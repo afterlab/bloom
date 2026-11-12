@@ -75,14 +75,14 @@ execute_process(COMMAND cp -a "${TREE}" "${directory}" RESULT_VARIABLE result ER
 if(NOT result EQUAL 0)
     message(FATAL_ERROR "the tree could not be copied: ${error}")
 endif()
-set(entry "share/applications/org.kinetik.bloom.desktop")
-set(icon "share/icons/hicolor/256x256/apps/org.kinetik.bloom.png")
+set(entry "share/applications/id.afterlab.bloom.desktop")
+set(icon "share/icons/hicolor/256x256/apps/id.afterlab.bloom.png")
 if(NOT EXISTS "${directory}/${entry}" OR NOT EXISTS "${directory}/${icon}")
     message(FATAL_ERROR "make_archives.cmake: the tree has no desktop entry or no icon")
 endif()
 file(CREATE_LINK "bin/Bloom" "${directory}/AppRun" SYMBOLIC)
 file(COPY "${directory}/${entry}" "${directory}/${icon}" DESTINATION "${directory}")
-file(CREATE_LINK "org.kinetik.bloom.png" "${directory}/.DirIcon" SYMBOLIC)
+file(CREATE_LINK "id.afterlab.bloom.png" "${directory}/.DirIcon" SYMBOLIC)
 
 # What only this form carries: the runtime's record and license files.
 set(licenses "${directory}/share/bloom/licenses/appimage-runtime")

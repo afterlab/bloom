@@ -72,7 +72,7 @@ void captureDividerMenu(WorkspaceHost& host, QSplitter* splitter, const int inde
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
-    kit::installKinetikTheme(application);
+    kit::installAfterlabTheme(application);
     directory =
         argc > 1 ? QString::fromLocal8Bit(argv[1]) : QStringLiteral(BLOOM_GRAMMAR_ARTIFACT_DIR);
     QDir().mkpath(directory);

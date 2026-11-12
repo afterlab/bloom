@@ -122,7 +122,7 @@ int run(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName("BloomControlGeometryTests");
     app.setApplicationName("Geometry");
-    kit::installKinetikTheme(app);
+    kit::installAfterlabTheme(app);
     test::WindowFixture fixture;
     int failures = 0;
     const auto fail = [&](const QString& message) {

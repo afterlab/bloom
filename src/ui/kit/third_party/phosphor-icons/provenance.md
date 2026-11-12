@@ -55,7 +55,7 @@ pre-existing exceptions; they do not claim that those exceptions are upstream-id
 ADR 0010 and `docs/ux/visual-language.md` require a curated, pinned subset rather than the
 complete catalog: the upstream release carries 1248 icons in six weights (7488 files), and Bloom
 embeds 84 of them in three weights (252 files). The three weights are exactly the three the
-Kinetik icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp`):
+Afterlab icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp`):
 
 - `regular` -- the resting interface weight, and the default of every non-role call.
 - `fill` -- the selected/toggled weight, and `IconRole::Control` (transport and viewer footer).
@@ -66,7 +66,7 @@ toggles); `IconRole::Chrome` asks for Bold on every chrome glyph in the applicat
 subset would have rendered some chrome icons blank. All three weights are now complete over the
 same 80 assets, which is also what makes `kit::iconResourcePath()` a total mapping with no per-id
 exception list. The other three upstream weights (`thin`, `light`, `duotone`) are deliberately not
-vendored, because no Kinetik icon role names one.
+vendored, because no Afterlab icon role names one.
 
 Bloom does not depend on a JavaScript, Node, npm, or web runtime to obtain or render these
 assets, and nothing is fetched from a network while configuring, building, or launching Bloom.

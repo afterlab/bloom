@@ -274,7 +274,7 @@ int main(int argc, char** argv) {
     app.setOrganizationName("BloomTooltipMemoryTests");
     app.setApplicationName("TooltipMemory");
     // The application style sheet is what routes every tip through QStyleSheetStyle.
-    ui::kit::installKinetikTheme(app);
+    ui::kit::installAfterlabTheme(app);
     const auto baseline = bloom::runtime::processResidentBytes();
     std::optional<MemoryCeiling> ceiling;
     if (baseline)

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:kinetik:bloom:schema:dependency-lock:1.4",
+  "$id": "urn:afterlab:bloom:schema:dependency-lock:1.4",
   "title": "Bloom Dependency Lock 1.4",
   "$comment": "Minor 4 adds the optional prebuilt list to a profileBuild, for a component a profile takes as official upstream binaries instead of building it: each entry binds one binary archive's HTTPS URL, SHA-256 and size. The component's source record stays the exact source archive the binaries were built from. Minor 1, 2 and 3 fields remain supported. The native bloom-dependency-artifact-check target checks exact schema bytes and synthetic contract fixtures only; production acceptance additionally requires the reviewed Unicode bootstrap and repository evidence validator.",
   "type": "object",
@@ -13,7 +13,7 @@
   ],
   "properties": {
     "format": {
-      "const": "org.kinetik.bloom.dependencies.lock"
+      "const": "id.afterlab.bloom.dependencies.lock"
     },
     "schemaVersion": {
       "$ref": "#/$defs/fixedVersion"

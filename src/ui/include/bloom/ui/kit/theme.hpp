@@ -7,7 +7,7 @@ class QApplication;
 
 namespace bloom::ui::kit {
 
-// The Kinetik theme installer. Owns the whole application-level appearance: the QPalette every
+// The Afterlab theme installer. Owns the whole application-level appearance: the QPalette every
 // palette-clean painter reads, the application stylesheet every QSS-hooked surface reads, and the
 // interface font. Called once from apps/bloom/main.cpp BEFORE MainWindow is constructed; safe to
 // call again at any time (it recomputes and reinstalls rather than accumulating).
@@ -16,16 +16,16 @@ namespace bloom::ui::kit {
 // application's visual language, and a one-shot literal QSS blob cannot stay in agreement with the
 // tokens. Every objectName-keyed rule that lived in that blob is re-expressed here through tokens,
 // with the objectNames themselves untouched.
-void installKinetikTheme(QApplication& application);
+void installAfterlabTheme(QApplication& application);
 
-// The palette installKinetikTheme() installs, built entirely from tokens.
-[[nodiscard]] QPalette kinetikPalette();
+// The palette installAfterlabTheme() installs, built entirely from tokens.
+[[nodiscard]] QPalette afterlabPalette();
 
-// The application stylesheet installKinetikTheme() installs, generated entirely from tokens: no
+// The application stylesheet installAfterlabTheme() installs, generated entirely from tokens: no
 // color, radius, spacing, or size literal is spelled anywhere in the sheet's source text.
-[[nodiscard]] QString kinetikStyleSheet();
+[[nodiscard]] QString afterlabStyleSheet();
 
-// Expands a Kinetik QSS template: "{color.Accent}" becomes the accent hex, "{space.S}" the spacing
+// Expands a Afterlab QSS template: "{color.Accent}" becomes the accent hex, "{space.S}" the spacing
 // value in design pixels, and so on for radius, size, and border widths. Exposed so a test can
 // prove the expansion is total -- an unresolved placeholder is a defect, not a silent no-op.
 [[nodiscard]] QString expandTokens(const QString& templateText);

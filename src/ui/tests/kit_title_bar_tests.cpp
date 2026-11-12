@@ -39,7 +39,7 @@ using namespace bloom::ui;
 
 void testTitleBarShapeAndIdentity(Expectations& expectations) {
     kit::TitleBar titleBar;
-    expectations.expect(titleBar.objectName() == QStringLiteral("kinetikTitleBar"),
+    expectations.expect(titleBar.objectName() == QStringLiteral("afterlabTitleBar"),
                         "the title bar carries its stable objectName");
     expectations.expect(titleBar.height() == kit::px(kit::Size::TitleBar),
                         "the title bar is exactly Size::TitleBar tall");

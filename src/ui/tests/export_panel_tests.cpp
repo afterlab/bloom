@@ -1702,7 +1702,7 @@ int main(int argc, char** argv) {
     QApplication::setOrganizationName(QStringLiteral("BloomExportPanelTests"));
     QApplication::setApplicationName(QStringLiteral("ExportPanel"));
     QStandardPaths::setTestModeEnabled(true);
-    kit::installKinetikTheme(application);
+    kit::installAfterlabTheme(application);
     QSettings().clear();
     TestContext context;
     adapterTests(context);

@@ -1,4 +1,4 @@
-# bloom_ui_kit (task U1, issue #117): the Kinetik design system -- tokens, icons, fonts, the
+# bloom_ui_kit (task U1, issue #117): the Afterlab design system -- tokens, icons, fonts, the
 # application theme installer, and the reusable widget kit. A target of its own rather than more
 # files inside bloom_ui, mirroring src/color's bloom_color/bloom_color_ocio precedent: the kit owns
 # the vendored third-party icon and font assets and the Qt6::Svg dependency, and nothing about a
@@ -156,7 +156,7 @@ qt_add_resources(bloom_ui_kit "shape_tool_icons"
         kit/icons/line-fill.svg
 )
 
-qt_add_resources(bloom_ui_kit "kinetik_icons"
+qt_add_resources(bloom_ui_kit "afterlab_icons"
     PREFIX "/bloom/kit"
     BASE "kit/third_party"
     FILES
@@ -422,7 +422,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
 # upright variable face per family (visual-language.md, "Type roles"), every role weight a point on
 # its wght axis. The static Inter faces beside them are text-layer content the render module
 # embeds; they are not interface resources.
-qt_add_resources(bloom_ui_kit "kinetik_fonts"
+qt_add_resources(bloom_ui_kit "afterlab_fonts"
     PREFIX "/bloom/kit"
     BASE "kit/third_party"
     FILES

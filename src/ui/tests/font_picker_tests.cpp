@@ -326,7 +326,7 @@ int main(int argc, char** argv) {
     if (argc >= 4 && QString::fromLatin1(argv[1]) == QStringLiteral("--capture"))
         qputenv("QT_SCALE_FACTOR", argv[3]);
     QApplication app(argc, argv);
-    ui::kit::installKinetikTheme(app);
+    ui::kit::installAfterlabTheme(app);
     if (argc >= 4 && QString::fromLatin1(argv[1]) == QStringLiteral("--capture")) {
         capture(QString::fromLocal8Bit(argv[2]), QString::fromLatin1(argv[3]));
         return 0;

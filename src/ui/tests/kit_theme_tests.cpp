@@ -37,7 +37,7 @@ using namespace bloom::ui;
 
 void testInstalledPaletteAgreesWithTheColorTokens(QApplication& application,
                                                   Expectations& expectations) {
-    kit::installKinetikTheme(application);
+    kit::installAfterlabTheme(application);
     const QPalette palette = QApplication::palette();
 
     const auto expectRole = [&expectations, &palette](const QPalette::ColorRole role,
@@ -76,10 +76,10 @@ void testInstalledPaletteAgreesWithTheColorTokens(QApplication& application,
 }
 
 void testTheInstallerIsReRunnable(QApplication& application, Expectations& expectations) {
-    kit::installKinetikTheme(application);
+    kit::installAfterlabTheme(application);
     const QPalette first = QApplication::palette();
     const QString firstSheet = application.styleSheet();
-    kit::installKinetikTheme(application);
+    kit::installAfterlabTheme(application);
     expectations.expect(QApplication::palette() == first,
                         "installing twice produces the same palette");
     expectations.expect(application.styleSheet() == firstSheet,
@@ -88,7 +88,7 @@ void testTheInstallerIsReRunnable(QApplication& application, Expectations& expec
 }
 
 void testTheStyleSheetIsGeneratedEntirelyFromTokens(Expectations& expectations) {
-    const QString sheet = kit::kinetikStyleSheet();
+    const QString sheet = kit::afterlabStyleSheet();
 
     expectations.expect(!sheet.contains('{') || !sheet.contains(QStringLiteral("{color.")),
                         "no color placeholder survives expansion");
@@ -120,7 +120,7 @@ void testTheStyleSheetIsGeneratedEntirelyFromTokens(Expectations& expectations) 
 }
 
 void testTheStyleSheetPreservesEveryStyledObjectName(Expectations& expectations) {
-    const QString sheet = kit::kinetikStyleSheet();
+    const QString sheet = kit::afterlabStyleSheet();
     // The objectNames the replaced MainWindow::applyFoundationTheme() blob keyed on are test
     // contracts elsewhere in the suite; the theme move may restate their appearance but must never
     // rename or drop one.
@@ -134,7 +134,7 @@ void testTheStyleSheetPreservesEveryStyledObjectName(Expectations& expectations)
     // bar is not installed, so the sheet carries neither.
     expectations.expect(!sheet.contains(QStringLiteral("maximizeAreaButton")),
                         "no rule for the self-painted maximize button");
-    expectations.expect(!sheet.contains(QStringLiteral("kinetikTitleBar")),
+    expectations.expect(!sheet.contains(QStringLiteral("afterlabTitleBar")),
                         "no rule for the uninstalled title bar");
     expectations.expect(!sheet.contains(QStringLiteral("font-size")) &&
                             !sheet.contains(QStringLiteral("font-weight")),
@@ -144,7 +144,7 @@ void testTheStyleSheetPreservesEveryStyledObjectName(Expectations& expectations)
 // The panel border is drawn once, by KPanelFrame (Accent while active); the sheet gives the panel
 // its background and no border of its own, so the two can never double up.
 void testThePanelBorderIsDrawnOnce(Expectations& expectations) {
-    const QString sheet = kit::kinetikStyleSheet();
+    const QString sheet = kit::afterlabStyleSheet();
     const qsizetype restRule = sheet.indexOf(QStringLiteral("QFrame#editorArea {"));
     expectations.expect(restRule >= 0, "the resting-area rule exists");
     if (restRule >= 0) {
@@ -174,7 +174,7 @@ void testThePanelBorderIsDrawnOnce(Expectations& expectations) {
 // The stock buttons wear the ONE button recipe: the generated QPushButton rules are the Secondary
 // recipe, a dialog's default button is the Primary one, and keyboard focus has a rule of its own.
 void testStockButtonsWearTheKitButtonRecipe(Expectations& expectations) {
-    const QString sheet = kit::kinetikStyleSheet();
+    const QString sheet = kit::afterlabStyleSheet();
     // The generated state rules follow the template's box rules, so the LAST block for a selector
     // is the recipe's.
     const auto block = [&sheet](const QString& selector) {
@@ -204,14 +204,14 @@ void testStockButtonsWearTheKitButtonRecipe(Expectations& expectations) {
         "a menu-strip button has a keyboard-focus rule");
     // The dropdown closed field is painted by KDropdown itself; no raw QComboBox is ever shown,
     // so the sheet carries no QComboBox rule to drift from it.
-    expectations.expect(!kit::kinetikStyleSheet().contains(QStringLiteral("QComboBox")),
+    expectations.expect(!kit::afterlabStyleSheet().contains(QStringLiteral("QComboBox")),
                         "the application sheet styles no QComboBox");
 }
 
 // Scrollbars keep one track width in every state, so hovering never relayouts a view; the thumb
 // changes colour and fills the track instead.
 void testScrollbarsKeepOneWidth(Expectations& expectations) {
-    const QString sheet = kit::kinetikStyleSheet();
+    const QString sheet = kit::afterlabStyleSheet();
     expectations.expect(!sheet.contains(QStringLiteral("QScrollBar:vertical:hover")) &&
                             !sheet.contains(QStringLiteral("QScrollBar:horizontal:hover")),
                         "no scrollbar rule changes the bar's own width on hover");
@@ -234,12 +234,12 @@ void testTokenExpansionResolvesNumbersAndColors(Expectations& expectations) {
 
 void testThemedWidgetsResolveTheirTokenColors(QApplication& application,
                                               Expectations& expectations) {
-    kit::installKinetikTheme(application);
+    kit::installAfterlabTheme(application);
     QWidget probe;
     probe.setObjectName(QStringLiteral("kitThemeProbe"));
     expectations.expect(probe.palette().color(QPalette::Window) ==
                             kit::color(kit::Color::Background),
-                        "a freshly constructed widget inherits the Kinetik window color");
+                        "a freshly constructed widget inherits the Afterlab window color");
     expectations.expect(QApplication::font().families().contains(kit::interfaceFontFamily()),
                         "the installer sets the interface font application-wide");
 }

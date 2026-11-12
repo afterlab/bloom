@@ -196,7 +196,7 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName("BloomTests");
     app.setApplicationName("McpLiveUndo");
-    ui::kit::installKinetikTheme(app);
+    ui::kit::installAfterlabTheme(app);
     try {
         exercise();
     } catch (const std::exception& error) {

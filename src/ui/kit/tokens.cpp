@@ -19,7 +19,7 @@ struct ColorEntry {
     std::uint32_t rgb;
 };
 
-// The one place a Kinetik hex value is written down. Everything else -- painters, the generated
+// The one place a Afterlab hex value is written down. Everything else -- painters, the generated
 // application stylesheet, and the QPalette the theme installer builds -- resolves through
 // color()/hex() so a rule and a painter can never drift apart.
 constexpr auto kColors = std::to_array<ColorEntry>({

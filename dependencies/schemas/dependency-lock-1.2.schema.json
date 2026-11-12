@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:kinetik:bloom:schema:dependency-lock:1.2",
+  "$id": "urn:afterlab:bloom:schema:dependency-lock:1.2",
   "title": "Bloom Dependency Lock 1.2",
   "$comment": "Minor 2 adds reviewed runtimeFetch metadata for components whose distributable binary is fetched directly from an upstream vendor on first use. The runtime record binds a URL pattern, compressed and decompressed SHA-256 values per platform, the installed library name, and the vendor licence artifact. Minor 1 fields remain supported. The native bloom-dependency-artifact-check target checks exact schema bytes and synthetic contract fixtures only; production acceptance additionally requires the reviewed Unicode bootstrap and repository evidence validator.",
   "type": "object",
   "required": ["format", "schemaVersion", "unicodeProfile", "profiles", "components"],
   "properties": {
-    "format": {"const": "org.kinetik.bloom.dependencies.lock"},
+    "format": {"const": "id.afterlab.bloom.dependencies.lock"},
     "schemaVersion": {"$ref": "#/$defs/fixedVersion"},
     "unicodeProfile": {"$ref": "#/$defs/unicodeProfile"},
     "profiles": {

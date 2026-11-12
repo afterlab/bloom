@@ -661,7 +661,7 @@ void testStatusBarZoomDropdownDrivesViewTransform(Expectations& expectations) {
 // contract, the color-state chip keeps rendering inside it. Pinned by rendering the returned
 // widget offscreen and confirming it is not just a flat Surface-colored strip -- real chip/text
 // content is painted into it -- the same "sample the rendered pixels" technique
-// kinetik_baseline_tests.cpp's QComboBox field/border test already uses elsewhere in this suite.
+// afterlab_baseline_tests.cpp's QComboBox field/border test already uses elsewhere in this suite.
 // A tolerant "found a non-Surface pixel" check rather than an exact color match: the chip fills
 // itself with the token color at partial opacity (paintChip()'s own withOpacity(color, 0.855)),
 // composited over the Surface base the bar already painted, so the resulting pixel is a blend,

@@ -4,7 +4,7 @@ Status: active implementation and source audit; runtime qualification is recorde
 
 Updated: 2026-10-23
 
-Owner: [issue #320](https://github.com/kinetik-gg/bloom/issues/320).
+Owner: [issue #320](https://github.com/afterlab/bloom/issues/320).
 Source baseline: `45431368`; current corrections are not claimed as passed until their grouped local gates finish.
 
 ## Decision
@@ -17,7 +17,7 @@ when the representation still eagerly allocates an entire file or every missing 
 
 ## Bounded implementation order
 
-### 1. [#321: Honor live cache preferences and independent GPU working capacity](https://github.com/kinetik-gg/bloom/issues/321)
+### 1. [#321: Honor live cache preferences and independent GPU working capacity](https://github.com/afterlab/bloom/issues/321)
 
 Parent: #320.
 
@@ -25,7 +25,7 @@ Remove host reserve/percentage trim/recovery ladders, proportional rewriting of 
 
 Scope: memory ledger, delivered phase view, cache preference wiring, GPU owner capacity, status/prefs. Preserve held claims, zero/unknown distinction, fresh constraint removal, native capability checks, cancellation and retirement. Test explicit targets above automatic defaults, auxiliary independence, live Apply, low cache with renderable frame, transient device-zero recovery, finite OS constraints, and Full/Half warm preview. One grouped local build/strict/CPU fallback/native-route milestone; no Actions.
 
-### 2. [#322: Preserve exact numeric values and untouched components across editors](https://github.com/kinetik-gg/bloom/issues/322)
+### 2. [#322: Preserve exact numeric values and untouched components across editors](https://github.com/afterlab/bloom/issues/322)
 
 Parent: #320.
 
@@ -33,7 +33,7 @@ Node cards clamp valid values to ±1e9 and commit entire vectors; Properties/Tim
 
 Scope: value field, node card, Properties, Timeline, focused UI regressions. Verify large finite values, int64 extrema/overflow, untouched siblings, cross-surface round trip, undo/cancel, and percentage/native-unit editing. Semantic opacity and positive-only domains remain. Validate with the first grouped local milestone.
 
-### 3. [#323: Preserve color intent in Project Settings, pickers and headless renders](https://github.com/kinetik-gg/bloom/issues/323)
+### 3. [#323: Preserve color intent in Project Settings, pickers and headless renders](https://github.com/afterlab/bloom/issues/323)
 
 Parent: #320.
 
@@ -41,7 +41,7 @@ Project Settings resets existing ACES working spaces or external configs on unto
 
 Implement sequential slices: (1) exact unchanged-settings preservation and effective-color-identity picker invalidation; (2) shared captured project/composition intent through Python/CLI/MCP render. Preserve external settings without pretending external OCIO runtime support exists. Tests: nondefault ACES and unknown/external no-op OK, explicit config edits, override/undo swatches, same saved composition desktop/headless color identity and pixels. Keep preparation off UI. No unrelated effect expansion.
 
-### 4. [#324: Remove repeated full-project validation from node search and undo](https://github.com/kinetik-gg/bloom/issues/324)
+### 4. [#324: Remove repeated full-project validation from node search and undo](https://github.com/afterlab/bloom/issues/324)
 
 Parent: #320.
 
@@ -49,7 +49,7 @@ Opening Add search constructs and validates a Document for each candidate (up to
 
 Replace trial execution in search/menus with shared read-only eligibility over one immutable snapshot; retain command-time validation. Remove only restore's redundant scan, retaining document provenance, revision, allocator high-water and publication guards. Owning files: node_editor_menus/node_editor_add, node_operations, document restore. Work-counter regressions must prove no per-entry validation and eligibility matches real commands; preserve undo/redo integrity. Group local checks with the color UI slice.
 
-### 5. [#325: Make input interpretation, thumbnails and export color choices coherent](https://github.com/kinetik-gg/bloom/issues/325)
+### 5. [#325: Make input interpretation, thumbnails and export color choices coherent](https://github.com/afterlab/bloom/issues/325)
 
 Parent: #320. Depends on color-intent correctness slice.
 
@@ -57,7 +57,7 @@ Add an undoable asset-level input interpretation control. Show effective precede
 
 Keep this as three sequential bounded slices: asset command+picker; thumbnail display processing; output capability-aware dialog. Tests cover asset/source override/invalidation, ACES thumbnail vs display output, unsupported presets and explicit diagnostics. External OCIO runtime support is separately planned, not enabled by selectors alone.
 
-### 6. [#326: Replace silent text and composition limits with checked requested semantics](https://github.com/kinetik-gg/bloom/issues/326)
+### 6. [#326: Replace silent text and composition limits with checked requested semantics](https://github.com/afterlab/bloom/issues/326)
 
 Parent: #320.
 
@@ -65,7 +65,7 @@ Text Repeat silently caps1024, Pad256, and decimal formatting17 fractional place
 
 Two bounded slices: (1) honor text count/width/precision within checked output byte/cancellation bounds; report budget exhaustion instead of success with altered output. (2) exact rational frame-rate entry/presets and canonical duration/frame-count handling constrained by representability. Test small outputs beyond old caps, empty/multibyte cases, exact30000/1001, long duration unit/rate changes, overflow and undo. Do not remove real allocation or arithmetic checks.
 
-### 7. [#327: Remove overlapping MCP restrictions and make large queries pageable](https://github.com/kinetik-gg/bloom/issues/327)
+### 7. [#327: Remove overlapping MCP restrictions and make large queries pageable](https://github.com/afterlab/bloom/issues/327)
 
 Parent: #320.
 
@@ -73,7 +73,7 @@ The JSON parser's4096-element array cap rejects atomic transactions already fitt
 
 Remove redundant per-array rejection while preserving existing total/depth/byte accounting and transaction atomicity. Add bounded deterministic query paging/individual-value retrieval and avoid unnecessary response duplication where protocol compatibility permits. Test a compact5000-command transaction, malformed/deep/oversized input rejection, large parameter data across pages and complete untruncated results.
 
-### 8. [#328: Scope purge coordination to cache consumers and simplify trusted project reads](https://github.com/kinetik-gg/bloom/issues/328)
+### 8. [#328: Scope purge coordination to cache consumers and simplify trusted project reads](https://github.com/afterlab/bloom/issues/328)
 
 Parent: #320.
 
@@ -81,7 +81,7 @@ Purge currently waits for global scheduler quiescence and fails after5s if unrel
 
 Separate slices: purge waits for relevant producer tasks/leases while preserving producer gating and late-publication exclusion; ZIP removes only ratio-based rejection/fallback with deliberate old-reader compatibility, preserving compressed/expanded limits, charged allocation, exact-size extraction, CRC and atomic publication. Test held unrelated Save vs held cache consumer, cancellation/retirement; ZIP high-compression roundtrip and actual expansion/CRC bounds. Never delete the purge barrier wholesale.
 
-### 9. [#329: Honor external media locations and budget actual import/decode work](https://github.com/kinetik-gg/bloom/issues/329)
+### 9. [#329: Honor external media locations and budget actual import/decode work](https://github.com/afterlab/bloom/issues/329)
 
 Parent: #320.
 
@@ -89,7 +89,7 @@ Verified restrictions: cross-drive Windows locator requires lexical relative pat
 
 Implement bounded sequential slices: (1) explicit external absolute file-URI locator fallback with save/relink/digest behavior; (2) typed audio diagnostics then streaming probe/windowed admitted decode; (3) cancellable matching-only sequence scan and interval gaps. Preserve actual byte/metadata admission and missing-frame semantics. Tests: drive/UNC roots, long valid audio beyond old thresholds, unrelated files, sparse/long sequences, cancellation and recovery. Removing caps without fixing whole-file/gap allocations does not complete this issue.
 
-### 10. [#330: Unify final-render admission with actual capacity instead of fixed fractions](https://github.com/kinetik-gg/bloom/issues/330)
+### 10. [#330: Unify final-render admission with actual capacity instead of fixed fractions](https://github.com/afterlab/bloom/issues/330)
 
 Parent: #320; coordinate #304 allocation ownership.
 
@@ -99,15 +99,15 @@ First replace repeated synchronous sampling/default fractions with one captured 
 
 ## Final bounded closeout
 
-- [#350: Undo retention ownership](https://github.com/kinetik-gg/bloom/issues/350): implemented
+- [#350: Undo retention ownership](https://github.com/afterlab/bloom/issues/350): implemented
   incremental accounting for history-owned storage, excluding unchanged active payload. Admission
   preserves the newest atomic undo step in both directions; large shared-payload, replacement,
   branching and repeated undo/redo regressions pass.
-- [#351: Recovery association](https://github.com/kinetik-gg/bloom/issues/351): implemented
+- [#351: Recovery association](https://github.com/afterlab/bloom/issues/351): implemented
   digest-bound ownership companions and worker-side candidate validation. Timestamp filtering uses
   each candidate's identified project; legacy candidates keep unknown ownership. Two-project,
   equal-time, corrupt-candidate and asynchronous host regressions pass.
-- [#329: Audio windowing](https://github.com/kinetik-gg/bloom/issues/329): standalone WAV/MP3
+- [#329: Audio windowing](https://github.com/afterlab/bloom/issues/329): standalone WAV/MP3
   playback now retains an admitted 4096-frame PCM window instead of a full decoded clip. Waveform
   scans stream on workers; seek, cancellation, source checks and diagnostics remain explicit.
   MP3 backward seeking can decode a prefix. Video audio still uses the existing buffered path.
@@ -119,7 +119,7 @@ execution. The preceding 18-node milestone has five passing required-device nati
 
 ## Remaining planned work
 
-- [#352: Video provider capacity](https://github.com/kinetik-gg/bloom/issues/352): image/sequence
+- [#352: Video provider capacity](https://github.com/afterlab/bloom/issues/352): image/sequence
   metadata now follows representability and caller decode admission, but the video provider still
   supports at most 16,384-axis / 16,777,216-pixel frames and 1,000,000 index entries. These are
   current provider implementation limits, not user cache settings or measured hardware limits.

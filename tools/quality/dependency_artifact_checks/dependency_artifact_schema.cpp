@@ -23,17 +23,17 @@ auto checkRepository(const Path& inputRoot) -> CheckResult {
     }
     const std::array schemaArtifacts{
         std::tuple{ArtifactKind::Lock, "dependency-lock-1.0.schema.json",
-                   "10ac9499cf19af39e561a47824a97d737f25fa26081a10dc8f8d9d94c831a5a0"},
+                   "a04c2bc037845234ac5232e79e6491e47bd889c34e4c8e77507549531d6afd3e"},
         std::tuple{ArtifactKind::LockV1_1, "dependency-lock-1.1.schema.json",
-                   "c7a377aea7f45c97e9146e0fc6ddce1f93ebae44f12f7306c1b1560a35c5b91f"},
+                   "d2048f3738012d8ce95ae1d681e6bf4f14f3b13b92e16affd4a10a890e8d6111"},
         std::tuple{ArtifactKind::LockV1_2, "dependency-lock-1.2.schema.json",
-                   "b158f17d0491609ecebb5d5507be6254500f90d3f43212041c23fba332d63d12"},
+                   "4ba0732225df759b0cd579b28d1a70316c4fc243405311d28434c8d55c0fb174"},
         std::tuple{ArtifactKind::LockV1_3, "dependency-lock-1.3.schema.json",
-                   "b898f08244dfb94cf4237321301dd2f44ccbc959e6f5559cf13efdb23da33ef4"},
+                   "79f04697e1fb1322a6ef5f1e916fe705892778aa7205be7b3d3c71df35a6a22e"},
         std::tuple{ArtifactKind::LockV1_4, "dependency-lock-1.4.schema.json",
-                   "1ff7a1a930bbd89e464c41a5664fd911026deebdf2a7ba2186bb1707d9ed099e"},
+                   "5a64fd07078bc17e4b21cefe76a83f276da4921fd79e523ea2e0b313b0cc0f10"},
         std::tuple{ArtifactKind::Prefix, "prefix-manifest-1.0.schema.json",
-                   "f3e2c731497753c15ad2f8fb7d0e6325811f1681e9a5186cbc6784cb1b682386"}};
+                   "42d48bfadb647e295dd155a82ff3e873ffa63b7140615e6c122672fc7397046c"}};
     for (const auto& [kind, name, expectedDigest] : schemaArtifacts) {
         const auto schema = loadSchemaArtifact(root / Path{kSchemaDirectory} / name);
         if (digestHex(schema.encoded) != expectedDigest) {
@@ -60,13 +60,13 @@ auto checkRepository(const Path& inputRoot) -> CheckResult {
 void validateSchemaArtifact(const Value& value, const ArtifactKind kind) {
     constexpr std::string_view draft = "https://json-schema.org/draft/2020-12/schema";
     const auto* expectedId =
-        kind == ArtifactKind::Lock       ? "urn:kinetik:bloom:schema:dependency-lock:1.0"
-        : kind == ArtifactKind::LockV1_1 ? "urn:kinetik:bloom:schema:dependency-lock:1.1"
-        : kind == ArtifactKind::LockV1_2 ? "urn:kinetik:bloom:schema:dependency-lock:1.2"
-        : kind == ArtifactKind::LockV1_3 ? "urn:kinetik:bloom:schema:dependency-lock:1.3"
+        kind == ArtifactKind::Lock       ? "urn:afterlab:bloom:schema:dependency-lock:1.0"
+        : kind == ArtifactKind::LockV1_1 ? "urn:afterlab:bloom:schema:dependency-lock:1.1"
+        : kind == ArtifactKind::LockV1_2 ? "urn:afterlab:bloom:schema:dependency-lock:1.2"
+        : kind == ArtifactKind::LockV1_3 ? "urn:afterlab:bloom:schema:dependency-lock:1.3"
         : kind == ArtifactKind::LockV1_4
-            ? "urn:kinetik:bloom:schema:dependency-lock:1.4"
-            : "urn:kinetik:bloom:schema:dependency-prefix-manifest:1.0";
+            ? "urn:afterlab:bloom:schema:dependency-lock:1.4"
+            : "urn:afterlab:bloom:schema:dependency-prefix-manifest:1.0";
     const auto* schema = value.find("$schema");
     const auto* id = value.find("$id");
     if (schema == nullptr || id == nullptr || !schema->isString() || !id->isString() ||
@@ -144,16 +144,16 @@ void validateSchemaArtifact(const Value& value, const ArtifactKind kind) {
 
     const auto* expectedValueDigest =
         kind == ArtifactKind::Lock
-            ? "5c64c0a1863181285f14c74c88cdc925e7f979cec8a6105fc24e15f24f8c8142"
+            ? "2a6d32da79c344d889499e5db156a55c990a3a23da321419586714e006df5198"
         : kind == ArtifactKind::LockV1_1
-            ? "9368ff59b958fd7fe7477f015b583643dc3bd2b59c7406750e0f74ef163b5919"
+            ? "f062116be3712cbfb7f80016926d255289af68ea6ddfb3060a6e930802d99d29"
         : kind == ArtifactKind::LockV1_2
-            ? "1c7d5c4c873194d39a4817fafb0a21c6c3f1254a3d3dc32e654ac67b069c8837"
+            ? "1feacbc8a91dd223568a9d4f3a011cc2a6106cfc909a8071a4be5a4ef37ef9dc"
         : kind == ArtifactKind::LockV1_3
-            ? "a048da1b2f2b2652c322b465f17bca9dba45a4ba1813dfb53ed0e632c1a13a30"
+            ? "609e687993afa705f4629a41c58d6852ccbb64618854613cc21712f33c106437"
         : kind == ArtifactKind::LockV1_4
-            ? "86ac610ad70817b47ff80a4fafa011c8dc59d44eb3ea1e9ef30064ae2bd24d26"
-            : "786926f6004bd73af98d23f01cc0d6502da7b2627468b3afd5dc264941f4d32f";
+            ? "02248b9c5eaf9135c6f627ef4df2436f4b7b42b813370557274b7031be1a48a9"
+            : "cbe233295e066bc45c77fc71fa2c26aeedd2f2e5a932b8840bb23b7670533dce";
     if (digestHex(encodeCanonical(value)) != expectedValueDigest) {
         fail("schema-contract", "$", "schema value differs from the frozen artifact");
     }

@@ -54,7 +54,7 @@ struct CompositionPreviewState;
 // dropped, what the cache holds, a transient notice, and the version of Bloom saying all of it.
 //
 // Not a QStatusBar. QMainWindow's status bar brings its own chrome, its own size grip, and its own
-// item model, none of which the Kinetik language wants; this is a kit strip laid out under the
+// item model, none of which the Afterlab language wants; this is a kit strip laid out under the
 // workspace with the same Surface/hairline treatment every other Bloom bar has.
 
 // The colour-state chip's text and palette role, resolved from the CURRENTLY DISPLAYED frame's own

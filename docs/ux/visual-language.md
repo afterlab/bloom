@@ -16,7 +16,7 @@ value listed here.
 
 ## Design Tokens
 
-Kinetik is Bloom's visual language. Every color, gap, corner, size, elevation, type role, state,
+Afterlab is Bloom's visual language. Every color, gap, corner, size, elevation, type role, state,
 and duration in the interface comes from the vocabulary below. No Bloom surface spells a raw hex
 value, a raw pixel gap, or a raw duration of its own: the tokens are implemented once in
 `bloom::ui::kit` (`src/ui/include/bloom/ui/kit/tokens.hpp`), and both the application stylesheet and
@@ -222,7 +222,7 @@ call-site `setWeight()` or a stylesheet `font-weight`. `KLabel` takes a role, an
 Bloom chrome.** A platform theme supplies an application font and a font per widget class (qt6ct
 gives every class its "general" font and re-sets the application font after start-up; CoreText
 and Windows give item views, labels and buttons their own sizes), and Qt lets those outrank the
-application default. `kit::installKinetikTheme()` therefore overrides every class entry Qt takes
+application default. `kit::installAfterlabTheme()` therefore overrides every class entry Qt takes
 from the platform theme, the kit proxy style gives any widget that never named a font its role,
 and both are re-applied on every application font, theme and style change (`kit/typography.hpp`).
 A widget that names its own font keeps it. The only time a platform family may appear in chrome is

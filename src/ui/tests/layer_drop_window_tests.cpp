@@ -137,7 +137,7 @@ int run(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName(QStringLiteral("BloomLayerDropWindow"));
     app.setApplicationName(QStringLiteral("LayerDropWindow"));
-    ui::kit::installKinetikTheme(app);
+    ui::kit::installAfterlabTheme(app);
     std::filesystem::path fixtures;
     for (int index = 1; index + 1 < argc; ++index)
         if (std::string_view(argv[index]) == "--media-fixtures")

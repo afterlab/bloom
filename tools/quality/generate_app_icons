@@ -9,7 +9,7 @@ and running this script is all a new icon needs.
 
     apps/bloom/macos/Bloom.icns                                    16 to 1024 pixels
     apps/bloom/windows/Bloom.ico                                   16 to 256 pixels
-    apps/bloom/linux/icons/<size>x<size>/org.kinetik.bloom.png     16 to 512 pixels
+    apps/bloom/linux/icons/<size>x<size>/id.afterlab.bloom.png     16 to 512 pixels
 
 Only the Python standard library is used, so the result is the same bytes on every machine:
 the PNG reader and writer, the scaling (an area average of premultiplied color) and the three
@@ -230,7 +230,7 @@ def main() -> int:
     images = {size: write_png(size, pixels[size]) for size in sizes}
     outputs = {ICNS: icns(images), ICO: ico(pixels, images)}
     for size in LINUX_SIZES:
-        outputs[LINUX / f"{size}x{size}" / "org.kinetik.bloom.png"] = images[size]
+        outputs[LINUX / f"{size}x{size}" / "id.afterlab.bloom.png"] = images[size]
     stale = []
     for path, data in outputs.items():
         if check:

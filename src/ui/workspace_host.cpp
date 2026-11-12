@@ -330,7 +330,7 @@ WorkspaceHost::WorkspaceHost(const EditorRegistry& editorRegistry, QWidget* pare
     setFrameShape(QFrame::NoFrame);
     // Window inner padding (task C1, item C4; owner: "panels inside window is overlapping with
     // actual window border at the edges; window needs inner padding"): autoFillBackground() paints
-    // this frame's own QPalette::Window role, which kinetikPalette() already sets to
+    // this frame's own QPalette::Window role, which afterlabPalette() already sets to
     // Color::Background -- the exact color the Gutter inset below must reveal on every side.
     setAutoFillBackground(true);
 

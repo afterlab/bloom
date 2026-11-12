@@ -560,7 +560,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QWidget ownerWindow;
     gOwner = &ownerWindow;
-    ui::kit::installKinetikTheme(application);
+    ui::kit::installAfterlabTheme(application);
     QTemporaryDir settingsDirectory;
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());

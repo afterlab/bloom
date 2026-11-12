@@ -235,7 +235,7 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName("BloomCompileFailureTests");
     app.setApplicationName("CompileFailure");
-    ui::kit::installKinetikTheme(app);
+    ui::kit::installAfterlabTheme(app);
     testAdapter();
     testStatusBarPopup();
     testGoneSubject();

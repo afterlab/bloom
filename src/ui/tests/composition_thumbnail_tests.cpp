@@ -100,7 +100,7 @@ QColor centre(const ui::kit::KThumbnail& thumbnail) {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
-    ui::kit::installKinetikTheme(app);
+    ui::kit::installAfterlabTheme(app);
     Fixture fixture;
     auto& session = fixture.session;
     expect(session.addSolidLayer("Red", core::Color4d{1.0, 0.0, 0.0, 1.0}), "red solid added");

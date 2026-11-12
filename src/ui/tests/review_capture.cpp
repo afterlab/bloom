@@ -175,7 +175,7 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName("BloomReviewCapture");
     app.setApplicationName("ReviewCapture");
-    kit::installKinetikTheme(app);
+    kit::installAfterlabTheme(app);
     gDirectory = QString::fromLocal8Bit(argv[1]);
     gSuffix = QString::fromLatin1(argv[2]).remove(QLatin1Char('.'));
     gSuffix = (gSuffix == QStringLiteral("1") ? QStringLiteral("dpr1") : QStringLiteral("dpr15"));

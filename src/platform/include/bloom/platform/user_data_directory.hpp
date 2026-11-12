@@ -8,6 +8,6 @@ namespace bloom::platform {
 
 // Resolves a per-user application-data root. The directory is created lazily by its caller.
 [[nodiscard]] std::optional<std::filesystem::path>
-userDataDirectory(std::string_view appSubdirectory = "Kinetik/Bloom");
+userDataDirectory(std::string_view appSubdirectory = "Afterlab/Bloom");
 
 } // namespace bloom::platform

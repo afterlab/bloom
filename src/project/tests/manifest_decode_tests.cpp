@@ -123,7 +123,7 @@ constexpr std::uint64_t kGenerousOperationBudget = 8ULL << 20U; // 8 MiB: ample 
     return result;
 }
 
-constexpr std::string_view kValidFormatJson = R"("org.kinetik.bloom.project")";
+constexpr std::string_view kValidFormatJson = R"("id.afterlab.bloom.project")";
 
 [[nodiscard]] std::string validVersion10Json() { return versionJson("1", "0"); }
 
@@ -354,7 +354,7 @@ void testRejectsMalformedGenerator(Expectations& expectations) {
 // ---------------------------------------------------------------------------------------------
 
 void testRejectsWrongFormat(Expectations& expectations) {
-    expectDecodeFailure(expectations, manifestWithFormat(R"("org.kinetik.bloom.other")"),
+    expectDecodeFailure(expectations, manifestWithFormat(R"("example.other")"),
                         ManifestDecodeError::InvalidFormat, "/format",
                         "a wrong format string is a typed InvalidFormat error");
 }

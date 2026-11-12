@@ -7,7 +7,7 @@ namespace bloom::ui {
 // The names Qt keeps Bloom's settings and per-user folders under, set once before anything reads
 // a setting.
 //
-// Normally they are Bloom's own ("Kinetik", "Bloom") and the settings are in the operating
+// Normally they are Bloom's own ("Afterlab", "Bloom") and the settings are in the operating
 // system's store.
 //
 // The package check (cmake/package/check_package.cmake) starts a packaged Bloom to see what it

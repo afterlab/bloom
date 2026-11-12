@@ -91,7 +91,7 @@ int capture(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName("BloomGrammarTests");
     app.setApplicationName("NodeCanvasCapture");
-    kit::installKinetikTheme(app);
+    kit::installAfterlabTheme(app);
     gDirectory = QString::fromLocal8Bit(argv[1]);
     gRatio = QString::fromLatin1(argv[2]) == QStringLiteral("1") ? QStringLiteral("dpr1")
                                                                  : QStringLiteral("dpr15");

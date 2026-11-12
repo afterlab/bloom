@@ -17,7 +17,7 @@ class KColorPicker;
 // composes. A Radius::Small swatch button that paints the alpha checkerboard under a translucent
 // color and opens a self-contained KColorPicker popup on click -- the same "closed field owns its
 // popup" shape KDropdown/KDropdownPopup already establish, so a chip behaves the way every other
-// Kinetik field that opens something does.
+// Afterlab field that opens something does.
 class KColorChip final : public QWidget {
     Q_OBJECT
 

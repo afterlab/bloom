@@ -242,7 +242,7 @@ The canonical manifest has members in this exact order:
 
 ```json
 {
-  "format": "org.kinetik.bloom.project",
+  "format": "id.afterlab.bloom.project",
   "containerVersion": {
     "major": 1,
     "minor": 0

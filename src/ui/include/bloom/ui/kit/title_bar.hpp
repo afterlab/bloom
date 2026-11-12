@@ -11,7 +11,7 @@ namespace bloom::ui::kit {
 
 class KButton;
 
-// The Kinetik application title bar (task U2, issue #118): a Size::TitleBar-tall row carrying the
+// The Afterlab application title bar (task U2, issue #118): a Size::TitleBar-tall row carrying the
 // app title (Type::Title) on the left, an optional embedded QMenuBar (custom chrome shares the
 // SAME QMenuBar instance the native-chrome path would otherwise dock classically -- see
 // MainWindow), and minimize/maximize-or-restore/close ghost buttons on the right.

@@ -699,7 +699,7 @@ void requireAdvisorySources(const Value::Array& components, const Path& root) {
 void validateProductionLockDocument(const Value& value, const Path& root) {
     object(value, {"format", "schemaVersion", "unicodeProfile", "profiles", "components"}, "$");
     if (!value.at("format").isString() ||
-        value.at("format").asString() != "org.kinetik.bloom.dependencies.lock") {
+        value.at("format").asString() != "id.afterlab.bloom.dependencies.lock") {
         fail("format", "$.format", "unexpected lock format");
     }
     const auto& version = value.at("schemaVersion");

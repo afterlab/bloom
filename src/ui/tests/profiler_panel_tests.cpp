@@ -546,7 +546,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     application.setOrganizationName(QStringLiteral("BloomProfilerPanelTests"));
     application.setApplicationName(QStringLiteral("ProfilerPanel"));
-    kit::installKinetikTheme(application);
+    kit::installAfterlabTheme(application);
     Expectations expectations;
     testRegistrationAndSwitcherIcon(expectations);
     testSubscriptionFollowsVisibilityWithARefcount(expectations);

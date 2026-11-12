@@ -541,7 +541,7 @@ What was measured, on an Apple M4 running macOS 26 (2026-11-12), in a qualified 
 Not measured: any macOS release from 13.3 to 25, and an Intel Mac. The deployment target says
 where the binaries are allowed to start, not where they were tested.
 
-The application bundle is `org.kinetik.bloom`, with its icon, the minimum system version of the
+The application bundle is `id.afterlab.bloom`, with its icon, the minimum system version of the
 deployment target, the media workers under `Contents/libexec/bloom/media`, the color worker and
 the shader tools beside the executable, and the loader and driver as above. It carries the
 Python interpreter (see Scripting Interpreter above): the library in `Contents/Frameworks`, the
@@ -595,7 +595,7 @@ What this does not guarantee:
   the meantime; the host's memory budget and pressure monitor
   ([GPU backend](gpu-backend.md)) do that for Bloom itself.
 
-The bundle declares Bloom's project document (`.bloom`, type `org.kinetik.bloom.project`), so
+The bundle declares Bloom's project document (`.bloom`, type `id.afterlab.bloom.project`), so
 the Finder offers Bloom for a project file. When a project is double-clicked, dropped on the
 Dock icon or chosen with Open With, the system sends the application a file-open event, at
 launch and while it runs; `ProjectFileOpenEvents` hands the file to the project host, and the

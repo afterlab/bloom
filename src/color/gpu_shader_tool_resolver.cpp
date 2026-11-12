@@ -19,7 +19,7 @@ namespace {
 using Clock = std::chrono::steady_clock;
 using gpu_shader_detail::hashFileBounded;
 
-constexpr std::string_view kInventoryFormat = "org.kinetik.bloom.gpu-shader-tools.inventory";
+constexpr std::string_view kInventoryFormat = "id.afterlab.bloom.gpu-shader-tools.inventory";
 constexpr std::string_view kInventoryLayout = "executable-relative";
 
 bool singleSegment(std::string_view name) {

@@ -179,7 +179,7 @@ requires an explicit report and confirmation under the standards and project-for
 
 ## Pipeline Example: Game Engine
 
-A future `kinetik.game-engine` pipeline could be one optional module bundle that registers:
+A future game-engine pipeline could be one optional module bundle that registers:
 
 - engine project and scene asset types
 - importers for engine-native assets and open scene standards

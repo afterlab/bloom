@@ -23,7 +23,7 @@ class KDropdownPopup;
 // A dropdown shows at least this many average characters of its value before it elides.
 inline constexpr int kDropdownMinimumCharacters = 6;
 
-// The Kinetik dropdown: a closed field carrying the current value and a caret pair, and a
+// The Afterlab dropdown: a closed field carrying the current value and a caret pair, and a
 // KDropdownPopup -- a KPopupWindow holding a KPopupList -- with the committed value checked and
 // one Accent bar for the current row.
 //

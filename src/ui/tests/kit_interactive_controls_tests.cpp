@@ -301,7 +301,7 @@ void testRangeEndsMayCross() {
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
-    kit::installKinetikTheme(application);
+    kit::installAfterlabTheme(application);
     testGradientEditorEditsStops();
     testAngleDialTurnsAndWinds();
     testPointPadDragsPoints();

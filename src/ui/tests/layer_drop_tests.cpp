@@ -490,7 +490,7 @@ void viewerDrop(Fixture& fixture) {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QApplication::setOrganizationName(QStringLiteral("BloomLayerDropTests"));
-    ui::kit::installKinetikTheme(app);
+    ui::kit::installAfterlabTheme(app);
     {
         Fixture fixture;
         expect(fixture.still.isValid() && fixture.shotA.isValid() && fixture.shotB.isValid(),

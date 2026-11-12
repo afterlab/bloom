@@ -463,7 +463,7 @@ int main(int argc, char** argv) {
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
     QApplication::setStyle(new kit::AltUnderlineProxyStyle());
-    kit::installKinetikTheme(application);
+    kit::installAfterlabTheme(application);
     tableFillsThePanel();
     columnsAndPersistence();
     monochromeGlyphsAndNesting();

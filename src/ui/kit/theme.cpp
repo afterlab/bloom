@@ -190,7 +190,7 @@ QString expandTokens(const QString& templateText) {
     return text;
 }
 
-QPalette kinetikPalette() {
+QPalette afterlabPalette() {
     QPalette palette;
     const QColor ink = color(Color::Foreground);
 
@@ -210,7 +210,7 @@ QPalette kinetikPalette() {
     palette.setColor(QPalette::Link, color(Color::Accent));
     palette.setColor(QPalette::LinkVisited, color(Color::AccentPressed));
 
-    // The three-dimensional roles carry Kinetik's separator vocabulary rather than Qt's default
+    // The three-dimensional roles carry Afterlab's separator vocabulary rather than Qt's default
     // light-theme bevel greys. Mid in particular is what timeline_ruler.cpp draws its ruler
     // baseline and keyframe-panel separator with, so it must stay legible against Base: Faint, not
     // Border, which would be all but invisible on #111111.
@@ -232,7 +232,7 @@ QPalette kinetikPalette() {
     return palette;
 }
 
-QString kinetikStyleSheet() {
+QString afterlabStyleSheet() {
     // Every objectName below already existed before this slice and is reproduced verbatim: they are
     // test contracts, and this sheet only restates their appearance in token terms.
     static const auto kTemplate = QStringLiteral(R"(
@@ -445,9 +445,9 @@ QScrollBar::add-page, QScrollBar::sub-page {
     return expandTokens(kTemplate) + kButtons;
 }
 
-void installKinetikTheme(QApplication& application) {
+void installAfterlabTheme(QApplication& application) {
     installKeyboardFocusTracking(application);
-    // Fusion rather than the platform style: Kinetik is one interface on Linux, macOS, and Windows,
+    // Fusion rather than the platform style: Afterlab is one interface on Linux, macOS, and Windows,
     // and only a style that honors the application palette and stylesheet uniformly can deliver
     // that. The native style on macOS and Windows overrides large parts of both.
     //
@@ -461,7 +461,7 @@ void installKinetikTheme(QApplication& application) {
     // already renders in Inter rather than flashing the platform family. A face that
     // will not load produces a diagnostic and a platform fallback, never a failure to open.
     (void)registerBundledFonts();
-    QApplication::setPalette(kinetikPalette());
+    QApplication::setPalette(afterlabPalette());
     // The application font AND every per-class font Qt takes from the platform theme become type
     // roles (kit/typography.hpp): a platform class font outranks the application default, so
     // setting only the latter left item views, labels and stock buttons in the desktop's face.
@@ -469,7 +469,7 @@ void installKinetikTheme(QApplication& application) {
     // application font after start-up, so the roles are re-applied on each of those events too.
     applyTypeRoleFonts();
     installTypeRoleEnforcement(application);
-    application.setStyleSheet(kinetikStyleSheet());
+    application.setStyleSheet(afterlabStyleSheet());
 }
 
 } // namespace bloom::ui::kit

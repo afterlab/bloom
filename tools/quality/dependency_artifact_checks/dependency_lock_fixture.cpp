@@ -17,7 +17,7 @@ using namespace detail;
 void validateLockFixture(const Value& value, const FixtureContext& context) {
     object(value, {"format", "schemaVersion", "unicodeProfile", "profiles", "components"}, "$");
     if (!value.at("format").isString() ||
-        value.at("format").asString() != "org.kinetik.bloom.dependencies.lock") {
+        value.at("format").asString() != "id.afterlab.bloom.dependencies.lock") {
         fail("format", "$.format", "unexpected lock format");
     }
     const auto& version = value.at("schemaVersion");

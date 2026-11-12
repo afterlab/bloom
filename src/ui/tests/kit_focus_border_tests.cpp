@@ -442,7 +442,7 @@ int main(int argc, char** argv) {
     testQtsOwnFocusRectangleIsNeverDrawn(expectations);
     testTheRemainingFocusablePrimitives(expectations);
     testThePickerCanvasesTakeKeyboardFocusAndStep(expectations);
-    kit::installKinetikTheme(application);
+    kit::installAfterlabTheme(application);
     testItemViewsShowKeyboardFocusOnTheCurrentRow(expectations);
     testTheFocusTrackerRestylesOnlyOptedInWidgets(expectations);
     return expectations.failures() == 0 ? 0 : 1;

@@ -86,7 +86,7 @@ constexpr auto windowGeometryKey = "window/main/geometry";
 constexpr auto chromeModeKey = "appearance/chrome";
 // Session/UI state like the workspace layout: whether Window > Context Bar shows the bar.
 constexpr auto contextBarVisibleKey = "workspace/context-bar-visible";
-constexpr auto issueTrackerUrl = "https://github.com/kinetik-gg/bloom/issues/new";
+constexpr auto issueTrackerUrl = "https://github.com/afterlab/bloom/issues/new";
 
 } // namespace
 
@@ -634,7 +634,7 @@ void MainWindow::createChrome() {
     // Native (server-side) window chrome only (task C1, owner: "let OS handle the native window
     // chrome for now" / "no need for custom minimize/maximize/close" / "remove the Bloom app
     // title"). QMainWindow's own classic menu bar, stock OS-drawn window decorations -- the
-    // Kinetik TitleBar, FramelessEdgeResizer, and the "appearance/chrome" setting all stay
+    // Afterlab TitleBar, FramelessEdgeResizer, and the "appearance/chrome" setting all stay
     // compiled and independently tested (see the ChromeMode comment in main_window.hpp) for a
     // possible future custom-chrome/CSD return, but MainWindow never constructs any of them.
 #ifdef Q_OS_MACOS

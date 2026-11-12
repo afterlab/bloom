@@ -287,7 +287,7 @@ void editorFlow() {
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
-    ui::kit::installKinetikTheme(application);
+    ui::kit::installAfterlabTheme(application);
     QApplication::setOrganizationName(QStringLiteral("BloomInterpretFootageTests"));
     QApplication::setApplicationName(QStringLiteral("InterpretFootage"));
     QStandardPaths::setTestModeEnabled(true);

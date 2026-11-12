@@ -12,7 +12,7 @@ namespace bloom::ui::kit {
 
 class KButton;
 
-// The Kinetik collapsible section (task PROPS-1, deliverable 1).
+// The Afterlab collapsible section (task PROPS-1, deliverable 1).
 //
 // One header row -- [chevron][Title Case title][spring][Reset] -- above one collapsible
 // body. Everything a panel wants to group goes into bodyLayout(); the section itself never knows

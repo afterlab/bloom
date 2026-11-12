@@ -13,7 +13,7 @@
 
 namespace bloom::project {
 
-inline constexpr std::string_view kCanonicalManifestFormat = "org.kinetik.bloom.project";
+inline constexpr std::string_view kCanonicalManifestFormat = "id.afterlab.bloom.project";
 inline constexpr std::string_view kCanonicalManifestDocumentPath = "document.json";
 inline constexpr document::SchemaVersion kCanonicalManifestContainerVersionV1{1, 0};
 inline constexpr document::SchemaVersion kCanonicalManifestDocumentSchemaVersionV1{1, 0};

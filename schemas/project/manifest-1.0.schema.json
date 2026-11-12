@@ -13,7 +13,7 @@
     ],
     "properties": {
         "format": {
-            "const": "org.kinetik.bloom.project"
+            "const": "id.afterlab.bloom.project"
         },
         "containerVersion": {
             "$ref": "#/$defs/fixedVersion-1.0"

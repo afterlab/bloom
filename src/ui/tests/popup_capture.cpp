@@ -15,7 +15,7 @@
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
-    bloom::ui::kit::installKinetikTheme(application);
+    bloom::ui::kit::installAfterlabTheme(application);
     const QString mode = argc > 1 ? QString::fromLatin1(argv[1]) : QStringLiteral("dropdown");
     const int seconds = argc > 2 ? QString::fromLatin1(argv[2]).toInt() : 6;
     const QString grabPath = argc > 3 ? QString::fromLocal8Bit(argv[3]) : QString{};

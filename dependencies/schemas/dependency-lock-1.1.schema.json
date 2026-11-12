@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:kinetik:bloom:schema:dependency-lock:1.1",
+  "$id": "urn:afterlab:bloom:schema:dependency-lock:1.1",
   "title": "Bloom Dependency Lock 1.1",
   "$comment": "Minor 1 adds optional configureArguments, source archive size/retrieval metadata, shared linkage, and corresponding-source evidence. sourceObligation=none means no corresponding-source record is required; sourceObligation=corresponding-source requires correspondingSourceArchiveSha256 equal to the locked source archive digest. The native bloom-dependency-artifact-check target checks exact schema bytes and synthetic contract fixtures only; production acceptance additionally requires the reviewed Unicode bootstrap and repository evidence validator.",
   "type": "object",
   "required": ["format", "schemaVersion", "unicodeProfile", "profiles", "components"],
   "properties": {
-    "format": {"const": "org.kinetik.bloom.dependencies.lock"},
+    "format": {"const": "id.afterlab.bloom.dependencies.lock"},
     "schemaVersion": {"$ref": "#/$defs/fixedVersion"},
     "unicodeProfile": {"$ref": "#/$defs/unicodeProfile"},
     "profiles": {

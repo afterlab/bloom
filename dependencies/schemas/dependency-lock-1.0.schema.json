@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:kinetik:bloom:schema:dependency-lock:1.0",
+  "$id": "urn:afterlab:bloom:schema:dependency-lock:1.0",
   "title": "Bloom Dependency Lock 1.0",
   "$comment": "The native bloom-dependency-artifact-check target checks exact schema bytes and synthetic contract fixtures only; production acceptance additionally requires the reviewed Unicode bootstrap and repository evidence validator.",
   "type": "object",
   "required": ["format", "schemaVersion", "unicodeProfile", "profiles", "components"],
   "properties": {
-    "format": {"const": "org.kinetik.bloom.dependencies.lock"},
+    "format": {"const": "id.afterlab.bloom.dependencies.lock"},
     "schemaVersion": {"$ref": "#/$defs/fixedVersion"},
     "unicodeProfile": {"$ref": "#/$defs/unicodeProfile"},
     "profiles": {

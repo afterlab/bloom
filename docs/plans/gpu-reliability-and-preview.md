@@ -21,7 +21,7 @@ independent review and integrated closure. Allocation-owned aggregate accounting
 
 The 2026-10-10 round packaged the qualified work since `e1086c13` and paused after the shipping
 cut at the owner's request. Execution resumed on 2026-10-13 from
-[issue #304](https://github.com/kinetik-gg/bloom/issues/304), starting with hosted build blockers
+[issue #304](https://github.com/afterlab/bloom/issues/304), starting with hosted build blockers
 and transient resident-display buffer ownership. Each future slice requires source review, focused
 regressions, and the applicable native/product evidence before its successor is accepted. A passing
 unit test does not complete an experience gate. A bounded final GPU-packed transfer into QWidget

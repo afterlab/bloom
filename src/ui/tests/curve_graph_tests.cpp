@@ -575,7 +575,7 @@ void pictures() {
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
-    ui::kit::installKinetikTheme(application);
+    ui::kit::installAfterlabTheme(application);
     cardGestures();
     hueGestures();
     presets();

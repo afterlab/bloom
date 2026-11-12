@@ -5,7 +5,7 @@ Status: Linux implementation and local qualification complete
 Updated: 2026-10-14
 
 This record owns the current Linux evidence for
-[issue #304](https://github.com/kinetik-gg/bloom/issues/304). The owner narrowed this execution to
+[issue #304](https://github.com/afterlab/bloom/issues/304). The owner narrowed this execution to
 Linux. Native Windows/macOS GPU execution remains explicitly unqualified. Hosted build/CPU
 workflow results identify their own revision and do not qualify native hardware.
 The historical checkpoints in [the overhaul plan](gpu-reliability-and-preview.md) retain their

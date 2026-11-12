@@ -113,7 +113,7 @@ enum class ManifestDecodeError : std::uint8_t {
     InvalidJsonUInt32,
     // containerVersion.major or document.schemaVersion.major is not 1 (decode refuses).
     UnsupportedMajorVersion,
-    // `format` is not exactly "org.kinetik.bloom.project".
+    // `format` is not exactly "id.afterlab.bloom.project".
     InvalidFormat,
     // `document.path` is not exactly "document.json".
     InvalidDocumentPath,

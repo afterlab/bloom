@@ -4,7 +4,7 @@ Status: active
 
 Updated: 2026-10-22
 
-Parent: [#306](https://github.com/kinetik-gg/bloom/issues/306)
+Parent: [#306](https://github.com/afterlab/bloom/issues/306)
 
 ## Baseline
 
@@ -18,19 +18,19 @@ The owning architecture documents remain authoritative.
 
 | Order | Issue | Gate | Package | State |
 | --- | --- | --- | --- | --- |
-| 00 | [#307](https://github.com/kinetik-gg/bloom/issues/307) | M0 | Revalidate current baseline and establish serialized local validation | Passed |
-| 01 | [#308](https://github.com/kinetik-gg/bloom/issues/308) | M1 | Bound node utility memory and repair numeric/readout contracts | Implementing |
-| 02 | [#309](https://github.com/kinetik-gg/bloom/issues/309) | M1 | Give recovery artifacts durable ownership across launches | Implementing |
-| 03 | [#310](https://github.com/kinetik-gg/bloom/issues/310) | M1 | Move project Open/recovery I/O and rejected export retirement off UI | Implementing |
-| 04 | [#311](https://github.com/kinetik-gg/bloom/issues/311) | M2 | Make warm RAM preview indexed and coverage incremental | Queued |
-| 05 | [#312](https://github.com/kinetik-gg/bloom/issues/312) | M2 | Repair prepared-cache replacement and asynchronous CPU retirement | Queued |
-| 06 | [#313](https://github.com/kinetik-gg/bloom/issues/313) | M2 | Separate raw source storage from request descriptors and deduplicate charges | Queued |
-| 07 | [#314](https://github.com/kinetik-gg/bloom/issues/314) | M2 | Remove playback-driven Assets rebuilds and redundant UI value work | Queued |
-| 08 | [#315](https://github.com/kinetik-gg/bloom/issues/315) | M2 | Make audio preparation and transport lifecycle asynchronous | Queued |
-| 09 | [#316](https://github.com/kinetik-gg/bloom/issues/316) | M3 | Reuse video decoder/index state within bounded shared scheduling | Queued |
-| 10 | [#317](https://github.com/kinetik-gg/bloom/issues/317) | M3 | Bound document edit cost and undo memory with structural sharing | Queued |
-| 11 | [#318](https://github.com/kinetik-gg/bloom/issues/318) | M3 | Run integrated local performance, memory and route qualification | Queued |
-| 12 | [#319](https://github.com/kinetik-gg/bloom/issues/319) | M3 | Independently audit the integrated sprint and close bounded follow-ups | Queued |
+| 00 | [#307](https://github.com/afterlab/bloom/issues/307) | M0 | Revalidate current baseline and establish serialized local validation | Passed |
+| 01 | [#308](https://github.com/afterlab/bloom/issues/308) | M1 | Bound node utility memory and repair numeric/readout contracts | Implementing |
+| 02 | [#309](https://github.com/afterlab/bloom/issues/309) | M1 | Give recovery artifacts durable ownership across launches | Implementing |
+| 03 | [#310](https://github.com/afterlab/bloom/issues/310) | M1 | Move project Open/recovery I/O and rejected export retirement off UI | Implementing |
+| 04 | [#311](https://github.com/afterlab/bloom/issues/311) | M2 | Make warm RAM preview indexed and coverage incremental | Queued |
+| 05 | [#312](https://github.com/afterlab/bloom/issues/312) | M2 | Repair prepared-cache replacement and asynchronous CPU retirement | Queued |
+| 06 | [#313](https://github.com/afterlab/bloom/issues/313) | M2 | Separate raw source storage from request descriptors and deduplicate charges | Queued |
+| 07 | [#314](https://github.com/afterlab/bloom/issues/314) | M2 | Remove playback-driven Assets rebuilds and redundant UI value work | Queued |
+| 08 | [#315](https://github.com/afterlab/bloom/issues/315) | M2 | Make audio preparation and transport lifecycle asynchronous | Queued |
+| 09 | [#316](https://github.com/afterlab/bloom/issues/316) | M3 | Reuse video decoder/index state within bounded shared scheduling | Queued |
+| 10 | [#317](https://github.com/afterlab/bloom/issues/317) | M3 | Bound document edit cost and undo memory with structural sharing | Queued |
+| 11 | [#318](https://github.com/afterlab/bloom/issues/318) | M3 | Run integrated local performance, memory and route qualification | Queued |
+| 12 | [#319](https://github.com/afterlab/bloom/issues/319) | M3 | Independently audit the integrated sprint and close bounded follow-ups | Queued |
 
 Acceptance and issue closure follow this order. Disjoint implementation may overlap within a
 milestone only after the coordinator assigns file ownership. Implementation-ready does not mean

@@ -118,11 +118,11 @@ int main(int argc, char* argv[]) try {
         return 2;
     }
 
-    // The Kinetik visual language is installed once, application-wide, before any widget exists
+    // The Afterlab visual language is installed once, application-wide, before any widget exists
     // (task U1, issue #117). It replaces MainWindow::applyFoundationTheme(): the palette, the
     // application stylesheet, and the interface font belong to the application, not to one window,
     // and installing them first means no surface is ever constructed under the default Qt theme.
-    bloom::ui::kit::installKinetikTheme(application);
+    bloom::ui::kit::installAfterlabTheme(application);
     // The theme installs kit::AltUnderlineProxyStyle (Alt-held mnemonic underlines, menu and
     // item-view painting) itself, so every window built after this line -- and every test window
     // built under the same theme -- shares one style.

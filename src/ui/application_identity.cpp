@@ -8,7 +8,7 @@
 namespace bloom::ui {
 
 ApplicationIdentity installApplicationIdentity() {
-    ApplicationIdentity identity{QStringLiteral("Kinetik"), QStringLiteral("Bloom"), {}, {}};
+    ApplicationIdentity identity{QStringLiteral("Afterlab"), QStringLiteral("Bloom"), {}, {}};
     const QString profile = qEnvironmentVariable(kPackageCheckProfileVariable);
     if (!profile.isEmpty()) {
         // Whoever set the variable meant this run not to be Bloom's own. From here on it never
@@ -32,7 +32,7 @@ ApplicationIdentity installApplicationIdentity() {
     QCoreApplication::setOrganizationName(identity.organization);
     // The name of Bloom's desktop entry on Linux (apps/bloom/linux), which is how a Wayland
     // desktop finds the icon and name of the window's application.
-    QGuiApplication::setDesktopFileName(QStringLiteral("org.kinetik.bloom"));
+    QGuiApplication::setDesktopFileName(QStringLiteral("id.afterlab.bloom"));
     return identity;
 }
 

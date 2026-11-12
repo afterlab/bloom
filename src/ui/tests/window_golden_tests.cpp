@@ -9,7 +9,7 @@ int run(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName("BloomGrammarTests");
     app.setApplicationName("WindowGoldens");
-    bloom::ui::kit::installKinetikTheme(app);
+    bloom::ui::kit::installAfterlabTheme(app);
     bloom::ui::test::WindowFixture fixture;
     const auto ratio = fixture.window->devicePixelRatioF();
     if (ratio != 1.0 && ratio != 1.5) {

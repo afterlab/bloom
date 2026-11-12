@@ -185,7 +185,7 @@ void testPanelsAreSeparatedByARealGutter(Expectations& expectations) {
 void testTheSplitterHandleIsPaintedInBackground(Expectations& expectations) {
     // The gap has to read as the window behind the panels rather than as a light divider, so the
     // handle takes Background -- asserted through the generated sheet rather than a screenshot.
-    const QString sheet = kit::kinetikStyleSheet();
+    const QString sheet = kit::afterlabStyleSheet();
     const qsizetype rule = sheet.indexOf(QStringLiteral("QSplitter::handle"));
     expectations.expect(rule >= 0, "the theme styles the splitter handle");
     if (rule < 0) {
@@ -197,10 +197,10 @@ void testTheSplitterHandleIsPaintedInBackground(Expectations& expectations) {
         "the handle is painted in Background, so the gutter reads as the gap it is");
 }
 
-void testTheNodeGraphSitsOnTheKinetikBackground(Expectations& expectations) {
+void testTheNodeGraphSitsOnTheAfterlabBackground(Expectations& expectations) {
     NodeGraphicsScene scene;
     expectations.expect(scene.backgroundBrush().color() == kit::color(kit::Color::Background),
-                        "the node graph's canvas is the Kinetik background, not its own gray");
+                        "the node graph's canvas is the Afterlab background, not its own gray");
     expectations.expect(scene.objectName() == QStringLiteral("nodeGraphicsScene"),
                         "and the scene keeps its objectName");
 }
@@ -303,7 +303,7 @@ void testWorkspaceHostInsetsItsSingleAreaByTheGutterFromItsOwnRect(Expectations&
 // theme carries the exact Spacing::S (8px) vertical bar padding and Spacing::MenuItemX (10px)
 // horizontal item padding the owner asked for.
 void testMenuBarCarriesItsDocumentedPadding(Expectations& expectations) {
-    const QString sheet = kit::kinetikStyleSheet();
+    const QString sheet = kit::afterlabStyleSheet();
 
     // "\n" before "QMenuBar {": the FIRST bare occurrence of "QMenuBar {" is a substring of the
     // combined "QMainWindow, QMenuBar {" selector above it, which carries no padding at all --
@@ -335,7 +335,7 @@ void testMenuBarCarriesItsDocumentedPadding(Expectations& expectations) {
 // edge the owner complained about.
 void testMenuBarItemsRenderVerticallyCenteredWithRoomAboveThem(Expectations& expectations) {
     QMenuBar menuBar;
-    menuBar.setStyleSheet(kit::kinetikStyleSheet());
+    menuBar.setStyleSheet(kit::afterlabStyleSheet());
     menuBar.addMenu(QStringLiteral("&File"));
     menuBar.resize(menuBar.sizeHint());
     QCoreApplication::processEvents();
@@ -363,11 +363,11 @@ void testMenuBarItemsRenderVerticallyCenteredWithRoomAboveThem(Expectations& exp
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
-    kit::installKinetikTheme(application);
+    kit::installAfterlabTheme(application);
     Expectations expectations;
     testPanelsAreSeparatedByARealGutter(expectations);
     testTheSplitterHandleIsPaintedInBackground(expectations);
-    testTheNodeGraphSitsOnTheKinetikBackground(expectations);
+    testTheNodeGraphSitsOnTheAfterlabBackground(expectations);
     testBacktickTogglesFullscreenForTheActivePanelAndDefersToTextEntry(expectations);
     testWorkspaceHostInsetsItsSingleAreaByTheGutterFromItsOwnRect(expectations);
     testDefaultWorkspaceUsesTheOwnerArrangement(expectations);

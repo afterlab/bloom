@@ -39,7 +39,7 @@
 			<string>${MACOSX_BUNDLE_ICON_FILE}</string>
 			<key>LSItemContentTypes</key>
 			<array>
-				<string>org.kinetik.bloom.project</string>
+				<string>id.afterlab.bloom.project</string>
 			</array>
 		</dict>
 	</array>
@@ -47,7 +47,7 @@
 	<array>
 		<dict>
 			<key>UTTypeIdentifier</key>
-			<string>org.kinetik.bloom.project</string>
+			<string>id.afterlab.bloom.project</string>
 			<key>UTTypeDescription</key>
 			<string>Bloom Project</string>
 			<key>UTTypeConformsTo</key>

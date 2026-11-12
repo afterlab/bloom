@@ -122,7 +122,7 @@ int main(int argc, char** argv) {
     if (capture)
         qputenv("QT_SCALE_FACTOR", argv[2]);
     QApplication app(argc, argv);
-    ui::kit::installKinetikTheme(app);
+    ui::kit::installAfterlabTheme(app);
     auto project = document::makeNewProject("Fields", "Main", core::RationalTime::fromInteger(10));
     document::Document document(std::move(project.project));
     commands::CommandStack stack(document);

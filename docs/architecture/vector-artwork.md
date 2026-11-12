@@ -4,11 +4,11 @@ Status: canonical
 
 Updated: 2026-11-11
 
-Issues: [#343](https://github.com/kinetik-gg/bloom/issues/343),
-[#642](https://github.com/kinetik-gg/bloom/issues/642),
-[#644](https://github.com/kinetik-gg/bloom/issues/644),
-[#645](https://github.com/kinetik-gg/bloom/issues/645),
-[#646](https://github.com/kinetik-gg/bloom/issues/646).
+Issues: [#343](https://github.com/afterlab/bloom/issues/343),
+[#642](https://github.com/afterlab/bloom/issues/642),
+[#644](https://github.com/afterlab/bloom/issues/644),
+[#645](https://github.com/afterlab/bloom/issues/645),
+[#646](https://github.com/afterlab/bloom/issues/646).
 
 An SVG file imports as native Bloom layers, not as a picture. An artist can select any element,
 move its points, key them, fill it with another colour, run Trim Path or Offset Path over it, and

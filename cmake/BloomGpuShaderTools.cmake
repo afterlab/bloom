@@ -332,7 +332,7 @@ function(bloom_package_gpu_shader_tools target)
     _bloom_gpu_tools_json_array("${_spirv_private_names}" _spirv_runtime_json)
     _bloom_gpu_tools_json_array("${_evidence_staged_names}" _licenses_json)
     string(CONCAT _inventory
-        "{\"format\":\"org.kinetik.bloom.gpu-shader-tools.inventory\",\"version\":1,"
+        "{\"format\":\"id.afterlab.bloom.gpu-shader-tools.inventory\",\"version\":1,"
         "\"layout\":\"executable-relative\",\"directory\":\"${_dir}\",\"relocated\":"
         "${_relocated_json},\"tools\":["
         "{\"name\":\"glslangValidator\",\"file\":\"${_glslang_name}\","

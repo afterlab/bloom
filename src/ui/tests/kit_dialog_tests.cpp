@@ -490,7 +490,7 @@ int main(int argc, char** argv) {
     // Qt's widget file dialog saves its state into the user's Qt settings: not from a test.
     QStandardPaths::setTestModeEnabled(true);
     QApplication application(argc, argv);
-    kit::installKinetikTheme(application);
+    kit::installAfterlabTheme(application);
     QTemporaryDir settings;
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settings.path());

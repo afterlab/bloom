@@ -28,15 +28,15 @@ int main(int argc, char** argv) {
 
     qunsetenv(bloom::ui::kPackageCheckProfileVariable);
     auto identity = bloom::ui::installApplicationIdentity();
-    expect(identity.organization == QStringLiteral("Kinetik") &&
+    expect(identity.organization == QStringLiteral("Afterlab") &&
                identity.application == QStringLiteral("Bloom") &&
                identity.settingsDirectory.isEmpty(),
            "Bloom's own names without the check's variable");
-    expect(QCoreApplication::organizationName() == QStringLiteral("Kinetik") &&
+    expect(QCoreApplication::organizationName() == QStringLiteral("Afterlab") &&
                QCoreApplication::applicationName() == QStringLiteral("Bloom"),
            "the names reach QCoreApplication");
     // The desktop entry a Linux package installs is named after this.
-    expect(QGuiApplication::desktopFileName() == QStringLiteral("org.kinetik.bloom"),
+    expect(QGuiApplication::desktopFileName() == QStringLiteral("id.afterlab.bloom"),
            "the window's application is named after Bloom's desktop entry");
 
     expect(identity.refusal.isEmpty(), "nothing is refused without the check's variable");
@@ -48,7 +48,7 @@ int main(int argc, char** argv) {
     expect(identity.organization == QString::fromLatin1(bloom::ui::kPackageCheckOrganization) &&
                identity.settingsDirectory.isEmpty() && !identity.refusal.isEmpty(),
            "a relative profile directory is refused");
-    expect(QCoreApplication::organizationName() != QStringLiteral("Kinetik") &&
+    expect(QCoreApplication::organizationName() != QStringLiteral("Afterlab") &&
                QSettings::defaultFormat() == QSettings::IniFormat,
            "a refused run is not Bloom's own: another organization and no system store");
 
@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
     identity = bloom::ui::installApplicationIdentity();
     expect(identity.organization == QString::fromLatin1(bloom::ui::kPackageCheckOrganization),
            "the check's organization name");
-    expect(QCoreApplication::organizationName() != QStringLiteral("Kinetik"),
+    expect(QCoreApplication::organizationName() != QStringLiteral("Afterlab"),
            "the check never uses Bloom's organization name");
     const QString root = QDir::cleanPath(directory.path());
     {
@@ -74,7 +74,7 @@ int main(int argc, char** argv) {
     // The per-user folders Qt derives from the names are not Bloom's own.
     for (const auto location : {QStandardPaths::AppDataLocation, QStandardPaths::CacheLocation}) {
         const QString path = QStandardPaths::writableLocation(location);
-        expect(!path.contains(QStringLiteral("Kinetik")),
+        expect(!path.contains(QStringLiteral("Afterlab")),
                "a per-user folder of the check is not Bloom's: " + path.toStdString());
         expect(path.contains(QString::fromLatin1(bloom::ui::kPackageCheckOrganization)),
                "a per-user folder of the check carries the check's name: " + path.toStdString());

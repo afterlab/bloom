@@ -145,7 +145,7 @@ QColor centre(const QImage& image) {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
-    ui::kit::installKinetikTheme(app);
+    ui::kit::installAfterlabTheme(app);
     Fixture fixture;
     auto& session = fixture.session;
     auto& previews = fixture.previews;

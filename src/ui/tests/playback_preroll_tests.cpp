@@ -458,7 +458,7 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName(QStringLiteral("BloomPrerollTests"));
     app.setApplicationName(QStringLiteral("PlaybackPreroll"));
-    bloom::ui::kit::installKinetikTheme(app);
+    bloom::ui::kit::installAfterlabTheme(app);
     Expectations expectations;
     testStateMachine(expectations);
     testHoldsUntilReady(expectations);

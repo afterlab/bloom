@@ -551,7 +551,7 @@ int main(int argc, char** argv) {
     QApplication::setOrganizationName(QStringLiteral("BloomAssetOrganizationTests"));
     QApplication::setApplicationName(QStringLiteral("AssetOrganization"));
     QStandardPaths::setTestModeEnabled(true);
-    bloom::ui::kit::installKinetikTheme(app);
+    bloom::ui::kit::installAfterlabTheme(app);
     try {
         run();
         importIntoSelectedFolder();

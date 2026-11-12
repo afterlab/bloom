@@ -181,7 +181,7 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     contentLayout_->setSpacing(0);
 
     // The single chokepoint every header control is built through (task U1, issue #117): the
-    // glyphs moved from typed characters ("H", "V", the box, the multiplication sign) to Kinetik
+    // glyphs moved from typed characters ("H", "V", the box, the multiplication sign) to Afterlab
     // icons here, and nowhere else. Tooltips, accessible names, objectNames, and behavior are
     // unchanged -- an icon never replaces an accessible name (ADR 0010), so every one of these
     // icon-only controls still carries both. task U8, issue #131, fix 7: every header button this

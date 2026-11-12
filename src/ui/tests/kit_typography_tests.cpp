@@ -510,7 +510,7 @@ int run(int argc, char** argv) {
     QGuiApplication::setFont(hostileFont());
     for (const char* name : kPlatformFontClasses)
         QApplication::setFont(hostileFont(), name);
-    ui::kit::installKinetikTheme(app);
+    ui::kit::installAfterlabTheme(app);
     Audit audit;
 
     // The application font and every platform class entry resolve to the bundled face.

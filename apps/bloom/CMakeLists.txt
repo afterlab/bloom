@@ -29,7 +29,7 @@ if(APPLE)
         bloom
         PROPERTIES
             MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/macos/Info.plist.in"
-            MACOSX_BUNDLE_GUI_IDENTIFIER "org.kinetik.bloom"
+            MACOSX_BUNDLE_GUI_IDENTIFIER "id.afterlab.bloom"
             MACOSX_BUNDLE_BUNDLE_NAME "Bloom"
             MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
             MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
@@ -54,9 +54,9 @@ bloom_package_search_path(bloom "${BLOOM_PACKAGE_PROGRAM_DIR}")
 # prefix. An AppImage shows the entry and one icon at its top as well
 # (cmake/package/make_archives.cmake).
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    install(FILES linux/org.kinetik.bloom.desktop DESTINATION share/applications)
+    install(FILES linux/id.afterlab.bloom.desktop DESTINATION share/applications)
     foreach(bloom_icon_size IN ITEMS 16 24 32 48 64 128 256 512)
-        install(FILES linux/icons/${bloom_icon_size}x${bloom_icon_size}/org.kinetik.bloom.png
+        install(FILES linux/icons/${bloom_icon_size}x${bloom_icon_size}/id.afterlab.bloom.png
                 DESTINATION share/icons/hicolor/${bloom_icon_size}x${bloom_icon_size}/apps)
     endforeach()
 elseif(WIN32)

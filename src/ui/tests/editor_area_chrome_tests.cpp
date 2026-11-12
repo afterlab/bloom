@@ -155,7 +155,7 @@ void testTheMaximizeButtonIsTheOnlyRemainingHeaderButtonAndIsAFullscreenToggle(
     if (button == nullptr) {
         return;
     }
-    expectations.expect(!button->icon().isNull(), "maximizeAreaButton draws a Kinetik icon");
+    expectations.expect(!button->icon().isNull(), "maximizeAreaButton draws a Afterlab icon");
     expectations.expect(button->text().isEmpty(), "maximizeAreaButton carries no typed glyph");
     expectations.expect(button->toolTip() == QStringLiteral("Fullscreen"),
                         "resting wording is Fullscreen, not Maximize area");

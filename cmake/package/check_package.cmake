@@ -619,10 +619,10 @@ elseif(system STREQUAL "macos" AND "resolution" IN_LIST ONLY)
     bloom_plist(":UTExportedTypeDeclarations:0:UTTypeIdentifier" exported_type)
     bloom_plist(":UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.filename-extension:0"
                 extension)
-    if(NOT document_type STREQUAL "org.kinetik.bloom.project"
+    if(NOT document_type STREQUAL "id.afterlab.bloom.project"
        OR NOT exported_type STREQUAL document_type OR NOT extension STREQUAL "bloom")
         bloom_fail("Info.plist does not declare the Bloom project document type "
-                   "(.bloom, org.kinetik.bloom.project)")
+                   "(.bloom, id.afterlab.bloom.project)")
     endif()
 
     # Every Mach-O file, by its first four bytes. Per file: what it loads, its search paths, the

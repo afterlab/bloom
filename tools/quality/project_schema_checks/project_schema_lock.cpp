@@ -682,7 +682,7 @@ const std::array<SchemaNodePin, 669> kDocumentSchemaLock{{
 
 const std::array<SchemaNodePin, 35> kManifestSchemaLock{{
     {"", R"pin({"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"urn:afterlab:bloom:schema:project-manifest:1.0","title":"Bloom Project Manifest 1.0","$comment":"The Bloom project manifest for document schema 1.0. The optional generator names the application and version that wrote the file; it is informational and never changes how the file is read.","type":"object","required":["format","containerVersion","document","requirements"],"properties":["format","containerVersion","document","requirements","generator"],"$defs":["unsigned32","positiveMajorVersion","namespacedIdentifier","fixedVersion-1.0","requirementVersion-1.0","document-1.0","requirement-1.0","documentSchemaVersion","generatorText","generator-1.0"],"unevaluatedProperties":true})pin"},
-    {"/properties/format", R"pin({"const":"org.kinetik.bloom.project"})pin"},
+    {"/properties/format", R"pin({"const":"id.afterlab.bloom.project"})pin"},
     {"/properties/containerVersion", R"pin({"$ref":"#/$defs/fixedVersion-1.0"})pin"},
     {"/properties/document", R"pin({"$ref":"#/$defs/document-1.0"})pin"},
     {"/properties/requirements", R"pin({"type":"array","maxItems":1000000,"items":"<schema>"})pin"},

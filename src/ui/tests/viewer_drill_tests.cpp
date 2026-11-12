@@ -1438,7 +1438,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QApplication::setOrganizationName(QStringLiteral("BloomViewerDrill"));
     QApplication::setApplicationName(QStringLiteral("ViewerDrill"));
-    ui::kit::installKinetikTheme(application);
+    ui::kit::installAfterlabTheme(application);
     try {
         {
             App app;

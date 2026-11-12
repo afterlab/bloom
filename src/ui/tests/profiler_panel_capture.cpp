@@ -185,7 +185,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     application.setOrganizationName(QStringLiteral("BloomProfilerPanelCapture"));
     application.setApplicationName(QStringLiteral("ProfilerPanelCapture"));
-    ui::kit::installKinetikTheme(application);
+    ui::kit::installAfterlabTheme(application);
     QTemporaryDir scratch;
     QString directory = qEnvironmentVariable("BLOOM_PROFILER_CAPTURE_DIR");
     if (directory.isEmpty() && argc > 1)

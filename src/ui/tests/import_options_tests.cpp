@@ -302,7 +302,7 @@ void thumbnailsFollowInterpretation(const QTemporaryDir& directory) {
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
-    ui::kit::installKinetikTheme(application);
+    ui::kit::installAfterlabTheme(application);
     QApplication::setOrganizationName(QStringLiteral("BloomImportOptionsTests"));
     QApplication::setApplicationName(QStringLiteral("ImportOptions"));
     QStandardPaths::setTestModeEnabled(true);

@@ -491,7 +491,7 @@ class ArchiveWriter final {
 // otherwise valid {1,0} document classifies PreservedReadOnlyRequired on the manifest side.
 [[nodiscard]] std::vector<std::byte> buildManifestSidePreservedReadOnlyArchiveOrAbort() {
     const std::string manifestText =
-        R"({"format":"org.kinetik.bloom.project","containerVersion":{"major":1,"minor":1},)"
+        R"({"format":"id.afterlab.bloom.project","containerVersion":{"major":1,"minor":1},)"
         R"("document":{"path":"document.json","schemaVersion":{"major":1,"minor":0}},)"
         R"("requirements":[]})";
     std::vector<std::byte> manifestBytes(manifestText.size());

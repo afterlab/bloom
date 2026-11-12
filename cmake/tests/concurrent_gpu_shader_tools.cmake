@@ -50,7 +50,7 @@ endforeach()
 file(SHA256 "${_bin}/glslang" _glslang_sha)
 file(SHA256 "${_bin}/spirv-val" _spirv_sha)
 string(CONCAT _inventory
-    "{\"format\":\"org.kinetik.bloom.gpu-shader-tools.inventory\",\"version\":1,"
+    "{\"format\":\"id.afterlab.bloom.gpu-shader-tools.inventory\",\"version\":1,"
     "\"layout\":\"executable-relative\",\"directory\":\"bloom-gpu-tools\",\"relocated\":false,"
     "\"tools\":["
     "{\"name\":\"glslangValidator\",\"file\":\"glslangValidator\","

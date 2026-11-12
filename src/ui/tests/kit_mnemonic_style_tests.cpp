@@ -318,7 +318,7 @@ int main(int argc, char** argv) {
     // The menu tests below assert what the APPLICATION draws, so they need the application's own
     // theme and style installed exactly as apps/bloom/main.cpp installs them.
     try {
-        kit::installKinetikTheme(application);
+        kit::installAfterlabTheme(application);
         // The theme installs kit::AltUnderlineProxyStyle itself, exactly as the application gets
         // it.
         Expectations expectations;

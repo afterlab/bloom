@@ -280,7 +280,7 @@ void testTheSwitchStateMachineAndDisabled(Expectations& expectations) {
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
-    kit::installKinetikTheme(application);
+    kit::installAfterlabTheme(application);
     Expectations expectations;
     testTheRadioGroupModelIsOneOfMany(expectations);
     testBothPresentationsShareOneStateMachine(expectations);

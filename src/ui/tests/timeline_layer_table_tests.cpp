@@ -978,7 +978,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QApplication::setOrganizationName(QStringLiteral("BloomTimelineLayerTable"));
     QApplication::setApplicationName(QStringLiteral("TimelineLayerTable"));
-    kit::installKinetikTheme(application);
+    kit::installAfterlabTheme(application);
     testLabels();
     testSwitches();
     testSizing();

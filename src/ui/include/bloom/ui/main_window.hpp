@@ -263,7 +263,7 @@ class MainWindow final : public QMainWindow {
     QMenu* purgeMenu_ = nullptr;
     QStackedWidget* centralStack_ = nullptr;
     // A kit strip under the workspace, NOT QMainWindow::statusBar(): that brings its own chrome,
-    // size grip and item model, none of which the Kinetik language wants.
+    // size grip and item model, none of which the Afterlab language wants.
     WindowStatusBar* statusStrip_ = nullptr;
     ContextBar* contextBar_ = nullptr;
     QAction* contextBarAction_ = nullptr;

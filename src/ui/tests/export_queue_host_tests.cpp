@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
     QApplication::setOrganizationName(QStringLiteral("BloomExportQueueHostTests"));
     QApplication::setApplicationName(QStringLiteral("ExportQueueHost"));
     QStandardPaths::setTestModeEnabled(true);
-    ui::kit::installKinetikTheme(application);
+    ui::kit::installAfterlabTheme(application);
 
     runtime::TaskScheduler scheduler;
     ui::TaskUiBridge bridge(scheduler, nullptr, std::chrono::milliseconds{5});

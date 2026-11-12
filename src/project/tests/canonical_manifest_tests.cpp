@@ -56,7 +56,7 @@ class Expectations final {
 
 void testEmptyGoldenBytes(Expectations& expectations) {
     constexpr std::string_view expected = "{\n"
-                                          "  \"format\": \"org.kinetik.bloom.project\",\n"
+                                          "  \"format\": \"id.afterlab.bloom.project\",\n"
                                           "  \"containerVersion\": {\n"
                                           "    \"major\": 1,\n"
                                           "    \"minor\": 0\n"
@@ -93,7 +93,7 @@ void testNonEmptyGoldenBytes(Expectations& expectations) {
     };
     const CanonicalManifestV1 manifest{.requirements = requirements, .generator = std::nullopt};
     constexpr std::string_view expected = "{\n"
-                                          "  \"format\": \"org.kinetik.bloom.project\",\n"
+                                          "  \"format\": \"id.afterlab.bloom.project\",\n"
                                           "  \"containerVersion\": {\n"
                                           "    \"major\": 1,\n"
                                           "    \"minor\": 0\n"
@@ -148,7 +148,7 @@ void testGeneratorGoldenBytes(Expectations& expectations) {
     const CanonicalManifestV1 manifest{
         .generator = bloom::project::ManifestGenerator{"Bloom", "9.8.7-test"}};
     constexpr std::string_view expected = "{\n"
-                                          "  \"format\": \"org.kinetik.bloom.project\",\n"
+                                          "  \"format\": \"id.afterlab.bloom.project\",\n"
                                           "  \"containerVersion\": {\n"
                                           "    \"major\": 1,\n"
                                           "    \"minor\": 0\n"
@@ -200,7 +200,7 @@ void testFixedConstantsAndSchemaVersions(Expectations& expectations) {
     };
 
     auto manifest = CanonicalManifestV1{};
-    manifest.format = "org.kinetik.bloom.project\n";
+    manifest.format = "id.afterlab.bloom.project\n";
     expectError(manifest, CanonicalManifestError::InvalidFormat,
                 "the format constant is exact and never escaped into output");
     manifest = {};

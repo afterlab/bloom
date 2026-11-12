@@ -28,7 +28,7 @@ and `wght` 100-900, default 400). Its name table declares the family `Inter Vari
 registers it under that name. Each type role is a named weight on the `wght` axis (Medium 500 for
 Ui/UiSmall, SemiBold 600 for UiSmallStrong/Title), applied with `QFont::setWeight()` and
 `QFont::setVariableAxis()`, and `opsz` is pinned to 14. It is registered with Qt's application font
-database from the `kinetik_fonts` resource. The italic variable face, `Inter.ttc` and the display
+database from the `afterlab_fonts` resource. The italic variable face, `Inter.ttc` and the display
 cuts are not vendored.
 
 ## Text layers: the static faces

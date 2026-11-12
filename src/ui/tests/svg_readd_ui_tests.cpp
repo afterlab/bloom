@@ -195,7 +195,7 @@ int main(int argc, char** argv) {
     QApplication::setOrganizationName(QStringLiteral("BloomSvgReadd"));
     QApplication::setApplicationName(QStringLiteral("SvgReadd"));
     QStandardPaths::setTestModeEnabled(true);
-    ui::kit::installKinetikTheme(app);
+    ui::kit::installAfterlabTheme(app);
     try {
         QTemporaryDir directory;
         require(directory.isValid(), "temporary directory");

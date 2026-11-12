@@ -3577,7 +3577,7 @@ void ditherCard() {
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
-    ui::kit::installKinetikTheme(application);
+    ui::kit::installAfterlabTheme(application);
     warpPathRefusal();
     // BLOOM_GRADING_CARDS_ONLY=quantize (dither or warp) runs only the Quantize (Dither, Procedural Warp) card(s) (the whole run writes every card).
     if (qEnvironmentVariable("BLOOM_GRADING_CARDS_ONLY") == QStringLiteral("dither")) {

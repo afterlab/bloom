@@ -118,7 +118,7 @@ void keyShape(ui::CompositionSession& session, const document::LayerId shape) {
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
-    ui::kit::installKinetikTheme(application);
+    ui::kit::installAfterlabTheme(application);
     if (argc < 2) {
         std::cerr << "usage: bloom_svg_drill_capture <output directory>\n";
         return 2;

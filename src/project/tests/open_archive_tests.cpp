@@ -685,7 +685,7 @@ void testManifestSidePreservedReadOnly(Expectations& expectations) {
     // technique): strict JSON parsing does not require canonical pretty-printing, only
     // encodeCanonicalManifest()'s writer-side comparisons do.
     const std::string manifestText =
-        R"({"format":"org.kinetik.bloom.project","containerVersion":{"major":1,"minor":1},)"
+        R"({"format":"id.afterlab.bloom.project","containerVersion":{"major":1,"minor":1},)"
         R"("document":{"path":"document.json","schemaVersion":{"major":1,"minor":0}},)"
         R"("requirements":[]})";
     std::vector<std::byte> manifestBytes(manifestText.size());

@@ -17,7 +17,7 @@
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
-    bloom::ui::kit::installKinetikTheme(application);
+    bloom::ui::kit::installAfterlabTheme(application);
     if (argc < 3) {
         std::cerr << "usage: bloom_svg_window_capture <output directory> <file.svg>\n";
         return 2;

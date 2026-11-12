@@ -70,7 +70,7 @@ int run(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName("BloomAudioTests");
     app.setApplicationName("AudioTransport");
-    ui::kit::installKinetikTheme(app);
+    ui::kit::installAfterlabTheme(app);
     QTemporaryDir directory;
     require(directory.isValid(), "fixture directory");
     writeTone(directory.filePath("Tone.wav"));

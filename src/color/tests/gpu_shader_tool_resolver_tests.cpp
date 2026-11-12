@@ -78,7 +78,7 @@ bloom::core::Sha256Digest digestOf(std::string_view text) {
 std::string inventoryText(const bool relocated, const std::string& glslangStaged,
                           const std::string& spirvStaged, const std::string& glslangSource,
                           const std::string& spirvSource) {
-    std::string text = "{\"format\":\"org.kinetik.bloom.gpu-shader-tools.inventory\","
+    std::string text = "{\"format\":\"id.afterlab.bloom.gpu-shader-tools.inventory\","
                        "\"version\":1,\"layout\":\"executable-relative\","
                        "\"directory\":\"bloom-gpu-tools\",\"relocated\":";
     text += relocated ? "true" : "false";

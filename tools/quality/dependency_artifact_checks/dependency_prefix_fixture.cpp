@@ -23,7 +23,7 @@ void validatePrefixFixture(const Value& value, const Value& lock,
             "capabilities", "cmakePackages", "installedFiles", "qualificationResults"},
            "$");
     if (!value.at("format").isString() ||
-        value.at("format").asString() != "org.kinetik.bloom.dependencies.prefix") {
+        value.at("format").asString() != "id.afterlab.bloom.dependencies.prefix") {
         fail("format", "$.format", "unexpected prefix format");
     }
     const auto& version = value.at("schemaVersion");

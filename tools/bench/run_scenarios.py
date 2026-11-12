@@ -197,11 +197,11 @@ class Instance:
         self.port = None
 
     def start(self, timeout=120):
-        for folder in ("config/Kinetik", "data", "cache", "state", "runtime"):
+        for folder in ("config/Afterlab", "data", "cache", "state", "runtime"):
             (self.home / folder).mkdir(parents=True, exist_ok=True)
         os.chmod(self.home / "runtime", 0o700)
         self.port = free_port()
-        (self.home / "config/Kinetik/Bloom.conf").write_text(
+        (self.home / "config/Afterlab/Bloom.conf").write_text(
             f"[mcp]\nport={self.port}\nautoStart=true\n")
         self.output = open(self.home / "bloom.log", "w", encoding="utf-8")
         self.process = subprocess.Popen([str(self.binary)], stdout=self.output,

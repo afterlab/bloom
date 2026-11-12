@@ -706,7 +706,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QApplication::setOrganizationName(QStringLiteral("BloomMcpLiveUiTests"));
     QApplication::setApplicationName(QStringLiteral("McpLiveUi"));
-    ui::kit::installKinetikTheme(application);
+    ui::kit::installAfterlabTheme(application);
     testEnumTableParity();
     testCompileSubjectIsData();
     try {

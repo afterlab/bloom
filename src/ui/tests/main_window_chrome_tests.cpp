@@ -518,8 +518,8 @@ void testMainWindowAlwaysBuildsNativeChrome(Expectations& expectations) {
     MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost);
     expectations.expect(!window.windowFlags().testFlag(Qt::FramelessWindowHint),
                         "native chrome: stock OS decorations, never frameless");
-    expectations.expect(window.findChild<QWidget*>(QStringLiteral("kinetikTitleBar")) == nullptr,
-                        "native chrome: no Kinetik TitleBar is constructed at all");
+    expectations.expect(window.findChild<QWidget*>(QStringLiteral("afterlabTitleBar")) == nullptr,
+                        "native chrome: no Afterlab TitleBar is constructed at all");
 #ifdef Q_OS_MACOS
     // #536: macOS has one global menu bar for every window, so the window carries none itself.
     expectations.expect(window.menuBar() != nullptr &&

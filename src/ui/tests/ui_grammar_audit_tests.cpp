@@ -25,7 +25,7 @@ int run(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName("BloomGrammarTests");
     app.setApplicationName("Metrics");
-    bloom::ui::kit::installKinetikTheme(app);
+    bloom::ui::kit::installAfterlabTheme(app);
     using namespace bloom::ui;
     test::WindowFixture fixture;
     int failures = 0, controls = 0, icons = 0;

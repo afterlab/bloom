@@ -121,7 +121,7 @@ int run(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName("BloomGrammarTests");
     app.setApplicationName("TimelineGraphCapture");
-    kit::installKinetikTheme(app);
+    kit::installAfterlabTheme(app);
     const QString directory = argc > 1 ? QString::fromLocal8Bit(argv[1])
                                        : QStringLiteral(BLOOM_GRAMMAR_ARTIFACT_DIR);
     QDir().mkpath(directory);

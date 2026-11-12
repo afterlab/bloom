@@ -13,7 +13,7 @@ class QWidget;
 
 namespace bloom::ui::kit {
 
-// Bloom's application proxy style: the handful of things the Kinetik look needs from Qt's own
+// Bloom's application proxy style: the handful of things the Afterlab look needs from Qt's own
 // widgets that neither a stylesheet nor a kit widget can deliver.
 //
 // 1. Mnemonic underlines only while Alt is held (task U2, issue #118). Bloom's menu bar and menus
@@ -31,14 +31,14 @@ namespace bloom::ui::kit {
 //    every row it holds are painted here.
 //
 // Scope: installed once, application-wide, in apps/bloom/main.cpp right after
-// installKinetikTheme() -- see that call site's comment. Not a per-widget style.
+// installAfterlabTheme() -- see that call site's comment. Not a per-widget style.
 class AltUnderlineProxyStyle final : public QProxyStyle {
     Q_OBJECT
 
   public:
-    // Wraps a freshly created "Fusion" base style (the same style installKinetikTheme() selects),
+    // Wraps a freshly created "Fusion" base style (the same style installAfterlabTheme() selects),
     // so replacing the application style with this proxy never double-frees or aliases the style
-    // object installKinetikTheme() already installed.
+    // object installAfterlabTheme() already installed.
     AltUnderlineProxyStyle();
     explicit AltUnderlineProxyStyle(QStyle* baseStyle);
 

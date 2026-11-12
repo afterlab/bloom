@@ -393,7 +393,7 @@ int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     qputenv("BLOOM_REDUCED_MOTION", "1");
     QApplication application(argc, argv);
-    kit::installKinetikTheme(application);
+    kit::installAfterlabTheme(application);
     Expectations expectations;
     testPlacementAgainstFakeScreens(expectations);
     testThereIsNoChinUnderTheLastRow(expectations);

@@ -100,11 +100,11 @@ void testCheckedInArtifacts(const Fixture& fixture, Expectations& expectations) 
     const auto result = dependency::checkRepository(fixture.root);
     expectations.expect(
         result.lockVector ==
-            "sha256:3a12df1cecff55b171ee3351dcad80fbb5cb52f44924c95ce5056535709d8d79",
+            "sha256:04d5a9e2dfbeea2251edcef26bf5e97a858b301b2f07cdc803f3cec3faa3c81d",
         "lock identity test vector matches exact canonical bytes");
     expectations.expect(
         result.prefixVector ==
-            "sha256:af0d91ce2f5004be73aec1635cf95b83733252fceef733c1b3289f1bdd8ac149",
+            "sha256:a5f00b0c926888d051fb91ce7d9792e4d7c4c3c7d2e256e5ed68ad9cc81a7893",
         "prefix identity test vector matches exact canonical bytes");
     const auto& components = fixture.prefix.at("components").asArray();
     expectations.expect(

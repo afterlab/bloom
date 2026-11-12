@@ -396,7 +396,7 @@ void run() {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
-    ui::kit::installKinetikTheme(app);
+    ui::kit::installAfterlabTheme(app);
     try {
         run();
     } catch (const std::exception& error) {

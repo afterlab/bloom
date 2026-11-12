@@ -623,7 +623,7 @@ int main(int argc, char** argv) {
     // out of the user's own.
     QStandardPaths::setTestModeEnabled(true);
     QApplication application(argc, argv);
-    kit::installKinetikTheme(application);
+    kit::installAfterlabTheme(application);
     gDirectory = QString::fromLocal8Bit(argv[1]);
     gSuffix = QString::fromLatin1(argv[2]).remove(QLatin1Char('.'));
     QDir().mkpath(gDirectory);

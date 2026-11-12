@@ -828,7 +828,7 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
     // about what is addable. Kit menu styling is the application-wide proxy style
     // (kit/mnemonic_style.hpp)
     // -- rows, the submenu caret and Size::MenuMinWidth come from it, so an ordinary QMenu is
-    // already a Kinetik menu and a second opinion here would be the drift that file exists to
+    // already a Afterlab menu and a second opinion here would be the drift that file exists to
     // prevent.
     auto* addMenu = menu->addMenu(tr("Add Node"));
     addMenu->setObjectName(QStringLiteral("nodeAddMenu"));

@@ -252,7 +252,7 @@ void testEveryRoleEndsInAPlatformFallback(Expectations& expectations) {
 }
 
 void testTheInstallerSetsTheApplicationFont(QApplication& application, Expectations& expectations) {
-    kit::installKinetikTheme(application);
+    kit::installAfterlabTheme(application);
     const QFont applied = QApplication::font();
     expectations.expect(applied.families() == kit::fontFamiliesForRole(kit::TypeRole::Ui),
                         "the application font is the UI role's resolved family list");

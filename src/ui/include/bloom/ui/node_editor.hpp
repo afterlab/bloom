@@ -118,7 +118,7 @@ class NodeGraphicsScene final : public QGraphicsScene {
   public:
     // The session in-node field rows read and commit through (decision 5). Null leaves the scene a
     // pure read-only projection with no editable rows at all -- the shape
-    // kinetik_baseline_tests.cpp constructs directly to assert the canvas background token.
+    // afterlab_baseline_tests.cpp constructs directly to assert the canvas background token.
     void setSession(CompositionSession* session);
     [[nodiscard]] CompositionSession* session() const noexcept { return session_; }
 

@@ -1,5 +1,5 @@
 #include "editor_chrome_test_support.hpp"
-// Task U4 (issue #123): the Kinetik node editor's navigation, selection, typed connectors,
+// Task U4 (issue #123): the Afterlab node editor's navigation, selection, typed connectors,
 // context menu and in-node editing contracts. Appended as its own executable rather than folded
 // into composition_projection_test.cpp, which owns the cross-editor projection/selection contract
 // this task must keep byte-equivalent.

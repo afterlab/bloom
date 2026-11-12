@@ -555,7 +555,7 @@ int main(int argc, char** argv) try {
     QApplication application(argc, argv);
     QCoreApplication::setOrganizationName("BloomColourBoundaryTests");
     QCoreApplication::setApplicationName("ColourBoundary");
-    ui::kit::installKinetikTheme(application);
+    ui::kit::installAfterlabTheme(application);
     boundaryPins();
     shapeColorPin();
     workingSpaceConverterPin();

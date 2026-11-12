@@ -348,7 +348,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QApplication::setOrganizationName(QStringLiteral("BloomMcpLiveUiApplicationTests"));
     QApplication::setApplicationName(QStringLiteral("McpLiveUiApplication"));
-    ui::kit::installKinetikTheme(application);
+    ui::kit::installAfterlabTheme(application);
     try {
         testApplication();
     } catch (const std::exception& error) {

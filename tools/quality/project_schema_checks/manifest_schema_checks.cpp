@@ -33,7 +33,7 @@ void validateManifestSchema(const json::Value& schema) {
                      {"format", "containerVersion", "document", "requirements", "generator"},
                      "$.properties keys");
     requireExact(requireMember(properties, "format", "$.properties"),
-                 R"({"const":"org.kinetik.bloom.project"})", "$.properties.format");
+                 R"({"const":"id.afterlab.bloom.project"})", "$.properties.format");
     requireExact(requireMember(properties, "containerVersion", "$.properties"),
                  R"({"$ref":"#/$defs/fixedVersion-1.0"})", "$.properties.containerVersion");
     requireExact(requireMember(properties, "document", "$.properties"),

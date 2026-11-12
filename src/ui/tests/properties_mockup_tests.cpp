@@ -354,7 +354,7 @@ int main(int argc, char** argv) try {
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName("BloomPropertiesMockupTest");
     QSettings().clear();
-    ui::kit::installKinetikTheme(app);
+    ui::kit::installAfterlabTheme(app);
     run();
     QSettings().clear();
     return failures ? 1 : 0;

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:kinetik:bloom:schema:dependency-lock:1.3",
+  "$id": "urn:afterlab:bloom:schema:dependency-lock:1.3",
   "title": "Bloom Dependency Lock 1.3",
   "$comment": "Minor 3 extends the profileBuild linkage vocabulary with header-only and executable so a header/data-only dependency and a non-shipping build-only tool can be recorded honestly. shippingRoles may be empty only for linkage executable; every other linkage keeps at least one declared shipping role. Minor 1 and 2 fields remain supported. The native bloom-dependency-artifact-check target checks exact schema bytes and synthetic contract fixtures only; production acceptance additionally requires the reviewed Unicode bootstrap and repository evidence validator.",
   "type": "object",
@@ -13,7 +13,7 @@
   ],
   "properties": {
     "format": {
-      "const": "org.kinetik.bloom.dependencies.lock"
+      "const": "id.afterlab.bloom.dependencies.lock"
     },
     "schemaVersion": {
       "$ref": "#/$defs/fixedVersion"

@@ -7,7 +7,7 @@
 
 #include <cstdint>
 
-// Kinetik design tokens -- the single C++ truth for every Bloom interface color, radius, border,
+// Afterlab design tokens -- the single C++ truth for every Bloom interface color, radius, border,
 // spacing, size, elevation, type role, state recipe, and motion duration. Product code (widgets,
 // painters, and the generated application stylesheet) reads these; no Bloom surface may spell a
 // raw hex literal, a raw pixel gap, or a raw duration of its own.

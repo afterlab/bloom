@@ -13,7 +13,7 @@
 
 namespace bloom::ui::kit {
 
-// The Kinetik button. Five variants across three control sizes, with an optional leading icon.
+// The Afterlab button. Five variants across three control sizes, with an optional leading icon.
 //
 // A QAbstractButton subclass that paints itself rather than a QPushButton wearing a stylesheet:
 // the accent recipes, the surface-ladder hover step, the single focus border, and the exact

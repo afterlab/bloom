@@ -1,8 +1,8 @@
 add_executable(bloom_editor_area_chrome_test
     editor_area_chrome_tests.cpp
 )
-add_executable(bloom_kinetik_baseline_test
-    kinetik_baseline_tests.cpp
+add_executable(bloom_afterlab_baseline_test
+    afterlab_baseline_tests.cpp
 )
 add_executable(bloom_workspace_presets_test
     workspace_presets_tests.cpp
@@ -192,7 +192,7 @@ add_executable(bloom_main_window_readonly_placeholder_test
     main_window_readonly_placeholder_tests.cpp
 )
 
-# Task U7 (issue #122): TimelineEditor track-row/transport Kinetik restyle tests, appended rather
+# Task U7 (issue #122): TimelineEditor track-row/transport Afterlab restyle tests, appended rather
 # than folded into timeline_ruler_tests.cpp (which owns the ruler/keyframe-panel interaction
 # contract this task must keep byte-equivalent).
 add_executable(bloom_timeline_editor_style_test
@@ -208,7 +208,7 @@ add_executable(bloom_node_editor_test
 )
 
 target_link_libraries(bloom_editor_area_chrome_test PRIVATE bloom_ui Qt6::Test)
-target_link_libraries(bloom_kinetik_baseline_test PRIVATE bloom_ui Qt6::Test)
+target_link_libraries(bloom_afterlab_baseline_test PRIVATE bloom_ui Qt6::Test)
 target_link_libraries(bloom_workspace_presets_test PRIVATE bloom_ui Qt6::Test)
 target_link_libraries(bloom_workspace_panel_test PRIVATE bloom_ui)
 target_link_libraries(bloom_kit_button_test PRIVATE bloom_ui_kit)
@@ -392,7 +392,7 @@ target_link_libraries(bloom_timeline_editor_style_test PRIVATE bloom_ui Qt6::Tes
 target_include_directories(bloom_timeline_editor_style_test PRIVATE ..)
 target_link_libraries(bloom_node_editor_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_editor_area_chrome_test)
-bloom_enable_warnings(bloom_kinetik_baseline_test)
+bloom_enable_warnings(bloom_afterlab_baseline_test)
 bloom_enable_warnings(bloom_workspace_presets_test)
 bloom_enable_warnings(bloom_workspace_panel_test)
 bloom_enable_warnings(bloom_kit_button_test)
@@ -483,8 +483,8 @@ bloom_add_test(
 )
 
 bloom_add_test(
-    NAME bloom.ui.kinetik_baseline
-    COMMAND bloom_kinetik_baseline_test
+    NAME bloom.ui.afterlab_baseline
+    COMMAND bloom_afterlab_baseline_test
     LABELS ui integration kit
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"

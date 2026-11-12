@@ -30,7 +30,7 @@ KButton* makeChromeButton(const IconId iconId, const QString& toolTip, const QSt
 } // namespace
 
 TitleBar::TitleBar(QWidget* parent) : QWidget(parent) {
-    setObjectName(QStringLiteral("kinetikTitleBar"));
+    setObjectName(QStringLiteral("afterlabTitleBar"));
     setFixedHeight(px(Size::TitleBar));
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 

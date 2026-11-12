@@ -73,7 +73,7 @@ int main(int argc, char** argv) {
     app.setApplicationName("ExportCapture");
     QStandardPaths::setTestModeEnabled(true);
     QSettings().clear();
-    kit::installKinetikTheme(app);
+    kit::installAfterlabTheme(app);
     const QString directory = argc > 1 ? QString::fromLocal8Bit(argv[1])
                                        : QStringLiteral(BLOOM_GRAMMAR_ARTIFACT_DIR);
     QDir().mkpath(directory);

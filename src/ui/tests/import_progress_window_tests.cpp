@@ -86,7 +86,7 @@ int run(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName(QStringLiteral("BloomImportProgressWindow"));
     app.setApplicationName(QStringLiteral("ImportProgressWindow"));
-    ui::kit::installKinetikTheme(app);
+    ui::kit::installAfterlabTheme(app);
     QTemporaryDir directory;
     require(directory.isValid(), "fixture directory");
     const auto file = [&](const QString& name) { return directory.filePath(name); };

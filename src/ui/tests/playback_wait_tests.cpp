@@ -509,7 +509,7 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName(QStringLiteral("BloomPlaybackWaitTests"));
     app.setApplicationName(QStringLiteral("PlaybackWait"));
-    bloom::ui::kit::installKinetikTheme(app);
+    bloom::ui::kit::installAfterlabTheme(app);
     Expectations expectations;
     testHoldsOnUncachedFrame(expectations);
     testCachedFramesPlayRealTime(expectations);

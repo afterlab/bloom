@@ -369,7 +369,7 @@ void testAJoinedLayoutPersists(Expectations& expectations) {
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
-    bloom::ui::kit::installKinetikTheme(application);
+    bloom::ui::kit::installAfterlabTheme(application);
     Expectations expectations;
     testMaximizeHidesTheActiveHighlight(expectations);
     testAPresetSwitchLeavesOneHighlight(expectations);

@@ -109,8 +109,8 @@ and artifact-reference paths are at most 4,096 UTF-8 bytes and non-empty unless 
 explicitly nullable. The absolute decoded-string ceiling remains 1 MiB.
 
 The schemas use JSON Schema Draft 2020-12 with absolute IDs
-`urn:kinetik:bloom:schema:dependency-lock:1.1` and
-`urn:kinetik:bloom:schema:dependency-prefix-manifest:1.0`. They use repository-local `$ref` values,
+`urn:afterlab:bloom:schema:dependency-lock:1.1` and
+`urn:afterlab:bloom:schema:dependency-prefix-manifest:1.0`. They use repository-local `$ref` values,
 declare every required member, set `unevaluatedProperties: false` on every object, and carry the
 closed lexical, enum, and count constraints expressible in that dialect. A standard-library-only
 offline repository checker verifies the exact schema artifacts and schema-specific fixture values;
@@ -366,7 +366,7 @@ member order is used by the schema definitions for repeated records.
 
 ```json
 {
-  "format": "org.kinetik.bloom.dependencies.lock",
+  "format": "id.afterlab.bloom.dependencies.lock",
   "schemaVersion": {"major": 1, "minor": 0},
   "unicodeProfile": {
     "version": "15.1.0",
@@ -663,7 +663,7 @@ aliases, and archive-order tricks consistently on Linux, macOS, and Windows.
 
 The prefix manifest root has exactly these members in this order:
 
-1. `format`, exact string `org.kinetik.bloom.dependencies.prefix`
+1. `format`, exact string `id.afterlab.bloom.dependencies.prefix`
 2. `schemaVersion`, exact object `major`, `minor` with value `1`, `0`
 3. `lockIdentity`, the validated lock identity
 4. `profile`, one complete profile object copied from the lock with the same member order

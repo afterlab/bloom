@@ -120,7 +120,7 @@ int run(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName("BloomMediaTests");
     app.setApplicationName("MediaCapture");
-    ui::kit::installKinetikTheme(app);
+    ui::kit::installAfterlabTheme(app);
     QTemporaryDir directory;
     require(directory.isValid(), "capture fixtures directory");
     writeFixtures(directory);
