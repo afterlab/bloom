@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 // The export side of capacity refusals: a typed wait at the frame boundary instead of a terminal
@@ -50,7 +51,8 @@ describeProcessingReservationsV1(const runtime::GpuProcessingPhasePolicy* policy
 // Only an admitted processing phase finishes and releases capacity by itself; retained claims
 // (caches, presentation) do not. A wait in which no phase was admitted anywhere for `stallAfter`
 // therefore cannot end on its own and is reported as stalled, so the caller fails with readable
-// text instead of waiting forever. Owner-thread only.
+// text instead of waiting forever; device room that grows while it waits (other programs giving
+// memory back) restarts the stall clock. Owner-thread only.
 class OutputAnalysisCapacityWaitV1 final {
   public:
     using Clock = std::chrono::steady_clock;
@@ -88,6 +90,7 @@ class OutputAnalysisCapacityWaitV1 final {
     Clock::time_point lastActivePhase_{};
     std::chrono::milliseconds backoff_{kFirstRetry};
     Clock::duration waitedTotal_{};
+    std::optional<std::uint64_t> lastDeviceCapacity_;
 };
 
 } // namespace bloom::host

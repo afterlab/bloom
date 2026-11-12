@@ -134,7 +134,8 @@ enum class GpuPhaseRecovery : std::uint8_t {
 // figure the driver reported (VK_EXT_memory_budget through VMA); `DeviceLocalEstimate` is a
 // conservative nominal DEVICE_LOCAL heap figure used when no live budget is available (integrated
 // GPUs share host memory and drivers migrate blocks, so it is never a claim of free VRAM);
-// `Unavailable` means no budget could be resolved (null/stub device, foreign thread, or no heap).
+// `Unavailable` means no budget could be resolved (null/stub device, foreign thread, no heap, or a
+// live query the driver did not answer, which is never reported as zero room).
 enum class GpuAllocationBudgetSource : std::uint8_t {
     Unavailable,
     MemoryBudget,

@@ -64,10 +64,21 @@ outputAnalysisCapacityRefusalV1(const OutputAnalysisAttemptOutcomeV1& outcome,
             // Measured capacity with nothing admitted but the export's own reservations: no
             // release in this process can make room, so waiting would only wait on itself until
             // the stall rule. Unmeasured capacity (a sample still pending) keeps waiting.
+            // Two device states are never proof either (#709): a device that reported but has
+            // no usable sample (the query failed; never read as zero room), and device memory
+            // that other programs hold now (the measured room is below the device ceiling): their
+            // memory can come back, as admission already assumes (#539).
             if (policy != nullptr && !processingCapacityHeldElsewhereV1(policy, ownPhases)) {
-                const auto reservations = policy->snapshot().reservations;
-                if (reservations.hostReady && reservations.hostCapacityBytes &&
-                    (!reservations.deviceCapacityBytes || reservations.deviceReady))
+                const auto snapshot = policy->snapshot();
+                const auto& reservations = snapshot.reservations;
+                const bool deviceMeasured =
+                    snapshot.deviceReports == 0 ||
+                    (reservations.deviceReady && reservations.deviceCapacityBytes);
+                const bool deviceHeldOutside =
+                    reservations.deviceCapacityBytes && reservations.deviceCeilingBytes &&
+                    *reservations.deviceCapacityBytes < *reservations.deviceCeilingBytes;
+                if (reservations.hostReady && reservations.hostCapacityBytes && deviceMeasured &&
+                    !deviceHeldOutside)
                     return OutputAnalysisCapacityRefusalV1::NeverFits;
             }
             return OutputAnalysisCapacityRefusalV1::Wait;
@@ -110,6 +121,14 @@ bool OutputAnalysisCapacityWaitV1::stalled(const Clock::time_point now,
         return false;
     if (otherProcessingPhasesAdmittedV1(policy, ownPhases))
         lastActivePhase_ = now;
+    // Device memory coming back from other programs is progress too (#709): while the measured
+    // room grows, the wait is not stalled.
+    if (policy != nullptr) {
+        const auto device = policy->snapshot().reservations.deviceCapacityBytes;
+        if (device && lastDeviceCapacity_ && *device > *lastDeviceCapacity_)
+            lastActivePhase_ = now;
+        lastDeviceCapacity_ = device;
+    }
     return now - lastActivePhase_ >= kStallAfter;
 }
 
@@ -118,6 +137,7 @@ void OutputAnalysisCapacityWaitV1::succeeded() noexcept {
         waitedTotal_ += lastRefusal_ - started_;
     waiting_ = false;
     backoff_ = kFirstRetry;
+    lastDeviceCapacity_.reset();
 }
 
 } // namespace bloom::host

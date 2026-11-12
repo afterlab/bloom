@@ -1,4 +1,5 @@
 #include <bloom/host/export_capacity_wait.hpp>
+#include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_processing_phase_budget.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
@@ -102,6 +103,60 @@ int main() {
         check(host::outputAnalysisCapacityRefusalV1(refusal(Code::AwaitingCapacity), policy.get(),
                                                     1) == OutputAnalysisCapacityRefusalV1::NeverFits,
               "the caller's own phase never counts as other work");
+    }
+    {
+        // #709: a device whose measured room is zero because other programs hold its memory is a
+        // wait; that memory can come back.
+        auto policy = makePolicy();
+        check(policy->reportDevice(7, {.source = render::GpuAllocationBudgetSource::MemoryBudget,
+                                       .device_local_bytes = 24 * kGib,
+                                       .available_bytes = 0}),
+              "a device reports a measured zero");
+        check(classify(Code::AwaitingCapacity, *policy) == OutputAnalysisCapacityRefusalV1::Wait,
+              "device memory held by other programs makes AwaitingCapacity a wait");
+    }
+    {
+        // #709: a query the driver did not answer is no sample, never zero capacity.
+        auto policy = makePolicy();
+        check(policy->reportDevice(7, {.source = render::GpuAllocationBudgetSource::Unavailable,
+                                       .device_local_bytes = 24 * kGib,
+                                       .available_bytes = 0}),
+              "a device reports an unanswered query");
+        const auto reservations = policy->snapshot().reservations;
+        check(!reservations.deviceReady && !reservations.deviceCapacityBytes,
+              "an unanswered query leaves the device unsampled, not at zero");
+        check(classify(Code::AwaitingCapacity, *policy) == OutputAnalysisCapacityRefusalV1::Wait,
+              "an unsampled device makes AwaitingCapacity a wait");
+    }
+    {
+        // A device nothing else holds still reports NeverFits for a frame that waits on itself.
+        auto policy = makePolicy();
+        check(policy->reportDevice(7, {.source = render::GpuAllocationBudgetSource::MemoryBudget,
+                                       .device_local_bytes = 24 * kGib,
+                                       .available_bytes = 24 * kGib}),
+              "a device reports all of its memory free");
+        check(classify(Code::AwaitingCapacity, *policy) == OutputAnalysisCapacityRefusalV1::NeverFits,
+              "an idle device and an empty root report NeverFits");
+    }
+    {
+        // Device room that grows while a frame waits restarts the stall clock.
+        auto policy = makePolicy();
+        check(policy->reportDevice(7, {.source = render::GpuAllocationBudgetSource::MemoryBudget,
+                                       .device_local_bytes = 24 * kGib,
+                                       .available_bytes = 0}),
+              "the stall fixture starts with no room");
+        host::OutputAnalysisCapacityWaitV1 wait;
+        const auto start = host::OutputAnalysisCapacityWaitV1::Clock::now();
+        wait.refused(start, policy.get());
+        check(!wait.stalled(start, policy.get()), "a new wait is not stalled");
+        const auto late = start + host::OutputAnalysisCapacityWaitV1::kStallAfter;
+        check(policy->reportDevice(7, {.source = render::GpuAllocationBudgetSource::MemoryBudget,
+                                       .device_local_bytes = 24 * kGib,
+                                       .available_bytes = 4 * kGib}),
+              "other programs give memory back");
+        check(!wait.stalled(late, policy.get()), "returning device memory is progress");
+        check(wait.stalled(late + host::OutputAnalysisCapacityWaitV1::kStallAfter, policy.get()),
+              "a wait with no progress afterwards still stalls");
     }
     return failures == 0 ? 0 : 1;
 }

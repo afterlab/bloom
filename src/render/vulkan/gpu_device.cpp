@@ -429,6 +429,7 @@ GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept {
             vmaGetHeapBudgets(control.allocator, budgets.data());
             std::uint64_t available = 0;
             bool reported = false;
+            bool unanswered = false;
             const auto addSaturating = [&available](const std::uint64_t value) noexcept {
                 const std::uint64_t sum = available + value;
                 available = sum < available ? std::numeric_limits<std::uint64_t>::max() : sum;
@@ -440,9 +441,18 @@ GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept {
                 }
                 reported = true;
                 const VmaBudget& budget = budgets[heap];
+                // A device-local heap with a size but a budget of zero is a query the driver did
+                // not answer, not a full device (#709): the sample is unavailable, never zero room.
+                if (budget.budget == 0 && properties->memoryHeaps[heap].size != 0)
+                    unanswered = true;
                 if (budget.budget > budget.usage) {
                     addSaturating(budget.budget - budget.usage);
                 }
+            }
+            if (unanswered) {
+                result.source = GpuAllocationBudgetSource::Unavailable;
+                result.available_bytes = 0;
+                return result;
             }
             if (reported) {
                 result.source = GpuAllocationBudgetSource::MemoryBudget;
