@@ -535,13 +535,15 @@ withExplicitExportView(document::ExportOutputSettings settings,
 }
 
 document::ExportOutputSettings withExplicitExportView(document::ExportOutputSettings settings,
-                                                      const document::ColorSettings& project) {
+                                                      const document::ColorSettings& project,
+                                                      const std::filesystem::path& projectDirectory) {
     const auto format = settings.format;
     if (format == ExportFormat::OpenExr || format == ExportFormat::Dpx ||
         format == ExportFormat::Wav ||
         (!settings.displayName.empty() && !settings.viewName.empty()))
         return settings;
-    return withExplicitExportView(std::move(settings), exportDisplayViews(project));
+    return withExplicitExportView(std::move(settings),
+                                  exportDisplayViews(project, projectDirectory));
 }
 
 ExportAvailability exportProjectAvailability(const document::ExportOutputSettings& settings,

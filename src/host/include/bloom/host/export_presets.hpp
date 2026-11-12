@@ -306,7 +306,8 @@ exportPlatformAvailability(const document::ExportOutputSettings& settings,
 // and a configuration that does not resolve come back unchanged.
 [[nodiscard]] document::ExportOutputSettings
 withExplicitExportView(document::ExportOutputSettings settings,
-                       const document::ColorSettings& project);
+                       const document::ColorSettings& project,
+                       const std::filesystem::path& projectDirectory = {});
 // The same rule over an already-resolved display/view list (exportDisplayViews), for callers that
 // apply it often; an empty list returns the settings unchanged.
 [[nodiscard]] document::ExportOutputSettings

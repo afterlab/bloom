@@ -133,7 +133,8 @@ rangeArguments(const Arguments& arguments, const std::string& op, OperationCreat
     const auto source = context.source();
     if (!source || !source->colorSettings)
         return settings;
-    return host::withExplicitExportView(std::move(settings), *source->colorSettings);
+    return host::withExplicitExportView(std::move(settings), *source->colorSettings,
+                                        source->assetBaseDirectory);
 }
 
 const std::string kOutputSummary =

@@ -162,6 +162,8 @@ struct ExportQueueService::State {
     // Issue #409: the project configuration's display/view list, resolved again only when the
     // colour settings change (resolving parses the configuration).
     std::optional<document::ColorSettings> displayViewsFor;
+    // The folder `displayViews` was resolved against: a project-relative config is found there.
+    std::optional<std::filesystem::path> displayViewsFolder;
     std::vector<color::DisplayViewEntry> displayViews;
     std::optional<std::filesystem::path> projectFolder;
     bool editable = false;

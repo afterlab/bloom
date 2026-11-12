@@ -30,9 +30,11 @@ ExportEditResult report(const commands::CommandResult& result) {
 
 // Issue #409: every stored display-referred output names its display/view; one that leaves either
 // empty records the project's resolved names (the Viewer's default pair).
-document::ExportOutputSettings explicitView(document::ExportOutputSettings settings,
-                                            const CompositionSession& session) {
-    return host::withExplicitExportView(std::move(settings), session.colorSettings());
+document::ExportOutputSettings
+explicitView(document::ExportOutputSettings settings, const CompositionSession& session,
+             const std::optional<std::filesystem::path>& projectFolder) {
+    return host::withExplicitExportView(std::move(settings), session.colorSettings(),
+                                        projectFolder.value_or(std::filesystem::path{}));
 }
 
 } // namespace
@@ -49,7 +51,7 @@ ExportEditResult ExportQueueEdits::addJobs(const std::vector<document::Compositi
                                            const std::optional<std::size_t> index) {
     commands::Transaction transaction("Add to Export Queue", session_.snapshot().revision());
     auto preset = defaultPreset_();
-    preset.settings = explicitView(std::move(preset.settings), session_);
+    preset.settings = explicitView(std::move(preset.settings), session_, projectFolder_ ? projectFolder_() : std::nullopt);
     for (std::size_t i = 0; i < compositions.size(); ++i)
         transaction.emplace<commands::AddExportJob>(host::defaultExportJob(compositions[i], preset),
                                                     index.has_value() ? std::optional(*index + i)
@@ -120,7 +122,7 @@ ExportEditResult ExportQueueEdits::addOutput(const document::ExportJobId job,
         preset.settings = choice->settings;
         preset.destination = host::defaultExportDestination(choice->settings.format);
     }
-    preset.settings = explicitView(std::move(preset.settings), session_);
+    preset.settings = explicitView(std::move(preset.settings), session_, projectFolder_ ? projectFolder_() : std::nullopt);
     transaction.emplace<commands::AddExportOutput>(
         job, host::defaultExportJob(document::CompositionId{}, preset).outputs.front());
     return report(session_.executeTransaction(std::move(transaction)));
@@ -135,7 +137,7 @@ ExportEditResult ExportQueueEdits::applyPreset(const document::ExportOutputId ou
                 std::nullopt, std::nullopt, {}};
     commands::Transaction transaction("Apply Export Preset", session_.snapshot().revision());
     transaction.emplace<commands::ApplyExportPreset>(output, presetId,
-                                                     explicitView(choice->settings, session_));
+                                                     explicitView(choice->settings, session_, projectFolder_ ? projectFolder_() : std::nullopt));
     return report(session_.executeTransaction(std::move(transaction)));
 }
 
@@ -150,10 +152,11 @@ ExportEditResult ExportQueueEdits::editOutput(const document::ExportOutputId out
                     std::nullopt, std::nullopt, {}};
         transaction.emplace<commands::ApplyExportPreset>(
             output, *edit.presetId,
-            explicitView(edit.settings.value_or(choice->settings), session_));
+            explicitView(edit.settings.value_or(choice->settings), session_,
+                         projectFolder_ ? projectFolder_() : std::nullopt));
     } else if (edit.settings)
         transaction.emplace<commands::SetExportOutputSettings>(
-            output, explicitView(*edit.settings, session_));
+            output, explicitView(*edit.settings, session_, projectFolder_ ? projectFolder_() : std::nullopt));
     if (edit.chosenPath) {
         const auto folder = projectFolder_ ? projectFolder_() : std::nullopt;
         const auto destination = host::exportDestinationForPath(

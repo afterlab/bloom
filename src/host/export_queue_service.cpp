@@ -131,16 +131,21 @@ struct Pump final {
             s.colorSettings = *colour;
         else
             s.colorSettings.reset();
-        if (s.colorSettings != s.displayViewsFor) {
-            s.displayViews = s.colorSettings ? exportDisplayViews(*s.colorSettings)
-                                             : std::vector<color::DisplayViewEntry>{};
-            s.displayViewsFor = s.colorSettings;
-        }
         const auto state = session.stateSnapshot();
         s.editable = s.snapshot.has_value() && state.editability.has_value();
         s.projectFolder = state.displayPath
                               ? std::optional(state.displayPath->value().parent_path())
                               : std::nullopt;
+        // The list is resolved against the project folder, so a project-relative config archive
+        // is found; a Save As to another folder resolves it again.
+        if (s.colorSettings != s.displayViewsFor || s.projectFolder != s.displayViewsFolder) {
+            s.displayViews = s.colorSettings
+                                 ? exportDisplayViews(*s.colorSettings,
+                                                      s.projectFolder.value_or(std::filesystem::path{}))
+                                 : std::vector<color::DisplayViewEntry>{};
+            s.displayViewsFor = s.colorSettings;
+            s.displayViewsFolder = s.projectFolder;
+        }
     }
 
     void syncJobs() {
