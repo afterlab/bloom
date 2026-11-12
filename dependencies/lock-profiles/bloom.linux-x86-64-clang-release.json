@@ -1076,7 +1076,7 @@
         {
           "id": "bloom.feature.qt.official-binaries",
           "state": "enabled",
-          "reason": "Not built: the Qt Project's official open-source binaries for Linux x86-64 (built with GCC on RHEL 9.6), with the ICU 73.2 libraries the same package publishes for them, unpacked unmodified and linked dynamically"
+          "reason": "Not built: the Qt Project's official open-source binaries for Linux x86-64 (built with GCC on RHEL 9.6), with the ICU 73.2 libraries the same package publishes for them (Unicode license, texts/ICU.txt in Qt's notices), unpacked unmodified and linked dynamically"
         }
       ],
       "capabilities": [

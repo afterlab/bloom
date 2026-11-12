@@ -137,7 +137,7 @@
     "reviewedAt": "2026-11-12",
     "record": {
       "path": "dependencies/licenses/qt/security.md",
-      "sha256": "sha256:c6036278b93e53185ad04805019070eaedaf9f2a61823be02b9256f8ea468c70"
+      "sha256": "sha256:94633241373cc776ebf016da519a90a003be53c9698156b898b0938f621626de"
     },
     "vulnerabilities": [
       {
@@ -145,7 +145,7 @@
         "disposition": "accepted-risk",
         "record": {
           "path": "dependencies/licenses/qt/security.md",
-          "sha256": "sha256:c6036278b93e53185ad04805019070eaedaf9f2a61823be02b9256f8ea468c70"
+          "sha256": "sha256:94633241373cc776ebf016da519a90a003be53c9698156b898b0938f621626de"
         }
       },
       {
@@ -153,7 +153,7 @@
         "disposition": "not-affected",
         "record": {
           "path": "dependencies/licenses/qt/security.md",
-          "sha256": "sha256:c6036278b93e53185ad04805019070eaedaf9f2a61823be02b9256f8ea468c70"
+          "sha256": "sha256:94633241373cc776ebf016da519a90a003be53c9698156b898b0938f621626de"
         }
       }
     ]

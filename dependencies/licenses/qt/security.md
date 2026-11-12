@@ -30,8 +30,17 @@ The Qt Project's own list of security advisories
   HTTPS with certificate verification; Bloom's transport refuses a response larger than its
   limit and has a transfer timeout, but the advisory does not say whether those bound the
   memory use, so this is recorded as an accepted risk (`cve-2026-116337`), not as mitigated.
-  The lock must move to a fixed open-source release when one has binaries for all three
-  platforms.
+  Accepted by the coordinator for the alpha release on 2026-11-12; **the owner is still to
+  confirm it**.
+- Bloom's own defense, whatever Qt does: the font download (`src/ui/qt_font_transport.cpp`)
+  takes the response from Qt in pieces of at most 64 KiB as it arrives and cuts the download
+  off the moment it passes its cap (1 MiB for a stylesheet, 32 MiB for a font file), whether or
+  not the server announced a length; it asks for an uncompressed response, so nothing can grow
+  after it was counted; and it stops a download that stalls for 20 seconds or lasts longer than
+  two minutes. The user is told in plain words that the server sent too much.
+  `bloom.ui.font-picker` tests it against a server that sends 8 MiB without a length.
+- **The pin moves to the first open-source Qt release that carries the fix** and has official
+  binaries for Linux, macOS and Windows.
 - CVE-2026-15037 (XML injection when serializing with QDom, fixed in 6.12.0 only) is in the Qt
   Xml library, which Bloom neither links nor carries (`cve-2026-15037`, not affected). The
   other advisories of 2026 not listed above are in modules Bloom does not use (HTTP Server,
