@@ -454,51 +454,72 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
             : preference == Preference::Hardware ? Platform::Required
             : *preset == output::OutputPresetV1::ProResMovV1 ? Platform::Required
                                                              : Platform::Preferred;
-        host::SequenceExportRunnerV1 runner(
-            scheduler, compiler, *session.publicationCoordinator(), *session.artifactCoordinator(),
-            ledger,
-            {.composition = {snapshot, composition->id()},
-             .range = {.destination = destination,
-                       .firstFrame = first,
-                       .lastFrame = last,
-                       .frameRate = composition->format().frameRate(),
-                       .duration = composition->duration()},
-             .preset = *preset,
-             .profile = profile,
-             .audio = member(arguments, "audio") ? boolean(member(arguments, "audio")) : true,
-             .platformEncoder = platformEncoder,
-             .sampleRate = static_cast<std::uint32_t>(rate),
-             .pcmCodec = *preset == output::OutputPresetV1::PcmWavV1 ? profile : "pcm_s16le",
-             .bwfDescription = {},
-             .assetBaseDirectory = source.assetBaseDirectory,
-             .worker = worker,
-             .encoderThreads = workerLimits.threads.value_or(0),
-             .workingColorSpaceId = std::string(colorIntent->workingColorSpaceId),
-             .ocioConfigRevision = colorIntent->ocioConfigRevision,
-             .ocioConfigUri = std::string(colorIntent->ocioConfigUri),
-             .gpuProvider = gpuExportProvider,
-             .loudness = loudness ? std::optional(output::AudioLoudnessTargetV1{
-                                        loudness->targetLufs, loudness->truePeakDbtp})
-                                  : std::nullopt,
-             .overwritePolicy = replace ? platform::ArtifactOverwritePolicy::CreateOrReplace
-                                        : platform::ArtifactOverwritePolicy::CreateOnly},
-            *retirement);
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(10);
-        while (!runner.result()) {
-            runner.poll();
-            if (stop.stop_requested() || std::chrono::steady_clock::now() > deadline)
-                runner.cancel();
-            if (runner.stage() == host::SequenceExportStageV1::AwaitingApproval) {
-                const auto* analysis = runner.analysis();
-                const auto digest = runner.frameApprovalDigest();
-                if (!analysis || !digest || !runner.approve(analysis->digest, *digest))
+        const auto attempt = [&](const Platform policy) {
+            host::SequenceExportRequestV1 request{
+                .composition = {snapshot, composition->id()},
+                .range = {.destination = destination,
+                          .firstFrame = first,
+                          .lastFrame = last,
+                          .frameRate = composition->format().frameRate(),
+                          .duration = composition->duration()},
+                .preset = *preset,
+                .profile = profile,
+                .audio = member(arguments, "audio") ? boolean(member(arguments, "audio")) : true,
+                .platformEncoder = policy,
+                .sampleRate = static_cast<std::uint32_t>(rate),
+                .pcmCodec = *preset == output::OutputPresetV1::PcmWavV1 ? profile : "pcm_s16le",
+                .bwfDescription = {},
+                .assetBaseDirectory = source.assetBaseDirectory,
+                .worker = worker,
+                .encoderThreads = workerLimits.threads.value_or(0),
+                .workingColorSpaceId = std::string(colorIntent->workingColorSpaceId),
+                .ocioConfigRevision = colorIntent->ocioConfigRevision,
+                .ocioConfigUri = std::string(colorIntent->ocioConfigUri),
+                .gpuProvider = gpuExportProvider,
+                .loudness = loudness ? std::optional(output::AudioLoudnessTargetV1{
+                                           loudness->targetLufs, loudness->truePeakDbtp})
+                                     : std::nullopt,
+                .overwritePolicy = replace ? platform::ArtifactOverwritePolicy::CreateOrReplace
+                                           : platform::ArtifactOverwritePolicy::CreateOnly};
+            auto made = std::make_unique<host::SequenceExportRunnerV1>(
+                scheduler, compiler, *session.publicationCoordinator(),
+                *session.artifactCoordinator(), ledger, std::move(request), *retirement);
+            auto& runner = *made;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(10);
+            while (!runner.result()) {
+                runner.poll();
+                if (stop.stop_requested() || std::chrono::steady_clock::now() > deadline)
                     runner.cancel();
-                else
-                    report = analysis->implementationNote;
+                if (runner.stage() == host::SequenceExportStageV1::AwaitingApproval) {
+                    const auto* analysis = runner.analysis();
+                    const auto digest = runner.frameApprovalDigest();
+                    if (!analysis || !digest || !runner.approve(analysis->digest, *digest))
+                        runner.cancel();
+                    else
+                        report = analysis->implementationNote;
+                }
+                if (!runner.result())
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
-            if (!runner.result())
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            return made;
+        };
+        auto owned = attempt(platformEncoder);
+        // The system's encoder was preferred and failed after it began: render the export again
+        // on Bloom's FFmpeg encoder, once, and say so in the report.
+        std::string replaced;
+        if (!owned->result()->published() &&
+            owned->result()->failureStage ==
+                host::SequenceExportFailureStageV1::PlatformEncoderFailed &&
+            !stop.stop_requested()) {
+            replaced = owned->result()->failure ? owned->result()->failure->detail
+                                                : std::string("it did not finish the file");
+            owned.reset();
+            owned = attempt(Platform::Skipped);
         }
+        auto& runner = *owned;
+        if (!replaced.empty())
+            report += "; the system encoder failed partway (" + replaced +
+                      "), so Bloom's FFmpeg encoder rendered the export again";
         if (!runner.result()->published()) {
             if (runner.result()->failureStage == host::SequenceExportFailureStageV1::Destination)
                 throw ToolFailure(McpToolErrorCode::PreflightBlocked,

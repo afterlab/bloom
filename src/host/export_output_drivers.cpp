@@ -1566,6 +1566,14 @@ class MediaDriver final : public DriverBase {
                          "Requiring a GPU device is available for image outputs only"));
             return;
         }
+        launch(exportHardwareRoute(settings, input_.encoders).platformEncoder);
+    }
+
+    // Starts the export with the platform encoder taking part as `platformEncoder` says. The
+    // second start of an output (the platform encoder failed partway) passes Skipped.
+    void launch(const media::provider::PlatformEncoderV1 platformEncoder) {
+        const auto& settings = input_.output.record.settings;
+        const auto preset = mediaPreset(settings.format);
         const auto* composition = input_.snapshot.project().findComposition(input_.composition);
         const auto& encoders = input_.encoders;
         // Hardware first when asked for: NVIDIA NVENC, then VA-API, each only for the codec and
@@ -1587,7 +1595,7 @@ class MediaDriver final : public DriverBase {
             .audio = settings.format == ExportFormat::Wav || settings.includeAudio,
             .hardware = hardware_,
             .nvenc = nvenc_,
-            .platformEncoder = route.platformEncoder,
+            .platformEncoder = platformEncoder,
             .sampleRate = settings.audioSampleRate,
             .pcmCodec = settings.format == ExportFormat::Wav ? profile : "pcm_s16le",
             .bwfDescription = {},
@@ -1606,6 +1614,8 @@ class MediaDriver final : public DriverBase {
         request.vaapiDevice = encoders.vaapiRenderNode;
         // Opt-in worker limits (issue #581); with none set the request is unchanged.
         request.worker.memoryCapBytes = input_.workerLimits.memoryCapBytes;
+        request.worker.launched = dependencies_.encodeWorkerLaunched;
+        request.worker.sending = dependencies_.encodeWorkerSending;
         request.encoderThreads = input_.workerLimits.encoderThreads;
         const bool mp4 = settings.format == ExportFormat::H264Mp4 ||
                          settings.format == ExportFormat::HevcMp4 ||
@@ -1645,6 +1655,7 @@ class MediaDriver final : public DriverBase {
             dependencies_.scheduler, dependencies_.compiler, dependencies_.publications,
             dependencies_.artifacts, *dependencies_.ledger, std::move(request),
             *dependencies_.retirement, dependencies_.ledger);
+        runner_->setPaused(paused_);
         report_.state = ExportOutputState::Rendering;
     }
 
@@ -1686,6 +1697,7 @@ class MediaDriver final : public DriverBase {
             finishStopped();
     }
     void setPaused(const bool paused) override {
+        paused_ = paused;
         if (runner_)
             runner_->setPaused(paused);
     }
@@ -1729,6 +1741,11 @@ class MediaDriver final : public DriverBase {
                      : ExportDeviceRoute::Gpu;
         if (const auto* analysis = runner_->analysis())
             provenance.implementationNote = analysis->implementationNote;
+        if (!platformFailure_.empty())
+            provenance.implementationNote +=
+                std::string(provenance.implementationNote.empty() ? "" : "; ") +
+                "rendered again by the FFmpeg encoder after the system encoder failed partway (" +
+                platformFailure_ + ")";
         provenance.encoder = result.encoder;
         if (result.loudness) {
             const auto& l = *result.loudness;
@@ -1749,6 +1766,25 @@ class MediaDriver final : public DriverBase {
             if (stopRequested_ ||
                 (result.failure && result.failure->reason == media::provider::Error::Cancelled))
                 return finishStopped();
+            // Issue #370: the system's encoder was preferred, began the export and failed it
+            // partway (or its file failed the worker's reopen check). Nothing was published, so the
+            // output
+            // starts again on Bloom's FFmpeg encoder, once; the log and the published output's
+            // note say that it did. `result` belongs to the runner replaced here.
+            if (result.failureStage == SequenceExportFailureStageV1::PlatformEncoderFailed &&
+                platformFailure_.empty()) {
+                platformFailure_ = result.failure && !result.failure->detail.empty()
+                                       ? result.failure->detail
+                                       : std::string("it did not finish the file");
+                log(runtime::DiagnosticSeverity::Warning, "export.encoder.platform-fallback",
+                    "This computer's own encoder failed partway through the export (" +
+                        platformFailure_ +
+                        "). Bloom's FFmpeg encoder is rendering the output again.");
+                approvalAsked_ = false;
+                runner_.reset();
+                launch(media::provider::PlatformEncoderV1::Skipped);
+                return;
+            }
             if (result.publication.outcome ==
                 platform::StagedArtifactPublicationOutcome::ExternalModificationConflict)
                 return fail(failure(ExportFailureCode::PublicationConflict,
@@ -1807,6 +1843,7 @@ class MediaDriver final : public DriverBase {
                     "This computer's own encoder refused the export (" + detail +
                         "). Bloom's FFmpeg encoder can export it instead: set the output's "
                         "encoder to Software and render again."));
+            case SequenceExportFailureStageV1::PlatformEncoderFailed:
             case SequenceExportFailureStageV1::Unclassified:
                 break;
             }
@@ -1859,8 +1896,11 @@ class MediaDriver final : public DriverBase {
     std::unique_ptr<SequenceExportRunnerV1> runner_;
     bool approvalAsked_ = false;
     bool stopRequested_ = false;
+    bool paused_ = false;
     bool hardware_ = false;
     bool nvenc_ = false;
+    // Why the platform encoder's attempt failed, once the output has started again without it.
+    std::string platformFailure_;
     ExportDeviceRoute route_ = ExportDeviceRoute::None;
 };
 

@@ -161,6 +161,11 @@ enum class SequenceExportFailureStageV1 : std::uint8_t {
     // The platform's own encoder was required and refused the export before any frame was
     // encoded; the bundled FFmpeg encoder was not substituted.
     PlatformEncoder,
+    // The platform's own encoder was preferred, began the export and then failed it partway (its
+    // own reopen check of the finished file included). Nothing was published; the same export with
+    // PlatformEncoderV1::Skipped renders on the bundled FFmpeg encoder (the export queue does
+    // that once, by itself).
+    PlatformEncoderFailed,
 };
 struct SequenceExportResultV1 {
     platform::StagedArtifactPublicationResult publication;
@@ -171,7 +176,8 @@ struct SequenceExportResultV1 {
     // ("bloom.video-rgba16-srgb.v3"); empty for an exact or byte-exact output.
     std::string toleranceProfile;
     // The encoder implementation token that served the output ("openh264", "nvenc", "vaapi",
-    // "kvazaar", "libvpx", "svt-av1", "videotoolbox", "ffmpeg-prores", "ffmpeg-dnxhr"); empty for
+    // "kvazaar", "libvpx", "svt-av1", "videotoolbox", "mediafoundation", "ffmpeg-prores",
+    // "ffmpeg-dnxhr"); empty for
     // an audio-only output.
     std::string encoder;
     std::uint64_t encodedFrames = 0;

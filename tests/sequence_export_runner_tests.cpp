@@ -1173,19 +1173,36 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
         }
     }
     // Delivery routes report the encoder that ran, not the implementation note: the bundled
-    // software encoders, and for H.264 on macOS the system encoder (ADR 0035).
+    // software encoders, and for H.264 and HEVC on macOS and Windows the system encoder (ADR
+    // 0035). A system HEVC encoder belongs to the computer's hardware or graphics driver, so a
+    // computer or an extent it does not take is served by the bundled Kvazaar.
 #if defined(__APPLE__)
-    const char* const h264Encoder = "videotoolbox";
+    const char* const systemEncoder = "videotoolbox";
+#elif defined(_WIN32)
+    const char* const systemEncoder = "mediafoundation";
 #else
-    const char* const h264Encoder = "openh264";
+    const char* const systemEncoder = nullptr;
 #endif
     for (const auto& [preset, name, token] :
-         {std::tuple{output::OutputPresetV1::H264Mp4V1, "token-h264.mp4", h264Encoder},
+         {std::tuple{output::OutputPresetV1::H264Mp4V1, "token-h264.mp4", "openh264"},
           std::tuple{output::OutputPresetV1::HevcMp4V1, "token-hevc.mp4", "kvazaar"},
           std::tuple{output::OutputPresetV1::Vp9WebmV1, "token-vp9.webm", "libvpx"},
           std::tuple{output::OutputPresetV1::Av1WebmV1, "token-av1.webm", "svt-av1"}}) {
         const auto result = f.run(f.request(directory / name, preset));
-        check(result.encoder == token, std::string("encoder token ") + token);
+        const bool h264 = preset == output::OutputPresetV1::H264Mp4V1;
+        const bool hevc = preset == output::OutputPresetV1::HevcMp4V1;
+        // macOS always has its H.264 encoder. A Windows encoder that does not write the export's
+        // color tags into the stream is refused, and the bundled OpenH264 serves.
+#if defined(__APPLE__)
+        const bool always = h264;
+#else
+        const bool always = false;
+#endif
+        const bool expected = systemEncoder != nullptr && always ? result.encoder == systemEncoder
+                              : systemEncoder != nullptr && (h264 || hevc)
+                                  ? result.encoder == systemEncoder || result.encoder == token
+                                  : result.encoder == token;
+        check(expected, std::string("encoder token ") + token + ", got " + result.encoder);
     }
     // The public null-provider default above remains an actual CPU export. An explicitly injected
     // disabled provider uses the same single policy for all admitted frames and releases the phase

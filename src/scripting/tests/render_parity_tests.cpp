@@ -546,7 +546,9 @@ void testRequireDevice(Session& session, runtime::TaskScheduler& scheduler,
                                           .gpu = provider,
                                           .retirement = nullptr,
                                           .displayProcessor = nullptr,
-                                          .scratchDirectory = root / "scratch-device"},
+                                          .scratchDirectory = root / "scratch-device",
+                                          .encodeWorkerLaunched = {},
+                                          .encodeWorkerSending = {}},
         std::move(runRequest));
     while (!runner.finished()) {
         runner.poll();

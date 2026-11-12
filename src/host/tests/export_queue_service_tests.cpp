@@ -1,10 +1,10 @@
 // ADR 0033: the export queue's runtime owner, presets, destinations and runner, driven headlessly
 // through a real ProjectSession, scheduler, staged publication and the media worker.
-#include <bloom/core/file_uri.hpp>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/export_queue_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/core/file_uri.hpp>
 #include <bloom/core/sha256.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/new_project.hpp>
@@ -15,6 +15,7 @@
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
+#include <bloom/media/provider/media_workers.hpp>
 #include <bloom/output/dpx_export_write.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
@@ -26,25 +27,32 @@
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <algorithm>
-#include <iterator>
-#include <vector>
-#include <span>
-#include <cstdio>
 #include <array>
+#include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
+#include <span>
 #include <stop_token>
 #include <thread>
+#include <vector>
 
 // An absolute path needs a drive on Windows; the same fixtures, under one root per platform.
 #if defined(_WIN32)
 #define BLOOM_TEST_ROOT "C:"
 #define BLOOM_TEST_URI_ROOT "/C:"
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #else
 #define BLOOM_TEST_ROOT ""
 #define BLOOM_TEST_URI_ROOT ""
+#include <csignal>
+#include <sys/types.h>
 #endif
 
 namespace {
@@ -523,6 +531,10 @@ void testVerticalVideoPreset() {
 // ---------------------------------------------------------------------------------------------
 // The service against a real session.
 
+// The picture extent of the fixture's composition; a test that needs an extent a hardware encoder
+// takes sets it for the fixture it constructs.
+std::uint32_t fixtureWidth = 64, fixtureHeight = 32;
+
 struct Fixture {
     std::filesystem::path folder;
     host::ProjectSessionIdentitySource identity;
@@ -553,7 +565,7 @@ struct Fixture {
     static host::ProjectSession makeSession(host::ProjectSessionIdentitySource& identity,
                                             const std::filesystem::path& folder,
                                             std::optional<document::ColorSettings> colour = {}) {
-        auto format = document::CompositionFormat::create(64, 32);
+        auto format = document::CompositionFormat::create(fixtureWidth, fixtureHeight);
         auto created =
             document::makeNewProject("Queue", "Main", core::RationalTime::fromInteger(1), *format);
         auto path = host::ProjectDisplayPath::create(folder / "queue.bloom");
@@ -1503,6 +1515,104 @@ void testVideoEndToEnd(const document::ExportFormat format,
            name + ": the published file has its digest");
 }
 
+// Issue #370: the production backend, except that the first encode worker of a movie output is
+// ended after it has taken three frames. On macOS and Windows that worker is the system
+// encoder's, so this is the system encoder failing partway through an export.
+class EndsPlatformEncoderBackend final : public host::ExportRunBackend {
+  public:
+    std::atomic<int> launches{0};
+    std::atomic<bool> ended{false};
+    std::unique_ptr<host::ExportRun> start(host::ExportJobRunnerDependencies dependencies,
+                                           host::ExportJobRunRequest request) override {
+        dependencies.encodeWorkerLaunched = [this](std::int64_t) { ++launches; };
+        dependencies.encodeWorkerSending = [this](const std::int64_t process,
+                                                  const std::uint64_t sent) {
+            // A second launch before any frame means the system encoder refused the export at
+            // its start and the bundled encoder already serves it: nothing to end.
+            if (sent != 3 || launches != 1 || ended.exchange(true))
+                return;
+#if defined(_WIN32)
+            if (const auto handle =
+                    OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(process))) {
+                TerminateProcess(handle, 9);
+                CloseHandle(handle);
+            }
+#else
+            kill(static_cast<pid_t>(process), SIGKILL);
+#endif
+        };
+        return production_->start(std::move(dependencies), std::move(request));
+    }
+    host::ExportDestinationSample
+    sampleDestination(const host::ExportDestinationSampleRequest& request) override {
+        return production_->sampleDestination(request);
+    }
+    host::ExportAudioSourceSample
+    sampleAudioSources(const host::ExportAudioSourceSampleRequest& request,
+                       const runtime::CancellationToken& cancellation) override {
+        return production_->sampleAudioSources(request, cancellation);
+    }
+
+  private:
+    std::shared_ptr<host::ExportRunBackend> production_ = host::makeProductionExportRunBackend();
+};
+
+// Issue #370: a system encoder that fails after it began an export does not fail the export. The
+// output is rendered again by the bundled encoder and published, and the log and the output's
+// note say so. Linux has no system encoder, so there is nothing to replace there.
+void testPlatformEncoderFailsPartway() {
+    if (media::provider::nativeMediaProviderId().empty())
+        return;
+    const auto backend = std::make_shared<EndsPlatformEncoderBackend>();
+    // An extent the hardware encoders take: on Windows the system's software H.264 encoder is
+    // refused for its color tags, so only a hardware one begins an export.
+    fixtureWidth = 1280;
+    fixtureHeight = 720;
+    Fixture f("platform-encoder-fails", linuxEncoders(), {}, {}, backend);
+    fixtureWidth = 64;
+    fixtureHeight = 32;
+    document::ExportOutputSettings settings;
+    settings.format = document::ExportFormat::H264Mp4;
+    settings.codecProfile = "high";
+    settings.includeAudio = false;
+    const auto job = f.addJob(settings, "Exports/{name}.mp4",
+                              document::ExportOverwritePolicy::AskBeforeReplacing,
+                              {document::ExportRangeKind::Composition, 0, 0});
+    expect(f.startable(job), "platform encoder fails: the movie job becomes startable");
+    const document::ExportJobId ids[] = {job};
+    expect(f.service->start(ids).accepted, "platform encoder fails: start");
+    expect(f.pumpUntil([&] { return host::isTerminal(f.view(job)->state); }, 120),
+           "platform encoder fails: the movie finishes");
+    const auto* view = f.view(job);
+    if (view && view->failure)
+        std::cerr << "  platform encoder fails: " << view->failure->reason << '\n';
+    expect(view && view->state != ExportJobState::Failed &&
+               std::filesystem::exists(f.folder / "Exports/Main.mp4"),
+           "platform encoder fails: the movie publishes all the same");
+    if (!backend->ended) {
+        std::cerr << "  platform encoder fails: NOT EXERCISED, the system encoder did not begin "
+                     "this export on this computer\n";
+        return;
+    }
+    if (!view || !view->outputs.front().verification)
+        return;
+    const auto& provenance = view->outputs.front().verification->provenance;
+    expect(provenance.encoder == "openh264",
+           "platform encoder fails: the bundled encoder made the file, got " + provenance.encoder);
+    expect(provenance.implementationNote.find("rendered again by the FFmpeg encoder") !=
+               std::string::npos,
+           "platform encoder fails: the output's note names the second render: " +
+               provenance.implementationNote);
+    const auto log = f.service->log(job, 0);
+    expect(std::ranges::any_of(log.entries,
+                               [](const host::ExportLogEntry& entry) {
+                                   return entry.code == "export.encoder.platform-fallback";
+                               }),
+           "platform encoder fails: the log records the fallback");
+    expect(backend->launches == 2, "platform encoder fails: one more worker was launched, got " +
+                                       std::to_string(backend->launches.load()));
+}
+
 } // namespace
 
 int main() {
@@ -1531,6 +1641,7 @@ int main() {
         testFreeTextWorkingSpace("Linear P3-D65");
         // H.264 MP4 end to end on the bundled OpenH264, with nothing installed.
         testVideoEndToEnd(document::ExportFormat::H264Mp4, linuxEncoders(), "h264-mp4");
+        testPlatformEncoderFailsPartway();
         // HEVC Main 10 without a hardware encoder: the bundled 10-bit Kvazaar delivers Main 10
         // (#408), which passes the reopen, container and color checks and publishes.
         testVideoEndToEnd(document::ExportFormat::HevcMp4, linuxEncoders(), "hevc-mp4-main10",

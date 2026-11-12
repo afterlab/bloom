@@ -426,7 +426,13 @@ unsigned sample16(const media::provider::Bytes& bytes, std::size_t offset) {
         check(decoded->format == PixelFormat::Yuv420p8 && decoded->colour.primaries == 1 &&
                   decoded->colour.transfer == 1 && decoded->colour.matrix == 1 &&
                   decoded->colour.range == 1,
-              "worker decoded limited-range Rec.709 YUV420");
+              ("worker decoded limited-range Rec.709 YUV420 (format " +
+               std::to_string(static_cast<int>(decoded->format)) + ", tags " +
+               std::to_string(decoded->colour.primaries) + "," +
+               std::to_string(decoded->colour.transfer) + "," +
+               std::to_string(decoded->colour.matrix) + "," +
+               std::to_string(decoded->colour.range) + ")")
+                  .c_str());
         unsigned maximum = 0;
         std::uint64_t total = 0;
         // Independently reconstruct display RGB from the worker's planar Rec.709 samples.

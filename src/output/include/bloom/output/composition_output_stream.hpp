@@ -70,6 +70,9 @@ class CompositionOutputStreamV1 final {
     [[nodiscard]] bool audioSourceFailed() const noexcept;
     // The failure is the required platform encoder refusing the encode (EncodeSessionV1).
     [[nodiscard]] bool platformEncoderRefused() const noexcept;
+    // The preferred platform encoder began the stream and then failed it (EncodeSessionV1): the
+    // caller may render the export again with PlatformEncoderV1::Skipped.
+    [[nodiscard]] bool platformEncoderFailed() const noexcept;
     // #570: the measured and delivered loudness of a normalizing export, once every audio block has
     // been written; absent otherwise.
     [[nodiscard]] std::optional<AudioLoudnessReportV1> loudnessReport() const;

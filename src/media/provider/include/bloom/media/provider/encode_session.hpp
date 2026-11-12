@@ -62,6 +62,9 @@ struct EncodeSessionOptionsV1 {
     // How long a worker that holds nothing more to finish may stay at the cap before the session
     // gives up (its allocator may still be returning memory to the system).
     std::chrono::milliseconds memorySettle{3000};
+    // Test seam: called before every frame or audio block is sent, with the worker's process id
+    // and how many were sent before it.
+    std::function<void(std::int64_t, std::uint64_t)> sending;
     // Test seam: replaces the operating system's report of the worker's memory.
     std::function<std::optional<platform::ProcessMemory>(std::int64_t)> memorySampler;
 };
@@ -69,7 +72,8 @@ struct EncodeSessionOptionsV1 {
 // framework first, then the bundled FFmpeg worker (Linux: FFmpeg with VA-API when requested, then
 // software). A provider that is missing, does not declare the codec/container, or refuses the
 // launch, handshake or EncodeBegin is skipped silently and recorded in provenance(). Once begin()
-// succeeds the provider is pinned for the whole attempt.
+// succeeds the provider is pinned for the whole attempt; a platform encoder that fails after that
+// is reported by platformEncoderFailed().
 // BlockingIo-only, one request/ack at a time. A failure poisons this session and reaps its worker.
 // Destruction cancels unfinished work. Neither worker nor client can publish a destination.
 class EncodeSessionV1 final {
@@ -95,6 +99,12 @@ class EncodeSessionV1 final {
     // begin() failed because the platform encoder was Required and refused the encode; the
     // bundled FFmpeg worker was not tried (PlatformEncoderV1::Skipped selects it).
     [[nodiscard]] bool platformEncoderRefused() const noexcept;
+    // The platform encoder was Preferred, began this session and then failed it: its worker
+    // ended, or it refused a frame, an audio block, the finish or its own reopen check. Nothing
+    // can be substituted inside a started session (the frames it took are gone), so the caller
+    // renders the attempt again with PlatformEncoderV1::Skipped. False for a cancelled session,
+    // a changed source and the memory cap, which the bundled encoder would not survive either.
+    [[nodiscard]] bool platformEncoderFailed() const noexcept;
     [[nodiscard]] static std::string defaultWorker();
     // The worker's measured memory so far (peak over the samples taken at each product, at finish
     // and when the session ends); valid after the worker has gone.

@@ -12,7 +12,9 @@
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/task_types.hpp>
 
+#include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -58,6 +60,11 @@ struct ExportJobRunnerDependencies final {
     runtime::QualifiedDisplayProcessorProvider* displayProcessor = nullptr;
     // Caller-owned scratch folder for publication's bridging files.
     std::filesystem::path scratchDirectory;
+    // Diagnostic and test seams of a movie output's encode workers, called on the encoding
+    // thread: with the process id of every worker launched, and before every frame or audio block
+    // is sent, with the worker's process id and how many were sent before it.
+    std::function<void(std::int64_t)> encodeWorkerLaunched;
+    std::function<void(std::int64_t, std::uint64_t)> encodeWorkerSending;
 };
 
 // One output of the captured job, resolved at Preparing.

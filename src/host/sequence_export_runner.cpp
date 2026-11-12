@@ -204,6 +204,8 @@ struct detail::SequenceExportWorkV1 {
         const bool hardware = execution.implementation == media::provider::Implementation::Hardware;
         if (execution.provider == "bloom.videotoolbox")
             return "videotoolbox";
+        if (execution.provider == "bloom.mediafoundation")
+            return "mediafoundation";
         if (codec == "h264" || codec == "hevc") {
             if (execution.device == "nvidia-nvenc")
                 return "nvenc";
@@ -436,6 +438,8 @@ struct detail::SequenceExportWorkV1 {
                 failureStage = SequenceExportFailureStageV1::AudioSource;
             if (failure && encoder->platformEncoderRefused())
                 failureStage = SequenceExportFailureStageV1::PlatformEncoder;
+            if (failure && encoder->platformEncoderFailed())
+                failureStage = SequenceExportFailureStageV1::PlatformEncoderFailed;
             checked(std::move(failure));
         };
         const auto& media = attempt.gpuMediaDisplay();
@@ -480,6 +484,10 @@ struct detail::SequenceExportWorkV1 {
         if (const auto* refused = std::get_if<Unavailable>(&finished);
             refused && refused->detail.starts_with("Reopen"))
             failureStage = SequenceExportFailureStageV1::Verification;
+        // A preferred platform encoder that fails its finish or its reopen check is rendered
+        // again on the bundled encoder, whatever the failure is named.
+        if (encoder->platformEncoderFailed())
+            failureStage = SequenceExportFailureStageV1::PlatformEncoderFailed;
         // The peak is on the worker's record once it has flushed and reopened the file.
         workerMemory = encoder->workerMemory();
         const auto qc = checked(std::move(finished));
@@ -551,7 +559,9 @@ struct detail::SequenceExportWorkV1 {
         // the profile and bit depth the reopened stream carries.
         if (request.preset == output::OutputPresetV1::H264MovV1)
             analysis->implementationNote +=
-                served.execution.device == "nvidia-nvenc"
+                served.execution.provider == "bloom.mediafoundation"
+                    ? "; encoder=mediafoundation " + qc.encoder
+                : served.execution.device == "nvidia-nvenc"
                     ? "; encoder=nvenc nvenc-runtime-unqualified"
                 : served.execution.implementation == media::provider::Implementation::Hardware
                     ? "; encoder=vaapi vaapi-runtime-unqualified"

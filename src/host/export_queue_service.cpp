@@ -518,7 +518,9 @@ struct Pump final {
             .gpu = s.dependencies.gpu,
             .retirement = s.dependencies.retirement,
             .displayProcessor = s.dependencies.displayProcessor,
-            .scratchDirectory = s.dependencies.scratchDirectory};
+            .scratchDirectory = s.dependencies.scratchDirectory,
+            .encodeWorkerLaunched = {},
+            .encodeWorkerSending = {}};
         job.runner = s.dependencies.backend->start(std::move(dependencies), std::move(request));
         if (!job.runner)
             return fail(id, job,

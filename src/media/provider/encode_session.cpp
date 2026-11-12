@@ -78,6 +78,8 @@ struct EncodeSessionV1::State {
     std::optional<Unavailable> terminal;
     // The platform encoder is the only route of this attempt, and whether it refused.
     bool platformRequired = false, platformRefused = false;
+    // The platform encoder began this session as the preferred route, and then failed it.
+    bool platformServes = false, platformFailed = false;
     explicit State(EncodeSessionOptionsV1 o, platform::ProcessCancellation c)
         : options(std::move(o)), cancel(std::move(c)) {}
     // A worker that vanished mid-session is reaped here so the error names how it ended.
@@ -105,6 +107,8 @@ struct EncodeSessionV1::State {
     EncodeWorkerMemoryV1 report;
     Payload stop(Unavailable e) {
         sampleMemory();
+        if (platformServes && !terminal && !report.capReached && mediaFallbackPermittedV1(e))
+            platformFailed = true;
         terminal = e;
         if (process)
             process->stop();
@@ -118,6 +122,7 @@ struct EncodeSessionV1::State {
     // pipe buffer.
     static constexpr std::size_t kMaxUnacknowledged = 16;
     std::size_t unacknowledged = 0;
+    std::uint64_t products = 0;
     std::optional<Unavailable> send(MessageKind kind, Payload payload) {
         if (terminal)
             return *terminal;
@@ -233,6 +238,9 @@ struct EncodeSessionV1::State {
             return error;
         if (const auto error = holdForMemory())
             return error;
+        if (options.sending && process)
+            options.sending(process->processId(), products);
+        ++products;
         if (const auto error = send(kind, std::move(payload)))
             return error;
         ++unacknowledged;
@@ -253,6 +261,7 @@ struct EncodeSessionV1::State {
         terminal.reset();
         sequence = 0;
         unacknowledged = 0;
+        products = 0;
         hello = route.hello;
         platform::ProcessOptions launch;
         launch.executable = route.executable;
@@ -284,8 +293,14 @@ struct EncodeSessionV1::State {
         }
         launch.arguments.insert(launch.arguments.end(), route.arguments.begin(),
                                 route.arguments.end());
+        // The native route's worker on Windows is the FFmpeg worker (its Media Foundation
+        // generation), which spools the encode like the software generation does.
+#if defined(_WIN32)
+        configureFfmpegWorkerEnvironment(launch, launch.executable);
+#else
         if (!route.native)
             configureFfmpegWorkerEnvironment(launch, launch.executable);
+#endif
         auto launched = platform::ProcessSupervisor::launch(launch);
         if (const auto* e = std::get_if<platform::ProcessFailure>(&launched))
             return processFailure(*e);
@@ -316,14 +331,15 @@ std::optional<Unavailable> EncodeSessionV1::begin(const EncodeSettingsV1& settin
     if (s.cancel && s.cancel())
         return Unavailable{Error::Cancelled, "Encode cancelled"};
     std::vector<EncodeRoute> routes;
-    // The platform media framework first (ADR 0035). Windows has a Media Foundation slot with no
-    // provider yet; it reports NotInstalled and FFmpeg serves the encode.
+    // The platform media framework first (ADR 0035): VideoToolbox on macOS, the worker's Media
+    // Foundation generation on Windows.
     if (const auto native = nativeMediaProviderId();
         !native.empty() && s.options.platformEncoder != PlatformEncoderV1::Skipped) {
         EncodeRoute route;
         route.id = std::string(native);
         route.native = true;
         route.executable = nativeWorkerExecutable();
+        route.arguments = nativeWorkerArguments();
         route.hello = nativeMediaHandshake();
         routes.push_back(std::move(route));
     }
@@ -389,9 +405,14 @@ std::optional<Unavailable> EncodeSessionV1::begin(const EncodeSettingsV1& settin
         s.platformRefused = s.platformRequired && mediaFallbackPermittedV1(*error);
         return *error;
     }
+    s.platformServes = s.options.platformEncoder == PlatformEncoderV1::Preferred &&
+                       !nativeMediaProviderId().empty() &&
+                       s.provenance.provider == nativeMediaProviderId();
     return std::nullopt;
 }
 bool EncodeSessionV1::platformEncoderRefused() const noexcept { return state_->platformRefused; }
+bool EncodeSessionV1::platformEncoderFailed() const noexcept { return state_->platformFailed; }
+
 std::optional<Unavailable> EncodeSessionV1::video(FrameProduct frame) {
     return state_->post(MessageKind::Frame, std::move(frame));
 }

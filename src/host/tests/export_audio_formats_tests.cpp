@@ -324,6 +324,11 @@ struct Fixture {
         expect(service->start(ids).accepted, name + ": start");
         expect(pumpUntil([&] { return host::isTerminal(view(job)->state); }, 120),
                name + ": the job finishes");
+        // A failed job's log holds the technical detail under its plain sentence.
+        if (const auto finished = view(job); finished && finished->failure)
+            for (const auto& entry : service->log(job, 0).entries)
+                std::cerr << "  " << name << " log: " << entry.code << ": " << entry.message
+                          << '\n';
         return view(job);
     }
 };

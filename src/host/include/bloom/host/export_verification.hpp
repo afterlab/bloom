@@ -169,7 +169,8 @@ struct ExportDeviceProvenance final {
     // approval and verification as an evaluated one.
     std::uint64_t framesReused = 0;
     // Encoder implementation token actually used, e.g. "openh264", "nvenc", "vaapi", "kvazaar",
-    // "libvpx", "svt-av1", "videotoolbox", "ffmpeg-prores"; empty for an audio-only output.
+    // "libvpx", "svt-av1", "videotoolbox", "mediafoundation", "ffmpeg-prores"; empty for an
+    // audio-only output.
     std::string encoder;
     // The preset's implementation/review note (e.g. "Review deliverable — not for archival; ..."),
     // kept apart from the encoder token.

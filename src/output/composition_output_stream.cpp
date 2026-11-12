@@ -501,6 +501,9 @@ bool CompositionOutputStreamV1::audioSourceFailed() const noexcept {
 bool CompositionOutputStreamV1::platformEncoderRefused() const noexcept {
     return state_->encoder->platformEncoderRefused();
 }
+bool CompositionOutputStreamV1::platformEncoderFailed() const noexcept {
+    return state_->encoder->platformEncoderFailed();
+}
 const Handshake& CompositionOutputStreamV1::handshake() const {
     return state_->encoder->handshake();
 }
@@ -566,10 +569,14 @@ Result<MediaQcEvidenceV1> makeMediaQcEvidenceV1(const MediaOutputAnalysisV1& ana
         }
         evidence.pipeline = checked(digest(pipeline));
         evidence.tool = hello.execution.provider;
-        // On macOS the version names the system encoder that ran (issue #455).
+        // On macOS and Windows the version names the system encoder that ran (issues #455 and
+        // #370).
+        const bool mediaFoundation = hello.execution.provider == "bloom.mediafoundation";
         evidence.version =
-            videotoolbox ? std::string("VideoToolbox") + (qc.encoder.empty() ? "" : " " + qc.encoder)
-                         : hello.execution.sdk;
+            videotoolbox
+                ? std::string("VideoToolbox") + (qc.encoder.empty() ? "" : " " + qc.encoder)
+            : mediaFoundation && !qc.encoder.empty() ? hello.execution.sdk + "; " + qc.encoder
+                                                     : hello.execution.sdk;
         evidence.profile = "media4-export-v1";
         evidence.coverage = "all frame timestamps/count; stream layout; duration; first/last "
                             "pixels; every PCM sample; staged digest";

@@ -301,7 +301,9 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
                 .gpu = injectedGpuProvider,
                 .retirement = retirement,
                 .displayProcessor = nullptr,
-                .scratchDirectory = scratchDirectory},
+                .scratchDirectory = scratchDirectory,
+                .encodeWorkerLaunched = {},
+                .encodeWorkerSending = {}},
             std::move(runRequest));
         bool stopping = false;
         // The run's technical detail (stage, typed codes) for the scripting diagnostic.
