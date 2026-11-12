@@ -44,9 +44,9 @@ using KeyframeId = core::Id<KeyframeIdTag>;
 using DriverBindingId = core::Id<DriverBindingIdTag>;
 using ExtensionRecordId = core::Id<ExtensionRecordIdTag>;
 using DataBlockRecordId = core::Id<DataBlockRecordIdTag>;
-// ADR 0028: a layer mask's stable identity (document schema 1.24).
+// ADR 0028: a layer mask's stable identity.
 using LayerMaskId = core::Id<LayerMaskIdTag>;
-// ADR 0033: export queue job and output identities (document schema 1.29). Project-global per
+// ADR 0033: export queue job and output identities. Project-global per
 // namespace; a deleted or undone job never frees its id for reuse.
 using ExportJobId = core::Id<ExportJobIdTag>;
 using ExportOutputId = core::Id<ExportOutputIdTag>;
@@ -62,15 +62,14 @@ struct IdAllocatorHighWater final {
     std::uint64_t keyframe = 0;
     std::uint64_t driverBinding = 0;
     std::uint64_t extensionRecord = 0;
-    // Appended last, matching the persisted `highestIssued` member order: node groups are the
-    // newest namespace (document schema 1.2), and an older file simply has no value for it.
+    // In the persisted `highestIssued` member order.
     std::uint64_t nodeGroup = 0;
     std::uint64_t asset = 0;
     std::uint64_t assetFolder = 0;
     std::uint64_t dataBlock = 0;
-    // Appended last (document schema 1.24, ADR 0028): an older file has no value for it.
+    // ADR 0028.
     std::uint64_t layerMask = 0;
-    // Appended last (document schema 1.29, ADR 0033): an older file has no value for them.
+    // ADR 0033.
     std::uint64_t exportJob = 0;
     std::uint64_t exportOutput = 0;
 

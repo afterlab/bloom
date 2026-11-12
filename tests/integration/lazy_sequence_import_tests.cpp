@@ -14,7 +14,6 @@
 #include <bloom/platform/source_identity.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/document_decode.hpp>
-#include <bloom/project/document_migration.hpp>
 #include <bloom/project/strict_json_dom.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 
@@ -270,20 +269,8 @@ std::optional<std::vector<doc::AssetRecord>> decode(const std::string& text) {
         return std::nullopt;
     return decoded.value()->assets;
 }
-std::string withMinor(const std::string& text, const int from, const int to) {
-    const auto result = std::regex_replace(
-        text, std::regex("\"minor\": " + std::to_string(from) + "(\\s*\\})"),
-        "\"minor\": " + std::to_string(to) + "$1", std::regex_constants::format_first_only);
-    if (result == text)
-        throw std::logic_error("fixture anchor missing");
-    return result;
-}
-
-// Document 1.35: a project saved while only some members have digests reopens to the same asset,
-// and its stamped members read as before; a document claiming 1.34 cannot carry a stamp, and 1.34
-// reaches the current minor by version alone (1.35 stamps, 1.36 verified digests, 1.37 entry
-// layers, 1.38 gradients, 1.39 gradient colour pairs, 1.40 gradient stop links, 1.41 gradient
-// modes, 1.42 matte sources, 1.43 compound paths).
+// A project saved while only some members have digests reopens to the same asset, and its stamped
+// members read as before.
 void partialDigestsReopen() {
     Folder folder("bloom-lazy-sequence-reopen");
     for (int frame = 1; frame <= 3; ++frame)
@@ -313,27 +300,11 @@ void partialDigestsReopen() {
                "the reopened stamped members read");
         expect(encode(draft.project()) == text, "the canonical text is stable");
     }
-    expect(!decode(withMinor(text, 43, 34)), "a document claiming 1.34 cannot carry a stamp");
-
-    const auto plain = encode(document.snapshot().project());
-    const auto older = withMinor(plain, 43, 34);
-    auto operation = memory();
-    auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(older)), {}, operation);
-    expect(static_cast<bool>(parsed), "the 1.34 document parses");
-    if (parsed) {
-        const auto migrated = project::migrateDocumentDom(
-            parsed.document()->root(), {1, 34}, project::kCanonicalDocumentSchemaVersionV1,
-            project::kProductionDocumentMigrationSteps, {}, operation);
-        expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
-                   migrated.stepsApplied() == 9 && migrated.migratedRoot() != nullptr &&
-                   static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
-               "1.34 reaches the current minor through nine version-only steps");
-    }
 }
 
-// Document 1.36 (#495): a member may carry its stamp and the digest a full hash verified for the
-// bytes that carried it. The three forms round-trip; recording a digest beside a stamp keeps the
-// member's identity; a document claiming 1.35 cannot carry both; 1.35 reaches the current minor by version.
+// #495: a member may carry its stamp and the digest a full hash verified for the bytes that carried
+// it. The three forms round-trip, and recording a digest beside a stamp keeps the member's
+// identity.
 void verifiedDigestsRoundTrip() {
     Folder folder("bloom-lazy-sequence-verified");
     for (int frame = 1; frame <= 3; ++frame)
@@ -370,27 +341,6 @@ void verifiedDigestsRoundTrip() {
     expect(reopened && reopened->size() == 1 && reopened->front() == asset,
            "verified, legacy and pending members reopen exactly");
     expect(encode(verified) == text, "the canonical text is stable");
-    expect(!decode(withMinor(text, 43, 35)),
-           "a document claiming 1.35 cannot carry both a digest and a stamp");
-    expect(!decode(withMinor(text, 43, 34)),
-           "a document claiming 1.34 cannot carry both a digest and a stamp");
-
-    const auto plain = encode(document.snapshot().project());
-    const auto older = withMinor(plain, 43, 35);
-    expect(static_cast<bool>(decode(older)), "a 1.35 document with one form per member decodes");
-    auto operation = memory();
-    auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(older)), {}, operation);
-    if (parsed) {
-        const auto migrated = project::migrateDocumentDom(
-            parsed.document()->root(), {1, 35}, project::kCanonicalDocumentSchemaVersionV1,
-            project::kProductionDocumentMigrationSteps, {}, operation);
-        expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
-                   migrated.stepsApplied() == 8 && migrated.migratedRoot() != nullptr &&
-                   static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
-               "1.35 reaches the current minor through eight version-only steps");
-    } else {
-        expect(false, "the 1.35 document parses");
-    }
 }
 } // namespace
 

@@ -10,7 +10,17 @@
 #include <span>
 #include <string_view>
 
+#ifndef BLOOM_VERSION
+#error "BLOOM_VERSION must name the build's project version"
+#endif
+
 namespace {
+
+// A generator string is non-empty, valid UTF-8 and at most kMaxManifestGeneratorTextBytes bytes.
+[[nodiscard]] bool validGeneratorText(const std::string_view text) noexcept {
+    return !text.empty() && text.size() <= bloom::project::kMaxManifestGeneratorTextBytes &&
+           bloom::core::isValidUtf8(text);
+}
 
 using bloom::project::CanonicalJsonWriter;
 using bloom::project::CanonicalJsonWriterResult;
@@ -74,12 +84,18 @@ failure(const CanonicalManifestError error,
         bloom::project::kCanonicalManifestDocumentSchemaVersionV1.major) {
         return failure(CanonicalManifestError::InvalidDocumentSchemaVersion);
     }
+    if (manifest.generator.has_value() && (!validGeneratorText(manifest.generator->name) ||
+                                           !validGeneratorText(manifest.generator->version))) {
+        return failure(CanonicalManifestError::InvalidGenerator);
+    }
     if (manifest.requirements.size() > limits.maximumRequirements) {
         return failure(CanonicalManifestError::RequirementCountExceeded);
     }
 
     constexpr std::size_t fixedValueCount = 11;
-    std::size_t valueCount = fixedValueCount;
+    constexpr std::size_t generatorValueCount = 3;
+    std::size_t valueCount =
+        fixedValueCount + (manifest.generator.has_value() ? generatorValueCount : 0);
     if (valueCount > limits.maximumValues) {
         return failure(CanonicalManifestError::ValueCountExceeded);
     }
@@ -202,6 +218,15 @@ void emitManifest(CanonicalJsonWriter& writer, const CanonicalManifestV1& manife
         emitRequirement(writer, requirement);
     }
     requireSuccess(writer.endArray());
+    if (manifest.generator.has_value()) {
+        requireSuccess(writer.memberName("generator"));
+        requireSuccess(writer.beginObject());
+        requireSuccess(writer.memberName("name"));
+        requireSuccess(writer.stringValue(manifest.generator->name));
+        requireSuccess(writer.memberName("version"));
+        requireSuccess(writer.stringValue(manifest.generator->version));
+        requireSuccess(writer.endObject());
+    }
     requireSuccess(writer.endObject());
     requireSuccess(writer.finish());
 }
@@ -209,6 +234,8 @@ void emitManifest(CanonicalJsonWriter& writer, const CanonicalManifestV1& manife
 } // namespace
 
 namespace bloom::project {
+
+ManifestGenerator currentManifestGenerator() noexcept { return {"Bloom", BLOOM_VERSION}; }
 
 CanonicalManifestSizeResult canonicalManifestSize(const CanonicalManifestV1& manifest,
                                                   const CanonicalManifestLimits limits) noexcept {

@@ -203,10 +203,7 @@ using document::Vec3d;
         out = value;
         return true;
     }
-    if (kindText == "vec3" && state.documentMinor >= 4) {
-        // Gated on the minor exactly as the Color4 curve kind is: a 1.3 or older document cannot
-        // contain this kind, so accepting it there would accept a file no 1.3 writer could have
-        // produced.
+    if (kindText == "vec3") {
         static constexpr std::array<std::string_view, 4> keys{"kind", "x", "y", "z"};
         std::vector<const JsonValue*> members;
         if (!matchOrderedMembers(node, keys, true, state, path, members)) {
@@ -224,10 +221,6 @@ using document::Vec3d;
         }
         out = value;
         return true;
-    }
-    if (kindText == "path" && state.documentMinor < 14) {
-        state.fail(DocumentDecodeError::InvalidConstantValueKind, joinPath(path, "kind"));
-        return false;
     }
     if (kindText == "path") {
         const auto point = [&](const JsonValue& object, const std::string& where, Vec2d& outPoint) {
@@ -256,8 +249,7 @@ using document::Vec3d;
                     anchorKeys.push_back("inHandle");
                 if (anchor.findMember("outHandle"))
                     anchorKeys.push_back("outHandle");
-                // The anchor mode is a 1.24 member: an older file carrying one is malformed.
-                if (anchor.findMember("mode") && state.documentMinor >= 24)
+                if (anchor.findMember("mode"))
                     anchorKeys.push_back("mode");
                 std::vector<const JsonValue*> parts;
                 const auto where = arrayPath + "/" + std::to_string(anchors.size());
@@ -293,22 +285,18 @@ using document::Vec3d;
                     (anchorKeys[index] == "inHandle" ? decoded.inHandle : decoded.outHandle) =
                         handle;
                 }
-                // An omitted mode is the one the geometry implies: documents written before schema
-                // 1.24 migrate as Corner, Mirrored, Aligned or Free.
+                // An omitted mode is the one the geometry implies: Corner, Mirrored, Aligned or
+                // Free.
                 if (!explicitMode)
                     decoded.mode = document::inferPathAnchorMode(decoded);
                 anchors.push_back(decoded);
             }
             return true;
         };
-        // Document 1.43 (#589): a compound value's contours, then its fill rule and groups, each
-        // only when it says something. An older document carrying one is refused, and so is a
-        // compound spelling of a value the flat shape can say: every value has one spelling.
+        // #589: a compound value's contours, then its fill rule and groups, each only when it
+        // says something. A compound spelling of a value the flat shape can say is refused: every
+        // value has one spelling.
         if (node.findMember("contours") != nullptr) {
-            if (state.documentMinor < kCompoundPathsMinor) {
-                state.fail(DocumentDecodeError::UnknownMember, joinPath(path, "contours"));
-                return false;
-            }
             std::vector<std::string_view> keys{"kind", "contours"};
             for (const std::string_view optional : {"fillRule", "groups"})
                 if (node.findMember(optional) != nullptr)
@@ -367,19 +355,14 @@ using document::Vec3d;
         out = document::PathValue::fromContour(std::move(contour));
         return true;
     }
-    // Document 1.38 (#541): a gradient's stops, each {position, red, green, blue, alpha}.
-    if (kindText == "gradient" && state.documentMinor >= 38) {
-        // #546: from 1.41 its colour mode, hue direction and interpolation follow, each only when
-        // not the default (RGB, Near, Linear); an older document carrying one is refused.
+    // #541: a gradient's stops, each {position, red, green, blue, alpha}.
+    if (kindText == "gradient") {
+        // #546: its colour mode, hue direction and interpolation follow, each only when not the
+        // default (RGB, Near, Linear).
         std::vector<std::string_view> keys{"kind", "stops"};
         for (const std::string_view mode : {"colorMode", "hueDirection", "interpolation"}) {
-            if (node.findMember(mode) == nullptr)
-                continue;
-            if (state.documentMinor < kGradientModesMinor) {
-                state.fail(DocumentDecodeError::UnknownMember, joinPath(path, mode));
-                return false;
-            }
-            keys.push_back(mode);
+            if (node.findMember(mode) != nullptr)
+                keys.push_back(mode);
         }
         std::vector<const JsonValue*> members;
         if (!matchOrderedMembers(node, keys, true, state, path, members))
@@ -543,8 +526,7 @@ using document::Vec3d;
         static constexpr std::array<std::string_view, 3> componentKeys{"kind", "curveId",
                                                                        "defaultValue"};
         std::vector<const JsonValue*> members;
-        const bool hasDefault =
-            state.documentMinor >= 9 && node.findMember("defaultValue") != nullptr;
+        const bool hasDefault = node.findMember("defaultValue") != nullptr;
         if (hasDefault) {
             if (!matchOrderedMembers(node, componentKeys, true, state, path, members))
                 return false;
@@ -565,8 +547,8 @@ using document::Vec3d;
         out = document::AnimationCurveSource{curveId, std::move(defaultValue)};
         return true;
     }
-    if (kindText == "driver" && state.documentMinor >= 4) {
-        // Document 1.4. Decoded on exactly an edge source's terms -- an object id and a port name,
+    if (kindText == "driver") {
+        // Decoded on exactly an edge source's terms -- an object id and a port name,
         // with no more checking than decodeOutputPortRef() does. Whether the name is valid
         // structural text, whether the node EXISTS, and whether its kind fits are all the graph's
         // own validation to answer once every node is decoded, which is the same order an edge's
@@ -619,11 +601,6 @@ using document::Vec3d;
     if (!decodeStringMember(*members[1], state, joinPath(path, "schemaKey"), schemaKeyText)) {
         return false;
     }
-    if (document::isGradientStopSchemaKey(schemaKeyText) &&
-        state.documentMinor < kGradientStopLinksMinor) {
-        state.fail(DocumentDecodeError::UnsupportedParameterSource, joinPath(path, "schemaKey"));
-        return false;
-    }
     document::ParameterSource source;
     {
         const AttachmentScope sourceScope(state, "source");
@@ -631,13 +608,6 @@ using document::Vec3d;
             return false;
         }
     }
-    // #589: Shape Source's path takes a Path driver from document 1.43; it was a constant before.
-    if (schemaKeyText == "bloom.shape.path" && state.documentMinor < kCompoundPathsMinor &&
-        std::holds_alternative<document::DriverBindingSource>(source)) {
-        state.fail(DocumentDecodeError::UnsupportedParameterSource, joinPath(path, "source"));
-        return false;
-    }
-
     out.id = id;
     out.schemaKey = std::string(schemaKeyText);
     out.source = std::move(source);
@@ -683,11 +653,6 @@ using document::Vec3d;
 // Animation curves (docs/architecture/project-format.md, "Animation")
 // ------------------------------------------------------------------------------------------
 
-// The minor that declares the easing-equation tokens and the keyframe `easing` member.
-inline constexpr std::uint32_t kKeyframeEasingMinor = 30;
-// The minor that declares the optional keyframe `handleMode` member.
-inline constexpr std::uint32_t kKeyframeHandleModeMinor = 32;
-
 [[nodiscard]] bool decodeInterpolation(const JsonValue& value, DecodeState& state,
                                        const std::string& path, KeyframeInterpolation& out) {
     std::string_view text;
@@ -702,31 +667,19 @@ inline constexpr std::uint32_t kKeyframeHandleModeMinor = 32;
         out = KeyframeInterpolation::Linear;
         return true;
     }
-    // Gated on the minor that DECLARES it, exactly as the composition's own member count is
-    // (document_decode.cpp's decodeComposition): a file claiming 1.2 carrying a 1.3 token is a
-    // malformed 1.2 file, not data to accept silently. A real older file never reaches here with
-    // this token -- the migration ladder rewrites the version before trusted decode -- and an
-    // OLDER build reading a 1.3 file preserves the unknown token read-only through
-    // failUnknownDiscriminator()'s own route.
-    if (text == "ease-in-out" && state.documentMinor >= 3) {
+    if (text == "ease-in-out") {
         out = KeyframeInterpolation::EaseInOut;
         return true;
     }
-    // Document 1.30: Robert Penner's easing equations, gated on the minor that declares them.
+    // Robert Penner's easing equations.
     if (const auto easing = document::keyframeInterpolationFromToken(text);
-        easing && document::isEasingInterpolation(*easing) &&
-        state.documentMinor >= kKeyframeEasingMinor) {
+        easing && document::isEasingInterpolation(*easing)) {
         out = *easing;
         return true;
     }
     state.fail(DocumentDecodeError::InvalidInterpolation, path);
     return false;
 }
-
-// The minor that DECLARES the ease-handle members. A file claiming an older minor that carries one
-// is a malformed file of that minor, not data to accept silently -- the same rule the
-// "ease-in-out" interpolation token follows.
-inline constexpr std::uint32_t kKeyframeHandleMinor = 12;
 
 // A handle object is CLOSED: exactly {time, value}, in that order, and nothing else. It is not a
 // collection element and carries no identity, so it is not a round-trip attachment point either;
@@ -765,9 +718,9 @@ inline constexpr std::uint32_t kKeyframeHandleMinor = 12;
 // members in declared order keeps matchOrderedMembers' strict ordering, unknown-member and
 // round-trip-capture rules exactly as they are for every other object: an out-of-order or
 // unexpected member still fails, and a genuinely unknown trailing member is still captured.
-void appendPresentHandleKeys(const JsonValue& node, const DecodeState& state,
-                             const std::size_t knownCount, std::vector<std::string_view>& keys) {
-    if (state.documentMinor < kKeyframeHandleMinor || node.kind() != JsonValueKind::Object) {
+void appendPresentHandleKeys(const JsonValue& node, const std::size_t knownCount,
+                             std::vector<std::string_view>& keys) {
+    if (node.kind() != JsonValueKind::Object) {
         return;
     }
     const auto members = node.objectMembers();
@@ -780,18 +733,16 @@ void appendPresentHandleKeys(const JsonValue& node, const DecodeState& state,
         keys.emplace_back("incomingHandle");
         ++index;
     }
-    if (state.documentMinor >= kKeyframeEasingMinor && members.size() > index &&
-        members[index].key() == "easing") {
+    if (members.size() > index && members[index].key() == "easing") {
         keys.emplace_back("easing");
         ++index;
     }
-    if (state.documentMinor >= kKeyframeHandleModeMinor && members.size() > index &&
-        members[index].key() == "handleMode") {
+    if (members.size() > index && members[index].key() == "handleMode") {
         keys.emplace_back("handleMode");
     }
 }
 
-// A 1.32 `handleMode` is the token of a non-Free mode. "free" is the default and is never written,
+// A `handleMode` is the token of a non-Free mode. "free" is the default and is never written,
 // so a document that spells it out is not one this writer could have produced.
 [[nodiscard]] bool decodeKeyframeHandleMode(const JsonValue& node, DecodeState& state,
                                             const std::string& path,
@@ -881,7 +832,7 @@ template <typename Keyframe>
                                         const std::string& path, ScalarKeyframe& out) {
     std::vector<std::string_view> keys{"id", "time", "value", "outgoingInterpolation"};
     const auto knownCount = keys.size();
-    appendPresentHandleKeys(node, state, knownCount, keys);
+    appendPresentHandleKeys(node, knownCount, keys);
     std::vector<const JsonValue*> members;
     std::vector<RetainedJsonMember> trailing;
     if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
@@ -923,12 +874,12 @@ template <typename Keyframe>
     return decodeHandleMembers(members, keys, knownCount, state, path, out);
 }
 
-// ADR 0028 (document 1.24): a whole-value Path key whose value is a constant of kind "path".
+// ADR 0028: a whole-value Path key whose value is a constant of kind "path".
 [[nodiscard]] bool decodePathKeyframe(const JsonValue& node, DecodeState& state,
                                       const std::string& path, document::PathKeyframe& out) {
     std::vector<std::string_view> keys{"id", "time", "value", "outgoingInterpolation"};
     const auto knownCount = keys.size();
-    appendPresentHandleKeys(node, state, knownCount, keys);
+    appendPresentHandleKeys(node, knownCount, keys);
     std::vector<const JsonValue*> members;
     std::vector<RetainedJsonMember> trailing;
     if (!matchOrderedMembers(node, keys, true, state, path, members, trailing))
@@ -964,13 +915,13 @@ template <typename Keyframe>
     return decodeHandleMembers(members, keys, knownCount, state, path, out);
 }
 
-// Document 1.38 (#541): a whole-value Gradient key whose value is a constant of kind "gradient".
+// #541: a whole-value Gradient key whose value is a constant of kind "gradient".
 [[nodiscard]] bool decodeGradientKeyframe(const JsonValue& node, DecodeState& state,
                                           const std::string& path,
                                           document::GradientKeyframe& out) {
     std::vector<std::string_view> keys{"id", "time", "value", "outgoingInterpolation"};
     const auto knownCount = keys.size();
-    appendPresentHandleKeys(node, state, knownCount, keys);
+    appendPresentHandleKeys(node, knownCount, keys);
     std::vector<const JsonValue*> members;
     std::vector<RetainedJsonMember> trailing;
     if (!matchOrderedMembers(node, keys, true, state, path, members, trailing))
@@ -1032,7 +983,7 @@ template <std::size_t Count>
                                            AnimationComponent& component, ScalarKeyframe& out) {
     std::vector<std::string_view> keys{"id", "component", "time", "value", "outgoingInterpolation"};
     const auto knownCount = keys.size();
-    appendPresentHandleKeys(node, state, knownCount, keys);
+    appendPresentHandleKeys(node, knownCount, keys);
     std::vector<const JsonValue*> members;
     std::vector<RetainedJsonMember> trailing;
     if (!matchOrderedMembers(node, keys, true, state, path, members, trailing))
@@ -1239,7 +1190,7 @@ template <typename Keyframe, typename DecodeOne>
         return true;
     }
 
-    if (kindText == "path" && state.documentMinor >= 24) {
+    if (kindText == "path") {
         static constexpr std::array<std::string_view, 3> keys{"id", "kind", "keyframes"};
         std::vector<const JsonValue*> members;
         if (!matchOrderedMembers(node, keys, true, state, path, members))
@@ -1253,7 +1204,7 @@ template <typename Keyframe, typename DecodeOne>
         return true;
     }
 
-    if (kindText == "gradient" && state.documentMinor >= 38) {
+    if (kindText == "gradient") {
         static constexpr std::array<std::string_view, 3> keys{"id", "kind", "keyframes"};
         std::vector<const JsonValue*> members;
         if (!matchOrderedMembers(node, keys, true, state, path, members))
@@ -1529,7 +1480,7 @@ template <typename Keyframe, typename DecodeOne>
 }
 
 // A node's parameter binding is a collection element identified by its `role`, scoped to its
-// owning node (see docs/architecture/project-format.md, "Versions, Migrations, And Preservation":
+// owning node (see docs/architecture/project-format.md, "Versions And Preservation":
 // "binding role within its node"). Its identity is one of its own known members, decoded only
 // after this closed shape's own match returns, so its own trailing capture must be deferred like
 // every other collection element's own shape.
@@ -1633,11 +1584,6 @@ template <typename Keyframe, typename DecodeOne>
         state.fail(DocumentDecodeError::DomainViolation, schemaVersionPath);
         return false;
     }
-    // Document 1.23 advanced Layer Output to schema 5 (optional Time Remap). Older documents carry
-    // schemas 3 or 4 with identical bindings, so they open as the current schema.
-    if (state.documentMinor < 23 && typeIdText == document::kLayerOutputNodeType &&
-        schemaVersion == 4)
-        schemaVersion = document::kLayerOutputNodeSchemaVersion;
     std::vector<ParameterBinding> bindings;
     if (!decodeBindings(*members[3], state, joinPath(path, "parameters"), bindings)) {
         return false;
@@ -1815,9 +1761,8 @@ template <typename Keyframe, typename DecodeOne>
             static constexpr std::array<std::string_view, 9> kKeys{
                 "id",        "name",    "mode", "inverted", "path", "feather",
                 "expansion", "opacity", "matte"};
-            // Document 1.42 (#383): a matte mask's Mask output.
-            const bool matte =
-                state.documentMinor >= kMatteSourcesMinor && element.findMember("matte") != nullptr;
+            // #383: a matte mask's Mask output.
+            const bool matte = element.findMember("matte") != nullptr;
             std::vector<const JsonValue*> members;
             std::vector<RetainedJsonMember> trailing;
             if (!matchOrderedMembers(element, std::span(kKeys).first(matte ? 9 : 8), true, state,
@@ -1876,10 +1821,9 @@ template <typename Keyframe, typename DecodeOne>
         const auto mattePath = joinPath(path, "trackMatte");
         const AttachmentScope matteScope(state, "trackMatte");
         static constexpr std::array<std::string_view, 3> kKeys{"source", "channel", "inverted"};
-        // Document 1.42 (#383): a node matte names its Mask output in place of `source`.
+        // #383: a node matte names its Mask output in place of `source`.
         static constexpr std::array<std::string_view, 3> kNodeKeys{"node", "channel", "inverted"};
-        const bool nodeMatte =
-            state.documentMinor >= kMatteSourcesMinor && matte->findMember("node") != nullptr;
+        const bool nodeMatte = matte->findMember("node") != nullptr;
         std::vector<const JsonValue*> members;
         if (!matchOrderedMembers(*matte, nodeMatte ? kNodeKeys : kKeys, true, state, mattePath, members))
             return false;
@@ -1917,48 +1861,21 @@ template <typename Keyframe, typename DecodeOne>
 }
 
 // A Layer Output boundary is a collection element identified by `layerId` (see
-// docs/architecture/project-format.md, "Versions, Migrations, And Preservation": "layer ID for a
+// docs/architecture/project-format.md, "Versions And Preservation": "layer ID for a
 // Layer Output"). `layerId` is its second member, so its own trailing capture must be deferred
 // until this closed shape's own match returns, like every other collection element's own shape.
-// Document 1.30 declares the layer `shy` and `nameFollowsSource` flags. A document older than that
-// has neither; reconstruction infers nameFollowsSource for it (see document_reconstruct.cpp).
-inline constexpr std::uint32_t kLayerPresentationFlagsMinor = 30;
-// Document 1.37 (#502) declares a Merge entry's own layer (`slotId`, `parameters`) and `pivot`.
-inline constexpr std::uint32_t kEntryLayersMinor = 37;
 
 [[nodiscard]] bool decodeLayerOutputBoundary(const JsonValue& node, DecodeState& state,
                                              const std::string& path, LayerOutputBoundary& out) {
     std::vector<std::string_view> keys{"nodeId", "layerId", "name", "outputPort"};
-    if (state.documentMinor >= 5) {
-        for (const auto* key : {"inPoint", "outPoint", "enabled", "solo", "locked", "labelColor"})
-            if (node.findMember(key))
-                keys.push_back(key);
-    }
-    if (state.documentMinor >= 13 && node.findMember("parent"))
-        keys.push_back("parent");
-    if (state.documentMinor >= 23)
-        for (const auto* key : {"startTime", "speed", "contentExtent", "beforeMode", "afterMode"})
-            if (node.findMember(key))
-                keys.push_back(key);
-    if (state.documentMinor >= 24)
-        for (const auto* key : {"masks", "trackMatte"})
-            if (node.findMember(key))
-                keys.push_back(key);
-    if (state.documentMinor >= kLayerPresentationFlagsMinor)
-        for (const auto* key : {"shy", "nameFollowsSource"})
-            if (node.findMember(key))
-                keys.push_back(key);
-    // Document 1.37 (#502): a Merge entry's own layer, and the Frame pivot. A document claiming
-    // 1.36 or older never carries them.
-    for (const auto* key : {"slotId", "pivot", "parameters"}) {
-        if (node.findMember(key) == nullptr)
-            continue;
-        if (state.documentMinor < kEntryLayersMinor) {
-            state.fail(DocumentDecodeError::UnknownMember, joinPath(path, key));
-            return false;
-        }
-        keys.push_back(key);
-    }
+    // Every member after the first four is optional and omitted when it is the default. The last
+    // three (#502) are a Merge entry's own layer and the Frame pivot.
+    for (const auto* key :
+         {"inPoint", "outPoint", "enabled", "solo", "locked", "labelColor", "parent", "startTime",
+          "speed", "contentExtent", "beforeMode", "afterMode", "masks", "trackMatte", "shy",
+          "nameFollowsSource", "slotId", "pivot", "parameters"})
+        if (node.findMember(key))
+            keys.push_back(key);
     std::vector<const JsonValue*> members;
     std::vector<RetainedJsonMember> trailing;
     if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
@@ -1986,7 +1903,7 @@ inline constexpr std::uint32_t kEntryLayersMinor = 37;
     if (!decodeStringMember(*members[3], state, joinPath(path, "outputPort"), outputPortText)) {
         return false;
     }
-    if (const auto* value = node.findMember("parent"); value && state.documentMinor >= 13) {
+    if (const auto* value = node.findMember("parent"); value) {
         LayerId parent;
         if (!decodeObjectId(*value, state, joinPath(path, "parent"), parent))
             return false;
@@ -1996,7 +1913,7 @@ inline constexpr std::uint32_t kEntryLayersMinor = 37;
     out.layerId = layerId;
     out.name = std::string(nameText);
     out.outputPort = std::string(outputPortText);
-    if (const auto* color = node.findMember("labelColor"); color && state.documentMinor >= 5) {
+    if (const auto* color = node.findMember("labelColor"); color) {
         const auto values = color->arrayElements();
         if (color->kind() != JsonValueKind::Array || values.size() != 3) {
             state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, "labelColor"));
@@ -2018,8 +1935,7 @@ inline constexpr std::uint32_t kEntryLayersMinor = 37;
     }
     for (const auto& [key, target] :
          {std::pair{"shy", &out.shy}, std::pair{"nameFollowsSource", &out.nameFollowsSource}}) {
-        if (const auto* value = node.findMember(key);
-            value && state.documentMinor >= kLayerPresentationFlagsMinor) {
+        if (const auto* value = node.findMember(key)) {
             const auto flag = value->asBoolean();
             if (!flag) {
                 state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, key));
@@ -2031,7 +1947,7 @@ inline constexpr std::uint32_t kEntryLayersMinor = 37;
     for (const auto& [key, target] :
          {std::pair{"enabled", &out.enabled}, std::pair{"solo", &out.solo},
           std::pair{"locked", &out.locked}}) {
-        if (const auto* value = node.findMember(key); value && state.documentMinor >= 5) {
+        if (const auto* value = node.findMember(key)) {
             const auto flag = value->asBoolean();
             if (!flag) {
                 state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, key));
@@ -2041,7 +1957,7 @@ inline constexpr std::uint32_t kEntryLayersMinor = 37;
         }
     }
     for (const auto* key : {"inPoint", "outPoint"}) {
-        if (const auto* value = node.findMember(key); value && state.documentMinor >= 5) {
+        if (const auto* value = node.findMember(key)) {
             const AttachmentScope rangeScope(state, key);
             auto& time = std::string_view(key) == "inPoint" ? out.inPoint : out.outPoint;
             if (!decodeRationalTimeValue(*value, state, joinPath(path, key), time))
@@ -2074,8 +1990,8 @@ inline constexpr std::uint32_t kEntryLayersMinor = 37;
             return false;
         }
     }
-    return (state.documentMinor < 23 || decodeLayerTiming(node, state, path, out.timing)) &&
-           (state.documentMinor < 24 || decodeLayerMasks(node, state, path, out));
+    return decodeLayerTiming(node, state, path, out.timing) &&
+           decodeLayerMasks(node, state, path, out);
 }
 
 [[nodiscard]] bool decodeLayerOutputs(const JsonValue& node, DecodeState& state,
@@ -2132,7 +2048,7 @@ checkLayerOutputNodeReferences(DecodeState& state, const std::string& layerOutpu
 }
 
 // A Layer Stack entry is a collection element identified by `slotId` (see
-// docs/architecture/project-format.md, "Versions, Migrations, And Preservation": "slot ID for a
+// docs/architecture/project-format.md, "Versions And Preservation": "slot ID for a
 // Layer Stack entry"); see decodeComposition's own comment in document_decode.cpp for why a
 // collection element's own trailing capture must be deferred until its identity member is
 // decoded.
@@ -2156,7 +2072,7 @@ checkLayerOutputNodeReferences(DecodeState& state, const std::string& layerOutpu
     }
 
     LayerId layerId;
-    if (!(state.documentMinor >= 6 && members[1]->kind() == JsonValueKind::Null) &&
+    if (members[1]->kind() != JsonValueKind::Null &&
         !decodeObjectId(*members[1], state, joinPath(path, "layerId"), layerId)) {
         return false;
     }
@@ -2192,7 +2108,7 @@ checkLayerOutputNodeReferences(DecodeState& state, const std::string& layerOutpu
 [[nodiscard]] bool decodeLayerStack(const JsonValue& node, DecodeState& state,
                                     const std::string& path, DecodedLayerStack& out) {
     std::vector<std::string_view> keys{"nodeId", "entries"};
-    if (state.documentMinor >= 6 && node.findMember("enabled"))
+    if (node.findMember("enabled"))
         keys.push_back("enabled");
     std::vector<const JsonValue*> members;
     if (!matchOrderedMembers(node, keys, true, state, path, members)) {
@@ -2206,7 +2122,7 @@ checkLayerOutputNodeReferences(DecodeState& state, const std::string& layerOutpu
     if (!decodeLayerStackEntries(*members[1], state, joinPath(path, "entries"), entries)) {
         return false;
     }
-    if (const auto* enabled = node.findMember("enabled"); enabled && state.documentMinor >= 6) {
+    if (const auto* enabled = node.findMember("enabled"); enabled) {
         if (enabled->kind() != JsonValueKind::Boolean) {
             state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, "enabled"));
             return false;
@@ -2222,7 +2138,7 @@ checkLayerOutputNodeReferences(DecodeState& state, const std::string& layerOutpu
                                const std::vector<ParameterRecord>& parameters, DecodedGraph& out) {
     std::vector<std::string_view> keys{"nodes", "edges", "layerOutputs", "layerStack",
                                        "compositionOutput"};
-    if (state.documentMinor >= 6 && node.findMember("merges"))
+    if (node.findMember("merges"))
         keys.push_back("merges");
     std::vector<const JsonValue*> members;
     if (!matchOrderedMembers(node, keys, true, state, path, members)) {
@@ -2256,7 +2172,7 @@ checkLayerOutputNodeReferences(DecodeState& state, const std::string& layerOutpu
     const auto layerStackPath = joinPath(path, "layerStack");
     {
         const AttachmentScope layerStackScope(state, "layerStack");
-        if (!(state.documentMinor >= 6 && members[3]->kind() == JsonValueKind::Null) &&
+        if (members[3]->kind() != JsonValueKind::Null &&
             !decodeLayerStack(*members[3], state, layerStackPath, out.layerStack)) {
             return false;
         }
@@ -2266,7 +2182,7 @@ checkLayerOutputNodeReferences(DecodeState& state, const std::string& layerOutpu
         return false;
     }
 
-    if (const auto* merges = node.findMember("merges"); merges && state.documentMinor >= 6) {
+    if (const auto* merges = node.findMember("merges"); merges) {
         if (merges->kind() != JsonValueKind::Array) {
             state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, "merges"));
             return false;

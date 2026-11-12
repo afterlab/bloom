@@ -34,10 +34,10 @@ namespace bloom::document {
 // is "Bezier". Their enumerator names and values are part of the persisted vocabulary and never
 // move.
 //
-// Document 1.30 appends Robert Penner's easing equations (in the reference implementation's forms,
-// including its exact-endpoint Expo and its blended Elastic). Each reads the segment's LEFT key's
-// KeyframeEasingParameters below: which end eases, Back's overshoot, and Elastic's amplitude and
-// period. See docs/architecture/animation-and-time.md, "Easing equations".
+// The interpolation set includes Robert Penner's easing equations (in the reference
+// implementation's forms, including its exact-endpoint Expo and its blended Elastic). Each reads
+// the segment's LEFT key's KeyframeEasingParameters below: which end eases, Back's overshoot, and
+// Elastic's amplitude and period. See docs/architecture/animation-and-time.md, "Easing equations".
 enum class KeyframeInterpolation : std::uint8_t {
     Hold,
     Linear,
@@ -126,7 +126,7 @@ keyframeInterpolationFromToken(std::string_view token) noexcept;
 [[nodiscard]] std::optional<KeyframeEasing>
 keyframeEasingFromToken(std::string_view token) noexcept;
 
-// How a key's two ease handles relate (document 1.32). The mode is stored per key on scalar,
+// How a key's two ease handles relate. The mode is stored per key on scalar,
 // component and Path keys and is presentation-only metadata: the STORED handle values are what
 // sampling reads, so changing the mode alone never changes a rendered pixel.
 //   Free     the handles are independent (the behavior of every earlier document).
@@ -198,11 +198,11 @@ struct ScalarKeyframe {
     // parameter hold ScalarKeyframes, and nothing else holds a key at all.
     KeyframeHandle outgoingHandle{};
     KeyframeHandle incomingHandle{};
-    // The easing equation's parameters for this key's OUTGOING segment (document 1.30). Kept on
+    // The easing equation's parameters for this key's OUTGOING segment. Kept on
     // every key, like the reference implementation's BezTriple, so switching a key between modes
     // never loses them.
     KeyframeEasingParameters easing{};
-    // Document 1.32. Presentation metadata; see KeyframeHandleMode.
+    // Presentation metadata; see KeyframeHandleMode.
     KeyframeHandleMode handleMode = KeyframeHandleMode::Free;
 
     friend bool operator==(const ScalarKeyframe&, const ScalarKeyframe&) = default;

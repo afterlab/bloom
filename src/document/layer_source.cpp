@@ -148,27 +148,4 @@ bool refreshLayerNamesFromSources(Project& project, const std::optional<Composit
     return !renames.empty();
 }
 
-void inferLayerNameFollowsSource(Project& project) {
-    std::vector<std::pair<CompositionId, std::vector<LayerId>>> following;
-    const auto& readable = std::as_const(project);
-    for (const auto& composition : readable.compositions()) {
-        std::vector<LayerId> layers;
-        for (const auto& layer : composition.graph().layerOutputs()) {
-            const auto name = layerSourceName(readable, composition, layer);
-            if (name && *name == layer.name)
-                layers.push_back(layer.layerId);
-        }
-        if (!layers.empty())
-            following.emplace_back(composition.id(), std::move(layers));
-    }
-    for (const auto& [compositionId, layers] : following) {
-        auto* composition = project.findComposition(compositionId);
-        if (composition == nullptr)
-            continue;
-        for (const auto layerId : layers)
-            if (auto* layer = composition->graph().findLayer(layerId))
-                layer->nameFollowsSource = true;
-    }
-}
-
 } // namespace bloom::document

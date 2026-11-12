@@ -833,8 +833,7 @@ void refreshColorSpaceSelector(kit::KDropdown& selector, const CompositionSessio
     if (!effect && stored.isEmpty() && legacy == 3)
         index = selector.findData(kRawInputChoice);
     else if (!effect && stored.isEmpty() && legacy != 0) {
-        // A legacy sRGB or Linear choice load could not migrate (its config's sRGB texture space
-        // is unknown without reading the config): shown, never offered.
+        // A legacy sRGB or Linear choice: shown, never offered.
         const auto data = kLegacyInputChoicePrefix + QString::number(legacy);
         index = selector.findData(data);
         if (index < 0) {

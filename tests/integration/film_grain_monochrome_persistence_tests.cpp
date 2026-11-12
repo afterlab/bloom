@@ -1,7 +1,5 @@
-// #486: a project saved with a Film Grain from before Monochrome (no binding for it) opens with it
-// bound off, so the card and Properties show the same switch as a new node, and it renders exactly as
-// it did before it was saved: the compiled plan is the same and the CPU reference frame is
-// bit-identical. A node that already has Monochrome keeps its id and value.
+// #486: a Film Grain's Monochrome survives a save and open with its id and value, and the opened
+// node renders bit-identically on the CPU reference.
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
@@ -94,22 +92,6 @@ struct Fixture {
         run<commands::SetParameterSource>(composition, parameter("seed"),
                                           document::ConstantValueSource{std::int64_t{42}});
     }
-    // Removes the binding (and record) a Film Grain saved before Monochrome never had.
-    void makeLegacy() {
-        const auto base = document.snapshot();
-        auto draft = document.draft(base);
-        auto* target = draft.project().findComposition(composition);
-        auto* node = target->graph().findNode(grain);
-        std::erase_if(node->parameters, [&](const document::ParameterBinding& binding) {
-            if (binding.role != "monochrome")
-                return false;
-            if (!target->parameters().erase(binding.parameterId))
-                throw std::logic_error("legacy record erases");
-            return true;
-        });
-        if (!document.commit(base.revision(), std::move(draft)).committed())
-            throw std::logic_error("legacy commit");
-    }
 };
 
 std::vector<std::byte> save(const document::Snapshot& snapshot,
@@ -152,69 +134,6 @@ bool sameBits(const std::vector<render::Rgba32f>& a, const std::vector<render::R
            (a.empty() || std::memcmp(a.data(), b.data(), a.size() * sizeof(render::Rgba32f)) == 0);
 }
 
-void legacyGrainOpensUnchanged() {
-    Fixture fixture;
-    const auto newSize = fixture.document.snapshot()
-                             .project()
-                             .findComposition(fixture.composition)
-                             ->graph()
-                             .findNode(fixture.grain)
-                             ->parameters.size();
-    const auto intensity = fixture.parameter("intensity");
-    fixture.makeLegacy();
-    const auto legacy = fixture.document.snapshot();
-    const auto settings = document::makeBloomNeutralColorSettingsV1({});
-    const auto before = render(legacy, fixture.composition);
-    bool lit = false;
-    for (const auto& pixel : before.pixels)
-        lit = lit || pixel.alpha() > 0.0F;
-    expect(lit, "the legacy Film Grain renders a picture");
-
-    auto result = project::openProjectArchive(save(legacy, settings), {}, memory());
-    expect(result.outcome() == project::OpenArchiveOutcome::Opened,
-           "a project with a pre-Monochrome Film Grain opens");
-    if (result.outcome() != project::OpenArchiveOutcome::Opened)
-        return;
-    auto opened = std::move(result).takeOpened();
-    const auto snapshot = opened.document->snapshot();
-    const auto* composition = snapshot.project().findComposition(fixture.composition);
-    const auto* node = composition ? composition->graph().findNode(fixture.grain) : nullptr;
-    expect(node && node->parameters.size() == newSize,
-           "the opened Film Grain binds the controls a new one does");
-    if (!node)
-        return;
-    const auto binding =
-        std::ranges::find(node->parameters, "monochrome", &document::ParameterBinding::role);
-    const auto* record = binding == node->parameters.end()
-                             ? nullptr
-                             : composition->parameters().find(binding->parameterId);
-    const auto* constant =
-        record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
-    expect(constant && constant->value == document::ParameterValue{false},
-           "the added Monochrome is off");
-    const auto kept =
-        std::ranges::find(node->parameters, "intensity", &document::ParameterBinding::role);
-    expect(kept != node->parameters.end() && kept->parameterId == intensity,
-           "the saved controls keep their ids");
-
-    const auto after = render(snapshot, fixture.composition);
-    expect(std::ranges::equal(before.plan->operations(), after.plan->operations()) &&
-               std::ranges::equal(before.plan->valueOperations(), after.plan->valueOperations()),
-           "the opened Film Grain compiles to the plan it had before it was saved");
-    expect(sameBits(before.pixels, after.pixels),
-           "the opened Film Grain renders bit-identically to the pre-Monochrome node");
-
-    // The migrated project saves and reopens as itself.
-    const auto bytes = save(snapshot, opened.colorSettings);
-    auto again = project::openProjectArchive(bytes, {}, memory());
-    expect(again.outcome() == project::OpenArchiveOutcome::Opened, "the migrated project reopens");
-    if (again.outcome() != project::OpenArchiveOutcome::Opened)
-        return;
-    auto reopened = std::move(again).takeOpened();
-    expect(save(reopened.document->snapshot(), reopened.colorSettings) == bytes,
-           "the migrated project round-trips byte-identically");
-}
-
 // Monochrome on survives a save and open with its id and value, and draws what it drew.
 void monochromeRoundTrips() {
     Fixture fixture;
@@ -249,7 +168,6 @@ void monochromeRoundTrips() {
 
 int main() {
     try {
-        legacyGrainOpensUnchanged();
         monochromeRoundTrips();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
@@ -257,6 +175,6 @@ int main() {
     }
     if (failures != 0)
         return 1;
-    std::cout << "PASS: a pre-Monochrome Film Grain opens off and renders identically\n";
+    std::cout << "PASS: Film Grain Monochrome survives a save and open\n";
     return 0;
 }

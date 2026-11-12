@@ -7,6 +7,7 @@
 #include <exception>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <source_location>
 #include <span>
 #include <string>
@@ -64,12 +65,12 @@ void testEmptyGoldenBytes(Expectations& expectations) {
                                           "    \"path\": \"document.json\",\n"
                                           "    \"schemaVersion\": {\n"
                                           "      \"major\": 1,\n"
-                                          "      \"minor\": 43\n"
+                                          "      \"minor\": 0\n"
                                           "    }\n"
                                           "  },\n"
                                           "  \"requirements\": []\n"
                                           "}\n";
-    const CanonicalManifestV1 manifest;
+    const CanonicalManifestV1 manifest{.generator = std::nullopt};
     const auto size = bloom::project::canonicalManifestSize(manifest);
     expectations.expect(size && *size.value() == expected.size(),
                         "empty-manifest preflight returns its exact golden byte count");
@@ -90,7 +91,7 @@ void testNonEmptyGoldenBytes(Expectations& expectations) {
         requirement("provider.b", "provider.b.nodes", {"provider.b.blur", "provider.b.text"},
                     {2, 3}),
     };
-    const CanonicalManifestV1 manifest{.requirements = requirements};
+    const CanonicalManifestV1 manifest{.requirements = requirements, .generator = std::nullopt};
     constexpr std::string_view expected = "{\n"
                                           "  \"format\": \"org.kinetik.bloom.project\",\n"
                                           "  \"containerVersion\": {\n"
@@ -101,7 +102,7 @@ void testNonEmptyGoldenBytes(Expectations& expectations) {
                                           "    \"path\": \"document.json\",\n"
                                           "    \"schemaVersion\": {\n"
                                           "      \"major\": 1,\n"
-                                          "      \"minor\": 43\n"
+                                          "      \"minor\": 0\n"
                                           "    }\n"
                                           "  },\n"
                                           "  \"requirements\": [\n"
@@ -139,6 +140,56 @@ void testNonEmptyGoldenBytes(Expectations& expectations) {
             std::ranges::all_of(output.begin() + static_cast<std::ptrdiff_t>(expected.size()),
                                 output.end(), [](const char value) { return value == '?'; }),
         "non-empty requirement records use their exact fixed shape and call order");
+}
+
+// The generator is written last, as exactly `name` then `version`; every manifest a save builds
+// carries this build's generator by default.
+void testGeneratorGoldenBytes(Expectations& expectations) {
+    const CanonicalManifestV1 manifest{
+        .generator = bloom::project::ManifestGenerator{"Bloom", "9.8.7-test"}};
+    constexpr std::string_view expected = "{\n"
+                                          "  \"format\": \"org.kinetik.bloom.project\",\n"
+                                          "  \"containerVersion\": {\n"
+                                          "    \"major\": 1,\n"
+                                          "    \"minor\": 0\n"
+                                          "  },\n"
+                                          "  \"document\": {\n"
+                                          "    \"path\": \"document.json\",\n"
+                                          "    \"schemaVersion\": {\n"
+                                          "      \"major\": 1,\n"
+                                          "      \"minor\": 0\n"
+                                          "    }\n"
+                                          "  },\n"
+                                          "  \"requirements\": [],\n"
+                                          "  \"generator\": {\n"
+                                          "    \"name\": \"Bloom\",\n"
+                                          "    \"version\": \"9.8.7-test\"\n"
+                                          "  }\n"
+                                          "}\n";
+    std::array<char, 512> output{};
+    const auto result = bloom::project::encodeCanonicalManifest(manifest, output);
+    expectations.expect(result && writtenView(output, result.bytesWritten()) == expected,
+                        "the generator is written last as exactly name then version");
+
+    const auto current = bloom::project::currentManifestGenerator();
+    expectations.expect(CanonicalManifestV1{}.generator == current && current.name == "Bloom" &&
+                            !current.version.empty(),
+                        "a default manifest carries this build's generator");
+
+    for (const auto& [name, version] : {std::pair<std::string_view, std::string_view>{"", "1"},
+                                        {"Bloom", ""},
+                                        {"Bloom", std::string_view("\xC0\x80", 2)}}) {
+        const auto refused = bloom::project::canonicalManifestSize(
+            CanonicalManifestV1{.generator = bloom::project::ManifestGenerator{name, version}});
+        expectations.expect(!refused && refused.error() == CanonicalManifestError::InvalidGenerator,
+                            "an empty or invalid UTF-8 generator string is refused");
+    }
+    const std::string tooLong(bloom::project::kMaxManifestGeneratorTextBytes + 1, 'x');
+    const auto longRefused = bloom::project::canonicalManifestSize(
+        CanonicalManifestV1{.generator = bloom::project::ManifestGenerator{"Bloom", tooLong}});
+    expectations.expect(!longRefused &&
+                            longRefused.error() == CanonicalManifestError::InvalidGenerator,
+                        "a generator string over the byte ceiling is refused");
 }
 
 void testFixedConstantsAndSchemaVersions(Expectations& expectations) {
@@ -250,11 +301,12 @@ void testLimitsAndSizeAccounting(Expectations& expectations) {
 
     limits = {};
     limits.maximumValues = 10;
-    const auto tenValueSize = bloom::project::canonicalManifestSize(CanonicalManifestV1{}, limits);
+    const CanonicalManifestV1 empty{.generator = std::nullopt};
+    const auto tenValueSize = bloom::project::canonicalManifestSize(empty, limits);
     std::array<char, 512> tenValueOutput{};
     tenValueOutput.fill('?');
     const auto tenValueWrite =
-        bloom::project::encodeCanonicalManifest(CanonicalManifestV1{}, tenValueOutput, limits);
+        bloom::project::encodeCanonicalManifest(empty, tenValueOutput, limits);
     expectations.expect(
         !tenValueSize && tenValueSize.error() == CanonicalManifestError::ValueCountExceeded &&
             !tenValueWrite && tenValueWrite.error() == CanonicalManifestError::ValueCountExceeded &&
@@ -263,13 +315,20 @@ void testLimitsAndSizeAccounting(Expectations& expectations) {
         "the fixed empty manifest accounts for all eleven JSON values before writing");
     limits.maximumValues = 11;
     std::array<char, 512> elevenValueOutput{};
-    const auto elevenValueSize =
-        bloom::project::canonicalManifestSize(CanonicalManifestV1{}, limits);
+    const auto elevenValueSize = bloom::project::canonicalManifestSize(empty, limits);
     const auto elevenValueWrite =
-        bloom::project::encodeCanonicalManifest(CanonicalManifestV1{}, elevenValueOutput, limits);
+        bloom::project::encodeCanonicalManifest(empty, elevenValueOutput, limits);
     expectations.expect(elevenValueSize && elevenValueWrite &&
                             elevenValueWrite.bytesWritten() == *elevenValueSize.value(),
                         "an exact eleven-value budget sizes and writes the empty manifest");
+    expectations.expect(
+        bloom::project::canonicalManifestSize(CanonicalManifestV1{}, limits).error() ==
+            CanonicalManifestError::ValueCountExceeded,
+        "the generator's three JSON values are accounted for before writing");
+    limits.maximumValues = 14;
+    expectations.expect(
+        static_cast<bool>(bloom::project::canonicalManifestSize(CanonicalManifestV1{}, limits)),
+        "an exact fourteen-value budget sizes the manifest with its generator");
 
     const auto exact = bloom::project::canonicalManifestSize(manifest);
     expectations.expect(static_cast<bool>(exact),
@@ -340,6 +399,7 @@ int main() {
         Expectations expectations;
         testEmptyGoldenBytes(expectations);
         testNonEmptyGoldenBytes(expectations);
+        testGeneratorGoldenBytes(expectations);
         testFixedConstantsAndSchemaVersions(expectations);
         testIdentifiersAndOrdering(expectations);
         testLimitsAndSizeAccounting(expectations);

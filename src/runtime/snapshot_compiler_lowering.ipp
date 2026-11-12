@@ -1389,7 +1389,7 @@ void collectAudibleLayers() {
         runtime::CompiledAudioSource compiled{audioSource.id, document::AssetId::fromRaw(assetRaw),
                                               *startFrame, *level};
         if (audioSource.typeId == "bloom.video-source") {
-            // Document 1.25: the optional stream selection; absent plays the first audio stream.
+            // The optional stream selection; absent plays the first audio stream.
             if (const auto* selected = parameterConstant<std::int64_t>(findParameterBinding(
                     audioSource, std::string(document::kVideoAudioStreamParameterRole)));
                 selected != nullptr && *selected >= 0 && *selected < 256)
@@ -2173,8 +2173,7 @@ lowerImageEffect(const document::NodeRecord& node,
         return effect;
     }
     // #486 Film Grain: the constant animation, seed and Monochrome, and every value. A node with no
-    // Monochrome or Mode binding (saved before them, on a path that does not migrate) lowers with
-    // them off. #565: a mode lowers only the values it reads; the others keep their defaults with
+    // Monochrome or Mode binding lowers with them off. #565: a mode lowers only the values it reads; the others keep their defaults with
     // no identity, so an unused (even animated) value neither claims nor invalidates anything.
     if (node.typeId == document::kFilmGrainNodeType) {
         runtime::FilmGrainKernel kernel;
@@ -3202,7 +3201,7 @@ lowerImageSource(const document::NodeRecord& node) {
         parsed.ec == std::errc{} && parsed.ptr == asset->data() + asset->size()
             ? request_.snapshot.project().findAsset(document::AssetId::fromRaw(raw))
             : nullptr;
-    // ADR 0026: part and layer are optional bindings (absent in a migrated v1 node).
+    // ADR 0026: part and layer are optional bindings.
     const auto* part = parameterConstant<std::string>(
         findParameterBinding(node, document::kImagePartParameterRole));
     const auto* layer = parameterConstant<std::string>(

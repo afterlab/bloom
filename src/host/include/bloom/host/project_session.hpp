@@ -319,7 +319,7 @@ struct DecodedProjectSessionRequest final {
     std::optional<ProjectDisplayPath> displayPath;
     std::optional<document::IdAllocatorHighWater> persistedAllocatorHighWater;
     // Present only for a same-major newer-minor (schema {1, minor > 0}) decoded document (see
-    // docs/architecture/project-format.md, "Versions, Migrations, And Preservation"); absent for
+    // docs/architecture/project-format.md, "Versions And Preservation"); absent for
     // an exact-{1,0} decoded document. project::RoundTripState is move-only, which makes this
     // whole request move-only. A request with roundTrip present and schemaMinor == 0 is a typed
     // create failure (see createDecoded()).

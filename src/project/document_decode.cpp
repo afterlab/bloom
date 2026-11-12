@@ -170,17 +170,17 @@ bool matchOrderedMembers(const JsonValue& object,
         return true;
     }
 
-    // Trailing members beyond the matched prefix exist. Pre-RT1 behavior (and RT1's own exact
-    // {1,0} behavior): always a hard error, since a 1.0 writer never emits one.
-    if (state.documentMinor == 0 || state.roundTrip == nullptr) {
+    // Trailing members beyond the matched prefix exist. In a document of the current schema they
+    // are always a hard error, since the current writer never emits one.
+    if (state.roundTrip == nullptr) {
         state.fail(DocumentDecodeError::UnknownMember,
                    joinPath(basePath, members[expectedKeys.size()].key()));
         return false;
     }
 
-    // RT1 (documentMinor > 0): capture every trailing member, requiring strictly ascending UTF-8
-    // key order (see "Canonical Document Shape": "Retained unknown additive members follow all
-    // known members of their object in ascending UTF-8 key order"). A duplicate key cannot
+    // RT1 (a newer-minor document): capture every trailing member, requiring strictly ascending
+    // UTF-8 key order (see "Canonical Document Shape": "Retained unknown additive members follow
+    // all known members of their object in ascending UTF-8 key order"). A duplicate key cannot
     // actually reach this point -- the strict JSON reader already rejects a duplicate decoded
     // object key before this module ever runs -- but a strict-ascending comparison also rejects an
     // equal adjacent key, so this one check covers both halves of the contract's "reject unsorted
@@ -304,7 +304,7 @@ bool decodeKindDiscriminator(const JsonValue& node, DecodeState& state, const st
 
 bool failUnknownDiscriminator(DecodeState& state, std::string kindPath,
                               const DocumentDecodeError exactVersionError) {
-    if (state.documentMinor > 0 && state.roundTrip != nullptr) {
+    if (state.roundTrip != nullptr) {
         state.requirePreservedReadOnly(RoundTripPreservationReason::UnknownDiscriminatorKind,
                                        std::move(kindPath));
     } else {
@@ -636,23 +636,20 @@ namespace {
     static constexpr std::array<std::string_view, 10> kKeys{
         "id",    "name",       "duration",   "format",   "parameters", "animationCurves",
         "graph", "nodeLayout", "nodeGroups", "safeAreas"};
-    const auto baseKeys = std::span(kKeys).first(state.documentMinor == 0   ? 7U
-                                                 : state.documentMinor == 1 ? 8U
-                                                                            : 9U);
+    const auto baseKeys = std::span(kKeys).first(9U);
     std::vector<std::string_view> keys(baseKeys.begin(), baseKeys.end());
-    const bool hasSafeAreas = state.documentMinor >= 8 && node.findMember("safeAreas") != nullptr;
+    const bool hasSafeAreas = node.findMember("safeAreas") != nullptr;
     if (hasSafeAreas) {
         keys.push_back("safeAreas");
     }
-    if (state.documentMinor >= 5 && node.findMember("workArea"))
+    if (node.findMember("workArea"))
         keys.push_back("workArea");
-    if (state.documentMinor >= 10)
-        keys.push_back("backgroundColor");
-    if (state.documentMinor >= 19 && node.findMember("workingColorSpaceId") != nullptr)
+    keys.push_back("backgroundColor");
+    if (node.findMember("workingColorSpaceId") != nullptr)
         keys.push_back("workingColorSpaceId");
-    if (state.documentMinor >= 26 && node.findMember("timecode") != nullptr)
+    if (node.findMember("timecode") != nullptr)
         keys.push_back("timecode");
-    if (state.documentMinor >= 27 && node.findMember("folder") != nullptr)
+    if (node.findMember("folder") != nullptr)
         keys.push_back("folder");
     std::vector<const JsonValue*> members;
     // A composition is a collection element (identity: numeric CompositionId), and that identity
@@ -698,18 +695,11 @@ namespace {
             joinPath(path, "animationCurves"), joinPath(path, "graph"), out.parameters,
             out.animationCurves, out.graph))
         return false;
-    if (state.documentMinor == 0) {
-        out.nodeLayout = document::defaultNodeLayout(out.graph.nodes);
-        return true;
-    }
     {
         const AttachmentScope layoutScope(state, "nodeLayout");
         if (!detail::decodeNodeLayout(*members[7], state, joinPath(path, "nodeLayout"),
                                       out.nodeLayout))
             return false;
-    }
-    if (state.documentMinor == 1) {
-        return true;
     }
     {
         const AttachmentScope groupsScope(state, "nodeGroups");
@@ -724,7 +714,7 @@ namespace {
             return false;
         }
     }
-    if (const auto* area = node.findMember("workArea"); area && state.documentMinor >= 5) {
+    if (const auto* area = node.findMember("workArea")) {
         const AttachmentScope scope(state, "workArea");
         std::vector<const JsonValue*> range;
         constexpr std::array<std::string_view, 2> rangeKeys{"start", "end"};
@@ -751,7 +741,7 @@ namespace {
         }
         out.workArea = value;
     }
-    if (state.documentMinor >= 10) {
+    {
         const auto* background = node.findMember("backgroundColor");
         if (!background || background->kind() != JsonValueKind::Array ||
             background->arrayElements().size() != 4) {
@@ -774,22 +764,18 @@ namespace {
             *channels[index] = *parsed.value();
         }
     }
-    if (state.documentMinor >= 19) {
-        if (const auto* workingColorSpaceId = node.findMember("workingColorSpaceId")) {
-            std::string_view id;
-            if (!decodeStringMember(*workingColorSpaceId, state,
-                                    joinPath(path, "workingColorSpaceId"), id))
-                return false;
-            out.workingColorSpaceId = std::string(id);
-            if (!document::validateWorkingColorSpaceId(*out.workingColorSpaceId).ok()) {
-                state.fail(DocumentDecodeError::DomainViolation,
-                           joinPath(path, "workingColorSpaceId"));
-                return false;
-            }
+    if (const auto* workingColorSpaceId = node.findMember("workingColorSpaceId")) {
+        std::string_view id;
+        if (!decodeStringMember(*workingColorSpaceId, state, joinPath(path, "workingColorSpaceId"),
+                                id))
+            return false;
+        out.workingColorSpaceId = std::string(id);
+        if (!document::validateWorkingColorSpaceId(*out.workingColorSpaceId).ok()) {
+            state.fail(DocumentDecodeError::DomainViolation, joinPath(path, "workingColorSpaceId"));
+            return false;
         }
     }
-    if (const auto* timecode = node.findMember("timecode");
-        timecode != nullptr && state.documentMinor >= 26) {
+    if (const auto* timecode = node.findMember("timecode"); timecode != nullptr) {
         const AttachmentScope scope(state, "timecode");
         const auto timecodePath = joinPath(path, "timecode");
         constexpr std::array<std::string_view, 2> timecodeKeys{"start", "dropFrame"};
@@ -813,8 +799,7 @@ namespace {
             return false;
         }
     }
-    if (const auto* folder = node.findMember("folder");
-        folder != nullptr && state.documentMinor >= 27) {
+    if (const auto* folder = node.findMember("folder"); folder != nullptr) {
         document::AssetFolderId folderId;
         if (!decodeObjectId(*folder, state, joinPath(path, "folder"), folderId))
             return false;
@@ -893,9 +878,9 @@ namespace {
 }
 
 // Like matchOrderedMembers(..., rejectExtraMembers=true) above, but never captures a trailing
-// member even at documentMinor > 0: reserved for a closed shape inside an array the format
+// member even in a newer-minor document: reserved for a closed shape inside an array the format
 // contract does not give a declared stable element identity (docs/architecture/project-format.md,
-// "Versions, Migrations, And Preservation": "An array without a declared identity cannot retain
+// "Versions And Preservation": "An array without a declared identity cannot retain
 // unknown elements through an edit"). OCIO context variables are v1's only such shape -- every
 // other array element type has a fixed identity from the contract's list and goes through the
 // deferred seven-argument matchOrderedMembers() overload instead.
@@ -950,7 +935,7 @@ namespace {
         // A context-variable array element has no member in the contract's fixed collection
         // identity list (docs/architecture/project-format.md, "Array reconciliation identities
         // are fixed"), so this closed shape never captures a trailing unknown member even at
-        // documentMinor > 0 (see matchOrderedMembersClosed's own comment above).
+        // in a newer-minor document (see matchOrderedMembersClosed's own comment above).
         if (!matchOrderedMembersClosed(elements[index], kKeys, state, elementPath, members)) {
             return false;
         }
@@ -1063,20 +1048,12 @@ namespace {
 
 [[nodiscard]] bool decodeProject(const JsonValue& node, DecodeState& state, const std::string& path,
                                  DecodedDocumentEnvelope& out) {
-    static constexpr std::array<std::string_view, 4> kKeys{"id", "name", "colorSettings",
-                                                           "compositions"};
-    std::vector<std::string_view> keys =
-        state.documentMinor >= 10
-            ? std::vector<std::string_view>{"id", "name", "colorSettings", "compositions", "assets"}
-            : std::vector<std::string_view>(kKeys.begin(), kKeys.end());
-    const bool hasAssetFolders =
-        state.documentMinor >= 16 && node.findMember("assetFolders") != nullptr;
+    std::vector<std::string_view> keys{"id", "name", "colorSettings", "compositions", "assets"};
+    const bool hasAssetFolders = node.findMember("assetFolders") != nullptr;
     if (hasAssetFolders)
         keys.push_back("assetFolders");
-    if (state.documentMinor >= 18)
-        keys.push_back("dataBlocks");
-    if (state.documentMinor >= 29)
-        keys.push_back("exportQueue");
+    keys.push_back("dataBlocks");
+    keys.push_back("exportQueue");
     std::vector<const JsonValue*> members;
     if (!matchOrderedMembers(node, keys, true, state, path, members)) {
         return false;
@@ -1133,8 +1110,7 @@ namespace {
         hasPrevious = true;
         out.compositions.push_back(std::move(composition));
     }
-    if (state.documentMinor >= 10 &&
-        !detail::decodeAssets(*members[4], state, joinPath(path, "assets"), out.assets))
+    if (!detail::decodeAssets(*members[4], state, joinPath(path, "assets"), out.assets))
         return false;
     std::size_t nextProjectMember = 5;
     if (hasAssetFolders) {
@@ -1143,18 +1119,13 @@ namespace {
             return false;
         ++nextProjectMember;
     }
-    if (state.documentMinor >= 18 && members.size() > nextProjectMember &&
-        !decodeDataBlocks(*members[nextProjectMember], state, joinPath(path, "dataBlocks"),
+    if (!decodeDataBlocks(*members[nextProjectMember], state, joinPath(path, "dataBlocks"),
                           out.dataBlocks))
         return false;
-    if (state.documentMinor >= 18)
-        ++nextProjectMember;
-    // Document 1.29 (ADR 0033): the export queue, the required last member.
-    if (state.documentMinor >= 29 &&
-        !detail::decodeExportQueue(*members[nextProjectMember], state,
-                                   joinPath(path, "exportQueue"), out.exportQueue))
-        return false;
-    return true;
+    ++nextProjectMember;
+    // The export queue (ADR 0033), the required last member.
+    return detail::decodeExportQueue(*members[nextProjectMember], state,
+                                     joinPath(path, "exportQueue"), out.exportQueue);
 }
 
 // ------------------------------------------------------------------------------------------
@@ -1181,9 +1152,8 @@ namespace {
 
 // The closed highestIssued object in exact order (see docs/architecture/project-format.md,
 // "Inclusive Allocator State"): composition/node/edge/layer/layerSlot/parameter/animationCurve/
-// keyframe/driverBinding/extensionRecord, and -- from document 1.2 -- nodeGroup. An older minor
-// has no nodeGroup member at all and leaves that namespace at zero; a 1.1 file whose groups do
-// not exist has never issued a group id.
+// keyframe/driverBinding/extensionRecord/nodeGroup/asset, then the optional assetFolder, dataBlock,
+// the optional layerMask, and exportJob/exportOutput.
 [[nodiscard]] bool decodeHighestIssued(const JsonValue& node, DecodeState& state,
                                        const std::string& path, IdAllocatorHighWater& out) {
     static constexpr std::array<std::string_view, 14> kKeys{
@@ -1191,21 +1161,16 @@ namespace {
         "parameter",   "animationCurve", "keyframe",    "driverBinding", "extensionRecord",
         "nodeGroup",   "asset",          "assetFolder", "dataBlock"};
     std::vector<std::string_view> keys;
-    const auto baseCount = state.documentMinor <= 1 ? 10U : state.documentMinor < 10 ? 11U : 12U;
-    keys.assign(kKeys.begin(), kKeys.begin() + static_cast<std::ptrdiff_t>(baseCount));
-    const bool hasAssetFolder =
-        state.documentMinor >= 16 && node.findMember("assetFolder") != nullptr;
+    keys.assign(kKeys.begin(), kKeys.begin() + 12);
+    const bool hasAssetFolder = node.findMember("assetFolder") != nullptr;
     if (hasAssetFolder)
         keys.push_back("assetFolder");
-    if (state.documentMinor >= 18)
-        keys.push_back("dataBlock");
-    const bool hasLayerMask = state.documentMinor >= 24 && node.findMember("layerMask") != nullptr;
+    keys.push_back("dataBlock");
+    const bool hasLayerMask = node.findMember("layerMask") != nullptr;
     if (hasLayerMask)
         keys.push_back("layerMask");
-    if (state.documentMinor >= 29) {
-        keys.push_back("exportJob");
-        keys.push_back("exportOutput");
-    }
+    keys.push_back("exportJob");
+    keys.push_back("exportOutput");
     std::vector<const JsonValue*> members;
     if (!matchOrderedMembers(node, keys, true, state, path, members)) {
         return false;
@@ -1231,11 +1196,7 @@ namespace {
                                         out.extensionRecord)) {
         return false;
     }
-    if (state.documentMinor <= 1) {
-        return true;
-    }
-    if (state.documentMinor >= 10 &&
-        !decodeAllocatorHighWaterMember(*members[11], state, joinPath(path, "asset"), out.asset))
+    if (!decodeAllocatorHighWaterMember(*members[11], state, joinPath(path, "asset"), out.asset))
         return false;
     std::size_t nextMember = 12;
     if (hasAssetFolder && !decodeAllocatorHighWaterMember(
@@ -1243,22 +1204,19 @@ namespace {
         return false;
     if (hasAssetFolder)
         ++nextMember;
-    if (state.documentMinor >= 18 &&
-        !decodeAllocatorHighWaterMember(*members[nextMember], state, joinPath(path, "dataBlock"),
+    if (!decodeAllocatorHighWaterMember(*members[nextMember], state, joinPath(path, "dataBlock"),
                                         out.dataBlock))
         return false;
-    if (state.documentMinor >= 18)
-        ++nextMember;
+    ++nextMember;
     if (hasLayerMask && !decodeAllocatorHighWaterMember(*members[nextMember], state,
                                                         joinPath(path, "layerMask"), out.layerMask))
         return false;
     if (hasLayerMask)
         ++nextMember;
-    if (state.documentMinor >= 29 &&
-        (!decodeAllocatorHighWaterMember(*members[nextMember], state, joinPath(path, "exportJob"),
-                                         out.exportJob) ||
-         !decodeAllocatorHighWaterMember(*members[nextMember + 1], state,
-                                         joinPath(path, "exportOutput"), out.exportOutput)))
+    if (!decodeAllocatorHighWaterMember(*members[nextMember], state, joinPath(path, "exportJob"),
+                                        out.exportJob) ||
+        !decodeAllocatorHighWaterMember(*members[nextMember + 1], state,
+                                        joinPath(path, "exportOutput"), out.exportOutput))
         return false;
     return decodeAllocatorHighWaterMember(*members[10], state, joinPath(path, "nodeGroup"),
                                           out.nodeGroup);
@@ -1406,7 +1364,7 @@ namespace {
 }
 
 // A host-table reference table entry is a collection element identified by its UTF-8 `key` (see
-// docs/architecture/project-format.md, "Versions, Migrations, And Preservation": "key for a host
+// docs/architecture/project-format.md, "Versions And Preservation": "key for a host
 // reference-table entry"), scoped to its owning extension record.
 [[nodiscard]] bool decodeHostReference(const JsonValue& node, DecodeState& state,
                                        const std::string& path, ExtensionHostReference& out) {
@@ -2078,13 +2036,9 @@ namespace {
             }
             return true;
         };
-        // Document 1.43 (#589): a compound block, as a path constant spells it. An older document
-        // carrying one is refused, and so is a compound spelling of a flat value.
+        // #589: a compound block, as a path constant spells it. A compound spelling of a flat
+        // value is refused.
         if (node.findMember("contours") != nullptr) {
-            if (state.documentMinor < kCompoundPathsMinor) {
-                state.fail(DocumentDecodeError::UnknownMember, joinPath(path, "contours"));
-                return false;
-            }
             std::vector<std::string_view> keys{"kind", "contours"};
             for (const std::string_view optional : {"fillRule", "groups"})
                 if (node.findMember(optional) != nullptr)
@@ -2351,7 +2305,7 @@ DocumentDecodeResult::preservedReadOnlyRequired(const RoundTripPreservationReaso
 
 namespace {
 // Builds the right three-way DocumentDecodeResult once a decode step under an active
-// documentMinor > 0 capture pass has returned false: state.preservedReadOnlyRequired (set only by
+// newer-minor capture pass has returned false: state.preservedReadOnlyRequired (set only by
 // copyRetainedValue's out-of-subset-number check or failUnknownDiscriminator) always takes
 // priority over state.error, since both DecodeState::fail() and requirePreservedReadOnly() are
 // first-wins and every site that sets either returns false immediately -- so in practice at most
@@ -2367,66 +2321,15 @@ namespace {
 
 } // namespace
 
-// #487: an Image or Video source has one input color space control, the OCIO "Input color space".
-// A legacy source Color Space choice (sRGB or Linear) is migrated on load to the config space it
-// always meant: the config's sRGB texture space, or the composition's working space. Raw stays the
-// legacy value (the control offers it as "Raw (no conversion)"); an sRGB choice under a config
-// whose sRGB texture space is not known without reading the config stays as it was.
-void migrateLegacySourceColorSpaces(DecodedDocumentEnvelope& envelope) {
-    const auto* builtIn =
-        std::get_if<document::BuiltInOcioConfigLocator>(&envelope.colorSettings.ocioConfig.locator);
-    const std::string_view srgbTexture = builtIn == nullptr ? std::string_view{}
-                                         : builtIn->uri == document::kBloomNeutralConfigUriV1
-                                             ? std::string_view("srgb_rec709_display")
-                                         : builtIn->uri == document::kAcesCgConfigUriV1
-                                             ? std::string_view("sRGB - Texture")
-                                             : std::string_view{};
-    for (auto& composition : envelope.compositions) {
-        const auto& working = composition.workingColorSpaceId.has_value()
-                                  ? *composition.workingColorSpaceId
-                                  : envelope.colorSettings.processColorSpaceId;
-        const auto constant = [&](const document::NodeRecord& node,
-                                  const std::string_view role) -> document::ParameterValue* {
-            const auto binding =
-                std::ranges::find(node.parameters, role, &document::ParameterBinding::role);
-            if (binding == node.parameters.end())
-                return nullptr;
-            const auto record = std::ranges::find(composition.parameters, binding->parameterId,
-                                                  &document::ParameterRecord::id);
-            auto* source = record == composition.parameters.end()
-                               ? nullptr
-                               : std::get_if<document::ConstantValueSource>(&record->source);
-            return source == nullptr ? nullptr : &source->value;
-        };
-        for (const auto& node : composition.graph.nodes) {
-            if (node.typeId != document::kImageSourceNodeType &&
-                node.typeId != "bloom.video-source")
-                continue;
-            auto* legacy = constant(node, "colorSpace");
-            auto* explicitId = constant(node, "inputColorSpaceId");
-            auto* legacyValue = legacy ? std::get_if<std::int64_t>(legacy) : nullptr;
-            auto* idValue = explicitId ? std::get_if<std::string>(explicitId) : nullptr;
-            if (legacyValue == nullptr || idValue == nullptr || !idValue->empty())
-                continue;
-            const std::string_view migrated = *legacyValue == 1   ? srgbTexture
-                                              : *legacyValue == 2 ? std::string_view(working)
-                                                                  : std::string_view{};
-            if (migrated.empty())
-                continue;
-            *idValue = std::string(migrated);
-            *legacyValue = 0;
-        }
-    }
-}
 DocumentDecodeResult decodeDocumentEnvelope(const JsonValue& root) {
     static constexpr std::array<std::string_view, 4> kKeys{"schemaVersion", "project",
                                                            "idAllocation", "extensions"};
     detail::DecodeState state;
     std::vector<const JsonValue*> members;
     // First pass: match only the exact-order prefix, not yet checking for a trailing member. The
-    // root object's own trailing-member capture eligibility depends on documentMinor, which is
-    // itself decoded from this pass's own result (members[0]) -- an unavoidable bootstrap order,
-    // mirrored below by a second pass once documentMinor/roundTrip are established (compare
+    // root object's own trailing-member capture eligibility depends on the document minor, which
+    // is itself decoded from this pass's own result (members[0]) -- an unavoidable bootstrap order,
+    // mirrored below by a second pass once roundTrip is established (compare
     // decodeAnimationCurve's own two-pass id/kind peek in document_decode_composition.cpp for the
     // same "must read one member before the rest of this object's shape is known" pattern).
     if (!detail::matchOrderedMembers(root, kKeys, false, state, std::string{}, members)) {
@@ -2438,16 +2341,15 @@ DocumentDecodeResult decodeDocumentEnvelope(const JsonValue& root) {
         return DocumentDecodeResult::failure(state.error, state.path);
     }
     // Unknown major versions are rejected without mutation regardless of minor (see
-    // docs/architecture/project-format.md, "Versions, Migrations, And Preservation"). Exactly
-    // {1,0} keeps the pre-RT1 exact-match behavior and never produces a RoundTripState; {1, minor
-    // > 0} is a same-major newer-minor document RT1 now decodes.
+    // docs/architecture/project-format.md, "Versions And Preservation"). The current schema keeps
+    // the exact-match behavior and never produces a RoundTripState; a same-major newer minor is a
+    // document RT1 decodes.
     if (schemaVersion.major != kCanonicalDocumentSchemaVersionV1.major) {
         return DocumentDecodeResult::failure(DocumentDecodeError::DomainViolation,
                                              "/schemaVersion");
     }
 
-    // Validate node identities before the schema floor so an old document names the exact
-    // unsupported kind/version instead of silently entering a migration path.
+    // Validate node identities first so a document names the exact unsupported kind/version.
     const auto* project = root.findMember("project");
     const auto* compositions = project ? project->findMember("compositions") : nullptr;
     if (compositions) {
@@ -2467,19 +2369,7 @@ DocumentDecodeResult decodeDocumentEnvelope(const JsonValue& root) {
                                                    std::numeric_limits<std::uint32_t>::max(),
                                                    parsedVersion) &&
                         parsedVersion != 0 &&
-                        !document::isSupportedNodeVersion(*kind->asString(), parsedVersion) &&
-                        // Layer Output schema 4 predates Time Remap (document 1.23); the
-                        // node decoder upgrades them to the current schema, as the migration does.
-                        !(schemaVersion.minor < 23 && *kind->asString() == "bloom.layer-output" &&
-                          parsedVersion == 4) &&
-                        // #493: Curves schema 1 opens as schema 2 (migrateLegacyCurvesNodes).
-                        !(*kind->asString() == document::kCurvesNodeType &&
-                          parsedVersion == document::kLegacyCurvesNodeSchemaVersion) &&
-                        // #541: a gradient generator's or Glow's schema 1 colour pair opens as a
-                        // gradient value in a document older than 1.39
-                        // (migrateLegacyGradientColorPairs).
-                        !(schemaVersion.minor < kGradientColorPairsMinor &&
-                          isLegacyGradientColorPairNode(*kind->asString(), parsedVersion))) {
+                        !document::isSupportedNodeVersion(*kind->asString(), parsedVersion)) {
                         return DocumentDecodeResult::failure(
                             DocumentDecodeError::UnsupportedNodeVersion,
                             "/project/compositions/" + std::to_string(compositionIndex) +
@@ -2492,22 +2382,15 @@ DocumentDecodeResult decodeDocumentEnvelope(const JsonValue& root) {
             ++compositionIndex;
         }
     }
-    if (schemaVersion.minor < kMinimumDocumentSchemaVersionV1.minor) {
-        return DocumentDecodeResult::failure(DocumentDecodeError::UnsupportedSchemaVersion,
-                                             "/schemaVersion");
-    }
-
     const bool isKnownSchema = schemaVersion.minor <= kCanonicalDocumentSchemaVersionV1.minor;
-    state.documentMinor = schemaVersion.minor;
     RoundTripState roundTrip;
     if (!isKnownSchema) {
-        state.documentMinor = schemaVersion.minor;
         state.roundTrip = &roundTrip;
     }
 
-    // Second pass: re-check the root object's own shape now that documentMinor/roundTrip reflect
-    // the decoded schemaVersion, so a trailing unknown root member is captured (RT1) rather than
-    // hard-rejected exactly when documentMinor > 0.
+    // Second pass: re-check the root object's own shape now that roundTrip reflects the decoded
+    // schemaVersion, so a trailing unknown root member is captured (RT1) rather than hard-rejected
+    // exactly when the document is a newer minor.
     if (!detail::matchOrderedMembers(root, kKeys, true, state, std::string{}, members)) {
         return finishDecodeFailure(state);
     }

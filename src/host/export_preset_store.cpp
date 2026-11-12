@@ -264,7 +264,7 @@ std::optional<document::ExportOutputSettings> settingsFrom(const Json& json) {
     out.viewName = *view;
     out.bakeLook = *bake;
     out.includeAudio = *audio;
-    // Optional: absent means true (the 1.29 document rule).
+    // Optional: absent means true (the document rule).
     if (const auto* value = json.find("useCachedFrames")) {
         const auto* cached = std::get_if<bool>(&value->value);
         if (!cached)
@@ -388,7 +388,7 @@ std::optional<document::ExportOutput> exportOutputFromJson(const std::string_vie
     if (const auto* settings = parsed->find("settings")) {
         auto value = settingsFrom(*settings);
         if (!value)
-            return refuse("Its \"settings\" are not valid document 1.29 output settings.");
+            return refuse("Its \"settings\" are not valid output settings.");
         output.settings = std::move(*value);
     } else if (!output.presetId.empty()) {
         // A preset named without settings is a request for that preset's settings, exactly as

@@ -1247,7 +1247,7 @@ void inspectionQueries() {
 
 } // namespace
 
-// Document 1.30 read-back: query kind=layers, kind=keyframes and kind=enums carry the easing
+// Easing read-back: query kind=layers, kind=keyframes and kind=enums carry the easing
 // equations, their parameters and the shy / nameFollowsSource layer flags the new operations write.
 std::string firstMatch(const std::string& text, const std::string& pattern) {
     std::smatch match;

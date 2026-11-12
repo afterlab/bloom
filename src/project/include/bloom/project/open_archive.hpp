@@ -3,6 +3,7 @@
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/schema_version.hpp>
+#include <bloom/project/manifest_decode.hpp>
 #include <bloom/project/manifest_requirements.hpp>
 #include <bloom/project/project_io_memory.hpp>
 #include <bloom/project/round_trip_state.hpp>
@@ -21,7 +22,7 @@
 // decode, reconstruction, and manifest-requirements validation against the reconstructed project.
 // Open omits Save's re-encode and byte-comparison stages (there is nothing to compare an Open
 // against) and Save's captured-input version leg of VersionAgreement (there is no prior in-memory
-// value for Open to agree with) -- see docs/architecture/project-format.md, "Versions, Migrations,
+// value for Open to agree with) -- see docs/architecture/project-format.md, "Versions
 // And Preservation".
 //
 // This is a pure decode/reconstruct composition boundary: no file I/O, no async work, no
@@ -34,7 +35,7 @@
 namespace bloom::project {
 
 // Which side of the reopen chain classified an archive as requiring preserved-read-only handling
-// (see docs/architecture/project-format.md, "Versions, Migrations, And Preservation": "Open
+// (see docs/architecture/project-format.md, "Versions And Preservation": "Open
 // returns a preserved-read-only result containing the bounded original archive and diagnostics").
 enum class OpenArchivePreservedReadOnlySide : std::uint8_t {
     None,
@@ -59,15 +60,17 @@ struct OpenedArchive final {
     std::unique_ptr<document::Document> document;
     document::ColorSettings colorSettings;
     // Present only for a same-major newer-minor document whose unknown additive members
-    // were safely captured; nullopt for current or migrated known-schema documents.
+    // were safely captured; nullopt for a current-schema document.
     std::optional<RoundTripState> roundTrip;
-    // The effective decoded minor after any supported older-schema migration.
+    // The decoded document root minor.
     std::uint32_t schemaMinor = 0;
     // Verbatim from the decoded manifest's requirement set (manifest_requirements.hpp); coverage
     // against the reconstructed project has already been validated by the shared chain.
     std::vector<ManifestRequirement> requirements;
     document::SchemaVersion containerVersion;
     document::SchemaVersion documentSchemaVersion;
+    // The manifest's optional generator, for tracing only: nothing decides anything from it.
+    std::optional<DecodedManifestGenerator> generator;
 
     ProjectIoMemoryReservation manifestReservation;
     ProjectIoMemoryReservation decodeReservation;

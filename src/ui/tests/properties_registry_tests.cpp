@@ -1088,7 +1088,7 @@ void videoRows() {
         expect(selector && selector->count() == 3,
                "Video loop modes use the shared registry selector");
     }
-    // Document 1.25: the audio stream row lists the asset's streams and selects one by command;
+    // The audio stream row lists the asset's streams and selects one by command;
     // field order and timecode type are read-only source metadata.
     expect(row(panel, "audioStream") == nullptr,
            "the audio stream uses its purpose-built row, not a generic integer");

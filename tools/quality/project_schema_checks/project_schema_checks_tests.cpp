@@ -1,3 +1,4 @@
+#include "schema_check_helpers.hpp"
 #include "schema_checks.hpp"
 
 #include <algorithm>
@@ -262,15 +263,15 @@ void testDocument(const Value& document, int& failures) {
                   "fixed process color identity is required", failures);
 
     auto driverSource = document;
-    path(driverSource, {"$defs", "parameterSource-1.0", "oneOf"})
+    path(driverSource, {"$defs", "parameterSource-1.4", "oneOf"})
         .asArray()
         .push_back(bloom::quality::json::parse(
             R"({"type":"object","required":["kind","driverId"],"properties":{"kind":{"const":"driver-binding"},"driverId":{"$ref":"#/$defs/objectId"}},"unevaluatedProperties":true})"));
     expectFailure([&] { validateDocumentSchema(driverSource); },
-                  "driver sources remain outside writable schema 1.0", failures);
+                  "the parameter source alternatives stay a closed set", failures);
 
     auto missingWatermark = document;
-    auto& highest = path(missingWatermark, {"$defs", "highestIssued-1.0"});
+    auto& highest = path(missingWatermark, {"$defs", "highestIssued-1.24"});
     auto& required = highest.at("required").asArray();
     required.erase(std::ranges::find_if(required, [](const auto& value) {
         return value.isString() && value.asString() == "driverBinding";
@@ -280,12 +281,12 @@ void testDocument(const Value& document, int& failures) {
                   "driver allocator watermark remains required", failures);
 
     auto closedAllocator = document;
-    path(closedAllocator, {"$defs", "highestIssued-1.0", "unevaluatedProperties"}) = Value{false};
+    path(closedAllocator, {"$defs", "highestIssued-1.24", "unevaluatedProperties"}) = Value{false};
     expectFailure([&] { validateDocumentSchema(closedAllocator); },
                   "unknown allocator members remain preservable", failures);
 
     auto addedWatermark = document;
-    auto& addedHighest = path(addedWatermark, {"$defs", "highestIssued-1.0"});
+    auto& addedHighest = path(addedWatermark, {"$defs", "highestIssued-1.24"});
     addedHighest.at("required").asArray().push_back(Value{std::string{"futureNamespace"}});
     addMember(addedHighest.at("properties"), "futureNamespace",
               bloom::quality::json::parse(R"({"$ref":"#/$defs/allocatorHighWater"})"));
@@ -298,7 +299,7 @@ void testDocument(const Value& document, int& failures) {
                   "weakened decimal bounds are rejected", failures);
 
     auto emptyCurve = document;
-    path(emptyCurve, {"$defs", "animationCurve-1.0", "oneOf"})
+    path(emptyCurve, {"$defs", "animationCurve-1.9", "oneOf"})
         .asArray()[0]
         .at("properties")
         .at("keyframes")
@@ -357,17 +358,17 @@ void testDocument(const Value& document, int& failures) {
     }
 
     auto unconstrainedCurveId = document;
-    path(unconstrainedCurveId, {"$defs", "parameterSource-1.0", "oneOf"})
+    path(unconstrainedCurveId, {"$defs", "parameterSource-1.4", "oneOf"})
         .asArray()[1]
         .at("properties")
         .at("curveId") = Value{Value::Object{}};
     expectFailure([&] { validateDocumentSchema(unconstrainedCurveId); },
                   "animation curve references remain constrained", failures);
 
-    auto optionalVec2 = document;
-    path(optionalVec2, {"$defs", "vec2Value-1.0", "required"}) = Value{Value::Array{}};
-    expectFailure([&] { validateDocumentSchema(optionalVec2); }, "vec2 members remain required",
-                  failures);
+    auto optionalPoint = document;
+    path(optionalPoint, {"$defs", "pathPoint-1.14", "required"}) = Value{Value::Array{}};
+    expectFailure([&] { validateDocumentSchema(optionalPoint); },
+                  "path point members remain required", failures);
 
     auto unconstrainedParameters = document;
     path(unconstrainedParameters, {"$defs", "node-1.0", "properties", "parameters"}) =
@@ -391,108 +392,139 @@ void testDocument(const Value& document, int& failures) {
                   "malformed Base64 comment produces typed failure", failures);
 }
 
-void testNodeLayoutSchema(const std::filesystem::path& root, int& failures) {
-    using namespace bloom::quality;
-    const auto document = json::parseFile(root / "schemas/project/document-1.1.schema.json");
-    validateDocumentSchemaV1_1(document);
+// Feature constraints of the one document schema stay pinned.
+void testDocumentFeatures(const Value& document, int& failures) {
+    using bloom::quality::SchemaCheckError;
+    using bloom::quality::validateDocumentSchema;
+    const auto expectFailure = [&](Value mutated, const std::string_view message) {
+        expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchema(mutated); }, message,
+                                             failures);
+    };
+
     auto missingLayout = document;
     eraseMember(path(missingLayout, {"$defs", "composition-1.0", "properties"}), "nodeLayout");
-    expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_1(missingLayout); },
-                                         "current compositions require node layout", failures);
+    expectFailure(missingLayout, "compositions require node layout");
     auto zeroWidth = document;
     eraseMember(path(zeroWidth, {"$defs", "nodeLayout-1.1", "properties", "width"}),
                 "exclusiveMinimum");
-    expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_1(zeroWidth); },
-                                         "layout width stays strictly positive", failures);
-    auto manifest = json::parseFile(root / "schemas/project/manifest-1.1.schema.json");
-    validateManifestSchemaV1_1(manifest);
-    path(manifest, {"$defs", "document-1.0", "properties", "schemaVersion", "$ref"}) =
-        Value{std::string{"#/$defs/fixedVersion-1.0"}};
-    expectTypedFailure<SchemaCheckError>([&] { validateManifestSchemaV1_1(manifest); },
-                                         "current manifest declares the matching document minor",
-                                         failures);
-}
-
-void testNodeGroupSchema(const std::filesystem::path& root, int& failures) {
-    using namespace bloom::quality;
-    const auto document = json::parseFile(root / "schemas/project/document-1.2.schema.json");
-    validateDocumentSchemaV1_2(document);
+    expectFailure(zeroWidth, "layout width stays strictly positive");
     auto missingGroups = document;
     eraseMember(path(missingGroups, {"$defs", "composition-1.0", "properties"}), "nodeGroups");
-    expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_2(missingGroups); },
-                                         "current compositions require node groups", failures);
+    expectFailure(missingGroups, "compositions require node groups");
     auto negativePadding = document;
     eraseMember(path(negativePadding,
-                     {"$defs", "nodeGroup-1.2", "properties", "padding", "properties", "x"}),
+                     {"$defs", "nodeGroup-1.31", "properties", "padding", "properties", "x"}),
                 "minimum");
-    expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_2(negativePadding); },
-                                         "group padding stays nonnegative", failures);
-    auto missingNamespace = document;
-    eraseMember(path(missingNamespace, {"$defs", "highestIssued-1.2", "properties"}), "nodeGroup");
-    expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_2(missingNamespace); },
-                                         "the group allocator namespace is required", failures);
-    auto manifest = json::parseFile(root / "schemas/project/manifest-1.2.schema.json");
-    validateManifestSchemaV1_2(manifest);
-    path(manifest, {"$defs", "document-1.0", "properties", "schemaVersion", "$ref"}) =
-        Value{std::string{"#/$defs/fixedVersion-1.0"}};
-    expectTypedFailure<SchemaCheckError>([&] { validateManifestSchemaV1_2(manifest); },
-                                         "current manifest declares the matching document minor",
-                                         failures);
-}
-
-void testAssetOrganizationSchema(const std::filesystem::path& root, int& failures) {
-    using namespace bloom::quality;
-    const auto document = json::parseFile(root / "schemas/project/document-1.16.schema.json");
-    validateDocumentSchemaV1_16(document);
+    expectFailure(negativePadding, "group padding stays nonnegative");
     for (const auto* field : {"name", "folder", "tags", "order"}) {
         auto missing = document;
         eraseMember(path(missing, {"$defs", "asset-1.11", "properties"}), field);
-        expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_16(missing); },
-                                             "organization fields stay pinned", failures);
+        expectFailure(missing, "asset organization fields stay pinned");
     }
     auto duplicateTags = document;
     path(duplicateTags, {"$defs", "asset-1.11", "properties", "tags", "uniqueItems"}) =
         Value(false);
-    expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_16(duplicateTags); },
-                                         "tags stay unique", failures);
+    expectFailure(duplicateTags, "asset tags stay unique");
     auto openFolder = document;
     path(openFolder, {"$defs", "assetFolder-1.16", "unevaluatedProperties"}) = Value(true);
-    expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_16(openFolder); },
-                                         "folder records remain closed", failures);
-    auto missingNamespace = document;
-    eraseMember(path(missingNamespace, {"$defs", "highestIssued-1.2", "properties"}),
-                "assetFolder");
-    expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_16(missingNamespace); },
-                                         "folder allocator namespace stays pinned", failures);
-    auto manifest = json::parseFile(root / "schemas/project/manifest-1.16.schema.json");
-    validateManifestSchemaV1_16(manifest);
-    path(manifest, {"$defs", "fixedVersion-1.16", "properties", "minor", "const"}) =
-        json::parse("15");
-    expectTypedFailure<SchemaCheckError>([&] { validateManifestSchemaV1_16(manifest); },
-                                         "manifest minor stays 1.16", failures);
-}
-
-void testVideoSchema(const std::filesystem::path& root, int& failures) {
-    using namespace bloom::quality;
-    const auto document = json::parseFile(root / "schemas/project/document-1.17.schema.json");
-    validateDocumentSchemaV1_17(document);
+    expectFailure(openFolder, "folder records remain closed");
     for (const auto* field : {"codec", "timebase", "framePeriod", "duration", "timecode",
                               "primaries", "channelLayout"}) {
         auto missing = document;
-        eraseMember(path(missing, {"$defs", "videoStream-1.17", "properties"}), field);
-        expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_17(missing); },
-                                             "video stream fields stay pinned", failures);
+        eraseMember(path(missing, {"$defs", "videoStream-1.34", "properties"}), field);
+        expectFailure(missing, "video stream fields stay pinned");
     }
-    auto open = document;
-    path(open, {"$defs", "video-1.17", "unevaluatedProperties"}) = Value(true);
-    expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_17(open); },
-                                         "video records remain closed", failures);
-    auto manifest = json::parseFile(root / "schemas/project/manifest-1.17.schema.json");
-    validateManifestSchemaV1_17(manifest);
-    path(manifest, {"$defs", "fixedVersion-1.17", "properties", "minor", "const"}) =
-        json::parse("16");
-    expectTypedFailure<SchemaCheckError>([&] { validateManifestSchemaV1_17(manifest); },
-                                         "manifest minor stays 1.17", failures);
+    auto openVideo = document;
+    path(openVideo, {"$defs", "video-1.17", "unevaluatedProperties"}) = Value(true);
+    expectFailure(openVideo, "video records remain closed");
+    auto newInterpolation = document;
+    path(newInterpolation, {"$defs", "keyframeInterpolation-1.30", "enum"})
+        .asArray()
+        .push_back(Value{std::string{"spring"}});
+    expectFailure(newInterpolation, "the interpolation vocabulary stays closed");
+    auto newExportFormat = document;
+    path(newExportFormat, {"$defs", "exportFormat-1.33", "enum"})
+        .asArray()
+        .push_back(Value{std::string{"gif"}});
+    expectFailure(newExportFormat, "the export format vocabulary stays closed");
+    auto newerDocument = document;
+    path(newerDocument, {"$defs", "documentSchemaVersion", "properties", "minor", "const"}) =
+        Value{Number{"1"}};
+    expectFailure(newerDocument, "the document schema stays exactly 1.0");
+    auto historicalDefinition = document;
+    addMember(
+        path(historicalDefinition, {"$defs"}), "fixedVersion-1.43",
+        bloom::quality::json::parse(
+            R"({"type":"object","required":["major","minor"],"properties":{"major":{"const":1},"minor":{"const":43}},"unevaluatedProperties":false})"));
+    expectFailure(historicalDefinition, "an unreferenced historical definition is rejected");
+}
+
+// The invariants hold on their own, independent of the lock.
+void testInvariants(const Value& document, int& failures) {
+    using bloom::quality::SchemaCheckError;
+    using bloom::quality::schema_detail::validateSchemaInvariants;
+    validateSchemaInvariants(document, "document schema");
+    const auto expectFailure = [&](Value mutated, const std::string_view message) {
+        expectTypedFailure<SchemaCheckError>(
+            [&] { validateSchemaInvariants(mutated, "document schema"); }, message, failures);
+    };
+
+    auto orphan = document;
+    addMember(path(orphan, {"$defs"}), "orphan-1.0",
+              bloom::quality::json::parse(R"({"type":"integer"})"));
+    expectFailure(orphan, "an orphan definition is rejected");
+    auto unbounded = document;
+    eraseMember(path(unbounded, {"properties", "extensions"}), "maxItems");
+    expectFailure(unbounded, "an unbounded array is rejected");
+    auto undescribed = document;
+    path(undescribed, {"$defs", "pathPoint-1.14", "required"})
+        .asArray()
+        .push_back(Value{std::string{"z"}});
+    expectFailure(undescribed, "a required member without a description is rejected");
+    auto silent = document;
+    eraseMember(path(silent, {"$defs", "pathPoint-1.14"}), "unevaluatedProperties");
+    expectFailure(silent, "an object that does not say whether it keeps unknown members fails");
+}
+
+void testManifestGenerator(const Value& manifest, int& failures) {
+    using bloom::quality::SchemaCheckError;
+    using bloom::quality::validateManifestSchema;
+    const auto expectFailure = [&](Value mutated, const std::string_view message) {
+        expectTypedFailure<SchemaCheckError>([&] { validateManifestSchema(mutated); }, message,
+                                             failures);
+    };
+    auto requiredGenerator = manifest;
+    path(requiredGenerator, {"required"}).asArray().push_back(Value{std::string{"generator"}});
+    expectFailure(requiredGenerator, "the generator stays optional");
+    auto scalarLimit = manifest;
+    addMember(path(scalarLimit, {"$defs", "generatorText"}), "maxLength", Value{Number{"256"}});
+    expectFailure(scalarLimit, "the generator byte ceiling is not misstated as a scalar limit");
+    auto extraMember = manifest;
+    addMember(path(extraMember, {"$defs", "generator-1.0", "properties"}), "build",
+              bloom::quality::json::parse(R"({"$ref":"#/$defs/generatorText"})"));
+    expectFailure(extraMember, "the generator holds exactly name and version");
+    auto olderDocument = manifest;
+    path(olderDocument, {"$defs", "document-1.0", "properties", "schemaVersion", "$ref"}) =
+        Value{std::string{"#/$defs/fixedVersion-1.0"}};
+    expectFailure(olderDocument, "the manifest names the document schema version definition");
+}
+
+void testSchemaDirectory(const std::filesystem::path& root, int& failures) {
+    using bloom::quality::checkProjectSchemas;
+    checkProjectSchemas(root);
+    const TemporaryDirectory fixtures;
+    const auto copyRoot = fixtures.path("repository");
+    std::filesystem::create_directories(copyRoot / "schemas/project");
+    for (const auto* name : {"document-1.0.schema.json", "manifest-1.0.schema.json"}) {
+        std::filesystem::copy_file(root / "schemas/project" / name,
+                                   copyRoot / "schemas/project" / name);
+    }
+    checkProjectSchemas(copyRoot);
+    std::filesystem::copy_file(root / "schemas/project/document-1.0.schema.json",
+                               copyRoot / "schemas/project/document-1.1.schema.json");
+    expectTypedFailure<bloom::quality::SchemaCheckError>(
+        [&] { checkProjectSchemas(copyRoot); },
+        "a second schema version beside the one pair is rejected", failures);
 }
 
 [[nodiscard]] auto parseRoot(const std::span<const char* const> arguments)
@@ -517,10 +549,10 @@ auto main(const int count, const char* const* values) -> int {
         testParser(failures);
         testManifest(manifest, failures);
         testDocument(document, failures);
-        testNodeLayoutSchema(root, failures);
-        testNodeGroupSchema(root, failures);
-        testAssetOrganizationSchema(root, failures);
-        testVideoSchema(root, failures);
+        testDocumentFeatures(document, failures);
+        testInvariants(document, failures);
+        testManifestGenerator(manifest, failures);
+        testSchemaDirectory(root, failures);
         if (failures == 0) {
             std::cout << "Project schema checker self-tests passed\n";
         }

@@ -203,7 +203,7 @@ struct DecodeState final {
         return false;
     }
     // Document `schemaVersion`'s major gates the same way containerVersion's does (decode refuses
-    // an unsupported major; migration is out of scope). Its minor does NOT: a newer document minor
+    // an unsupported major). Its minor does NOT: a newer document minor
     // embedded in an otherwise-{1,0} manifest is exposed as a plain decoded value rather than
     // refused here -- manifest/document agreement and the document side's own newer-minor handling
     // belong to a later chain-layer slice (see manifest_decode.hpp's file comment).
@@ -397,9 +397,42 @@ ManifestDecodeResult ManifestDecodeResult::preservationRequired(const std::strin
     return result;
 }
 
+namespace {
+
+// ------------------------------------------------------------------------------------------
+// `generator` (docs/architecture/project-format.md, "Manifest Shape"): optional, exactly `name`
+// then `version`, closed. Read for tracing only.
+// ------------------------------------------------------------------------------------------
+
+[[nodiscard]] bool decodeGenerator(const JsonValue& node, DecodeState& state,
+                                   const std::string& path, DecodedManifestGenerator& out) {
+    static constexpr std::array<std::string_view, 2> kKeys{"name", "version"};
+    std::vector<const JsonValue*> members;
+    if (!matchOrderedMembers(node, kKeys, true, state, path, members)) {
+        return false;
+    }
+    for (std::size_t index = 0; index < kKeys.size(); ++index) {
+        const auto memberPath = joinPath(path, kKeys[index]);
+        std::string_view text;
+        if (!decodeStringMember(*members[index], state, memberPath, text)) {
+            return false;
+        }
+        if (text.empty() || text.size() > kMaxManifestGeneratorTextBytes) {
+            state.fail(ManifestDecodeError::InvalidGenerator, memberPath);
+            return false;
+        }
+        (index == 0 ? out.name : out.version) = std::string(text);
+    }
+    return true;
+}
+
+} // namespace
+
 ManifestDecodeResult decodeManifestEnvelope(const JsonValue& root) {
     static constexpr std::array<std::string_view, 4> kRootKeys{"format", "containerVersion",
                                                                "document", "requirements"};
+    static constexpr std::array<std::string_view, 5> kRootKeysWithGenerator{
+        "format", "containerVersion", "document", "requirements", "generator"};
     DecodeState state;
     std::vector<const JsonValue*> members;
     // First pass: match only the exact-order prefix, not yet rejecting a trailing member. Whether
@@ -448,7 +481,10 @@ ManifestDecodeResult decodeManifestEnvelope(const JsonValue& root) {
     // now that containerVersion.minor is known to be 0, so a trailing unknown root member is a hard
     // error (mirrors decodeDocumentEnvelope's second pass, minus RT1 capture -- this module never
     // captures).
-    if (!matchOrderedMembers(root, kRootKeys, true, state, std::string{}, members)) {
+    const auto rootKeys = root.findMember("generator") != nullptr
+                              ? std::span<const std::string_view>(kRootKeysWithGenerator)
+                              : std::span<const std::string_view>(kRootKeys);
+    if (!matchOrderedMembers(root, rootKeys, true, state, std::string{}, members)) {
         return ManifestDecodeResult::failure(state.error, state.path);
     }
     // containerVersion's own shape gets the same strict re-check: a trailing member there is only
@@ -468,6 +504,14 @@ ManifestDecodeResult decodeManifestEnvelope(const JsonValue& root) {
 
     if (!decodeRequirements(*members[3], state, "/requirements", manifest.requirements)) {
         return ManifestDecodeResult::failure(state.error, state.path);
+    }
+
+    if (members.size() > 4) {
+        DecodedManifestGenerator generator;
+        if (!decodeGenerator(*members[4], state, "/generator", generator)) {
+            return ManifestDecodeResult::failure(state.error, state.path);
+        }
+        manifest.generator = std::move(generator);
     }
 
     return ManifestDecodeResult::success(std::move(manifest));

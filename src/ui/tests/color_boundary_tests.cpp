@@ -9,7 +9,6 @@
 #include <bloom/document/shape.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/document_decode.hpp>
-#include <bloom/project/document_migration.hpp>
 #include <bloom/project/document_reconstruct.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
@@ -401,14 +400,14 @@ void workingSpaceConverterPin() {
            "rebind uses the new composition's effective working space");
 }
 
-void migrationPin() {
-    auto project = document::makeNewProject("Legacy", "Main", core::RationalTime::fromInteger(10));
+void reopenPin() {
+    auto project = document::makeNewProject("Saved", "Main", core::RationalTime::fromInteger(10));
     const auto id = project.initialCompositionId;
     document::Document original(std::move(project.project));
     commands::CommandStack stack(original);
     ui::CompositionSession session(original, stack, id);
     const core::Color4d oldNumbers{0.86, 0.04, 2.5, 0.75};
-    expect(session.addSolidLayer("Legacy solid", oldNumbers), "legacy color fixture authored");
+    expect(session.addSolidLayer("Saved solid", oldNumbers), "saved color fixture authored");
     auto snapshot = original.snapshot();
     const auto settings =
         document::makeBloomNeutralColorSettingsV1(color::kBloomNeutralV1ConfigDigest);
@@ -419,30 +418,12 @@ void migrationPin() {
                                              .payloadScratch = payload,
                                              .sortScratch = sort};
     const auto size = project::canonicalDocumentSize(input);
-    expect(static_cast<bool>(size), "legacy fixture serializes");
+    expect(static_cast<bool>(size), "saved fixture serializes");
     if (!size)
         return;
     std::string json(*size.value(), '\0');
     expect(static_cast<bool>(project::encodeCanonicalDocument(input, json)),
            "fixture canonical encoding succeeds");
-    const auto replace = [&json](const std::string& pattern, const std::string& to) {
-        const std::regex expression(pattern);
-        expect(std::regex_search(json, expression), "legacy fixture field found");
-        json = std::regex_replace(json, expression, to);
-    };
-    // Whatever the current minor is, the fixture is a 1.9 document: the production chain from 1.9
-    // to the current canonical version is what runs, and later minors add only optional fields.
-    // Only the FIRST schemaVersion is the document's; colorSettings carries its own further down.
-    json = std::regex_replace(json, std::regex(R"("minor"\s*:\s*\d+)"), "\"minor\": 9",
-                              std::regex_constants::format_first_only);
-    replace(R"(,\s*"assets"\s*:\s*\[\s*\])", "");
-    replace(R"(,\s*"dataBlocks"\s*:\s*\[\s*\])", "");
-    replace(R"(,\s*"backgroundColor"\s*:\s*\[[^\]]*\])", "");
-    replace(R"(,\s*"asset"\s*:\s*"0")", "");
-    replace(R"(,\s*"dataBlock"\s*:\s*"0")", "");
-    replace(R"(,\s*"exportQueue"\s*:\s*\{\s*"jobs"\s*:\s*\[\s*\]\s*\})", "");
-    replace(R"(,\s*"exportJob"\s*:\s*"0")", "");
-    replace(R"(,\s*"exportOutput"\s*:\s*"0")", "");
     auto coordinator = project::ProjectIoMemoryCoordinator::create(64ULL << 20U);
     if (!coordinator)
         std::abort();
@@ -451,29 +432,22 @@ void migrationPin() {
         std::abort();
     const auto parsed = project::parseStrictJsonDom(
         {reinterpret_cast<const std::byte*>(json.data()), json.size()}, {}, *operation);
-    expect(static_cast<bool>(parsed), "legacy document parses");
+    expect(static_cast<bool>(parsed), "saved document parses");
     if (!parsed)
         return;
-    const auto migrated = project::migrateDocumentDom(
-        parsed.document()->root(), {1, 9}, project::kCanonicalDocumentSchemaVersionV1,
-        project::kProductionDocumentMigrationSteps, {}, *operation);
-    expect(migrated.outcome() == project::MigrationOutcome::Migrated,
-           "real production migration runs");
-    if (!migrated.migratedRoot())
-        return;
-    const auto decoded = project::decodeDocumentEnvelope(*migrated.migratedRoot());
-    expect(static_cast<bool>(decoded), "migrated document decodes");
+    const auto decoded = project::decodeDocumentEnvelope(parsed.document()->root());
+    expect(static_cast<bool>(decoded), "saved document decodes");
     if (!decoded)
         return;
     auto rebuilt = project::reconstructDocument(*decoded.value());
-    expect(static_cast<bool>(rebuilt), "migrated document reconstructs");
+    expect(static_cast<bool>(rebuilt), "saved document reconstructs");
     if (!rebuilt)
         return;
     auto& document = *rebuilt.value()->document;
     commands::CommandStack reopenedStack(document);
     ui::CompositionSession reopened(document, reopenedStack, id);
     expect(waitUntil([&] { return static_cast<bool>(reopened.colorConverter()); }),
-           "migrated session converter prepares");
+           "reopened session converter prepares");
     const auto* composition = reopened.composition();
     for (const auto& layer : composition->graph().layerStack().entries())
         reopened.selectLayer(layer.layerId);
@@ -482,7 +456,7 @@ void migrationPin() {
     ui::PropertiesEditor panel(reopened);
     expect(parameter && reopened.constantColorValue(parameter->id) == oldNumbers &&
                reopened.snapshot().revision() == revision && reopenedStack.size() == 0,
-           "migrated old document keeps every stored color number; UI adds no command");
+           "reopened document keeps every stored color number; UI adds no command");
 }
 // Issue #409: asset (and node card) thumbnails display through the Viewer's default pair, never
 // the configuration's own default view: un-tone-mapped sRGB under ACES CG, the single neutral
@@ -586,7 +560,7 @@ int main(int argc, char** argv) try {
     shapeColorPin();
     workingSpaceConverterPin();
     relativeArchiveIntentPin();
-    migrationPin();
+    reopenPin();
     acesThumbnailDisplayPin();
     return failures == 0 ? 0 : 1;
 } catch (const std::exception& error) {

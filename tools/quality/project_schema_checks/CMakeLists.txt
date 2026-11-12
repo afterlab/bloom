@@ -2,32 +2,8 @@ add_library(
     bloom_project_schema_checks
     STATIC
     document_schema_checks.cpp
-    document_schema_graph_checks.cpp
     manifest_schema_checks.cpp
-    node_group_schema_checks.cpp
-    animation_breadth_schema_checks.cpp
-    value_graph_schema_checks.cpp
-    layer_timeline_schema_checks.cpp
-    merge_schema_checks.cpp
-    content_bounds_schema_checks.cpp
-    viewer_schema_checks.cpp
-    asset_schema_checks.cpp
-    export_queue_schema_checks.cpp
-    easing_schema_checks.cpp
-    handle_mode_schema_checks.cpp
-    export_format_schema_checks.cpp
-    footage_schema_checks.cpp
-    sequence_stamp_schema_checks.cpp
-    verified_digest_schema_checks.cpp
-    entry_layer_schema_checks.cpp
-    gradient_schema_checks.cpp
-    gradient_color_pair_schema_checks.cpp
-    gradient_stop_link_schema_checks.cpp
-    gradient_mode_schema_checks.cpp
-    matte_source_schema_checks.cpp
-    compound_path_schema_checks.cpp
-    video_schema_checks.cpp
-    node_layout_schema_checks.cpp
+    project_schema_lock.cpp
     schema_check_helpers.cpp
     schema_check_helpers.hpp
     schema_checks.hpp

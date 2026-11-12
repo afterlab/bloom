@@ -307,12 +307,6 @@ bloom_enable_strict_floating_point(bloom_runtime_shape_sources_test)
 bloom_add_test(NAME bloom.runtime.shape_sources COMMAND bloom_runtime_shape_sources_test LABELS unit rendering)
 
 # Cross-module (runtime + commands) evaluation tests live under tests/integration/.
-# #534: a pre-#506 Glow opens with the full control set and renders identically.
-add_executable(bloom_runtime_glow_legacy_controls_test ${PROJECT_SOURCE_DIR}/tests/integration/glow_legacy_controls_tests.cpp)
-target_link_libraries(bloom_runtime_glow_legacy_controls_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
-bloom_enable_warnings(bloom_runtime_glow_legacy_controls_test)
-bloom_enable_strict_floating_point(bloom_runtime_glow_legacy_controls_test)
-bloom_add_test(NAME bloom.runtime.glow-legacy-controls COMMAND bloom_runtime_glow_legacy_controls_test LABELS unit runtime persistence TIMEOUT 60)
 # #642: an SVG imported as one layer composes, renders and reopens (its file deleted) as the same
 # file imported as editable shapes, on the CPU reference.
 add_executable(bloom_runtime_svg_artwork_layer_test ${PROJECT_SOURCE_DIR}/tests/integration/svg_artwork_layer_tests.cpp)
@@ -323,18 +317,12 @@ bloom_add_test(NAME bloom.runtime.svg-artwork-layer COMMAND bloom_runtime_svg_ar
 if(WIN32)
     set_tests_properties(bloom.runtime.svg-artwork-layer PROPERTIES TIMEOUT 360)
 endif()
-# #484: a pre-motion-blur Transform 2D opens with its motion blur bound off and renders identically.
-add_executable(bloom_runtime_transform_motion_blur_migration_test ${PROJECT_SOURCE_DIR}/tests/integration/transform_motion_blur_migration_tests.cpp)
-target_link_libraries(bloom_runtime_transform_motion_blur_migration_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
-bloom_enable_warnings(bloom_runtime_transform_motion_blur_migration_test)
-bloom_enable_strict_floating_point(bloom_runtime_transform_motion_blur_migration_test)
-bloom_add_test(NAME bloom.runtime.transform-motion-blur-migration COMMAND bloom_runtime_transform_motion_blur_migration_test LABELS runtime integration)
-# #486: a Film Grain saved before Monochrome opens with it bound off and renders identically.
-add_executable(bloom_runtime_film_grain_monochrome_migration_test ${PROJECT_SOURCE_DIR}/tests/integration/film_grain_monochrome_migration_tests.cpp)
-target_link_libraries(bloom_runtime_film_grain_monochrome_migration_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
-bloom_enable_warnings(bloom_runtime_film_grain_monochrome_migration_test)
-bloom_enable_strict_floating_point(bloom_runtime_film_grain_monochrome_migration_test)
-bloom_add_test(NAME bloom.runtime.film-grain-monochrome-migration COMMAND bloom_runtime_film_grain_monochrome_migration_test LABELS runtime integration)
+# #486: Film Grain's Monochrome survives a save and open and draws what it drew.
+add_executable(bloom_runtime_film_grain_monochrome_persistence_test ${PROJECT_SOURCE_DIR}/tests/integration/film_grain_monochrome_persistence_tests.cpp)
+target_link_libraries(bloom_runtime_film_grain_monochrome_persistence_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
+bloom_enable_warnings(bloom_runtime_film_grain_monochrome_persistence_test)
+bloom_enable_strict_floating_point(bloom_runtime_film_grain_monochrome_persistence_test)
+bloom_add_test(NAME bloom.runtime.film-grain-monochrome-persistence COMMAND bloom_runtime_film_grain_monochrome_persistence_test LABELS runtime integration)
 
 # #509: Mask Path and Text Outline through the compiler against independent references.
 add_executable(bloom_runtime_path_source_nodes_test ${PROJECT_SOURCE_DIR}/tests/integration/path_source_nodes_tests.cpp)
@@ -343,12 +331,12 @@ bloom_enable_warnings(bloom_runtime_path_source_nodes_test)
 bloom_enable_strict_floating_point(bloom_runtime_path_source_nodes_test)
 bloom_add_test(NAME bloom.runtime.path-source-nodes COMMAND bloom_runtime_path_source_nodes_test LABELS runtime integration paths)
 
-# #509: a Path Stroke saved before stamps opens with Dot stamps and draws what it drew.
-add_executable(bloom_runtime_path_stroke_stamp_migration_test ${PROJECT_SOURCE_DIR}/tests/integration/path_stroke_stamp_migration_tests.cpp)
-target_link_libraries(bloom_runtime_path_stroke_stamp_migration_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
-bloom_enable_warnings(bloom_runtime_path_stroke_stamp_migration_test)
-bloom_enable_strict_floating_point(bloom_runtime_path_stroke_stamp_migration_test)
-bloom_add_test(NAME bloom.runtime.path-stroke-stamp-migration COMMAND bloom_runtime_path_stroke_stamp_migration_test LABELS runtime integration paths)
+# #509: a Path Stroke's stamp survives a save and open and draws what it drew.
+add_executable(bloom_runtime_path_stroke_stamp_persistence_test ${PROJECT_SOURCE_DIR}/tests/integration/path_stroke_stamp_persistence_tests.cpp)
+target_link_libraries(bloom_runtime_path_stroke_stamp_persistence_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
+bloom_enable_warnings(bloom_runtime_path_stroke_stamp_persistence_test)
+bloom_enable_strict_floating_point(bloom_runtime_path_stroke_stamp_persistence_test)
+bloom_add_test(NAME bloom.runtime.path-stroke-stamp-persistence COMMAND bloom_runtime_path_stroke_stamp_persistence_test LABELS runtime integration paths)
 # #509: the glowing path presets (ready-made Node Groups) render, undo, save and reopen.
 add_executable(bloom_runtime_path_glow_preset_test ${PROJECT_SOURCE_DIR}/tests/integration/path_glow_preset_tests.cpp)
 target_link_libraries(bloom_runtime_path_glow_preset_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
@@ -369,11 +357,6 @@ target_link_libraries(bloom_runtime_film_grain_sensor_noise_test PRIVATE bloom_r
 bloom_enable_warnings(bloom_runtime_film_grain_sensor_noise_test)
 bloom_enable_strict_floating_point(bloom_runtime_film_grain_sensor_noise_test)
 bloom_add_test(NAME bloom.runtime.film-grain-sensor-noise COMMAND bloom_runtime_film_grain_sensor_noise_test LABELS runtime integration)
-# #541: a document older than 1.39 opens its schema 1 colour pairs as gradient values.
-add_executable(bloom_runtime_gradient_color_pairs_test ${PROJECT_SOURCE_DIR}/tests/integration/gradient_color_pair_migration_tests.cpp)
-target_link_libraries(bloom_runtime_gradient_color_pairs_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
-bloom_enable_warnings(bloom_runtime_gradient_color_pairs_test)
-bloom_add_test(NAME bloom.runtime.gradient-color-pairs COMMAND bloom_runtime_gradient_color_pairs_test LABELS unit runtime persistence TIMEOUT 60)
 # #543: value nodes drive gradient stops through stop links.
 add_executable(bloom_runtime_gradient_stop_links_test ${PROJECT_SOURCE_DIR}/tests/integration/gradient_stop_link_tests.cpp)
 target_link_libraries(bloom_runtime_gradient_stop_links_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
@@ -381,13 +364,13 @@ bloom_enable_warnings(bloom_runtime_gradient_stop_links_test)
 bloom_enable_strict_floating_point(bloom_runtime_gradient_stop_links_test)
 bloom_add_test(NAME bloom.runtime.gradient-stop-links COMMAND bloom_runtime_gradient_stop_links_test LABELS unit runtime persistence TIMEOUT 120)
 
-# #589: a project saved before compound paths opens with one contour everywhere and renders identically.
-add_executable(bloom_runtime_path_value_migration_test ${PROJECT_SOURCE_DIR}/tests/integration/path_value_migration_tests.cpp)
-target_link_libraries(bloom_runtime_path_value_migration_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
-target_compile_definitions(bloom_runtime_path_value_migration_test PRIVATE BLOOM_PATH_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures/paths")
-bloom_enable_warnings(bloom_runtime_path_value_migration_test)
-bloom_enable_strict_floating_point(bloom_runtime_path_value_migration_test)
-bloom_add_test(NAME bloom.runtime.path-value-migration COMMAND bloom_runtime_path_value_migration_test LABELS unit runtime persistence TIMEOUT 120)
+# #589: a project of one-contour paths opens, renders its pinned frames, and saves and reopens unchanged.
+add_executable(bloom_runtime_path_value_project_test ${PROJECT_SOURCE_DIR}/tests/integration/path_value_project_tests.cpp)
+target_link_libraries(bloom_runtime_path_value_project_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
+target_compile_definitions(bloom_runtime_path_value_project_test PRIVATE BLOOM_PATH_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures/paths")
+bloom_enable_warnings(bloom_runtime_path_value_project_test)
+bloom_enable_strict_floating_point(bloom_runtime_path_value_project_test)
+bloom_add_test(NAME bloom.runtime.path-value-project COMMAND bloom_runtime_path_value_project_test LABELS unit runtime persistence TIMEOUT 120)
 
 # #597: the alignment step any two path values morph through (pairing, subdivision, start and direction).
 add_executable(bloom_runtime_path_morph_test path_morph_tests.cpp)

@@ -197,11 +197,6 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                 }
                 if (outcome == ProjectHostOperationOutcome::Published) {
                     statusStrip_->showTransientMessage(message);
-                    // ADR 0032's one-time note for an older project, in an asynchronous
-                    // window-modal notice that does not block the open.
-                    if (const auto& notice = projectHost_.openNotice(); !notice.isEmpty())
-                        kit::inform(*this, kit::KPromptTone::Info, tr("Open Project"), {}, notice,
-                                    QStringLiteral("openNoticeBox"));
                     return;
                 }
                 if (outcome == ProjectHostOperationOutcome::Cancelled) {

@@ -6,12 +6,12 @@
 #include <filesystem>
 #include <optional>
 
-// Document 1.36 (#495, docs/architecture/project-format.md "Verified Member Digests In Document
-// 1.36"). A save records what the process memo of ADR 0025 (platform::verifiedSourceDigests())
-// already proved about image-sequence members, so a reopened project knows each verified member's
-// digest and its stamp. It never hashes and never waits: one stat and one memo lookup per member
-// that lacks one of the two. Only the bytes a save publishes change; the live document, its
-// revision, dirty state and undo history are not touched.
+// #495 (docs/architecture/project-format.md "Verified Member Digests"). A save records what the
+// process memo of ADR 0025 (platform::verifiedSourceDigests()) already proved about image-sequence
+// members, so a reopened project knows each verified member's digest and its stamp. It never hashes
+// and never waits: one stat and one memo lookup per member that lacks one of the two. Only the
+// bytes a save publishes change; the live document, its revision, dirty state and undo history are
+// not touched.
 namespace bloom::host {
 
 struct VerifiedDigestRecording final {

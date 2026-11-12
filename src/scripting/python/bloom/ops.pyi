@@ -3613,8 +3613,8 @@ class ExportOps:
               Range: 0..255
           outputs  array  optional
               Outputs as JSON strings; omitted adds one H.264 MP4 output. One output as JSON: {"preset":
-              id, "settings": {document 1.29 settings}, "destination": {"portability", "path",
-              "overwrite"}, "enabled", "importIntoAssets"}; every field is optional. A built-in "preset"
+              id, "settings": {output settings}, "destination": {"portability", "path", "overwrite"},
+              "enabled", "importIntoAssets"}; every field is optional. A built-in "preset"
               (export.presets lists them) with no "settings" takes that preset's settings; "settings"
               given with it override them. "overwrite" is "ask", "replace" or "refuse"; an output with
               no destination path must be given one before Start. A destination is a path below the
@@ -3667,7 +3667,7 @@ class ExportOps:
               Unit: export job id (export.status)
               Range: >= 1
           output  str  required
-              One output as JSON: {"preset": id, "settings": {document 1.29 settings}, "destination":
+              One output as JSON: {"preset": id, "settings": {output settings}, "destination":
               {"portability", "path", "overwrite"}, "enabled", "importIntoAssets"}; every field is
               optional. A built-in "preset" (export.presets lists them) with no "settings" takes that
               preset's settings; "settings" given with it override them. "overwrite" is "ask", "replace"
@@ -4304,7 +4304,7 @@ class ExportOps:
         ...
     def set_output_settings(self, output: int | Proxy, settings: str) -> Mapping[str, Any] | None:
         """bloom.export.set-output-settings  (operation, export)
-        Replaces an output's settings with a document 1.29 settings object.
+        Replaces an output's settings with an output settings object.
 
         Arguments:
           output  id  required
@@ -4312,7 +4312,7 @@ class ExportOps:
               Unit: export output id (export.status)
               Range: >= 1
           settings  str  required
-              The document 1.29 settings object as JSON.
+              The output settings object as JSON.
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 

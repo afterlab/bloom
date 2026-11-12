@@ -848,7 +848,7 @@ OperationResult AddAudioLayer::apply(document::Draft& draft) const {
                         document::kLayerOutputNodeSchemaVersion}) ||
         !graph.addLayerOutput({*layerOutputNodeId,
                                *layerId,
-                               // The layer shows its source's name and follows it (document 1.30).
+                               // The layer shows its source's name and follows it.
                                asset->name.empty() ? asset->locator.path : asset->name,
                                std::string(document::kLayerOutputAudioOutputPort),
                                std::nullopt,

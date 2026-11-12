@@ -400,11 +400,6 @@ AssumedVideoColour assumeMissingVideoColour(const ColourTags& source,
     return result;
 }
 
-bool sdrVideoColourDefaultApplies(const ColourTags& tags, const VideoGeometry& geometry) {
-    const auto assumed = assumeMissingVideoColour(tags, geometry).tags;
-    return missingTags(assumed, true).empty() && ordinarySdr(assumed);
-}
-
 VideoInputColorSpaceResolution resolveVideoInputColorSpace(
     const bloom::color::ResolvedBloomNeutralConfig& config, const ColourTags& tags,
     const std::uint32_t legacyColorSpace, const std::string_view explicitId,

@@ -536,10 +536,10 @@ void blurNodeReopen() {
     }
 }
 
-// #510: a Procedural Warp saved before Asymmetric Split has neither of its two values. It opens with
-// Asymmetric off and Opposite Distance at its default, every other binding exactly as saved, and the
-// opened document is a valid one (so it renders as the symmetric split it was).
-void proceduralWarpSavedBeforeAsymmetricSplit() {
+// #510: Asymmetric and Opposite Distance are optional. A Procedural Warp that binds neither saves
+// and reopens with exactly its bindings: nothing is injected, and the opened document is a valid
+// one (an unbound optional role lowers at its default, the symmetric split).
+void proceduralWarpWithoutOptionalSplit() {
     auto initial = document::makeNewProject("Warp Project", "Warp Composition",
                                             core::RationalTime::fromInteger(10));
     document::Document owned(std::move(initial.project));
@@ -553,7 +553,7 @@ void proceduralWarpSavedBeforeAsymmetricSplit() {
         throw std::logic_error("warp definition");
     std::vector<document::ParameterBinding> bindings;
     for (const auto& parameter : definition->parameters) {
-        // The node as the previous version saved it: no Asymmetric, no Opposite Distance.
+        // No Asymmetric, no Opposite Distance.
         if (parameter.role == "asymmetric" || parameter.role == "oppositeDistance") {
             expect(!parameter.required, "Asymmetric and Opposite Distance are optional");
             continue;
@@ -581,11 +581,13 @@ void proceduralWarpSavedBeforeAsymmetricSplit() {
         document::makeBloomNeutralColorSettingsV1(core::Sha256Digest::fromBytes({}));
     auto archive = buildVerifiedSaveArchive({}, {.snapshot = &snapshot, .colorSettings = &settings},
                                             {}, memory());
-    expect(static_cast<bool>(archive), "an earlier Procedural Warp passes verified save");
+    expect(static_cast<bool>(archive),
+           "a Procedural Warp without the Split values passes verified save");
     if (!archive)
         return;
     auto result = openProjectArchive(archive.archive()->bytes(), {}, memory());
-    expect(result.outcome() == OpenArchiveOutcome::Opened, "an earlier Procedural Warp reopens");
+    expect(result.outcome() == OpenArchiveOutcome::Opened,
+           "a Procedural Warp without the Split values reopens");
     if (result.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(result).takeOpened();
@@ -594,31 +596,26 @@ void proceduralWarpSavedBeforeAsymmetricSplit() {
     const auto* newComposition = reopened.project().findComposition(initial.initialCompositionId);
     const auto* oldNode = oldComposition->graph().findNode(*node);
     const auto* newNode = newComposition->graph().findNode(*node);
-    expect(oldNode && newNode, "an earlier Procedural Warp survives reopen");
+    expect(oldNode && newNode, "a Procedural Warp without the Split values survives reopen");
     if (!oldNode || !newNode)
         return;
-    expect(newNode->parameters.size() == oldNode->parameters.size() + 2,
-           "opening binds the two missing values");
+    auto savedBindings = oldNode->parameters;
+    auto openedBindings = newNode->parameters;
+    const auto byRole = [](const auto& left, const auto& right) { return left.role < right.role; };
+    std::ranges::sort(savedBindings, byRole);
+    std::ranges::sort(openedBindings, byRole);
+    expect(openedBindings == savedBindings, "opening binds exactly what was saved");
     for (const auto& binding : oldNode->parameters) {
         const auto* was = oldComposition->parameters().find(binding.parameterId);
         const auto* is = newComposition->parameters().find(binding.parameterId);
         expect(was && is && was->source == is->source, "a saved value is exactly as saved");
     }
-    const auto constantOf = [&](const std::string_view role) -> const document::ParameterValue* {
-        for (const auto& binding : newNode->parameters)
-            if (binding.role == role)
-                if (const auto* parameter = newComposition->parameters().find(binding.parameterId))
-                    if (const auto* constant =
-                            std::get_if<document::ConstantValueSource>(&parameter->source))
-                        return &constant->value;
-        return nullptr;
+    const auto bound = [&](const std::string_view role) {
+        return std::ranges::any_of(newNode->parameters,
+                                   [role](const auto& binding) { return binding.role == role; });
     };
-    const auto* asymmetric = constantOf("asymmetric");
-    const auto* opposite = constantOf("oppositeDistance");
-    expect(asymmetric && std::get_if<bool>(asymmetric) && !*std::get_if<bool>(asymmetric),
-           "Asymmetric opens off");
-    expect(opposite && std::get_if<double>(opposite) && *std::get_if<double>(opposite) == 40.0,
-           "Opposite Distance opens at its default");
+    expect(!bound("asymmetric") && !bound("oppositeDistance"),
+           "Asymmetric and Opposite Distance stay unbound");
 }
 
 // #361: Set Alpha and Multiply Alpha with inverted matte selectors (9 Luma Inverted, 7 Green
@@ -704,11 +701,11 @@ void futureLayoutAttachments() {
         throw std::logic_error("layout future entries");
     const auto bytes = entries.document()->documentBytes();
     std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    const auto rootMinor = text.find("\"minor\": 43");
+    const auto rootMinor = text.find("\"minor\": 0");
     const auto layoutStart = text.find("\"nodeLayout\"");
     if (rootMinor == std::string::npos || layoutStart == std::string::npos)
         throw std::logic_error("layout future anchors");
-    text.replace(rootMinor, std::string_view("\"minor\": 43").size(), "\"minor\": 44");
+    text.replace(rootMinor, std::string_view("\"minor\": 0").size(), "\"minor\": 1");
     const auto y = text.find("\"y\": 32.0", layoutStart);
     if (y == std::string::npos)
         throw std::logic_error("layout position anchor");
@@ -717,7 +714,7 @@ void futureLayoutAttachments() {
     if (muted == std::string::npos)
         throw std::logic_error("layout record anchor");
     text.insert(muted + std::string_view("\"muted\": false").size(), R"(, "zzzLayout":"retained")");
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 44}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 1}};
     const auto size = canonicalManifestSize(manifest);
     if (!size)
         throw std::logic_error("future manifest size");
@@ -733,7 +730,7 @@ void futureLayoutAttachments() {
     if (openedResult.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(openedResult).takeOpened();
-    expect(opened.roundTrip && opened.schemaMinor == 44,
+    expect(opened.roundTrip && opened.schemaMinor == 1,
            "future layout retains its schema and attachments");
     if (!opened.roundTrip)
         throw std::logic_error("layout round-trip state");
@@ -743,7 +740,7 @@ void futureLayoutAttachments() {
                                  CanonicalDocumentV1{.snapshot = &snapshot,
                                                      .colorSettings = &opened.colorSettings,
                                                      .roundTrip = &*opened.roundTrip,
-                                                     .schemaMinor = 44},
+                                                     .schemaMinor = 1},
                                  {}, memory());
     expect(static_cast<bool>(rewritten), "future layout passes verified overlay save");
     if (!rewritten)
@@ -765,7 +762,7 @@ int main() {
         layoutAndReopen();
         discreteImageNodesReopen();
         blurNodeReopen();
-        proceduralWarpSavedBeforeAsymmetricSplit();
+        proceduralWarpWithoutOptionalSplit();
         matteNodeReopen();
         futureLayoutAttachments();
     } catch (const std::exception& error) {

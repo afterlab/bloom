@@ -1,4 +1,4 @@
-// Document 1.29 export queue decode (ADR 0033). Closed object shapes in writer order; record
+// Export queue decode (ADR 0033). Closed object shapes in writer order; record
 // validation beyond the wire shape (profiles per format, bounds, composition existence) is
 // document::Project::validate()'s during reconstruction.
 #include "document_decode_internal.hpp"
@@ -109,10 +109,6 @@ bool decodeSettings(const JsonValue& node, DecodeState& state, const std::string
     if (!token(*fields[at], state, joinPath(path, "format"), document::parseExportFormat,
                out.format))
         return false;
-    // The WebM and AV1 tokens exist from document 1.33; an older document cannot name them.
-    if (document::isDocument133ExportFormat(out.format) &&
-        state.documentMinor < document::kExportWebmFormatsMinor)
-        return fail(state, joinPath(path, "format"));
     ++at;
     if (!text(*fields[at++], state, joinPath(path, "codecProfile"), out.codecProfile))
         return false;

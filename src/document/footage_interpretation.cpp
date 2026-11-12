@@ -1,4 +1,4 @@
-// Interpret Footage (#381, document 1.34): validation and resolution of an asset's interpretation.
+// Interpret Footage (#381): validation and resolution of an asset's interpretation.
 #include <bloom/document/asset.hpp>
 
 #include <algorithm>

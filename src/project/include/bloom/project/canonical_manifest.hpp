@@ -16,9 +16,24 @@ namespace bloom::project {
 inline constexpr std::string_view kCanonicalManifestFormat = "org.kinetik.bloom.project";
 inline constexpr std::string_view kCanonicalManifestDocumentPath = "document.json";
 inline constexpr document::SchemaVersion kCanonicalManifestContainerVersionV1{1, 0};
-inline constexpr document::SchemaVersion kCanonicalManifestDocumentSchemaVersionV1{1, 43};
+inline constexpr document::SchemaVersion kCanonicalManifestDocumentSchemaVersionV1{1, 0};
 inline constexpr std::size_t kCanonicalManifestMaximumBytes = 1U << 20U;
 inline constexpr std::size_t kCanonicalManifestNoIndex = static_cast<std::size_t>(-1);
+// The UTF-8 byte ceiling of each generator string.
+inline constexpr std::size_t kMaxManifestGeneratorTextBytes = 256;
+
+// The application that wrote a project and its version string, recorded for tracing only: reading
+// accepts it as optional and never decides anything from it (docs/architecture/project-format.md,
+// "Manifest Shape").
+struct ManifestGenerator final {
+    std::string_view name;
+    std::string_view version;
+
+    friend bool operator==(const ManifestGenerator&, const ManifestGenerator&) = default;
+};
+
+// This build: "Bloom" and the build's project version.
+[[nodiscard]] ManifestGenerator currentManifestGenerator() noexcept;
 
 struct CanonicalManifestV1 final {
     std::string_view format = kCanonicalManifestFormat;
@@ -26,6 +41,9 @@ struct CanonicalManifestV1 final {
     std::string_view documentPath = kCanonicalManifestDocumentPath;
     document::SchemaVersion documentSchemaVersion = kCanonicalManifestDocumentSchemaVersionV1;
     std::span<const ManifestRequirement> requirements{};
+    // Written last when present. Every save writes this build's generator; a re-encode of a decoded
+    // manifest passes back the generator it read, or none.
+    std::optional<ManifestGenerator> generator = currentManifestGenerator();
 };
 
 struct CanonicalManifestLimits final {
@@ -42,6 +60,7 @@ enum class CanonicalManifestError : std::uint8_t {
     InvalidContainerVersion,
     InvalidDocumentPath,
     InvalidDocumentSchemaVersion,
+    InvalidGenerator,
     RequirementCountExceeded,
     InvalidProviderId,
     InvalidCapabilityId,

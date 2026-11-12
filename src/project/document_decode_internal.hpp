@@ -39,11 +39,10 @@ struct DecodeState final {
     DocumentDecodeError error = DocumentDecodeError::None;
     std::string path;
 
-    // RT1 capture state. `documentMinor` is set once (right after schemaVersion is confirmed
-    // major == 1) and never changes afterward; it gates every capture decision below ("when, and
-    // only when, the document minor is > 0"). `roundTrip` is non-null exactly when
-    // documentMinor > 0, and every capture/attach call below is a no-op unless it is.
-    std::uint32_t documentMinor = 0;
+    // RT1 capture state. `roundTrip` is set once (right after schemaVersion is confirmed
+    // major == 1) and never changes afterward: it is non-null exactly when the document is a
+    // same-major newer minor than the current schema, and every capture/attach call below is a
+    // no-op unless it is.
     RoundTripState* roundTrip = nullptr;
     // The running attachment path from the document root to whatever object is currently being
     // decoded, in the same identity-keyed shape RoundTripState::attach() expects (see
@@ -78,7 +77,7 @@ struct DecodeState final {
 // RAII scope that pushes one attachment-path segment onto `state.attachmentPath` for the
 // duration of decoding one nested singleton member or collection element, and pops it back off
 // on scope exit (including every early-return failure path, since this is destructor-driven).
-// Constructing a scope is always safe even when documentMinor == 0 / capture is inactive: the
+// Constructing a scope is always safe even when capture is inactive: the
 // attachment path is simply unused in that case.
 class AttachmentScope final {
   public:
@@ -111,11 +110,11 @@ class AttachmentScope final {
 // `rejectExtraMembers` is false, trailing members beyond the matched prefix are accepted without
 // inspection (used only by decodeAnimationCurve's id/kind discriminator prefix match).
 //
-// When `rejectExtraMembers` is true and trailing members beyond the matched prefix exist: at
-// documentMinor == 0 (or exact schemaVersion {1,0}), this is always the pre-RT1 hard
-// DocumentDecodeError::UnknownMember at the first trailing member's path -- a 1.0 writer never
-// emits one. At documentMinor > 0, the trailing members are instead a capture candidate: this
-// function copies each one into a bounded RetainedJsonValue (routing every nested JSON number
+// When `rejectExtraMembers` is true and trailing members beyond the matched prefix exist: in a
+// document of the current schema, this is always the hard
+// DocumentDecodeError::UnknownMember at the first trailing member's path -- the current writer
+// never emits one. In a newer-minor document, the trailing members are instead a capture candidate:
+// this function copies each one into a bounded RetainedJsonValue (routing every nested JSON number
 // through parseUnknownJsonNumber -- see unknown_json_number.hpp -- and calling
 // state.requirePreservedReadOnly(UnknownNumberOutOfSubset, ...) the first time one falls outside
 // the lossless subset), and requires the trailing keys to already be in strictly ascending UTF-8
@@ -172,7 +171,7 @@ class AttachmentScope final {
 // Reads an object's first member, requires it to be literally named "kind", and decodes its
 // string value as the discriminator for a branch the caller resolves afterward (constant value,
 // parameter source, edge destination, OCIO locator).
-// Document 1.43 (#589): a compound path's optional fill rule and keyed groups, shared by a path
+// #589: a compound path's optional fill rule and keyed groups, shared by a path
 // constant and a Path data block. Only an explicit rule is written, so "inherit" is refused.
 [[nodiscard]] bool decodePathFillRule(const JsonValue& value, DecodeState& state,
                                       const std::string& path, document::PathFillRule& out);
@@ -184,11 +183,11 @@ class AttachmentScope final {
 
 // Shared fallback for every closed-vocabulary discriminator's "no branch matched" case (OCIO
 // locator kind, parameter-source kind, constant-value kind, animation-curve kind, edge-destination
-// kind, extension target/subject kind, extension reference-policy kind). At documentMinor == 0 (or
-// exact schemaVersion {1,0}) this is always the pre-RT1 hard `exactVersionError` at `kindPath` --
-// the discriminator vocabulary is fully known and closed for 1.0. At documentMinor > 0, an unknown
+// kind, extension target/subject kind, extension reference-policy kind). In a document of the
+// current schema this is always the hard `exactVersionError` at `kindPath` -- the discriminator
+// vocabulary is fully known and closed. In a newer-minor document, an unknown
 // discriminator string is not a decode error at all: the string itself is core vocabulary (never
-// captured as a retained value -- see docs/architecture/project-format.md, "Versions, Migrations,
+// captured as a retained value -- see docs/architecture/project-format.md, "Versions
 // And Preservation": "unknown core discriminators are never guessed"), so this instead latches
 // state.requirePreservedReadOnly(UnknownDiscriminatorKind, kindPath). Always returns false so
 // every call site can `return failUnknownDiscriminator(...);`.
@@ -241,7 +240,7 @@ decodeCompositionInterior(const JsonValue& parametersNode, const JsonValue& anim
 [[nodiscard]] bool decodeNodeLayout(const JsonValue& node, DecodeState& state,
                                     const std::string& path, document::NodeLayout& out);
 
-// A composition's `nodeGroups` array (document 1.2): ascending by numeric groupId, each record's
+// A composition's `nodeGroups` array: ascending by numeric groupId, each record's
 // members ascending by numeric NodeId, both duplicate-free. Membership disjointness across groups
 // and member existence are the document model's own validation, not this module's wire check.
 [[nodiscard]] bool decodeNodeGroups(const JsonValue& node, DecodeState& state,

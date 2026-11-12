@@ -1,8 +1,7 @@
 // #599 persistence: a Line Shape Source's animatable ends. Keyed ends and an end driven by a
 // Vector2 value node save and reopen exactly (every key, the driver edge, bit for bit, a reopened
-// project re-saves byte-identically); a project saved with constant ends, which is the only
-// spelling an older writer knew, opens unchanged and re-saves differing only in the schema minor, so
-// the schema minor does not move for this change.
+// project re-saves byte-identically); a project with constant ends reopens with the constants it
+// had and re-saves byte-identically.
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
@@ -133,31 +132,13 @@ std::string documentText(const std::vector<std::byte>& archive) {
     return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
 }
 
-
-project::DocumentDecodeResult decode(const std::string& text) {
-    auto operation = memory();
-    auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
-    if (!parsed)
-        throw std::runtime_error("parse");
-    return project::decodeDocumentEnvelope(parsed.document()->root());
-}
-
-std::string withMinor(std::string text, const int from, const int to) {
-    const auto from_ = "\"minor\": " + std::to_string(from) + "\n  },\n  \"project\"";
-    const auto at = text.find(from_);
-    if (at == std::string::npos)
-        throw std::runtime_error("version anchor");
-    text.replace(at, from_.size(), "\"minor\": " + std::to_string(to) + "\n  },\n  \"project\"");
-    return text;
-}
-
 void roundTrip() {
     Fixture fixture(true);
     const auto snapshot = fixture.document.snapshot();
     const auto archive = save(snapshot);
     const auto text = documentText(archive);
-    expect(text.find("\"minor\": 43") != std::string::npos,
-           "the document is written at the current minor (1.43): the schema does not move");
+    expect(text.find("\"minor\": 0") != std::string::npos,
+           "the document is written at the current schema (1.0)");
     auto result = project::openProjectArchive(archive, {}, memory());
     expect(result.outcome() == project::OpenArchiveOutcome::Opened, "the archive opens");
     if (result.outcome() != project::OpenArchiveOutcome::Opened)
@@ -182,26 +163,14 @@ void roundTrip() {
            "the reopened project compiles and its Line is time dependent");
 }
 
-void olderFilesAreUnchanged() {
+void constantEndsRoundTrip() {
     Fixture fixture(false);
     const auto snapshot = fixture.document.snapshot();
-    const auto text = documentText(save(snapshot));
-    // The same document labelled 1.42 is exactly what the previous writer produced: constants.
-    const auto older = withMinor(text, 43, 42);
-    expect(static_cast<bool>(decode(older)), "a 1.42 document with constant ends decodes");
-    const project::CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 42}};
-    const auto size = project::canonicalManifestSize(manifest);
-    if (!size)
-        throw std::runtime_error("manifest size");
-    std::vector<char> encoded(*size.value());
-    if (!project::encodeCanonicalManifest(manifest, encoded))
-        throw std::runtime_error("manifest encode");
-    const auto archive = project::test::buildConformingArchive(
-        project::test::makeStoredEntry("manifest.json",
-                                       project::test::toBytes({encoded.data(), encoded.size()})),
-        project::test::makeStoredEntry("document.json", project::test::toBytes(older)));
+    const auto archive = save(snapshot);
+    const auto text = documentText(archive);
     auto result = project::openProjectArchive(archive, {}, memory());
-    expect(result.outcome() == project::OpenArchiveOutcome::Opened, "the 1.42 archive opens");
+    expect(result.outcome() == project::OpenArchiveOutcome::Opened,
+           "the archive with constant ends opens");
     if (result.outcome() != project::OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(result).takeOpened();
@@ -211,10 +180,10 @@ void olderFilesAreUnchanged() {
         const auto* parameter = restored.parameters().find(fixture.parameter(fixture.shape, role));
         expect(parameter != nullptr &&
                    std::holds_alternative<document::ConstantValueSource>(parameter->source),
-               "an older project's ends open as the constants they were");
+               "constant ends open as the constants they were");
     }
     expect(documentText(save(reopened)) == text,
-           "re-saving a 1.42 project with constant ends changes only the schema minor");
+           "re-saving a project with constant ends writes the same document");
 }
 
 } // namespace
@@ -222,7 +191,7 @@ void olderFilesAreUnchanged() {
 int main() {
     try {
         roundTrip();
-        olderFilesAreUnchanged();
+        constantEndsRoundTrip();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

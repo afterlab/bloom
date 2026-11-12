@@ -33,8 +33,4 @@ using LayerSource = std::variant<AssetId, CompositionId>;
 bool refreshLayerNamesFromSources(Project& project,
                                   std::optional<CompositionId> only = std::nullopt);
 
-// Document 1.30 migration rule for a project saved before the field existed: a layer follows its
-// source exactly when its current name already IS its source's name, so no visible name changes.
-void inferLayerNameFollowsSource(Project& project);
-
 } // namespace bloom::document

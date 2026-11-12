@@ -202,7 +202,7 @@ void testEaseInOutAtExactThirds(Expectations& expectations) {
 // A colour curve is four component tables. The fixture below is the whole-value fixture this test
 // used before the whole-value projection was removed, spelled channel by channel at the same exact
 // times with the same values: the composed samples must not move.
-// Document 1.32: a key's handle mode is presentation metadata. Compilation copies handles verbatim
+// A key's handle mode is presentation metadata. Compilation copies handles verbatim
 // and never the mode, so the same stored handles sample bit-for-bit whatever the mode says.
 void testHandleModeIsRenderNeutral(Expectations& expectations) {
     const auto build = [](const document::KeyframeHandleMode mode) {

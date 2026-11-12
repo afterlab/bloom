@@ -299,7 +299,7 @@ void PropertiesEditor::configureRegistryRows() {
                         &PropertiesEditor::applyCardWidgetRows);
             }
             if (node->typeId == "bloom.video-source") {
-                // Document 1.25: the played audio stream and the source's field order/timecode.
+                // The played audio stream and the source's field order/timecode.
                 auto* label = kit::makePropertyRowLabel(tr("Audio Stream"), section->body());
                 auto* selector = new kit::KDropdown(section->body());
                 selector->setObjectName(QStringLiteral("propertiesVideoAudioStream"));

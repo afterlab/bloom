@@ -1,8 +1,7 @@
 // #541 persistence: a Colorize gradient -- a constant and a whole-value animation curve -- saves,
-// reopens and decodes exactly in document 1.38, and its keys sample stop by stop; the canonical text
-// is stable; a document claiming 1.37 that carries a gradient is refused; a malformed gradient is
-// refused; a 1.37 document without one migrates by version alone and opens unchanged; and a
-// Colorize saved before the gradient existed binds it on its first edit.
+// reopens and decodes exactly, and its keys sample stop by stop; the canonical text is stable; a
+// malformed gradient is refused; and a Colorize without a gradient binding binds it on its first
+// edit.
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
@@ -16,7 +15,6 @@
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/document_decode.hpp>
-#include <bloom/project/document_migration.hpp>
 #include <bloom/project/open_archive.hpp>
 #include <bloom/project/save_archive.hpp>
 #include <bloom/project/strict_json_dom.hpp>
@@ -155,8 +153,8 @@ void gradientsRoundTrip() {
 
     const auto constantText = encode(fixture.document);
     expect(constantText.find("\"kind\": \"gradient\"") != std::string::npos &&
-               constantText.find("\"minor\": 43") != std::string::npos,
-           "the gradient constant is written at 1.42");
+               constantText.find("\"minor\": 0") != std::string::npos,
+           "the gradient constant is written at 1.0");
     const auto decodedConstant = decodeText(constantText);
     expect(static_cast<bool>(decodedConstant), "the gradient constant decodes");
 
@@ -213,18 +211,13 @@ void gradientsRoundTrip() {
     expect(encode(*opened.document) == text, "the canonical text is stable across save and open");
 }
 
-void olderAndMalformedDocuments() {
+void malformedDocuments() {
     Fixture fixture;
     const auto current = encode(fixture.document);
     const auto kindAt = current.find("\"kind\": \"gradient\"");
     expect(kindAt != std::string::npos, "the fixture carries a gradient");
     if (kindAt == std::string::npos)
         return;
-    // A document claiming 1.37 cannot carry a gradient.
-    auto claimed = current;
-    replaceOnce(claimed, "\"minor\": 43", "\"minor\": 37");
-    expect(!static_cast<bool>(decodeText(claimed)), "a 1.37 document carrying a gradient is refused");
-
     // A malformed gradient is refused: a stop outside [0, 1], an unknown stop member.
     const auto stopsAt = current.find("\"stops\": [", kindAt);
     expect(stopsAt != std::string::npos, "the gradient writes its stops");
@@ -244,35 +237,9 @@ void olderAndMalformedDocuments() {
             expect(!static_cast<bool>(decodeText(unknown)), "a misplaced stop member is refused");
         }
     }
-
-    // A 1.37 document without gradients migrates to 1.38 in one version-only step.
-    document::Document bare{
-        document::makeNewProject("Bare", "Main", core::RationalTime::fromInteger(4)).project};
-    auto legacy = encode(bare);
-    replaceOnce(legacy, "\"minor\": 43", "\"minor\": 37");
-    const auto decodedLegacy = decodeText(legacy);
-    expect(static_cast<bool>(decodedLegacy), "a 1.37 document without gradients decodes");
-    auto operation = memory();
-    auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(legacy)), {}, operation);
-    expect(static_cast<bool>(parsed), "the 1.37 fixture parses");
-    if (parsed) {
-        const auto migrated =
-            project::migrateDocumentDom(parsed.document()->root(), {1, 37}, {1, 38},
-                                        project::kProductionDocumentMigrationSteps, {}, operation);
-        expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
-                   migrated.stepsApplied() == 1,
-               "1.37 -> 1.38 is one step");
-        if (migrated.outcome() == project::MigrationOutcome::Migrated) {
-            const auto decodedMigrated = project::decodeDocumentEnvelope(*migrated.migratedRoot());
-            expect(static_cast<bool>(decodedMigrated) && decodedLegacy &&
-                       decodedMigrated.value()->compositions.size() ==
-                           decodedLegacy.value()->compositions.size(),
-                   "the 1.37 -> 1.38 step only advances the version");
-        }
-    }
 }
 
-// A Colorize with no gradient binding (one saved before 1.38) is valid, saves without a gradient,
+// A Colorize with no gradient binding is valid, saves without a gradient,
 // and takes the gradient on its first edit: SetNodeParameterValue binds the optional role.
 void unboundColorizeBindsOnFirstEdit() {
     auto initial = document::makeNewProject("Legacy", "Main", core::RationalTime::fromInteger(4));
@@ -331,10 +298,10 @@ void unboundColorizeBindsOnFirstEdit() {
            "one undo removes the binding again");
 }
 
-// #546: a gradient's interpolation, colour mode and hue direction save and reopen in document
-// 1.41, each written only when it is not the default; a default gradient writes none of them; a
-// document claiming 1.40 that carries one is refused, as are a spelled-out default and an unknown
-// name; and a keyed gradient takes the earlier key's modes between its keys.
+// #546: a gradient's interpolation, colour mode and hue direction save and reopen, each written
+// only when it is not the default; a default gradient writes none of them; a spelled-out default
+// and an unknown name are refused; and a keyed gradient takes the earlier key's modes between its
+// keys.
 void gradientModesPersist() {
     Fixture fixture;
     const auto gradient = fixture.parameter("gradient");
@@ -383,10 +350,6 @@ void gradientModesPersist() {
         }
     }
 
-    auto claimed = text;
-    replaceOnce(claimed, "\"minor\": 43", "\"minor\": 40");
-    expect(!static_cast<bool>(decodeText(claimed)),
-           "a document claiming 1.40 that carries a gradient mode is refused");
     auto spelled = text;
     replaceOnce(spelled, "\"colorMode\": \"hsl\"", "\"colorMode\": \"rgb\"");
     expect(!static_cast<bool>(decodeText(spelled)), "a spelled-out default mode is refused");
@@ -428,7 +391,7 @@ void gradientModesPersist() {
 int main() {
     try {
         gradientsRoundTrip();
-        olderAndMalformedDocuments();
+        malformedDocuments();
         unboundColorizeBindsOnFirstEdit();
         gradientModesPersist();
     } catch (const std::exception& error) {

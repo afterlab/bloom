@@ -455,17 +455,11 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
                            capturedInputVersion.value_or(manifestValue.documentSchemaVersion)}));
         }
 
-        // The decoder applies the additive 1.15 asset metadata defaults. Node semantics
-        // and older schema versions retain their existing refusal path.
         const JsonValue* trustedDocumentRoot = &documentDom.document()->root();
-        auto effectiveDocumentVersion = decodedDocumentVersion;
-        if (effectiveDocumentVersion == document::SchemaVersion{1, 15})
-            effectiveDocumentVersion = kCanonicalDocumentSchemaVersionV1;
-        const auto effectiveDocumentValueCount = documentValueCount;
 
         stage = SaveArchiveStage::DocumentDecode;
-        auto decodeReservation = reserveRepresentation(operation, entries->documentBytes().size(),
-                                                       effectiveDocumentValueCount);
+        auto decodeReservation =
+            reserveRepresentation(operation, entries->documentBytes().size(), documentValueCount);
         if (!decodeReservation.has_value()) {
             return ReopenChainResult::failure(
                 SaveArchiveFailure(stage, SaveArchiveResourceExhausted{}));
@@ -487,30 +481,13 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
         }
 
         stage = SaveArchiveStage::Reconstruction;
-        auto reconstructionReservation = reserveRepresentation(
-            operation, entries->documentBytes().size(), effectiveDocumentValueCount);
+        auto reconstructionReservation =
+            reserveRepresentation(operation, entries->documentBytes().size(), documentValueCount);
         if (!reconstructionReservation.has_value()) {
             return ReopenChainResult::failure(
                 SaveArchiveFailure(stage, SaveArchiveResourceExhausted{}));
         }
-        // Document 1.30: a layer of an older document follows its source exactly when its name
-        // already is the source's name.
-        auto envelope = *decodedDocument.value();
-        if (!capturedInputVersion.has_value()) {
-            migrateLegacyFontAssets(envelope);
-            migrateLegacySourceColorSpaces(envelope);
-            migrateLegacyCurvesNodes(envelope);
-            migrateLegacyGradientColorPairs(envelope);
-            migrateLegacyGlowNodes(envelope);
-            migrateLegacyTransformMotionBlur(envelope);
-            migrateLegacyFilmGrainMonochrome(envelope);
-            migrateLegacyPathStrokeStamps(envelope);
-            migrateLegacyProceduralWarpSplit(envelope);
-        }
-        auto reconstructed = reconstructDocument(
-            std::move(envelope),
-            decodedDocumentVersion.has_value() &&
-                *decodedDocumentVersion < document::SchemaVersion{1, kLayerNameFollowsSourceMinor});
+        auto reconstructed = reconstructDocument(*decodedDocument.value());
         if (!reconstructed) {
             return ReopenChainResult::failure(SaveArchiveFailure(stage, reconstructed.rejection()));
         }
@@ -551,7 +528,7 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
             .zipRead = std::move(reopened),
             .document = std::move(*reconstructed.value()),
             .manifest = *decodedManifest.value(),
-            .documentRootVersion = effectiveDocumentVersion,
+            .documentRootVersion = decodedDocumentVersion,
             .roundTrip = std::move(roundTrip),
             .manifestReservation = std::move(*manifestReservation),
             .decodeReservation = std::move(*decodeReservation),
@@ -625,6 +602,11 @@ SaveArchiveVerificationResult verifySaveArchive(const std::span<const std::byte>
             .documentPath = success.manifest.documentPath,
             .documentSchemaVersion = success.manifest.documentSchemaVersion,
             .requirements = success.manifest.requirements,
+            .generator =
+                success.manifest.generator.has_value()
+                    ? std::optional<ManifestGenerator>(ManifestGenerator{
+                          success.manifest.generator->name, success.manifest.generator->version})
+                    : std::nullopt,
         };
         if (auto failure =
                 encodeManifest(manifestRequest, limits.manifest, manifestReencoded, stage);

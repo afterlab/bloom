@@ -1686,7 +1686,7 @@ OperationResult publishCurves(document::Composition& composition, CurveEdits edi
             },
             record);
         const auto* original = staged.find(id);
-        // Document 1.32: Aligned handles follow an edited partner and Auto handles are recomputed.
+        // Aligned handles follow an edited partner and Auto handles are recomputed.
         document::settleAnimationCurveHandles(record, original);
         if (original && *original == record)
             continue;

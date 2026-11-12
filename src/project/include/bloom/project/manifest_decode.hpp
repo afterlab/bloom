@@ -76,11 +76,22 @@ namespace bloom::project {
 // The decoded manifest.json envelope's durable values: the container version, the declared document
 // path and schema version, and the requirement set in the exact shape
 // validateManifestRequirements() consumes.
+// The optional `generator` member: the application that wrote the file and its version string.
+// Informational only; nothing decides anything from it.
+struct DecodedManifestGenerator final {
+    std::string name;
+    std::string version;
+
+    friend bool operator==(const DecodedManifestGenerator&,
+                           const DecodedManifestGenerator&) = default;
+};
+
 struct DecodedManifest final {
     document::SchemaVersion containerVersion;
     std::string documentPath;
     document::SchemaVersion documentSchemaVersion;
     std::vector<ManifestRequirement> requirements;
+    std::optional<DecodedManifestGenerator> generator;
 
     friend bool operator==(const DecodedManifest&, const DecodedManifest&) = default;
 };
@@ -122,6 +133,9 @@ enum class ManifestDecodeError : std::uint8_t {
     InvalidProvidedNodeTypeOrder,
     // Two entries in the same requirement's `providedNodeTypeIds` are identical.
     DuplicateProvidedNodeTypeId,
+    // A `generator` string is empty, not valid UTF-8, or longer than
+    // kMaxManifestGeneratorTextBytes bytes.
+    InvalidGenerator,
 };
 
 enum class ManifestDecodeOutcome : std::uint8_t {

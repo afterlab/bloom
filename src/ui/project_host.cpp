@@ -1317,52 +1317,6 @@ void ProjectHost::handleSaveResult(host::SessionSaveResult result) {
     }
 }
 
-QString ProjectHost::colourChangeNotice(const host::SessionOpenResult& result) const {
-    // ADR 0032 and issue #407: only a decoded project saved before a colour interpretation changed
-    // relied on the previous look; saving it records the current version, so the note shows once
-    // per project.
-    const auto version = result.openedDocumentSchemaVersion();
-    if (!session_.has_value() || !version ||
-        result.attemptedContentKind() != host::ProjectSessionContentKind::DecodedDocument)
-        return {};
-    const bool beforeSdrVideoDefault = *version < project::kSdrVideoColourDefaultDocumentVersionV1;
-    const bool beforeHlgReferenceWhite = *version < project::kHlgReferenceWhiteDocumentVersionV1;
-    if (!beforeSdrVideoDefault && !beforeHlgReferenceWhite)
-        return {};
-    const auto snapshot = session_->decodedSnapshot();
-    if (!snapshot)
-        return {};
-    const auto& assets = snapshot.snapshot().project().assets();
-    QStringList changes;
-    if (beforeSdrVideoDefault) {
-        const auto affected =
-            std::ranges::count_if(assets, runtime::detail::assetUsesSdrVideoColourDefault);
-        if (affected > 0) {
-            const auto videos = affected == 1 ? tr("1 video") : tr("%1 videos").arg(affected);
-            changes.push_back(
-                tr("Video without a chosen input color now looks the way video players show it, "
-                   "so it is less pale than before. This affects %1 in this project. To interpret "
-                   "a video differently, choose its input color in Assets → Interpret Footage.")
-                    .arg(videos));
-        }
-    }
-    if (beforeHlgReferenceWhite) {
-        const auto affected = std::ranges::count_if(assets, runtime::detail::assetUsesHlgInput);
-        if (affected > 0) {
-            const auto footage = affected == 1 ? tr("1 asset") : tr("%1 assets").arg(affected);
-            changes.push_back(
-                tr("HLG footage now follows the BT.2408 standard, which puts its reference white "
-                   "at the same level as SDR white, so it looks about 1.26 times brighter than "
-                   "before. This affects %1 in this project.")
-                    .arg(footage));
-        }
-    }
-    if (changes.isEmpty())
-        return {};
-    changes.push_front(tr("This project was saved by an earlier version of Bloom."));
-    return changes.join(QLatin1Char(' '));
-}
-
 void ProjectHost::handleOpenResult(
     host::SessionOpenResult result,
     std::shared_ptr<const host::detail::AsyncSessionOpenArchive> archive) {
@@ -1446,7 +1400,6 @@ void ProjectHost::handleOpenResult(
     }
     pendingOpenRecoveryPath_.clear();
     protectedRecoveryOfferPath_.reset();
-    openNotice_ = installed ? colourChangeNotice(result) : QString{};
 
     emit dirtyStateChanged();
     emit openFinished(outcome, message);

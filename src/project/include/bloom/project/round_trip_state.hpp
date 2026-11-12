@@ -11,7 +11,7 @@
 #include <vector>
 
 // The move-only owner of unknown-additive-member round-trip data for a newer-minor (schema
-// {1, minor>0}) document.json (see docs/architecture/project-format.md, "Versions, Migrations,
+// {1, minor>0}) document.json (see docs/architecture/project-format.md, "Versions
 // And Preservation"). RoundTripState is Project I/O's exclusively: it never enters
 // bloom::document::Document or any live authoring type, and an exact-{1,0} document never
 // produces one. This package (RT1) only captures and classifies; the writer-side overlay that
@@ -25,7 +25,7 @@
 //  - a collection element (composition, parameter, animation curve, keyframe, node, edge,
 //    extension record, a node's parameter binding, a Layer Output boundary, a Layer Stack entry,
 //    a host reference-table entry) attaches by the contract's fixed stable identity for that
-//    collection, never array position (see "Versions, Migrations, And Preservation": "Array
+//    collection, never array position (see "Versions And Preservation": "Array
 //    reconciliation identities are fixed").
 //
 // A full attachment path threads both kinds of segment from the root, e.g. the retained members

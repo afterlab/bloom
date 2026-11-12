@@ -25,25 +25,13 @@ namespace bloom::project {
 // that merely names a CanonicalDocumentV1.
 class RoundTripState;
 
-inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 43};
-inline constexpr document::SchemaVersion kMinimumDocumentSchemaVersionV1{1, 15};
-// The first document minor that stores the layer `nameFollowsSource` flag; an older one infers it.
-inline constexpr std::uint32_t kLayerNameFollowsSourceMinor = 30;
-// ADR 0032: the first document version saved after Auto began showing ordinary and untagged SDR
-// video through the sRGB texture space. Opening an older project that relied on the previous
-// Auto default shows a one-time note.
-inline constexpr document::SchemaVersion kSdrVideoColourDefaultDocumentVersionV1{1, 28};
-// Issue #407: the first document version every build saved after HLG input began following BT.2408
-// (reference white at 1.0). Document 1.31 was current on both sides of that change, so 1.32 is the
-// first version that is never older than it; opening a project below it that has HLG footage shows
-// a one-time note.
-inline constexpr document::SchemaVersion kHlgReferenceWhiteDocumentVersionV1{1, 32};
+inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 0};
 // The v1 expanded document.json resource limit from docs/architecture/project-format.md.
 inline constexpr std::size_t kCanonicalDocumentMaximumBytes = 268'435'456;
 // Deepest canonical document emission is nine containers (root through a vec2 keyframe value
 // object, or through a scalar keyframe's 1.12 ease-handle object, which sits at the same depth).
 // The budget keeps manifest-style headroom over that fixed shape while still bounding every write
-// path. Document 1.24's Path keyframe value (ADR 0028) is the deepest shape at twelve containers:
+// path. The Path keyframe value (ADR 0028) is the deepest shape at twelve containers:
 // root, project, compositions, composition, animationCurves, curve, keyframes, key, value, anchors,
 // anchor, point.
 inline constexpr std::size_t kCanonicalDocumentMaximumDepth = 16;
@@ -73,7 +61,7 @@ struct CanonicalDocumentV1 final {
     const bloom::document::ColorSettings* colorSettings = nullptr;
     std::span<char> payloadScratch{};
     std::span<std::size_t> sortScratch{};
-    // Optional RT2 overlay (see docs/architecture/project-format.md, "Versions, Migrations, And
+    // Optional RT2 overlay (see docs/architecture/project-format.md, "Versions And
     // Preservation"). Null (the default) emits the current known schema without attachment
     // lookup. When non-null, every
     // retained attachment point in *roundTrip is re-emitted after the last known member of its
@@ -118,7 +106,7 @@ enum class CanonicalDocumentError : std::uint8_t {
     DocumentSizeExceeded,
     OutputCapacityExceeded,
     // RT2: the supplied RoundTripState has at least one attachment-point entry the emission walk
-    // never visited (see docs/architecture/project-format.md, "Versions, Migrations, And
+    // never visited (see docs/architecture/project-format.md, "Versions And
     // Preservation": preserved intent is never silently discarded). Every entry in a RoundTripState
     // produced by decoding *this exact* document is visited exactly once by construction; a
     // leftover entry means the caller passed state captured against a different document (or a
@@ -278,7 +266,7 @@ class [[nodiscard]] CanonicalDocumentWriteResult final {
 
 // Validates the complete v1 document shape against the format contract and returns the exact
 // canonical byte count. Document-owned lexical and domain rules for color settings are delegated to
-// ColorSettings::validate(). Every parameter source is writable from document 1.4 on -- a driver
+// ColorSettings::validate(). Every parameter source is writable -- a driver
 // binding is the durable node-and-port pair it addresses -- so this writer no longer refuses one as
 // an unsupported save feature. No destination byte is touched and no memory is allocated beyond the
 // callers' provided scratch spans.

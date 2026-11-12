@@ -1,4 +1,4 @@
-// Included inside canonical_document.cpp's private namespace: the document 1.29 export queue
+// Included inside canonical_document.cpp's private namespace: the document's export queue
 // (ADR 0033). Jobs are written in run order (vector order), never sorted by id.
 [[nodiscard]] bool emitDecimalMember(EmitState& state, const std::string_view name,
                                      const std::uint64_t value) noexcept {
@@ -35,7 +35,7 @@
         !state.ok(writer.memberName("includeAudio")) ||
         !state.ok(writer.booleanValue(settings.includeAudio)))
         return false;
-    // Optional in 1.29 (absent means true), so files saved before it existed stay canonical.
+    // Optional (absent means true): written only when false.
     if (!settings.useCachedFrames &&
         (!state.ok(writer.memberName("useCachedFrames")) || !state.ok(writer.booleanValue(false))))
         return false;

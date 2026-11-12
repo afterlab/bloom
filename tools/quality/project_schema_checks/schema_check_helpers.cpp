@@ -1,6 +1,7 @@
 #include "schema_check_helpers.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <limits>
 #include <ranges>
@@ -300,6 +301,192 @@ void validateArray(const json::Value& value, const std::string_view location,
     if (hasMinimum) {
         requireExactInteger(requireMember(value, "minItems", location), minimum,
                             std::string{location} + ".minItems");
+    }
+}
+
+namespace {
+
+constexpr std::array<std::string_view, 2> kNamedSubschemas{"properties", "$defs"};
+constexpr std::array<std::string_view, 4> kListedSubschemas{"oneOf", "anyOf", "allOf",
+                                                            "prefixItems"};
+constexpr std::array<std::string_view, 11> kSingleSubschemas{"items",
+                                                             "if",
+                                                             "then",
+                                                             "else",
+                                                             "not",
+                                                             "contains",
+                                                             "propertyNames",
+                                                             "additionalProperties",
+                                                             "unevaluatedProperties",
+                                                             "additionalItems",
+                                                             "unevaluatedItems"};
+
+[[nodiscard]] auto isOneOf(const std::string_view key, const auto& keys) -> bool {
+    return std::ranges::find(keys, key) != keys.end();
+}
+
+[[nodiscard]] auto escapePointer(const std::string_view key) -> std::string {
+    std::string result;
+    for (const auto character : key) {
+        if (character == '~') {
+            result += "~0";
+        } else if (character == '/') {
+            result += "~1";
+        } else {
+            result.push_back(character);
+        }
+    }
+    return result;
+}
+
+[[nodiscard]] auto shallowNode(const json::Value& node) -> json::Value {
+    json::Value::Object result;
+    for (const auto& [key, value] : node.asObject()) {
+        if (isOneOf(key, kNamedSubschemas) && value.isObject()) {
+            json::Value::Array names;
+            for (const auto& member : value.asObject()) {
+                names.emplace_back(member.first);
+            }
+            result.emplace_back(key, json::Value{std::move(names)});
+        } else if (isOneOf(key, kListedSubschemas) && value.isArray()) {
+            result.emplace_back(key,
+                                json::Value{json::Number{std::to_string(value.asArray().size())}});
+        } else if (isOneOf(key, kSingleSubschemas) && value.isObject()) {
+            result.emplace_back(key, json::Value{std::string{"<schema>"}});
+        } else {
+            result.emplace_back(key, value);
+        }
+    }
+    return json::Value{std::move(result)};
+}
+
+struct VisitedNode final {
+    std::string pointer;
+    const json::Value* node;
+};
+
+void visitSchemaNodes(const json::Value& node, const std::string& pointer,
+                      std::vector<VisitedNode>& visited, const std::size_t depth) {
+    if (depth > 128U) {
+        fail("schema traversal exceeds the quality checker depth limit");
+    }
+    if (!node.isObject()) {
+        return;
+    }
+    visited.push_back({pointer, &node});
+    for (const auto& [key, value] : node.asObject()) {
+        if (isOneOf(key, kNamedSubschemas) && value.isObject()) {
+            for (const auto& [name, child] : value.asObject()) {
+                visitSchemaNodes(child,
+                                 pointer + '/' + escapePointer(key) + '/' + escapePointer(name),
+                                 visited, depth + 1U);
+            }
+        } else if (isOneOf(key, kListedSubschemas) && value.isArray()) {
+            for (std::size_t index = 0; index < value.asArray().size(); ++index) {
+                visitSchemaNodes(value.asArray()[index],
+                                 pointer + '/' + key + '/' + std::to_string(index), visited,
+                                 depth + 1U);
+            }
+        } else if (isOneOf(key, kSingleSubschemas) && value.isObject()) {
+            visitSchemaNodes(value, pointer + '/' + key, visited, depth + 1U);
+        }
+    }
+}
+
+void collectReferences(const json::Value& value, std::vector<std::string>& names) {
+    if (value.isObject()) {
+        for (const auto& [key, child] : value.asObject()) {
+            if (key == "$ref" && child.isString() && child.asString().starts_with("#/$defs/")) {
+                names.push_back(child.asString().substr(8));
+            } else if (key != "$defs") {
+                collectReferences(child, names);
+            }
+        }
+    } else if (value.isArray()) {
+        for (const auto& child : value.asArray()) {
+            collectReferences(child, names);
+        }
+    }
+}
+
+} // namespace
+
+void validateSchemaLock(const json::Value& schema, const std::span<const SchemaNodePin> lock,
+                        const std::string_view name) {
+    std::vector<VisitedNode> visited;
+    visitSchemaNodes(schema, std::string{}, visited, 1U);
+    const auto prefix = std::string{name} + " node ";
+    for (std::size_t index = 0; index < std::max(visited.size(), lock.size()); ++index) {
+        if (index == visited.size()) {
+            fail(prefix + '\'' + std::string{lock[index].pointer} +
+                 "' is pinned by the lock but missing from the schema");
+        }
+        const auto pointer =
+            visited[index].pointer.empty() ? std::string{"(root)"} : visited[index].pointer;
+        if (index == lock.size() || visited[index].pointer != lock[index].pointer) {
+            fail(prefix + '\'' + pointer +
+                 "' is not the next node pinned by the lock; regenerate project_schema_lock.cpp "
+                 "with generate_schema_lock and review the change");
+        }
+        if (!json::exactEqual(shallowNode(*visited[index].node), json::parse(lock[index].node))) {
+            fail(prefix + '\'' + pointer + "' differs from its pinned keywords");
+        }
+    }
+}
+
+void validateSchemaInvariants(const json::Value& schema, const std::string_view name) {
+    validateReferences(schema, schema);
+    const auto& definitions = requireMember(schema, "$defs", name);
+
+    // Every definition is reachable from the root members, directly or through other definitions.
+    std::unordered_set<std::string> reachable;
+    std::vector<std::string> pending;
+    collectReferences(schema, pending);
+    while (!pending.empty()) {
+        auto next = std::move(pending.back());
+        pending.pop_back();
+        if (!reachable.insert(next).second) {
+            continue;
+        }
+        collectReferences(requireMember(definitions, next, name), pending);
+    }
+    for (const auto& [definition, value] : definitions.asObject()) {
+        static_cast<void>(value);
+        if (!reachable.contains(definition)) {
+            fail(std::string{name} + " definition '" + definition +
+                 "' is not referenced from the schema root");
+        }
+    }
+
+    std::vector<VisitedNode> visited;
+    visitSchemaNodes(schema, std::string{}, visited, 1U);
+    for (const auto& [pointer, node] : visited) {
+        const auto location = std::string{name} + " node '" + pointer + '\'';
+        const auto* type = node->find("type");
+        // A described object says whether it keeps unknown members; a bare {"type":"object"} is
+        // an opaque value.
+        const bool isDescribedObject = type != nullptr && type->isString() &&
+                                       type->asString() == "object" &&
+                                       node->find("properties") != nullptr;
+        if (isDescribedObject) {
+            const auto* unevaluated = node->find("unevaluatedProperties");
+            if (unevaluated == nullptr || !unevaluated->isBoolean()) {
+                fail(location + " must say whether unknown members are kept");
+            }
+            const auto* properties = node->find("properties");
+            if (const auto* required = node->find("required"); required != nullptr) {
+                for (const auto& member : requireArray(*required, location + ".required")) {
+                    const auto& key = requireString(member, location + ".required[]");
+                    if (properties == nullptr || properties->find(key) == nullptr) {
+                        fail(location + " requires '" + key + "' without describing it");
+                    }
+                }
+            }
+        }
+        if (type != nullptr && type->isString() && type->asString() == "array" &&
+            !json::asUint64(requireMember(*node, "maxItems", location)).has_value()) {
+            fail(location + " must bound its array with an integer maxItems");
+        }
     }
 }
 

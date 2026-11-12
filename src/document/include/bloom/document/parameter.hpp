@@ -45,10 +45,6 @@ inline constexpr std::string_view kGradientStartParameterSchemaKey = "bloom.grad
 inline constexpr std::string_view kGradientEndParameterSchemaKey = "bloom.gradient.end";
 // #541: the gradient's colours, a GradientValue of one to 64 stops along start -> end (schema 2).
 inline constexpr std::string_view kGradientStopsParameterSchemaKey = "bloom.gradient.stops";
-// Schema 1's start and end colours, read only by the migration that makes them two stops.
-inline constexpr std::string_view kGradientStartColorParameterSchemaKey =
-    "bloom.gradient.start-color";
-inline constexpr std::string_view kGradientEndColorParameterSchemaKey = "bloom.gradient.end-color";
 inline constexpr std::string_view kGradientRepeatParameterSchemaKey = "bloom.gradient.repeat";
 inline constexpr std::string_view kTextParameterSchemaKey = "bloom.text.content";
 inline constexpr std::string_view kTextSizeParameterSchemaKey = "bloom.text.size";
@@ -111,7 +107,7 @@ inline constexpr std::string_view kImageInputColorSpaceIdParameterSchemaKey =
 inline constexpr std::string_view kVideoInputColorSpaceIdParameterRole = "inputColorSpaceId";
 inline constexpr std::string_view kVideoInputColorSpaceIdParameterSchemaKey =
     "bloom.video.input-color-space-id";
-// Document 1.25: which of the asset's audio streams (0-based among its audio streams) the Video
+// Which of the asset's audio streams (0-based among its audio streams) the Video
 // node plays. Optional and non-animatable; absent means the first audio stream.
 inline constexpr std::string_view kVideoAudioStreamParameterRole = "audioStream";
 inline constexpr std::string_view kVideoAudioStreamParameterSchemaKey = "bloom.video.audio-stream";
@@ -231,7 +227,7 @@ struct Vec2d {
 // #589: the cap on one contour. A whole value is bounded by kMaximumPathValueAnchors below, so a
 // compound value holding a long equation or a paragraph is not limited to one contour's worth.
 inline constexpr std::size_t kMaximumPathAnchors = 4096;
-// How an anchor's handles respond to editing (document schema 1.24). It is authoring intent only:
+// How an anchor's handles respond to editing. It is authoring intent only:
 // the rendered curve is always the stored point and handles, so the mode never changes a frame.
 //   Corner    no handles; a sharp point.
 //   Mirrored  collinear handles of equal length; dragging one moves the other symmetrically.

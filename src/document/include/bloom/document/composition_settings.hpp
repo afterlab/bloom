@@ -99,7 +99,7 @@ class CompositionFormat final {
     FrameRate frameRate_ = FrameRate::framesPerSecond24();
 };
 
-// How a composition labels its own time (document 1.26). Display only: neither value moves a layer,
+// How a composition labels its own time. Display only: neither value moves a layer,
 // a key or a frame. `start` is the time that composition time zero is labelled as (an exact,
 // non-negative time, so it survives a frame-rate change); `dropFrame` asks for SMPTE drop-frame
 // timecode, and is honoured only at the NTSC rates 30000/1001 and 60000/1001 (any other rate

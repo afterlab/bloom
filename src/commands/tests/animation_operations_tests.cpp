@@ -1140,7 +1140,7 @@ void testKeyframeHandleAndValueOperations(TestContext& test) {
                 "the pasted key lands at its destination time with the handles it was copied with");
 }
 
-// Document 1.30: Robert Penner's easing equations and their per-key parameters, through one
+// Robert Penner's easing equations and their per-key parameters, through one
 // undoable batch, and the compositor-standard Easy Ease mapped onto Bloom's handle model.
 void testKeyframeEasingOperations(TestContext& test) {
     Document document(makeSourceProject());
@@ -1231,7 +1231,7 @@ void testKeyframeEasingOperations(TestContext& test) {
     }
 }
 
-// Document 1.32: per-key handle modes. Free and Aligned move no handle and are render-neutral;
+// Per-key handle modes. Free and Aligned move no handle and are render-neutral;
 // Auto recomputes handles in the same undo step; handle edits and key moves honor the mode.
 void testKeyframeHandleModes(TestContext& test) {
     Document document(makeSourceProject());

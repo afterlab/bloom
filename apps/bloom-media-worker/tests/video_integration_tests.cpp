@@ -288,7 +288,7 @@ void run(const std::filesystem::path& directory) {
                           .apply(draft)
                           .status == commands::OperationStatus::Applied,
                   "video start frame offsets both ports");
-    // Document 1.24: import records the timecode type and field order; a Video node selects
+    // Import records the timecode type and field order; a Video node selects
     // which audio stream plays, creating its parameter on first use, and refuses a missing one.
     check(asset.videoStreams.front().timecode == "01:00:00:00" &&
               asset.videoStreams.front().timecodeType == 1 &&
@@ -388,7 +388,7 @@ void run(const std::filesystem::path& directory) {
     auto opened = project::openProjectArchive(archive.archive()->bytes(), {}, memory());
     check(opened.outcome() == project::OpenArchiveOutcome::Opened, "video archive reopens");
     auto restored = std::move(opened).takeOpened();
-    check(restored.schemaMinor >= 21 &&
+    check(restored.schemaMinor == project::kCanonicalDocumentSchemaVersionV1.minor &&
               *restored.document->snapshot().project().findAsset(asset.id) == asset,
           "video streams, timing and identity round trip");
     const auto* restoredNode = restored.document->snapshot()

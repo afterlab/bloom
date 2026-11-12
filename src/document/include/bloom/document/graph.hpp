@@ -155,7 +155,7 @@ struct LayerMask {
     ParameterId feather;
     ParameterId expansion;
     ParameterId opacity;
-    // #383 (document 1.42): a matte mask takes its shape from this Mask output instead of the path,
+    // #383: a matte mask takes its shape from this Mask output instead of the path,
     // read in the layer's content space; feather and expansion are path controls and do not apply.
     std::optional<OutputPortRef> matte{};
 
@@ -169,14 +169,14 @@ struct TrackMatte {
     LayerId source;
     TrackMatteChannel channel = TrackMatteChannel::Alpha;
     bool inverted = false;
-    // #383 (document 1.42): the matte is this Mask output, in composition space and time, instead
+    // #383: the matte is this Mask output, in composition space and time, instead
     // of a layer. `source` is then zero.
     std::optional<OutputPortRef> node{};
 
     friend bool operator==(const TrackMatte&, const TrackMatte&) = default;
 };
 
-// #502 (document 1.37): the point a layer's scale and rotation pivot about, before its anchor
+// #502: the point a layer's scale and rotation pivot about, before its anchor
 // offset. Content is the centre of the layer's local content bounds (every Layer node before
 // 1.37); Frame is the centre of the composition frame, so a layer at its default position is the
 // identity whatever its content's bounds -- the Fusion-style pivot every Merge entry's own layer
@@ -201,10 +201,10 @@ struct LayerOutputBoundary {
     std::optional<LayerId> parent{};
     // Layer-owned time (ADR 0024). Identity by default.
     LayerTiming timing{};
-    // ADR 0028 (document schema 1.24): ordered masks and an optional track matte.
+    // ADR 0028: ordered masks and an optional track matte.
     std::vector<LayerMask> masks{};
     std::optional<TrackMatte> trackMatte{};
-    // Document 1.30, both presentation only (never an evaluation input):
+    // Both presentation only (never an evaluation input):
     // `shy` hides the layer from the layer table while the table's shy filter is on, like the
     // compositor-standard Shy switch; it changes no pixel and no cache identity.
     bool shy = false;
@@ -212,7 +212,7 @@ struct LayerOutputBoundary {
     // the source is renamed or replaced; renaming the layer clears it. Layers made from a source
     // start with it set; layers without a source never have it.
     bool nameFollowsSource = false;
-    // #502 (document 1.37). A Merge entry's own layer: the slot of `nodeId`'s Merge it belongs to.
+    // #502. A Merge entry's own layer: the slot of `nodeId`'s Merge it belongs to.
     // Such a layer has no Layer node; its transform, opacity, blend mode and Time Remap are the
     // `parameters` it owns (bound by role, like a Layer node's), and the slot's layerId names it.
     std::optional<LayerSlotId> entrySlot{};

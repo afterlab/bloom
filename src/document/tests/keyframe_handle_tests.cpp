@@ -1,4 +1,4 @@
-// Keyframe handle modes (document 1.32): Auto Clamped handles against reference values produced
+// Keyframe handle modes: Auto Clamped handles against reference values produced
 // by the reference implementation itself (keyframe_handle_blender_reference.inc), Aligned
 // collinearity after edits, Auto recomputation when a neighbor changes, the Auto-to-Aligned
 // conversion, Free sequences left bit-for-bit untouched, and the classification of the mode as

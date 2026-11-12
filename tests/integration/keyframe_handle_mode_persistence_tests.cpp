@@ -1,7 +1,6 @@
-// Document 1.32 persistence: a key's handle mode (Aligned or Auto; Free is the default and is never
-// written) saves and reopens exactly together with the handles the mode produced, a project saved
-// without any mode is byte-identical to its 1.30 form apart from the schema minor, and a file that
-// misuses the member is refused.
+// Keyframe handle mode persistence: a key's handle mode (Aligned or Auto; Free is the default and
+// is never written) saves and reopens exactly together with the handles the mode produced, a
+// project without any mode writes no member, and a file that misuses the member is refused.
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/asset_operations.hpp>
@@ -14,7 +13,6 @@
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/canonical_manifest.hpp>
 #include <bloom/project/document_decode.hpp>
-#include <bloom/project/document_migration.hpp>
 #include <bloom/project/open_archive.hpp>
 #include <bloom/project/save_archive.hpp>
 #include <bloom/project/strict_json_dom.hpp>
@@ -151,22 +149,13 @@ project::DocumentDecodeResult decode(const std::string& text) {
     return project::decodeDocumentEnvelope(parsed.document()->root());
 }
 
-std::string withMinor(std::string text, const int from, const int to) {
-    const auto from_ = "\"minor\": " + std::to_string(from) + "\n  },\n  \"project\"";
-    const auto at = text.find(from_);
-    if (at == std::string::npos)
-        throw std::runtime_error("version anchor");
-    text.replace(at, from_.size(), "\"minor\": " + std::to_string(to) + "\n  },\n  \"project\"");
-    return text;
-}
-
 void roundTrip() {
     Fixture fixture(true);
     const auto snapshot = fixture.document.snapshot();
     const auto archive = save(snapshot);
     const auto text = documentText(archive);
-    expect(text.find("\"minor\": 43") != std::string::npos,
-           "the document is written at the current minor (1.43)");
+    expect(text.find("\"minor\": 0\n  },\n  \"project\"") != std::string::npos,
+           "the document is written at the current schema (1.0)");
     expect(occurrences(text, "\"handleMode\": \"auto\"") == 2 &&
                occurrences(text, "\"handleMode\": \"aligned\"") == 1,
            "each non-Free key carries its mode");
@@ -174,7 +163,7 @@ void roundTrip() {
            "Free is never written");
 
     auto result = project::openProjectArchive(archive, {}, memory());
-    expect(result.outcome() == project::OpenArchiveOutcome::Opened, "the 1.32 archive opens");
+    expect(result.outcome() == project::OpenArchiveOutcome::Opened, "the archive opens");
     if (result.outcome() != project::OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(result).takeOpened();
@@ -189,32 +178,19 @@ void roundTrip() {
                keys->keyframes[1].handleMode == document::KeyframeHandleMode::Auto &&
                keys->keyframes[3].handleMode == document::KeyframeHandleMode::Aligned,
            "the modes reopen on the keys that had them");
-    expect(save(reopened) == archive, "a reopened 1.32 project re-saves byte-identically");
+    expect(save(reopened) == archive, "a reopened project re-saves byte-identically");
 }
 
-void oldFilesAreBitIdentical() {
+void projectsWithoutModes() {
     Fixture fixture(false);
     const auto snapshot = fixture.document.snapshot();
-    const auto text = documentText(save(snapshot));
+    const auto archive = save(snapshot);
+    const auto text = documentText(archive);
     expect(text.find("handleMode") == std::string::npos, "a project without modes has no member");
 
-    // The same document labelled 1.30 is exactly what a 1.30 writer produced.
-    const auto older = withMinor(text, 43, 30);
-    const auto decoded = decode(older);
-    expect(static_cast<bool>(decoded), "a 1.30 document decodes");
-    const project::CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 30}};
-    const auto size = project::canonicalManifestSize(manifest);
-    if (!size)
-        throw std::runtime_error("manifest size");
-    std::vector<char> encoded(*size.value());
-    if (!project::encodeCanonicalManifest(manifest, encoded))
-        throw std::runtime_error("manifest encode");
-    const auto archive = project::test::buildConformingArchive(
-        project::test::makeStoredEntry("manifest.json",
-                                       project::test::toBytes({encoded.data(), encoded.size()})),
-        project::test::makeStoredEntry("document.json", project::test::toBytes(older)));
     auto result = project::openProjectArchive(archive, {}, memory());
-    expect(result.outcome() == project::OpenArchiveOutcome::Opened, "the 1.30 archive opens");
+    expect(result.outcome() == project::OpenArchiveOutcome::Opened,
+           "the archive without modes opens");
     if (result.outcome() != project::OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(result).takeOpened();
@@ -223,41 +199,15 @@ void oldFilesAreBitIdentical() {
     const auto& restored = *reopened.project().findComposition(fixture.composition);
     expect(std::ranges::equal(original.animationCurves().records(),
                               restored.animationCurves().records()),
-           "a 1.30 project opens with every key Free and every handle bit for bit");
-    expect(documentText(save(reopened)) == text,
-           "re-saving a 1.30 project changes only the schema minor");
-}
-
-void migration() {
-    Fixture fixture(false);
-    const auto older = withMinor(documentText(save(fixture.document.snapshot())), 43, 30);
-    auto operation = memory();
-    auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(older)), {}, operation);
-    if (!parsed)
-        throw std::runtime_error("parse");
-    const auto migrated = project::migrateDocumentDom(
-        parsed.document()->root(), {1, 30}, project::kCanonicalDocumentSchemaVersionV1,
-        project::kProductionDocumentMigrationSteps, {}, operation);
-    expect(
-        migrated.outcome() == project::MigrationOutcome::Migrated &&
-            migrated.stepsApplied() == 13 && migrated.migratedRoot() != nullptr && decode(older) &&
-            static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
-        "1.30 reaches the current minor through the reserved 1.31 step, the handle-mode step "
-        "the 1.33 export-format step, the 1.34 Interpret Footage step, the 1.35 sequence "
-        "member stamp step, the 1.36 verified member digest step, the 1.37 entry layer step, "
-        "the 1.38 gradient step, the 1.39 gradient colour pair step, the 1.40 gradient stop link "
-        "step, the 1.41 gradient mode step, the 1.42 matte source step and the 1.43 compound path "
-        "step");
+           "a project without modes opens with every key Free and every handle bit for bit");
+    expect(documentText(save(reopened)) == text, "re-saving it writes the same document");
 }
 
 void refusals() {
     Fixture fixture(true);
     const auto text = documentText(save(fixture.document.snapshot()));
-    expect(static_cast<bool>(decode(text)), "the 1.32 document decodes");
+    expect(static_cast<bool>(decode(text)), "the document decodes");
 
-    // A 1.31 file cannot carry the member.
-    expect(!decode(withMinor(text, 43, 31)),
-           "a document claiming 1.31 with a handleMode is refused");
     // "free" is the default and the writer never spells it.
     auto spelled = text;
     spelled.replace(spelled.find("\"aligned\""), std::string_view("\"aligned\"").size(),
@@ -274,8 +224,7 @@ void refusals() {
 int main() {
     try {
         roundTrip();
-        oldFilesAreBitIdentical();
-        migration();
+        projectsWithoutModes();
         refusals();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';

@@ -27,7 +27,7 @@ bool shy(const CompositionSession& session, const document::LayerId layer) {
 
 bool setShy(CompositionSession& session, const std::vector<document::LayerId>& layers,
             const bool value) {
-    // Shy is presentation (document 1.30): one undoable step that never invalidates a render.
+    // Shy is presentation: one undoable step that never invalidates a render.
     commands::Transaction transaction("Set Layer Shy", session.snapshot().revision());
     bool any = false;
     for (const auto layer : layers) {

@@ -1,5 +1,4 @@
-// Document 1.25 (issue #367): video-asset stream field order and timecode type persist, and the
-// 1.24 -> 1.25 migration derives them for older files without changing anything else.
+// Issue #367: video-asset stream field order and timecode type persist.
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/asset.hpp>
 #include <bloom/document/color_settings.hpp>
@@ -7,25 +6,16 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/document_decode.hpp>
-#include <bloom/project/document_migration.hpp>
 #include <bloom/project/strict_json_dom.hpp>
 
 #include <array>
 #include <iostream>
-#include <regex>
 #include <span>
 #include <stdexcept>
 #include <string>
 
 namespace {
 
-// Document 1.29 (ADR 0033) members a downgraded fixture must not carry.
-[[maybe_unused]] void stripExportQueueV1_29(std::string& text) {
-    text = std::regex_replace(
-        text, std::regex(R"(,\s*"exportQueue"\s*:\s*\{\s*"jobs"\s*:\s*\[\]\s*\})"), "");
-    text = std::regex_replace(
-        text, std::regex(R"(,\s*"exportJob"\s*:\s*"0",\s*"exportOutput"\s*:\s*"0")"), "");
-}
 using namespace bloom;
 using namespace bloom::project;
 using namespace bloom::document;
@@ -100,12 +90,6 @@ std::string encode(const Document& document) {
         throw std::runtime_error("canonical encode");
     return text;
 }
-std::string replaceRegex(const std::string& text, const char* pattern, const char* replacement) {
-    const auto result = std::regex_replace(text, std::regex(pattern), replacement);
-    if (result == text)
-        throw std::logic_error(std::string("fixture anchor missing: ") + pattern);
-    return result;
-}
 void roundTrip() {
     const auto document = makeDocument("01:00:00;00", 2);
     const auto text = encode(document);
@@ -114,7 +98,7 @@ void roundTrip() {
            "field order and drop-frame timecode type are written");
     auto operation = memory();
     auto parsed = parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
-    expect(static_cast<bool>(parsed), "1.25 document parses");
+    expect(static_cast<bool>(parsed), "the document parses");
     if (!parsed)
         return;
     const auto decoded = decodeDocumentEnvelope(parsed.document()->root());
@@ -123,85 +107,10 @@ void roundTrip() {
                    *document.snapshot().project().findAsset(AssetId::fromRaw(1)),
            "video metadata round trips exactly");
 }
-void migration() {
-    for (const auto& [timecode, expected] : std::array<std::pair<const char*, std::uint32_t>, 3>{
-             {{"01:00:00:00", 1}, {"01:00:00;00", 2}, {"", 0}}}) {
-        auto text = encode(makeDocument(timecode, 0));
-        // A 1.24 file has no field order or timecode type.
-        text = replaceRegex(text, R"(,\s*"fieldOrder": \d+,\s*"timecodeType": \d+)", "");
-        text = replaceRegex(text, R"("minor": 43(\s*\}))", "\"minor\": 24$1");
-        stripExportQueueV1_29(text);
-        auto operation = memory();
-        auto parsed = parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
-        expect(static_cast<bool>(parsed), "1.24 video fixture parses");
-        if (!parsed)
-            continue;
-        const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 24}, {1, 34},
-                                                 kProductionDocumentMigrationSteps, {}, operation);
-        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 10,
-               "1.24 to the current schema runs the video-metadata, channel-set, folder, "
-               "video-colour-default, export-queue, easing and node-group-colour steps");
-        if (migrated.outcome() != MigrationOutcome::Migrated)
-            continue;
-        const auto decoded = decodeDocumentEnvelope(*migrated.migratedRoot());
-        expect(static_cast<bool>(decoded), "migrated document decodes");
-        if (!decoded)
-            continue;
-        const auto& streams = decoded.value()->assets.front().videoStreams;
-        expect(streams.front().fieldOrder == 0 && streams.front().timecodeType == expected &&
-                   streams[1].timecodeType == 0 && streams[2].fieldOrder == 0,
-               "migration derives the timecode type and leaves the field order unknown");
-    }
-}
 } // namespace
-// Document 1.28 (issue #381, ADR 0032): the 1.27 -> 1.28 step changes only the version, so a video
-// asset's Auto or explicit input colour opens exactly as it was saved; the source version alone
-// tells the open path that the project predates the SDR video colour default.
-void videoColourDefaultMigration() {
-    for (const auto* explicitId : {"", "lin_rec709_scene"}) {
-        auto document = makeDocument({}, 0);
-        auto draft = document.draft(document.snapshot());
-        auto* asset = draft.project().findAsset(AssetId::fromRaw(1));
-        if (asset == nullptr)
-            throw std::logic_error("video color default asset");
-        asset->interpretation.inputColorSpaceId = explicitId;
-        if (!document.commit(document.snapshot().revision(), std::move(draft)).committed())
-            throw std::logic_error("video color default commit");
-        auto text = encode(document);
-        const auto current = encode(document);
-        text = replaceRegex(text, R"("minor": 43(\s*\}))", "\"minor\": 27$1");
-        stripExportQueueV1_29(text);
-        auto operation = memory();
-        auto parsed = parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
-        expect(static_cast<bool>(parsed), "1.27 video color fixture parses");
-        if (!parsed)
-            continue;
-        const auto older = decodeDocumentEnvelope(parsed.document()->root());
-        const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 27}, {1, 34},
-                                                 kProductionDocumentMigrationSteps, {}, operation);
-        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 7,
-               "1.27 to 1.31 runs the version-only steps and the export-queue step");
-        if (migrated.outcome() != MigrationOutcome::Migrated)
-            continue;
-        const auto upgraded = decodeDocumentEnvelope(*migrated.migratedRoot());
-        expect(older && upgraded && *older.value() == *upgraded.value() &&
-                   upgraded.value()->assets.front().interpretation.inputColorSpaceId == explicitId,
-               "the migrated video asset keeps its Auto or explicit input color exactly");
-        auto reparsed = parseStrictJsonDom(std::as_bytes(std::span(current)), {}, operation);
-        expect(static_cast<bool>(reparsed), "the 1.29 video color document parses");
-        if (!reparsed)
-            continue;
-        const auto saved = decodeDocumentEnvelope(reparsed.document()->root());
-        expect(saved && upgraded && *saved.value() == *upgraded.value(),
-               "a migrated 1.27 document equals the same project saved at 1.30");
-    }
-}
-
 int main() {
     try {
         roundTrip();
-        migration();
-        videoColourDefaultMigration();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

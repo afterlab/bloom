@@ -18,7 +18,7 @@ class KButton;
 } // namespace kit
 QString imageDimensionsText(const document::AssetRecord* asset);
 QString imageRangeText(const document::AssetRecord* asset);
-// Document 1.25 video source metadata as shown in Properties and the Assets tooltip.
+// Video source metadata as shown in Properties and the Assets tooltip.
 QString videoFieldOrderText(std::uint32_t fieldOrder);
 QString videoTimecodeText(const document::AssetVideoStream& stream);
 // #381: the asset's start timecode and field order as Interpret Footage reads them; an override
@@ -90,8 +90,8 @@ void refreshAudioStreamSelector(kit::KDropdown& selector, const CompositionSessi
                                 const document::NodeRecord& node);
 bool commitAudioStream(CompositionSession& session, document::NodeId node, std::uint32_t ordinal);
 // #487: the one input colour space control of an Image or Video source. Besides Auto and the OCIO
-// spaces it offers "Raw (no conversion)" (the legacy Raw choice), and shows a legacy sRGB choice
-// that load could not migrate. Committing writes the OCIO id and clears the legacy choice (or sets
+// spaces it offers "Raw (no conversion)" (the legacy Raw choice), and shows a legacy sRGB or Linear
+// choice. Committing writes the OCIO id and clears the legacy choice (or sets
 // Raw) in one undoable edit. Answers false when the schema is not a source input colour space.
 [[nodiscard]] bool isSourceInputColorSpaceSchema(std::string_view schemaKey) noexcept;
 bool commitSourceInputColorSpace(CompositionSession& session, document::NodeId node,

@@ -11,6 +11,7 @@
 #include <bloom/document/extension_records.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/schema_version.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/host/sequence_digest_recording.hpp>
@@ -402,6 +403,24 @@ void testEndToEndSaveAs(Expectations& expectations) {
     expectations.expect(static_cast<bool>(reverified),
                         "end to end: verifySaveArchive independently re-verifies the published "
                         "file's bytes as the final oracle");
+
+    // The save records which Bloom wrote the file, and a reopen reads it back with the single
+    // 1.0 schema.
+    auto reopened = bloom::project::openProjectArchive(asBytes(published), SaveArchiveLimits{},
+                                                       makeOperation());
+    expectations.expect(reopened.outcome() == bloom::project::OpenArchiveOutcome::Opened,
+                        "end to end: the published file reopens");
+    if (reopened.outcome() != bloom::project::OpenArchiveOutcome::Opened) {
+        return;
+    }
+    const auto opened = std::move(reopened).takeOpened();
+    const auto writer = bloom::project::currentManifestGenerator();
+    expectations.expect(opened.documentSchemaVersion == bloom::document::SchemaVersion{1, 0} &&
+                            opened.generator.has_value() && opened.generator->name == "Bloom" &&
+                            opened.generator->name == writer.name &&
+                            opened.generator->version == writer.version &&
+                            !opened.generator->version.empty(),
+                        "end to end: the saved 1.0 file names this build as its generator");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -528,14 +547,14 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
         return;
     }
 
-    const std::string anchor = "\"minor\": 43\n  },\n  \"project\"";
+    const std::string anchor = "\"minor\": 0\n  },\n  \"project\"";
     const auto anchorPos = text.find(anchor);
     expectations.expect(anchorPos != std::string::npos,
                         "round-tripped newer minor: root schemaVersion anchor is located");
     if (anchorPos == std::string::npos) {
         return;
     }
-    text.replace(anchorPos, std::string_view("\"minor\": 43").size(), "\"minor\": 44");
+    text.replace(anchorPos, std::string_view("\"minor\": 0").size(), "\"minor\": 1");
     expectations.expect(text.size() >= 2 && text.back() == '\n' && text[text.size() - 2] == '}',
                         "round-tripped newer minor: baseline ends with the root's closing brace");
     if (text.size() < 2 || text.back() != '\n' || text[text.size() - 2] != '}') {
@@ -579,7 +598,7 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
                          .displayPath = std::nullopt,
                          .persistedAllocatorHighWater = persistedHighWater,
                          .roundTrip = std::move(roundTrip),
-                         .schemaMinor = 44,
+                         .schemaMinor = 1,
                          .retainedRequirements = {}});
     expectations.expect(static_cast<bool>(sessionResult),
                         "round-tripped newer minor: the session installs the round-tripped "
@@ -627,8 +646,8 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
         expectations.expect(
             static_cast<bool>(decodedManifest) && decodedManifest.value() != nullptr &&
                 decodedManifest.value()->documentSchemaVersion ==
-                    bloom::document::SchemaVersion{1, 44},
-            "round-tripped newer minor: the published manifest declares document schema {1, 44}");
+                    bloom::document::SchemaVersion{1, 1},
+            "round-tripped newer minor: the published manifest declares document schema {1, 1}");
     }
 
     auto documentDom =
@@ -1154,7 +1173,7 @@ void testDeterminism(Expectations& expectations) {
 } // namespace
 
 // ---------------------------------------------------------------------------------------------
-// #495 / document 1.36: a save records what the ADR 0025 memo already proved about sequence
+// #495: a save records what the ADR 0025 memo already proved about sequence
 // members, without hashing and without touching the live document.
 // ---------------------------------------------------------------------------------------------
 

@@ -14,8 +14,8 @@
 //   animation  Every Frame draws new grain for each frame; Held keeps one pattern. Constant.
 //   seed       which grain. The same seed and frame always give the same grain. Constant.
 //   monochrome off gives each channel its own grain; on, every channel takes the red channel's
-//              pattern, each still scaled by its own amount. Constant and optional: a node saved
-//              before it opens with it off (migrateLegacyFilmGrainMonochrome).
+//              pattern, each still scaled by its own amount. Constant and optional: absent means
+//              off.
 //   mode       Film (the default) or Sensor Noise (#565). Constant and optional.
 //   shadowWeighting, chromaBlotches, blotchSize, fixedPattern
 //              what Sensor Noise adds: how much the noise favors the shadows, the strength and size

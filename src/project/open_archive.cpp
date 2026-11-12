@@ -88,6 +88,7 @@ OpenArchiveResult openProjectArchive(const std::span<const std::byte> archive,
             .containerVersion = success.manifest.containerVersion,
             .documentSchemaVersion =
                 success.documentRootVersion.value_or(success.manifest.documentSchemaVersion),
+            .generator = success.manifest.generator,
             .manifestReservation = std::move(success.manifestReservation),
             .decodeReservation = std::move(success.decodeReservation),
             .reconstructionReservation = std::move(success.reconstructionReservation),

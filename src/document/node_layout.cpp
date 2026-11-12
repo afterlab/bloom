@@ -157,7 +157,7 @@ std::size_t defaultNodeLayoutColumn(const std::string_view typeId) noexcept {
 }
 
 NodeLayoutRecord defaultNodeLayoutRecord(const std::size_t column, const std::size_t row) noexcept {
-    // The original four-column editor placement, frozen in document units for migration.
+    // The four-column editor placement, in document units.
     return {{32.0 + static_cast<double>(column) * 256.0, 32.0 + static_cast<double>(row) * 180.0},
             128.0,
             false,

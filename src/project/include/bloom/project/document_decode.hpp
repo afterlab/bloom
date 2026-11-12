@@ -58,8 +58,8 @@
 //
 // RT1: unknown-additive-member capture for a same-major newer-minor document (schemaVersion
 // {1, minor > 0}) is implemented; the writer-side overlay that reconciles retained data back onto
-// a canonical rewrite remains a later slice (see docs/architecture/project-format.md, "Versions,
-// Migrations, And Preservation"). Exact supported schemas keep the strict behavior: an
+// a canonical rewrite remains a later slice (see docs/architecture/project-format.md, "Versions And
+// Preservation"). Exact supported schemas keep the strict behavior: an
 // unrecognized member anywhere is a typed UnknownMember/MemberOutOfOrder decode error and no
 // RoundTripState is ever produced. A {1, minor > 0} document additionally accepts a trailing
 // unknown member on any closed object -- but only strictly after every known member of that same
@@ -145,9 +145,9 @@ struct DecodedComposition final {
     document::SafeAreaSettings safeAreas{};
     std::optional<document::WorkArea> workArea{};
     std::optional<std::string> workingColorSpaceId{};
-    // Document 1.26: how the composition labels its time. Absent means the default.
+    // How the composition labels its time. Absent means the default.
     document::CompositionTimecode timecode{};
-    // Document 1.27 (#378): the Assets folder holding the composition. Absent means the root.
+    // #378: the Assets folder holding the composition. Absent means the root.
     std::optional<document::AssetFolderId> folder{};
 
     friend bool operator==(const DecodedComposition&, const DecodedComposition&) = default;
@@ -173,7 +173,7 @@ struct DecodedDocumentEnvelope final {
     std::vector<document::AssetRecord> assets;
     std::vector<document::AssetFolder> assetFolders;
     std::vector<document::DataBlockRecord> dataBlocks;
-    // Document 1.29 (ADR 0033); empty for an older document.
+    // ADR 0033.
     document::ExportQueue exportQueue;
     document::IdAllocatorHighWater highWater;
     std::vector<document::ExtensionRecord> extensionRecords;
@@ -303,7 +303,7 @@ enum class DocumentDecodeError : std::uint8_t {
     // (RT1, minor > 0 only) A closed object's trailing unknown additive members are not in strictly
     // ascending UTF-8 key order (or, structurally impossible through the strict JSON reader's own
     // duplicate-key rejection, repeat a key) -- see docs/architecture/project-format.md, "Canonical
-    // Document Shape" and "Versions, Migrations, And Preservation": "retained unknown object
+    // Document Shape" and "Versions And Preservation": "retained unknown object
     // members" sort by "UTF-8 key after known members". Such input could not have come from a
     // conforming writer.
     UnsortedUnknownMember,
@@ -317,7 +317,7 @@ enum class DocumentDecodeError : std::uint8_t {
 
 // (RT1) Why a same-major newer-minor document could not be opened editable even though every
 // unknown member appeared in a position a conforming writer could have produced (see
-// docs/architecture/project-format.md, "Versions, Migrations, And Preservation": "unknown core
+// docs/architecture/project-format.md, "Versions And Preservation": "unknown core
 // discriminators are never guessed").
 enum class RoundTripPreservationReason : std::uint8_t {
     // No PreservedReadOnlyRequired outcome occurred; not a valid reason on its own.
@@ -458,69 +458,6 @@ class [[nodiscard]] DocumentDecodeResult final {
     std::string nodeTypeId_;
     std::uint32_t nodeVersion_ = 0;
 };
-
-// #487: an Image or Video source has one input color space control. Opening a project migrates a
-// legacy source Color Space choice (sRGB, Linear) to the OCIO space it meant; Raw stays. Applied
-// by the open path only, never by save verification, which must reproduce the saved values.
-void migrateLegacySourceColorSpaces(DecodedDocumentEnvelope& envelope);
-
-// #493: opening a project migrates each Curves node of schema 1 (five Vector 2 points per channel)
-// to schema 2: each channel's points become its point-list curve (exactly, when constant) and the
-// hue curves start empty, reusing the old records' ids. A point that was animated keeps its value
-// where its keys begin and a driven point its default; their curves and drivers are removed.
-void migrateLegacyCurvesNodes(DecodedDocumentEnvelope& envelope);
-
-// #534: opening a project binds each optional Glow parameter (the #506 modes and shared controls) a
-// Glow saved before them lacks, at its definition default and on a newly allocated id, so every
-// Glow presents the full control set. Those defaults are what an unbound parameter already lowered
-// with, so the picture is unchanged. Open path only, like the migrations above.
-void migrateLegacyGlowNodes(DecodedDocumentEnvelope& envelope);
-
-// #484: opening a project binds Transform 2D's optional motion blur parameters a node saved before
-// them lacks, at their defaults (motion blur off), so the picture is unchanged. Open path only.
-void migrateLegacyTransformMotionBlur(DecodedDocumentEnvelope& envelope);
-
-// #486: opening a project binds Film Grain's optional Monochrome on a node saved before it, off, so
-// the picture is unchanged. Open path only.
-void migrateLegacyFilmGrainMonochrome(DecodedDocumentEnvelope& envelope);
-
-// #509: opening a project binds Path Stroke's optional stamp, stamp alignment and stamp rotation on
-// a node saved before them, at Dot, Automatic and 0 degrees, so the stroke is unchanged. Open path
-// only.
-void migrateLegacyPathStrokeStamps(DecodedDocumentEnvelope& envelope);
-
-// #510: opening a project binds Procedural Warp's optional Asymmetric (off) and Opposite Distance
-// on a node saved before them, so a Split renders as it did. Open path only.
-void migrateLegacyProceduralWarpSplit(DecodedDocumentEnvelope& envelope);
-
-// #541: the first document minor whose Linear and Radial Gradients and Glows are at schema 2. An
-// older document's schema 1 nodes open through migrateLegacyGradientColorPairs.
-inline constexpr std::uint32_t kGradientColorPairsMinor = 39;
-// #543: the first document minor that may carry a gradient stop link (a parameter under
-// bloom.gradient.stop-color or bloom.gradient.stop-position); an older one is refused at its key.
-inline constexpr std::uint32_t kGradientStopLinksMinor = 40;
-// #546: the first document minor whose gradient values may carry an interpolation, a colour mode
-// and a hue direction; an older one carrying any of them is refused at that member.
-inline constexpr std::uint32_t kGradientModesMinor = 41;
-// #383: the first document minor whose layer masks may take their shape from a Mask output
-// (`matte`) and whose track mattes may name one (`node`); an older one carrying either is refused.
-inline constexpr std::uint32_t kMatteSourcesMinor = 42;
-// Document 1.43 (#589): compound path values: contours, a fill rule and keyed groups.
-inline constexpr std::uint32_t kCompoundPathsMinor = 43;
-[[nodiscard]] bool isLegacyGradientColorPairNode(std::string_view typeId,
-                                                 std::uint32_t schemaVersion) noexcept;
-// #541: opening a document older than 1.39 turns each schema 1 colour pair that makes up a ramp
-// into a gradient value of two stops: a Linear or Radial Gradient's start and end colours become
-// its `gradient` (stops at 0 and 1), and a Glow's tint and outer tint its `tintGradient` (the
-// tightest and the widest octave), each node moving to schema 2. Constant colours convert
-// exactly; keyed colours become whole-value gradient keys (docs/architecture/project-format.md,
-// "Gradient Colour Pairs"). Open path only, before migrateLegacyGlowNodes.
-void migrateLegacyGradientColorPairs(DecodedDocumentEnvelope& envelope);
-
-// Fonts are not assets (docs/architecture/fonts.md): opening a document that has Font assets, or a
-// text font stored as an asset id, a face number or a "family|style|digest" reference, stores each
-// text font as a font ID and drops the Font assets. Open path only, before reconstruction.
-void migrateLegacyFontAssets(DecodedDocumentEnvelope& envelope);
 
 // Decodes `root` (the document.json root value from a parsed StrictJsonDomDocument) into a
 // DecodedDocumentEnvelope. `root` must outlive the call; nothing is retained past return. See the

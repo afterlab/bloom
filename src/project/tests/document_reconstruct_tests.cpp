@@ -482,12 +482,12 @@ constexpr std::string_view kMinimalGraphJson =
 [[nodiscard]] std::string documentJson(const std::string_view idAllocationJson,
                                        const std::string_view extensionsJson) {
     std::string result =
-        R"({"schemaVersion":{"major":1,"minor":17},"project":{"id":"1","name":"Untitled",)"
+        R"({"schemaVersion":{"major":1,"minor":0},"project":{"id":"1","name":"Untitled",)"
         R"("colorSettings":)";
     result += defaultColorSettingsJson();
     result += R"(,"compositions":[)";
     result += defaultCompositionJson();
-    result += R"(],"assets":[]},"idAllocation":)";
+    result += R"(],"assets":[],"dataBlocks":[],"exportQueue":{"jobs":[]}},"idAllocation":)";
     result += idAllocationJson;
     result += R"(,"extensions":)";
     result += extensionsJson;
@@ -498,7 +498,7 @@ constexpr std::string_view kMinimalGraphJson =
 constexpr std::string_view kDefaultHighestIssued =
     R"({"highestIssued":{"composition":"0","node":"0","edge":"0","layer":"0","layerSlot":"0",)"
     R"("parameter":"0","animationCurve":"0","keyframe":"0","driverBinding":"0",)"
-    R"("extensionRecord":"0","nodeGroup":"0","asset":"0"}})";
+    R"("extensionRecord":"0","nodeGroup":"0","asset":"0","dataBlock":"0","exportJob":"0","exportOutput":"0"}})";
 
 void expectDecodeFailure(Expectations& expectations, const std::string& text,
                          const DocumentDecodeError expectedError,
@@ -511,10 +511,11 @@ void expectDecodeFailure(Expectations& expectations, const std::string& text,
 void testHighestIssuedRejections(Expectations& expectations) {
     expectDecodeFailure(
         expectations,
-        documentJson(R"({"highestIssued":{"node":"0","composition":"0","edge":"0","layer":"0",)"
-                     R"("layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
-                     R"("driverBinding":"0","extensionRecord":"0","nodeGroup":"0","asset":"0"}})",
-                     "[]"),
+        documentJson(
+            R"({"highestIssued":{"node":"0","composition":"0","edge":"0","layer":"0",)"
+            R"("layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
+            R"("driverBinding":"0","extensionRecord":"0","nodeGroup":"0","asset":"0","dataBlock":"0","exportJob":"0","exportOutput":"0"}})",
+            "[]"),
         DocumentDecodeError::MemberOutOfOrder, "/idAllocation/highestIssued/node",
         "highestIssued members out of order report MemberOutOfOrder at the misplaced key");
 
@@ -522,18 +523,20 @@ void testHighestIssuedRejections(Expectations& expectations) {
         expectations,
         documentJson(R"({"highestIssued":{"composition":"0","node":"0","edge":"0","layer":"0",)"
                      R"("layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
-                     R"("driverBinding":"0","extensionRecord":"0","nodeGroup":"0"}})",
+                     R"("driverBinding":"0","extensionRecord":"0","nodeGroup":"0","asset":"0",)"
+                     R"("dataBlock":"0","exportJob":"0"}})",
                      "[]"),
-        DocumentDecodeError::MissingMember, "/idAllocation/highestIssued/asset",
+        DocumentDecodeError::MissingMember, "/idAllocation/highestIssued/exportOutput",
         "a highestIssued object missing its trailing member reports MissingMember");
 
     expectDecodeFailure(
         expectations,
-        documentJson(R"({"highestIssued":{"composition":"0","node":"0","edge":"0","layer":"0",)"
-                     R"("layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
-                     R"("driverBinding":"0","extensionRecord":"0","nodeGroup":"0",)"
-                     R"("asset":"0","extra":"0"}})",
-                     "[]"),
+        documentJson(
+            R"({"highestIssued":{"composition":"0","node":"0","edge":"0","layer":"0",)"
+            R"("layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
+            R"("driverBinding":"0","extensionRecord":"0","nodeGroup":"0",)"
+            R"("asset":"0","dataBlock":"0","exportJob":"0","exportOutput":"0","extra":"0"}})",
+            "[]"),
         DocumentDecodeError::UnknownMember, "/idAllocation/highestIssued/extra",
         "a highestIssued object with one member past the closed shape reports UnknownMember");
 
@@ -542,7 +545,7 @@ void testHighestIssuedRejections(Expectations& expectations) {
         documentJson(R"({"highestIssued":{"composition":"+1","node":"0","edge":"0","layer":"0",)"
                      R"("layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
                      R"("driverBinding":"0","extensionRecord":"0","nodeGroup":"0",)"
-                     R"("asset":"0"}})",
+                     R"("asset":"0","dataBlock":"0","exportJob":"0","exportOutput":"0"}})",
                      "[]"),
         DocumentDecodeError::InvalidAllocatorHighWater, "/idAllocation/highestIssued/composition",
         "a leading-plus highestIssued spelling is rejected as non-canonical");
@@ -552,7 +555,7 @@ void testHighestIssuedRejections(Expectations& expectations) {
         documentJson(R"({"highestIssued":{"composition":"01","node":"0","edge":"0","layer":"0",)"
                      R"("layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
                      R"("driverBinding":"0","extensionRecord":"0","nodeGroup":"0",)"
-                     R"("asset":"0"}})",
+                     R"("asset":"0","dataBlock":"0","exportJob":"0","exportOutput":"0"}})",
                      "[]"),
         DocumentDecodeError::InvalidAllocatorHighWater, "/idAllocation/highestIssued/composition",
         "a leading-zero highestIssued spelling is rejected as non-canonical");

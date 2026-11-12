@@ -8,7 +8,7 @@ namespace bloom::quality {
 namespace {
 
 constexpr std::string_view draft202012 = "https://json-schema.org/draft/2020-12/schema";
-constexpr std::string_view manifestId = "urn:kinetik:bloom:schema:project-manifest:1.0";
+constexpr std::string_view manifestId = "urn:afterlab:bloom:schema:project-manifest:1.0";
 constexpr std::string_view identifierPattern = "^[a-z0-9][a-z0-9._-]{0,127}$";
 
 } // namespace
@@ -18,6 +18,9 @@ void validateManifestSchema(const json::Value& schema) {
     requireObject(schema, "manifest schema root");
     requireExactString(requireMember(schema, "$schema", "$"), draft202012, "$.$schema");
     requireExactString(requireMember(schema, "$id", "$"), manifestId, "$.$id");
+    requireExactString(requireMember(schema, "title", "$"), "Bloom Project Manifest 1.0",
+                       "$.title");
+    static_cast<void>(requireString(requireMember(schema, "$comment", "$"), "$.$comment"));
     requireExactString(requireMember(schema, "type", "$"), "object", "$.type");
     requireExactStringArray(requireMember(schema, "required", "$"),
                             {"format", "containerVersion", "document", "requirements"},
@@ -26,7 +29,8 @@ void validateManifestSchema(const json::Value& schema) {
                         "$.unevaluatedProperties");
 
     const auto& properties = requireMember(schema, "properties", "$");
-    requireExactKeys(properties, {"format", "containerVersion", "document", "requirements"},
+    requireExactKeys(properties,
+                     {"format", "containerVersion", "document", "requirements", "generator"},
                      "$.properties keys");
     requireExact(requireMember(properties, "format", "$.properties"),
                  R"({"const":"org.kinetik.bloom.project"})", "$.properties.format");
@@ -50,7 +54,7 @@ void validateManifestSchema(const json::Value& schema) {
     requireExactKeys(definitions,
                      {"unsigned32", "positiveMajorVersion", "namespacedIdentifier",
                       "fixedVersion-1.0", "requirementVersion-1.0", "document-1.0",
-                      "requirement-1.0"},
+                      "requirement-1.0", "documentSchemaVersion", "generatorText", "generator-1.0"},
                      "$.$defs keys");
     requireExact(requireMember(definitions, "unsigned32", "$.$defs"),
                  R"({"type":"integer","minimum":0,"maximum":4294967295})", "$.$defs.unsigned32");
@@ -75,8 +79,14 @@ void validateManifestSchema(const json::Value& schema) {
                         true, "$.$defs.document-1.0.unevaluatedProperties");
     requireExact(
         requireMember(document, "properties", "$.$defs.document-1.0"),
-        R"({"path":{"const":"document.json"},"schemaVersion":{"$ref":"#/$defs/fixedVersion-1.0"}})",
+        R"({"path":{"const":"document.json"},"schemaVersion":{"$ref":"#/$defs/documentSchemaVersion"}})",
         "$.$defs.document-1.0.properties");
+    // The manifest names the one document schema, 1.0. It stays open like the document's own
+    // version object so a newer minor's manifest still reads.
+    requireExact(
+        requireMember(definitions, "documentSchemaVersion", "$.$defs"),
+        R"({"type":"object","required":["major","minor"],"properties":{"major":{"const":1},"minor":{"const":0}},"unevaluatedProperties":true})",
+        "$.$defs.documentSchemaVersion");
 
     const auto& requirement = requireMember(definitions, "requirement-1.0", "$.$defs");
     requireExactString(requireMember(requirement, "type", "$.$defs.requirement-1.0"), "object",
@@ -123,10 +133,37 @@ void validateManifestSchema(const json::Value& schema) {
                  "providedNodeTypeIds.items.allOf[0]");
     requireExact(
         allOf[1],
-        R"({"not":{"enum":["bloom.composition-output","bloom.layer-output","bloom.layer-stack","bloom.solid-source","bloom.text-source"]}})",
+        R"({"not":{"enum":["bloom.composition-output","bloom.layer-output","bloom.layer-stack","bloom.solid-source","bloom.text-source","bloom.image-source","bloom.audio-source","bloom.shape-source"]}})",
         "providedNodeTypeIds.items.allOf[1]");
 
-    validateReferences(schema, schema);
+    // The optional generator records which application wrote the file. Reading never decides
+    // anything from it, so it is never required.
+    requireExact(requireMember(properties, "generator", "$.properties"),
+                 R"({"$ref":"#/$defs/generator-1.0"})", "$.properties.generator");
+    const auto& generator = requireMember(definitions, "generator-1.0", "$.$defs");
+    requireExactString(requireMember(generator, "type", "$.$defs.generator-1.0"), "object",
+                       "$.$defs.generator-1.0.type");
+    requireExactStringArray(requireMember(generator, "required", "$.$defs.generator-1.0"),
+                            {"name", "version"}, "$.$defs.generator-1.0.required");
+    requireExact(
+        requireMember(generator, "properties", "$.$defs.generator-1.0"),
+        R"({"name":{"$ref":"#/$defs/generatorText"},"version":{"$ref":"#/$defs/generatorText"}})",
+        "$.$defs.generator-1.0.properties");
+    const auto& generatorText = requireMember(definitions, "generatorText", "$.$defs");
+    requireExactString(requireMember(generatorText, "type", "$.$defs.generatorText"), "string",
+                       "$.$defs.generatorText.type");
+    requireExactInteger(requireMember(generatorText, "minLength", "$.$defs.generatorText"), 1,
+                        "$.$defs.generatorText.minLength");
+    const auto& generatorComment =
+        requireString(requireMember(generatorText, "$comment", "$.$defs.generatorText"),
+                      "$.$defs.generatorText.$comment");
+    if (generatorComment.find("256-byte") == std::string::npos ||
+        generatorText.find("maxLength") != nullptr) {
+        fail("$.$defs.generatorText must leave its 256-byte UTF-8 ceiling to Project I/O");
+    }
+
+    validateSchemaInvariants(schema, "manifest schema");
+    validateSchemaLock(schema, manifestSchemaLock(), "manifest schema");
 }
 
 } // namespace bloom::quality

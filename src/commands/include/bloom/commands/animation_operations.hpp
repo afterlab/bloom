@@ -486,9 +486,9 @@ struct KeyframePaste {
     // defaults because such a paste names no single scalar axis for a handle to offset.
     document::KeyframeHandle outgoingHandle{};
     document::KeyframeHandle incomingHandle{};
-    // Document 1.30: the easing-equation parameters travel with a copied key too.
+    // The easing-equation parameters travel with a copied key too.
     document::KeyframeEasingParameters easing{};
-    // Document 1.32: the handle mode travels with a copied key. A pasted Auto key is recomputed
+    // The handle mode travels with a copied key. A pasted Auto key is recomputed
     // from its new neighbors.
     document::KeyframeHandleMode handleMode = document::KeyframeHandleMode::Free;
 };
@@ -572,7 +572,7 @@ class SetKeyframeHandles final : public Operation {
     document::CompositionId composition_;
     std::vector<KeyframeHandleEdit> edits_;
 };
-// The easing-equation parameters to write on addressed keys (document 1.30). An absent optional
+// The easing-equation parameters to write on addressed keys. An absent optional
 // leaves that parameter exactly as it is.
 struct KeyframeEasingEdit {
     std::optional<document::KeyframeEasing> easing{};
@@ -632,7 +632,7 @@ class ApplyEasyEase final : public Operation {
     std::vector<KeyframeAddress> keys_;
     EasyEase kind_ = EasyEase::Both;
 };
-// Stores a handle mode (Free, Aligned or Auto; document 1.32) on addressed keys in one undoable
+// Stores a handle mode (Free, Aligned or Auto) on addressed keys in one undoable
 // step. The mode itself renders nothing: Free and Aligned leave every stored handle where it is, so
 // that step is render-neutral. Switching a key to Auto recomputes its handles (and those of the
 // Auto keys around it) from the neighboring keys in the same step, which is an ordinary animation

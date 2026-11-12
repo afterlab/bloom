@@ -1,12 +1,11 @@
-// #589 document 1.43: the path value becomes a list of contours. A project saved by the writer that
-// came before it opens with one contour wherever it had a path (shapes, masks, data blocks, a
-// field's remap curve, a Curves node), renders byte for byte what that writer's build rendered, and
-// survives save and reopen unchanged. tests/fixtures/paths holds the project and the document as
-// that build wrote them; the digests below are the frames it rendered.
+// #589: the path value is a list of contours. A project of one-contour paths (shapes, masks, data
+// blocks, a field's remap curve, a Curves node) opens with one contour wherever it has a path,
+// renders the frames pinned below, and survives save and reopen unchanged. tests/fixtures/paths
+// holds the project and its document.
 //
-// #597 changed one thing that build did: a key followed by a key of a different shape used to hold,
-// and now morphs into it. The fixture's mask has such a pair, so the one frame between them is the
-// morph; with that key made a Hold key, the project renders every frame exactly as that build did.
+// #597: a key followed by a key of a different shape morphs into it. The fixture's mask has such a
+// pair, so the one frame between them is the morph; with that key made a Hold key, every frame is
+// the held one.
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
@@ -18,7 +17,6 @@
 #include <bloom/document/shape.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/document_decode.hpp>
-#include <bloom/project/document_migration.hpp>
 #include <bloom/project/open_archive.hpp>
 #include <bloom/project/save_archive.hpp>
 #include <bloom/project/strict_json_dom.hpp>
@@ -103,16 +101,9 @@ project::DocumentDecodeResult decodeText(const std::string& text) {
     return project::decodeDocumentEnvelope(parsed.document()->root());
 }
 
-void replaceOnce(std::string& text, const std::string_view from, const std::string_view to) {
-    const auto at = text.find(from);
-    if (at == std::string::npos)
-        throw std::logic_error("fixture anchor missing");
-    text.replace(at, from.size(), to);
-}
-
-// The frames at q / 4 seconds, as the build before document 1.43 rendered this fixture: the mask's
-// two matching keys interpolate (frames 0 to 4), the second holds up to the triangle key (5), and
-// the triangle key holds (6 and 7).
+// The frames at q / 4 seconds with the mask's second key held: the mask's two matching keys
+// interpolate (frames 0 to 4), the second holds up to the triangle key (5), and the triangle key
+// holds (6 and 7).
 constexpr std::array<std::string_view, 8> kBaselineFrames{
     "f9197cee9f0b13325c07eeb2a2b4ad8d738a6599e9c2724f6c97b914e9b87e6b",
     "c4633bdde8c3c8179f28b32b13410dc4acf1dbc8591edcf1ab5beb95006eed44",
@@ -155,20 +146,20 @@ std::vector<std::string> renderFrames(const document::Snapshot& snapshot,
     return digests;
 }
 
-// The exact digests pin this toolchain's floating point against the old build's. Every platform
-// still proves the frames unchanged by save and reopen, and every path unchanged, below. `morphs`
-// expects the frame between the second key and the triangle to be the morph; otherwise the
-// second key is a Hold key and every frame is the old build's.
+// The exact digests pin this toolchain's floating point. Every platform still proves the frames
+// unchanged by save and reopen, and every path unchanged, below. `morphs` expects the frame
+// between the second key and the triangle to be the morph; otherwise the second key is a Hold key
+// and every frame is the held one.
 void expectBaselineFrames(const std::vector<std::string>& frames, const bool morphs) {
     std::vector<std::string_view> expected(kBaselineFrames.begin(), kBaselineFrames.end());
     if (morphs)
         expected.at(kMorphFrameIndex) = kMorphFrame;
 #if defined(__linux__) && defined(__x86_64__)
     const bool same = std::ranges::equal(frames, expected);
-    expect(same, morphs ? "the migrated project renders every frame byte for byte as it did before "
-                          "1.43, except the one where the keys of different shapes now morph"
-                        : "with that key made Hold, the migrated project renders every frame byte "
-                          "for byte as it did before 1.43");
+    expect(same, morphs ? "the project renders every pinned frame byte for byte, with the keys of "
+                          "different shapes morphing"
+                        : "with that key made Hold, the project renders every pinned frame byte "
+                          "for byte");
     if (!same)
         for (const auto& frame : frames)
             std::cerr << "  rendered " << frame << '\n';
@@ -229,25 +220,24 @@ PathCensus censusOf(const document::Project& project, const document::Compositio
     return census;
 }
 
-void oldProjectOpensAndRendersIdentically() {
-    const auto archive = readFixture("one-contour-paths-1.42.bloom");
+void projectOpensAndRendersItsFrames() {
+    const auto archive = readFixture("one-contour-paths.bloom");
     auto opening = project::openProjectArchive(archive, {}, memory());
-    expect(opening.outcome() == project::OpenArchiveOutcome::Opened,
-           "a project the older writer saved opens");
+    expect(opening.outcome() == project::OpenArchiveOutcome::Opened, "the fixture project opens");
     if (opening.outcome() != project::OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(opening).takeOpened();
-    expect(opened.documentSchemaVersion == document::SchemaVersion{1, 42},
-           "the fixture really is a 1.42 document");
+    expect(opened.documentSchemaVersion == document::SchemaVersion{1, 0},
+           "the fixture is a 1.0 document");
     const auto snapshot = opened.document->snapshot();
-    expect(snapshot.project().validate().ok(), "the migrated project validates");
+    expect(snapshot.project().validate().ok(), "the opened project validates");
     const auto composition = snapshot.project().compositions().front().id();
 
     // Every path surface the fixture carries: a closed self-crossing shape, an open shape, the
     // mask's constant and three keys, a remap curve, a Curves node and a data block.
     const auto census = censusOf(snapshot.project(), composition);
     expect(census.paths == census.oneContour + census.empty,
-           "every path in the older project loads as a compound value of exactly one contour");
+           "every path in the project loads as a compound value of exactly one contour");
     expect(census.oneContour >= 8,
            "the fixture exercises the shape, mask, field and curve surfaces");
     expect(census.dataBlockPaths == 1, "the data block's path loads");
@@ -256,27 +246,25 @@ void oldProjectOpensAndRendersIdentically() {
     const auto frames = renderFrames(snapshot, composition);
     expectBaselineFrames(frames, true);
 
-    // The re-encoded document is the older document with only its minor advanced: no value on any
-    // surface changed its spelling, so nothing downstream of the bytes can tell.
-    auto older = readText("one-contour-paths-1.42.document.json");
-    replaceOnce(older, "\"minor\": 42", "\"minor\": 43");
-    expect(encode(snapshot, opened.colorSettings) == older,
-           "a one-contour project re-encodes byte for byte apart from its minor");
+    // The re-encoded document is the fixture document: no value on any surface changed its
+    // spelling, so nothing downstream of the bytes can tell.
+    const auto stored = readText("one-contour-paths.document.json");
+    expect(encode(snapshot, opened.colorSettings) == stored,
+           "a one-contour project re-encodes byte for byte");
 
     // Save and reopen.
     auto saved = project::buildVerifiedSaveArchive(
         {}, {.snapshot = &snapshot, .colorSettings = &opened.colorSettings}, {}, memory());
-    expect(static_cast<bool>(saved), "the migrated project saves and verifies");
+    expect(static_cast<bool>(saved), "the project saves and verifies");
     if (!saved)
         return;
     auto reopening = project::openProjectArchive(saved.archive()->bytes(), {}, memory());
-    expect(reopening.outcome() == project::OpenArchiveOutcome::Opened,
-           "the migrated project reopens");
+    expect(reopening.outcome() == project::OpenArchiveOutcome::Opened, "the project reopens");
     if (reopening.outcome() != project::OpenArchiveOutcome::Opened)
         return;
     auto reopened = std::move(reopening).takeOpened();
-    expect(reopened.documentSchemaVersion == document::SchemaVersion{1, 43},
-           "the migrated project saves at the current schema");
+    expect(reopened.documentSchemaVersion == document::SchemaVersion{1, 0},
+           "the project saves at the current schema");
     const auto again = reopened.document->snapshot();
     const auto& before = *snapshot.project().findComposition(composition);
     const auto& after = *again.project().findComposition(composition);
@@ -288,15 +276,14 @@ void oldProjectOpensAndRendersIdentically() {
            "every path equals itself after save and reopen");
     expect(renderFrames(again, composition) == frames,
            "save and reopen renders exactly the same frames");
-    expect(encode(again, reopened.colorSettings) == older,
+    expect(encode(again, reopened.colorSettings) == stored,
            "a second save writes the same document");
 }
 
-// The older build's hold, asked for explicitly: the second key made a Hold key renders every frame
-// as that build did.
-void aHoldKeyRendersAsTheOlderBuildHeld() {
+// The second key made a Hold key renders every pinned held frame.
+void aHoldKeyRendersTheHeldFrames() {
     auto opening =
-        project::openProjectArchive(readFixture("one-contour-paths-1.42.bloom"), {}, memory());
+        project::openProjectArchive(readFixture("one-contour-paths.bloom"), {}, memory());
     expect(opening.outcome() == project::OpenArchiveOutcome::Opened, "the fixture opens again");
     if (opening.outcome() != project::OpenArchiveOutcome::Opened)
         return;
@@ -326,25 +313,11 @@ void aHoldKeyRendersAsTheOlderBuildHeld() {
     expectBaselineFrames(renderFrames(document.snapshot(), composition), false);
 }
 
-void theMigrationStepOnlyAdvancesTheVersion() {
-    const auto text = readText("one-contour-paths-1.42.document.json");
-    auto operation = memory();
-    auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
-    expect(static_cast<bool>(parsed), "the older document parses");
-    if (!parsed)
-        return;
-    const auto migrated =
-        project::migrateDocumentDom(parsed.document()->root(), {1, 42}, {1, 43},
-                                    project::kProductionDocumentMigrationSteps, {}, operation);
-    expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
-               migrated.stepsApplied() == 1 &&
-               static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
-           "1.42 -> 1.43 is one step and the result decodes");
-}
-
-void olderDocumentsRefuseTheNewSpelling() {
-    auto text = readText("one-contour-paths-1.42.document.json");
-    expect(static_cast<bool>(decodeText(text)), "the older document decodes");
+// One value has one spelling: a one-contour value spelled as contours is refused, and the flat
+// spelling decodes.
+void aOneContourValueHasOneSpelling() {
+    const auto text = readText("one-contour-paths.document.json");
+    expect(static_cast<bool>(decodeText(text)), "the fixture document decodes");
 
     // The first path in the document, respelled with contours.
     const auto kind = text.find("\"kind\": \"path\"");
@@ -358,21 +331,12 @@ void olderDocumentsRefuseTheNewSpelling() {
     spelled.replace(anchors, closedEnd - anchors,
                     "\"contours\": [{" + anchorText + closedText + "}]");
     expect(!static_cast<bool>(decodeText(spelled)),
-           "a 1.42 document carrying the contours spelling is refused");
-
-    // At 1.43 the flat form stays the one spelling of a one-contour value.
-    auto current = spelled;
-    replaceOnce(current, "\"minor\": 42", "\"minor\": 43");
-    expect(!static_cast<bool>(decodeText(current)),
            "a one-contour value spelled as contours is refused: one value has one spelling");
-    auto flat = text;
-    replaceOnce(flat, "\"minor\": 42", "\"minor\": 43");
-    expect(static_cast<bool>(decodeText(flat)), "the flat spelling stays current");
 }
 
-// Shape Source's path could not take a driver before 1.43.
-void olderDocumentsRefuseADrivenShapePath() {
-    auto text = readText("one-contour-paths-1.42.document.json");
+// Shape Source's path may take a Path driver.
+void aShapePathMayBeDriven() {
+    auto text = readText("one-contour-paths.document.json");
     const auto key = text.find("\"schemaKey\": \"bloom.shape.path\"");
     const auto open = text.find('{', text.find("\"source\"", key));
     auto close = open;
@@ -383,21 +347,17 @@ void olderDocumentsRefuseADrivenShapePath() {
     }
     text.replace(open, close - open + 1,
                  R"({"kind": "driver", "sourceNodeId": "1", "outputPort": "value"})");
-    expect(!static_cast<bool>(decodeText(text)),
-           "a 1.42 document with a driven shape path is refused");
-    replaceOnce(text, "\"minor\": 42", "\"minor\": 43");
-    expect(static_cast<bool>(decodeText(text)), "a 1.43 document may drive a shape's path");
+    expect(static_cast<bool>(decodeText(text)), "a document may drive a shape's path");
 }
 
 } // namespace
 
 int main() {
     try {
-        oldProjectOpensAndRendersIdentically();
-        aHoldKeyRendersAsTheOlderBuildHeld();
-        theMigrationStepOnlyAdvancesTheVersion();
-        olderDocumentsRefuseTheNewSpelling();
-        olderDocumentsRefuseADrivenShapePath();
+        projectOpensAndRendersItsFrames();
+        aHoldKeyRendersTheHeldFrames();
+        aOneContourValueHasOneSpelling();
+        aShapePathMayBeDriven();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

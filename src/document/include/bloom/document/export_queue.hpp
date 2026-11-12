@@ -13,7 +13,7 @@
 #include <string_view>
 #include <vector>
 
-// The export queue's durable authoring records (ADR 0033; document schema 1.29).
+// The export queue's durable authoring records (ADR 0033).
 //
 // These are project truth: the jobs, their render settings and their outputs are saved in the
 // project, mutated only through undoable commands, and restored by undo/redo. Nothing here
@@ -27,8 +27,8 @@
 // src/output.
 //
 // The records are members of document::Project (Project::exportJobs()), their ids come from the
-// `exportJob`/`exportOutput` allocator namespaces, and src/project persists them from document
-// schema 1.29 (`project.exportQueue`).
+// `exportJob`/`exportOutput` allocator namespaces, and src/project persists them as
+// `project.exportQueue`.
 namespace bloom::document {
 
 // ExportJobId and ExportOutputId (ids.hpp) are stable, allocator-backed and project-global. A
@@ -69,11 +69,10 @@ struct ExportRenderSettings final {
     friend bool operator==(const ExportRenderSettings&, const ExportRenderSettings&) = default;
 };
 
-// The closed output-format vocabulary of document 1.29, extended by document 1.33 with the WebM
-// and AV1 formats. Values are serialized as tokens (ADR 0033, "Schema"); the numeric values here
-// are not persisted. A newer minor may add tokens; an unknown token at a supported minor (or a 1.33
-// token in an older document) is a decode error, exactly as for other closed document
-// vocabularies.
+// The closed output-format vocabulary, including the WebM and AV1 formats. Values are serialized as
+// tokens (ADR 0033, "Schema"); the numeric values here are not persisted. A newer minor may add
+// tokens; an unknown token at the current minor is a decode error, exactly as for other closed
+// document vocabularies.
 enum class ExportFormat : std::uint8_t {
     // Image formats: one file per frame (a still when the range is one frame).
     Png = 1,     // "png": 8-bit straight RGBA, display-referred
@@ -88,19 +87,11 @@ enum class ExportFormat : std::uint8_t {
     HevcMov = 9,   // "hevc-mov" (issue #369)
     HevcMp4 = 10,  // "hevc-mp4" (issue #369)
     Wav = 11,      // "wav": PCM WAV/BWF, RF64 when large
-    // Document 1.33 (ADR 0036): the bundled SVT-AV1, libvpx and Opus encoders.
+    // ADR 0036: the bundled SVT-AV1, libvpx and Opus encoders.
     Vp9Webm = 12, // "vp9-webm": VP9 with Opus audio in WebM
     Av1Webm = 13, // "av1-webm": AV1 with Opus audio in WebM
     Av1Mp4 = 14,  // "av1-mp4": AV1 with AAC audio in MP4
 };
-
-// The first document minor that accepts the WebM and AV1 format tokens.
-inline constexpr std::uint32_t kExportWebmFormatsMinor = 33;
-// True for the formats document 1.33 added; an older document cannot name them.
-[[nodiscard]] constexpr bool isDocument133ExportFormat(const ExportFormat format) noexcept {
-    return format == ExportFormat::Vp9Webm || format == ExportFormat::Av1Webm ||
-           format == ExportFormat::Av1Mp4;
-}
 
 // Which encoder implementation a movie output asks for. A preference, not a guarantee: the
 // runner reports the encoder it actually used in the output's verification.
@@ -182,7 +173,7 @@ enum class ExportOverwritePolicy : std::uint8_t {
     Refuse = 3,
 };
 
-// Where an output is written. Uses the asset locator portability rules of document 1.22:
+// Where an output is written. Uses the asset locator portability rules:
 // "project-relative" stores a path relative to the project file's folder (preferred, so a project
 // moved with its renders keeps working); "external" stores an absolute RFC 8089 file URI. An empty
 // path means "not chosen yet" and blocks Start with a reason. The path may contain the destination
@@ -232,7 +223,7 @@ struct ExportQueue final {
 };
 
 // ---------------------------------------------------------------------------------------------
-// Closed vocabularies (document 1.29 tokens). Shared by the codec, scripting and the host.
+// Closed vocabularies (document tokens). Shared by the codec, scripting and the host.
 
 [[nodiscard]] std::string_view exportFormatToken(ExportFormat format) noexcept;
 [[nodiscard]] std::optional<ExportFormat> parseExportFormat(std::string_view token) noexcept;

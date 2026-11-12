@@ -37,12 +37,6 @@ inline constexpr std::array<double, kLevelsFieldCount> kLevelsFieldDefaults{0.0,
                                                                             1.0};
 inline constexpr std::size_t kLevelsGammaField = 2;
 
-// Curves schema 1 (#340) had five Vector 2 points per channel ("bloom.curves.<channel>.point-<n>",
-// roles "<channel>Point<n>"). That vocabulary survives only so Project I/O can migrate a schema 1
-// node on open; no current definition, validation or command accepts it.
-inline constexpr std::size_t kLegacyCurvePointCount = 5;
-inline constexpr std::uint32_t kLegacyCurvesNodeSchemaVersion = 1;
-
 // Curves schema 2 (#493): nine curves, each its own animatable Path parameter with no socket. The
 // five channel curves come first in the channel order above; the four hue curves follow. A hue
 // curve's input is the periodic hue in [0, 1] (bloom/runtime/grade_curve.hpp defines the model);
@@ -172,20 +166,6 @@ gradeCurveFromSchemaKey(const std::string_view schemaKey) noexcept {
 // "masterInputBlack", "redGamma", ...
 [[nodiscard]] inline std::string levelsRole(const std::size_t channel, const std::size_t field) {
     return std::string(kGradeChannelNames[channel]) + std::string(kLevelsFieldRoleSuffixes[field]);
-}
-// Schema 1 only (migration): `point` counts from zero; the schema key and role count from one.
-[[nodiscard]] inline std::string curvePointSchemaKey(const std::size_t channel,
-                                                     const std::size_t point) {
-    return "bloom.curves." + std::string(kGradeChannelNames[channel]) + ".point-" +
-           std::to_string(point + 1);
-}
-// "masterPoint1", "alphaPoint5", ...
-[[nodiscard]] inline std::string curvePointRole(const std::size_t channel,
-                                                const std::size_t point) {
-    return std::string(kGradeChannelNames[channel]) + "Point" + std::to_string(point + 1);
-}
-[[nodiscard]] constexpr double defaultCurvePointCoordinate(const std::size_t point) noexcept {
-    return static_cast<double>(point) / static_cast<double>(kLegacyCurvePointCount - 1);
 }
 
 // #494 Grade: Resolve-style primaries. Four wheels (Lift, Gamma, Gain, Offset), each a master and a

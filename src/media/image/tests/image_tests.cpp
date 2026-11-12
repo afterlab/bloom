@@ -417,7 +417,7 @@ void testDeferredDigests(bloom_output_png_test_support::Expectations& check,
         check.expect(rehashed && (*rehashed.value)->contentVerified() &&
                          (*rehashed.value)->captureStatistics().bytesHashed == bytes.size(),
                      "a changed identity forces the hash, which admits the same bytes");
-        // A verified member (stamp and digest, document 1.36) whose stamp changed is rehashed.
+        // A verified member (stamp and digest) whose stamp changed is rehashed.
         const auto verifiedMember = media::captureImageSourceRevision(
             path, media::kMaxImageStorageBytes, {}, *recorded, stampBefore);
         check.expect(stampBefore && verifiedMember && (*verifiedMember.value)->contentVerified(),

@@ -305,9 +305,7 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* value = std::get_if<double>(&constant.value);
         return value && std::isfinite(*value) && isScalarWithinSchemaDomain(schemaKey, *value);
     }
-    if (schemaKey == kSolidColorParameterSchemaKey ||
-        schemaKey == kGradientStartColorParameterSchemaKey ||
-        schemaKey == kGradientEndColorParameterSchemaKey) {
+    if (schemaKey == kSolidColorParameterSchemaKey) {
         const auto* color = std::get_if<bloom::core::Color4d>(&constant.value);
         return color != nullptr && color->isValid();
     }
@@ -874,8 +872,6 @@ bool isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 bool isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == "bloom.shape.fill-color" || schemaKey == "bloom.shape.stroke-color" ||
            schemaKey == kSolidColorParameterSchemaKey ||
-           schemaKey == kGradientStartColorParameterSchemaKey ||
-           schemaKey == kGradientEndColorParameterSchemaKey ||
            schemaKey == kTextColorParameterSchemaKey ||
            schemaKey == kColorValueParameterSchemaKey || isRecipeColorSchemaKey(schemaKey) ||
            isColorizeColorSchemaKey(schemaKey) || isDepthColorAnimatableSchemaKey(schemaKey) ||

@@ -235,7 +235,7 @@ template <typename Curve, typename Keyframe>
     if (position != curve.keyframes.end() && position->time == keyframe.time) {
         return false;
     }
-    // Document 1.32: a sequence with Aligned or Auto keys keeps its handles consistent.
+    // A sequence with Aligned or Auto keys keeps its handles consistent.
     const bool settles = keyframe.handleMode != bloom::document::KeyframeHandleMode::Free ||
                          bloom::document::hasNonFreeHandleMode(curve.keyframes);
     auto before = settles ? curve.keyframes : decltype(curve.keyframes){};

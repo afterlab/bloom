@@ -1,7 +1,5 @@
-// Document 1.30 persistence: Robert Penner's easing equations with their per-key parameters, and
-// the presentation-only layer flags `shy` and `nameFollowsSource`, save and reopen exactly; a 1.29
-// document opens unchanged, and its layers follow their source exactly when their name already is
-// the source's name.
+// Persistence of Robert Penner's easing equations with their per-key parameters, and of the
+// presentation-only layer flags `shy` and `nameFollowsSource`: they save and reopen exactly.
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/asset_operations.hpp>
@@ -143,20 +141,12 @@ std::size_t occurrences(const std::string& text, const std::string_view needle) 
     return count;
 }
 
-project::DocumentDecodeResult decode(const std::string& text) {
-    auto operation = memory();
-    auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
-    if (!parsed)
-        throw std::runtime_error("parse");
-    return project::decodeDocumentEnvelope(parsed.document()->root());
-}
-
 void roundTrip() {
     Fixture fixture;
     const auto snapshot = fixture.document.snapshot();
     const auto archive = save(snapshot);
     const auto text = documentText(archive);
-    expect(text.find("\"minor\": 43") != std::string::npos, "the document is written at 1.42");
+    expect(text.find("\"minor\": 0") != std::string::npos, "the document is written at 1.0");
     expect(text.find("\"elastic\"") != std::string::npos &&
                text.find("\"bounce\"") != std::string::npos,
            "the easing equations are written with their tokens");
@@ -167,7 +157,7 @@ void roundTrip() {
            "the shy layer and the following layer carry their flags; defaults are omitted");
 
     auto result = project::openProjectArchive(archive, {}, memory());
-    expect(result.outcome() == project::OpenArchiveOutcome::Opened, "the 1.31 archive opens");
+    expect(result.outcome() == project::OpenArchiveOutcome::Opened, "the archive opens");
     if (result.outcome() != project::OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(result).takeOpened();
@@ -179,75 +169,7 @@ void roundTrip() {
     expect(
         std::ranges::equal(before.animationCurves().records(), after.animationCurves().records()),
         "modes and easing parameters reopen bit for bit");
-    expect(save(reopened) == archive, "a reopened 1.31 project re-saves byte-identically");
-}
-
-void olderDocuments() {
-    Fixture fixture;
-    const auto snapshot = fixture.document.snapshot();
-    const auto text = documentText(save(snapshot));
-
-    // A 1.29 file cannot carry 1.30's tokens or members.
-    auto mislabelled = text;
-    mislabelled.replace(mislabelled.find("\"minor\": 43"), std::string_view("\"minor\": 43").size(),
-                        "\"minor\": 29");
-    const auto refused = decode(mislabelled);
-    expect(!refused, "a document claiming 1.29 while carrying an easing equation is refused");
-
-    // A genuine 1.29 file: no equations, no easing objects, no flags.
-    auto older =
-        std::regex_replace(text, std::regex(R"re(,\s*"(shy|nameFollowsSource)": true)re"), "");
-    older = std::regex_replace(older, std::regex(R"(,\s*"easing": \{[^}]*\})"), "");
-    older = std::regex_replace(older, std::regex(R"re("(elastic|bounce)")re"), "\"linear\"");
-    older.replace(older.find("\"minor\": 43"), std::string_view("\"minor\": 43").size(),
-                  "\"minor\": 29");
-    const auto decoded = decode(older);
-    expect(static_cast<bool>(decoded), "a 1.29 document decodes");
-    if (!decoded)
-        return;
-    auto reconstructed = project::reconstructDocument(*decoded.value(), true);
-    expect(static_cast<bool>(reconstructed), "the 1.29 document reconstructs");
-    if (!reconstructed)
-        return;
-    const auto restored = reconstructed.value()->document->snapshot();
-    const auto layers =
-        restored.project().findComposition(fixture.composition)->graph().layerOutputs();
-    expect(layers.size() == 2 && layers[0].name == "plate" && layers[0].nameFollowsSource &&
-               layers[1].name == "Renamed" && !layers[1].nameFollowsSource,
-           "a migrated layer follows its source exactly when its name already is the source's "
-           "name, so no visible name changes");
-    expect(!layers[0].shy && !layers[1].shy, "a migrated layer is not shy");
-
-    // The same 1.29 document through the archive open path the editor uses.
-    const project::CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 29}};
-    const auto size = project::canonicalManifestSize(manifest);
-    if (!size)
-        throw std::runtime_error("manifest size");
-    std::vector<char> encoded(*size.value());
-    if (!project::encodeCanonicalManifest(manifest, encoded))
-        throw std::runtime_error("manifest encode");
-    const auto archive = project::test::buildConformingArchive(
-        project::test::makeStoredEntry("manifest.json",
-                                       project::test::toBytes({encoded.data(), encoded.size()})),
-        project::test::makeStoredEntry("document.json", project::test::toBytes(older)));
-    auto result = project::openProjectArchive(archive, {}, memory());
-    expect(result.outcome() == project::OpenArchiveOutcome::Opened, "the 1.29 archive opens");
-    if (result.outcome() != project::OpenArchiveOutcome::Opened)
-        return;
-    auto opened = std::move(result).takeOpened();
-    const auto openedSnapshot = opened.document->snapshot();
-    const auto openedLayers =
-        openedSnapshot.project().findComposition(fixture.composition)->graph().layerOutputs();
-    expect(openedLayers.size() == 2 && openedLayers[0].nameFollowsSource &&
-               openedLayers[0].name == "plate" && !openedLayers[1].nameFollowsSource &&
-               openedLayers[1].name == "Renamed",
-           "opening a 1.29 archive infers nameFollowsSource without changing a visible name");
-    const auto& curves =
-        openedSnapshot.project().findComposition(fixture.composition)->animationCurves();
-    const auto& originalCurves =
-        snapshot.project().findComposition(fixture.composition)->animationCurves();
-    expect(curves.records().size() == originalCurves.records().size(),
-           "the 1.29 document keeps its curves");
+    expect(save(reopened) == archive, "a reopened project re-saves byte-identically");
 }
 
 } // namespace
@@ -255,7 +177,6 @@ void olderDocuments() {
 int main() {
     try {
         roundTrip();
-        olderDocuments();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

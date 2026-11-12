@@ -4,7 +4,7 @@
 // authored stop. Linear Gradient, Colorize's Gradient Map and Glow's tint gradient follow their
 // links, a changed driver invalidates the frame, a keyed driver makes the source time dependent, an
 // edit that moves or removes stops moves or removes their links, and a link survives a save and
-// reopen in document 1.40 while a document claiming 1.39 that carries one is refused.
+// reopen.
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
@@ -363,7 +363,7 @@ std::string encode(const document::Document& document) {
     return text;
 }
 
-// A link saves and reopens in 1.40; a document claiming 1.39 that carries one is refused.
+// A link saves and reopens exactly.
 void linksPersist() {
     using document::GradientStopComponent;
     Fixture fixture(document::kLinearGradientNodeType);
@@ -383,19 +383,6 @@ void linksPersist() {
         return;
     const auto reopened = std::move(opened).takeOpened();
     expect(encode(*reopened.document) == encode(fixture.document), "the stop link reopens exactly");
-
-    auto text = encode(fixture.document);
-    const auto version = text.find("\"minor\": 43");
-    if (version == std::string::npos)
-        return expect(false, "the document declares 1.42");
-    text.replace(version, std::string_view("\"minor\": 43").size(), "\"minor\": 39");
-    auto operation = memory();
-    auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
-    const auto decoded = parsed ? project::decodeDocumentEnvelope(parsed.document()->root())
-                                : project::DocumentDecodeResult::failure(
-                                      project::DocumentDecodeError::DomainViolation, "/");
-    expect(!decoded && decoded.error() == project::DocumentDecodeError::UnsupportedParameterSource,
-           "a document claiming 1.39 that carries a stop link is refused");
 }
 
 } // namespace

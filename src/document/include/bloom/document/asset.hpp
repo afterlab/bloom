@@ -19,7 +19,7 @@ enum class AssetKind : std::uint8_t { Image, Sequence, Audio, Font, Video, Lut }
 enum class AssetColorSpace : std::uint8_t { Auto, Srgb, Linear, Raw };
 enum class AssetAlphaAssociation : std::uint8_t { Straight, Premultiplied };
 inline constexpr std::size_t kMaxAssetInputColorSpaceIdBytes = 256;
-// Interpret Footage (#381, document 1.34). How the asset's alpha channel is read. Guess follows the
+// Interpret Footage (#381). How the asset's alpha channel is read. Guess follows the
 // association the file declared at import (`alphaAssociation`), and leaves each image node's own
 // Premultiply switch in charge; the explicit modes apply to every use of the asset.
 enum class AssetAlphaMode : std::uint8_t { Guess, Ignore, Straight, Premultiplied };
@@ -38,8 +38,8 @@ struct AssetInterpretation {
     std::string inputColorSpaceId;
     // The association the file declared at import (what Guess follows).
     AssetAlphaAssociation alphaAssociation = AssetAlphaAssociation::Straight;
-    // Document 1.34. A sequence's assumed rate (absent: one member per composition frame, the
-    // pre-1.34 timing) or a video's conformed rate (absent: the file's rate).
+    // A sequence's assumed rate (absent: one member per composition frame) or a video's conformed
+    // rate (absent: the file's rate).
     std::optional<FrameRate> frameRate;
     // Absent: the source's own start timecode.
     std::optional<CompositionTimecode> startTimecode;
@@ -93,7 +93,7 @@ struct AssetLocator {
     std::string relinkHint;
     friend bool operator==(const AssetLocator&, const AssetLocator&) = default;
 };
-// Document 1.35 (#473): a sequence member whose bytes import did not read. Its file's length and
+// #473: a sequence member whose bytes import did not read. Its file's length and
 // modification time (nanoseconds since the Unix epoch) when import listed it stand for the bytes
 // until a read proves them; a file whose length or time differs is a changed frame.
 struct AssetFileStamp {
@@ -104,10 +104,9 @@ struct AssetFileStamp {
 struct AssetSequenceMember {
     std::int64_t frame = 0;
     AssetLocator locator;
-    // At least one of the two. A digest alone (legacy): the SHA-256 of the bytes import read (the
-    // member it probed, and every member of a sequence imported before 1.35). A stamp alone
-    // (pending): the stamp import listed. Both (verified, document 1.36): the digest a full hash
-    // proved for the bytes that carried that stamp.
+    // At least one of the two. A digest alone: the SHA-256 of the bytes import read (the member it
+    // probed). A stamp alone (pending): the stamp import listed. Both (verified): the digest a full
+    // hash proved for the bytes that carried that stamp.
     std::optional<core::Sha256Digest> contentDigest;
     std::optional<AssetFileStamp> stamp;
     friend bool operator==(const AssetSequenceMember&, const AssetSequenceMember&) = default;
@@ -116,10 +115,10 @@ struct AssetSequenceMember {
 // provisional SHA-256 over "BloomSequenceMemberStamp", NUL, the locator path, NUL, the relink hint,
 // NUL, the decimal size, NUL and the decimal modification time. Path + size + time, so two frames
 // with one size and time never share an identity. A stamped member keeps that identity when a
-// verified digest is recorded beside it (document 1.36), so recording a digest never changes a
+// verified digest is recorded beside it, so recording a digest never changes a
 // cache key.
 [[nodiscard]] core::Sha256Digest sequenceMemberIdentity(const AssetSequenceMember& member);
-// The numbered frames an import was limited to (document 1.34): Reload Footage reads only these.
+// The numbered frames an import was limited to: Reload Footage reads only these.
 struct AssetSequenceRange {
     std::int64_t first = 0;
     std::int64_t last = 0;
@@ -159,18 +158,18 @@ struct AssetVideoStream {
     core::RationalTime timebase{}, framePeriod{}, duration{};
     std::uint32_t width = 1, height = 1, sampleRate = 0;
     std::int64_t primaries = -1, transfer = -1, matrix = -1, range = -1;
-    // Document 1.25. Coded field order (0 unknown, 1 progressive, 2 top first, 3 bottom first,
+    // Coded field order (0 unknown, 1 progressive, 2 top first, 3 bottom first,
     // 4 top coded/bottom displayed first, 5 the reverse) and timecode type (0 none, 1 non-drop,
     // 2 drop-frame), captured at import and shown in Assets and Properties.
     std::uint32_t fieldOrder = 0, timecodeType = 0;
     std::vector<std::string> channelLayout;
-    // Document 1.34. The coded pixel aspect ratio the decoder already resamples to square pixels
+    // The coded pixel aspect ratio the decoder already resamples to square pixels
     // (width above is the display width); square when the file declares none or predates 1.34.
     core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
     friend bool operator==(const AssetVideoStream&, const AssetVideoStream&) = default;
 };
 // SMPTE timecode type from its text: drop-frame timecode separates frames with ';' (or '.'),
-// non-drop with ':'; no timecode is type 0. Import and the 1.23 -> 1.25 migration share it.
+// non-drop with ':'; no timecode is type 0.
 [[nodiscard]] inline std::uint32_t timecodeTypeFor(const std::string_view timecode) noexcept {
     if (timecode.empty())
         return 0;
@@ -245,6 +244,6 @@ struct FootageSequenceFrame final {
 // 60000/1001) at `rate`, as a start time.
 [[nodiscard]] std::optional<CompositionTimecode> parseFootageTimecode(std::string_view text,
                                                                       FrameRate rate);
-// Lexical only: importing and migration share a portable UTF-8 file-stem default.
+// Lexical only: import names an asset by its portable UTF-8 file stem.
 [[nodiscard]] std::string defaultAssetName(const AssetRecord& asset);
 } // namespace bloom::document

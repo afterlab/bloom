@@ -56,7 +56,7 @@ std::optional<std::uint64_t> footageFrameIndex(const document::AssetRecord& asse
             return std::nullopt;
         index = *frame;
     } else {
-        // One member per composition frame (a sequence without an assumed rate, as before 1.34).
+        // One member per composition frame (a sequence without an assumed rate).
         const auto frame = valueGraphFrameIndex(time, compositionRate);
         if (!frame)
             return std::nullopt;

@@ -791,7 +791,7 @@ OperationResult AddImageLayer::apply(document::Draft& draft) const {
         return OperationResult::rejected(OperationIssueCode::InvalidTarget,
                                          "Asset " + std::to_string(asset_.value()) +
                                              " does not exist in the project");
-    // The layer shows its source's name and follows it (document 1.30).
+    // The layer shows its source's name and follows it.
     const std::string name =
         !asset->name.empty() ? asset->name
         : asset->kind == document::AssetKind::Sequence

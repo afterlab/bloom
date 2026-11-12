@@ -2086,7 +2086,7 @@ void AssetController::startThumbnails() {
                         }
                         const auto previous = cachedPreviews.find(asset.id);
                         // Every audio stream of the file is decoded so each Video node can play
-                        // its selected stream (document 1.25); the waveform shows the first.
+                        // its selected stream; the waveform shows the first.
                         const auto waveform = cachedWaveforms.find(asset.id);
                         const bool sameSource = available && previous != cachedPreviews.end() &&
                                                 previous->second.key == preview.key;

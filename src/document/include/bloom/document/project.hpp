@@ -137,7 +137,7 @@ class Composition final {
     void setSafeAreas(SafeAreaSettings settings) noexcept { safeAreas_ = settings; }
     [[nodiscard]] CompositionTimecode timecode() const noexcept { return timecode_; }
     void setTimecode(CompositionTimecode timecode) noexcept { timecode_ = timecode; }
-    // Document 1.27 (#378): the Assets folder holding this composition; null is the root.
+    // #378: the Assets folder holding this composition; null is the root.
     [[nodiscard]] const std::optional<AssetFolderId>& folder() const noexcept { return folder_; }
     void setFolder(std::optional<AssetFolderId> folder) noexcept { folder_ = folder; }
     // A node is locked when a locked layer boundary depends on it through node inputs. Published

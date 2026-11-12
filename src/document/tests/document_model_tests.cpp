@@ -115,7 +115,7 @@ void testSparseSequenceManifest(ExpectationContext& expectations) {
     expectations.expect(!asset.validate().ok(), "partial legacy gap enumeration is refused");
 }
 
-// Document 1.36 (#495): a member may carry its stamp and a verified digest; its identity stays the
+// #495: a member may carry its stamp and a verified digest; its identity stays the
 // stamp-derived one, so recording the digest never changes a cache key. Neither is refused.
 void testVerifiedSequenceMember(ExpectationContext& expectations) {
     using namespace bloom::document;

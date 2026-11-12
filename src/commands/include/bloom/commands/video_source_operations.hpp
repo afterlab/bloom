@@ -3,7 +3,7 @@
 #include <bloom/document/ids.hpp>
 #include <cstdint>
 
-// Document 1.25 Video node commands.
+// Video node commands.
 namespace bloom::commands {
 
 // Chooses which of a Video node asset's audio streams (0-based among its audio streams) the node

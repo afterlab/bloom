@@ -45,7 +45,7 @@ LayerOutputBoundary evaluationView(LayerOutputBoundary boundary) {
     boundary.name.clear();
     boundary.labelColor.reset();
     boundary.locked = false;
-    // Document 1.30: the layer table's shy filter and whether the name follows the source.
+    // The layer table's shy filter and whether the name follows the source.
     boundary.shy = false;
     boundary.nameFollowsSource = false;
     for (auto& mask : boundary.masks)

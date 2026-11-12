@@ -330,7 +330,7 @@ constexpr std::array kNotes{
         "export.presets bloom.export.set-output-destination", ""},
     OperationNotes{"bloom.export.remove-output", "Removes an output from its job.", "", "", ""},
     OperationNotes{"bloom.export.set-output-settings",
-        "Replaces an output's settings with a document 1.29 settings object.", "",
+        "Replaces an output's settings with an output settings object.", "",
         "bloom.export.apply-preset export.presets", ""},
     OperationNotes{"bloom.export.apply-preset",
         "Replaces an output's settings with a built-in preset's.", "", "export.presets", ""},

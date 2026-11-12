@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-// Interpret Footage (#381, document 1.34).
+// Interpret Footage (#381).
 namespace bloom::commands {
 
 // The members an Interpret Footage edit sets. An absent member is left as it is on every asset,

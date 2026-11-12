@@ -22,9 +22,8 @@
 //
 // runReopenChain() runs exactly the prefix the two callers share: container read, strict parse of
 // both entries under one shared JSON value budget, manifest decode, version agreement, document
-// decode (including node-version validation and the 1.11 schema floor), reconstruction, and
-// manifest-requirements validation against the reconstructed project. Historical schema migrations
-// do not run during archive open. Save's own re-encode and byte-comparison stages
+// decode (including node-version validation), reconstruction, and manifest-requirements
+// validation against the reconstructed project. Save's own re-encode and byte-comparison stages
 // (ManifestReencode..DocumentByteComparison) are not part of this routine; they run only in
 // verifySaveArchive() against the state this routine hands back. Every allocation is charged
 // through `operation`, identically to the pre-split verifySaveArchive() this was extracted from.
@@ -149,7 +148,7 @@ class [[nodiscard]] ReopenChainResult final {
 // Runs the shared reopen/decode/reconstruct/validate prefix against `archive`.
 // `capturedInputVersion` is verifySaveArchive()'s expected-content documentSchemaVersion leg of
 // VersionAgreement; it is std::nullopt for openProjectArchive(), which has no captured-input
-// version to compare against (see docs/architecture/project-format.md "Versions, Migrations, And
+// version to compare against (see docs/architecture/project-format.md "Versions And
 // Preservation" and this task's own design decision on Open's narrower VersionAgreement leg). Every
 // allocation is charged through `operation`, which this routine only ever reads (every downstream
 // call it drives -- readZipContainer, parseStrictJsonDom, reserve() -- takes or copies its own

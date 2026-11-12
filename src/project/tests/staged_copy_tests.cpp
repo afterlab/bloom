@@ -174,7 +174,7 @@ makeCoordinator(Expectations& expectations, const StagedArtifactConfig config = 
 
 // A real, valid, two-entry Constrained ZIP Profile archive -- the exact shape a preserved-read-only
 // project's retained original archive bytes would take (docs/architecture/project-format.md's
-// "Versions, Migrations, And Preservation": "Open returns a preserved-read-only result containing
+// "Versions And Preservation": "Open returns a preserved-read-only result containing
 // the bounded original archive"). stageCopyArchive() has no build step of its own; it copies
 // whatever bytes it is given verbatim, so this fixture builds real archive bytes purely to serve as
 // realistic, preflight-passing source content.

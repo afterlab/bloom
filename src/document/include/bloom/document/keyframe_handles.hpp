@@ -1,6 +1,6 @@
 #pragma once
 
-// Keyframe handle modes (document 1.32): the reference implementation's Auto Clamped handle
+// Keyframe handle modes: the reference implementation's Auto Clamped handle
 // computation (see tests/keyframe_handle_blender_reference.inc) and the
 // Aligned/Auto bookkeeping that keeps stored handles consistent with each key's mode.
 //

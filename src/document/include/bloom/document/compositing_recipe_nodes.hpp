@@ -62,8 +62,7 @@ inline constexpr std::int64_t kDefaultGlowOctaves = 5;
 //               glow can be tighter than the others.
 //   gradient, tintGradient   with the gradient on (and not Streak), octave j of n takes the
 //               colour of `tintGradient` at j / (n - 1), the tightest octave its start and the
-//               widest its end, instead of all taking `tint` (#541; schema 1 ran from `tint` to
-//               an `outerTint` colour, which opens as this gradient's two stops).
+//               widest its end, instead of all taking `tint` (#541).
 //   points, angle, length, chromatic   Streak: the number of rays (2 is an anamorphic streak), the
 //               first ray's angle in degrees clockwise from screen right, the ray length in pixels,
 //               and the dispersion that shortens green and blue against red.
@@ -76,8 +75,6 @@ inline constexpr std::string_view kGlowRadiusGreenSchemaKey = "bloom.glow.radius
 inline constexpr std::string_view kGlowRadiusBlueSchemaKey = "bloom.glow.radius-blue";
 inline constexpr std::string_view kGlowGradientSchemaKey = "bloom.glow.gradient";
 inline constexpr std::string_view kGlowTintGradientSchemaKey = "bloom.glow.tint-gradient";
-// Schema 1's outer tint, read only by the migration that makes it the tint gradient's end.
-inline constexpr std::string_view kGlowOuterTintSchemaKey = "bloom.glow.outer-tint";
 inline constexpr std::string_view kGlowPointsSchemaKey = "bloom.glow.points";
 inline constexpr std::string_view kGlowAngleSchemaKey = "bloom.glow.angle";
 inline constexpr std::string_view kGlowLengthSchemaKey = "bloom.glow.length";
@@ -237,8 +234,7 @@ recipeScalarDomain(const std::string_view schemaKey) noexcept {
 // glow tints (their alpha is not used) and the contour colour (its alpha scales the band).
 [[nodiscard]] constexpr bool isRecipeColorSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == kDropShadowColorSchemaKey || schemaKey == kGlowTintSchemaKey ||
-           schemaKey == kGlowOuterTintSchemaKey || schemaKey == kAlphaContourColorSchemaKey ||
-           schemaKey == kInnerShadowColorSchemaKey ||
+           schemaKey == kAlphaContourColorSchemaKey || schemaKey == kInnerShadowColorSchemaKey ||
            schemaKey == kInnerGlowColorSchemaKey;
 }
 

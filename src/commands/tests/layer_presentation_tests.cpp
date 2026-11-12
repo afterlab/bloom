@@ -12,7 +12,7 @@
 #include <string>
 #include <utility>
 
-// Document 1.30's presentation-only layer fields: shy, and a name that follows the layer's source.
+// The presentation-only layer fields: shy, and a name that follows the layer's source.
 
 namespace bloom::commands::test {
 namespace {
@@ -163,38 +163,6 @@ void testNameFollowsComposition(TestContext& test) {
                 "undo restores both names");
 }
 
-void testMigrationInference(TestContext& test) {
-    auto initial = document::makeNewProject("Infer", "Main", core::RationalTime::fromInteger(4));
-    const auto composition = initial.initialCompositionId;
-    document::AssetRecord asset;
-    asset.id = AssetId::fromRaw(1);
-    asset.locator = {"file", "project-relative", "media/a.png", "file:///media/a.png"};
-    asset.width = 4;
-    asset.height = 3;
-    requireFixture(initial.project.addAsset(asset), "asset fixture");
-    Document document(std::move(initial.project));
-    CommandStack stack(document);
-    requireFixture(execute<AddImageLayer>(document, stack, composition, asset.id).changed(),
-                   "layer fixture");
-    requireFixture(execute<AddImageLayer>(document, stack, composition, asset.id).changed(),
-                   "layer fixture");
-    auto project = document.snapshot().project();
-    auto* edited = project.findComposition(composition);
-    auto& first = edited->graph().layerOutputs()[0];
-    auto& second = edited->graph().layerOutputs()[1];
-    // A pre-1.30 project: no flags, one layer still shows its source name, one was renamed.
-    auto* firstLayer = edited->graph().findLayer(first.layerId);
-    auto* secondLayer = edited->graph().findLayer(second.layerId);
-    firstLayer->nameFollowsSource = false;
-    secondLayer->nameFollowsSource = false;
-    secondLayer->name = "Renamed";
-    document::inferLayerNameFollowsSource(project);
-    const auto& inferred = project.findComposition(composition)->graph().layerOutputs();
-    test.expect(inferred[0].nameFollowsSource && inferred[0].name == "a" &&
-                    !inferred[1].nameFollowsSource && inferred[1].name == "Renamed",
-                "migration follows exactly the layers already showing their source's name");
-}
-
 } // namespace
 } // namespace bloom::commands::test
 
@@ -204,7 +172,6 @@ int main() {
         bloom::commands::test::testShy(test);
         bloom::commands::test::testNameFollowsAsset(test);
         bloom::commands::test::testNameFollowsComposition(test);
-        bloom::commands::test::testMigrationInference(test);
     } catch (const std::exception& error) {
         test.fail(std::string("unexpected test exception: ") + error.what());
     }

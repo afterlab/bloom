@@ -1,7 +1,7 @@
 #pragma once
 
 // The graph editor's Easing presets (T1, item 9), in menu order: Linear and Constant, then
-// Robert Penner's easing functions (document 1.30's evaluated equations), each as Ease In / Ease
+// Robert Penner's easing functions (the document's evaluated equations), each as Ease In / Ease
 // Out / Ease In-Out. This table is the ONE place the menu reads them from.
 
 #include <bloom/document/animation.hpp>

@@ -102,7 +102,7 @@ nb::object parameterValue(const document::ParameterValue& value) {
         value);
 }
 
-// Document 1.30: the interpolation's stable token next to its enum id, and the easing-equation
+// The interpolation's stable token next to its enum id, and the easing-equation
 // parameters every key carries.
 template <typename Keyframe> void easing(nb::dict& row, const Keyframe& key) {
     row["interpolation_name"] =

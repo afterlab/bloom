@@ -1,7 +1,7 @@
-// The value graph on the wire (introduced in document 1.4): the vec3 constant kind and the driver
-// parameter source, written and read back at the current minor. The gating cases are produced by
-// restamping a freshly written document's declared minor rather than by pasting a second
-// hand-written literal, so the claimed version and the payload cannot drift apart here.
+// The value graph on the wire: the vec3 constant kind and the driver parameter source, written and
+// read back at the current minor. The newer-minor case is produced by restamping a freshly written
+// document's declared minor rather than by pasting a second hand-written literal, so the claimed
+// version and the payload cannot drift apart here.
 
 #include "zip_container_test_support.hpp"
 
@@ -69,7 +69,7 @@ struct Authored final {
     document::NodeId scalarValueNode;
 };
 
-// One composition carrying BOTH of 1.4's additions at once: a Vector 3 value node whose constant is
+// One composition carrying BOTH constructs at once: a Vector 3 value node whose constant is
 // a vec3, and a Layer Output whose opacity is driven by a Scalar value node. The vec3 components
 // deliberately include a negative one and a value with no short decimal spelling, because those are
 // what a lossy encoder would quietly round.
@@ -275,7 +275,7 @@ void roundTripAndReopen() {
            "a driven parameter is written with the driver discriminator");
     expect(text.find("\"outputPort\": \"value\"") != std::string::npos,
            "and names the output port it reads");
-    expect(text.find("\"minor\": 43") != std::string::npos,
+    expect(text.find("\"minor\": 0") != std::string::npos,
            "both constructs declare the current document schema minor");
 
     auto openedResult = openProjectArchive(archive, {}, memory());
@@ -329,13 +329,12 @@ void roundTripAndReopen() {
     expect(reencoded == text, "re-encoding the reopened document reproduces identical bytes");
 }
 
-// The additive-minor rule in both directions: a file claiming a minor that PREDATES 1.4 may not
-// carry a 1.4 construct, while one claiming a later minor may.
+// A file claiming a minor newer than this build still decodes the current constructs.
 void minorGating() {
     const auto authored = authoredProject();
     const auto settings = neutralColorSettings();
     auto baseline = documentTextOf(archiveOf(authored.document->snapshot(), settings));
-    const auto anchor = std::string_view("\"minor\": 43");
+    const auto anchor = std::string_view("\"minor\": 0");
     const auto minor = baseline.find(anchor);
     expect(minor != std::string::npos, "the value-graph fixture declares the current minor");
     if (minor == std::string::npos) {
@@ -352,22 +351,7 @@ void minorGating() {
         return decodeDocumentEnvelope(dom.document()->root());
     };
 
-    // Claiming 1.3 -- a minor BELOW the 1.12 floor. The document is refused at the floor, before
-    // any member of it is interpreted, so a construct 1.3 never declared can no more be read as
-    // part of 1.3 than it could be silently migrated forward.
-    {
-        const auto decoded = decodeClaiming("\"minor\": 3");
-        expect(decoded.outcome() == DocumentDecodeOutcome::Failed &&
-                   decoded.error() == DocumentDecodeError::UnsupportedSchemaVersion,
-               "a document claiming 1.3 while carrying a driver source is refused, never decoded "
-               "as if the construct were part of 1.3");
-        expect(decoded.path() == "/schemaVersion",
-               "and the refusal names the schema version it could not accept");
-    }
-
-    // Claiming 1.5 -- a minor NEWER than this build -- still decodes both constructs, because the
-    // gate is "the minor that declares it or later", not "exactly 1.4". That is what makes 1.4's
-    // additions additive rather than a one-version island.
+    // Claiming a minor NEWER than this build still decodes both constructs.
     {
         const auto decoded = decodeClaiming(
             "\"minor\": " + std::to_string(kCanonicalDocumentSchemaVersionV1.minor + 1));

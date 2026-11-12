@@ -463,7 +463,7 @@ class PathScope final {
 // schemaVersion, ocioConfig.schemaVersion, an extension record's schemaVersion, and an
 // owner-remapper's version); the document root's own schemaVersion is written with the default
 // `attach = false` and no PathScope pushed, matching the decode-side bootstrap constraint that the
-// root schemaVersion object is always decoded before documentMinor/roundTrip are established and so
+// root schemaVersion object is always decoded before roundTrip is established and so
 // can never itself retain a trailing member (see document_decode.cpp's decodeDocumentEnvelope).
 [[nodiscard]] bool emitVersion(EmitState& state, const bloom::document::SchemaVersion version,
                                const bool attach = false) noexcept {
@@ -629,7 +629,7 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
     return state.ok(state.writer.endObject());
 }
 
-// Document 1.43 (#589): what follows a compound path's contours, each only when it says something.
+// #589: what follows a compound path's contours, each only when it says something.
 [[nodiscard]] bool emitPathValueTrailer(EmitState& state,
                                         const bloom::document::PathValue& path) noexcept {
     auto& writer = state.writer;
@@ -692,7 +692,7 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
                state.ok(writer.endObject());
     }
     if (const auto* vector = std::get_if<Vec3d>(&value)) {
-        // Document 1.4. Its own kind token rather than a third component appended to "vec2": the
+        // Its own kind token rather than a third component appended to "vec2": the
         // format's discriminators name TYPES, and a three-component vector is a different type from
         // a two-component one -- which is also why an older minor refuses to decode this kind at
         // all rather than reading it as a vec2 with a stray member.
@@ -729,7 +729,7 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
             if (!state.ok(writer.memberName("anchors")) || !state.ok(writer.beginArray()))
                 return false;
             for (const auto& anchor : contour.anchors) {
-                // Schema 1.24: the editing mode, written only when it differs from the mode the
+                // The editing mode, written only when it differs from the mode the
                 // geometry implies, so the decoder's inference reproduces every omitted value.
                 const bool explicitMode =
                     anchor.mode != bloom::document::inferPathAnchorMode(anchor);
@@ -745,7 +745,7 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
             return state.ok(writer.endArray()) && state.ok(writer.memberName("closed")) &&
                    state.ok(writer.booleanValue(contour.closed));
         };
-        // Document 1.43 (#589): a value the original shape can say keeps that shape, so a document
+        // #589: a value the original shape can say keeps that shape, so a document
         // with one-contour paths re-encodes byte-identically apart from its schema minor.
         if (bloom::document::pathValueHasFlatForm(*path))
             return contourMembers(path->firstContour()) && emitRetainedTrailing(state) &&
@@ -759,7 +759,7 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
         return state.ok(writer.endArray()) && emitPathValueTrailer(state, *path) &&
                emitRetainedTrailing(state) && state.ok(writer.endObject());
     }
-    // Document 1.38 (#541): a gradient, its stops in stored order, each a flat object.
+    // #541: a gradient, its stops in stored order, each a flat object.
     if (const auto* gradient = std::get_if<GradientValue>(&value)) {
         if (!gradient->isValid() || !state.ok(writer.memberName("kind")) ||
             !state.ok(writer.stringValue("gradient")) || !state.ok(writer.memberName("stops")) ||
@@ -776,7 +776,7 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
                 return false;
         if (!state.ok(writer.endArray()))
             return false;
-        // Document 1.41 (#546): each mode that is not its default, in this order.
+        // #546: each mode that is not its default, in this order.
         const auto& modes = gradient->modes;
         const auto named = [&](const std::string_view member, const std::string_view text) {
             return state.ok(writer.memberName(member)) && state.ok(writer.stringValue(text));
@@ -855,7 +855,7 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
                 }
             }
         } else if (const auto* driver = std::get_if<DriverBindingSource>(&record.source)) {
-            // Document 1.4. The durable record is exactly the pair it addresses, written the same
+            // The durable record is exactly the pair it addresses, written the same
             // way an edge's source is -- an object id and a port name -- because that is what a
             // driver is: an ordinary port reference that lands in parameter-address space.
             if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("driver"))) {
@@ -904,7 +904,7 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
            emitFloat64Member(state, "value", handle.value) && state.ok(writer.endObject());
 }
 
-// Document 1.30: a key's easing-equation parameters, emitted ONLY when non-default, after the
+// A key's easing-equation parameters, emitted ONLY when non-default, after the
 // handles, so every older key re-encodes byte-identically apart from the schema minor.
 [[nodiscard]] bool
 emitKeyframeEasing(EmitState& state,
@@ -921,7 +921,7 @@ emitKeyframeEasing(EmitState& state,
            emitFloat64Member(state, "period", easing.period) && state.ok(writer.endObject());
 }
 
-// Document 1.32: a key's handle mode, emitted ONLY when it is not Free, after the easing member.
+// A key's handle mode, emitted ONLY when it is not Free, after the easing member.
 [[nodiscard]] bool emitKeyframeHandleMode(EmitState& state,
                                           const bloom::document::KeyframeHandleMode mode) noexcept {
     if (mode == bloom::document::KeyframeHandleMode::Free)
@@ -1003,7 +1003,7 @@ emitInterpolation(EmitState& state,
     return state.ok(writer.endObject());
 }
 
-// ADR 0028 (document 1.24): a whole-value Path key. Its value is the ordinary constant-value
+// ADR 0028: a whole-value Path key. Its value is the ordinary constant-value
 // object of kind "path".
 [[nodiscard]] bool emitPathKeyframe(EmitState& state,
                                     const bloom::document::PathKeyframe& key) noexcept {
@@ -1030,7 +1030,7 @@ emitInterpolation(EmitState& state,
            emitRetainedTrailing(state) && state.ok(writer.endObject());
 }
 
-// Document 1.38 (#541): a whole-value Gradient key, its value a constant of kind "gradient".
+// #541: a whole-value Gradient key, its value a constant of kind "gradient".
 [[nodiscard]] bool emitGradientKeyframe(EmitState& state,
                                         const bloom::document::GradientKeyframe& key) noexcept {
     auto& writer = state.writer;
@@ -1316,8 +1316,8 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
     return "add";
 }
 
-// Layer masks and track matte (1.24, ADR 0028): written only when present, so a layer without
-// them keeps its pre-1.24 bytes.
+// Layer masks and track matte (ADR 0028): written only when present, so a layer without them
+// writes neither.
 [[nodiscard]] bool emitLayerMasks(EmitState& state,
                                   const bloom::document::LayerOutputBoundary& boundary) noexcept {
     using namespace bloom::document;
@@ -1340,7 +1340,7 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
                 !emitNamedId(state, "expansion", mask.expansion.value()) ||
                 !emitNamedId(state, "opacity", mask.opacity.value()))
                 return false;
-            // Document 1.42 (#383): a matte mask's Mask output.
+            // #383: a matte mask's Mask output.
             if (mask.matte) {
                 const PathScope matteScope(state, "matte");
                 if (!state.ok(writer.memberName("matte")) || !emitOutputPortRef(state, *mask.matte))
@@ -1357,7 +1357,7 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
         const auto& matte = *boundary.trackMatte;
         if (!state.ok(writer.memberName("trackMatte")) || !state.ok(writer.beginObject()))
             return false;
-        // Document 1.42 (#383): a node matte names its Mask output instead of a source layer.
+        // #383: a node matte names its Mask output instead of a source layer.
         if (matte.node) {
             const PathScope nodeScope(state, "node");
             if (!state.ok(writer.memberName("node")) || !emitOutputPortRef(state, *matte.node))
@@ -1376,8 +1376,8 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
     return true;
 }
 
-// Layer time (1.23): every member is written only when it differs from the identity default, so a
-// layer without timing keeps its pre-1.23 bytes.
+// Layer time: every member is written only when it differs from the identity default, so a layer
+// without timing writes none of them.
 [[nodiscard]] bool emitLayerTiming(EmitState& state,
                                    const bloom::document::LayerTiming& timing) noexcept {
     using namespace bloom::document;
@@ -1678,16 +1678,15 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
             return false;
         if (!emitLayerTiming(state, boundary.timing) || !emitLayerMasks(state, boundary))
             return false;
-        // Document 1.30: presentation flags, each written only when set.
+        // Presentation flags, each written only when set.
         if (boundary.shy &&
             (!state.ok(writer.memberName("shy")) || !state.ok(writer.booleanValue(true))))
             return false;
         if (boundary.nameFollowsSource && (!state.ok(writer.memberName("nameFollowsSource")) ||
                                            !state.ok(writer.booleanValue(true))))
             return false;
-        // Document 1.37 (#502): a Merge entry's own layer names its slot and binds its own
-        // parameters; the Frame pivot is written only when set, so every other layer keeps its
-        // pre-1.37 bytes.
+        // #502: a Merge entry's own layer names its slot and binds its own parameters; the Frame
+        // pivot is written only when set, so every other layer writes neither.
         if (boundary.entrySlot && !emitNamedId(state, "slotId", boundary.entrySlot->value()))
             return false;
         if (boundary.pivot == bloom::document::LayerPivot::Frame &&
@@ -1876,7 +1875,7 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
         }
         if (!state.ok(writer.endObject()))
             return false;
-        // Document 1.31: the optional frame colour, written only when the frame has one.
+        // The optional frame colour, written only when the frame has one.
         if (record.color) {
             if (!state.ok(writer.memberName("color")) || !state.ok(writer.beginArray()))
                 return false;
@@ -2023,7 +2022,7 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
             !state.ok(writer.stringValue(*workingColorSpaceId)))
             return false;
     }
-    // Document 1.26: written only when it differs from the default (start 0, non-drop).
+    // Written only when it differs from the default (start 0, non-drop).
     if (const auto timecode = composition.timecode();
         timecode != bloom::document::CompositionTimecode{}) {
         const PathScope scope(state, "timecode");
@@ -2035,7 +2034,7 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
             !state.ok(writer.endObject()))
             return false;
     }
-    // Document 1.27 (#378): the Assets folder holding the composition; absent means the root.
+    // #378: the Assets folder holding the composition; absent means the root.
     if (const auto& folder = composition.folder();
         folder && !emitNamedId(state, "folder", folder->value()))
         return false;
@@ -2378,7 +2377,7 @@ dataBlockWireKind(const bloom::document::DataBlockKind kind) noexcept {
             }
             return state.ok(writer.endArray());
         };
-        // Document 1.43 (#589): the same choice of shape a path constant makes.
+        // #589: the same choice of shape a path constant makes.
         if (bloom::document::pathValueHasFlatForm(*path)) {
             if (!contourMembers(path->firstContour()))
                 return false;
@@ -2728,10 +2727,10 @@ dataBlockWireKind(const bloom::document::DataBlockKind kind) noexcept {
                 (water.assetFolder != 0 &&
                  !emitHighWaterMember(state, "assetFolder", water.assetFolder)) ||
                 !emitHighWaterMember(state, "dataBlock", water.dataBlock) ||
-                // Document 1.24 (ADR 0028): written only once a mask id has been issued.
+                // ADR 0028: written only once a mask id has been issued.
                 (water.layerMask != 0 &&
                  !emitHighWaterMember(state, "layerMask", water.layerMask)) ||
-                // Document 1.29 (ADR 0033): always written.
+                // ADR 0033: always written.
                 !emitHighWaterMember(state, "exportJob", water.exportJob) ||
                 !emitHighWaterMember(state, "exportOutput", water.exportOutput)) {
                 return false;
@@ -2782,7 +2781,7 @@ dataBlockWireKind(const bloom::document::DataBlockKind kind) noexcept {
         return false;
     }
     // RT2: every attachment point in an overlay's RoundTripState must be consumed exactly once by
-    // this walk (see docs/architecture/project-format.md, "Versions, Migrations, And
+    // this walk (see docs/architecture/project-format.md, "Versions And
     // Preservation"). A leftover entry is state captured against a different document (or a stale
     // edit of this one), never silently dropped.
     if (state.roundTrip != nullptr && state.retainedConsumed != state.roundTrip->entries().size()) {
@@ -2863,7 +2862,7 @@ locatorPortability(const bloom::document::OcioConfigLocator& locator) noexcept {
         return walk;
     }
 
-    // No parameter-source admission pass any more. Document 1.4 can write every alternative the
+    // No parameter-source admission pass any more. The document can write every alternative the
     // document layer can hold, and a driver source's own well-formedness -- a valid node id and
     // valid structural port text -- is already refused by ParameterStore on insert, so a second
     // check here could only ever be unreachable.

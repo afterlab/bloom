@@ -1,5 +1,4 @@
-// Document 1.34 (issue #381): every Interpret Footage member and a stream's coded pixel aspect
-// ratio round-trip, a document claiming 1.33 cannot carry them, and 1.33 migrates by version alone.
+// Issue #381: every Interpret Footage member and a stream's coded pixel aspect ratio round-trip.
 // The Import members (Skip, a sequence's imported frame range, a still's duration) do too.
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/asset.hpp>
@@ -8,7 +7,6 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/document_decode.hpp>
-#include <bloom/project/document_migration.hpp>
 #include <bloom/project/strict_json_dom.hpp>
 
 #include <array>
@@ -20,13 +18,6 @@
 
 namespace {
 
-// Document 1.29 (ADR 0033) members a downgraded fixture must not carry.
-[[maybe_unused]] void stripExportQueueV1_29(std::string& text) {
-    text = std::regex_replace(
-        text, std::regex(R"(,\s*"exportQueue"\s*:\s*\{\s*"jobs"\s*:\s*\[\]\s*\})"), "");
-    text = std::regex_replace(
-        text, std::regex(R"(,\s*"exportJob"\s*:\s*"0",\s*"exportOutput"\s*:\s*"0")"), "");
-}
 using namespace bloom;
 using namespace bloom::project;
 using namespace bloom::document;
@@ -154,17 +145,15 @@ void roundTrip() {
         expect(text.find(token) != std::string::npos, token);
     const auto decoded = decodeText(text);
     expect(decoded.front() == *document.snapshot().project().findAsset(AssetId::fromRaw(1)),
-           "every 1.34 member and the stream pixel aspect round-trip exactly");
+           "every member and the stream pixel aspect round-trip exactly");
     expect(encode(document) == text, "the canonical text is stable");
 
-    // Defaults write nothing new: the 1.33 interpretation shape.
+    // Defaults write nothing new.
     const auto plain = encode(makeDocument("01:00:00:00", 2));
     expect(plain.find("\"alphaMode\"") == std::string::npos &&
                plain.find("\"loopCount\"") == std::string::npos &&
                plain.find("\"missingFrames\"") == std::string::npos,
            "default members are absent");
-    expect(!decodes(replaceRegex(text, R"("minor": 43(\s*\}))", "\"minor\": 33$1")),
-           "a document claiming 1.33 cannot carry the 1.34 members");
     expect(!decodes(replaceRegex(text, R"("loopCount": 3)", "\"loopCount\": 1")),
            "a default value written out is refused");
     expect(!decodes(replaceRegex(text, R"("lowerFirst")", "\"sideways\"")),
@@ -276,34 +265,8 @@ void importMembers() {
     const auto decoded = decodeText(text);
     expect(decoded.size() == 2 && decoded[0] == asset && decoded[1] == still,
            "Skip, the frame range and the still duration round-trip exactly");
-    // A 1.33 reader keeps unknown trailing members aside and reads the 1.33 meaning.
-    const auto older = decodeText(replaceRegex(text, R"("minor": 43(\s*\}))", "\"minor\": 33$1"));
-    expect(older.size() == 2 &&
-               older[0].interpretation.missingFrames == AssetMissingFrames::HoldPrevious &&
-               !older[0].manifest.range && !older[1].interpretation.stillDuration,
-           "a document claiming 1.33 does not read them");
     expect(!decodes(replaceRegex(text, R"("skip")", "\"sometimes\"")),
            "an unknown missing-frames token is refused");
-}
-void migration() {
-    const auto current = encode(makeDocument("01:00:00:00", 2));
-    const auto older = replaceRegex(current, R"("minor": 43(\s*\}))", "\"minor\": 33$1");
-    auto operation = memory();
-    auto parsed = parseStrictJsonDom(std::as_bytes(std::span(older)), {}, operation);
-    expect(static_cast<bool>(parsed), "1.33 document parses");
-    if (!parsed)
-        return;
-    const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 33}, {1, 34},
-                                             kProductionDocumentMigrationSteps, {}, operation);
-    expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 1 &&
-               migrated.migratedRoot() != nullptr,
-           "1.33 -> 1.34 is one step");
-    if (migrated.migratedRoot() == nullptr)
-        return;
-    const auto decoded = decodeDocumentEnvelope(*migrated.migratedRoot());
-    expect(static_cast<bool>(decoded) &&
-               decoded.value()->assets.front().interpretation == AssetInterpretation{},
-           "a migrated asset has the default interpretation (the 1.33 playback)");
 }
 } // namespace
 
@@ -312,7 +275,6 @@ int main() {
         roundTrip();
         sequenceMembers();
         importMembers();
-        migration();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

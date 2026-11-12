@@ -48,7 +48,7 @@ namespace bloom::document {
 // The record with every presentation field reset to its default (rule 3).
 [[nodiscard]] LayerOutputBoundary evaluationView(LayerOutputBoundary boundary);
 [[nodiscard]] AssetRecord evaluationView(AssetRecord asset);
-// A key with its handle mode reset (document 1.32). Auto and Aligned only decide how the stored
+// A key with its handle mode reset. Auto and Aligned only decide how the stored
 // handles are later maintained; sampling reads the handles themselves.
 [[nodiscard]] ScalarKeyframe evaluationView(ScalarKeyframe keyframe) noexcept;
 [[nodiscard]] PathKeyframe evaluationView(PathKeyframe keyframe) noexcept;

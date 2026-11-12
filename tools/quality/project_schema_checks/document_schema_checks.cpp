@@ -1,8 +1,11 @@
 #include "schema_check_helpers.hpp"
 
+#include <algorithm>
 #include <array>
+#include <filesystem>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace bloom::quality {
 namespace {
@@ -10,7 +13,7 @@ namespace {
 using schema_detail::ExpectedBranch;
 
 constexpr std::string_view draft202012 = "https://json-schema.org/draft/2020-12/schema";
-constexpr std::string_view documentId = "urn:kinetik:bloom:schema:project-document:1.0";
+constexpr std::string_view documentId = "urn:afterlab:bloom:schema:project-document:1.0";
 constexpr std::string_view identifierPattern = "^[a-z0-9][a-z0-9._-]{0,127}$";
 constexpr std::string_view objectIdPattern =
     "^(?:[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|"
@@ -174,6 +177,9 @@ void validateColorDefinitions(const json::Value& definitions) {
 
 } // namespace
 
+// The one project document schema. The semantic checks below pin what Project I/O relies on and
+// read as the reason for each constraint; the generated lock (project_schema_lock.cpp) then pins
+// every remaining schema node, so no edit to the artifact passes without a reviewed lock change.
 void validateDocumentSchema(const json::Value& schema) {
     using namespace schema_detail;
     requireExactKeys(schema,
@@ -189,6 +195,7 @@ void validateDocumentSchema(const json::Value& schema) {
     requireExactStringArray(requireMember(schema, "required", "$"),
                             {"schemaVersion", "project", "idAllocation", "extensions"},
                             "$.required");
+    // A same-major newer minor keeps unknown members for preservation, so the root stays open.
     requireExactBoolean(requireMember(schema, "unevaluatedProperties", "$"), true,
                         "$.unevaluatedProperties");
 
@@ -196,7 +203,7 @@ void validateDocumentSchema(const json::Value& schema) {
     requireExactKeys(properties, {"schemaVersion", "project", "idAllocation", "extensions"},
                      "$.properties keys");
     requireExact(requireMember(properties, "schemaVersion", "$.properties"),
-                 R"({"$ref":"#/$defs/fixedVersion-1.0"})", "$.properties.schemaVersion");
+                 R"({"$ref":"#/$defs/documentSchemaVersion"})", "$.properties.schemaVersion");
     requireExact(requireMember(properties, "project", "$.properties"),
                  R"({"$ref":"#/$defs/project-1.0"})", "$.properties.project");
     requireExact(requireMember(properties, "idAllocation", "$.properties"),
@@ -205,55 +212,11 @@ void validateDocumentSchema(const json::Value& schema) {
                   "$.properties.extensions", "#/$defs/extensionRecord-1.0");
 
     const auto& definitions = requireMember(schema, "$defs", "$");
-    requireExactKeys(definitions,
-                     {"unsigned32",
-                      "positiveUnsigned32",
-                      "fixedVersion-1.0",
-                      "schemaVersion-1.0",
-                      "objectId",
-                      "allocatorHighWater",
-                      "signed64Decimal",
-                      "positiveSigned64Decimal",
-                      "positiveUnsigned32Decimal",
-                      "humanFacingName",
-                      "structuralText",
-                      "namespacedIdentifier",
-                      "rationalTime",
-                      "positiveRationalTime",
-                      "unsignedRatio",
-                      "project-1.0",
-                      "composition-1.0",
-                      "compositionFormat-1.0",
-                      "colorSettings-1.0",
-                      "ocioConfigReference-1.0",
-                      "ocioConfigLocator-1.0",
-                      "externalFileUri",
-                      "ocioConfigRevision-1.0",
-                      "ocioContextVariable-1.0",
-                      "parameter-1.0",
-                      "parameterSource-1.0",
-                      "parameterValue-1.0",
-                      "animationCurve-1.0",
-                      "scalarKeyframe-1.0",
-                      "vec2Keyframe-1.0",
-                      "vec2Value-1.0",
-                      "graph-1.0",
-                      "node-1.0",
-                      "parameterBinding-1.0",
-                      "edge-1.0",
-                      "outputPortReference-1.0",
-                      "inputPortReference-1.0",
-                      "layerOutput-1.0",
-                      "layerStack-1.0",
-                      "layerStackEntry-1.0",
-                      "idAllocation-1.0",
-                      "highestIssued-1.0",
-                      "extensionRecord-1.0",
-                      "extensionTarget-1.0",
-                      "extensionReferencePolicy-1.0",
-                      "extensionHostReference-1.0",
-                      "canonicalBase64"},
-                     "$.$defs keys");
+    // The schema this file describes is exactly 1.0; the writer and decoder agree on it.
+    requireExact(
+        requireMember(definitions, "documentSchemaVersion", "$.$defs"),
+        R"({"type":"object","required":["major","minor"],"properties":{"major":{"const":1},"minor":{"const":0}},"unevaluatedProperties":false})",
+        "$.$defs.documentSchemaVersion");
     requireExact(requireMember(definitions, "unsigned32", "$.$defs"),
                  R"({"type":"integer","minimum":0,"maximum":4294967295})", "$.$defs.unsigned32");
     requireExact(requireMember(definitions, "positiveUnsigned32", "$.$defs"),
@@ -281,267 +244,38 @@ void validateDocumentSchema(const json::Value& schema) {
     requirePatternDefinition(definitions, "positiveUnsigned32Decimal", positiveUnsigned32Pattern);
     validateTextDefinitions(definitions);
     validateRationals(definitions);
-
-    const auto& project = validateObjectShape(definitions, "project-1.0",
-                                              {"id", "name", "colorSettings", "compositions"},
-                                              {"id", "name", "colorSettings", "compositions"});
-    requireExact(requireMember(project, "colorSettings", "project"),
-                 R"({"$ref":"#/$defs/colorSettings-1.0"})",
-                 "$.$defs.project-1.0.properties.colorSettings");
-    validateArray(requireMember(project, "compositions", "project"),
-                  "$.$defs.project-1.0.properties.compositions", "#/$defs/composition-1.0");
-
-    const auto& composition = validateObjectShape(
-        definitions, "composition-1.0",
-        {"id", "name", "duration", "format", "parameters", "animationCurves", "graph"},
-        {"id", "name", "duration", "format", "parameters", "animationCurves", "graph"});
-    requireExact(requireMember(composition, "duration", "composition"),
-                 R"({"$ref":"#/$defs/positiveRationalTime"})",
-                 "$.$defs.composition-1.0.properties.duration");
-    validateArray(requireMember(composition, "parameters", "composition"),
-                  "$.$defs.composition-1.0.properties.parameters", "#/$defs/parameter-1.0");
-    validateArray(requireMember(composition, "animationCurves", "composition"),
-                  "$.$defs.composition-1.0.properties.animationCurves",
-                  "#/$defs/animationCurve-1.0");
-
-    const auto& format = validateObjectShape(definitions, "compositionFormat-1.0",
-                                             {"width", "height", "pixelAspect", "frameRate"},
-                                             {"width", "height", "pixelAspect", "frameRate"});
-    for (const std::string_view dimension : {"width", "height"}) {
-        requireExact(requireMember(format, dimension, "composition format"),
-                     R"({"type":"integer","minimum":1,"maximum":1048576})",
-                     "$.$defs.compositionFormat-1.0.properties." + std::string{dimension});
-    }
-
     validateColorDefinitions(definitions);
 
-    static const std::array sourceSpecs{
-        ExpectedBranch{"constant", {"kind", "value"}, {"kind", "value"}},
-        ExpectedBranch{"animation-curve", {"kind", "curveId"}, {"kind", "curveId"}},
-    };
-    static_cast<void>(validateObjectShape(definitions, "parameter-1.0",
-                                          {"id", "schemaKey", "source"},
-                                          {"id", "schemaKey", "source"}));
-    const auto sources =
-        validateDiscriminatedUnion(definitions, "parameterSource-1.0", sourceSpecs);
-    requireExact(requireMember(*sources[0], "value", "constant source"),
-                 R"({"$ref":"#/$defs/parameterValue-1.0"})",
-                 "$.$defs.parameterSource-1.0 constant value");
-    requireExact(requireMember(*sources[1], "curveId", "animation source"),
-                 R"({"$ref":"#/$defs/objectId"})",
-                 "$.$defs.parameterSource-1.0 animation-curve curveId");
-
-    static const std::array parameterValueSpecs{
-        ExpectedBranch{"bool", {"kind", "value"}, {"kind", "value"}},
-        ExpectedBranch{"int64", {"kind", "value"}, {"kind", "value"}},
-        ExpectedBranch{"float64", {"kind", "value"}, {"kind", "value"}},
-        ExpectedBranch{"vec2", {"kind", "x", "y"}, {"kind", "x", "y"}},
-        ExpectedBranch{"color4",
-                       {"kind", "red", "green", "blue", "alpha"},
-                       {"kind", "red", "green", "blue", "alpha"}},
-        ExpectedBranch{"string", {"kind", "value"}, {"kind", "value"}},
-        ExpectedBranch{
-            "rational", {"kind", "numerator", "denominator"}, {"kind", "numerator", "denominator"}},
-    };
-    const auto parameterValues =
-        validateDiscriminatedUnion(definitions, "parameterValue-1.0", parameterValueSpecs);
-    requireExact(requireMember(*parameterValues[0], "value", "bool value"), R"({"type":"boolean"})",
-                 "$.$defs.parameterValue-1.0 bool value");
-    requireExact(requireMember(*parameterValues[1], "value", "int64 value"),
-                 R"({"$ref":"#/$defs/signed64Decimal"})", "$.$defs.parameterValue-1.0 int64 value");
-    requireExact(requireMember(*parameterValues[2], "value", "float64 value"),
-                 R"({"type":"number"})", "$.$defs.parameterValue-1.0 float64 value");
-
-    static const std::array curveSpecs{
-        ExpectedBranch{"scalar", {"id", "kind", "keyframes"}, {"id", "kind", "keyframes"}},
-        ExpectedBranch{"vec2", {"id", "kind", "keyframes"}, {"id", "kind", "keyframes"}},
-    };
-    const auto curves = validateDiscriminatedUnion(definitions, "animationCurve-1.0", curveSpecs);
-    validateArray(requireMember(*curves[0], "keyframes", "scalar curve"),
-                  "$.$defs.animationCurve-1.0 scalar keys", "#/$defs/scalarKeyframe-1.0", 1'000'000,
-                  1, true);
-    validateArray(requireMember(*curves[1], "keyframes", "vec2 curve"),
-                  "$.$defs.animationCurve-1.0 vec2 keys", "#/$defs/vec2Keyframe-1.0", 1'000'000, 1,
-                  true);
-
-    validateDocumentGraphAndReferences(definitions, parameterValues, curves);
-    validateReferences(schema, schema);
+    validateSchemaInvariants(schema, "document schema");
+    validateSchemaLock(schema, documentSchemaLock(), "document schema");
 }
 
 void checkProjectSchemas(const std::filesystem::path& repositoryRoot) {
-    validateDocumentSchemaV1_24(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.24.schema.json"));
-    validateManifestSchemaV1_24(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.24.schema.json"));
-    validateDocumentSchemaV1_25(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.25.schema.json"));
-    validateManifestSchemaV1_25(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.25.schema.json"));
-    validateDocumentSchemaV1_26(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.26.schema.json"));
-    validateManifestSchemaV1_26(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.26.schema.json"));
-    validateDocumentSchemaV1_27(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.27.schema.json"));
-    validateManifestSchemaV1_27(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.27.schema.json"));
-    validateDocumentSchemaV1_28(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.28.schema.json"));
-    validateManifestSchemaV1_28(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.28.schema.json"));
-    validateDocumentSchemaV1_29(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.29.schema.json"));
-    validateManifestSchemaV1_29(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.29.schema.json"));
-    validateDocumentSchemaV1_30(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.30.schema.json"));
-    validateManifestSchemaV1_30(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.30.schema.json"));
-    validateDocumentSchemaV1_31(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.31.schema.json"));
-    validateManifestSchemaV1_31(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.31.schema.json"));
-    validateDocumentSchemaV1_32(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.32.schema.json"));
-    validateManifestSchemaV1_32(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.32.schema.json"));
-    validateDocumentSchemaV1_33(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.33.schema.json"));
-    validateManifestSchemaV1_33(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.33.schema.json"));
-    validateDocumentSchemaV1_34(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.34.schema.json"));
-    validateManifestSchemaV1_34(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.34.schema.json"));
-    validateDocumentSchemaV1_35(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.35.schema.json"));
-    validateManifestSchemaV1_35(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.35.schema.json"));
-    validateDocumentSchemaV1_36(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.36.schema.json"));
-    validateManifestSchemaV1_36(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.36.schema.json"));
-    validateDocumentSchemaV1_37(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.37.schema.json"));
-    validateManifestSchemaV1_37(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.37.schema.json"));
-    validateDocumentSchemaV1_38(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.38.schema.json"));
-    validateManifestSchemaV1_38(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.38.schema.json"));
-    validateDocumentSchemaV1_39(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.39.schema.json"));
-    validateManifestSchemaV1_39(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.39.schema.json"));
-    validateDocumentSchemaV1_40(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.40.schema.json"));
-    validateManifestSchemaV1_40(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.40.schema.json"));
-    validateDocumentSchemaV1_41(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.41.schema.json"));
-    validateManifestSchemaV1_41(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.41.schema.json"));
-    validateDocumentSchemaV1_42(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.42.schema.json"));
-    validateManifestSchemaV1_42(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.42.schema.json"));
-    validateDocumentSchemaV1_43(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.43.schema.json"));
-    validateManifestSchemaV1_43(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.43.schema.json"));
-    validateDocumentSchemaV1_23(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.23.schema.json"));
-    validateManifestSchemaV1_23(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.23.schema.json"));
-    validateDocumentSchemaV1_22(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.22.schema.json"));
-    validateManifestSchemaV1_22(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.22.schema.json"));
-    validateDocumentSchemaV1_21(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.21.schema.json"));
-    validateManifestSchemaV1_21(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.21.schema.json"));
-    validateDocumentSchemaV1_20(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.20.schema.json"));
-    validateManifestSchemaV1_20(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.20.schema.json"));
-    validateDocumentSchemaV1_19(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.19.schema.json"));
-    validateManifestSchemaV1_19(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.19.schema.json"));
-    validateDocumentSchemaV1_18(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.18.schema.json"));
-    validateManifestSchemaV1_18(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.18.schema.json"));
-    validateDocumentSchemaV1_17(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.17.schema.json"));
-    validateManifestSchemaV1_17(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.17.schema.json"));
-    validateDocumentSchemaV1_16(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.16.schema.json"));
-    validateManifestSchemaV1_16(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.16.schema.json"));
-    validateDocumentSchemaV1_15(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.15.schema.json"));
-    validateManifestSchemaV1_15(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.15.schema.json"));
-    validateDocumentSchemaV1_14(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.14.schema.json"));
-    validateManifestSchemaV1_14(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.14.schema.json"));
-    validateDocumentSchemaV1_13(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.13.schema.json"));
-    validateManifestSchemaV1_13(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.13.schema.json"));
-    validateDocumentSchemaV1_12(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.12.schema.json"));
-    validateManifestSchemaV1_12(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.12.schema.json"));
-    validateDocumentSchemaV1_11(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.11.schema.json"));
-    validateManifestSchemaV1_11(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.11.schema.json"));
-    validateDocumentSchemaV1_9(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.9.schema.json"));
-    validateManifestSchemaV1_9(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.9.schema.json"));
-    validateDocumentSchemaV1_8(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.8.schema.json"));
-    validateManifestSchemaV1_8(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.8.schema.json"));
-    validateDocumentSchemaV1_7(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.7.schema.json"));
-    validateManifestSchemaV1_7(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.7.schema.json"));
-    validateDocumentSchemaV1_6(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.6.schema.json"));
-    validateManifestSchemaV1_6(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.6.schema.json"));
-    validateDocumentSchemaV1_5(
-        json::parseFile(repositoryRoot / "schemas/project/document-1.5.schema.json"));
-    validateManifestSchemaV1_5(
-        json::parseFile(repositoryRoot / "schemas/project/manifest-1.5.schema.json"));
-    const auto repository = std::filesystem::weakly_canonical(repositoryRoot);
-    validateManifestSchema(
-        json::parseFile(repository / "schemas/project/manifest-1.0.schema.json"));
-    validateDocumentSchema(
-        json::parseFile(repository / "schemas/project/document-1.0.schema.json"));
-    validateManifestSchemaV1_1(
-        json::parseFile(repository / "schemas/project/manifest-1.1.schema.json"));
-    validateDocumentSchemaV1_1(
-        json::parseFile(repository / "schemas/project/document-1.1.schema.json"));
-    validateManifestSchemaV1_2(
-        json::parseFile(repository / "schemas/project/manifest-1.2.schema.json"));
-    validateDocumentSchemaV1_2(
-        json::parseFile(repository / "schemas/project/document-1.2.schema.json"));
-    validateManifestSchemaV1_3(
-        json::parseFile(repository / "schemas/project/manifest-1.3.schema.json"));
-    validateDocumentSchemaV1_3(
-        json::parseFile(repository / "schemas/project/document-1.3.schema.json"));
-    validateManifestSchemaV1_4(
-        json::parseFile(repository / "schemas/project/manifest-1.4.schema.json"));
-    validateDocumentSchemaV1_4(
-        json::parseFile(repository / "schemas/project/document-1.4.schema.json"));
+    using namespace schema_detail;
+    // The project format has exactly one schema pair; a second version of either never lands
+    // beside it.
+    const auto directory = repositoryRoot / "schemas/project";
+    std::vector<std::string> entries;
+    for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+        entries.push_back(entry.path().filename().generic_string());
+    }
+    std::ranges::sort(entries);
+    if (entries !=
+        std::vector<std::string>{"document-1.0.schema.json", "manifest-1.0.schema.json"}) {
+        fail("schemas/project must hold exactly document-1.0.schema.json and "
+             "manifest-1.0.schema.json");
+    }
+    const auto document = json::parseFile(directory / "document-1.0.schema.json");
+    const auto manifest = json::parseFile(directory / "manifest-1.0.schema.json");
+    validateDocumentSchema(document);
+    validateManifestSchema(manifest);
+
+    // The manifest's document version is the document's own.
+    const auto& documentVersion = document.at("$defs").at("documentSchemaVersion").at("properties");
+    const auto& manifestVersion = manifest.at("$defs").at("documentSchemaVersion").at("properties");
+    if (!json::exactEqual(documentVersion, manifestVersion)) {
+        fail("the manifest and document schemas must name the same document schema version");
+    }
 }
 
 } // namespace bloom::quality

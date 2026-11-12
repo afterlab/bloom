@@ -12,7 +12,6 @@
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/canonical_manifest.hpp>
 #include <bloom/project/document_decode.hpp>
-#include <bloom/project/document_migration.hpp>
 #include <bloom/project/open_archive.hpp>
 #include <bloom/project/save_archive.hpp>
 #include <bloom/project/strict_json_dom.hpp>
@@ -27,13 +26,6 @@
 
 namespace {
 
-// Document 1.29 (ADR 0033) members a downgraded fixture must not carry.
-[[maybe_unused]] void stripExportQueueV1_29(std::string& text) {
-    text = std::regex_replace(
-        text, std::regex(R"(,\s*"exportQueue"\s*:\s*\{\s*"jobs"\s*:\s*\[\]\s*\})"), "");
-    text = std::regex_replace(
-        text, std::regex(R"(,\s*"exportJob"\s*:\s*"0",\s*"exportOutput"\s*:\s*"0")"), "");
-}
 using namespace bloom;
 using namespace bloom::project;
 using namespace bloom::document;
@@ -235,70 +227,6 @@ void roundTripsEveryMember() {
     }
 }
 
-void olderDocumentMigratesAndResavesWithoutTiming() {
-    auto text = encodeProject({});
-    text = replaceRegex(text, R"("minor": 43\s*\})", "\"minor\": 22\n  }");
-    stripExportQueueV1_29(text);
-    const auto typeAt = text.find("\"bloom.layer-output\"");
-    const auto versionAt = text.find("\"schemaVersion\": 5", typeAt);
-    if (typeAt == std::string::npos || versionAt == std::string::npos)
-        throw std::logic_error("layer output node anchor");
-    text.replace(versionAt, std::string_view("\"schemaVersion\": 5").size(),
-                 "\"schemaVersion\": 4");
-    {
-        auto operation = memory();
-        auto parsed = parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
-        expect(static_cast<bool>(parsed), "1.22 layer output fixture parses");
-        if (parsed) {
-            const auto migrated =
-                migrateDocumentDom(parsed.document()->root(), {1, 22}, {1, 23},
-                                   kProductionDocumentMigrationSteps, {}, operation);
-            expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 1,
-                   "1.22 to 1.23 runs one step");
-            const auto decoded = migrated.outcome() == MigrationOutcome::Migrated
-                                     ? decodeDocumentEnvelope(*migrated.migratedRoot())
-                                     : decodeDocumentEnvelope(parsed.document()->root());
-            bool upgraded = false;
-            if (decoded)
-                for (const auto& node : decoded.value()->compositions.front().graph.nodes)
-                    if (node.typeId == kLayerOutputNodeType)
-                        upgraded = node.schemaVersion == 5 && node.parameters.size() == 6;
-            expect(upgraded, "layer output node schema is 5 with identical bindings");
-        }
-    }
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 22}, .requirements = {}};
-    const auto manifestSize = canonicalManifestSize(manifest);
-    if (!manifestSize)
-        throw std::runtime_error("manifest size");
-    std::string manifestText(*manifestSize.value(), '\0');
-    if (!encodeCanonicalManifest(manifest, manifestText))
-        throw std::runtime_error("manifest encode");
-    const auto archive = test::buildConformingArchive(
-        test::makeStoredEntry("manifest.json", test::toBytes(manifestText)),
-        test::makeStoredEntry("document.json", test::toBytes(text)));
-    auto opened = openProjectArchive(archive, {}, memory());
-    expect(opened.outcome() == OpenArchiveOutcome::Opened, "1.22 archive migrates on open");
-    if (opened.outcome() != OpenArchiveOutcome::Opened)
-        return;
-    auto result = std::move(opened).takeOpened();
-    expect(result.schemaMinor == 22 && !result.roundTrip,
-           "1.22 archive opens as an editable document that reports its own minor");
-    expect(result.document->snapshot()
-                   .project()
-                   .compositions()
-                   .front()
-                   .graph()
-                   .layerOutputs()
-                   .front()
-                   .timing == LayerTiming{},
-           "migrated layer has identity timing");
-    const auto resaved = encode(*result.document);
-    for (const auto member : kMembers)
-        expect(resaved.find(std::string("\"") + std::string(member) + "\"") == std::string::npos,
-               "re-saved 1.22 document has no layer time member");
-    expect(resaved.find("\"minor\": 43") != std::string::npos, "re-save writes the current minor");
-}
-
 void rejectsInvalidMembers() {
     const auto fixed = encodeProject(nonDefaultTiming(false));
     const auto speedReplace = [&](const char* numerator, const char* denominator) {
@@ -319,15 +247,12 @@ void rejectsInvalidMembers() {
            "fixed extent with zero duration is rejected");
     expect(!decodeText(replaceRegex(fixed, R"("kind": "fixed")", "\"kind\": \"bogus\"")),
            "unknown extent kind is rejected");
-    expect(!decodeText(replaceRegex(fixed, R"("minor": 43\s*\})", "\"minor\": 22\n  }")),
-           "layer time members are not accepted in a 1.22 document");
 }
 } // namespace
 
 int main() try {
     identityWritesNoTimingMembers();
     roundTripsEveryMember();
-    olderDocumentMigratesAndResavesWithoutTiming();
     rejectsInvalidMembers();
     return failures == 0 ? 0 : 1;
 } catch (const std::exception& error) {

@@ -29,7 +29,7 @@ template <typename Keyframe>
 void componentChangeSpans(const std::vector<Keyframe>& before, const std::vector<Keyframe>& after,
                           const core::RationalTime duration, std::vector<RenderTimeSpan>& out,
                           const core::RationalTime low = {}) {
-    // A key's handle mode is presentation (document 1.32): only its stored values can change a
+    // A key's handle mode is presentation: only its stored values can change a
     // sample, so two keys that differ in mode alone are the same key here.
     const auto same = [](const Keyframe& left, const Keyframe& right) {
         return left == right || document::evaluationView(left) == document::evaluationView(right);

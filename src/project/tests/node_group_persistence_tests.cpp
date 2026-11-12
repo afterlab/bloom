@@ -1,8 +1,5 @@
-#include <regex>
-// Durable node groups (document 1.2): the round trip through a real archive, the reopen that must
-// return the exact same records, and the 1.1 -> 1.2 migration that gives an older file no groups at
-// all. The 1.1 fixture is produced by downgrading a freshly written 1.2 document rather than by
-// pasting a second hand-written document literal, so the two versions cannot drift apart here.
+// Durable node groups: the round trip through a real archive and the reopen that must return the
+// exact same records.
 
 #include "zip_container_test_support.hpp"
 
@@ -11,7 +8,6 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/canonical_manifest.hpp>
-#include <bloom/project/document_migration.hpp>
 #include <bloom/project/open_archive.hpp>
 #include <bloom/project/save_archive.hpp>
 #include <bloom/project/zip_container.hpp>
@@ -29,21 +25,6 @@
 #include <vector>
 
 namespace {
-
-// Document 1.29 (ADR 0033) members a downgraded fixture must not carry.
-[[maybe_unused]] void stripExportQueueV1_29(std::string& text) {
-    text = std::regex_replace(
-        text, std::regex(R"(,\s*"exportQueue"\s*:\s*\{\s*"jobs"\s*:\s*\[\]\s*\})"), "");
-    text = std::regex_replace(
-        text, std::regex(R"(,\s*"exportJob"\s*:\s*"0",\s*"exportOutput"\s*:\s*"0")"), "");
-}
-void removeImageFields(std::string& text) {
-    text = std::regex_replace(text, std::regex(R"(,\s*"backgroundColor"\s*:\s*\[[^\]]*\])"), "");
-    text = std::regex_replace(text, std::regex(R"(,\s*"assets"\s*:\s*\[\])"), "");
-    text = std::regex_replace(text, std::regex(R"(,\s*"dataBlocks"\s*:\s*\[\])"), "");
-    text = std::regex_replace(text, std::regex(R"(,\s*"asset"\s*:\s*"0")"), "");
-    text = std::regex_replace(text, std::regex(R"(,\s*"dataBlock"\s*:\s*"0")"), "");
-}
 
 using namespace bloom;
 using namespace bloom::project;
@@ -93,7 +74,7 @@ Authored authoredProject() {
     std::set<document::NodeId> members;
     for (const auto& node : composition.graph().nodes())
         members.insert(node.id);
-    // Document 1.30: the first frame carries a colour, the second none.
+    // The first frame carries a colour, the second none.
     composition.nodeGroups()[*first] = {
         *first, "Lighting", members, {48.0, 12.5}, std::array<std::uint8_t, 3>{217, 124, 124}};
     composition.nodeGroups()[*second] = {*second, "Spare", {}, {}};
@@ -160,106 +141,6 @@ void roundTripAndReopen() {
            "a reopened grouped document re-saves byte-identically");
 }
 
-// Strips one pretty-printed member line and the comma that joined it to the previous line, which is
-// how this fixture turns a canonical 1.2 document back into the 1.1 document it would have been.
-void eraseMemberLine(std::string& text, const std::string_view member) {
-    const auto key = "\"" + std::string(member) + "\":";
-    const auto found = text.find(key);
-    if (found == std::string::npos)
-        throw std::logic_error("downgrade anchor");
-    const auto lineStart = text.rfind('\n', found);
-    const auto lineEnd = text.find('\n', found);
-    if (lineStart == std::string::npos || lineEnd == std::string::npos)
-        throw std::logic_error("downgrade line");
-    const auto comma = text.rfind(',', lineStart);
-    if (comma == std::string::npos || comma + 1 != lineStart)
-        throw std::logic_error("downgrade comma");
-    text.erase(comma, lineEnd - comma);
-}
-
-// The 1.1 fixture starts from an UNGROUPED project, because a 1.1 file cannot hold a group: both
-// members this strips are then the canonical writer's own one-line `[]`/`"0"` spellings.
-std::vector<std::byte> legacyArchive(std::string& documentText) {
-    auto initial = document::makeNewProject("Untitled Project", "Main Composition",
-                                            core::RationalTime::fromInteger(10));
-    const document::Document ungrouped(std::move(initial.project));
-    const auto settings = neutralColorSettings();
-    const auto snapshot = ungrouped.snapshot();
-    const auto current = archiveOf(snapshot, settings);
-    auto entries = readZipContainer(current, {}, memory());
-    if (!entries)
-        throw std::logic_error("legacy entries");
-    const auto bytes = entries.document()->documentBytes();
-    documentText.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    const auto minor = documentText.find("\"minor\": 43");
-    if (minor == std::string::npos)
-        throw std::logic_error("legacy minor anchor");
-    documentText.replace(minor, std::string_view("\"minor\": 43").size(), "\"minor\": 1");
-    stripExportQueueV1_29(documentText);
-    removeImageFields(documentText);
-    eraseMemberLine(documentText, "nodeGroups");
-    eraseMemberLine(documentText, "nodeGroup");
-
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 1}};
-    const auto size = canonicalManifestSize(manifest);
-    if (!size)
-        throw std::logic_error("legacy manifest size");
-    std::vector<char> encoded(*size.value());
-    if (!encodeCanonicalManifest(manifest, encoded))
-        throw std::logic_error("legacy manifest encode");
-    return test::buildConformingArchive(
-        test::makeStoredEntry("manifest.json", test::toBytes({encoded.data(), encoded.size()})),
-        test::makeStoredEntry("document.json", test::toBytes(documentText)));
-}
-
-void migrationFromSchema11() {
-    std::string documentText;
-    const auto archive = legacyArchive(documentText);
-    const auto result = openProjectArchive(archive, {}, memory());
-    const auto* failure =
-        result.failure()
-            ? std::get_if<SaveArchiveDocumentDecodeFailure>(&result.failure()->payload())
-            : nullptr;
-    expect(result.outcome() == OpenArchiveOutcome::Failed && failure &&
-               failure->error == DocumentDecodeError::UnsupportedSchemaVersion,
-           "documents below the canonical 1.12 floor are refused without migration");
-}
-
-void migrationDeterminismAndChain() {
-    std::string documentText;
-    (void)legacyArchive(documentText);
-    auto operation = memory();
-    const auto bytes = test::toBytes(documentText);
-    auto parsed = parseStrictJsonDom(bytes, {}, operation);
-    expect(static_cast<bool>(parsed), "the 1.1 fixture parses");
-    if (!parsed)
-        return;
-    std::pmr::vector<char> first;
-    std::pmr::vector<char> second;
-    expect(static_cast<bool>(migrateNodeGroupsV1_1(parsed.document()->root(),
-                                                   first.get_allocator().resource(), first)),
-           "first group migration succeeds");
-    expect(static_cast<bool>(migrateNodeGroupsV1_1(parsed.document()->root(),
-                                                   second.get_allocator().resource(), second)),
-           "second group migration succeeds");
-    expect(first == second, "group migration byte determinism");
-    // The step refuses a document that is not its own source version, so the chain cannot be
-    // entered twice or out of order.
-    std::pmr::vector<char> again;
-    expect(
-        !migrateNodeLayoutV1_0(parsed.document()->root(), again.get_allocator().resource(), again),
-        "the layout step refuses a 1.1 document");
-    std::pmr::vector<char> output;
-    auto migrated = parseStrictJsonDom(
-        std::span<const std::byte>{reinterpret_cast<const std::byte*>(first.data()), first.size()},
-        {}, operation);
-    expect(static_cast<bool>(migrated), "migrated group bytes reparse");
-    if (!migrated)
-        return;
-    expect(!migrateNodeGroupsV1_1(migrated.document()->root(), output.get_allocator().resource(),
-                                  output),
-           "the group step refuses its own output");
-}
 void multipleMergeRoundTrip() {
     auto authored = authoredProject();
     auto snapshot = authored.document->snapshot();
@@ -308,8 +189,6 @@ int main() {
     try {
         multipleMergeRoundTrip();
         roundTripAndReopen();
-        migrationFromSchema11();
-        migrationDeterminismAndChain();
     } catch (const std::exception& error) {
         std::cerr << error.what() << "\n";
         return 1;

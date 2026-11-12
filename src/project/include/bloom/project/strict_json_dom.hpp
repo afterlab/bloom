@@ -15,7 +15,7 @@
 #include <vector>
 
 // The bounded strict JSON DOM: a reader-side counterpart to the canonical JSON writer described
-// in docs/architecture/project-format.md ("Canonical JSON Primitives" and "Versions, Migrations,
+// in docs/architecture/project-format.md ("Canonical JSON Primitives" and "Versions
 // And Preservation"). `parseStrictJsonDom()` first runs the existing bounded
 // `bloom::project::detail::preflightStrictJson()` scan, then parses the accepted bytes with a
 // qualified yyjson 0.12 reader whose allocation is bound to the caller's

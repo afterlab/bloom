@@ -1,8 +1,5 @@
-// #509: a project saved with a Path Stroke from before stamps (no `stamp`, `stampAlign` or
-// `stampRotation` binding) opens with them bound at Dot, Automatic and 0, so Properties and the
-// card show the same rows as a new node, and it draws exactly the round brush dots it drew before
-// it was saved: the CPU reference frame is bit-identical. A node that already has a Square stamp
-// keeps its ids and values, and draws what it drew.
+// #509: a Path Stroke with a turned Square stamp survives a save and open with its ids and values,
+// and draws what it drew: the CPU reference frame is bit-identical.
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
@@ -118,22 +115,6 @@ struct Fixture {
         set(stroke, "width", 7.0);
         set(stroke, "spacing", 9.0);
     }
-    // Removes the bindings (and records) a Path Stroke saved before stamps never had.
-    void makeLegacy() {
-        const auto base = document.snapshot();
-        auto draft = document.draft(base);
-        auto* target = draft.project().findComposition(composition);
-        auto* record = target->graph().findNode(stroke);
-        std::erase_if(record->parameters, [&](const document::ParameterBinding& binding) {
-            if (std::ranges::find(kStampRoles, binding.role) == kStampRoles.end())
-                return false;
-            if (!target->parameters().erase(binding.parameterId))
-                throw std::logic_error("legacy record erases");
-            return true;
-        });
-        if (!document.commit(base.revision(), std::move(draft)).committed())
-            throw std::logic_error("legacy commit");
-    }
 };
 
 std::vector<std::byte> save(const document::Snapshot& snapshot,
@@ -172,71 +153,6 @@ bool sameBits(const std::vector<render::Rgba32f>& a, const std::vector<render::R
            (a.empty() || std::memcmp(a.data(), b.data(), a.size() * sizeof(render::Rgba32f)) == 0);
 }
 
-void legacyStrokeOpensUnchanged() {
-    Fixture fixture;
-    const auto newSize = fixture.node(fixture.stroke)->parameters.size();
-    const auto width = fixture.parameter(fixture.stroke, "width");
-    const auto current = render(fixture.document.snapshot(), fixture.composition);
-    fixture.makeLegacy();
-    const auto legacy = fixture.document.snapshot();
-    expect(legacy.project().validate().ok(), "a Path Stroke without the stamp bindings validates");
-    const auto before = render(legacy, fixture.composition);
-    bool lit = false;
-    for (const auto& pixel : before)
-        lit = lit || pixel.alpha() > 0.0F;
-    expect(lit, "the legacy Path Stroke draws its dots");
-    expect(sameBits(before, current),
-           "an unbound stamp lowers at its default: the legacy node draws what a new Dot draws");
-
-    const auto settings = document::makeBloomNeutralColorSettingsV1({});
-    auto result = project::openProjectArchive(save(legacy, settings), {}, memory());
-    expect(result.outcome() == project::OpenArchiveOutcome::Opened,
-           "a project with a pre-stamp Path Stroke opens");
-    if (result.outcome() != project::OpenArchiveOutcome::Opened)
-        return;
-    auto opened = std::move(result).takeOpened();
-    const auto snapshot = opened.document->snapshot();
-    const auto* composition = snapshot.project().findComposition(fixture.composition);
-    const auto* node = composition ? composition->graph().findNode(fixture.stroke) : nullptr;
-    expect(node && node->parameters.size() == newSize,
-           "the opened Path Stroke binds the controls a new one does");
-    if (!node)
-        return;
-    const auto valueOf = [&](const std::string_view role) -> const document::ParameterValue* {
-        const auto binding =
-            std::ranges::find(node->parameters, role, &document::ParameterBinding::role);
-        const auto* record = binding == node->parameters.end()
-                                 ? nullptr
-                                 : composition->parameters().find(binding->parameterId);
-        const auto* constant =
-            record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
-        return constant ? &constant->value : nullptr;
-    };
-    const auto* stamp = valueOf("stamp");
-    const auto* align = valueOf("stampAlign");
-    const auto* rotation = valueOf("stampRotation");
-    expect(stamp && *stamp == document::ParameterValue{std::int64_t{0}} && align &&
-               *align == document::ParameterValue{std::int64_t{0}} && rotation &&
-               *rotation == document::ParameterValue{0.0},
-           "the added stamp is Dot, Automatic, turned 0 degrees");
-    const auto kept =
-        std::ranges::find(node->parameters, "width", &document::ParameterBinding::role);
-    expect(kept != node->parameters.end() && kept->parameterId == width,
-           "the saved controls keep their ids");
-    expect(sameBits(before, render(snapshot, fixture.composition)),
-           "the opened Path Stroke renders bit-identically to the pre-stamp node");
-
-    // The migrated project saves and reopens as itself.
-    const auto bytes = save(snapshot, opened.colorSettings);
-    auto again = project::openProjectArchive(bytes, {}, memory());
-    expect(again.outcome() == project::OpenArchiveOutcome::Opened, "the migrated project reopens");
-    if (again.outcome() != project::OpenArchiveOutcome::Opened)
-        return;
-    auto reopened = std::move(again).takeOpened();
-    expect(save(reopened.document->snapshot(), reopened.colorSettings) == bytes,
-           "the migrated project round-trips byte-identically");
-}
-
 // A turned Square stamp survives a save and open with its ids and values, and draws what it drew.
 void squareStampRoundTrips() {
     Fixture fixture;
@@ -273,7 +189,6 @@ void squareStampRoundTrips() {
 
 int main() {
     try {
-        legacyStrokeOpensUnchanged();
         squareStampRoundTrips();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
@@ -281,6 +196,6 @@ int main() {
     }
     if (failures != 0)
         return 1;
-    std::cout << "PASS: a pre-stamp Path Stroke opens with Dot stamps and renders identically\n";
+    std::cout << "PASS: a Path Stroke stamp survives a save and open\n";
     return 0;
 }

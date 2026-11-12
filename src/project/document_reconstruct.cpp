@@ -146,8 +146,7 @@ ReconstructDocumentResult ReconstructDocumentResult::failure(ReconstructionRejec
     return out;
 }
 
-ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope,
-                                              const bool inferLayerNameFollowsSource) {
+ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope) {
     if (const auto rejection = validateDecodedNodeVersions(envelope); rejection.has_value()) {
         return ReconstructDocumentResult::failure(*rejection);
     }
@@ -216,8 +215,6 @@ ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope,
     }
 
     project.setExportQueue(std::move(envelope.exportQueue));
-    if (inferLayerNameFollowsSource)
-        document::inferLayerNameFollowsSource(project);
 
     const auto validation = project.validate();
     if (!validation.ok()) {

@@ -281,7 +281,7 @@ class PythonApi(unittest.TestCase):
             {'layer': 'Wash', 'role': 'opacity'}, [], replace=True)['succeeded'])
 
     def test_easing_and_layer_flags(self):
-        """Document 1.30: easing equations, Easy Ease and the shy flag through the registry."""
+        """Easing equations, Easy Ease and the shy flag through the registry."""
         result = bloom.ops.layer.add_solid('Red', (1, 0, 0, 1))
         layer = next(o['id'] for o in result['outputs'] if o['name'] == 'layer')
         composition = bloom.context.composition
@@ -328,7 +328,7 @@ class PythonApi(unittest.TestCase):
         self.assertEqual(values, [1.0, 0.0])
 
     def test_keyframe_handle_modes(self):
-        """Document 1.32: per-key handle modes through the registry, read back in curve rows."""
+        """Per-key handle modes through the registry, read back in curve rows."""
         bloom.ops.layer.add_solid('Red', (1, 0, 0, 1))
         composition = bloom.context.composition
         opacity = bloom.data.nodes(composition)[-1].parameters['opacity']

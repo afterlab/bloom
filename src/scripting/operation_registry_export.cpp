@@ -1,6 +1,6 @@
 // ADR 0033 section 13: the bloom.export.* project-truth operations. They build the same undoable
 // commands the Export panel issues (commands/export_queue_operations.hpp), so a script edit has the
-// panel's validation and undo. Output settings travel as the document 1.29 JSON objects.
+// panel's validation and undo. Output settings travel as the document JSON objects.
 
 #include <bloom/commands/export_queue_operations.hpp>
 #include <bloom/host/export_presets.hpp>
@@ -137,7 +137,7 @@ rangeArguments(const Arguments& arguments, const std::string& op, OperationCreat
 }
 
 const std::string kOutputSummary =
-    R"(One output as JSON: {"preset": id, "settings": {document 1.29 settings}, )"
+    R"(One output as JSON: {"preset": id, "settings": {output settings}, )"
     R"("destination": {"portability", "path", "overwrite"}, "enabled", "importIntoAssets"}; every )"
     R"(field is optional. A built-in "preset" (export.presets lists them) with no "settings" takes )"
     R"(that preset's settings; "settings" given with it override them. "overwrite" is "ask", )"
@@ -366,7 +366,7 @@ void addExportOperations(std::vector<OperationDescriptor>& descriptors) {
         {argument("output", ValueKind::Id, true, StableId{1}, "The output."),
          argument("settings", ValueKind::String, true,
                   host::exportSettingsToJson(document::ExportOutputSettings{}),
-                  "The document 1.29 settings object as JSON.")},
+                  "The output settings object as JSON.")},
         [](const std::string& op, const Arguments& args, const OperationContext& context) {
             const auto output = idArgument<ExportOutputId>(args, "output");
             const auto text = textArgument(args, "settings");

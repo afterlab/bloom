@@ -65,7 +65,7 @@ struct NodeGroupRecord {
     std::string name;
     std::set<NodeId> members;
     Vec2d padding{kDefaultNodeGroupPadding, kDefaultNodeGroupPadding};
-    // The frame's tint as 8-bit sRGB, or none for the neutral frame (document 1.30). Layout like
+    // The frame's tint as 8-bit sRGB, or none for the neutral frame. Layout like
     // the rest of the record: nothing that evaluates, compiles or caches reads it.
     std::optional<std::array<std::uint8_t, 3>> color{};
 

@@ -113,7 +113,7 @@ expectedBindings(const bloom::document::NodeRecord& node) noexcept {
     if (node.typeId == kLayerOutputNodeType &&
         (node.schemaVersion == kLayerOutputNodeSchemaVersion || node.schemaVersion == 4 ||
          node.schemaVersion == 3)) {
-        // Schemas 3 and 4 never declared Time Remap; the document migration rewrites them to 5.
+        // Schemas 3 and 4 never declared Time Remap.
         if (node.schemaVersion == kLayerOutputNodeSchemaVersion)
             return kLayerOutputBindings;
         return std::span(kLayerOutputBindings).first(6);

@@ -25,13 +25,6 @@ target_sources(
         canonical_export_queue.ipp
         document_decode_composition.cpp
         document_decode_internal.hpp
-        document_components_migration.cpp
-        document_curves_migration.cpp
-        document_glow_migration.cpp
-        document_gradient_migration.cpp
-        document_font_migration.cpp
-        document_migration.cpp
-        document_layout_migration.cpp
         document_decode_layout.cpp
         document_reconstruct.cpp
         manifest_decode.cpp
@@ -64,7 +57,6 @@ target_sources(
             include/bloom/project/canonical_json_writer.hpp
             include/bloom/project/canonical_manifest.hpp
             include/bloom/project/document_decode.hpp
-            include/bloom/project/document_migration.hpp
             include/bloom/project/document_reconstruct.hpp
             include/bloom/project/manifest_decode.hpp
             include/bloom/project/manifest_requirements.hpp
@@ -82,6 +74,8 @@ target_sources(
 )
 
 target_compile_features(bloom_project PUBLIC cxx_std_20)
+# The manifest's generator records this build's project version.
+target_compile_definitions(bloom_project PRIVATE BLOOM_VERSION="${PROJECT_VERSION}")
 # bloom_platform is PUBLIC (not PRIVATE, despite the allowed dependency edge being unqualified):
 # include/bloom/project/staged_save.hpp declares stageSaveArchive() taking a
 # platform::StagedArtifactLease& in its public signature, so anything that includes that header
@@ -153,15 +147,6 @@ if(BUILD_TESTING)
         NAME bloom.project.data_block_persistence
         COMMAND bloom_project_data_block_persistence_test
         LABELS unit project persistence data
-    )
-
-    add_executable(bloom_project_document_migration_test tests/document_migration_tests.cpp)
-    target_link_libraries(bloom_project_document_migration_test PRIVATE bloom_project)
-    bloom_enable_warnings(bloom_project_document_migration_test)
-    bloom_add_test(
-        NAME bloom.project.document_migration
-        COMMAND bloom_project_document_migration_test
-        LABELS unit project persistence document
     )
 
     add_executable(bloom_project_document_reconstruct_test tests/document_reconstruct_tests.cpp)
@@ -353,20 +338,10 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_project_asset_organization_test)
     bloom_add_test(NAME bloom.project.asset-organization COMMAND bloom_project_asset_organization_test LABELS unit persistence)
 
-    add_executable(bloom_project_font_migration_test tests/font_migration_tests.cpp)
-    target_link_libraries(bloom_project_font_migration_test PRIVATE bloom_project ZLIB::ZLIB)
-    bloom_enable_warnings(bloom_project_font_migration_test)
-    bloom_add_test(NAME bloom.project.font-migration COMMAND bloom_project_font_migration_test LABELS unit persistence)
-
     add_executable(bloom_project_node_layout_test tests/node_layout_persistence_tests.cpp)
     target_link_libraries(bloom_project_node_layout_test PRIVATE bloom_project ZLIB::ZLIB)
     bloom_enable_warnings(bloom_project_node_layout_test)
     bloom_add_test(NAME bloom.project.node-layout COMMAND bloom_project_node_layout_test LABELS unit persistence)
-
-    add_executable(bloom_project_curves_migration_test tests/curves_migration_tests.cpp)
-    target_link_libraries(bloom_project_curves_migration_test PRIVATE bloom_project ZLIB::ZLIB)
-    bloom_enable_warnings(bloom_project_curves_migration_test)
-    bloom_add_test(NAME bloom.project.curves-migration COMMAND bloom_project_curves_migration_test LABELS unit persistence)
 
     add_executable(bloom_project_layer_time_test tests/layer_time_persistence_tests.cpp)
     target_link_libraries(bloom_project_layer_time_test PRIVATE bloom_project ZLIB::ZLIB)

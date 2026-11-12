@@ -99,7 +99,7 @@ struct ImageSourceReadAheadTarget final {
     core::Sha256Digest digest;
     // #473: a stamped member is captured against its stamp instead of `digest`.
     std::optional<media::ImageSourceStamp> stamp;
-    // The digest the project records for the member (absent while it is pending, document 1.36).
+    // The digest the project records for the member (absent while it is pending).
     std::optional<core::Sha256Digest> recordedDigest;
     std::string revisionKey;
 };

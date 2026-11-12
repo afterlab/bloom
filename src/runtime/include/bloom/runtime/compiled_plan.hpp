@@ -1537,7 +1537,7 @@ struct CompiledAudioSource final {
     // stream plays once.
     std::int64_t loopMode = 0;
     std::optional<TimeExtent> loopExtent{};
-    // Document 1.25: which of the asset's audio streams (0-based among its audio streams) plays.
+    // Which of the asset's audio streams (0-based among its audio streams) plays.
     std::uint32_t audioStream = 0;
     // #381: absent unless the video is conformed or looped.
     std::optional<FootageAudioTiming> footage{};

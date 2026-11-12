@@ -60,8 +60,25 @@ void validateArray(const json::Value& value, std::string_view location,
                    std::string_view itemReference, std::uint64_t maximum = 1'000'000,
                    std::uint64_t minimum = 0, bool hasMinimum = false);
 
-void validateDocumentGraphAndReferences(const json::Value& definitions,
-                                        const std::vector<const json::Value*>& parameterValues,
-                                        const std::vector<const json::Value*>& curves);
+// One pinned schema node: its JSON pointer and its own keywords, with each subschema replaced by
+// a marker (member names for `properties` and `$defs`, a count for `oneOf`/`anyOf`/`allOf`, and
+// "<schema>" for a single subschema). generate_schema_lock writes these from the artifacts.
+struct SchemaNodePin final {
+    std::string_view pointer;
+    std::string_view node;
+};
+
+[[nodiscard]] auto documentSchemaLock() -> std::span<const SchemaNodePin>;
+[[nodiscard]] auto manifestSchemaLock() -> std::span<const SchemaNodePin>;
+
+// Walks every schema node in a fixed order and requires it to equal its pin, so an added, removed
+// or changed node fails at its own pointer.
+void validateSchemaLock(const json::Value& schema, std::span<const SchemaNodePin> lock,
+                        std::string_view name);
+
+// Rules every project schema keeps: references are repository-local and resolve, every definition
+// is reachable from the root, every object schema says whether unknown members are kept and lists
+// each required member among its properties, and every array is bounded.
+void validateSchemaInvariants(const json::Value& schema, std::string_view name);
 
 } // namespace bloom::quality::schema_detail

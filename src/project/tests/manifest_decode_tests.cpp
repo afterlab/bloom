@@ -258,6 +258,11 @@ void expectRoundTrip(Expectations& expectations,
                         "round trip: decoded document schemaVersion equals the canonical constant");
     expectations.expect(envelope.requirements == requirements,
                         "round trip: decoded requirements equal the source requirements exactly");
+    const auto current = bloom::project::currentManifestGenerator();
+    expectations.expect(envelope.generator.has_value() &&
+                            envelope.generator->name == current.name &&
+                            envelope.generator->version == current.version,
+                        "round trip: the writer's generator decodes back exactly");
 }
 
 void testRoundTripEmptyRequirements(Expectations& expectations) {
@@ -295,6 +300,53 @@ void testBaselineDecodesSuccessfully(Expectations& expectations) {
                         "the baseline document schemaVersion decodes to exactly {1,0}");
     expectations.expect(manifest.requirements.empty(),
                         "the baseline fixture decodes zero requirements");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Optional generator: read when present, never required
+// ---------------------------------------------------------------------------------------------
+
+[[nodiscard]] std::string manifestWithGenerator(const std::string_view generatorJson) {
+    std::string root = baselineManifestJson();
+    root.pop_back(); // drop closing '}'
+    root += ",\"generator\":";
+    root += generatorJson;
+    root += "}";
+    return root;
+}
+
+void testGeneratorIsOptional(Expectations& expectations) {
+    const auto absent = decodeText(baselineManifestJson());
+    expectations.expect(absent && absent.value() != nullptr && !absent.value()->generator,
+                        "a manifest without a generator decodes with no generator");
+
+    const auto present =
+        decodeText(manifestWithGenerator(R"({"name":"Bloom","version":"9.8.7-test"})"));
+    expectations.expect(present && present.value() != nullptr &&
+                            present.value()->generator ==
+                                bloom::project::DecodedManifestGenerator{"Bloom", "9.8.7-test"},
+                        "a present generator decodes its name and version exactly");
+}
+
+void testRejectsMalformedGenerator(Expectations& expectations) {
+    expectDecodeFailure(expectations, manifestWithGenerator(R"({"name":"","version":"1"})"),
+                        ManifestDecodeError::InvalidGenerator, "/generator/name",
+                        "an empty generator name is a typed InvalidGenerator error");
+    const std::string tooLong(bloom::project::kMaxManifestGeneratorTextBytes + 1, 'x');
+    expectDecodeFailure(
+        expectations, manifestWithGenerator(R"({"name":"Bloom","version":")" + tooLong + "\"}"),
+        ManifestDecodeError::InvalidGenerator, "/generator/version",
+        "a generator string over the byte ceiling is a typed InvalidGenerator error");
+    expectDecodeFailure(expectations, manifestWithGenerator(R"({"name":"Bloom"})"),
+                        ManifestDecodeError::MissingMember, "/generator/version",
+                        "a generator without a version is a typed MissingMember error");
+    expectDecodeFailure(expectations,
+                        manifestWithGenerator(R"({"name":"Bloom","version":"1","extra":1})"),
+                        ManifestDecodeError::UnknownMember, "/generator/extra",
+                        "an extra generator member at {1,0} is a typed UnknownMember error");
+    expectDecodeFailure(expectations, manifestWithGenerator(R"({"name":"Bloom","version":1})"),
+                        ManifestDecodeError::WrongValueKind, "/generator/version",
+                        "a non-string generator version is a typed WrongValueKind error");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -720,6 +772,8 @@ int main() try {
     testRoundTripPopulatedRequirements(expectations);
 
     testBaselineDecodesSuccessfully(expectations);
+    testGeneratorIsOptional(expectations);
+    testRejectsMalformedGenerator(expectations);
 
     testRejectsWrongFormat(expectations);
     testRejectsWrongDocumentPath(expectations);

@@ -180,7 +180,7 @@ struct ExportFormatToken final {
 };
 
 // What the panel may offer for one format, so it never hard-codes tokens. `codecProfiles` is the
-// closed document 1.29 vocabulary (document::exportCodecProfiles) and `compressions` the tokens
+// closed document vocabulary (document::exportCodecProfiles) and `compressions` the tokens
 // the runner accepts; an empty list means the format has no such choice. An empty
 // codecProfile/compression in a record means the listed default.
 struct ExportFormatDescription final {
@@ -330,7 +330,7 @@ exportProjectAvailability(const document::ExportOutputSettings& settings,
 [[nodiscard]] ExportAvailability
 exportSourceAvailability(const document::ExportOutputSettings& settings,
                          const std::optional<std::string>& audioSourceRefusal);
-// The document 1.29 `settings` object and a whole output ({"preset", "settings", "destination",
+// The document `settings` object and a whole output ({"preset", "settings", "destination",
 // "enabled", "importIntoAssets"}) as compact JSON, for scripting, MCP and "copy as command".
 // Parsing validates the record; the parsed output has no id (the add operation allocates it). An
 // output that names a built-in `preset` and leaves `settings` out takes that preset's settings; a

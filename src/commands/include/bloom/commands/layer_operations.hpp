@@ -79,7 +79,7 @@ class SetLayerLocked final : public Operation {
     document::LayerId layer_;
     bool value_;
 };
-// Document 1.30: the compositor-standard Shy switch. It only decides whether the layer table lists
+// The compositor-standard Shy switch. It only decides whether the layer table lists
 // the layer while its shy filter is on, so it is presentation and never invalidates a render or
 // cache.
 class SetLayerShy final : public Operation {
@@ -95,7 +95,7 @@ class SetLayerShy final : public Operation {
     document::LayerId layer_;
     bool value_;
 };
-// Document 1.30: whether the layer shows its source's name. Turning it on renames the layer to the
+// Whether the layer shows its source's name. Turning it on renames the layer to the
 // source's current name and is refused for a layer without a source; turning it off keeps the
 // current name. Renaming the layer (bloom.layer.rename) turns it off. Presentation only.
 class SetLayerNameFollowsSource final : public Operation {

@@ -1,9 +1,5 @@
-#include <regex>
-// Animation breadth on the wire (document 1.3): the colour curve kind, the ease-in-out keyframe
-// interpolation token, and the 1.2 -> 1.3 migration that changes nothing but the version. The 1.2
-// fixture is produced by downgrading a freshly written 1.3 document rather than by pasting a second
-// hand-written document literal, so the two versions cannot drift apart here -- the same discipline
-// node_group_persistence_tests.cpp already follows for 1.1 -> 1.2.
+// Animation breadth on the wire: the colour curve kind and the ease-in-out keyframe interpolation
+// token round-trip, and a newer minor still decodes them.
 
 #include "zip_container_test_support.hpp"
 
@@ -32,14 +28,6 @@
 #include <vector>
 
 namespace {
-void removeImageFields(std::string& text) {
-    text = std::regex_replace(text, std::regex(R"(,\s*"backgroundColor"\s*:\s*\[[^\]]*\])"), "");
-    text = std::regex_replace(text, std::regex(R"(,\s*"assets"\s*:\s*\[\])"), "");
-    text = std::regex_replace(text, std::regex(R"(,\s*"dataBlocks"\s*:\s*\[\])"), "");
-    text = std::regex_replace(text, std::regex(R"(,\s*"asset"\s*:\s*"0")"), "");
-    text = std::regex_replace(text, std::regex(R"(,\s*"dataBlock"\s*:\s*"0")"), "");
-}
-
 using namespace bloom;
 using namespace bloom::project;
 int failures = 0;
@@ -112,7 +100,7 @@ struct Authored final {
     document::AnimationCurveId scalarCurve;
 };
 
-// A project whose one composition carries BOTH of 1.3's additions at once: a colour curve, and an
+// A project whose one composition carries BOTH constructs at once: a colour curve, and an
 // ease-in-out interior key on a scalar curve. The channel values deliberately include a negative
 // one, an HDR one, and an exact subframe rational time, because those are the three things a lossy
 // encoder would quietly round.
@@ -315,7 +303,7 @@ void roundTripAndReopen() {
            "and an eased key is written with the ease-in-out token");
     expect(text.find("\"red\"") != std::string::npos && text.find("\"alpha\"") != std::string::npos,
            "a color key's value carries the same named channels a constant color does");
-    expect(text.find("\"minor\": 43") != std::string::npos,
+    expect(text.find("\"minor\": 0") != std::string::npos,
            "both constructs declare the current document schema minor");
     expect(handleObject(text, "outgoingHandle") == R"({"time":0.125,"value":0.5})" &&
                handleObject(text, "incomingHandle") == R"({"time":0.875,"value":-0.25})",
@@ -365,93 +353,26 @@ void roundTripAndReopen() {
            "a reopened animated document re-saves byte-identically");
 }
 
-// The 1.2 fixture starts from a project with NO curve at all, because a 1.2 file can hold neither
-// of 1.3's additions: downgrading is then purely the version rewrite the migration will undo.
-std::vector<std::byte> legacyArchive(std::string& documentText) {
-    auto initial = document::makeNewProject("Untitled Project", "Main Composition",
-                                            core::RationalTime::fromInteger(10));
-    const document::Document unanimated(std::move(initial.project));
-    const auto settings = neutralColorSettings();
-    const auto snapshot = unanimated.snapshot();
-    documentText = documentTextOf(archiveOf(snapshot, settings));
-
-    const auto minor = documentText.find("\"minor\": 43");
-    if (minor == std::string::npos) {
-        throw std::logic_error("legacy minor anchor");
-    }
-    documentText.replace(minor, std::string_view("\"minor\": 43").size(), "\"minor\": 2");
-
-    removeImageFields(documentText);
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 2}};
-    const auto size = canonicalManifestSize(manifest);
-    if (!size) {
-        throw std::logic_error("legacy manifest size");
-    }
-    std::vector<char> encoded(*size.value());
-    if (!encodeCanonicalManifest(manifest, encoded)) {
-        throw std::logic_error("legacy manifest encode");
-    }
-    return test::buildConformingArchive(
-        test::makeStoredEntry("manifest.json", test::toBytes({encoded.data(), encoded.size()})),
-        test::makeStoredEntry("document.json", test::toBytes(documentText)));
-}
-
-void migrationFromTwelve() {
-    std::string documentText;
-    const auto archive = legacyArchive(documentText);
-    const auto result = openProjectArchive(archive, {}, memory());
-    const auto* failure = result.failure()
-                              ? result.failure()->payloadAs<SaveArchiveDocumentDecodeFailure>()
-                              : nullptr;
-    expect(result.outcome() == OpenArchiveOutcome::Failed && failure &&
-               failure->error == DocumentDecodeError::UnsupportedSchemaVersion,
-           "documents below the canonical 1.12 floor are refused without migration");
-}
-
-// The additive-minor rule, in both directions: a file claiming a minor that PREDATES 1.3 may not
-// carry a 1.3 construct, while one claiming a later minor may.
+// A file claiming a minor newer than this build still decodes the current constructs: additions
+// are additive.
 void minorGating() {
     const auto authored = authoredProject();
     const auto settings = neutralColorSettings();
     const auto baseline = documentTextOf(archiveOf(authored.document->snapshot(), settings));
-    const auto anchor = std::string_view("\"minor\": 43");
+    const auto anchor = std::string_view("\"minor\": 0");
     const auto minor = baseline.find(anchor);
     expect(minor != std::string::npos, "the animated fixture declares the current minor");
     if (minor == std::string::npos) {
         return;
     }
 
-    // Claiming 1.2 -- a minor this build KNOWS, and one that does not declare the colour curve
-    // kind. There is no round-trip state for a known minor (that exists only for a minor newer than
-    // this build), so the unknown discriminator is a hard decode failure naming the exact member,
-    // which is the only honest answer: the file says it is 1.2 and 1.2 has no such construct.
-    {
-        auto text = baseline;
-        text.replace(minor, anchor.size(), "\"minor\": 2");
-        removeImageFields(text);
-        auto dom = parseStrictJsonDom(test::toBytes(text), {}, memory());
-        expect(static_cast<bool>(dom), "the 1.2-labelled document parses");
-        if (!dom) {
-            return;
-        }
-        const auto decoded = decodeDocumentEnvelope(dom.document()->root());
-        expect(decoded.outcome() == DocumentDecodeOutcome::Failed &&
-                   decoded.error() == DocumentDecodeError::UnsupportedSchemaVersion,
-               "a document claiming 1.2 while carrying a color curve is refused, never decoded as "
-               "if the construct were part of 1.2");
-        expect(decoded.path() == "/schemaVersion",
-               "and the refusal names the exact discriminator it could not accept");
-    }
-
-    // Claiming 1.13 -- a minor NEWER than this build -- still decodes the colour curve, because the
-    // gate is "the minor that declares it or later", not "exactly 1.3". That is what makes 1.3's
-    // additions additive rather than a one-version island.
+    // Claiming a minor NEWER than this build still decodes the colour curve.
     {
         auto text = baseline;
         text.replace(minor, anchor.size(),
                      "\"minor\": " + std::to_string(kCanonicalDocumentSchemaVersionV1.minor + 1));
         auto dom = parseStrictJsonDom(test::toBytes(text), {}, memory());
-        expect(static_cast<bool>(dom), "the 1.4-labelled document parses");
+        expect(static_cast<bool>(dom), "the newer-minor document parses");
         if (!dom) {
             return;
         }
@@ -467,7 +388,6 @@ void minorGating() {
 int main() {
     try {
         roundTripAndReopen();
-        migrationFromTwelve();
         minorGating();
     } catch (const std::exception& error) {
         std::cerr << "animation breadth persistence fixture failure: " << error.what() << '\n';

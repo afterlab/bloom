@@ -1,6 +1,5 @@
 // ADR 0028 persistence: layer masks (constant and keyed paths), a track matte and the layerMask
-// allocator namespace save, reopen and decode exactly in document 1.24; a 1.23 document migrates
-// with none of them, and a 1.23 document carrying a 1.24 member is refused.
+// allocator namespace save, reopen and decode exactly.
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/composition_settings_operations.hpp>
@@ -14,7 +13,6 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/document_decode.hpp>
-#include <bloom/project/document_migration.hpp>
 #include <bloom/project/open_archive.hpp>
 #include <bloom/project/save_archive.hpp>
 #include <bloom/project/strict_json_dom.hpp>
@@ -28,13 +26,6 @@
 
 namespace {
 
-// Document 1.29 (ADR 0033) members a downgraded fixture must not carry.
-[[maybe_unused]] void stripExportQueueV1_29(std::string& text) {
-    text = std::regex_replace(
-        text, std::regex(R"(,\s*"exportQueue"\s*:\s*\{\s*"jobs"\s*:\s*\[\]\s*\})"), "");
-    text = std::regex_replace(
-        text, std::regex(R"(,\s*"exportJob"\s*:\s*"0",\s*"exportOutput"\s*:\s*"0")"), "");
-}
 using namespace bloom;
 int failures = 0;
 void expect(const bool condition, const char* message) {
@@ -127,13 +118,6 @@ project::DocumentDecodeResult decodeText(const std::string& text) {
     return project::decodeDocumentEnvelope(parsed.document()->root());
 }
 
-void replaceOnce(std::string& text, const std::string_view from, const std::string_view to) {
-    const auto at = text.find(from);
-    if (at == std::string::npos)
-        throw std::logic_error("fixture anchor missing");
-    text.replace(at, from.size(), to);
-}
-
 void roundTrip() {
     Fixture fixture;
     const auto snapshot = fixture.document.snapshot();
@@ -145,7 +129,7 @@ void roundTrip() {
                text.find("\"layerMask\"") != std::string::npos,
            "masks, the matte, the Path curve and the layerMask namespace are written");
     const auto decoded = decodeText(text);
-    expect(static_cast<bool>(decoded), "the 1.24 document decodes");
+    expect(static_cast<bool>(decoded), "the document decodes");
 
     const auto settings = document::makeBloomNeutralColorSettingsV1({});
     auto archive = project::buildVerifiedSaveArchive(
@@ -170,43 +154,8 @@ void roundTrip() {
     expect(reopened.project().validate().ok(), "the reopened project validates");
 }
 
-void olderDocumentsMigrateAndRefuseNewMembers() {
-    document::Document plain{
-        document::makeNewProject(
-            "Plain", "Main", core::RationalTime::fromInteger(2),
-            *document::CompositionFormat::create(8, 8, core::PixelAspectRatio::square(),
-                                                 document::FrameRate::framesPerSecond24()))
-            .project};
-    auto text = encode(plain);
-    replaceOnce(text, "\"minor\": 43", "\"minor\": 23");
-    stripExportQueueV1_29(text);
-    expect(static_cast<bool>(decodeText(text)), "a 1.23 document without masks decodes");
-    auto operation = memory();
-    auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
-    if (parsed) {
-        const auto migrated =
-            project::migrateDocumentDom(parsed.document()->root(), {1, 23}, {1, 34},
-                                        project::kProductionDocumentMigrationSteps, {}, operation);
-        expect(
-            migrated.outcome() == project::MigrationOutcome::Migrated &&
-                migrated.stepsApplied() == 11 &&
-                static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
-            "the 1.23 -> 1.24 mask, 1.24 -> 1.25 video-metadata and 1.25 -> 1.26 channel-set and "
-            "1.26 -> 1.27 composition-folder and 1.27 -> 1.28 video-colour-default steps only "
-            "advance the version, 1.28 -> 1.29 adds the empty export queue, and 1.29 -> 1.30 "
-            "easing and 1.30 -> 1.31 "
-            "node-group-colour only advances the version");
-    }
-
-    Fixture fixture;
-    auto masked = encode(fixture.document);
-    replaceOnce(masked, "\"minor\": 43", "\"minor\": 23");
-    stripExportQueueV1_29(masked);
-    expect(!static_cast<bool>(decodeText(masked)), "a 1.23 document carrying masks is refused");
-}
-
-// #383 document 1.42: a node Mask as a layer's matte mask and as another layer's track matte
-// saves, reopens and decodes exactly; a 1.41 document carrying either is refused.
+// #383: a node Mask as a layer's matte mask and as another layer's track matte saves, reopens and
+// decodes exactly.
 void matteSourcesPersist() {
     Fixture fixture;
     const auto combine = *fixture
@@ -241,7 +190,7 @@ void matteSourcesPersist() {
     expect(text.find("\"matte\": {") != std::string::npos &&
                text.find("\"node\": {") != std::string::npos,
            "the matte mask's node and the node track matte are written");
-    expect(static_cast<bool>(decodeText(text)), "the 1.42 document decodes");
+    expect(static_cast<bool>(decodeText(text)), "the document decodes");
 
     const auto settings = document::makeBloomNeutralColorSettingsV1({});
     auto archive = project::buildVerifiedSaveArchive(
@@ -262,9 +211,6 @@ void matteSourcesPersist() {
             expect(reopened.project().validate().ok(), "the reopened project validates");
         }
     }
-    auto older = text;
-    replaceOnce(older, "\"minor\": 43", "\"minor\": 41");
-    expect(!static_cast<bool>(decodeText(older)), "a 1.41 document carrying a node matte is refused");
 }
 
 // Every handle mode on a path; the explicit modes are the ones the geometry would not imply.
@@ -299,7 +245,7 @@ document::PathValue modedPath(const double shift) {
     return path;
 }
 
-void anchorModesPersistAndMigrate() {
+void anchorModesPersist() {
     Fixture fixture;
     const auto target =
         *fixture
@@ -340,8 +286,7 @@ void anchorModesPersistAndMigrate() {
         std::ranges::equal(before.animationCurves().records(), after.animationCurves().records()),
         "every key's anchor modes equal themselves after save and reopen");
 
-    // A file written before the mode existed carries none: each anchor migrates to its inferred
-    // mode, and an explicit mode in a pre-1.24 file is refused.
+    // A file that omits every mode opens each anchor at the mode its geometry implies.
     auto stripped = text;
     for (const auto* name : {"corner", "mirrored", "aligned", "free", "auto"}) {
         const std::string member = std::string("\"mode\": \"") + name + "\"";
@@ -372,31 +317,12 @@ void anchorModesPersistAndMigrate() {
                                anchors[4].mode == PathAnchorMode::Mirrored &&
                                anchors[5].mode == PathAnchorMode::Mirrored;
                 }
-        expect(inferred, "omitted modes migrate as Corner, Mirrored, Aligned or Free");
+        expect(inferred, "omitted modes open as Corner, Mirrored, Aligned or Free");
     }
-
-    document::Document shaped{
-        document::makeNewProject(
-            "Shaped", "Main", core::RationalTime::fromInteger(2),
-            *document::CompositionFormat::create(64, 64, core::PixelAspectRatio::square(),
-                                                 document::FrameRate::framesPerSecond24()))
-            .project};
-    commands::CommandStack shapedCommands{shaped};
-    commands::Transaction add("Shape", shaped.snapshot().revision());
-    commands::ShapeLayerGeometry geometry;
-    geometry.path = modedPath(0);
-    add.emplace<commands::AddShapeLayer>(shaped.snapshot().project().compositions().front().id(),
-                                         document::ShapeKind::Path, geometry);
-    expect(shapedCommands.execute(std::move(add)).succeeded(), "a moded shape path is added");
-    auto shapeText = encode(shaped);
-    replaceOnce(shapeText, "\"minor\": 43", "\"minor\": 23");
-    stripExportQueueV1_29(shapeText);
-    expect(!static_cast<bool>(decodeText(shapeText)),
-           "a pre-1.24 file carrying an anchor mode is refused");
 }
 
-// #376: a composition's timecode labelling (document 1.26) is written only when set, saves and
-// reopens exactly, and is refused in an older file.
+// #376: a composition's timecode labelling is written only when set, and saves and reopens
+// exactly.
 void compositionTimecodePersists() {
     Fixture fixture;
     expect(encode(fixture.document).find("\"timecode\"") == std::string::npos,
@@ -427,10 +353,6 @@ void compositionTimecodePersists() {
                    "the start timecode and drop-frame flag reopen exactly");
         }
     }
-    auto older = text;
-    replaceOnce(older, "\"minor\": 43", "\"minor\": 25");
-    stripExportQueueV1_29(older);
-    expect(!static_cast<bool>(decodeText(older)), "a pre-1.26 file carrying a timecode is refused");
 }
 
 } // namespace
@@ -438,8 +360,7 @@ void compositionTimecodePersists() {
 int main() {
     try {
         roundTrip();
-        olderDocumentsMigrateAndRefuseNewMembers();
-        anchorModesPersistAndMigrate();
+        anchorModesPersist();
         compositionTimecodePersists();
         matteSourcesPersist();
     } catch (const std::exception& error) {

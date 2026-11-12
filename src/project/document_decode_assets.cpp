@@ -69,10 +69,9 @@ bool locator(const JsonValue& node, DecodeState& state, const std::string& path,
 }
 bool manifest(const JsonValue& node, DecodeState& state, const std::string& path,
               document::AssetSequenceManifest& out) {
-    // Document 1.34 (#381) appends the optional imported frame range.
+    // #381: the optional imported frame range comes last.
     std::vector<std::string_view> keys{"pattern", "padding", "first", "last", "members", "gaps"};
-    if (state.documentMinor >= 34 && node.kind() == JsonValueKind::Object &&
-        node.findMember("range") != nullptr)
+    if (node.kind() == JsonValueKind::Object && node.findMember("range") != nullptr)
         keys.emplace_back("range");
     std::vector<const JsonValue*> members;
     if (!matchOrderedMembers(node, keys, false, state, path, members) ||
@@ -88,9 +87,9 @@ bool manifest(const JsonValue& node, DecodeState& state, const std::string& path
         return false;
     }
     constexpr std::array<std::string_view, 3> memberKeys{"frame", "locator", "contentDigest"};
-    // Document 1.35 (#473): a member import did not read carries its file stamp instead.
+    // #473: a member import did not read carries its file stamp instead.
     constexpr std::array<std::string_view, 3> stampedKeys{"frame", "locator", "stamp"};
-    // Document 1.36 (#495): a verified member carries both, the digest a full hash proved for the
+    // #495: a verified member carries both, the digest a full hash proved for the
     // bytes that carried the stamp.
     constexpr std::array<std::string_view, 4> verifiedKeys{"frame", "locator", "contentDigest",
                                                            "stamp"};
@@ -100,13 +99,8 @@ bool manifest(const JsonValue& node, DecodeState& state, const std::string& path
         document::AssetSequenceMember member;
         const bool object = value.kind() == JsonValueKind::Object;
         const bool hasStamp = object && value.findMember("stamp") != nullptr;
-        const bool stamped = state.documentMinor >= 35 && hasStamp;
+        const bool stamped = hasStamp;
         const bool digested = object && value.findMember("contentDigest") != nullptr;
-        // A document claiming 1.35 or older never carries both.
-        if (hasStamp && digested && state.documentMinor < 36) {
-            state.fail(DocumentDecodeError::UnknownMember, path);
-            return false;
-        }
         const std::span<const std::string_view> layout =
             stamped ? (digested ? std::span<const std::string_view>(verifiedKeys)
                                 : std::span<const std::string_view>(stampedKeys))
@@ -215,7 +209,7 @@ bool trueFlag(const JsonValue& node, DecodeState& state, const std::string& path
     out = true;
     return true;
 }
-// Document 1.34 (#381): the optional Interpret Footage members after alphaAssociation, each present
+// #381: the optional Interpret Footage members after alphaAssociation, each present
 // only when it differs from its default and always in this order.
 constexpr std::array<std::string_view, 11> kFootageInterpretationKeys{
     "frameRate",   "startTimecode", "alphaMode", "invertAlpha",   "matteColor",   "fieldOrder",
@@ -337,9 +331,8 @@ bool video(const JsonValue& node, DecodeState& state, const std::string& path,
     for (const auto& value : fields[2]->arrayElements()) {
         document::AssetVideoStream stream;
         std::vector<const JsonValue*> members;
-        // Document 1.34 appends an optional coded pixel aspect ratio.
-        const auto* pixelAspect =
-            state.documentMinor >= 34 ? value.findMember("pixelAspect") : nullptr;
+        // An optional coded pixel aspect ratio comes last.
+        const auto* pixelAspect = value.findMember("pixelAspect");
         if (!matchOrderedMembers(value, streamKeys, false, state, path, members) ||
             value.objectMembers().size() != streamKeys.size() + (pixelAspect ? 1U : 0U) ||
             (pixelAspect != nullptr &&
@@ -432,15 +425,6 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
             state.fail(DocumentDecodeError::DomainViolation, path);
             return false;
         }
-        // Font assets arrive with document 1.15; 1.14 carries path values but no font kind, so an
-        // earlier minor naming one is a domain violation rather than a tolerated unknown. Mirrors
-        // the `path` constant's own minor gate in document_decode_composition.cpp.
-        if ((kind == "font" && state.documentMinor < 15) ||
-            (kind == "video" && state.documentMinor < 17) ||
-            (kind == "lut" && state.documentMinor < 21)) {
-            state.fail(DocumentDecodeError::DomainViolation, path);
-            return false;
-        }
         previous = asset.id.value();
         asset.kind = kind == "image"      ? document::AssetKind::Image
                      : kind == "sequence" ? document::AssetKind::Sequence
@@ -450,25 +434,19 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
                                           : document::AssetKind::Font;
         std::vector<std::string_view> interpretationKeys{"colorSpace", "inputColorSpaceId",
                                                          "alphaAssociation"};
-        if (state.documentMinor >= 34 && fields[4]->kind() == JsonValueKind::Object)
+        if (fields[4]->kind() == JsonValueKind::Object)
             for (const auto key : kFootageInterpretationKeys)
                 if (fields[4]->findMember(key) != nullptr)
                     interpretationKeys.push_back(key);
-        constexpr std::array<std::string_view, 2> legacyInterpretationKeys{"colorSpace",
-                                                                           "alphaAssociation"};
         std::vector<const JsonValue*> interpretation;
         std::uint32_t space = 0, alpha = 0;
         std::string inputColorSpaceId;
-        const bool currentInterpretation = state.documentMinor >= 20;
-        if ((currentInterpretation ? !matchOrderedMembers(*fields[4], interpretationKeys, false,
-                                                          state, path, interpretation)
-                                   : !matchOrderedMembers(*fields[4], legacyInterpretationKeys,
-                                                          false, state, path, interpretation)) ||
+        if (!matchOrderedMembers(*fields[4], interpretationKeys, false, state, path,
+                                 interpretation) ||
             !number(*interpretation[0], state, path, space) ||
-            (currentInterpretation && !text(*interpretation[1], state, path, inputColorSpaceId)) ||
-            !number(*(currentInterpretation ? interpretation[2] : interpretation[1]), state, path,
-                    alpha) ||
-            space > 3 || alpha > 1 || !number(*fields[5], state, path, asset.width) ||
+            !text(*interpretation[1], state, path, inputColorSpaceId) ||
+            !number(*interpretation[2], state, path, alpha) || space > 3 || alpha > 1 ||
+            !number(*fields[5], state, path, asset.width) ||
             !number(*fields[6], state, path, asset.height) ||
             !manifest(*fields[7], state, path, asset.manifest)) {
             state.fail(DocumentDecodeError::DomainViolation, path);
@@ -477,7 +455,7 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
         asset.interpretation.colorSpace = static_cast<document::AssetColorSpace>(space);
         asset.interpretation.inputColorSpaceId = std::move(inputColorSpaceId);
         asset.interpretation.alphaAssociation = static_cast<document::AssetAlphaAssociation>(alpha);
-        if (currentInterpretation && interpretationKeys.size() > 3 &&
+        if (interpretationKeys.size() > 3 &&
             !footageInterpretation(*fields[4], std::span(interpretation).subspan(3),
                                    std::span<const std::string_view>(interpretationKeys).subspan(3),
                                    state, path, asset.interpretation)) {
@@ -504,68 +482,53 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
                 return false;
             }
         }
-        if (state.documentMinor >= 16) {
-            auto allKeys = std::vector<std::string_view>(keys.begin(), keys.end());
-            if (asset.kind == document::AssetKind::Font)
-                allKeys.push_back("font");
-            if (asset.kind == document::AssetKind::Audio)
-                allKeys.push_back("audio");
-            if (asset.kind == document::AssetKind::Video)
-                allKeys.push_back("video");
-            allKeys.push_back("name");
-            if (value.findMember("folder"))
-                allKeys.push_back("folder");
-            allKeys.push_back("tags");
-            allKeys.push_back("order");
-            if (!matchOrderedMembers(value, allKeys, false, state, path, fields) ||
-                value.objectMembers().size() != allKeys.size()) {
-                state.fail(DocumentDecodeError::UnknownMember, path);
-                return false;
-            }
-            const auto* nameNode = value.findMember("name");
-            if (!text(*nameNode, state, path, asset.name) ||
-                !document::isValidHumanFacingName(asset.name)) {
-                state.fail(DocumentDecodeError::DomainViolation, path);
-                return false;
-            }
-            if (const auto* folderNode = value.findMember("folder")) {
-                document::AssetFolderId folderId;
-                if (!decodeObjectId(*folderNode, state, path, folderId))
-                    return false;
-                asset.folder = folderId;
-            }
-            const auto* tags = value.findMember("tags");
-            if (tags->kind() != JsonValueKind::Array || tags->arrayElements().size() > 64) {
-                state.fail(DocumentDecodeError::DomainViolation, path);
-                return false;
-            }
-            for (const auto& tagNode : tags->arrayElements()) {
-                std::string tag;
-                if (!text(tagNode, state, path, tag))
-                    return false;
-                asset.tags.push_back(std::move(tag));
-            }
-            const auto orderText = value.findMember("order")->asString();
-            const auto order = parseCanonicalAllocatorHighWater(orderText.value_or(""));
-            if (!order) {
-                state.fail(DocumentDecodeError::DomainViolation, path);
-                return false;
-            }
-            asset.order = *order.value();
-        } else {
-            auto legacyKeys = std::vector<std::string_view>(keys.begin(), keys.end());
-            if (asset.kind == document::AssetKind::Font)
-                legacyKeys.push_back("font");
-            if (asset.kind == document::AssetKind::Audio)
-                legacyKeys.push_back("audio");
-            if (!matchOrderedMembers(value, legacyKeys, false, state, path, fields) ||
-                value.objectMembers().size() != legacyKeys.size()) {
-                state.fail(DocumentDecodeError::UnknownMember, path);
-                return false;
-            }
-            asset.name = document::defaultAssetName(asset);
-            asset.order = out.size();
+        auto allKeys = std::vector<std::string_view>(keys.begin(), keys.end());
+        if (asset.kind == document::AssetKind::Font)
+            allKeys.push_back("font");
+        if (asset.kind == document::AssetKind::Audio)
+            allKeys.push_back("audio");
+        if (asset.kind == document::AssetKind::Video)
+            allKeys.push_back("video");
+        allKeys.push_back("name");
+        if (value.findMember("folder"))
+            allKeys.push_back("folder");
+        allKeys.push_back("tags");
+        allKeys.push_back("order");
+        if (!matchOrderedMembers(value, allKeys, false, state, path, fields) ||
+            value.objectMembers().size() != allKeys.size()) {
+            state.fail(DocumentDecodeError::UnknownMember, path);
+            return false;
         }
+        const auto* nameNode = value.findMember("name");
+        if (!text(*nameNode, state, path, asset.name) ||
+            !document::isValidHumanFacingName(asset.name)) {
+            state.fail(DocumentDecodeError::DomainViolation, path);
+            return false;
+        }
+        if (const auto* folderNode = value.findMember("folder")) {
+            document::AssetFolderId folderId;
+            if (!decodeObjectId(*folderNode, state, path, folderId))
+                return false;
+            asset.folder = folderId;
+        }
+        const auto* tags = value.findMember("tags");
+        if (tags->kind() != JsonValueKind::Array || tags->arrayElements().size() > 64) {
+            state.fail(DocumentDecodeError::DomainViolation, path);
+            return false;
+        }
+        for (const auto& tagNode : tags->arrayElements()) {
+            std::string tag;
+            if (!text(tagNode, state, path, tag))
+                return false;
+            asset.tags.push_back(std::move(tag));
+        }
+        const auto orderText = value.findMember("order")->asString();
+        const auto order = parseCanonicalAllocatorHighWater(orderText.value_or(""));
+        if (!order) {
+            state.fail(DocumentDecodeError::DomainViolation, path);
+            return false;
+        }
+        asset.order = *order.value();
         if (!asset.validate().ok()) {
             state.fail(DocumentDecodeError::DomainViolation, path);
             return false;

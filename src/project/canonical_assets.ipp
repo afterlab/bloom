@@ -17,7 +17,7 @@
     const auto text = digest.toLowercaseHex();
     return state.ok(state.writer.stringValue(std::string_view(text.data(), text.size())));
 }
-// Document 1.34 (#381): the Interpret Footage members, each written only when it differs from
+// #381: the Interpret Footage members, each written only when it differs from
 // its default, in this fixed order after alphaAssociation.
 [[nodiscard]] bool
 emitFootageInterpretation(EmitState& state,
@@ -127,8 +127,8 @@ emitFootageInterpretation(EmitState& state,
                 !state.ok(writer.memberName("locator")) ||
                 !emitAssetLocator(state, member.locator))
                 return false;
-            // Document 1.35 (#473): the content digest when import read the member, the file
-            // stamp it listed, or (document 1.36) both once a full hash verified the stamped bytes.
+            // #473: the content digest when import read the member, the file
+            // stamp it listed, or both once a full hash verified the stamped bytes.
             if (!member.contentDigest && !member.stamp)
                 return false;
             if (member.contentDigest && (!state.ok(writer.memberName("contentDigest")) ||
@@ -156,7 +156,7 @@ emitFootageInterpretation(EmitState& state,
         }
         if (!state.ok(writer.endArray()))
             return false;
-        // Document 1.34 (#381): the imported frame range, only when the import was limited.
+        // #381: the imported frame range, only when the import was limited.
         if (asset.manifest.range &&
             (!state.ok(writer.memberName("range")) || !state.ok(writer.beginObject()) ||
              !emitNamedSigned(state, "first", asset.manifest.range->first) ||
@@ -256,7 +256,7 @@ emitFootageInterpretation(EmitState& state,
                         return false;
                 if (!state.ok(writer.endArray()))
                     return false;
-                // Document 1.34: the coded pixel aspect ratio, written only when not square.
+                // The coded pixel aspect ratio, written only when not square.
                 if (stream.pixelAspect != bloom::core::PixelAspectRatio::square() &&
                     (!state.ok(writer.memberName("pixelAspect")) ||
                      !emitRational(state, stream.pixelAspect.numerator(),

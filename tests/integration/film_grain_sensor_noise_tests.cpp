@@ -1,7 +1,7 @@
-// #565: a project saved with a Film Grain from before Sensor Noise (no binding for the mode or any
-// of its values) opens with them bound at their defaults, in Film mode, and renders exactly as it
-// did before it was saved: the compiled plan is the same and the CPU reference frame is
-// bit-identical. A node set to Sensor Noise keeps its mode, values and ids through a save and an
+// #565: the mode and the Sensor Noise values are optional. A Film Grain that binds none of them
+// saves and opens with exactly its bindings, lowers them at their defaults (Film), and renders
+// exactly as it did before it was saved: the compiled plan is the same and the CPU reference frame
+// is bit-identical. A node set to Sensor Noise keeps its mode, values and ids through a save and an
 // open and draws the same picture after it, and Sensor Noise draws another picture than Film.
 
 #include <bloom/commands/command_stack.hpp>
@@ -96,7 +96,7 @@ struct Fixture {
                                           document::ConstantValueSource{std::int64_t{42}});
     }
     // Removes the bindings (and records) a Film Grain saved before Sensor Noise never had.
-    void makeLegacy() {
+    void unbindSensorNoise() {
         const auto base = document.snapshot();
         auto draft = document.draft(base);
         auto* target = draft.project().findComposition(composition);
@@ -107,11 +107,11 @@ struct Fixture {
                 binding.role != "fixedPattern")
                 return false;
             if (!target->parameters().erase(binding.parameterId))
-                throw std::logic_error("legacy record erases");
+                throw std::logic_error("optional record erases");
             return true;
         });
         if (!document.commit(base.revision(), std::move(draft)).committed())
-            throw std::logic_error("legacy commit");
+            throw std::logic_error("optional commit");
     }
 };
 
@@ -155,52 +155,45 @@ bool sameBits(const std::vector<render::Rgba32f>& a, const std::vector<render::R
            (a.empty() || std::memcmp(a.data(), b.data(), a.size() * sizeof(render::Rgba32f)) == 0);
 }
 
-void legacyGrainOpensUnchanged() {
+void unboundGrainOpensUnchanged() {
     Fixture fixture;
-    const auto newSize = fixture.document.snapshot()
-                             .project()
+    const auto intensity = fixture.parameter("intensity");
+    fixture.unbindSensorNoise();
+    const auto unbound = fixture.document.snapshot();
+    const auto byRole = [](const auto& left, const auto& right) { return left.role < right.role; };
+    auto savedBindings = unbound.project()
                              .findComposition(fixture.composition)
                              ->graph()
                              .findNode(fixture.grain)
-                             ->parameters.size();
-    const auto intensity = fixture.parameter("intensity");
-    fixture.makeLegacy();
-    const auto legacy = fixture.document.snapshot();
+                             ->parameters;
+    std::ranges::sort(savedBindings, byRole);
     const auto settings = document::makeBloomNeutralColorSettingsV1({});
-    const auto before = render(legacy, fixture.composition);
+    const auto before = render(unbound, fixture.composition);
     bool lit = false;
     for (const auto& pixel : before.pixels)
         lit = lit || pixel.alpha() > 0.0F;
-    expect(lit, "the legacy Film Grain renders a picture");
+    expect(lit, "the unbound Film Grain renders a picture");
 
-    auto result = project::openProjectArchive(save(legacy, settings), {}, memory());
+    auto result = project::openProjectArchive(save(unbound, settings), {}, memory());
     expect(result.outcome() == project::OpenArchiveOutcome::Opened,
-           "a project with a pre-Sensor Noise Film Grain opens");
+           "a project with an unbound Film Grain opens");
     if (result.outcome() != project::OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(result).takeOpened();
     const auto snapshot = opened.document->snapshot();
     const auto* composition = snapshot.project().findComposition(fixture.composition);
     const auto* node = composition ? composition->graph().findNode(fixture.grain) : nullptr;
-    expect(node && node->parameters.size() == newSize,
-           "the opened Film Grain binds the controls a new one does");
+    auto openedBindings = node ? node->parameters : std::vector<document::ParameterBinding>{};
+    std::ranges::sort(openedBindings, byRole);
+    expect(node && openedBindings == savedBindings,
+           "the opened Film Grain binds exactly what was saved");
     if (!node)
         return;
-    const auto constantOf = [&](const char* role) -> const document::ConstantValueSource* {
-        const auto binding = std::ranges::find(node->parameters, role,
-                                               &document::ParameterBinding::role);
-        const auto* record = binding == node->parameters.end()
-                                 ? nullptr
-                                 : composition->parameters().find(binding->parameterId);
-        return record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
-    };
-    const auto* mode = constantOf("mode");
-    expect(mode && mode->value == document::ParameterValue{document::kFilmGrainFilm},
-           "the added mode is Film");
-    const auto* fixed = constantOf("fixedPattern");
-    expect(fixed && fixed->value == document::ParameterValue{0.0}, "the added fixed pattern is off");
-    for (const char* role : {"shadowWeighting", "chromaBlotches", "blotchSize"})
-        expect(constantOf(role) != nullptr, "the added Sensor Noise value is bound");
+    for (const char* role :
+         {"mode", "fixedPattern", "shadowWeighting", "chromaBlotches", "blotchSize"})
+        expect(std::ranges::find(node->parameters, role, &document::ParameterBinding::role) ==
+                   node->parameters.end(),
+               "an optional role stays unbound");
     const auto kept =
         std::ranges::find(node->parameters, "intensity", &document::ParameterBinding::role);
     expect(kept != node->parameters.end() && kept->parameterId == intensity,
@@ -211,7 +204,7 @@ void legacyGrainOpensUnchanged() {
                std::ranges::equal(before.plan->valueOperations(), after.plan->valueOperations()),
            "the opened Film Grain compiles to the plan it had before it was saved");
     expect(sameBits(before.pixels, after.pixels),
-           "the opened Film Grain renders bit-identically to the pre-Sensor Noise node");
+           "the opened Film Grain renders bit-identically to the saved node");
     // Moving a Sensor Noise value on a Film node changes neither its plan nor its picture.
     Fixture moved;
     moved.run<commands::SetParameterSource>(moved.composition, moved.parameter("fixedPattern"),
@@ -223,15 +216,15 @@ void legacyGrainOpensUnchanged() {
                std::ranges::equal(before.plan->operations(), movedRender.plan->operations()),
            "Film mode ignores the Sensor Noise values");
 
-    // The migrated project saves and reopens as itself.
+    // The opened project saves and reopens as itself.
     const auto bytes = save(snapshot, opened.colorSettings);
     auto again = project::openProjectArchive(bytes, {}, memory());
-    expect(again.outcome() == project::OpenArchiveOutcome::Opened, "the migrated project reopens");
+    expect(again.outcome() == project::OpenArchiveOutcome::Opened, "the opened project reopens");
     if (again.outcome() != project::OpenArchiveOutcome::Opened)
         return;
     auto reopened = std::move(again).takeOpened();
     expect(save(reopened.document->snapshot(), reopened.colorSettings) == bytes,
-           "the migrated project round-trips byte-identically");
+           "the opened project round-trips byte-identically");
 }
 
 // Sensor Noise survives a save and open with its ids and values, and draws what it drew.
@@ -275,7 +268,7 @@ void sensorNoiseRoundTrips() {
 
 int main() {
     try {
-        legacyGrainOpensUnchanged();
+        unboundGrainOpensUnchanged();
         sensorNoiseRoundTrips();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
