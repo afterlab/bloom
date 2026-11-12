@@ -253,8 +253,10 @@ void testExitCode(const std::string& self) {
 #ifdef _WIN32
     const bool three = failure != nullptr && failure->nativeCode == 3;
 #else
-    const bool three = failure != nullptr && WIFEXITED(failure->nativeCode) &&
-                       WEXITSTATUS(failure->nativeCode) == 3;
+    // A plain int of its own: some systems' wait macros take the address of their argument as a
+    // pointer to non-const int.
+    int status = failure != nullptr ? failure->nativeCode : 0;
+    const bool three = failure != nullptr && WIFEXITED(status) && WEXITSTATUS(status) == 3;
 #endif
     expect(failure != nullptr && failure->code == ProcessError::Crashed && three,
            "a nonzero exit is reported as Crashed with the exit code");
