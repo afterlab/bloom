@@ -5,8 +5,8 @@ its **RAM preview**. The status bar reports each as "held / budget". Decoded vid
 thumbnail images and queued disk-cache writes have separate retention targets. Active exports
 have separate reservation accounting.
 
-Ordinary GPU preview prepares the scene and display on the GPU, then transfers the final display
-image once for widget painting. Its status says **GPU-prepared / CPU-painted**. RAM preview retains
+Ordinary GPU preview renders the scene and its display on the GPU, then hands the finished image
+to the window once. Its status says **GPU render**. RAM preview retains
 that immutable host display storage, including metadata, without a second native copy of every
 finished frame. A tight Full 1920×1080 display has 8,294,400 pixel bytes; Half has 2,073,600 before
 metadata. The GPU native route remains separately supported. Channel display changes use a bounded

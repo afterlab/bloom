@@ -56,9 +56,13 @@ PreviewColorState previewColorState(const CompositionPreviewState& preview) {
                                 : PreviewColorState{WindowStatusBar::tr("CPU render · GPU display"),
                                                     kit::Color::Ok, WindowStatusBar::tr("CPU")};
         }
+        // The scene and its display transform both ran on the GPU; the finished image is then
+        // handed to the window for painting, which is how every widget reaches the screen and
+        // says nothing about how the frame was rendered. The words an artist reads are "GPU
+        // render", with no "CPU" in them (#681); the architecture documents keep the precise
+        // name of the route.
         if (provider == runtime::PreviewDisplayProvider::GpuPreparedPacked) {
-            return {WindowStatusBar::tr("GPU-prepared / CPU-painted"), kit::Color::Ok,
-                    WindowStatusBar::tr("GPU")};
+            return {WindowStatusBar::tr("GPU render"), kit::Color::Ok, WindowStatusBar::tr("GPU")};
         }
     }
     if (bufferView.has_value() && bufferView->isOcioQualified) {

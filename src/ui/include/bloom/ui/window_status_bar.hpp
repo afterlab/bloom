@@ -161,6 +161,8 @@ class WindowStatusBar final : public kit::KSurface {
 
     // Test/diagnostic surface only, mirroring ViewerEditor's own *ForTest precedent.
     [[nodiscard]] QString colorChipTextForTest() const;
+    [[nodiscard]] QString renderPathToolTipForTest() const;
+    [[nodiscard]] QString renderPathAccessibleNameForTest() const;
     [[nodiscard]] QString previewStateTextForTest() const;
     [[nodiscard]] QString droppedFrameTextForTest() const;
     // The disk cache's plain status sentence (also the head of the Disk cache tooltip).

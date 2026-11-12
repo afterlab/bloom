@@ -782,9 +782,13 @@ void WindowStatusBar::refreshMessage() {
     refreshActivity();
 }
 
-// The full colour-state sentence ("Qualified · Bloom Neutral", "GPU-prepared / CPU-painted"): the
-// bar shows a plain GPU or CPU, and this is the detail its tooltip carries.
+// The full colour-state sentence ("Qualified · Bloom Neutral", "GPU render"): the bar shows a
+// plain GPU or CPU, and this is the detail its tooltip and accessible name carry.
 QString WindowStatusBar::colorChipTextForTest() const { return colorStateText_; }
+QString WindowStatusBar::renderPathToolTipForTest() const { return renderPath_->toolTip(); }
+QString WindowStatusBar::renderPathAccessibleNameForTest() const {
+    return renderPath_->accessibleName();
+}
 
 // The preview's full status sentence ("Shown EV 0 · RGBA · Current"), which the Viewer segment's
 // tooltips carry; empty while no viewer's state is displayed.

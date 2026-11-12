@@ -85,7 +85,8 @@ Neither experiment is installed as a production repair.
 
 Narrow the presentation direction to genuine GPU scene and display processing, followed by one
 asynchronous final RGBA8 transfer into immutable host storage for ordinary QWidget painting.
-Provenance must say **GPU-prepared/CPU-painted**. This adds transfer and host-storage cost; it is
+Provenance must record the route as GPU-prepared and host-painted (the application's status bar
+shows it to the artist as **GPU render**, #681). This adds transfer and host-storage cost; it is
 not a zero-readback resident presentation claim. No per-operation roundtrips, CPU scene
 re-evaluation labelled GPU, processing-precision change, or GPU coverage exemption is permitted.
 Native preview and all final-render routes remain required and independently qualified.

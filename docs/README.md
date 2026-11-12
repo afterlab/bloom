@@ -206,7 +206,7 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   ([platform support](architecture/platform-support.md)). Vulkan/MoltenVK remains a working GPU direction
   until its cross-platform parity and lifecycle spike passes.
 - Ordinary Viewer preview now uses genuine GPU scene/display preparation followed by an asynchronous
-  final RGBA8 transfer and QWidget painting, explicitly labelled GPU-prepared/CPU-painted. Bounded
+  final RGBA8 transfer and QWidget painting, shown in the status bar as "GPU render". Bounded
   private Linux checks qualify clipping, ROI, coherent outlines, host-only Full/Half 100-frame reuse,
   real animated text manipulation and short useful cold progress. Channel remapping is a bounded
   CPU worker with explicit provenance. Native preview/final GPU coverage remains required. These

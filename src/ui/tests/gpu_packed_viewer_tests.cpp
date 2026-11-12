@@ -505,12 +505,19 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                       "real final GPU copy is held before fence observation");
     };
     checks.expect(current(), "genuine GPU-prepared product is actually QWidget-painted Current");
-    checks.expect(
-        waitUntil([&] { return status.colorChipTextForTest() == "GPU-prepared / CPU-painted"; },
-                  3s) &&
-            !viewer->displayedPreviewState().ownerAppliedDisplay &&
-            !viewer->residentPresentationActiveForTest(),
-        "painted provenance is explicit and never native/ownerApplied");
+    checks.expect(waitUntil([&] { return status.colorChipTextForTest() == "GPU render"; }, 3s) &&
+                      !viewer->displayedPreviewState().ownerAppliedDisplay &&
+                      !viewer->residentPresentationActiveForTest(),
+                  "the status says GPU render and the frame is never native/ownerApplied");
+    // #681: nothing an artist can read about a GPU-rendered frame says "CPU": the Render value,
+    // its color-state text, its tooltip and its accessible name.
+    for (const QString& text :
+         {status.renderPathTextForTest(), status.colorChipTextForTest(),
+          status.renderPathToolTipForTest(), status.renderPathAccessibleNameForTest()}) {
+        checks.expect(!text.isEmpty() && !text.contains(QStringLiteral("CPU"), Qt::CaseInsensitive),
+                      "a GPU-rendered frame's status text has no CPU in it: " + text.toStdString());
+    }
+    checks.expect(status.renderPathTextForTest() == "GPU", "the Render value stays GPU");
     exactPackedCacheAdmission(checks, viewer->displayedFrameForTest());
     if (hostRetirement)
         return exercisePackedHostRetirement(checks, *viewer, *area, registry, splitter, controller,

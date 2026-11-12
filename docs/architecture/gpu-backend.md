@@ -437,8 +437,9 @@ mode runs the genuine GPU scene and selected Neutral or general OCIO display pro
 copies only the final RGBA8 data window into host storage. It works without a WSI target. This is
 separate from the older CPU-stage/`GpuNeutral` display route above. The process identity remains
 `EvaluationProvider::GpuResident`; the display provider explicitly records transferred host pixels.
-Ordinary application preview now selects this packed product for QWidget painting, with explicit
-GPU-prepared/CPU-painted status. The native service route remains available and required.
+Ordinary application preview now selects this packed product for QWidget painting. Its
+provenance is the GPU-prepared, host-painted route; the status bar shows it as "GPU render"
+(#681). The native service route remains available and required.
 
 The owner submits and polls the real fence without a GUI wait; host materialization also stays off
 the UI thread. Admission validates exact device control-block identity, allocator generation,
