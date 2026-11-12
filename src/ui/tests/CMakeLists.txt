@@ -2544,6 +2544,11 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
         set_tests_properties(bloom.ui.gpu_packed_viewer_${packed_case}
             PROPERTIES SKIP_RETURN_CODE 77)
+        if(packed_case MATCHES "gib$")
+            # A modelled card is the only limit the case measures, so it runs with the device to
+            # itself: other tests holding device memory would make it a smaller card than modelled.
+            set_tests_properties(bloom.ui.gpu_packed_viewer_${packed_case} PROPERTIES RUN_SERIAL TRUE)
+        endif()
     endforeach()
 
     bloom_add_test(
