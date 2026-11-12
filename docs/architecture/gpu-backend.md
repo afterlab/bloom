@@ -1626,6 +1626,22 @@ and read-ahead keep one frame waiting so the run resumes when room returns. Befo
 filling the device made every frame `BudgetRefused`, and the fill ended with nothing cached. The
 explicit CPU fallback remains only for a frame that already had every byte the device could give
 with nothing left to evict, for an unsupported subset and for device loss.
+**The caches leave room for the next frame (#682).** A RAM fill used to let the reusable scene
+cache grow to the whole device: on a 12 GiB card it filled the device, and from then on every frame
+whose admitted phase had to grow for its images (`raiseExecutorNeed`) waited. That wait never asked
+the caches for memory (only a waiting reservation did), so each frame waited for the next capacity
+sample, about 24 times per frame (0.85 frames per second). Now a phase that must grow asks the
+reclaimers for its shortfall at once, as a reservation does (`GpuProcessingPhasePolicy::reclaimFor`),
+and the preview owner keeps the root's free device room at least one phase of the current work
+(`deviceWorkReserveBytes`, the need the last native phase was admitted with): at each capacity
+sample the parked storage and the scene cache give back the difference before the next frame asks.
+Only reusable retention gives way for that reserve, never finished frames. The retention ceilings are
+planned against the device memory less the VRAM headroom. `render::GpuDeviceCreationOptions::
+device_memory_limit_bytes` caps every device-local heap in the allocator, so a test plans for a small
+card on any machine: `bloom.ui.gpu_packed_viewer_full100_12gib`, `_8gib` and `_6gib` fill the
+100-frame range at Full on a modelled 12, 8 and 6 GiB card with about one admitted phase per frame,
+and Bloom never owns more than the card. Before the change the 12 GiB run admitted 2433 phases for
+87 frames and did not finish.
 An export frame boundary reads the same rule (#709): a frame waiting for device room while the
 measured room is below the device ceiling waits, because the memory other programs hold can come
 back, and room that grows during the wait restarts the 30-second stall clock. A live budget query

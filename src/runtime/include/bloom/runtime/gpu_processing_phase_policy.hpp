@@ -131,6 +131,16 @@ class GpuProcessingPhasePolicy final {
     // preference (MemoryHeadroom{} when none is saved); a root starts with no margin.
     void setHeadroom(MemoryHeadroom headroom) noexcept;
     [[nodiscard]] MemoryHeadroom headroom() const noexcept;
+    // #682: the device need of the most recently admitted native phase, the room the device caches
+    // keep free so the next frame of the same work is admitted without waiting for them.
+    [[nodiscard]] std::uint64_t deviceWorkReserveBytes() const noexcept;
+    // Records the device need a native phase was finally admitted with (its executor need included).
+    void noteDeviceWorkNeed(std::uint64_t bytes) noexcept;
+    // Asks the reclaimers for what `need` lacks in `domain` now (the need minus the free room),
+    // as a waiting reservation does. For work whose admitted phase must grow (#682): its wait
+    // must give the caches the same chance to give memory back.
+    void reclaimFor(render::GpuProcessingPhaseDomain domain, std::uint64_t need,
+                    Clock::time_point now = Clock::now()) noexcept;
     [[nodiscard]] UsableCapacity usableCapacity() const noexcept;
     // How many more frames of this per-frame need fit the free capacity right now.
     [[nodiscard]] std::size_t framesThatFit(std::uint64_t hostBytesPerFrame,
@@ -206,6 +216,7 @@ class GpuProcessingPhasePolicy final {
     std::optional<Clock::time_point> viewerAdmittedAt_;
     std::uint64_t viewerNeedHostBytes_ = 0;
     std::uint64_t viewerNeedDeviceBytes_ = 0;
+    std::uint64_t lastDeviceNeed_ = 0;
     std::vector<RetentionReclaimer> reclaimers_;
     mutable std::mutex reclaimerMutex_;
     std::optional<AwaitingNeed> lastAwaitingNeed_;
@@ -275,4 +286,9 @@ void registerDeviceReclaim(GpuProcessingPhasePolicy& policy,
 [[nodiscard]] std::uint64_t deviceReclaimBytes(GpuDeviceReclaimRequest& request,
                                                const render::GpuAllocationBudget& live,
                                                std::uint64_t vramHeadroomBytes) noexcept;
+// Owner thread (#682): how far the root's free device room (capacity less every claim, retained
+// caches included) has fallen below one more phase of the current work (deviceWorkReserveBytes).
+// The reusable caches give this back before the next frame asks, so a frame does not wait for a
+// cache to shrink; finished frames are never evicted for it.
+[[nodiscard]] std::uint64_t deviceWorkReserveShortfall(const GpuProcessingPhasePolicy& policy) noexcept;
 } // namespace bloom::runtime

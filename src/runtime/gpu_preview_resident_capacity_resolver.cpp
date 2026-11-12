@@ -55,6 +55,13 @@ void resolveResidentCapacity(const std::shared_ptr<PreviewDisplayServiceCore>& c
         // checked against the refreshed shared-root capacity and the device allocator.
         capacity = gpuResidentConstructionCapacity(capacity);
     }
+    // #682: retention ceilings are planned against the usable device memory, never the VRAM
+    // headroom the preference keeps free of Bloom's work and caches.
+    if (core->options.processingPhasePolicy && capacity.isKnown()) {
+        const auto headroom = core->options.processingPhasePolicy->headroom().vramBytes;
+        capacity.availableBytes =
+            capacity.availableBytes > headroom ? capacity.availableBytes - headroom : 0;
+    }
     const GpuResidentCapacityPlan plan = gpuResidentCapacityPlanFor(configured, capacity);
 
     // Retention sub-budgets never exceed their configured values. Rooted foreground work borrows
@@ -167,9 +174,28 @@ void refreshResidentForegroundCapacity(
         // Evict on demand (#425): what waiting work is short of, or what the driver's free memory
         // is below the VRAM headroom. The reusable scene cache gives it back first; what it cannot
         // cover goes to the UI as a finished-frame eviction, so finished frames go last.
-        const auto wanted = deviceReclaimBytes(
-            *core->deviceReclaim, allocation,
-            core->options.processingPhasePolicy->headroom().vramBytes);
+        const auto& policy = *core->options.processingPhasePolicy;
+        const auto headroom = policy.headroom().vramBytes;
+        const auto wanted = deviceReclaimBytes(*core->deviceReclaim, allocation, headroom);
+        // #682: the caches also keep room for one more phase of the current work, so a RAM fill
+        // never waits for them to shrink. Only reusable retention gives this back.
+        const auto reserve = deviceWorkReserveShortfall(policy);
+        if (reserve > wanted) {
+            auto released = core->device->releaseReusableNativeStorage(reserve, true);
+            const auto parkedBefore = core->device->nativeStorageReuseStats().parkedDeviceBytes;
+            if (released < reserve && core->residentSceneCache != nullptr)
+                released += core->residentSceneCache->reclaim(reserve - released);
+            const auto parkedAfter = core->device->nativeStorageReuseStats().parkedDeviceBytes;
+            if (parkedAfter > parkedBefore)
+                static_cast<void>(
+                    core->device->releaseReusableNativeStorage(parkedAfter - parkedBefore, true));
+            if (released != 0) {
+                core->counterDeviceRoomReclaims.fetch_add(1, std::memory_order_relaxed);
+                core->counterDeviceRoomReclaimedBytes.fetch_add(released,
+                                                                std::memory_order_relaxed);
+                allocation = sample();
+            }
+        }
         if (wanted != 0) {
             // Parked native storage (#477) holds nothing anyone reads, so it goes first.
             auto released = core->device->releaseReusableNativeStorage(wanted, true);

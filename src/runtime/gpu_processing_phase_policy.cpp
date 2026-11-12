@@ -515,6 +515,9 @@ GpuProcessingPhasePolicy::reserve(const GpuProcessingPhaseEnvelope& envelope,
         } else {
             grant = budget_.reserve(*request);
         }
+        if (grant.status == render::GpuProcessingPhaseAdmission::Accepted && request->native &&
+            grant.lease)
+            lastDeviceNeed_ = grant.lease->deviceNeedBytes();
         if (viewer) {
             if (grant.status == render::GpuProcessingPhaseAdmission::Accepted) {
                 viewerWaitingAt_.reset();
@@ -529,33 +532,12 @@ GpuProcessingPhasePolicy::reserve(const GpuProcessingPhaseEnvelope& envelope,
     }
     if (grant.status == render::GpuProcessingPhaseAdmission::AwaitingCapacity &&
         grant.domain != render::GpuProcessingPhaseDomain::RequestCount) {
-        // Evict reusable retention first; the waiting request retries on the release. Ask only
-        // for the shortfall: the need minus what is free in that domain now.
+        // Evict reusable retention first; the waiting request retries on the release.
         const bool device = grant.domain == render::GpuProcessingPhaseDomain::Device;
-        const auto need = device ? request->deviceWorkingBytes + request->minimumExecutorBytes
-                                 : budget_.hostNeedBytes(*request);
-        const auto counters = budget_.snapshot();
-        const auto capacity = device ? counters.deviceCapacityBytes : counters.hostCapacityBytes;
-        const auto claims = device ? counters.totalDeviceClaimBytes : counters.totalHostClaimBytes;
-        const auto free = capacity ? subtractSaturating(*capacity, claims) : std::uint64_t{0};
-        const auto needed = std::max<std::uint64_t>(subtractSaturating(need, free), 1);
-        {
-            const std::lock_guard lock(mutex_);
-            lastAwaitingNeed_ = AwaitingNeed{.domain = grant.domain, .bytes = need,
-                                             .shortfallBytes = needed, .at = now};
-        }
-        std::vector<RetentionReclaimer> reclaimers;
-        {
-            const std::lock_guard lock(reclaimerMutex_);
-            reclaimers = reclaimers_;
-        }
-        for (const auto& reclaimer : reclaimers) {
-            try {
-                if (reclaimer(grant.domain, needed) >= needed)
-                    break;
-            } catch (...) {
-            }
-        }
+        reclaimFor(grant.domain,
+                   device ? request->deviceWorkingBytes + request->minimumExecutorBytes
+                          : budget_.hostNeedBytes(*request),
+                   now);
     }
     // The Profiler's pressure section: each answer to wait for capacity, and each refusal of a
     // request that can never fit the budget.
@@ -699,6 +681,44 @@ MemoryHeadroom GpuProcessingPhasePolicy::headroom() const noexcept {
     const std::lock_guard lock(mutex_);
     return headroom_;
 }
+std::uint64_t GpuProcessingPhasePolicy::deviceWorkReserveBytes() const noexcept {
+    const std::lock_guard lock(mutex_);
+    return lastDeviceNeed_;
+}
+void GpuProcessingPhasePolicy::noteDeviceWorkNeed(const std::uint64_t bytes) noexcept {
+    const std::lock_guard lock(mutex_);
+    lastDeviceNeed_ = bytes;
+}
+void GpuProcessingPhasePolicy::reclaimFor(const render::GpuProcessingPhaseDomain domain,
+                                          const std::uint64_t need,
+                                          const Clock::time_point now) noexcept {
+    // Ask only for the shortfall: the need minus what is free in that domain now.
+    const bool device = domain == render::GpuProcessingPhaseDomain::Device;
+    const auto counters = budget_.snapshot();
+    const auto capacity = device ? counters.deviceCapacityBytes : counters.hostCapacityBytes;
+    const auto claims = device ? counters.totalDeviceClaimBytes : counters.totalHostClaimBytes;
+    const auto free = capacity ? subtractSaturating(*capacity, claims) : std::uint64_t{0};
+    const auto needed = std::max<std::uint64_t>(subtractSaturating(need, free), 1);
+    {
+        const std::lock_guard lock(mutex_);
+        lastAwaitingNeed_ =
+            AwaitingNeed{.domain = domain, .bytes = need, .shortfallBytes = needed, .at = now};
+    }
+    std::vector<RetentionReclaimer> reclaimers;
+    try {
+        const std::lock_guard lock(reclaimerMutex_);
+        reclaimers = reclaimers_;
+    } catch (...) {
+        return;
+    }
+    for (const auto& reclaimer : reclaimers) {
+        try {
+            if (reclaimer(domain, needed) >= needed)
+                break;
+        } catch (...) {
+        }
+    }
+}
 
 std::size_t previewFramesThatFit(const GpuProcessingPhasePolicy& policy,
                                  const std::uint64_t framePixels,
@@ -813,5 +833,14 @@ std::uint64_t deviceReclaimBytes(GpuDeviceReclaimRequest& request,
             ? vramHeadroomBytes - live.available_bytes
             : std::uint64_t{0};
     return std::max(waiting, pressure);
+}
+std::uint64_t deviceWorkReserveShortfall(const GpuProcessingPhasePolicy& policy) noexcept {
+    const auto reserve = policy.deviceWorkReserveBytes();
+    const auto counters = policy.snapshot().reservations;
+    if (reserve == 0 || !counters.deviceReady || !counters.deviceCapacityBytes)
+        return 0;
+    const auto free = subtractSaturating(*counters.deviceCapacityBytes,
+                                         counters.totalDeviceClaimBytes);
+    return free < reserve ? reserve - free : 0;
 }
 } // namespace bloom::runtime

@@ -1381,8 +1381,17 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                                                            {extent.width(), extent.height()});
         switch (phaseLease->raiseExecutorNeed(live)) {
         case render::GpuProcessingPhaseAdmission::Accepted:
+            // #682: the device caches keep this much free for the next frame of the same work.
+            if (phase_.policy)
+                phase_.policy->noteDeviceWorkNeed(phaseLease->deviceNeedBytes());
             break;
         case render::GpuProcessingPhaseAdmission::AwaitingCapacity:
+            // #682: a phase that must grow waits like a reservation does, so the device caches
+            // are asked for the shortfall now instead of holding the device until the next
+            // capacity sample.
+            if (phase_.policy)
+                phase_.policy->reclaimFor(render::GpuProcessingPhaseDomain::Device,
+                                          phaseLease->deviceNeedBytes() + live);
             return fail(PreparedGpuSceneDiagnosticCode::AwaitingCapacity,
                         "GPU preparation is awaiting device-memory capacity for the scene's images",
                         mediaStatistics);

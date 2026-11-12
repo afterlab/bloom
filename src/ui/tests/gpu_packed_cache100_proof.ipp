@@ -299,6 +299,7 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
         return result;
     };
     auto configured = serviceOptions(options.loader_path);
+    configured.deviceMemoryLimitBytes = gDeviceMemoryLimit;
     if (deliveredDefaults) {
         ui::applyGpuResidentBudgetPlan(configured,
                                        ui::gpuResidentBudgetPlanFor(retainedCacheBudget));
@@ -885,6 +886,20 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                       device.peakPhaseDeviceAllocationBytes <= device.peakPhaseDeviceNeedBytes &&
                       device.releasedPhaseDeviceNeedBytes <= 2 * device.releasedPhaseDevicePeakBytes,
                   "preview device needs cover the measured allocation within a factor of two");
+    // #682: on a modelled small card (--device-memory-gib) the fill stays inside the card and the
+    // device caches give memory back before a frame has to wait for it: about one admitted phase
+    // per frame (a frame that waited is admitted again), and Bloom never owns more than the card.
+    if (gDeviceMemoryLimit != 0) {
+        std::cout << "PACKED_SMALL_CARD limit=" << gDeviceMemoryLimit
+                  << " peakOwned=" << device.peakOwnedNativeBytes
+                  << " peakClaim=" << device.peakTotalDeviceClaimBytes
+                  << " phases=" << device.releasedNativePhases << '\n';
+        checks.expect(device.peakOwnedNativeBytes <= gDeviceMemoryLimit,
+                      "Bloom never owns more device memory than the card has");
+        checks.expect(device.releasedNativePhases <= sequence.frames + sequence.frames / 5,
+                      "the device caches give memory back before frames wait: at most one "
+                      "waiting frame in five");
+    }
     std::cout << "PACKED_HOST_SOURCE phases=" << device.finishedSourcePhases
               << " needSum=" << device.finishedPhaseSourceNeedBytes
               << " retainedSum=" << device.finishedPhaseRetainedSourceBytes
