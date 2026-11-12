@@ -32,7 +32,9 @@ template <typename T> T get(Result<T> result) {
 // a stale prefix, not a defect in the code under test: the case reports an explicit skip with the
 // reason, and any other refusal still fails the test.
 bool workerServes(const EncodeSettingsV1& settings, const char* what) {
-    EncodeSessionV1 session({});
+    EncodeSessionOptionsV1 options;
+    options.platformEncoder = PlatformEncoderV1::Skipped;
+    EncodeSessionV1 session(std::move(options));
     const auto refused = session.begin(settings);
     if (refused && refused->reason == Error::Unavailable &&
         refused->detail == "Encoder is not in the intake") {
@@ -121,6 +123,13 @@ bool servedByFfmpegAfter(const MediaProviderProvenanceV1& served, const std::str
     const auto tried = std::ranges::find_if_not(served.fallbacks, passedOver);
     return served.provider == kFfmpegProviderId && tried != served.fallbacks.end() &&
            tried->provider == refused;
+}
+// The bundled encoders alone: the platform media framework's encoder (ADR 0035), which is ahead
+// of them for H.264 and HEVC on macOS and Windows, takes no part.
+EncodeSessionOptionsV1 bundled() {
+    EncodeSessionOptionsV1 options;
+    options.platformEncoder = PlatformEncoderV1::Skipped;
+    return options;
 }
 Bytes run(const EncodeSettingsV1& settings, const std::filesystem::path& destination,
           EncodeSessionOptionsV1 options = {}, MediaProviderProvenanceV1* provenance = nullptr,
@@ -375,12 +384,28 @@ void tests(const std::filesystem::path& directory) {
         (void)run(settings, directory / "export-h264.mov", {}, &served);
 #if defined(__APPLE__)
         // ADR 0035: the system encoder is ahead of FFmpeg in the macOS chain.
-        test::check(served.provider == nativeMediaProviderId() && !served.fellBack(),
-                    "H.264 is served by the system encoder on macOS");
+        test::check(
+            served.provider == nativeMediaProviderId() && !served.fellBack(),
+            ("H.264 is served by the system encoder on macOS: " + served.diagnostic()).c_str());
+#elif defined(_WIN32)
+        // Windows asks its own encoder first. One that does not write the export's color tags
+        // into the stream is refused (the software H.264 encoder of Windows writes none for a
+        // limited range), and the bundled OpenH264 serves.
+        test::check(
+            served.provider == nativeMediaProviderId() ||
+                servedByFfmpegAfter(served, nativeMediaProviderId()),
+            ("H.264 is asked of the system encoder first on Windows: " + served.diagnostic())
+                .c_str());
 #else
         test::check(servedByFfmpegAlone(served),
                     "software H.264 is served by the FFmpeg worker's bundled OpenH264");
 #endif
+        // The bundled encoder itself, on every platform.
+        EncodeQcV1 delivered;
+        (void)run(settings, directory / "export-h264-bundled.mov", bundled(), &served, &delivered);
+        test::check(servedByFfmpegAlone(served) && served.fallbacks.empty() &&
+                        delivered.encoder == "libopenh264",
+                    "with the platform encoder skipped, H.264 is the bundled OpenH264");
         auto mp4 = settings;
         mp4.container = "mp4";
         mp4.audioCodec = "aac";
@@ -443,10 +468,18 @@ void tests(const std::filesystem::path& directory) {
         vaapi.vaapi = true;
         MediaProviderProvenanceV1 served;
         (void)run(absent, directory / "export-h264-fallback.mov", std::move(vaapi), &served);
-#if defined(__APPLE__)
-        // There is no VA-API on macOS; the request is served like any other H.264 export.
+#if defined(__APPLE__) || defined(_WIN32)
+        // The system encoder is ahead of VA-API in the chain, and there is no VA-API on macOS or
+        // Windows; the request is served like any other H.264 export.
+#if defined(_WIN32)
+        // A Windows encoder that does not write the color tags is refused, as above.
+        test::check(served.provider == nativeMediaProviderId() ||
+                        servedByFfmpegAfter(served, nativeMediaProviderId()),
+                    "an H.264 export that asks for VA-API is asked of the system encoder first");
+#else
         test::check(served.provider == nativeMediaProviderId(),
                     "an H.264 export that asks for VA-API is served by the system encoder");
+#endif
 #else
         test::check(servedByFfmpegAfter(served, kFfmpegVaapiProviderId),
                     "H.264 falls back from VA-API to the bundled OpenH264 silently");
@@ -455,21 +488,22 @@ void tests(const std::filesystem::path& directory) {
     // HEVC ships with Bloom too: the bundled Kvazaar encodes Main in MOV and MP4 with its 8-bit
     // build and Main 10 with its 10-bit build (#408), the requested profile choosing the build. It
     // pads an extent that is not whole 8x8 blocks (cropped again by the conformance window), and is
-    // VA-API's silent fallback.
+    // VA-API's silent fallback. This section measures Kvazaar, so the platform media framework's
+    // HEVC encoder is skipped throughout; it has its own section below.
     {
         auto hevc = settings;
         hevc.videoCodec = "hevc";
         hevc.profile = "main";
         MediaProviderProvenanceV1 served;
-        (void)run(hevc, directory / "export-hevc.mov", {}, &served);
+        (void)run(hevc, directory / "export-hevc.mov", bundled(), &served);
         test::check(servedByFfmpegAlone(served),
                     "software HEVC is served by the FFmpeg worker's bundled Kvazaar");
         auto mp4 = hevc;
         mp4.container = "mp4";
         mp4.audioCodec = "aac";
-        (void)run(mp4, directory / "export-hevc.mp4");
+        (void)run(mp4, directory / "export-hevc.mp4", bundled());
         EncodeQcV1 delivered;
-        (void)run(hevc, directory / "export-hevc-main.mov", {}, nullptr, &delivered);
+        (void)run(hevc, directory / "export-hevc-main.mov", bundled(), nullptr, &delivered);
         test::check(delivered.profile == "Main" && delivered.bitDepth == 8,
                     "an HEVC Main request reports the Main 8-bit stream it delivered");
         // #408: a Main 10 request with no hardware encoder is real Main 10 from the 10-bit
@@ -484,8 +518,8 @@ void tests(const std::filesystem::path& directory) {
             request.container = container;
             request.audioCodec = std::string_view(container) == "mp4" ? "aac" : "pcm_s16le";
             MediaProviderProvenanceV1 tenServed;
-            (void)run(request, directory / (std::string("export-hevc-main10.") + container), {},
-                      &tenServed, &delivered);
+            (void)run(request, directory / (std::string("export-hevc-main10.") + container),
+                      bundled(), &tenServed, &delivered);
             test::check(servedByFfmpegAlone(tenServed) && delivered.profile == "Main 10" &&
                             delivered.bitDepth == 10 &&
                             delivered.container == std::string(container) + "/hevc" &&
@@ -494,7 +528,7 @@ void tests(const std::filesystem::path& directory) {
                         "10-bit Kvazaar");
         }
         // The same session settings with only the profile changed: the request picks the build.
-        (void)run(hevc, directory / "export-hevc-main-again.mov", {}, nullptr, &delivered);
+        (void)run(hevc, directory / "export-hevc-main-again.mov", bundled(), nullptr, &delivered);
         test::check(delivered.profile == "Main" && delivered.bitDepth == 8,
                     "an HEVC Main request still uses the 8-bit Kvazaar");
         // Grey ramps across 1280 columns for bloom.media.hevc-depth, which counts the distinct
@@ -510,9 +544,11 @@ void tests(const std::filesystem::path& directory) {
             ramp.frames = 4;
             ramp.audioCodec.clear();
             ramp.audioSamples = 0;
-            (void)run(ramp, directory / ("export-hevc-" + std::string(profile) + "-ramp.mov"));
+            (void)run(ramp, directory / ("export-hevc-" + std::string(profile) + "-ramp.mov"),
+                      bundled());
             ramp.container = "mp4";
-            (void)run(ramp, directory / ("export-hevc-" + std::string(profile) + "-ramp.mp4"));
+            (void)run(ramp, directory / ("export-hevc-" + std::string(profile) + "-ramp.mp4"),
+                      bundled());
         }
         lumaRamp = false;
         // 1918x1078 is not whole 8x8 blocks: Kvazaar codes the padded picture and crops it with
@@ -523,13 +559,13 @@ void tests(const std::filesystem::path& directory) {
         unaligned.frames = 6;
         unaligned.audioCodec.clear();
         unaligned.audioSamples = 0;
-        (void)run(unaligned, directory / "export-hevc-1918x1078.mov");
+        (void)run(unaligned, directory / "export-hevc-1918x1078.mov", bundled());
         unaligned.profile = "main10";
         if (main10Served)
-            (void)run(unaligned, directory / "export-hevc-main10-1918x1078.mov");
+            (void)run(unaligned, directory / "export-hevc-main10-1918x1078.mov", bundled());
         auto absent = hevc;
         absent.vaapiDevice = "/dev/dri/renderD-absent";
-        EncodeSessionOptionsV1 vaapi;
+        auto vaapi = bundled();
         vaapi.vaapi = true;
         MediaProviderProvenanceV1 fell;
         (void)run(absent, directory / "export-hevc-fallback.mov", std::move(vaapi), &fell);
@@ -537,7 +573,7 @@ void tests(const std::filesystem::path& directory) {
                     "HEVC falls back from VA-API to the bundled Kvazaar silently");
         // A Main 10 request falls back to the 10-bit Kvazaar and is still Main 10.
         absent.profile = "main10";
-        EncodeSessionOptionsV1 vaapi10;
+        auto vaapi10 = bundled();
         vaapi10.vaapi = true;
         if (main10Served) {
             (void)run(absent, directory / "export-hevc-main10-fallback.mov", std::move(vaapi10),
@@ -547,6 +583,119 @@ void tests(const std::filesystem::path& directory) {
                         "HEVC Main 10 falls back from VA-API to the 10-bit Kvazaar as Main 10");
         }
     }
+#if defined(__APPLE__) || defined(_WIN32)
+    // The platform media framework's encoders (#370). On Windows the worker's Media Foundation
+    // generation is ahead of the bundled encoders for H.264 and HEVC in MOV and MP4; its
+    // container, audio and reopen check are the software generation's, so what the system encoder
+    // wrote is read back by FFmpeg's own decoder: the tags as requested, the frames within the
+    // tolerance profile. On macOS the VideoToolbox provider encodes HEVC as it does H.264.
+    {
+        const auto native = nativeMediaProviderId();
+        const auto system = [&](const EncodeSettingsV1& request, const std::string& file,
+                                EncodeSessionOptionsV1 options, EncodeQcV1& delivered) {
+            MediaProviderProvenanceV1 served;
+            (void)run(request, directory / file, std::move(options), &served, &delivered);
+            std::cout << file << ": " << served.diagnostic() << "; encoder " << delivered.encoder
+                      << '\n';
+            return served;
+        };
+#if defined(_WIN32)
+        // BT.2020 PQ in MP4 with AAC, and full-range sRGB in MOV with PCM, each tagged as asked:
+        // by the system encoder when it writes those tags into the stream, by the bundled encoder
+        // when it does not.
+        for (const auto& [container, audio, tags] :
+             {std::tuple{"mp4", "aac", ColourTags{9, 16, 9, 1}},
+              std::tuple{"mov", "pcm_s16le", ColourTags{1, 13, 1, 2}}}) {
+            auto request = settings;
+            request.container = container;
+            request.audioCodec = audio;
+            request.colour = tags;
+            EncodeQcV1 delivered;
+            const auto served =
+                system(request, std::string("export-h264-system.") + container, {}, delivered);
+            test::check((served.provider == native || servedByFfmpegAfter(served, native)) &&
+                            delivered.colour == tags && delivered.profile == "High" &&
+                            delivered.bitDepth == 8 &&
+                            delivered.container == std::string(container) + "/h264" &&
+                            (served.provider != native ||
+                             delivered.encoder.ends_with("(hardware)") ||
+                             delivered.encoder.ends_with("(software)")),
+                        "H.264 is delivered as High with the requested tags");
+        }
+        // Tags Media Foundation has no name for are refused, never replaced: the bundled encoder
+        // writes them.
+        {
+            auto request = settings;
+            request.colour = {12, 13, 1, 1};
+            EncodeQcV1 delivered;
+            const auto served =
+                system(request, "export-h264-system-unnamed-tags.mov", {}, delivered);
+            test::check(servedByFfmpegAfter(served, native) && delivered.colour == request.colour,
+                        "tags the system encoder cannot write fall back to the bundled encoder");
+        }
+#endif
+        // HEVC encoders belong to the graphics driver or to a separate component of Windows, and
+        // to the computer's own hardware on macOS: a computer that has one for the extent
+        // delivers the requested profile, and one that has none falls back to the bundled
+        // Kvazaar. Either way the stream is what was asked for.
+        for (const auto* profile : {"main", "main10"}) {
+            auto request = settings;
+            request.videoCodec = "hevc";
+            request.profile = profile;
+            request.container = "mp4";
+            request.audioCodec = "aac";
+            const bool ten = std::string_view(profile) == "main10";
+            EncodeQcV1 delivered;
+            const auto served = system(
+                request, std::string("export-hevc-system-") + profile + ".mp4", {}, delivered);
+            test::check((served.provider == native || servedByFfmpegAfter(served, native)) &&
+                            delivered.profile == (ten ? "Main 10" : "Main") &&
+                            delivered.bitDepth == (ten ? 10U : 8U) &&
+                            delivered.colour == request.colour,
+                        "HEVC is the system encoder's or the bundled Kvazaar's, as requested");
+        }
+        // At 1280x720, an extent graphics hardware encodes: a computer with a hardware encoder
+        // uses it (the name printed says which ran), and the stream is still what was asked for.
+        for (const auto& [codec, profile] :
+             {std::pair{"h264", "high"}, std::pair{"hevc", "main"}, std::pair{"hevc", "main10"}}) {
+            auto request = settings;
+            request.videoCodec = codec;
+            request.profile = profile;
+            request.container = "mp4";
+            request.width = 1280;
+            request.height = 720;
+            request.frames = 12;
+            request.audioCodec.clear();
+            request.audioSamples = 0;
+            const bool ten = std::string_view(profile) == "main10";
+            const bool hevc = std::string_view(codec) == "hevc";
+            EncodeQcV1 delivered;
+            const auto served =
+                system(request, std::string("export-") + codec + "-system-" + profile + "-720p.mp4",
+                       {}, delivered);
+            test::check((served.provider == native || servedByFfmpegAfter(served, native)) &&
+                            delivered.profile == (!hevc ? "High"
+                                                  : ten ? "Main 10"
+                                                        : "Main") &&
+                            delivered.bitDepth == (ten ? 10U : 8U) &&
+                            delivered.colour == request.colour,
+                        "the requested 720p stream is delivered");
+            // Required: where the system encoder serves this stream, it serves it alone.
+            if (served.provider == native) {
+                EncodeSessionOptionsV1 required;
+                required.platformEncoder = PlatformEncoderV1::Required;
+                EncodeQcV1 alone;
+                const auto only = system(request,
+                                         std::string("export-") + codec + "-system-" + profile +
+                                             "-720p-required.mp4",
+                                         std::move(required), alone);
+                test::check(only.provider == native && only.fallbacks.empty() &&
+                                alone.colour == request.colour,
+                            "a required platform encoder serves the stream alone");
+            }
+        }
+    }
+#endif
     // ADR 0036: VP9 (libvpx) and AV1 (SVT-AV1) with Opus (libopus) in WebM, and AV1 with AAC in
     // MP4, at 8 and 10 bits, each delivering exactly the profile and depth requested. 64x48 is
     // below SVT-AV1's 64-pixel rate-control floor, which constant quality covers; WebM's
@@ -1047,6 +1196,63 @@ void workerMemoryCap() {
         ok(session.close());
     }
 }
+// ADR 0035: a system encoder that began an export and then fails it is reported as such, so the
+// caller renders the attempt again on the bundled encoder. The worker is ended while the third
+// frame is on its way. 1280x720 with BT.709 tags, which the hardware encoders of both platforms
+// take; a computer whose system encoder does not take it has nothing to measure.
+void platformEncoderFailsPartway() {
+#if defined(__APPLE__) || defined(_WIN32)
+    EncodeSettingsV1 settings;
+    settings.width = 1280;
+    settings.height = 720;
+    settings.frames = 24;
+    settings.videoCodec = "h264";
+    settings.profile = "high";
+    settings.container = "mov";
+    bool killed = false;
+    EncodeSessionOptionsV1 options;
+    options.sending = [&killed](const std::int64_t pid, const std::uint64_t sent) {
+        if (sent == 3 && !killed)
+            killed = bloom::test_support::killProcess(pid);
+    };
+    EncodeSessionV1 session(std::move(options));
+    ok(session.begin(settings));
+    if (session.provenance().provider != nativeMediaProviderId()) {
+        std::cout << "NOT EXERCISED: system encoder failing partway — "
+                  << session.provenance().diagnostic() << '\n';
+        (void)session.close();
+        return;
+    }
+    test::check(!session.platformEncoderFailed(), "a started system encoder has not failed");
+    bool failed = false;
+    for (std::uint64_t i = 0; i < settings.frames && !failed; ++i)
+        failed = session.video(image(settings, i)).has_value();
+    if (!failed)
+        failed = std::holds_alternative<Unavailable>(session.finish());
+    test::check(killed && failed && session.platformEncoderFailed(),
+                "a system encoder whose worker ends partway is reported as a failed platform "
+                "encoder");
+    (void)session.close();
+    // The same loss on the bundled encoder is an ordinary failure, with nothing left to try.
+    killed = false;
+    auto skipped = bundled();
+    skipped.sending = [&killed](const std::int64_t pid, const std::uint64_t sent) {
+        if (sent == 3 && !killed)
+            killed = bloom::test_support::killProcess(pid);
+    };
+    EncodeSessionV1 software(std::move(skipped));
+    ok(software.begin(settings));
+    failed = false;
+    for (std::uint64_t i = 0; i < settings.frames && !failed; ++i)
+        failed = software.video(image(settings, i)).has_value();
+    if (!failed)
+        failed = std::holds_alternative<Unavailable>(software.finish());
+    test::check(killed && failed && !software.platformEncoderFailed(),
+                "the bundled encoder's worker ending is not a platform encoder failure");
+    (void)software.close();
+    std::cout << "system encoder failing partway: exercised\n";
+#endif
+}
 int main(int argc, char** argv) {
     try {
         test::check(argc == 2 || (argc == 3 && std::string_view(argv[2]) == "--nvenc"),
@@ -1055,6 +1261,7 @@ int main(int argc, char** argv) {
             return nvencTests(argv[1]);
         prores4444Threaded(argv[1]);
         workerMemoryCap();
+        platformEncoderFailsPartway();
         tests(argv[1]);
         chromaSampling(argv[1]);
         targetBitrate();

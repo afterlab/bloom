@@ -121,6 +121,8 @@ struct Codec final {
     AVPixelFormat planar = AV_PIX_FMT_NONE;
     OSType buffer = 0;
     bool alpha = false;
+    // 4:2:0 at 10 bits: the two-plane buffer holds each sample in the high bits of a 16-bit word.
+    bool deep = false;
 };
 
 [[nodiscard]] std::optional<Codec> codecFor(const provider::EncodeSettingsV1& settings) {
@@ -133,6 +135,23 @@ struct Codec final {
         codec.planar = AV_PIX_FMT_YUV420P;
         codec.buffer = settings.colour.range == 2 ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
                                                   : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+        return codec;
+    }
+    if (settings.videoCodec == "hevc") {
+        // Main is 8-bit and Main 10 is 10-bit, both 4:2:0; the profile asked for is the one
+        // written, never the other.
+        const bool deep = settings.profile == "main10";
+        if (!deep && settings.profile != "main")
+            return std::nullopt;
+        const bool full = settings.colour.range == 2;
+        codec.type = AVVideoCodecTypeHEVC;
+        codec.code = kCMVideoCodecType_HEVC;
+        codec.planar = deep ? AV_PIX_FMT_YUV420P10LE : AV_PIX_FMT_YUV420P;
+        codec.buffer = deep   ? (full ? kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
+                                      : kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange)
+                       : full ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+                              : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+        codec.deep = deep;
         return codec;
     }
     if (settings.videoCodec != "prores")
@@ -327,9 +346,11 @@ void Encoder::State::begin(const provider::EncodeSettingsV1& requested) {
         throw Unavailable{Error::Unavailable, "Audio-only output unavailable"};
     // H.264 and 4:2:2 ProRes subsample chroma; refuse an extent they cannot code up front rather
     // than fail on the first frame.
-    if (requested.videoCodec == "h264" &&
+    if ((requested.videoCodec == "h264" || requested.videoCodec == "hevc") &&
         ((requested.width % 2U) != 0U || (requested.height % 2U) != 0U))
-        throw Unavailable{Error::InvalidValue, "H.264 requires even frame dimensions"};
+        throw Unavailable{Error::InvalidValue, requested.videoCodec == "h264"
+                                                   ? "H.264 requires even frame dimensions"
+                                                   : "HEVC requires even frame dimensions"};
     if (requested.videoCodec == "prores" && !chosen->alpha && (requested.width % 2U) != 0U)
         throw Unavailable{Error::InvalidValue, "ProRes 4:2:2 requires an even width"};
     // ProRes is video range by definition.
@@ -410,6 +431,17 @@ void Encoder::State::begin(const provider::EncodeSettingsV1& requested) {
                                               : 30000000U;
             video[AVVideoCompressionPropertiesKey] = @{
                 AVVideoProfileLevelKey : AVVideoProfileLevelH264HighAutoLevel,
+                AVVideoAverageBitRateKey : @(bitrate),
+            };
+        } else if (settings.videoCodec == "hevc") {
+            // The requested bit rate, or the FFmpeg worker's default for HEVC.
+            const std::uint64_t bitrate = settings.videoBitrateKbps != 0
+                                              ? std::uint64_t{settings.videoBitrateKbps} * 1000U
+                                              : 20000000U;
+            video[AVVideoCompressionPropertiesKey] = @{
+                AVVideoProfileLevelKey :
+                    (__bridge NSString*)(codec.deep ? kVTProfileLevel_HEVC_Main10_AutoLevel
+                                                    : kVTProfileLevel_HEVC_Main_AutoLevel),
                 AVVideoAverageBitRateKey : @(bitrate),
             };
         }
@@ -525,6 +557,31 @@ void Encoder::State::frame(const provider::FrameProduct& product) {
                     store(to + x * 8U + 2U, word(luma + x * 2U));
                     store(to + x * 8U + 4U, word(blue + x * 2U));
                     store(to + x * 8U + 6U, word(red + x * 2U));
+                }
+            }
+        } else if (codec.deep) {
+            // 10-bit 4:2:0: a luma plane and an interleaved Cb, Cr plane of 16-bit little-endian
+            // words, each sample in the word's high ten bits.
+            auto* luma = static_cast<std::uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(buffer, 0));
+            auto* chroma =
+                static_cast<std::uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(buffer, 1));
+            const auto lumaStride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0);
+            const auto chromaStride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 1);
+            const auto high = [](const std::uint8_t* at) {
+                return static_cast<std::uint16_t>(word(at) << 6U);
+            };
+            for (std::uint32_t y = 0; y < height; ++y) {
+                auto* to = luma + static_cast<std::size_t>(y) * lumaStride;
+                const auto* from = row(0, y);
+                for (std::uint32_t x = 0; x < width; ++x)
+                    store(to + x * 2U, high(from + x * 2U));
+            }
+            for (std::uint32_t y = 0; y < height / 2U; ++y) {
+                auto* to = chroma + static_cast<std::size_t>(y) * chromaStride;
+                const auto *blue = row(1, y), *red = row(2, y);
+                for (std::uint32_t x = 0; x < width / 2U; ++x) {
+                    store(to + x * 4U, high(blue + x * 2U));
+                    store(to + x * 4U + 2U, high(red + x * 2U));
                 }
             }
         } else {
@@ -750,9 +807,11 @@ provider::EncodeQcV1 Encoder::State::finish() {
         require(format != AV_PIX_FMT_NONE, "Reopened sample layout is not comparable");
         // The codec's own subsampling: the decoded layout must decimate chroma as the encoder's
         // input did.
-        const auto expected = codec.planar == AV_PIX_FMT_YUV420P       ? ChromaSampling::S420
-                              : codec.planar == AV_PIX_FMT_YUV422P16LE ? ChromaSampling::S422
-                                                                       : ChromaSampling::S444;
+        const auto expected =
+            codec.planar == AV_PIX_FMT_YUV420P || codec.planar == AV_PIX_FMT_YUV420P10LE
+                ? ChromaSampling::S420
+            : codec.planar == AV_PIX_FMT_YUV422P16LE ? ChromaSampling::S422
+                                                     : ChromaSampling::S444;
         require(planes->frame.sampling == expected, "Reopened chroma sampling differs");
         AVFrame* view = av_frame_alloc();
         if (view == nullptr)

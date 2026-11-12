@@ -63,9 +63,9 @@ Handshake videoToolboxHandshake(const bool hardwareEncoder) {
     for (const auto* codec : {"aac", "pcm_s16le", "pcm_s24le", "pcm_f32le"})
         add(Role::AudioDecode, codec);
 
-    // Encode roles are declared for exactly what the AVAssetWriter provider implements: ProRes and
-    // H.264 video and PCM/AAC audio in MOV/MP4 containers. WAV, MXF and TIFF are deliberately
-    // absent.
+    // Encode roles are declared for exactly what the AVAssetWriter provider implements: ProRes,
+    // H.264 and HEVC video and PCM/AAC audio in MOV/MP4 containers. WAV, MXF and TIFF are
+    // deliberately absent.
     auto encode = [&](Role role, const char* codec, const char* container, const char* profile) {
         auto& declaration = add(role, codec);
         declaration.capability.purpose = Purpose::Export;
@@ -90,6 +90,15 @@ Handshake videoToolboxHandshake(const bool hardwareEncoder) {
         auto* declaration = encode(Role::VideoEncode, "h264", "mov", "high");
         declaration->capability.bitDepth = 8;
         declaration->capability.chroma = "yuv420p";
+        declaration->capability.range = "stream-declared";
+        declaration->capability.colorFeatures = "h273-export-tags";
+    }
+    // HEVC Main (8-bit) and Main 10 (issue #370), 4:2:0 as H.264 is.
+    for (const auto* profile : {"main", "main10"}) {
+        const bool deep = std::string_view(profile) == "main10";
+        auto* declaration = encode(Role::VideoEncode, "hevc", "mov", profile);
+        declaration->capability.bitDepth = deep ? 10 : 8;
+        declaration->capability.chroma = deep ? "yuv420p10" : "yuv420p";
         declaration->capability.range = "stream-declared";
         declaration->capability.colorFeatures = "h273-export-tags";
     }
