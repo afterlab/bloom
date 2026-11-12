@@ -262,12 +262,11 @@ void ExportEditor::buildStrip() {
     rows->addWidget(line);
     auto* barRow = new QWidget(strip_);
     auto* barLayout = new QHBoxLayout(barRow);
-    // The bar starts under the title and stops at a readable length, never across a wide panel.
+    // The bar starts under the title and runs to the panel's right edge at any width (#691).
     barLayout->setContentsMargins(kit::px(kit::Size::Control) + kit::px(kit::Spacing::XS), 0, 0,
                                   kit::px(kit::Spacing::S));
     stripBar_ = new kit::KProgressBar(barRow);
     stripBar_->setObjectName(QStringLiteral("exportCurrentRenderBar"));
-    stripBar_->setMaximumWidth(kit::px(kit::Size::DialogWideWidth));
     barLayout->addWidget(stripBar_, 1);
     barLayout->addStretch(0);
     rows->addWidget(barRow);

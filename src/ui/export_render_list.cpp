@@ -228,6 +228,10 @@ void RenderList::fitColumns() {
         if (const int still = over - give; still > 0)
             at(StatusColumn) = std::max(floor, at(StatusColumn) - still);
     }
+    // #691: a wide panel is filled, not left with an empty tail: the slack goes to Composition, the
+    // column that names the item, so the row's cells run to the panel's right edge.
+    if (const int slack = available - total(); slack > 0)
+        at(CompositionColumn) += slack;
     for (int column = 0; column + 1 < ListColumnCount; ++column)
         if (top->sectionSize(column) != at(column))
             top->resizeSection(column, at(column));
