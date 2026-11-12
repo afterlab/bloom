@@ -69,6 +69,7 @@
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/preview_frame_trace.hpp>
 #include <bloom/ui/profiler_runtime_feed.hpp>
+#include <bloom/ui/project_file_open_events.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/qualified_display_processor_bootstrap.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
@@ -912,6 +913,9 @@ int main(int argc, char* argv[]) try {
                                  &ramPreviewController, &previewController,
                                  nullptr, &playback, cpuEvaluator.operationCache().get(),
                                  mediaDiskCache.get(), &accelerationStatus, &cachePurgeController);
+    // A project the operating system asks Bloom to open (macOS: double-clicked, dropped on the
+    // Dock icon, Open With), at launch and while running, opens as it does through File, Open.
+    const bloom::ui::ProjectFileOpenEvents projectFileOpenEvents(projectHost);
     // Every default dialog of the project host and the export controller opens over the window.
     window.setMcpServer(&mcpAdapter);
     mcpLiveUi.setWindow(&window);

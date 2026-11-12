@@ -1,4 +1,5 @@
 #include <bloom/platform/private_temporary_directory.hpp>
+#include <bloom/ui/project_file_open_events.hpp>
 #include <bloom/ui/project_host.hpp>
 
 #include <bloom/commands/command_stack.hpp>
@@ -21,10 +22,12 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFileDialog>
+#include <QFileOpenEvent>
 #include <QLabel>
 #include <QStandardPaths>
 #include <QString>
 #include <QTimer>
+#include <QUrl>
 #include <QWidget>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/dialog.hpp>
@@ -894,6 +897,87 @@ void testUnsavedChangeDecisionSeamForOpen(Expectations& expectations) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The operating system's file-open event (macOS: a project double-clicked, dropped on the Dock
+// icon or chosen with Open With) opens the project as File, Open does.
+// ---------------------------------------------------------------------------------------------
+
+void sendFileOpenEvent(const std::filesystem::path& path) {
+    QFileOpenEvent event(QUrl::fromLocalFile(QString::fromStdU16String(path.u16string())));
+    QCoreApplication::sendEvent(QCoreApplication::instance(), &event);
+}
+
+void testFileOpenEventOpensTheProject(Expectations& expectations) {
+    TempDirectory directory;
+    if (!directory.isValid()) {
+        expectations.expect(false, "file-open event: temp directory is available");
+        return;
+    }
+    const auto projectPath = directory.path() / "double clicked.bloom";
+    {
+        bloom::runtime::TaskScheduler seedScheduler;
+        ProjectHost seedHost(seedScheduler);
+        expectations.expect(executeRename(seedHost, "Opened From The Finder"),
+                            "file-open event: the seed rename transaction commits");
+        seedHost.beginSaveAs(projectPath);
+        expectations.expect(waitUntilIdle(seedHost),
+                            "file-open event: the seed save reaches a terminal state");
+        expectations.expect(pathExists(projectPath), "file-open event: the seed file was written");
+    }
+
+    bloom::runtime::TaskScheduler scheduler;
+    ProjectHost host(scheduler);
+    int sessionReplacedCount = 0;
+    QObject::connect(&host, &ProjectHost::sessionReplaced, [&] { ++sessionReplacedCount; });
+    // The dialog seam must never be asked: the event names the file.
+    int dialogCount = 0;
+    host.setOpenPathProvider([&]() -> std::optional<std::filesystem::path> {
+        ++dialogCount;
+        return std::nullopt;
+    });
+    const bloom::ui::ProjectFileOpenEvents events(host);
+
+    // At launch and while running the event is the same: a clean project is replaced.
+    sendFileOpenEvent(projectPath);
+    expectations.expect(waitUntil([&] { return sessionReplacedCount == 1; }),
+                        "file-open event: the named project opens");
+    expectations.expect(host.displayPath() == projectPath && !host.isDirty() && dialogCount == 0,
+                        "file-open event: the session is the file's, clean, with no dialog");
+
+    // Unsaved changes are asked about first, as for File, Open: Cancel opens nothing.
+    expectations.expect(executeRename(host, "Unsaved Work"),
+                        "file-open event: the dirtying transaction commits");
+    host.setUnsavedChangeDecisionProvider([] { return UnsavedChangeDecision::Cancel; });
+    sendFileOpenEvent(projectPath);
+    expectations.expect(waitUntilIdle(host) && sessionReplacedCount == 1 && host.isDirty(),
+                        "file-open event: Cancel keeps the unsaved project");
+    host.setUnsavedChangeDecisionProvider([] { return UnsavedChangeDecision::Discard; });
+    sendFileOpenEvent(projectPath);
+    expectations.expect(waitUntil([&] { return sessionReplacedCount == 2; }) && !host.isDirty(),
+                        "file-open event: Discard opens the named project");
+
+    // An event that arrives while another project operation runs waits for it and is not lost.
+    const auto otherPath = directory.path() / "saved meanwhile.bloom";
+    expectations.expect(executeRename(host, "Saved Meanwhile"),
+                        "file-open event: the second dirtying transaction commits");
+    host.beginSaveAs(otherPath);
+    expectations.expect(host.isBusy(), "file-open event: a save is in progress");
+    sendFileOpenEvent(projectPath);
+    expectations.expect(waitUntil([&] { return sessionReplacedCount == 3; }),
+                        "file-open event: the waiting request opens once the save has finished");
+    expectations.expect(pathExists(otherPath) && host.displayPath() == projectPath,
+                        "file-open event: the save completed first and the project then opened");
+
+    // A file that is not there is reported like any failed open; the project stays.
+    OutcomeCapture opened;
+    connectOpenCapture(host, opened);
+    sendFileOpenEvent(directory.path() / "absent.bloom");
+    expectations.expect(waitUntil([&] { return opened.count == 1; }) &&
+                            opened.outcome == ProjectHostOperationOutcome::Failed &&
+                            sessionReplacedCount == 3,
+                        "file-open event: a missing file is a failed open, not a new project");
+}
+
+// ---------------------------------------------------------------------------------------------
 // Pathless Save routes to the Save As decision (the seam observes it).
 // ---------------------------------------------------------------------------------------------
 
@@ -1281,6 +1365,7 @@ int main(int argc, char** argv) {
     testTypedFailureSurfacedOnUnwritablePath(expectations);
     testUnsavedChangeDecisionSeamForNew(expectations);
     testUnsavedChangeDecisionSeamForOpen(expectations);
+    testFileOpenEventOpensTheProject(expectations);
     testPathlessSaveRoutesToSaveAsDecision(expectations);
     testSaveCopyUnavailableOnEditableContent(expectations);
     testDefaultSaveAsAddsBloomSuffix(expectations);

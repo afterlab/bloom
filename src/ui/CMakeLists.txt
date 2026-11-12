@@ -634,6 +634,7 @@ target_sources(
         playback_controller.cpp
         preview_frame_cache.cpp
         preview_frame_trace.cpp
+        project_file_open_events.cpp
         project_host.cpp
         ram_preview_controller.cpp
         ram_preview_pipeline.cpp
@@ -828,6 +829,7 @@ target_sources(
             include/bloom/ui/playback_controller.hpp
             include/bloom/ui/preferences_aware.hpp
             include/bloom/ui/preview_frame_cache.hpp
+            include/bloom/ui/project_file_open_events.hpp
             include/bloom/ui/project_host.hpp
             include/bloom/ui/live_session_adapter.hpp
             include/bloom/ui/ram_preview_controller.hpp

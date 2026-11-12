@@ -548,6 +548,14 @@ that none was built for a newer system than the bundle declares; there is no Dev
 signature or notarization, so a copy downloaded from the internet is stopped by Gatekeeper until
 the person opening it allows it.
 
+The bundle declares Bloom's project document (`.bloom`, type `org.kinetik.bloom.project`), so
+the Finder offers Bloom for a project file. When a project is double-clicked, dropped on the
+Dock icon or chosen with Open With, the system sends the application a file-open event, at
+launch and while it runs; `ProjectFileOpenEvents` hands the file to the project host, and the
+project opens exactly as through File, Open: unsaved changes are asked about first, a request
+that arrives during another project operation waits for it, and a file that cannot be opened
+is reported the same way. The package check fails on a bundle that does not declare the type.
+
 Media on macOS is read and encoded by the Apple frameworks first, with the bundled FFmpeg worker
 behind them ([Media I/O](media-io.md)). Continuous integration builds macOS in qualified mode on
 hosted Apple silicon runners; a hosted runner may have no usable GPU device, and its GPU tests

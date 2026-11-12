@@ -613,6 +613,17 @@ elseif(system STREQUAL "macos" AND "resolution" IN_LIST ONLY)
     if(NOT main_name OR NOT EXISTS "${programs}/${main_name}")
         list(APPEND failures "the bundle's executable is missing: '${main_name}'")
     endif()
+    # The bundle declares Bloom's project document, so the system offers Bloom for a project
+    # file and sends it the file-open event.
+    bloom_plist(":CFBundleDocumentTypes:0:LSItemContentTypes:0" document_type)
+    bloom_plist(":UTExportedTypeDeclarations:0:UTTypeIdentifier" exported_type)
+    bloom_plist(":UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.filename-extension:0"
+                extension)
+    if(NOT document_type STREQUAL "org.kinetik.bloom.project"
+       OR NOT exported_type STREQUAL document_type OR NOT extension STREQUAL "bloom")
+        bloom_fail("Info.plist does not declare the Bloom project document type "
+                   "(.bloom, org.kinetik.bloom.project)")
+    endif()
 
     # Every Mach-O file, by its first four bytes. Per file: what it loads, its search paths, the
     # systems it was built for, and whether it is a program.

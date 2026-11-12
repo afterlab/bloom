@@ -871,6 +871,31 @@ void ProjectHost::requestOpen() {
         false, UnsavedChangeAction::OpenProject);
 }
 
+void ProjectHost::requestOpenPath(const std::filesystem::path& path) {
+    if (isBusy()) {
+        if (!waitingOpenPath_.has_value()) {
+            // Taken up from the event loop once the operation in progress has finished.
+            auto connection = std::make_shared<QMetaObject::Connection>();
+            *connection = connect(
+                this, &ProjectHost::activityChanged, this,
+                [this, connection] {
+                    if (isBusy() || !waitingOpenPath_.has_value()) {
+                        return;
+                    }
+                    disconnect(*connection);
+                    const auto waiting = std::move(*waitingOpenPath_);
+                    waitingOpenPath_.reset();
+                    requestOpenPath(waiting);
+                },
+                Qt::QueuedConnection);
+        }
+        waitingOpenPath_ = path;
+        return;
+    }
+    confirmUnsavedChanges([this, path] { beginOpen(path); }, false,
+                          UnsavedChangeAction::OpenProject);
+}
+
 void ProjectHost::requestSaveAs() {
     if (isBusy()) {
         emit saveFinished(ProjectHostOperationOutcome::Refused,

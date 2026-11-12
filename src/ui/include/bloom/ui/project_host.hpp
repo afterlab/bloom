@@ -267,6 +267,12 @@ class ProjectHost final : public QObject {
     // The "Open…" menu action's entry point: composes the unsaved-change flow, then the open-path
     // dialog seam, then beginOpen() with the chosen path.
     void requestOpen();
+    // Opens the project at `path` the way File, Open does once its dialog has answered: the
+    // unsaved-change flow, then beginOpen(). This is what the operating system's request to
+    // open a document reaches (bloom/ui/project_file_open_events.hpp). A request made while
+    // another project operation is in progress waits and is taken up when the host is idle
+    // again; a newer request replaces one that is waiting.
+    void requestOpenPath(const std::filesystem::path& path);
     // The "Save As…" menu action's entry point: the save-path dialog seam, then beginSaveAs() with
     // the chosen path.
     void requestSaveAs();
@@ -418,6 +424,8 @@ class ProjectHost final : public QObject {
     UnsavedChangeAction pendingUnsavedContinuationAction_ = UnsavedChangeAction::Continue;
     QPointer<QWidget> dialogOwner_;
     ProjectPathProvider openPathProvider_;
+    // requestOpenPath() while busy: the path to open when the host is idle again.
+    std::optional<std::filesystem::path> waitingOpenPath_;
     ProjectPathProvider saveAsPathProvider_;
     RecoveryDecisionProvider recoveryDecisionProvider_;
 
