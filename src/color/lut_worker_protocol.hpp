@@ -13,6 +13,17 @@
 #include <string>
 #include <vector>
 #endif
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <cstring>
+#include <utility>
+#include <windows.h>
+#endif
 
 namespace bloom::color::detail {
 inline constexpr std::uint64_t kLutProtocolMagic = 0x424c4f4f4d4c5554ULL;
@@ -174,5 +185,101 @@ inline bool validSharedFile(const int fd, const std::uint64_t expectedInode,
            static_cast<std::uint64_t>(info.st_ino) == expectedInode;
 }
 #endif
+#elif defined(_WIN32)
+// Windows passes no descriptors. A shared file here is an unnamed section of the paging file: it
+// has no name, is in no file system and its size is fixed when it is made. The host gives the
+// helper its own handle to it (ProcessSupervisor::shareHandle), with read access only for an
+// input, so the helper cannot change an input and neither side can resize anything. The helper's
+// handle value travels in the packet field that carries the file identity on the other systems.
+class LutSection final {
+  public:
+    explicit LutSection(HANDLE value = nullptr) : value_(value) {}
+    ~LutSection() {
+        if (value_ != nullptr)
+            CloseHandle(value_);
+    }
+    LutSection(const LutSection&) = delete;
+    LutSection& operator=(const LutSection&) = delete;
+    LutSection(LutSection&& other) noexcept : value_(std::exchange(other.value_, nullptr)) {}
+    [[nodiscard]] HANDLE get() const { return value_; }
+    [[nodiscard]] bool valid() const { return value_ != nullptr; }
+
+  private:
+    HANDLE value_;
+};
+inline HANDLE createSection(const std::uint64_t bytes) {
+    if (bytes == 0)
+        return nullptr;
+    return CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
+                              static_cast<DWORD>(bytes >> 32U),
+                              static_cast<DWORD>(bytes & 0xffffffffULL), nullptr);
+}
+// The first `bytes` of a section, mapped for reading or for reading and writing.
+class LutView final {
+  public:
+    LutView(const HANDLE section, const std::uint64_t bytes, const bool writable)
+        : data_(section == nullptr || bytes == 0
+                    ? nullptr
+                    : MapViewOfFile(section, writable ? FILE_MAP_WRITE : FILE_MAP_READ, 0, 0,
+                                    static_cast<SIZE_T>(bytes))) {}
+    ~LutView() {
+        if (data_ != nullptr)
+            UnmapViewOfFile(data_);
+    }
+    LutView(const LutView&) = delete;
+    LutView& operator=(const LutView&) = delete;
+    [[nodiscard]] void* data() const { return data_; }
+    [[nodiscard]] bool valid() const { return data_ != nullptr; }
+
+  private:
+    void* data_;
+};
+inline bool writeSection(const HANDLE section, const std::span<const std::byte> bytes) {
+    const LutView view(section, bytes.size(), true);
+    if (!view.valid())
+        return false;
+    std::memcpy(view.data(), bytes.data(), bytes.size());
+    return true;
+}
+inline bool readSection(const HANDLE section, const std::span<std::byte> bytes) {
+    const LutView view(section, bytes.size(), false);
+    if (!view.valid())
+        return false;
+    std::memcpy(bytes.data(), view.data(), bytes.size());
+    return true;
+}
+// A section of at least the announced size that this process can read, and can write exactly when
+// it is not an input.
+inline bool validSharedSection(const HANDLE section, const std::uint64_t bytes,
+                               const bool readOnly) {
+    const LutView view(section, bytes, false);
+    MEMORY_BASIC_INFORMATION info{};
+    if (!view.valid() || VirtualQuery(view.data(), &info, sizeof(info)) == 0 ||
+        info.Type != MEM_MAPPED || info.RegionSize < bytes)
+        return false;
+    const LutView writable(section, bytes, true);
+    return writable.valid() != readOnly;
+}
+// The helper's standard input and output are pipes.
+inline bool writeFd(const HANDLE pipe, std::span<const std::byte> bytes) {
+    while (!bytes.empty()) {
+        DWORD count = 0;
+        if (!WriteFile(pipe, bytes.data(), static_cast<DWORD>(bytes.size()), &count, nullptr) ||
+            count == 0)
+            return false;
+        bytes = bytes.subspan(count);
+    }
+    return true;
+}
+inline bool readFd(const HANDLE pipe, std::span<std::byte> bytes) {
+    while (!bytes.empty()) {
+        DWORD count = 0;
+        if (!ReadFile(pipe, bytes.data(), static_cast<DWORD>(bytes.size()), &count, nullptr) ||
+            count == 0)
+            return false;
+        bytes = bytes.subspan(count);
+    }
+    return true;
+}
 #endif
 } // namespace bloom::color::detail

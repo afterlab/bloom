@@ -23,7 +23,6 @@ namespace bloom::color::detail {
 namespace {
 using Clock = std::chrono::steady_clock;
 
-#if defined(__linux__) || defined(__APPLE__)
 [[nodiscard]] LutError processError(const platform::ProcessFailure failure) {
     switch (failure.code) {
     case platform::ProcessError::Unavailable:
@@ -43,37 +42,6 @@ using Clock = std::chrono::steady_clock;
     return LutError::HelperProtocolViolation;
 }
 
-[[nodiscard]] std::string workerPath() {
-    std::error_code error;
-#ifdef __linux__
-    const auto executable = std::filesystem::read_symlink("/proc/self/exe", error);
-    if (!error) {
-        const auto installed = executable.parent_path() / "../libexec/bloom/bloom-color-worker";
-        if (std::filesystem::is_regular_file(installed, error))
-            return installed.lexically_normal().string();
-    }
-#else
-    // Beside the executable: an application bundle's Contents/MacOS, or a tool's own directory.
-    std::uint32_t size = 0;
-    static_cast<void>(::_NSGetExecutablePath(nullptr, &size));
-    std::string buffer(size + 1U, '\0');
-    if (::_NSGetExecutablePath(buffer.data(), &size) == 0) {
-        buffer.resize(std::char_traits<char>::length(buffer.c_str()));
-        const auto executable = std::filesystem::weakly_canonical(buffer, error);
-        if (!error) {
-            const auto installed = executable.parent_path() / "bloom-color-worker";
-            if (std::filesystem::is_regular_file(installed, error))
-                return installed.string();
-        }
-    }
-#endif
-#ifdef BLOOM_COLOR_WORKER
-    return BLOOM_COLOR_WORKER;
-#else
-    return {};
-#endif
-}
-
 // Tracks the helper for the duration of one extraction and always reaps it, including every early
 // return and any throw.
 class WorkerGuard final {
@@ -89,14 +57,59 @@ class WorkerGuard final {
     WorkerGuard(const WorkerGuard&) = delete;
     WorkerGuard& operator=(const WorkerGuard&) = delete;
     [[nodiscard]] platform::ProcessSupervisor* operator->() const noexcept { return worker_.get(); }
+    [[nodiscard]] platform::ProcessSupervisor& operator*() const noexcept { return *worker_; }
 
   private:
     std::unique_ptr<platform::ProcessSupervisor> worker_;
     // Listed for the Profiler while the colour worker lives (#423).
     core::telemetry::HelperProcessRegistration listed_;
 };
-#endif
 } // namespace
+
+std::string lutWorkerPath() {
+    std::error_code error;
+#if defined(__linux__)
+    const auto executable = std::filesystem::read_symlink("/proc/self/exe", error);
+    if (!error) {
+        const auto installed = executable.parent_path() / "../libexec/bloom/bloom-color-worker";
+        if (std::filesystem::is_regular_file(installed, error))
+            return installed.lexically_normal().string();
+    }
+#elif defined(__APPLE__)
+    // Beside the executable: an application bundle's Contents/MacOS, or a tool's own directory.
+    std::uint32_t size = 0;
+    static_cast<void>(::_NSGetExecutablePath(nullptr, &size));
+    std::string buffer(size + 1U, '\0');
+    if (::_NSGetExecutablePath(buffer.data(), &size) == 0) {
+        buffer.resize(std::char_traits<char>::length(buffer.c_str()));
+        const auto executable = std::filesystem::weakly_canonical(buffer, error);
+        if (!error) {
+            const auto installed = executable.parent_path() / "bloom-color-worker";
+            if (std::filesystem::is_regular_file(installed, error))
+                return installed.string();
+        }
+    }
+#elif defined(_WIN32)
+    // Beside the executable, where the program's own libraries are.
+    std::wstring buffer(32768, L'\0');
+    const DWORD length =
+        GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length > 0 && length < buffer.size()) {
+        buffer.resize(length);
+        const auto installed =
+            std::filesystem::path(buffer).parent_path() / L"bloom-color-worker.exe";
+        if (std::filesystem::is_regular_file(installed, error)) {
+            const auto text = installed.u8string();
+            return {reinterpret_cast<const char*>(text.data()), text.size()};
+        }
+    }
+#endif
+#ifdef BLOOM_COLOR_WORKER
+    return BLOOM_COLOR_WORKER;
+#else
+    return {};
+#endif
+}
 
 FileTransformGpuExtraction extractFileTransformGpuProgram(
     const std::span<const std::byte> lutBytes, const core::Sha256Digest& expectedDigest,
@@ -115,10 +128,6 @@ FileTransformGpuExtraction extractFileTransformGpuProgram(
         result.error = LutError::HelperCancelled;
         return result;
     }
-#if !defined(__linux__) && !defined(__APPLE__)
-    result.error = LutError::HelperUnavailable;
-    return result;
-#else
     const auto outputReservation = LutReservation::acquire(kMaximumGpuProgramBytes);
     if (!outputReservation) {
         result.error = LutError::HelperMemoryLimit;
@@ -129,14 +138,14 @@ FileTransformGpuExtraction extractFileTransformGpuProgram(
         result.error = LutError::ChangedFile;
         return result;
     }
-    const auto generation = nextLutGeneration();
-    LutListener listener(static_cast<std::uint64_t>(::getpid()), generation);
-    if (!listener.valid()) {
+    LutFileChannel channel;
+    if (!channel.valid()) {
         result.error = LutError::HelperUnavailable;
         return result;
     }
     platform::ProcessOptions options;
-    options.executable = workerPath();
+    options.executable = lutWorkerPath();
+    options.confined = kLutLaunchConfined;
     options.addressSpaceBytes = std::uint64_t{512} * 1024U * 1024U;
     options.messageGrace = std::chrono::milliseconds(50);
     options.termGrace = std::chrono::milliseconds(100);
@@ -169,31 +178,23 @@ FileTransformGpuExtraction extractFileTransformGpuProgram(
         return static_cast<LutError>(message[5]);
     };
     auto hello = packet(kLutCommandHello, nonce++);
-    hello[5] = static_cast<std::uint64_t>(::getpid());
-    hello[6] = generation;
+    channel.announce(hello);
     if (const auto error = exchange(hello, std::chrono::seconds(5)); error != LutError::None) {
         result.error = error;
         return result;
     }
-    LutFd descriptorSocket(listener.accept());
-    if (descriptorSocket.get() < 0 || !lutPeerIs(descriptorSocket.get(), worker->processId())) {
+    if (!channel.attach(*worker)) {
         result.error = LutError::HelperProtocolViolation;
         return result;
     }
-    LutFd resource(sharedFile());
-    if (resource.get() < 0 || !writeFd(resource.get(), lutBytes) || !sealInput(resource.get())) {
+    const LutSharedFile resource{lutBytes};
+    const LutSharedFile programFile{std::uint64_t{kMaximumGpuProgramBytes}};
+    if (!resource.valid() || !programFile.valid()) {
         result.error = LutError::HelperMemoryLimit;
         return result;
     }
-    LutFd programFile(sharedFile());
-    if (programFile.get() < 0 ||
-        ::ftruncate(programFile.get(), static_cast<off_t>(kMaximumGpuProgramBytes)) != 0 ||
-        !sealExtent(programFile.get())) {
-        result.error = LutError::HelperMemoryLimit;
-        return result;
-    }
-    const std::array descriptors{resource.get(), programFile.get()};
-    if (!sendDescriptors(descriptorSocket.get(), descriptors)) {
+    const auto shared = channel.send(resource, &programFile);
+    if (!shared) {
         result.error = LutError::HelperProtocolViolation;
         return result;
     }
@@ -202,9 +203,9 @@ FileTransformGpuExtraction extractFileTransformGpuProgram(
         .lutFormat = lutFormat,
         .interpolation = static_cast<std::uint64_t>(interpolation),
         .direction = static_cast<std::uint64_t>(direction),
-        .lutInode = inode(resource.get()),
+        .lutInode = (*shared)[0],
         .programExtent = kMaximumGpuProgramBytes,
-        .programInode = inode(programFile.get()),
+        .programInode = (*shared)[1],
     };
     auto message = request.encode(nonce++);
     if (const auto error = exchange(message, std::chrono::seconds(30)); error != LutError::None) {
@@ -216,24 +217,19 @@ FileTransformGpuExtraction extractFileTransformGpuProgram(
         result.error = LutError::HelperProtocolViolation;
         return result;
     }
-    if (::lseek(programFile.get(), 0, SEEK_SET) != 0) {
-        result.error = LutError::HelperProtocolViolation;
-        return result;
-    }
     try {
         result.bytes.resize(static_cast<std::size_t>(reply.programBytes));
     } catch (const std::bad_alloc&) {
         result.error = LutError::HelperMemoryLimit;
         return result;
     }
-    if (!readFd(programFile.get(), std::as_writable_bytes(std::span(result.bytes)))) {
+    if (!programFile.read(std::as_writable_bytes(std::span(result.bytes)))) {
         result.bytes.clear();
         result.error = LutError::HelperProtocolViolation;
         return result;
     }
     result.error = LutError::None;
     return result;
-#endif
 }
 
 } // namespace bloom::color::detail

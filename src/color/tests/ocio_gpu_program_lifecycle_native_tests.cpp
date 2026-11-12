@@ -3,9 +3,11 @@
 // colour processors. The complete wrapper + OCIO GLSL is compiled once, off the owner thread, with
 // the pinned glslangValidator/spirv-val; no runtime compiler exists here.
 
+#include "tool_command.hpp"
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/color/ocio_gpu_program.hpp>
 #include <bloom/core/color.hpp>
+#include <bloom/core/executable_suffix.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/gpu_image_upload.hpp>
@@ -202,8 +204,8 @@ uint bloom_ocio_quantize(float value)
 [[nodiscard]] std::optional<std::vector<std::uint32_t>> compileGlsl(const std::string& glsl) {
 #ifdef BLOOM_GPUSHADER_TOOLS_DIR
     const std::filesystem::path tools{BLOOM_GPUSHADER_TOOLS_DIR};
-    const std::filesystem::path glslang = tools / "glslangValidator";
-    const std::filesystem::path spirvVal = tools / "spirv-val";
+    const std::filesystem::path glslang = tools / "glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
+    const std::filesystem::path spirvVal = tools / "spirv-val" BLOOM_EXECUTABLE_SUFFIX;
     if (!std::filesystem::exists(glslang) || !std::filesystem::exists(spirvVal)) {
         return std::nullopt;
     }
@@ -225,14 +227,14 @@ uint bloom_ocio_quantize(float value)
     const std::string compile = "\"" + glslang.string() + "\" --target-env vulkan1.2 -V \"" +
                                 sourcePath + "\" -o \"" + spvPath + "\"";
     // NOLINTNEXTLINE(bugprone-command-processor) -- bounded test fixture: pinned build tool path.
-    if (std::system(compile.c_str()) != 0) {
+    if (bloom::color::test_support::runToolCommand(compile) != 0) {
         std::cerr << "glslangValidator rejected the resource wrapper program\n";
         return std::nullopt;
     }
     const std::string validate =
         "\"" + spirvVal.string() + "\" --target-env vulkan1.2 \"" + spvPath + "\"";
     // NOLINTNEXTLINE(bugprone-command-processor) -- bounded test fixture: pinned build tool path.
-    if (std::system(validate.c_str()) != 0) {
+    if (bloom::color::test_support::runToolCommand(validate) != 0) {
         std::cerr << "spirv-val rejected the resource wrapper program\n";
         return std::nullopt;
     }

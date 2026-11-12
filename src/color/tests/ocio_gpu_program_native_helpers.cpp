@@ -1,4 +1,6 @@
 #include "ocio_gpu_program_native_helpers.hpp"
+#include "tool_command.hpp"
+#include <bloom/core/executable_suffix.hpp>
 
 #include <bloom/color/ocio_gpu_program.hpp>
 #include <bloom/core/color.hpp>
@@ -131,8 +133,8 @@ uploadImage(bloom::render::GpuImageUpload& uploader, const std::uint32_t width,
 std::optional<std::vector<std::uint32_t>> compileGlsl(const std::string& glsl) {
 #ifdef BLOOM_GPUSHADER_TOOLS_DIR
     const std::filesystem::path tools{BLOOM_GPUSHADER_TOOLS_DIR};
-    const std::filesystem::path glslang = tools / "glslangValidator";
-    const std::filesystem::path spirvVal = tools / "spirv-val";
+    const std::filesystem::path glslang = tools / "glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
+    const std::filesystem::path spirvVal = tools / "spirv-val" BLOOM_EXECUTABLE_SUFFIX;
     if (!std::filesystem::exists(glslang) || !std::filesystem::exists(spirvVal)) {
         return std::nullopt;
     }
@@ -154,14 +156,14 @@ std::optional<std::vector<std::uint32_t>> compileGlsl(const std::string& glsl) {
     const std::string compile = "\"" + glslang.string() + "\" --target-env vulkan1.2 -V \"" +
                                 sourcePath + "\" -o \"" + spvPath + "\"";
     // NOLINTNEXTLINE(bugprone-command-processor) -- bounded test fixture: pinned build tool path.
-    if (std::system(compile.c_str()) != 0) {
+    if (bloom::color::test_support::runToolCommand(compile) != 0) {
         std::cerr << "glslangValidator rejected the complete OCIO wrapper program\n";
         return std::nullopt;
     }
     const std::string validate =
         "\"" + spirvVal.string() + "\" --target-env vulkan1.2 \"" + spvPath + "\"";
     // NOLINTNEXTLINE(bugprone-command-processor) -- bounded test fixture: pinned build tool path.
-    if (std::system(validate.c_str()) != 0) {
+    if (bloom::color::test_support::runToolCommand(validate) != 0) {
         std::cerr << "spirv-val rejected the compiled OCIO wrapper program\n";
         return std::nullopt;
     }

@@ -6,12 +6,22 @@
 #include <charconv>
 #include <cmath>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #if defined(__linux__) || defined(__APPLE__)
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 #endif
 
 namespace bloom::color {
@@ -236,6 +246,85 @@ LutFile readLutFile(const std::filesystem::path& path, const std::function<bool(
             modified(before).tv_nsec != modified(after).tv_nsec ||
             changed(before).tv_sec != changed(after).tv_sec ||
             changed(before).tv_nsec != changed(after).tv_nsec) {
+            result.error = LutError::ChangedFile;
+            return result;
+        }
+#elif defined(_WIN32)
+        // The same read as above: a regular file, never through a link in its last name, read
+        // whole, and unchanged in size and in both timestamps between the first look and the last.
+        const auto open = [&](const DWORD flags) {
+            return CreateFileW(path.c_str(), GENERIC_READ,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                               OPEN_EXISTING, flags, nullptr);
+        };
+        HANDLE file = open(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN);
+        FILE_ATTRIBUTE_TAG_INFO tag{};
+        if (file != INVALID_HANDLE_VALUE &&
+            GetFileInformationByHandleEx(file, FileAttributeTagInfo, &tag, sizeof(tag)) &&
+            (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+            // A link is refused; any other reparse point (a cloud-synced file) is opened as the
+            // file it stands for.
+            CloseHandle(file);
+            file = IsReparseTagNameSurrogate(tag.ReparseTag) ? INVALID_HANDLE_VALUE
+                                                             : open(FILE_FLAG_SEQUENTIAL_SCAN);
+        }
+        if (file == INVALID_HANDLE_VALUE) {
+            result.error = LutError::MissingFile;
+            return result;
+        }
+        struct Close final {
+            HANDLE handle;
+            ~Close() { CloseHandle(handle); }
+        } close{file};
+        struct Look final {
+            std::int64_t size = 0, modified = 0, changed = 0;
+            bool regular = false;
+        };
+        const auto look = [&]() -> std::optional<Look> {
+            FILE_BASIC_INFO basic{};
+            FILE_STANDARD_INFO standard{};
+            if (!GetFileInformationByHandleEx(file, FileBasicInfo, &basic, sizeof(basic)) ||
+                !GetFileInformationByHandleEx(file, FileStandardInfo, &standard, sizeof(standard)))
+                return std::nullopt;
+            return Look{standard.EndOfFile.QuadPart, basic.LastWriteTime.QuadPart,
+                        basic.ChangeTime.QuadPart,
+                        GetFileType(file) == FILE_TYPE_DISK && !standard.Directory};
+        };
+        const auto before = look();
+        if (!before || !before->regular || before->size <= 0) {
+            result.error = LutError::MalformedFile;
+            return result;
+        }
+        if (static_cast<std::uint64_t>(before->size) > kMaximumLutBytes) {
+            result.error = LutError::FileTooLarge;
+            return result;
+        }
+        result.reservation = detail::LutReservation::acquire(kMaximumLutBytes);
+        if (!result.reservation) {
+            result.error = LutError::HelperMemoryLimit;
+            return result;
+        }
+        result.bytes.resize(static_cast<std::size_t>(before->size));
+        std::size_t offset = 0;
+        while (offset < result.bytes.size()) {
+            if (cancellation && cancellation()) {
+                result.error = LutError::HelperCancelled;
+                return result;
+            }
+            DWORD count = 0;
+            if (!ReadFile(
+                    file, result.bytes.data() + offset,
+                    static_cast<DWORD>(std::min<std::size_t>(65536, result.bytes.size() - offset)),
+                    &count, nullptr) ||
+                count == 0) {
+                result.error = LutError::ChangedFile;
+                return result;
+            }
+            offset += count;
+        }
+        const auto after = look();
+        if (!after || before->size != after->size || before->modified != after->modified ||
+            before->changed != after->changed) {
             result.error = LutError::ChangedFile;
             return result;
         }

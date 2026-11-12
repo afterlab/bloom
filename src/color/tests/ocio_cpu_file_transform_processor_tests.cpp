@@ -26,7 +26,7 @@ void cube(const std::filesystem::path& path, const float gain) {
                      << static_cast<float>(b) * gain << '\n';
 }
 void testFormatsAndRefusals([[maybe_unused]] const std::filesystem::path& root) {
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
     const auto testFormat = [&root](const char* name, const std::string& contents) {
         const auto path = root / name;
         {
@@ -150,6 +150,13 @@ void testFormatsAndRefusals([[maybe_unused]] const std::filesystem::path& root) 
     std::error_code error;
     const auto link = root / "symlink.cube";
     std::filesystem::create_symlink(path, link, error);
+#ifdef _WIN32
+    // Making a link needs a privilege that an ordinary Windows account does not hold.
+    if (error) {
+        std::cout << "SKIP: this account cannot create a symbolic link\n";
+        return;
+    }
+#endif
     expect(!error && readLutFile(link).error == LutError::MissingFile,
            "LUT intake never follows a final symlink");
 #else
@@ -165,7 +172,7 @@ int main() {
         const auto path = root / "identity.cube";
         cube(path, 1);
         const auto file = readLutFile(path);
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
         expect(file.error == LutError::None, "identity cube passes bounded preflight");
         auto result = CpuFileTransformProcessor::prepare(file, LutInterpolation::Linear,
                                                          LutDirection::Forward);

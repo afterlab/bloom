@@ -1,4 +1,6 @@
 #include "ocio_gpu_program_test_support.hpp"
+#include "tool_command.hpp"
+#include <bloom/core/executable_suffix.hpp>
 
 #include <bloom/color/ocio_gpu_program.hpp>
 
@@ -287,10 +289,10 @@ void testResourceAndIdentityMutations(Expectations& expectations) {
     }
 }
 
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
 // --- File-transform LUT fixtures, written to a scratch directory at runtime. -------------------
-// Only where the LUT helper exists (Linux and macOS): these fixtures feed the isolated-worker
-// parsing cases below, which a build without the helper must not run in-process.
+// Only where the LUT helper exists (Linux, macOS and Windows): these fixtures feed the
+// isolated-worker parsing cases below, which a build without the helper must not run in-process.
 
 void writeCube1d(const std::filesystem::path& path) {
     std::ofstream file(path);
@@ -563,8 +565,8 @@ void testFileTransformExtraction(Expectations& expectations,
 void testWrapperFixtureCompiles(Expectations& expectations) {
 #if defined(BLOOM_OCIO_GPU_WRAPPER_FIXTURE) && defined(BLOOM_GPUSHADER_TOOLS_DIR)
     const std::filesystem::path tools{BLOOM_GPUSHADER_TOOLS_DIR};
-    const std::filesystem::path glslang = tools / "glslangValidator";
-    const std::filesystem::path spirvVal = tools / "spirv-val";
+    const std::filesystem::path glslang = tools / "glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
+    const std::filesystem::path spirvVal = tools / "spirv-val" BLOOM_EXECUTABLE_SUFFIX;
     const std::filesystem::path fixture{BLOOM_OCIO_GPU_WRAPPER_FIXTURE};
     if (!std::filesystem::exists(glslang) || !std::filesystem::exists(spirvVal) ||
         !std::filesystem::exists(fixture)) {
@@ -575,14 +577,14 @@ void testWrapperFixtureCompiles(Expectations& expectations) {
     const std::string compile = "\"" + glslang.string() + "\" --target-env vulkan1.2 -V \"" +
                                 fixture.string() + "\" -o \"" + spv.string() + "\"";
     // NOLINTNEXTLINE(bugprone-command-processor) -- bounded test fixture: pinned build tool path.
-    if (std::system(compile.c_str()) != 0) {
+    if (bloom::color::test_support::runToolCommand(compile) != 0) {
         expectations.expect(false, "the pinned wrapper fixture compiles with glslangValidator");
         return;
     }
     const std::string validate =
         "\"" + spirvVal.string() + "\" --target-env vulkan1.2 \"" + spv.string() + "\"";
     // NOLINTNEXTLINE(bugprone-command-processor) -- bounded test fixture: pinned build tool path.
-    expectations.expect(std::system(validate.c_str()) == 0,
+    expectations.expect(bloom::color::test_support::runToolCommand(validate) == 0,
                         "the compiled wrapper fixture passes spirv-val");
     std::error_code ignored;
     std::filesystem::remove(spv, ignored);
@@ -602,7 +604,7 @@ int main() {
     testResourceAndIdentityMutations(expectations);
     bloom::color::gpu_program_test::testSerializationRoundTrip(expectations);
     bloom::color::gpu_program_test::testPerSamplerSamplingAdapter(expectations);
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
     auto resolution = neutralConfig();
     auto neutral = std::move(resolution).takeResolved();
     if (!neutral.has_value()) {

@@ -233,3 +233,182 @@ inline std::array<int, 2> receiveDescriptors(const int socket, const std::size_t
 }
 } // namespace bloom::color::detail
 #endif
+
+#include <bloom/platform/process_supervisor.hpp>
+#include <optional>
+
+// What the host and the helper each do with a shared file, under one set of names for the three
+// systems. On Linux and macOS a shared file is a descriptor that travels over the descriptor
+// socket and is named by its inode; on Windows it is a section the supervisor hands to the helper
+// and is named by the helper's handle value.
+namespace bloom::color::detail {
+// Windows confines the helper when it is launched; Linux and macOS helpers confine themselves
+// once they hold their files.
+#ifdef _WIN32
+inline constexpr bool kLutLaunchConfined = true;
+#else
+inline constexpr bool kLutLaunchConfined = false;
+#endif
+// --- helper side ---
+#ifdef _WIN32
+using LutHelperFile = LutSection;
+inline std::array<LutHelperFile, 2> receiveFiles(const int, const std::size_t count,
+                                                 const std::array<std::uint64_t, 2> identities) {
+    const auto handle = [](const std::uint64_t value) {
+        return reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(value));
+    };
+    return {LutSection(handle(identities[0])),
+            LutSection(count > 1 ? handle(identities[1]) : nullptr)};
+}
+inline bool validHelperFile(const LutHelperFile& file, const std::uint64_t,
+                            const std::uint64_t bytes, const bool input) {
+    return validSharedSection(file.get(), bytes, input);
+}
+inline bool readHelperFile(const LutHelperFile& file, const std::span<std::byte> bytes) {
+    return readSection(file.get(), bytes);
+}
+inline bool writeHelperFile(const LutHelperFile& file, const std::span<const std::byte> bytes) {
+    return writeSection(file.get(), bytes);
+}
+#else
+using LutHelperFile = LutFd;
+inline std::array<LutHelperFile, 2> receiveFiles(const int socket, const std::size_t count,
+                                                 const std::array<std::uint64_t, 2>) {
+    const auto descriptors = receiveDescriptors(socket, count);
+    return {LutFd(descriptors[0]), LutFd(descriptors[1])};
+}
+inline bool validHelperFile(const LutHelperFile& file, const std::uint64_t identity,
+                            const std::uint64_t bytes, const bool input) {
+    return file.get() >= 0 && validSharedFile(file.get(), identity, bytes, input);
+}
+inline bool readHelperFile(const LutHelperFile& file, const std::span<std::byte> bytes) {
+    return ::lseek(file.get(), 0, SEEK_SET) == 0 && readFd(file.get(), bytes);
+}
+inline bool writeHelperFile(const LutHelperFile& file, const std::span<const std::byte> bytes) {
+    return ::lseek(file.get(), 0, SEEK_SET) == 0 && writeFd(file.get(), bytes);
+}
+#endif
+
+// --- host side ---
+// One file the host shares with its helper: an input the helper reads, or an output of a fixed
+// size the helper fills.
+class LutSharedFile final {
+  public:
+    explicit LutSharedFile(const std::span<const std::byte> content)
+#ifdef _WIN32
+        : file_(createSection(content.size())), input_(true) {
+        valid_ = file_.valid() && writeSection(file_.get(), content);
+    }
+#else
+        : file_(sharedFile()), input_(true) {
+        valid_ = file_.get() >= 0 && writeFd(file_.get(), content) && sealInput(file_.get());
+    }
+#endif
+    explicit LutSharedFile(const std::uint64_t outputBytes)
+#ifdef _WIN32
+        : file_(createSection(outputBytes)), input_(false) {
+        valid_ = file_.valid();
+    }
+#else
+        : file_(sharedFile()), input_(false) {
+        valid_ = file_.get() >= 0 &&
+                 ::ftruncate(file_.get(), static_cast<off_t>(outputBytes)) == 0 &&
+                 sealExtent(file_.get());
+    }
+#endif
+    [[nodiscard]] bool valid() const { return valid_; }
+    // Stops further change to an output where the system can (Linux); the host reads its own
+    // copy once either way.
+    [[nodiscard]] bool freeze() const {
+#ifdef _WIN32
+        return true;
+#else
+        return sealInput(file_.get());
+#endif
+    }
+    // The first bytes of the file, read into the host's own memory.
+    [[nodiscard]] bool read(const std::span<std::byte> bytes) const {
+        return readHelperFile(file_, bytes);
+    }
+
+  private:
+    friend class LutFileChannel;
+    LutHelperFile file_;
+    [[maybe_unused]] bool input_; // read where access is granted per file (Windows)
+    bool valid_ = false;
+};
+
+// The host's way of giving shared files to one helper.
+class LutFileChannel final {
+  public:
+#ifdef _WIN32
+    LutFileChannel() = default;
+    [[nodiscard]] bool valid() const { return true; }
+    void announce(LutPacket& hello) const { hello[5] = GetCurrentProcessId(); }
+    // After the handshake.
+    [[nodiscard]] bool attach(platform::ProcessSupervisor& worker) {
+        worker_ = &worker;
+        return true;
+    }
+    // Gives the helper one or two files; the identities to name them by in the request.
+    [[nodiscard]] std::optional<std::array<std::uint64_t, 2>>
+    send(const LutSharedFile& first, const LutSharedFile* const second = nullptr) const {
+        const auto share = [&](const LutSharedFile& file) {
+            return worker_->shareHandle(file.file_.get(),
+                                        SECTION_QUERY | SECTION_MAP_READ |
+                                            (file.input_ ? 0U : SECTION_MAP_WRITE));
+        };
+        if (worker_ == nullptr || !first.valid() || (second != nullptr && !second->valid()))
+            return std::nullopt;
+        const auto one = share(first);
+        const auto two = second != nullptr ? share(*second) : std::optional<std::uint64_t>(0);
+        if (!one || !two)
+            return std::nullopt;
+        return std::array{*one, *two};
+    }
+
+  private:
+    platform::ProcessSupervisor* worker_ = nullptr;
+#else
+    LutFileChannel() : generation_(nextLutGeneration()) {
+        listener_.emplace(static_cast<std::uint64_t>(::getpid()), generation_);
+    }
+    ~LutFileChannel() {
+        if (socket_ >= 0)
+            ::close(socket_);
+    }
+    LutFileChannel(const LutFileChannel&) = delete;
+    LutFileChannel& operator=(const LutFileChannel&) = delete;
+    [[nodiscard]] bool valid() const { return listener_ && listener_->valid(); }
+    void announce(LutPacket& hello) const {
+        hello[5] = static_cast<std::uint64_t>(::getpid());
+        hello[6] = generation_;
+    }
+    // After the handshake: the helper has connected; accept it and check who it is.
+    [[nodiscard]] bool attach(platform::ProcessSupervisor& worker) {
+        if (!listener_)
+            return false;
+        socket_ = listener_->accept();
+        listener_.reset();
+        return socket_ >= 0 && lutPeerIs(socket_, worker.processId());
+    }
+    // Gives the helper one or two files; the identities to name them by in the request.
+    [[nodiscard]] std::optional<std::array<std::uint64_t, 2>>
+    send(const LutSharedFile& first, const LutSharedFile* const second = nullptr) const {
+        if (socket_ < 0 || !first.valid() || (second != nullptr && !second->valid()))
+            return std::nullopt;
+        const std::array descriptors{first.file_.get(),
+                                     second != nullptr ? second->file_.get() : -1};
+        if (!sendDescriptors(socket_, std::span(descriptors).first(second != nullptr ? 2 : 1)))
+            return std::nullopt;
+        return std::array{inode(first.file_.get()),
+                          second != nullptr ? inode(second->file_.get()) : std::uint64_t{0}};
+    }
+
+  private:
+    std::uint64_t generation_;
+    std::optional<LutListener> listener_;
+    int socket_ = -1;
+#endif
+};
+} // namespace bloom::color::detail

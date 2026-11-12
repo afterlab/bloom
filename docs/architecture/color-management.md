@@ -1171,12 +1171,27 @@ handles under the 768 MiB service ceiling; a request stays below 384 MiB and all
 handle. Cancellation kills and reaps an active helper, invalidates its token and publishes no
 partial image. A later evaluation prepares a fresh token.
 
-Linux requires the confinement primitives as well as the existing process supervisor. macOS,
-Windows and Linux hosts without those capabilities report `HelperUnavailable` for external LUTs.
-They preserve the editable graph and pass through with diagnostics. There is no in-process external
-LUT fallback. The sealed-file intake also returns `HelperUnavailable` on macOS and Windows, so new
-LUT import is refused there while saved LUT records remain editable. Built-in CST processing
-remains available on all three desktop targets.
+Each desktop target confines the helper with its own system's primitives, and the helper checks
+that the confinement is in force before it reads any input:
+
+- Linux: Landlock and seccomp as above, with sealed anonymous files.
+- macOS: the system sandbox's pure-computation profile, entered by the helper itself, which
+  denies every file open, connection, child process and signal to another process. Resources are
+  unnamed files passed over the private socket.
+- Windows: the supervisor starts the helper with a restricted token in which every account and
+  group is deny-only and no privilege remains, and the helper lowers itself to the untrusted
+  integrity level before it reads input. It cannot open a file, device, registry key or another
+  process, cannot create a socket, and its job allows no child process and no desktop access.
+  Resources and pixel slabs are unnamed shared-memory sections whose handles the supervisor hands
+  over, checked for size and nonce like the sealed files; requests travel over the supervisor's
+  pipes. The helper proves the confinement by trying to open its own program file, which must be
+  refused.
+
+A host where those primitives are missing or the proof fails reports `HelperUnavailable` for
+external LUTs, preserves the editable graph and passes through with diagnostics. There is no
+in-process external LUT fallback, and new LUT import is refused on such a host while saved LUT
+records remain editable. Windows intake never follows a symbolic link at the final path component.
+Built-in CST processing remains available on all three desktop targets.
 
 A File Transform runs on the GPU on every required route when a device is available: the
 interactive Viewer, RAM preview, still export, sequence export, video export, and the scripted

@@ -24,18 +24,21 @@
 #include <sys/syscall.h>
 #endif
 #ifdef __APPLE__
+#include <sandbox.h>
+#include <sys/resource.h>
+#endif
+#if defined(__APPLE__) || defined(_WIN32)
 #include <atomic>
 #include <cstdint>
-#include <sandbox.h>
+#include <cstring>
 #include <sstream>
-#include <sys/resource.h>
 #include <vector>
 #endif
 
 namespace {
 using namespace bloom::color;
 namespace OCIO = OCIO_NAMESPACE;
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
 #ifdef __linux__
 // The helper receives only anonymous sealed files. Landlock denies access to the filesystem;
 // seccomp denies networking, child creation, execution, and process-memory/signal access.
@@ -86,11 +89,34 @@ bool confine() {
 }
 
 // OpenColorIO reads a LUT by path; the sealed descriptor has one under /proc.
-OCIO::ConstProcessorRcPtr lutProcessor(const detail::LutFd& file, const std::vector<std::byte>&,
+OCIO::ConstProcessorRcPtr lutProcessor(const detail::LutHelperFile& file,
+                                       const std::vector<std::byte>&,
                                        const OCIO::FileTransformRcPtr& transform) {
     const auto path = "/proc/self/fd/" + std::to_string(file.get());
     transform->setSrc(path.c_str());
     return OCIO::Config::CreateRaw()->getProcessor(transform);
+}
+#else
+#ifdef _WIN32
+// The supervisor launched this process confined, and the worker bootstrap completed it before
+// any input was read: the process token names no account, group or privilege, so no file, device,
+// registry key or other process can be opened, and the job allows no second process. What stays
+// possible is reading and writing the pipes and mapping the sections it was handed. This checks
+// that the confinement is really in force, by trying what it must refuse: opening this program's
+// own file for reading.
+bool confine() {
+    std::vector<wchar_t> path(32768);
+    const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+    if (length == 0 || length >= path.size())
+        return false;
+    const HANDLE file = CreateFileW(path.data(), GENERIC_READ,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                    OPEN_EXISTING, 0, nullptr);
+    if (file != INVALID_HANDLE_VALUE) {
+        CloseHandle(file);
+        return false;
+    }
+    return GetLastError() == ERROR_ACCESS_DENIED;
 }
 #else
 // The helper receives only unnamed files. The system sandbox's pure-computation profile then
@@ -113,6 +139,7 @@ bool confine() {
 #pragma clang diagnostic pop
     return confined;
 }
+#endif
 
 // The confined helper cannot open a path, so OpenColorIO gets the LUT through its own interface
 // for configurations that are not on disk: a raw configuration whose one file is these bytes. The
@@ -139,7 +166,8 @@ class LutBytes final : public OCIO::ConfigIOProxy {
     std::vector<std::uint8_t> lut_;
     std::string hash_;
 };
-OCIO::ConstProcessorRcPtr lutProcessor(const detail::LutFd&, const std::vector<std::byte>& bytes,
+OCIO::ConstProcessorRcPtr lutProcessor(const detail::LutHelperFile&,
+                                       const std::vector<std::byte>& bytes,
                                        const OCIO::FileTransformRcPtr& transform) {
     std::ostringstream raw;
     OCIO::Config::CreateRaw()->serialize(raw);
@@ -155,15 +183,15 @@ LutError build(const detail::LutPacket& message, OCIO::ConstCPUProcessorRcPtr& c
     if (!message[4] || message[4] > kMaximumLutBytes || message[8] < 1 || message[8] > 4 ||
         message[9] > 2 || message[10] > 1)
         return LutError::HelperProtocolViolation;
-    const auto descriptors = detail::receiveDescriptors(descriptorSocket, 1);
-    detail::LutFd file(descriptors[0]);
-    if (file.get() < 0 || !detail::validSharedFile(file.get(), message[7], message[4], true))
+    const auto files = detail::receiveFiles(descriptorSocket, 1, {message[7], 0});
+    const auto& file = files[0];
+    if (!detail::validHelperFile(file, message[7], message[4], true))
         return LutError::HelperProtocolViolation;
     if (!confine())
         return LutError::HelperUnavailable;
     try {
         std::vector<std::byte> bytes(static_cast<std::size_t>(message[4]));
-        if (::lseek(file.get(), 0, SEEK_SET) != 0 || !detail::readFd(file.get(), bytes))
+        if (!detail::readHelperFile(file, bytes))
             return LutError::HelperProtocolViolation;
         const auto checked = detail::preflightLut(
             std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()),
@@ -207,12 +235,12 @@ LutError extractGpuProgram(const detail::LutPacket& message, const int descripto
         request.programExtent == 0 || request.programExtent > detail::kMaximumGpuProgramBytes) {
         return LutError::HelperProtocolViolation;
     }
-    const auto descriptors = detail::receiveDescriptors(descriptorSocket, 2);
-    detail::LutFd input(descriptors[0]), output(descriptors[1]);
-    if (input.get() < 0 || output.get() < 0 ||
-        !detail::validSharedFile(input.get(), request.lutInode, request.lutBytes, true) ||
-        !detail::validSharedFile(output.get(), request.programInode, request.programExtent,
-                                 false)) {
+    const auto files =
+        detail::receiveFiles(descriptorSocket, 2, {request.lutInode, request.programInode});
+    const auto& input = files[0];
+    const auto& output = files[1];
+    if (!detail::validHelperFile(input, request.lutInode, request.lutBytes, true) ||
+        !detail::validHelperFile(output, request.programInode, request.programExtent, false)) {
         return LutError::HelperProtocolViolation;
     }
     if (!confine()) {
@@ -220,7 +248,7 @@ LutError extractGpuProgram(const detail::LutPacket& message, const int descripto
     }
     try {
         std::vector<std::byte> bytes(static_cast<std::size_t>(request.lutBytes));
-        if (::lseek(input.get(), 0, SEEK_SET) != 0 || !detail::readFd(input.get(), bytes)) {
+        if (!detail::readHelperFile(input, bytes)) {
             return LutError::HelperProtocolViolation;
         }
         const auto checked = detail::preflightLut(
@@ -255,8 +283,7 @@ LutError extractGpuProgram(const detail::LutPacket& message, const int descripto
         if (!serialized) {
             return LutError::FileTooLarge;
         }
-        if (::lseek(output.get(), 0, SEEK_SET) != 0 ||
-            !detail::writeFd(output.get(), std::span<const std::byte>(*serialized))) {
+        if (!detail::writeHelperFile(output, std::span<const std::byte>(*serialized))) {
             return LutError::HelperProtocolViolation;
         }
         programBytes = serialized->size();
@@ -268,10 +295,29 @@ LutError extractGpuProgram(const detail::LutPacket& message, const int descripto
     }
 }
 
+// A shared file's pixels in this process's memory.
+#ifdef _WIN32
 class Mapping final {
   public:
-    Mapping(const int descriptor, const std::size_t size, const int protection)
-        : data_(::mmap(nullptr, size, protection, MAP_SHARED, descriptor, 0)), size_(size) {}
+    Mapping(const detail::LutHelperFile& file, const std::size_t size, const bool writable)
+        : view_(file.get(), size, writable), size_(size) {}
+    [[nodiscard]] bool valid() const { return view_.valid(); }
+    [[nodiscard]] std::span<std::array<float, 4>> pixels() const {
+        return {static_cast<std::array<float, 4>*>(view_.data()),
+                size_ / sizeof(std::array<float, 4>)};
+    }
+
+  private:
+    detail::LutView view_;
+    std::size_t size_;
+};
+#else
+class Mapping final {
+  public:
+    Mapping(const detail::LutHelperFile& file, const std::size_t size, const bool writable)
+        : data_(::mmap(nullptr, size, writable ? PROT_READ | PROT_WRITE : PROT_READ, MAP_SHARED,
+                       file.get(), 0)),
+          size_(size) {}
     ~Mapping() {
         if (data_ != MAP_FAILED)
             ::munmap(data_, size_);
@@ -287,19 +333,20 @@ class Mapping final {
     void* data_;
     std::size_t size_;
 };
+#endif
 
 LutError applySlab(const detail::LutPacket& message, const OCIO::ConstCPUProcessorRcPtr& cpu,
                    const int descriptorSocket, const bool identity) {
     if (!cpu || !message[4] || message[4] > detail::kLutSlabBytes || message[4] % 16 != 0)
         return LutError::HelperProtocolViolation;
-    const auto descriptors = detail::receiveDescriptors(descriptorSocket, 2);
-    detail::LutFd input(descriptors[0]), output(descriptors[1]);
-    if (input.get() < 0 || output.get() < 0 ||
-        !detail::validSharedFile(input.get(), message[7], message[4], true) ||
-        !detail::validSharedFile(output.get(), message[9], message[4], false))
+    const auto files = detail::receiveFiles(descriptorSocket, 2, {message[7], message[9]});
+    const auto& input = files[0];
+    const auto& output = files[1];
+    if (!detail::validHelperFile(input, message[7], message[4], true) ||
+        !detail::validHelperFile(output, message[9], message[4], false))
         return LutError::HelperProtocolViolation;
-    Mapping in(input.get(), message[4], PROT_READ),
-        out(output.get(), message[4], PROT_READ | PROT_WRITE);
+    const Mapping in(input, static_cast<std::size_t>(message[4]), false),
+        out(output, static_cast<std::size_t>(message[4]), true);
     if (!in.valid() || !out.valid())
         return LutError::HelperMemoryLimit;
     try {
@@ -322,15 +369,26 @@ LutError applySlab(const detail::LutPacket& message, const OCIO::ConstCPUProcess
 } // namespace
 
 int main() {
-#if !defined(__linux__) && !defined(__APPLE__)
+#if !defined(__linux__) && !defined(__APPLE__) && !defined(_WIN32)
     return 1;
 #else
     try {
         if (!bloom::platform::processWorkerBootstrap())
             return 1;
+#ifdef _WIN32
+        // Shared files arrive as handles named in each request; there is no descriptor socket.
+        const HANDLE standardInput = GetStdHandle(STD_INPUT_HANDLE);
+        const HANDLE standardOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+        struct {
+            [[nodiscard]] int get() const { return -1; }
+        } descriptorSocket;
+#else
+        constexpr int standardInput = STDIN_FILENO;
+        constexpr int standardOutput = STDOUT_FILENO;
         detail::LutFd descriptorSocket(detail::lutHelperSocket());
         if (descriptorSocket.get() < 0)
             return 1;
+#endif
         OCIO::ConstCPUProcessorRcPtr cpu;
         bool identity = false;
         // The config request group (ocio_config_protocol.hpp). A helper serves one group: once a
@@ -340,7 +398,7 @@ int main() {
         std::uint64_t nonce = 0;
         while (true) {
             detail::LutPacket message{};
-            if (!detail::readFd(STDIN_FILENO, std::as_writable_bytes(std::span(message))))
+            if (!detail::readFd(standardInput, std::as_writable_bytes(std::span(message))))
                 return 0;
             if (message[0] != detail::kLutProtocolMagic ||
                 message[1] != detail::kLutProtocolVersion || message[3] != ++nonce)
@@ -348,14 +406,24 @@ int main() {
             LutError error = LutError::HelperProtocolViolation;
             std::uint64_t payload = 0;
             if (message[2] == detail::kLutCommandHello && nonce == 1) {
+#ifdef _WIN32
+                error = LutError::None;
+#else
                 error = detail::lutConnect(descriptorSocket.get(), message[5], message[6])
                             ? LutError::None
                             : LutError::HelperUnavailable;
+#endif
             } else if (message[2] >= detail::kConfigCommandBegin &&
                        message[2] <= detail::kConfigCommandLast && nonce >= 2 &&
                        (servesConfig || nonce == 2)) {
+#ifdef _WIN32
+                // Config requests are not served by the Windows helper; the host reports the
+                // typed unavailability and never sends them.
+                error = LutError::HelperUnavailable;
+#else
                 servesConfig = true;
                 error = configs.handle(message, descriptorSocket.get(), &confine, payload);
+#endif
             } else if (servesConfig) {
                 error = LutError::HelperProtocolViolation;
             } else if (message[2] == detail::kLutCommandBuildCpu && nonce == 2) {
@@ -368,7 +436,7 @@ int main() {
             }
             message[5] = static_cast<std::uint64_t>(error);
             message[6] = payload;
-            if (!detail::writeFd(STDOUT_FILENO, std::as_bytes(std::span(message))))
+            if (!detail::writeFd(standardOutput, std::as_bytes(std::span(message))))
                 return 1;
             if (error != LutError::None)
                 return 1;

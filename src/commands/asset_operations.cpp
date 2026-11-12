@@ -164,6 +164,8 @@ std::string lutRefusal(const color::LutError error) {
         return "Reading the LUT took too long";
     case color::LutError::TransformBuildFailed:
         return "The LUT could not be turned into a color transform";
+    case color::LutError::HelperUnavailable:
+        return "Bloom could not start its LUT reader";
     default:
         return "The LUT reader stopped unexpectedly";
     }
