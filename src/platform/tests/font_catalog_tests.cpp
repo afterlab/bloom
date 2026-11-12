@@ -1,3 +1,4 @@
+#include <bloom/core/environment.hpp>
 #include <bloom/platform/font_catalog.hpp>
 
 #include <array>
@@ -37,12 +38,14 @@ int main() {
     }
     const auto* previous = std::getenv("FONTCONFIG_FILE");
     const std::string previousValue = previous == nullptr ? std::string{} : previous;
-    setenv("FONTCONFIG_FILE", config.c_str(), 1);
+    static_cast<void>(
+        bloom::core::setEnvironmentVariable("FONTCONFIG_FILE", config.string().c_str()));
     const auto catalogue = bloom::platform::FontCatalogueProvider{}.enumerate();
     if (previous == nullptr)
-        unsetenv("FONTCONFIG_FILE");
+        static_cast<void>(bloom::core::unsetEnvironmentVariable("FONTCONFIG_FILE"));
     else
-        setenv("FONTCONFIG_FILE", previousValue.c_str(), 1);
+        static_cast<void>(
+            bloom::core::setEnvironmentVariable("FONTCONFIG_FILE", previousValue.c_str()));
     std::filesystem::remove_all(root, error);
 
     expectations.expect(catalogue.available(), "the installed-font catalogue is available");
@@ -53,6 +56,12 @@ int main() {
     constexpr const char* kInstalledFamily = "Helvetica";
     constexpr std::size_t kInstalledFaces = 1;
     constexpr const char* kListed = "installed fonts are listed from the system's font database";
+#elif defined(_WIN32)
+    // The Windows catalogue lists the system font collection, not a fontconfig database. Arial is
+    // part of every Windows installation.
+    constexpr const char* kInstalledFamily = "Arial";
+    constexpr std::size_t kInstalledFaces = 1;
+    constexpr const char* kListed = "installed fonts are listed from the system's font collection";
 #else
     // The installed-font listing returns the fonts fontconfig knows (here, the fixture folder), not
     // only the embedded ones.
