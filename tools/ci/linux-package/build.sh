@@ -4,7 +4,9 @@
 #
 #   sh tools/ci/linux-package/build.sh [work directory, default build/linux-package]
 #
-# The two files are left in <work directory>/bloom/package.
+# The two files are left in <work directory>/bloom/package. BLOOM_PACKAGE_VERSION in the
+# environment names a pre-release's files (0.1.0-alpha.1); without it they carry the
+# project's version.
 set -eu
 source=$(cd "$(dirname "$0")/../../.." && pwd)
 work=${1:-$source/build/linux-package}
@@ -19,5 +21,6 @@ cmake --build "$work/superbuild"
 cmake -S "$source" -B "$work/bloom" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DBLOOM_DEPENDENCY_MODE=qualified -DBLOOM_DEPENDENCY_PREFIX="$work/prefix" \
     -DBLOOM_BUILD_PYTHON=ON -DBLOOM_BUILD_DESKTOP=ON -DBLOOM_RENDER_ENABLE_VULKAN=ON \
-    "-DBLOOM_PACKAGE_FLOOR=GLIBC=2.35;GLIBCXX=3.4.30;CXXABI=1.3.13"
+    "-DBLOOM_PACKAGE_FLOOR=GLIBC=2.35;GLIBCXX=3.4.30;CXXABI=1.3.13" \
+    ${BLOOM_PACKAGE_VERSION:+"-DBLOOM_PACKAGE_VERSION=$BLOOM_PACKAGE_VERSION"}
 cmake --build "$work/bloom" --target bloom-package-archives

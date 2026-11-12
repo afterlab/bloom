@@ -312,7 +312,7 @@ if(APPLE)
         if(bloom_bundle_complete)
             string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" bloom_zip_processor)
             set(bloom_macos_zip
-                "${CMAKE_BINARY_DIR}/package/Bloom-${PROJECT_VERSION}-macos-${bloom_zip_processor}.zip")
+                "${CMAKE_BINARY_DIR}/package/Bloom-${BLOOM_PACKAGE_VERSION}-macos-${bloom_zip_processor}.zip")
             add_custom_target(
                 bloom-package-archives
                 COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/package"

@@ -51,8 +51,8 @@ function(bloom_add_package_rules)
         set(processor "x86_64")
     endif()
     set(BLOOM_PACKAGE_NAME
-        "Bloom-${PROJECT_VERSION}-${BLOOM_PACKAGE_OPERATING_SYSTEM}-${processor}"
-        CACHE STRING "The name of the package directory and archives")
+        "Bloom-${BLOOM_PACKAGE_VERSION}-${BLOOM_PACKAGE_OPERATING_SYSTEM}-${processor}"
+        CACHE INTERNAL "The name of the package directory and archives")
     # Linux: the oldest system a published package is for, as the newest symbol versions of
     # the C and C++ libraries a file may need (cmake/package/check_package.cmake, FLOOR). Empty
     # on a developer's machine, whose own libraries are newer; the build of a published
