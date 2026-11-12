@@ -3,6 +3,7 @@
 #include "test_card_expectation.hpp"
 
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -224,18 +225,19 @@ void TestCardCardWidget::refresh() {
         } else {
             signal_->setText(signalLine(signal, spaceName));
             const auto settings = session_.colorSettings();
-            const auto* builtIn =
-                std::get_if<document::BuiltInOcioConfigLocator>(&settings.ocioConfig.locator);
+            const auto location = std::string(session_.colorIntent().ocioConfigUri);
             const auto digest = settings.ocioConfig.expectedRevision.digest.toLowercaseHex();
             const auto revision = QString::fromLatin1(digest.data(), static_cast<int>(digest.size()));
             const auto remembered = session_.projectViewMemory().recallDisplayView(revision);
             const auto working = std::string(session_.colorIntent().workingColorSpaceId);
-            const auto key = QStringLiteral("%1|%2|%3|%4|%5|%6")
+            const auto key = QStringLiteral("%1|%2|%3|%4|%5|%6|%7")
                                  .arg(revision, QString::fromStdString(working))
                                  .arg(value)
                                  .arg(space)
-                                 .arg(remembered ? remembered->join('/') : QString{}, QString::number(card));
-            if (builtIn == nullptr) {
+                                 .arg(remembered ? remembered->join('/') : QString{}, QString::number(card))
+                                 .arg(QString::fromStdString(location));
+            if (settings.ocioConfig.expectedRevision.algorithm !=
+                document::OcioRevisionAlgorithm::Sha256) {
                 expected_->setText(tr("Expected display value unavailable for this color "
                                       "configuration."));
                 swatch_ = QColor();
@@ -244,14 +246,14 @@ void TestCardCardWidget::refresh() {
                 expected_->setText(tr("Expected display value: working it out…"));
                 const auto generation = ++state_->generation;
                 QPointer<TestCardCardWidget> self(this);
-                const auto uri = builtIn->uri;
+                const auto uri = location;
                 const auto expectedRevision = settings.ocioConfig.expectedRevision.digest;
                 QThreadPool::globalInstance()->start([self, generation, uri, expectedRevision,
                                                       working, remembered, spaceId, signal] {
                     QString text;
                     QColor swatch;
-                    auto resolution = color::resolveOcioBuiltIn(
-                        color::OcioConfigLocatorKind::BloomBuiltIn, uri, expectedRevision, working);
+                    // A worker: an external config is parsed in the supervised helper here.
+                    auto resolution = color::resolveOcioConfig(uri, expectedRevision, working);
                     auto resolved = std::move(resolution).takeResolved();
                     if (resolved && !resolved->displays().empty()) {
                         std::string display;

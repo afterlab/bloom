@@ -875,6 +875,28 @@ OcioBuiltInResolutionResult resolveOcioConfig(const std::string_view locationTex
     }
 }
 
+OcioBuiltInResolutionResult resolveOcioConfigIfKept(const std::string_view locationText,
+                                                    const core::Sha256Digest& expectedRevision,
+                                                    const std::string_view workingColorSpaceId) noexcept {
+    try {
+        const auto location = parseOcioConfigLocation(locationText);
+        if (location.kind == OcioConfigLocatorKind::BloomBuiltIn)
+            return resolveOcioBuiltIn(location.kind, location.value, expectedRevision,
+                                      workingColorSpaceId);
+#ifdef BLOOM_OCIO_HOST_RESOLVES_FILES
+        auto& cache = kept();
+        const Key key{location, std::string(workingColorSpaceId)};
+        const std::lock_guard lock(cache.mutex);
+        for (const auto& entry : cache.entries)
+            if (entry.key == key && entry.session->failure() == OcioHelperError::None)
+                return answer(entry, expectedRevision);
+#endif
+        return helperFailed(OcioHelperError::HelperPending);
+    } catch (const std::exception&) {
+        return helperFailed(OcioHelperError::HelperMemoryLimit);
+    }
+}
+
 std::optional<core::Sha256Digest>
 ocioConfigContentRevision(const OcioConfigLocation& location) noexcept {
     if (location.kind == OcioConfigLocatorKind::BloomBuiltIn)

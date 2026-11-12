@@ -15,6 +15,7 @@
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
+#include <bloom/host/export_job_runner.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -27,6 +28,7 @@
 #include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
+#include <filesystem>
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QGraphicsProxyWidget>
@@ -314,9 +316,17 @@ void relativeArchiveIntentPin() {
     expect(settings.validate().ok(), "zero-digest relative OCIO reference is valid project data");
     session.setColorSettings(settings);
     const auto intent = session.colorIntent();
-    expect(intent.ocioConfigUri == "color/config.ocioz" &&
+    expect(intent.ocioConfigUri.find("color/config.ocioz") != std::string::npos &&
+               intent.ocioConfigUri != "color/config.ocioz" &&
                intent.ocioConfigRevision == core::Sha256Digest{},
-           "desktop captures the relative OCIO locator instead of an empty Neutral intent");
+           "desktop captures the same relative OCIO location text export carries, not an empty Neutral intent");
+    // Preview and export derive the config from one function; a saved project's folder changes both.
+    const std::filesystem::path folder = std::filesystem::path("/projects") / "show";
+    session.setProjectDirectory(folder);
+    expect(session.colorIntent().ocioConfigUri ==
+               host::ocioConfigIntentLocation(settings.ocioConfig, folder),
+           "preview color intent equals the export intent for the same project folder");
+    session.setProjectDirectory({});
     const auto resolution =
         color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn, intent.ocioConfigUri,
                                   intent.ocioConfigRevision, intent.workingColorSpaceId);

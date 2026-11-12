@@ -19,6 +19,7 @@
 #include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
+#include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/project.hpp>
 
@@ -45,15 +46,13 @@ using namespace viewer_detail;
 namespace viewer_detail {
 std::optional<color::ResolvedBloomNeutralConfig>
 resolveViewerColorConfig(const CompositionSession& session) {
-    const auto* builtIn = std::get_if<document::BuiltInOcioConfigLocator>(
-        &session.colorSettings().ocioConfig.locator);
-    if (builtIn == nullptr) {
-        return std::nullopt;
-    }
-    auto result =
-        color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn, builtIn->uri,
-                                  session.colorSettings().ocioConfig.expectedRevision.digest,
-                                  session.colorIntent().workingColorSpaceId);
+    // On the UI thread: a built-in resolves here; an external config only once a worker has
+    // parsed it (the previews, the converter and the catalogs do that), so this never waits for
+    // the helper. The caller shows no display list until then and is told again when it lands.
+    const auto intent = session.colorIntent();
+    auto result = color::resolveOcioConfigIfKept(
+        intent.ocioConfigUri, session.colorSettings().ocioConfig.expectedRevision.digest,
+        intent.workingColorSpaceId);
     return std::move(result).takeResolved();
 }
 

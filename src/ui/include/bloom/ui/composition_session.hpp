@@ -26,6 +26,8 @@
 #include <bloom/ui/viewer_overlays.hpp>
 
 #include <QObject>
+
+#include <filesystem>
 #include <QRectF>
 #include <QString>
 #include <QTransform>
@@ -228,6 +230,10 @@ class CompositionSession final : public QObject {
     const document::ColorSettings& colorSettings() const&& = delete;
     [[nodiscard]] runtime::EvaluationColorIntent colorIntent() const noexcept;
     void setColorSettings(document::ColorSettings settings);
+    // The folder the open project lives in (empty while unsaved): where a project-relative OCIO
+    // config archive is looked for. The intent's config location is built from it exactly as the
+    // export queue builds its own, so a preview never resolves another config than an export.
+    void setProjectDirectory(std::filesystem::path directory);
     [[nodiscard]] bool setWorkingColorSpaceOverride(std::optional<std::string> colorSpaceId);
     // What the artist was looking at in this project (session state, never document truth): the
     // Viewer's Display / View, the last active composition and pinned Viewers' targets. The
@@ -1178,6 +1184,10 @@ class CompositionSession final : public QObject {
     // and by rebind(), and are never null while this object is alive.
     std::shared_ptr<SessionColorConverterState> colorConverterState_;
     document::ColorSettings colorSettings_;
+    std::filesystem::path projectDirectory_;
+    // colorIntent().ocioConfigUri: owned here so the borrowed intent stays valid.
+    std::string colorIntentUri_;
+    void refreshColorIntentUri();
     ProjectViewMemory projectViewMemory_;
     document::Document* document_;
     commands::CommandStack* commandStack_;

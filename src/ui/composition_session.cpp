@@ -13,6 +13,9 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/core/utf8.hpp>
+#include <bloom/color/ocio_config_resolution.hpp>
+#include <bloom/host/export_job_runner.hpp>
+#include <bloom/runtime/input_color_context.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/layer_masks.hpp>
@@ -35,6 +38,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <variant>
 #include <utility>
 #include <vector>
 
@@ -61,6 +65,9 @@ struct SessionColorConverterState final {
     std::mutex mutex;
     std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> processor;
     document::ColorSettings settings;
+    // The config's location as the evaluation intent carries it, so a different project folder
+    // is a different converter.
+    std::string location;
     std::atomic<bool> cancelled{false};
     bool finished = false;
     // Owner thread only: set by the poll that announces the landing with snapshotChanged(). Until
@@ -69,20 +76,16 @@ struct SessionColorConverterState final {
 };
 
 [[nodiscard]] std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle>
-buildColorProcessor(const document::ColorSettings& settings) {
-    const auto* builtIn =
-        std::get_if<document::BuiltInOcioConfigLocator>(&settings.ocioConfig.locator);
-    if (builtIn == nullptr ||
-        settings.ocioConfig.expectedRevision.algorithm != document::OcioRevisionAlgorithm::Sha256) {
+buildColorProcessor(const document::ColorSettings& settings, const std::string& location) {
+    if (settings.ocioConfig.expectedRevision.algorithm != document::OcioRevisionAlgorithm::Sha256)
         return {};
-    }
-    auto resolution = color::resolveOcioBuiltIn(
-        color::OcioConfigLocatorKind::BloomBuiltIn, builtIn->uri,
-        settings.ocioConfig.expectedRevision.digest, settings.processColorSpaceId);
-    if (!resolution.ready()) {
-        return {};
-    }
-    auto resolved = std::move(resolution).takeResolved();
+    // The same resolution every other consumer of the intent uses: a built-in in this process, a
+    // project-relative or external config through the supervised helper. This runs on a worker.
+    const runtime::EvaluationColorIntent intent{
+        .workingColorSpaceId = settings.processColorSpaceId,
+        .ocioConfigRevision = settings.ocioConfig.expectedRevision.digest,
+        .ocioConfigUri = location};
+    auto resolved = runtime::detail::resolveInputColorConfig(intent);
     if (!resolved.has_value()) {
         return {};
     }
@@ -117,7 +120,8 @@ kit::KColorConverter CompositionSession::colorConverter(const std::string_view s
         currentComposition != nullptr && currentComposition->workingColorSpaceId().has_value()) {
         settings.processColorSpaceId = *currentComposition->workingColorSpaceId();
     }
-    if (colorConverterState_ && colorConverterState_->settings != settings) {
+    if (colorConverterState_ && (colorConverterState_->settings != settings ||
+                                 colorConverterState_->location != colorIntentUri_)) {
         colorConverterState_->cancelled.store(true);
         colorConverterState_.reset();
     }
@@ -125,14 +129,15 @@ kit::KColorConverter CompositionSession::colorConverter(const std::string_view s
         colorConverterState_ = std::make_shared<SessionColorConverterState>();
         const auto state = colorConverterState_;
         state->settings = settings;
+        state->location = colorIntentUri_;
         // Only the immutable, bounded built-in runs here. No widget/session pointer crosses
         // into the worker. Destruction cancels publication and never waits on the UI thread.
-        QThreadPool::globalInstance()->start([state, settings] {
+        QThreadPool::globalInstance()->start([state, settings, location = colorIntentUri_] {
             if (state->cancelled.load())
                 return;
             std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> result;
             try {
-                result = buildColorProcessor(settings);
+                result = buildColorProcessor(settings, location);
             } catch (...) {
                 result.reset();
             }
@@ -202,22 +207,34 @@ runtime::EvaluationColorIntent CompositionSession::colorIntent() const noexcept 
         currentComposition != nullptr && currentComposition->workingColorSpaceId().has_value()
             ? std::string_view{*currentComposition->workingColorSpaceId()}
             : std::string_view{colorSettings_.processColorSpaceId};
-    std::string_view ocioConfigUri;
-    if (const auto* builtIn =
-            std::get_if<document::BuiltInOcioConfigLocator>(&colorSettings_.ocioConfig.locator))
-        ocioConfigUri = builtIn->uri;
-    else if (const auto* relativeArchive = std::get_if<document::ProjectRelativeOciozLocator>(
-                 &colorSettings_.ocioConfig.locator))
-        ocioConfigUri = relativeArchive->path;
-    else if (const auto* externalArchive =
-                 std::get_if<document::ExternalOciozLocator>(&colorSettings_.ocioConfig.locator))
-        ocioConfigUri = externalArchive->uri;
-    else if (const auto* externalConfig = std::get_if<document::ExternalOcioConfigLocator>(
-                 &colorSettings_.ocioConfig.locator))
-        ocioConfigUri = externalConfig->uri;
     return {.workingColorSpaceId = workingColorSpaceId,
             .ocioConfigRevision = colorSettings_.ocioConfig.expectedRevision.digest,
-            .ocioConfigUri = ocioConfigUri};
+            .ocioConfigUri = colorIntentUri_};
+}
+
+void CompositionSession::refreshColorIntentUri() {
+    // The text the export queue and the scripting render carry for the same settings and folder
+    // (host::ocioConfigIntentLocation), so preview, thumbnails, pickers and every output resolve
+    // one config. A built-in is its URI alone.
+    colorIntentUri_ = host::ocioConfigIntentLocation(colorSettings_.ocioConfig, projectDirectory_);
+}
+
+void CompositionSession::setProjectDirectory(std::filesystem::path directory) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (projectDirectory_ == directory)
+        return;
+    projectDirectory_ = std::move(directory);
+    const auto before = colorIntentUri_;
+    refreshColorIntentUri();
+    if (before == colorIntentUri_)
+        return;
+    // A project-relative config now names another file: previews and pickers resolve it again.
+    if (colorConverterState_ != nullptr)
+        colorConverterState_->cancelled.store(true);
+    colorConverterState_.reset();
+    emit colorSettingsChanged();
+    emit snapshotChanged();
+    emit evaluationChanged();
 }
 
 void CompositionSession::setColorSettings(document::ColorSettings settings) {
@@ -230,6 +247,7 @@ void CompositionSession::setColorSettings(document::ColorSettings settings) {
     }
     colorConverterState_.reset();
     colorSettings_ = std::move(settings);
+    refreshColorIntentUri();
     emit colorSettingsChanged();
     emit snapshotChanged();
     emit evaluationChanged();
@@ -246,20 +264,38 @@ bool CompositionSession::setWorkingColorSpaceOverride(std::optional<std::string>
             reportUnavailable(QStringLiteral("Invalid working color space id"));
             return false;
         }
-        const auto* builtIn =
-            std::get_if<document::BuiltInOcioConfigLocator>(&colorSettings_.ocioConfig.locator);
-        if (builtIn == nullptr || colorSettings_.ocioConfig.expectedRevision.algorithm !=
-                                      document::OcioRevisionAlgorithm::Sha256) {
-            reportUnavailable(QStringLiteral("The selected OCIO configuration needs its color "
-                                             "helper before this override can be used"));
+        if (colorSettings_.ocioConfig.expectedRevision.algorithm !=
+            document::OcioRevisionAlgorithm::Sha256) {
+            reportUnavailable(QStringLiteral("The selected OCIO configuration is not available in "
+                                             "this build"));
             return false;
         }
-        const auto resolution = color::resolveOcioBuiltIn(
-            color::OcioConfigLocatorKind::BloomBuiltIn, builtIn->uri,
-            colorSettings_.ocioConfig.expectedRevision.digest, *colorSpaceId);
-        if (!resolution.ready()) {
-            reportUnavailable(QStringLiteral("The selected color space is not a scene-linear "
-                                             "space in this configuration"));
+        // A built-in resolves here; an external config only once a worker has parsed it (the
+        // converter and the previews do), because this runs on the UI thread and must not wait
+        // for the helper.
+        // An external config is parsed for the project's working space; its description lists the
+        // scene-linear spaces an override may choose.
+        const bool builtIn = std::holds_alternative<document::BuiltInOcioConfigLocator>(
+            colorSettings_.ocioConfig.locator);
+        auto resolution = color::resolveOcioConfigIfKept(
+            colorIntentUri_, colorSettings_.ocioConfig.expectedRevision.digest,
+            builtIn ? std::string_view(*colorSpaceId)
+                    : std::string_view(colorSettings_.processColorSpaceId));
+        const bool pending = resolution.helperError() == color::OcioHelperError::HelperPending;
+        bool offered = resolution.ready();
+        if (offered && !builtIn) {
+            const auto config = std::move(resolution).takeResolved();
+            offered = config.has_value() &&
+                      std::ranges::any_of(config->colorSpaces(), [&](const auto& space) {
+                          return space.id == *colorSpaceId && space.sceneLinear;
+                      });
+        }
+        if (!offered) {
+            reportUnavailable(
+                pending ? QStringLiteral("The selected OCIO configuration is still being "
+                                         "prepared; try again in a moment")
+                        : QStringLiteral("The selected color space is not a scene-linear "
+                                         "space in this configuration"));
             return false;
         }
     }
@@ -381,6 +417,7 @@ CompositionSession::CompositionSession(document::Document& document,
       document_(&document), commandStack_(&commandStack), snapshot_(document.snapshot()),
       compositionId_(compositionId) {
     tools_ = new ToolController(this);
+    refreshColorIntentUri();
     attachCommandObserver();
     // #645: the Viewer's level follows a selection made anywhere but the Viewer. Connected first,
     // so every other observer of selectionChanged already sees the matching level.

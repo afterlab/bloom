@@ -73,6 +73,9 @@ enum class OcioHelperError : std::uint8_t {
     HelperDeadline,
     HelperCancelled,
     HelperTerminated,
+    // resolveOcioConfigIfKept: no helper holds this config yet, and the caller must not wait for
+    // one. Nothing failed; a worker resolution will make a later call succeed.
+    HelperPending,
 };
 [[nodiscard]] std::string_view ocioHelperErrorName(OcioHelperError error) noexcept;
 

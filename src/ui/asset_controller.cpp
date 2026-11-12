@@ -17,6 +17,7 @@
 #include <array>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/commands/project_item_operations.hpp>
@@ -604,22 +605,23 @@ void AssetController::requestInputColorSpaces() {
             "Prepare input color choices",
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::Cpu),
-        [settings, working](runtime::TaskContext& context) {
+        [settings, working, location = std::string(session_.colorIntent().ocioConfigUri)](
+            runtime::TaskContext& context) {
             if (context.isCancellationRequested())
                 return runtime::TaskResult<std::shared_ptr<InputColorCatalog>>::cancelled();
             auto result = std::make_shared<InputColorCatalog>();
             result->settings = settings;
             result->workingColorSpaceId = working;
-            const auto* builtIn =
-                std::get_if<document::BuiltInOcioConfigLocator>(&settings.ocioConfig.locator);
-            if (!builtIn || settings.ocioConfig.expectedRevision.algorithm !=
-                                document::OcioRevisionAlgorithm::Sha256) {
+            if (settings.ocioConfig.expectedRevision.algorithm !=
+                document::OcioRevisionAlgorithm::Sha256) {
                 result->diagnostic = QObject::tr("This OCIO configuration is not available in the "
                                                  "current runtime.");
             } else {
-                auto resolved = color::resolveOcioBuiltIn(
-                    color::OcioConfigLocatorKind::BloomBuiltIn, builtIn->uri,
-                    settings.ocioConfig.expectedRevision.digest, working);
+                // The location the intent carries: a built-in here, an external config through
+                // the supervised helper on this worker, with the task's cancellation.
+                auto resolved = color::resolveOcioConfig(
+                    location, settings.ocioConfig.expectedRevision.digest, working,
+                    [&context] { return context.isCancellationRequested(); });
                 if (resolved.ready()) {
                     auto config = std::move(resolved).takeResolved();
                     if (config)

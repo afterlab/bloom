@@ -68,6 +68,15 @@ resolveOcioConfig(std::string_view locationText, const core::Sha256Digest& expec
                   std::string_view workingColorSpaceId = {},
                   const std::function<bool()>& cancellation = {}) noexcept;
 
+// The same answer without waiting: a built-in resolves as always; an external config is answered
+// only when a helper already holds it (a resolution kept it), and otherwise reports
+// LocatorKindRequiresHelper with HelperPending. No file is read and no helper starts, so it is safe
+// on a thread that must not block (the UI thread). Whoever needs the config calls
+// resolveOcioConfig on a worker first; this then sees what that kept.
+[[nodiscard]] OcioBuiltInResolutionResult
+resolveOcioConfigIfKept(std::string_view locationText, const core::Sha256Digest& expectedRevision,
+                        std::string_view workingColorSpaceId = {}) noexcept;
+
 // The current content revision of a location, for a caller that proposes a durable reference.
 // Empty when the config cannot be read or, for a loose config, when the helper did not accept it.
 [[nodiscard]] std::optional<core::Sha256Digest>

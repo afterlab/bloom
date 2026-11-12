@@ -146,6 +146,8 @@ int main(int argc, char* argv[]) try {
     }
     bloom::ui::CompositionSession compositionSession(*initialDocument, *initialCommandStack,
                                                      projectHost.lowestCompositionId());
+    if (const auto path = projectHost.displayPath())
+        compositionSession.setProjectDirectory(path->parent_path());
     if (const auto* settings = projectHost.colorSettings(); settings != nullptr) {
         compositionSession.setColorSettings(*settings);
     }
@@ -202,6 +204,8 @@ int main(int argc, char* argv[]) try {
                 return;
             }
             compositionSession.projectViewMemory().beginProject(path);
+            compositionSession.setProjectDirectory(path ? path->parent_path()
+                                                        : std::filesystem::path{});
             // #550: reopen on the composition last viewed in this project, if it still exists.
             compositionSession.rebindToRememberedComposition(*document, *commandStack,
                                                              projectHost.lowestCompositionId());
@@ -288,6 +292,10 @@ int main(int argc, char* argv[]) try {
     const auto updateMediaDirectory = [&] {
         const auto path = projectHost.displayPath();
         cpuEvaluator.setAssetBaseDirectory(path ? path->parent_path() : std::filesystem::path{});
+        // The OCIO config of a project-relative archive is found beside the project, as the
+        // media is, so the previews and exports of one project resolve one config.
+        compositionSession.setProjectDirectory(path ? path->parent_path()
+                                                    : std::filesystem::path{});
     };
     QObject::connect(&projectHost, &bloom::ui::ProjectHost::saveFinished, &assetController,
                      updateMediaDirectory);

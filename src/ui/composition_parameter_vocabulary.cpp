@@ -5,6 +5,7 @@
 #include <QSignalBlocker>
 #include <algorithm>
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/commands/video_source_operations.hpp>
@@ -707,14 +708,13 @@ namespace {
 [[nodiscard]] std::optional<color::ResolvedBloomNeutralConfig>
 inputColorConfig(const CompositionSession& session) {
     const auto& settings = session.colorSettings();
-    const auto* builtIn =
-        std::get_if<document::BuiltInOcioConfigLocator>(&settings.ocioConfig.locator);
-    if (builtIn == nullptr ||
-        settings.ocioConfig.expectedRevision.algorithm != document::OcioRevisionAlgorithm::Sha256)
+    if (settings.ocioConfig.expectedRevision.algorithm != document::OcioRevisionAlgorithm::Sha256)
         return {};
-    auto result = color::resolveOcioBuiltIn(
-        color::OcioConfigLocatorKind::BloomBuiltIn, builtIn->uri,
-        settings.ocioConfig.expectedRevision.digest, session.colorIntent().workingColorSpaceId);
+    // UI thread: a built-in here, an external config once a worker has parsed it.
+    const auto intent = session.colorIntent();
+    auto result = color::resolveOcioConfigIfKept(
+        intent.ocioConfigUri, settings.ocioConfig.expectedRevision.digest,
+        intent.workingColorSpaceId);
     if (!result.ready())
         return {};
     return std::move(result).takeResolved();

@@ -5,6 +5,7 @@
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 
 #include <bloom/document/project.hpp>
+#include <bloom/runtime/input_color_context.hpp>
 
 #include <string>
 #include <utility>
@@ -56,21 +57,24 @@ std::string evaluationSubjectDetail(const bloom::runtime::EvaluationDiagnostic& 
     return detail;
 }
 
+// The config the intent names, resolved as every other consumer of the intent resolves it (input
+// color conversion, thumbnails, the GPU display program, exports): a built-in in this process, a
+// project-relative or external config through the supervised helper. Runs on a worker.
+[[nodiscard]] std::optional<bloom::color::ResolvedBloomNeutralConfig>
+resolveSelectedConfig(const bloom::runtime::EvaluationColorIntent& intent) {
+    auto selected = intent;
+    // An intent that carries the default URI with another config's revision is the ACES CG
+    // built-in, as the output path reads it.
+    if (!isNeutralIntent(intent) && intent.ocioConfigUri == bloom::runtime::kBloomNeutralOcioConfigUri &&
+        !(intent.ocioConfigRevision == bloom::core::Sha256Digest{}))
+        selected.ocioConfigUri = bloom::color::kAcesCgV1ConfigUri;
+    return bloom::runtime::detail::resolveInputColorConfig(selected);
+}
+
 [[nodiscard]] std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle>
 buildSelectedDisplayProcessor(const bloom::runtime::EvaluationColorIntent& intent) noexcept {
     try {
-        const auto expectedRevision = intent.ocioConfigRevision == bloom::core::Sha256Digest{}
-                                          ? bloom::color::kBloomNeutralV1ConfigDigest
-                                          : intent.ocioConfigRevision;
-        const auto locator = isNeutralIntent(intent) ? bloom::color::kBloomNeutralV1ConfigUri
-                                                     : bloom::color::kAcesCgV1ConfigUri;
-        auto resolution =
-            bloom::color::resolveOcioBuiltIn(bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
-                                             locator, expectedRevision, intent.workingColorSpaceId);
-        if (!resolution.ready()) {
-            return {};
-        }
-        auto resolved = std::move(resolution).takeResolved();
+        const auto resolved = resolveSelectedConfig(intent);
         if (!resolved.has_value()) {
             return {};
         }
@@ -94,18 +98,7 @@ buildSelectedDisplayProcessor(const bloom::runtime::EvaluationColorIntent& inten
         return buildSelectedDisplayProcessor(intent);
     }
     try {
-        const auto expectedRevision = intent.ocioConfigRevision == bloom::core::Sha256Digest{}
-                                          ? bloom::color::kBloomNeutralV1ConfigDigest
-                                          : intent.ocioConfigRevision;
-        const auto locator = isNeutralIntent(intent) ? bloom::color::kBloomNeutralV1ConfigUri
-                                                     : bloom::color::kAcesCgV1ConfigUri;
-        auto resolution =
-            bloom::color::resolveOcioBuiltIn(bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
-                                             locator, expectedRevision, intent.workingColorSpaceId);
-        if (!resolution.ready()) {
-            return {};
-        }
-        auto resolved = std::move(resolution).takeResolved();
+        const auto resolved = resolveSelectedConfig(intent);
         if (!resolved.has_value()) {
             return {};
         }

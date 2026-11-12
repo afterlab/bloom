@@ -837,6 +837,8 @@ std::string_view ocioHelperErrorName(const OcioHelperError error) noexcept {
         return "HelperCancelled";
     case OcioHelperError::HelperTerminated:
         return "HelperTerminated";
+    case OcioHelperError::HelperPending:
+        return "HelperPending";
     }
     return "Unknown";
 }
