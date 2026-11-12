@@ -188,6 +188,43 @@ Platform-specific tests supplement the shared suite; they do not replace it. A p
 temporarily red during development, but a release cannot call a feature complete while its required
 workflow is absent or knowingly broken on another first-class target.
 
+## Scripting Interpreter
+
+Every package carries the same CPython, built from one locked source archive, with the same
+modules and the same bundled packages ([Dependency intake](dependency-intake.md)). A script needs
+no Python on the computer, and Bloom never uses one that is installed there.
+
+- **Modules.** The standard library, with `ssl`, `hashlib`, `lzma`, `compression.zstd`, `zlib`,
+  `bz2`, `sqlite3`, `ctypes`, `pyexpat` and `decimal` made of locked libraries. Absent on every
+  platform: `tkinter` (and `idlelib`, `turtle`), `curses`, `readline`, `dbm.gnu`, `dbm.ndbm` and
+  `ensurepip`; `dbm` works through `dbm.sqlite3`. Modules that CPython itself limits to one
+  system (`winreg`, `msvcrt`, `termios`, `fcntl`, `pwd` and the like) exist where CPython has
+  them. The committed list is `tests/fixtures/scripting/python_module_set.txt`, and
+  `bloom.scripting.python-module-set` compares it with the interpreter on every platform.
+- **Bundled packages.** numpy 2.5.4, and nothing else. It is built without a BLAS or LAPACK
+  library and without its kernels for particular instruction sets, so linear algebra and large
+  arrays are slower than in an accelerated numpy.
+- **How the set grows.** A package is added as a lock component like any other dependency: its
+  source archive with digest, license, provenance, review and security records with an advisory
+  source, a superbuild recipe that builds it from source for every profile with the carried
+  interpreter (no wheel, no pip), a line in the module table, and a section of the same-result
+  fixture that exercises it. It is added on all three platforms or on none.
+- **Packages a user installs are not supported.** The interpreter runs isolated: it reads no
+  environment variable, no user site directory and no `site` configuration, and it has no pip.
+  A script can add a directory of pure Python modules to `sys.path` itself.
+- **The same result.** `bloom.scripting.python-same-result` runs one script on every platform
+  and requires the digests committed in `tests/fixtures/scripting/python_same_result.txt`:
+  integer and rational arithmetic, floating-point array arithmetic including complex products
+  and quotients, square roots, sorting, reductions, linear algebra (`@`, `dot`, `solve`, `inv`,
+  `det`, `cholesky`, `qr`, `einsum`), hashing, compression, SQLite and `decimal`. Measured equal
+  on x86-64 Linux, arm64 macOS and x86-64 Windows (2026-11-12).
+- **What can differ in the last bit.** The functions each system's math library computes, other
+  than the square root: the transcendental functions (`sin`, `exp`, `log`, `pow` with a
+  fractional exponent and the like) and `hypot`, which is also the absolute value of a complex
+  number, in `math`, `cmath` and numpy. Linux uses glibc's, macOS Apple's and Windows the
+  Universal C Runtime's; making them equal would mean replacing the math library. Measured:
+  `numpy.abs` of a complex array and `numpy.hypot` differ between Linux and macOS.
+
 ## Capability Reporting And Graceful Degradation
 
 Runtime capability checks produce structured data that both the UI and headless tools can inspect.
@@ -321,9 +358,9 @@ where the binaries are allowed to start, not where they were tested.
 
 The application bundle is `org.kinetik.bloom`, with its icon, the minimum system version of the
 deployment target, the media workers under `Contents/libexec/bloom/media`, the color worker and
-the shader tools beside the executable, and the loader and driver as above. It carries its own
-Python interpreter, built from locked source: the library in `Contents/Frameworks`, the standard
-library in `Contents/Resources/python` and Bloom's Python package in
+the shader tools beside the executable, and the loader and driver as above. It carries the
+Python interpreter (see Scripting Interpreter above): the library in `Contents/Frameworks`, the
+standard library and numpy in `Contents/Resources/python` and Bloom's Python package in
 `Contents/Resources/bloom-python` ([Dependency intake](dependency-intake.md)). The
 `bloom-deploy-macos` target adds Qt with `macdeployqt`, signs the result ad hoc, and then checks
 that every program and library in the bundle resolves inside it or in the operating system and

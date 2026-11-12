@@ -202,34 +202,58 @@ FFmpeg's x86 SIMD is enabled. NASM 2.16.03 is a source-built, build-host-only to
 installed into a superbuild-private `tools/` directory rather than the dependency prefix and is
 passed to FFmpeg through `--x86asmexe` on x86 targets only.
 
-### Bundled Python interpreter (macOS)
+### Carried Python interpreter
 
-The macOS application bundle carries its own CPython, so scripting starts on a Mac that has no
-Python (issue #668). CPython is a lock component of the Apple silicon profile only, built from its
-release archive with the profile's deployment target as a shared library
-(`@rpath/libpython3.X.dylib`) and installed under `python/` in the dependency prefix. Linux has no
-build of it and uses the system's CPython.
+Every Bloom package carries its own CPython, so scripting starts on a computer that has no
+Python and a script gives the same result on Linux, macOS and Windows (issues #668, #677).
+CPython is a lock component of every profile, built from the same release archive as a shared
+library and installed under `python/` in the dependency prefix: by its configure script on Linux
+and macOS (`python.cmake`), and on Windows by its own Visual Studio project files driven by
+MSBuild (`python-windows.cmake`), which are given the locked components in place of the prebuilt
+libraries they would fetch. One recorded patch to those project files is the only change to the
+archive (`dependencies/patches/python/`); the interpreter's source is the same everywhere.
 
-Three more Apple-profile components exist only for its modules and are linked statically into
-them from a private `python-support/` directory of the prefix: OpenSSL (`ssl`, `hashlib`),
-XZ Utils' liblzma (`lzma`) and Zstandard (`compression.zstd`). `pyexpat` links the locked Expat.
-The remaining modules use libraries of the operating system (`sqlite3`, `zlib`, `bz2`, `ctypes`
-through libffi, `curses`, `readline` through libedit). `_tkinter` and `_gdbm` are not built: the
-operating system has no library for them and none is locked. pkg-config is off for CPython's
-configure step, so no library of the build machine can be picked up, and the recipe's install
-step (`python-install.cmake`) imports the modules Bloom requires and refuses an interpreter in
-which any module loads a library from outside the operating system.
+The modules are made of locked components only, from a private `python-support/` directory of
+the prefix: OpenSSL (`ssl`, `hashlib`), XZ Utils' liblzma (`lzma`), Zstandard
+(`compression.zstd`), SQLite (`sqlite3`), bzip2 (`bz2`) and libffi (`ctypes`); `zlib` and
+`pyexpat` use the locked zlib and Expat of the prefix. Linux and macOS link them statically into
+the modules. Windows carries OpenSSL, libffi and SQLite as libraries beside the modules, as
+CPython's Windows build is made to. The module set is the same on every platform: `_tkinter`,
+`_gdbm`, `_dbm`, `_curses` and `readline` are built nowhere, and the parts of the standard
+library that need them are removed from the prefix. pkg-config is off for CPython's configure
+step, so no library of the build machine can be picked up, and the recipe's install step
+(`python-install.cmake`) imports the modules Bloom requires and refuses an interpreter in which
+anything loads a library from outside its own directory and the operating system. Compilers are
+told not to fuse a multiplication and an addition, which arm64 compilers otherwise do.
 
-OpenSSL is built with a configuration directory that does not exist, so it trusts no certificate
-by accident. When Bloom starts the carried interpreter it sets `SSL_CERT_FILE` to the operating
-system's certificate file (`/etc/ssl/cert.pem`), unless `SSL_CERT_FILE` or `SSL_CERT_DIR` is
-already set; HTTPS requests from scripts are verified against it.
+The carried interpreter has one third-party package, numpy, built from its source archive with
+the Meson it carries and the locked Cython (a build tool that is not shipped), without a BLAS or
+LAPACK library and without numpy's kernels for particular instruction sets, into the
+interpreter's own `site-packages`. [Platform support](platform-support.md) records the module
+set, the package set, how the set grows and what "the same result" covers.
 
-A qualified macOS build takes CPython from the prefix and from nowhere else (`Python3_ROOT_DIR`
-in the top-level `CMakeLists.txt`); with `BLOOM_BUILD_PYTHON=ON` and no interpreter in the prefix
-it refuses to configure. nanobind's static core is built against the same interpreter.
+OpenSSL on Linux and macOS is built with a configuration directory that does not exist, so it
+trusts no certificate by accident. When Bloom starts the carried interpreter it sets
+`SSL_CERT_FILE` to the operating system's certificate file (macOS: `/etc/ssl/cert.pem`; Linux:
+the first that exists of the common distribution paths), unless `SSL_CERT_FILE` or `SSL_CERT_DIR`
+is already set; HTTPS requests from scripts are verified against it. On Windows CPython reads
+the system certificate store itself.
+
+The Windows superbuild needs, beyond what the codec libraries need, a Perl that runs as a Windows
+program for OpenSSL's Configure (MSYS2's `mingw-w64-ucrt-x86_64-perl`, or Strawberry Perl; the
+MSYS2 shell's own Perl is refused) and MSBuild, which the Visual Studio developer environment
+provides.
+
+A qualified build takes CPython from the prefix (`Python3_ROOT_DIR` in the top-level
+`CMakeLists.txt`) and the tests then run with it, the bench suite included. On macOS, with
+`BLOOM_BUILD_PYTHON=ON` and no interpreter in the prefix, the build refuses to configure; on
+Linux and Windows a prefix from before the interpreter was locked still configures against the
+host's CPython and says so, and such a build is not what a package is made from. nanobind's
+static core is built against the same interpreter. The shared lookup in
+`src/scripting/python/interpreter_home.cpp` finds the interpreter inside a package by the
+package's layout on each platform and falls back to the prefix in a build tree.
 `apps/bloom/macos/bundle_python.cmake` copies the interpreter to `Contents/Frameworks`, the
-standard library to `Contents/Resources/python`, Bloom's package to
+standard library with the bundled packages to `Contents/Resources/python`, Bloom's package to
 `Contents/Resources/bloom-python` and the license texts to `Contents/Resources/python/licenses`.
 The `bloom-deploy-macos` target ends with `apps/bloom/macos/verify_bundle.cmake`, which fails when a
 program or library in the bundle loads something that is neither in the bundle nor part of the
@@ -834,6 +858,27 @@ Bloom never mutates a qualified prefix in place.
 When a vulnerability affects a locked component, the response records reachability, exposure to
 untrusted content, affected package versions, mitigation, and the replacement lock. Suppressing a
 scanner finding without this record does not qualify a release.
+
+### Security release tracking
+
+The carried interpreter runs users' scripts against the network and their files, so its
+components are followed for security releases as part of intake (issue #677). This covers
+CPython, every library its modules are made of (OpenSSL, liblzma, Zstandard, SQLite, bzip2,
+libffi, zlib, Expat), every bundled package (numpy) and what a bundled package links.
+
+- Each of these components' security record (`dependencies/licenses/<component>/security.md`)
+  has a "Security Release Tracking" section with a line `Advisory source: <https://...>` naming
+  where its upstream publishes security releases. The production lock check
+  (`bloom.quality.dependency_artifacts`) fails when the record of such a component has no such
+  line; the set is computed from the lock: the `python` component, the components linked
+  against it, and everything those link or carry.
+- A review reads each advisory source and writes the date and what it found in the record's
+  "Bounded Review" section; the lock's `securityReview.reviewedAt` carries the same date. Every
+  release of Bloom is preceded by such a review of these components.
+- A security release of the locked series of any of them moves the lock: a new component input
+  with the new archive digest, review and provenance records, a rebuilt prefix on every
+  profile, and the module-set and same-result tests on every platform. When a fix cannot be
+  taken at once, the incident record above says what is reachable and how it is mitigated.
 
 Primary references:
 

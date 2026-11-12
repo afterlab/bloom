@@ -4,18 +4,26 @@ The optional Python client uses the same operation registry, command stack, immu
 task scheduler and reference render runner as the native host. Run a trusted local script with
 `bloom-cli run script.py`, or start `bloom-cli python` for an interpreter with `bloom` pre-imported.
 The embedded interpreter ignores `PYTHONHOME`, `PYTHONPATH`, user site packages and current-directory
-imports. It loads the build's Bloom package and the selected interpreter's standard library.
+imports. It loads the build's Bloom package, the interpreter's standard library and the packages
+bundled with it (numpy); see [Platform support](../architecture/platform-support.md) for the
+module set and what is the same on every platform.
 
 ## Building
 
-Install a GIL-enabled CPython interpreter and its development headers. `BLOOM_BUILD_PYTHON` defaults
-to ON when the interpreter, extension headers and embedding library are found. Explicit ON requires
-all three; explicit OFF disables development-library discovery and the Python clients. MCP pipe
-tests may still use a discovered Python interpreter as their test driver. Linux CI installs `python3-dev`
-and enables Python explicitly. The current local qualification uses CPython 3.14.7; Linux CI's
-system Python may have a different minor version. Rebuild the dependency prefix's nanobind core for
-each Python SOABI. This host-interpreter policy is a development intake, not a bundled release
-interpreter or a stable-ABI wheel promise. Desktop and headless builds use the same package.
+A qualified build embeds the CPython the dependency superbuild builds from locked source
+(CPython 3.14.7, with numpy) and needs no Python on the computer; packages carry that interpreter,
+and the tests run with it. `BLOOM_BUILD_PYTHON` defaults to ON when an interpreter, its extension
+headers and its embedding library are found. Explicit ON requires all three; explicit OFF
+disables development-library discovery and the Python clients. MCP pipe tests may still use a
+discovered Python interpreter as their test driver.
+
+A developer build without that prefix can embed a GIL-enabled CPython installed on the computer
+instead, with its development headers (Linux CI installs `python3-dev` and enables Python
+explicitly; its system Python may have a different minor version). Rebuild the dependency
+prefix's nanobind core for each Python SOABI. Such a build has that computer's modules and
+libraries, so the tests that compare the carried interpreter's module set and results are not
+registered for it, and no package is made from it. Desktop and headless builds use the same
+package. There is no stable-ABI wheel promise.
 
 The superbuild provides nanobind 3.0.1 and its separately recorded robin-map 1.4.0 subtree. Normal
 application configuration performs no Python package installation or dependency download.
