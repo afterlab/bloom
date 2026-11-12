@@ -150,8 +150,8 @@
    "route": "gpu"
   },
   "bloom.dither": {
-   "cpu": "sha256:ce43bea032fd70021de6ed232b5b3bd4f4884939e2f7ec0eeb7f87783d610488",
-   "gpu": "sha256:ce43bea032fd70021de6ed232b5b3bd4f4884939e2f7ec0eeb7f87783d610488",
+   "cpu": "sha256:ba9bf2a3b39323360f12a30a462e20dd03c8addfd8a70e6f3e43e2b476ee447e",
+   "gpu": "sha256:ba9bf2a3b39323360f12a30a462e20dd03c8addfd8a70e6f3e43e2b476ee447e",
    "parity": "identical",
    "route": "gpu"
   },
