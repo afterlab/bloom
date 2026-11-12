@@ -1,0 +1,46 @@
+{
+  "name": "libffi",
+  "version": "3.8.0",
+  "source": {
+    "url": "https://github.com/libffi/libffi/releases/download/v3.8.0/libffi-3.8.0.tar.gz",
+    "archiveSha256": "sha256:7da3e2d9a171eb0a038f592ecad3ff2bb2550f3496d87b3b29ad0cf4430c0db4",
+    "archiveSizeBytes": 1581626,
+    "retrievedAt": "2026-11-12",
+    "commit": null,
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/libffi/provenance.md",
+      "sha256": "sha256:b14ae16d242c6529225cc47e9054757c0b99678c492a9e05f5c88b4731480bc6"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "MIT",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/libffi/LICENSE",
+        "sha256": "sha256:17b64dc60f3b6897a60f971e288b973f655c2edcdf08b25f3c3dd5549857881c"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/libffi/review.md",
+      "sha256": "sha256:34b738ca986ef2a7f81ffd510857d69c8dde3e404a25220b63475c664b0566f0"
+    },
+    "reviewedAt": "2026-11-12"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [],
+  "securityReview": {
+    "reviewedAt": "2026-11-12",
+    "record": {
+      "path": "dependencies/licenses/libffi/security.md",
+      "sha256": "sha256:9fa66b6fd30ff23f821920c8a22a1c2dab0b415ba0ec046c8b776c2a893e26da"
+    },
+    "vulnerabilities": []
+  }
+}

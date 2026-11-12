@@ -1,0 +1,57 @@
+{
+  "name": "bzip2",
+  "version": "1.0.8",
+  "source": {
+    "url": "https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz",
+    "archiveSha256": "sha256:ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269",
+    "archiveSizeBytes": 810029,
+    "retrievedAt": "2026-11-12",
+    "commit": null,
+    "provenancePolicy": "required",
+    "provenanceReview": {
+      "path": "dependencies/licenses/bzip2/provenance.md",
+      "sha256": "sha256:092124e3c9482066bf4ddd33c340b86527f5760e3f1c2ba46ff404cdfb220f71"
+    },
+    "provenance": [
+      {
+        "kind": "detached-signature",
+        "evidence": {
+          "path": "dependencies/licenses/bzip2/bzip2-1.0.8.tar.gz.sig",
+          "sha256": "sha256:c667e2db9a3cd17bde492584263cb7c30d8050538678ece3078ae58230e6e5e1"
+        },
+        "identity": "EC3CFE88F6CA0788774F5C1D1AA44BE649DE760A",
+        "issuer": "Mark Wielaard <mark@klomp.org>",
+        "policy": "Official bzip2 release detached signature verified with the key the project's download page links"
+      }
+    ]
+  },
+  "license": {
+    "spdxExpression": "bzip2-1.0.6",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/bzip2/LICENSE",
+        "sha256": "sha256:c6dbbf828498be844a89eaa3b84adbab3199e342eb5cb2ed2f0d4ba7ec0f38a3"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/bzip2/review.md",
+      "sha256": "sha256:9e02f33232894ba3138dddb5da53da54a2692b8cf6e543c99976dd7e39805672"
+    },
+    "reviewedAt": "2026-11-12"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [],
+  "securityReview": {
+    "reviewedAt": "2026-11-12",
+    "record": {
+      "path": "dependencies/licenses/bzip2/security.md",
+      "sha256": "sha256:977792ca6d6ba200d5755e6ef7c3dc2b25057850156e2fa76d0094e28a37377f"
+    },
+    "vulnerabilities": []
+  }
+}

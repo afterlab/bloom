@@ -23,3 +23,9 @@ that script gives it. Bloom's own readers do not use it.
 
 - Accepted for non-release intake as an unqualified component. This record does not qualify it
   for release.
+
+## Security Release Tracking
+
+- Advisory source: <https://github.com/tukaani-project/xz/security/advisories>
+- The project's published advisories; its release notes (`NEWS`) name the security fixes of each
+  release. See "Security release tracking" in `docs/architecture/dependency-intake.md`.

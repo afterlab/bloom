@@ -1,0 +1,46 @@
+{
+  "name": "sqlite",
+  "version": "3.54.1",
+  "source": {
+    "url": "https://www.sqlite.org/2026/sqlite-autoconf-3540100.tar.gz",
+    "archiveSha256": "sha256:926ef8d3eab93fbf6e06011901273eec076b25594a4e1cdadd50c987f4f6d64e",
+    "archiveSizeBytes": 3332984,
+    "retrievedAt": "2026-11-12",
+    "commit": null,
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/sqlite/provenance.md",
+      "sha256": "sha256:4ae1439c9398e9babb7e27f224e639b197d675c068254b1fa01da636d735b33a"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "blessing",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/sqlite/LICENSE",
+        "sha256": "sha256:452d1e9b9ac57647fd26b9a0eee6a647e0d090f180897b3626ea1278ccb1cf95"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/sqlite/review.md",
+      "sha256": "sha256:f658d1b91b5b39d3562eb9e95e173d6bd8d00afcdc9fa1078ef02fa732d7c4aa"
+    },
+    "reviewedAt": "2026-11-12"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [],
+  "securityReview": {
+    "reviewedAt": "2026-11-12",
+    "record": {
+      "path": "dependencies/licenses/sqlite/security.md",
+      "sha256": "sha256:81349a14947cd2c8dc05e5960351b1940564e361bc8c5b6ceb72c3f155105fe7"
+    },
+    "vulnerabilities": []
+  }
+}

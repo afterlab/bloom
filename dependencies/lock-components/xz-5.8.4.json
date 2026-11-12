@@ -43,7 +43,7 @@
     "modified": false,
     "reviewRecord": {
       "path": "dependencies/licenses/xz/review.md",
-      "sha256": "sha256:4466585f19a2f488106bd9d2d05e75b8f7821f36bfe951670992cd791259781d"
+      "sha256": "sha256:704dcf41f4912fd708f7f72b5f256dc1197a7cc9d3c521cd58ee626115664472"
     },
     "reviewedAt": "2026-11-12"
   },
@@ -54,7 +54,7 @@
     "reviewedAt": "2026-11-12",
     "record": {
       "path": "dependencies/licenses/xz/security.md",
-      "sha256": "sha256:01320ec9354e9cfdc3e733515c4e2922a3c9d349655f4ad81718a3cc0091291e"
+      "sha256": "sha256:96a737ab6a97ad72dd6811eddaa252733145c557f409c2994ecd8c9588f7c22c"
     },
     "vulnerabilities": []
   }

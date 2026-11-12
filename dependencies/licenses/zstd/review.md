@@ -11,16 +11,18 @@ Reviewed: 2026-11-12
 
 ## Why It Is Here
 
-Bloom ships its own Python interpreter on macOS (see the `python` component). Python 3.14 has
-the `compression.zstd` module, which the Linux system interpreter provides; this component gives
-the bundled interpreter the same. Bloom's own code does not call it.
+Bloom carries its own Python interpreter in every package (see the `python` component). Python
+3.14 has the `compression.zstd` module; this component is the one Zstandard behind it on every
+platform. Bloom's own code does not call it.
 
 ## Reached Scope And Minimization
 
-- Built on the Apple silicon profile only (`dependencies/superbuild/projects/zstd.cmake`), with
-  the CMake project under `build/cmake`.
-- The static `libzstd.a` and its headers, into the prefix's private `python-support` directory,
-  linked into the interpreter's `_zstd` extension module.
+- Linux and macOS: `dependencies/superbuild/projects/zstd.cmake` builds the static `libzstd.a`
+  with the CMake project under `build/cmake` and installs it with its headers into the prefix's
+  private `python-support` directory. It is linked into the interpreter's `_zstd` extension
+  module.
+- Windows: CPython's own project file compiles the library's sources from the same archive into
+  `_zstd.pyd`; the recipe only unpacks the archive there.
 - Off: the command line programs, the shared library, tests, contributed code and support for the
   legacy frame formats.
 - Recorded role: `license`.

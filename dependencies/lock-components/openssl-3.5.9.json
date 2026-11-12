@@ -39,18 +39,23 @@
     "modified": false,
     "reviewRecord": {
       "path": "dependencies/licenses/openssl/review.md",
-      "sha256": "sha256:7516473be0bc3d219e8d97f2bd305fa5612d158b34b0baf790560b04cea0a425"
+      "sha256": "sha256:29ccd864d622532bd3f36421604a4308e5e0f6c9f923fda6bdf72b63e891c45f"
     },
     "reviewedAt": "2026-11-12"
   },
   "patches": [],
-  "dependencies": [],
+  "dependencies": [
+    {
+      "name": "nasm",
+      "relationship": "build"
+    }
+  ],
   "profileBuilds": [],
   "securityReview": {
     "reviewedAt": "2026-11-12",
     "record": {
       "path": "dependencies/licenses/openssl/security.md",
-      "sha256": "sha256:af765c1a95b8769fa2136e3213f65902fdb04fb8eea1c0af2be4c0ff4a737491"
+      "sha256": "sha256:ea78f4846350682091f5c6f255ae0fee45133d5d1a51a83858eea0385e8d038c"
     },
     "vulnerabilities": []
   }

@@ -45,17 +45,32 @@
       }
     ],
     "sourceObligation": "none",
-    "modified": false,
+    "modified": true,
     "reviewRecord": {
       "path": "dependencies/licenses/python/review.md",
-      "sha256": "sha256:210c6a15012f8571c48a91e20c8f7d233df06318018727dc9646bd4b2f88dc46"
+      "sha256": "sha256:ca0307330bcd31196f509d0f66b07adbf833e3048b8725c8635250d651dacd98"
     },
     "reviewedAt": "2026-11-12"
   },
-  "patches": [],
+  "patches": [
+    {
+      "path": "dependencies/patches/python/0001-windows-build-with-locked-libraries.patch",
+      "sha256": "sha256:f68023969ff717443e0e60a1316db8c57fb142266b96cb3c7d1dc26db64214a5",
+      "applyOrder": 0,
+      "reason": "Windows only: CPython's Visual Studio projects link the locked zlib, expat and liblzma instead of CPython's own zlib-ng, carried expat and an older XZ archive layout, and reach the libmpdec the archive carries; no interpreter source changes"
+    }
+  ],
   "dependencies": [
     {
+      "name": "bzip2",
+      "relationship": "link"
+    },
+    {
       "name": "expat",
+      "relationship": "link"
+    },
+    {
+      "name": "libffi",
       "relationship": "link"
     },
     {
@@ -63,7 +78,15 @@
       "relationship": "link"
     },
     {
+      "name": "sqlite",
+      "relationship": "link"
+    },
+    {
       "name": "xz",
+      "relationship": "link"
+    },
+    {
+      "name": "zlib",
       "relationship": "link"
     },
     {
@@ -76,7 +99,7 @@
     "reviewedAt": "2026-11-12",
     "record": {
       "path": "dependencies/licenses/python/security.md",
-      "sha256": "sha256:73ad2ae1e7f2d2e530cf09a86802ce7b388b4875e95f31d15232d15cde64299b"
+      "sha256": "sha256:3df9f4b16053a709fa982bcc6d1815fcf136b2f7eb9a343aca9cb9ae3c350b7e"
     },
     "vulnerabilities": []
   }

@@ -10,3 +10,9 @@ Reviewed: 2026-08-27
   contract's expansion ceilings before use; allocation routes through bounded project-I/O memory
   at the Bloom boundary.
 - Disposition: accepted for intake at 1.3.2. Re-review on any zlib advisory or version change.
+
+## Security Release Tracking
+
+- Advisory source: <https://github.com/madler/zlib/security/advisories>
+- The project's published advisories; its `ChangeLog` names the fixes of each release. See
+  "Security release tracking" in `docs/architecture/dependency-intake.md`.

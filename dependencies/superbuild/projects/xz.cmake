@@ -1,13 +1,11 @@
 # XZ Utils 5.8.4 (liblzma: 0BSD; see dependencies/licenses/xz/) - the LZMA library behind the
-# bundled Python's `lzma` module on macOS. Bloom itself does not link it.
+# carried Python's `lzma` module. Bloom itself does not link it.
 #
-# Built on Apple platforms only, where Bloom ships its own interpreter (python.cmake). The static
-# liblzma and its headers only, into the prefix's private `python-support` directory; the command
-# line tools, scripts, translations and documentation are not built.
-if(NOT APPLE)
-    return()
-endif()
-
+# Built for every profile (python.cmake, issue #677). The static liblzma and its headers only, into
+# the prefix's private `python-support` directory; the command line tools, scripts, translations
+# and documentation are not built. (CPython's Windows project files would compile liblzma
+# themselves from an older archive layout that this release no longer has, so the Windows
+# interpreter links this library too; see dependencies/patches/python/.)
 set(BLOOM_XZ_VERSION 5.8.4)
 set(BLOOM_XZ_URL
     "https://github.com/tukaani-project/xz/releases/download/v${BLOOM_XZ_VERSION}/xz-${BLOOM_XZ_VERSION}.tar.gz")

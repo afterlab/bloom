@@ -1,0 +1,56 @@
+{
+  "name": "cython",
+  "version": "3.3.1",
+  "source": {
+    "url": "https://files.pythonhosted.org/packages/source/c/cython/cython-3.3.1.tar.gz",
+    "archiveSha256": "sha256:e0e45989e821bef6aa9ae15c7d583ab5e055f7406c4b3624e49e06d24e90375a",
+    "archiveSizeBytes": 3743354,
+    "retrievedAt": "2026-11-12",
+    "commit": null,
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/cython/provenance.md",
+      "sha256": "sha256:f9acc46056a1325a4b9a8d97ec4add1ce82d721040afa94c1d72cafb6966a273"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "Apache-2.0",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/cython/LICENSE.txt",
+        "sha256": "sha256:9568a2b155e66ac3e0ba1fd80b52b827b9460e6cf6f233125e7cbca8e206ddc3"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [
+      {
+        "path": "dependencies/licenses/cython/COPYING.txt",
+        "sha256": "sha256:e1eb1c49a8508e8173dac30157e4a6439a44ad8846194746c424fbc3fc2b95d7"
+      }
+    ],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/cython/review.md",
+      "sha256": "sha256:1aca256ef11a829f98bd7a8d3b8f87e8cb732bd5f1ed98387e716f59eef1ab9d"
+    },
+    "reviewedAt": "2026-11-12"
+  },
+  "patches": [],
+  "dependencies": [
+    {
+      "name": "python",
+      "relationship": "build"
+    }
+  ],
+  "profileBuilds": [],
+  "securityReview": {
+    "reviewedAt": "2026-11-12",
+    "record": {
+      "path": "dependencies/licenses/cython/security.md",
+      "sha256": "sha256:22c9a9ccfdc3da48eea2052ca14b6b739246551afcc1c9abce6231165c851d1e"
+    },
+    "vulnerabilities": []
+  }
+}

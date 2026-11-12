@@ -39,7 +39,7 @@
     "modified": false,
     "reviewRecord": {
       "path": "dependencies/licenses/zstd/review.md",
-      "sha256": "sha256:647ec4f66ad046b8dd3d22a7e1f59afafa92e61fcc8275e4253288aa0c580f76"
+      "sha256": "sha256:1e045ba8825a2471be75e12511e66e02e2e7c3b61b7b79e133891c87c0812bc2"
     },
     "reviewedAt": "2026-11-12"
   },
@@ -50,7 +50,7 @@
     "reviewedAt": "2026-11-12",
     "record": {
       "path": "dependencies/licenses/zstd/security.md",
-      "sha256": "sha256:83a845cd888013f68746e208bfa0b420205b69a35269762f4b53352103abdba9"
+      "sha256": "sha256:fdecb7d6d2b45336fe41d194dcdf6a94b35fd61484c406b85e1159551ab84998"
     },
     "vulnerabilities": []
   }

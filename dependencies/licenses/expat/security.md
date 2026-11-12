@@ -60,3 +60,9 @@ real, currently-unpatched-in-any-release vulnerability that reaches Bloom's buil
   lock"); the lock's vulnerability disposition for this entry is the supervisor's call to make
   (this record recommends `mitigated`, given the bounded-by-deadline reasoning above), not
   fabricated here.
+
+## Security Release Tracking
+
+- Advisory source: <https://github.com/libexpat/libexpat/security/advisories>
+- The project's published advisories; its `Changes` file names the security fixes of each release.
+  See "Security release tracking" in `docs/architecture/dependency-intake.md`.

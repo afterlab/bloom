@@ -14,16 +14,19 @@ Reviewed: 2026-11-12
 
 ## Why It Is Here
 
-Bloom ships its own Python interpreter on macOS (see the `python` component). On Linux the
-system interpreter gives scripts the `lzma` module; this component gives the bundled
-interpreter the same. Bloom's own code does not call liblzma.
+Bloom carries its own Python interpreter in every package (see the `python` component). This
+component gives that interpreter's `lzma` module one liblzma on every platform. Bloom's own
+code does not call liblzma.
 
 ## Reached Scope And Minimization
 
-- Built on the Apple silicon profile only (`dependencies/superbuild/projects/xz.cmake`), with the
-  archive's CMake project.
-- The static `liblzma.a` and its headers, into the prefix's private `python-support` directory,
-  linked into the interpreter's `_lzma` extension module.
+- Built on every profile (`dependencies/superbuild/projects/xz.cmake`), with the archive's CMake
+  project.
+- The static liblzma and its headers, into the prefix's private `python-support` directory,
+  linked into the interpreter's `_lzma` extension module. On Windows the library is `lzma.lib`
+  and CPython's `_lzma` project is pointed at it by the patch recorded with the `python`
+  component (CPython's own project would compile liblzma from an archive layout this release no
+  longer has).
 - Off: `xz`, `xzdec`, `lzmadec`, `lzmainfo`, the scripts, documentation, translations, Doxygen and
   tests.
 - Recorded role: `license`.

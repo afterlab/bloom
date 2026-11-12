@@ -105,6 +105,24 @@
     ]
   },
   "componentBuilds": {
+    "bzip2": {
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.bzip2.library-only",
+          "state": "enabled",
+          "reason": "The library's seven source files as a static library; the bzip2 and bzip2recover programs are not built; linked into the carried interpreter's _bz2 module"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.bzip2.compression"
+      ],
+      "shippingRoles": [
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
     "cereal": {
       "linkage": "header-only",
       "cmakeOptions": [],
@@ -115,6 +133,16 @@
       "shippingRoles": [
         "license"
       ],
+      "conformanceFixtureSets": []
+    },
+    "cython": {
+      "linkage": "executable",
+      "cmakeOptions": [],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.cython"
+      ],
+      "shippingRoles": [],
       "conformanceFixtureSets": []
     },
     "dav1d": {
@@ -454,6 +482,24 @@
       ],
       "conformanceFixtureSets": []
     },
+    "libffi": {
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.libffi.library-only",
+          "state": "enabled",
+          "reason": "Static position-independent library only (--disable-shared --with-pic --disable-docs), linked into the carried interpreter's _ctypes module"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.libffi.foreign-calls"
+      ],
+      "shippingRoles": [
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
     "libvpx": {
       "linkage": "static",
       "cmakeOptions": [],
@@ -730,6 +776,41 @@
       "conformanceFixtureSets": []
     },
     "nasm": null,
+    "numpy": {
+      "linkage": "shared",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.numpy.blas-lapack",
+          "state": "disabled",
+          "reason": "No BLAS or LAPACK library: linear algebra uses the routines numpy carries, the same on every platform"
+        },
+        {
+          "id": "bloom.feature.numpy.cpu-specific-kernels",
+          "state": "disabled",
+          "reason": "-Ddisable-optimization=true: the kernels for particular instruction sets and their choice at start are not built; they fused multiply-add on some processors and changed last bits"
+        },
+        {
+          "id": "bloom.feature.numpy.svml",
+          "state": "disabled",
+          "reason": "Intel SVML exists for x86-64 Linux only"
+        },
+        {
+          "id": "bloom.feature.numpy.tests",
+          "state": "disabled",
+          "reason": "numpy's test packages are not installed"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.python.numpy"
+      ],
+      "shippingRoles": [
+        "data",
+        "library",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
     "nv-codec-headers": null,
     "opencolorio": {
       "linkage": "static",
@@ -912,7 +993,7 @@
         {
           "id": "bloom.feature.openssl.libraries-only",
           "state": "enabled",
-          "reason": "Static libssl and libcrypto only (no-shared no-tests no-apps no-docs no-module no-legacy no-engine), linked into the bundled interpreter's _ssl and _hashlib modules; no configuration or certificate directory is compiled in"
+          "reason": "Static libssl and libcrypto only (no-shared no-tests no-apps no-docs no-module no-legacy no-engine), linked into the carried interpreter's _ssl and _hashlib modules; no configuration or certificate directory is compiled in"
         }
       ],
       "capabilities": [
@@ -973,12 +1054,17 @@
         {
           "id": "bloom.feature.python.mimalloc",
           "state": "disabled",
-          "reason": "The allocator CPython carries serves the free-threaded build, which Bloom does not use (--without-mimalloc)"
+          "reason": "The allocator CPython carries serves the free-threaded build, which Bloom does not use"
+        },
+        {
+          "id": "bloom.feature.python.no-fused-multiply-add",
+          "state": "enabled",
+          "reason": "-ffp-contract=off: a multiplication and an addition are never fused, so arm64 and x86-64 compute the same"
         },
         {
           "id": "bloom.feature.python.pip",
           "state": "disabled",
-          "reason": "--without-ensurepip: the bundled interpreter runs Bloom scripts and installs nothing"
+          "reason": "pip and ensurepip are not installed: the carried interpreter runs Bloom scripts and installs nothing"
         },
         {
           "id": "bloom.feature.python.system-expat",
@@ -986,14 +1072,14 @@
           "reason": "pyexpat links the locked expat component instead of the copy CPython carries"
         },
         {
-          "id": "bloom.feature.python.test-modules",
+          "id": "bloom.feature.python.terminal-and-tk-modules",
           "state": "disabled",
-          "reason": "--disable-test-modules: the standard library test extension modules are not built"
+          "reason": "_tkinter, _gdbm, _dbm, _curses, _curses_panel and readline are not built on any platform, so the module set is the same everywhere; tkinter, idlelib, turtle, turtledemo, curses and ensurepip are removed from the standard library"
         },
         {
-          "id": "bloom.feature.python.tkinter-gdbm",
+          "id": "bloom.feature.python.test-modules",
           "state": "disabled",
-          "reason": "The operating system has no Tk or GDBM library and none is locked; _tkinter and _gdbm are not built"
+          "reason": "The standard library's test packages and test extension modules are not built"
         }
       ],
       "capabilities": [
@@ -1140,6 +1226,24 @@
       ],
       "conformanceFixtureSets": []
     },
+    "sqlite": {
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.sqlite.amalgamation-only",
+          "state": "enabled",
+          "reason": "The amalgamation compiled into a static library with the options CPython's Windows build uses (math functions, FTS4, FTS5, R-Tree); no shell program, no Tcl extension; linked into the carried interpreter's _sqlite3 module"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.sqlite.database"
+      ],
+      "shippingRoles": [
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
     "sse2neon": {
       "linkage": "header-only",
       "cmakeOptions": [],
@@ -1261,7 +1365,7 @@
         {
           "id": "bloom.feature.xz.liblzma-only",
           "state": "enabled",
-          "reason": "Static liblzma only, from the CMake project; the command line tools, scripts, translations, documentation and tests are off; linked into the bundled interpreter's _lzma module"
+          "reason": "Static liblzma only, from the CMake project; the command line tools, scripts, translations, documentation and tests are off; linked into the carried interpreter's _lzma module"
         }
       ],
       "capabilities": [
@@ -1420,7 +1524,7 @@
         {
           "id": "bloom.feature.zstd.library-only",
           "state": "enabled",
-          "reason": "Static library only; programs, shared library, tests, contributed code and legacy frame formats are off; linked into the bundled interpreter's _zstd module"
+          "reason": "Static library only; programs, shared library, tests, contributed code and legacy frame formats are off; linked into the carried interpreter's _zstd module"
         }
       ],
       "capabilities": [

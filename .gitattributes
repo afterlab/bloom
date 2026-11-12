@@ -2,6 +2,9 @@
 # the intake contract binds their exact bytes to SHA-256 records.
 dependencies/unicode/** -text
 dependencies/licenses/** -text
+# The CPython patch changes Visual Studio project files, which have Windows line endings; its
+# context lines must keep them or it no longer applies.
+dependencies/patches/python/** -text
 assets/ocio/** -text
 
 # Vendored interface assets are digest-bound in their provenance records (src/ui/kit/third_party/

@@ -1,0 +1,6 @@
+--buildtype=release
+-Dblas=none
+-Dlapack=none
+-Dallow-noblas=true
+-Ddisable-svml=true
+-Ddisable-optimization=true

@@ -19,3 +19,9 @@ input is then whatever data that script gives it. Bloom's own readers do not use
 
 - Accepted for non-release intake as an unqualified component. This record does not qualify it
   for release.
+
+## Security Release Tracking
+
+- Advisory source: <https://github.com/facebook/zstd/security/advisories>
+- The project's published advisories; its release notes name the security fixes of each release.
+  See "Security release tracking" in `docs/architecture/dependency-intake.md`.
