@@ -899,7 +899,7 @@ endif()
 # Reveal in File Manager selects the file through the freedesktop.org FileManager1 D-Bus interface
 # on Linux. Without Qt D-Bus the same source opens the containing folder, its supported fallback.
 if(UNIX AND NOT APPLE)
-    find_package(Qt6 6.8 QUIET COMPONENTS DBus)
+    find_package(Qt6 ${BLOOM_QT_VERSION_REQUEST} QUIET COMPONENTS DBus)
     if(TARGET Qt6::DBus)
         target_link_libraries(bloom_ui PRIVATE Qt6::DBus)
         target_compile_definitions(bloom_ui PRIVATE BLOOM_UI_HAS_QTDBUS=1)

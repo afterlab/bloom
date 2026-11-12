@@ -170,7 +170,7 @@ add_executable(bloom_direct_manipulation_test
 # machinery, and issue #117's header-chrome signal assertions -- need Qt6::Test. Scoped to the two
 # executables that use it rather than to bloom_ui itself.
 if(NOT TARGET Qt6::Test)
-    find_package(Qt6 6.8 REQUIRED COMPONENTS Test)
+    find_package(Qt6 ${BLOOM_QT_VERSION_REQUEST} REQUIRED COMPONENTS Test)
 endif()
 add_executable(bloom_playback_controller_test
     playback_controller_tests.cpp

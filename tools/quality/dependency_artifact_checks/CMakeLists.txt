@@ -61,6 +61,38 @@ if(BUILD_TESTING)
         LABELS quality dependencies
         TIMEOUT 60
     )
+    # Bloom uses only the listed parts of Qt, each offered under LGPL-3.0-only by the locked
+    # Qt's bill of materials (read when the build takes Qt from the dependency prefix).
+    set(bloom_qt_module_check_arguments "-DBLOOM_SOURCE_ROOT=${PROJECT_SOURCE_DIR}")
+    if(BLOOM_DEPENDENCY_MODE STREQUAL "qualified"
+       AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/qt/bloom-prebuilt.txt")
+        list(APPEND bloom_qt_module_check_arguments
+             "-DBLOOM_QT_ROOT=${BLOOM_DEPENDENCY_PREFIX}/qt")
+    endif()
+    bloom_add_test(
+        NAME bloom.quality.qt_modules
+        COMMAND "${CMAKE_COMMAND}" ${bloom_qt_module_check_arguments} -P
+                "${PROJECT_SOURCE_DIR}/cmake/BloomQtModuleCheck.cmake"
+        LABELS quality dependencies
+        TIMEOUT 60
+    )
+    # A qualified configure refuses a prefix without the locked Qt or with another version.
+    bloom_add_test(
+        NAME bloom.quality.locked_qt_refusal
+        COMMAND
+            "${CMAKE_COMMAND}" "-DBLOOM_WORK=${CMAKE_CURRENT_BINARY_DIR}/locked-qt-test" -P
+            "${PROJECT_SOURCE_DIR}/cmake/BloomLockedQtTest.cmake"
+        LABELS quality dependencies
+        TIMEOUT 60
+    )
+    bloom_add_test(
+        NAME bloom.quality.qt_modules_self_test
+        COMMAND
+            "${CMAKE_COMMAND}" "-DBLOOM_WORK=${CMAKE_CURRENT_BINARY_DIR}/qt-module-check-test"
+            -P "${PROJECT_SOURCE_DIR}/cmake/BloomQtModuleCheckTest.cmake"
+        LABELS quality dependencies
+        TIMEOUT 60
+    )
 endif()
 
 add_custom_target(

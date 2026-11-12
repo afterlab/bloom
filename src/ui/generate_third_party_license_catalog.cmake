@@ -4,9 +4,9 @@
 #
 #   * every dependencies/licenses/<component>/LICENSE  (the qualified-prefix superbuild libraries)
 #   * every src/ui/kit/third_party/<component>/LICENSE (the vendored icon/font assets)
-#   * a Qt/ADR-0014 dynamic-LGPL distribution notice, authored here (there is no vendored Qt
-#     LICENSE file in this repository to parse: Bloom links Qt dynamically rather than vendoring
-#     its source -- see docs/decisions/0014-apache-license-and-qt-distribution.md)
+#   * the locked Qt's notice (dependencies/licenses/qt/NOTICE.txt) with the text of every license
+#     it names (dependencies/licenses/qt/texts) -- see
+#     docs/decisions/0014-apache-license-and-qt-distribution.md
 #
 # Technique: mirrors src/color/ocio_builtin_payload.inc.in's file(READ ... HEX) -> "0x..," byte
 # array embed, generalized from one frozen asset to N discovered files, because license text has
@@ -31,31 +31,39 @@ foreach(_bloom_license_dir IN LISTS _bloom_dependency_license_dirs _bloom_kit_li
     endif()
 endforeach()
 
-# The Qt notice: authored text, not parsed from a vendored file (see the file comment above),
-# routed through the same hex-embed path as every other entry by writing it to a generated text
-# file first.
-set(_bloom_qt_notice_text [[Qt 6
-
-Bloom links dynamically against the Qt 6 libraries under the GNU Lesser General Public License,
-version 3 (LGPLv3). Bloom does not modify Qt's source. Community release packages bundle the
-qualified, unmodified Qt runtime libraries and plugins alongside Bloom; artists never install a
-separate Qt SDK or compile Bloom themselves.
-
-Under the LGPLv3, you may relink Bloom against a modified or different compatible version of the
-Qt libraries. Bloom preserves this right by linking dynamically and not imposing technical
-restrictions (such as static linking, or locked or signed libraries that would reject a relinked
-Qt) that would remove it.
-
-Qt is Copyright (C) The Qt Company Ltd. and other contributors, and is licensed under the GNU
-Lesser General Public License, version 3, as published by the Free Software Foundation. The
-complete LGPLv3 text is available at https://www.gnu.org/licenses/lgpl-3.0.html. Qt's own
-licensing terms are documented at https://doc.qt.io/qt-6/licensing.html.
-
-See this repository's docs/decisions/0014-apache-license-and-qt-distribution.md for Bloom's
-complete Qt distribution decision.
-]])
+# The Qt entry: the locked Qt's notice file (dependencies/licenses/qt/NOTICE.txt, generated from
+# the bills of materials inside the official Qt binaries: the Qt libraries and plugins carried,
+# every third-party component inside them, and the exact source archive) followed by the text of
+# every license it names, the LGPL and the GPL it supplements first. They are joined into one
+# generated text file and routed through the same hex-embed path as every other entry.
+set(_bloom_qt_license_root "${CMAKE_CURRENT_SOURCE_DIR}/../../dependencies/licenses/qt")
+if(NOT EXISTS "${_bloom_qt_license_root}/NOTICE.txt"
+   OR NOT EXISTS "${_bloom_qt_license_root}/texts/LGPL-3.0-only.txt"
+   OR NOT EXISTS "${_bloom_qt_license_root}/texts/GPL-3.0-only.txt")
+    message(FATAL_ERROR
+        "dependencies/licenses/qt has no NOTICE.txt or no LGPL and GPL texts -- the Open Source "
+        "Licenses window would ship without Qt's license. Run tools/quality/generate_qt_notices.")
+endif()
+file(GLOB _bloom_qt_license_texts "${_bloom_qt_license_root}/texts/*.txt")
+list(SORT _bloom_qt_license_texts)
+list(REMOVE_ITEM _bloom_qt_license_texts
+    "${_bloom_qt_license_root}/texts/LGPL-3.0-only.txt"
+    "${_bloom_qt_license_root}/texts/GPL-3.0-only.txt")
+list(PREPEND _bloom_qt_license_texts
+    "${_bloom_qt_license_root}/texts/LGPL-3.0-only.txt"
+    "${_bloom_qt_license_root}/texts/GPL-3.0-only.txt")
+file(READ "${_bloom_qt_license_root}/NOTICE.txt" _bloom_qt_notice_text)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${_bloom_qt_license_root}/NOTICE.txt")
 set(_bloom_qt_notice_path "${CMAKE_CURRENT_BINARY_DIR}/generated/qt6-notice.txt")
 file(WRITE "${_bloom_qt_notice_path}" "${_bloom_qt_notice_text}")
+foreach(_bloom_qt_license_text IN LISTS _bloom_qt_license_texts)
+    get_filename_component(_bloom_qt_license_name "${_bloom_qt_license_text}" NAME)
+    file(READ "${_bloom_qt_license_text}" _bloom_qt_license_body)
+    file(APPEND "${_bloom_qt_notice_path}"
+        "\n\n==== texts/${_bloom_qt_license_name} ====\n\n" "${_bloom_qt_license_body}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_bloom_qt_license_text}")
+endforeach()
 list(APPEND _bloom_license_component_names "Qt 6")
 list(APPEND _bloom_license_component_files "${_bloom_qt_notice_path}")
 

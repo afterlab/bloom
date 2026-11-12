@@ -86,6 +86,24 @@ void testCatalogCoversEveryLicensedComponentDirectory(Expectations& expectations
     }
     expectations.expect(catalogComponents.contains("Qt 6"),
                         "the catalog also carries the Qt/ADR-0014 notice");
+    // The Qt entry is the locked Qt's own notice with its license texts: the exact source
+    // archive, the LGPL and the GPL it supplements, and the third-party notices.
+    for (const auto& entry : thirdPartyLicenseCatalog()) {
+        if (entry.component != "Qt 6") {
+            continue;
+        }
+        const auto has = [&entry](const std::string_view text) {
+            return entry.licenseText.find(text) != std::string_view::npos;
+        };
+        expectations.expect(has("qt-everywhere-src-") && has("corresponding source"),
+                            "the Qt entry names the exact Qt source archive");
+        expectations.expect(has("GNU LESSER GENERAL PUBLIC LICENSE") &&
+                                has("GNU GENERAL PUBLIC LICENSE"),
+                            "the Qt entry carries the LGPL and the GPL text it supplements");
+        expectations.expect(has("Third-party components inside those libraries and plugins") &&
+                                has("==== texts/MIT.txt ===="),
+                            "the Qt entry carries Qt's third-party notices and their licenses");
+    }
 }
 
 // The owner's credit for the bundled UI sounds travels with every build: the catalog entry carries

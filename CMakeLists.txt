@@ -159,7 +159,9 @@ add_custom_target(
 )
 
 if(BLOOM_BUILD_DESKTOP)
-    find_package(Qt6 6.8 REQUIRED COMPONENTS Network Svg Widgets)
+    # One exact Qt, the dependency lock's, in a qualified build (issue #679).
+    include(BloomLockedQt)
+    bloom_find_locked_qt(Network Svg Widgets)
     qt_standard_project_setup()
 
     # Qt 6.8 links the AGL framework into every OpenGL consumer on macOS. The macOS 26 SDK no
