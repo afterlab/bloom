@@ -100,18 +100,18 @@ void testCheckedInArtifacts(const Fixture& fixture, Expectations& expectations) 
     const auto result = dependency::checkRepository(fixture.root);
     expectations.expect(
         result.lockVector ==
-            "sha256:04d5a9e2dfbeea2251edcef26bf5e97a858b301b2f07cdc803f3cec3faa3c81d",
+            "sha256:4fa5b248e5cc849e6e31684418e811442c7e879385e764cf4a92905cafc350d0",
         "lock identity test vector matches exact canonical bytes");
     expectations.expect(
         result.prefixVector ==
-            "sha256:a5f00b0c926888d051fb91ce7d9792e4d7c4c3c7d2e256e5ed68ad9cc81a7893",
+            "sha256:2ff65cf8554e3b972f3a73b0942fbcd292667d75230b1b24cc3ce0841f2cb895",
         "prefix identity test vector matches exact canonical bytes");
     const auto& components = fixture.prefix.at("components").asArray();
     expectations.expect(
         components[0].at("buildOptionsIdentity").asString() ==
-                "sha256:5a014d1740b6ca8189d1195c2f670d22ac6e94367f33d18808fa84094f4c424b" &&
+                "sha256:33d3378c99aa026e46b4cd64c32ad70ad98dfc6295539e447fa4539d234a4a03" &&
             components[1].at("buildOptionsIdentity").asString() ==
-                "sha256:5bc93726991d01181405854fcd7f261ca5b2807cdd09a1b5beb6973985f5b4e5",
+                "sha256:6fe471bd8ab9e2d14ae5421648adc7bb2a057e5b18847fbef95b45e91f5f82ef",
         "component build identity test vectors remain frozen");
     expectations.rejects(
         "lock-identity",
@@ -151,55 +151,40 @@ void testSchemaArtifacts(const Fixture& fixture, Expectations& expectations) {
             "schema-object", [&] { dependency::validateSchemaArtifact(schema.value, kind); },
             "schema object closure is structural, not hash-only");
     }
-    auto lockSchema11 = dependency::loadSchemaArtifact(
-        fixture.root / "dependencies/schemas/dependency-lock-1.1.schema.json");
-    dependency::validateSchemaArtifact(lockSchema11.value, dependency::ArtifactKind::LockV1_1);
-    expectations.expect(lockSchema11.value.at("title").asString() == "Bloom Dependency Lock 1.1" &&
-                            lockSchema11.value.at("$defs")
-                                    .at("fixedVersion")
-                                    .at("properties")
-                                    .at("minor")
-                                    .at("const")
-                                    .asNumber()
-                                    .spelling == "1",
-                        "minor lock schema records the 1.1 version and accepts optional members");
-    auto lockSchema13 = dependency::loadSchemaArtifact(
-        fixture.root / "dependencies/schemas/dependency-lock-1.3.schema.json");
-    dependency::validateSchemaArtifact(lockSchema13.value, dependency::ArtifactKind::LockV1_3);
-    const auto& linkageEnum = lockSchema13.value.at("$defs")
+    const auto single = dependency::loadSchemaArtifact(
+        fixture.root / "dependencies/schemas/dependency-lock-1.0.schema.json");
+    const auto& linkageEnum = single.value.at("$defs")
                                   .at("profileBuild")
                                   .at("properties")
                                   .at("linkage")
                                   .at("enum")
                                   .asArray();
-    expectations.expect(lockSchema13.value.at("title").asString() == "Bloom Dependency Lock 1.3" &&
-                            lockSchema13.value.at("$defs")
-                                    .at("fixedVersion")
-                                    .at("properties")
-                                    .at("minor")
-                                    .at("const")
-                                    .asNumber()
-                                    .spelling == "3" &&
-                            linkageEnum.size() == 4,
-                        "minor 3 schema records the version and the extended linkage vocabulary");
-    auto lockSchema14 = dependency::loadSchemaArtifact(
-        fixture.root / "dependencies/schemas/dependency-lock-1.4.schema.json");
-    dependency::validateSchemaArtifact(lockSchema14.value, dependency::ArtifactKind::LockV1_4);
-    const auto& prebuiltArchive = lockSchema14.value.at("$defs").at("prebuiltArchive");
+    const auto& prebuiltArchive = single.value.at("$defs").at("prebuiltArchive");
     expectations.expect(
-        lockSchema14.value.at("title").asString() == "Bloom Dependency Lock 1.4" &&
-            lockSchema14.value.at("$defs")
+        single.value.at("title").asString() == "Bloom Dependency Lock 1.0" &&
+            single.value.at("$defs")
                     .at("fixedVersion")
                     .at("properties")
                     .at("minor")
                     .at("const")
                     .asNumber()
-                    .spelling == "4" &&
-            lockSchema14.value.at("$defs").at("profileBuild").at("properties").find("prebuilt") !=
+                    .spelling == "0" &&
+            linkageEnum.size() == 4 &&
+            single.value.at("$defs").at("profileBuild").at("properties").find("prebuilt") !=
                 nullptr &&
-            prebuiltArchive.at("required").asArray().size() == 3 &&
-            lockSchema13.value.at("$defs").find("prebuiltArchive") == nullptr,
-        "minor 4 schema records the version and the prebuilt archive list; minor 3 has none");
+            prebuiltArchive.at("required").asArray().size() == 3,
+        "the one lock schema records version 1.0, the linkage vocabulary and the prebuilt list");
+
+    dependency::verifySchemaSet(fixture.root);
+    TemporaryDirectory schemaSet;
+    schemaSet.write("dependencies/schemas/dependency-lock-1.0.schema.json", "{}");
+    schemaSet.write("dependencies/schemas/prefix-manifest-1.0.schema.json", "{}");
+    dependency::verifySchemaSet(schemaSet.root());
+    schemaSet.write("dependencies/schemas/dependency-lock-1.1.schema.json", "{}");
+    expectations.rejects(
+        "schema-set", [&] { dependency::verifySchemaSet(schemaSet.root()); },
+        "a second lock schema version beside the one schema is refused");
+
     auto lockSchema = dependency::loadSchemaArtifact(
         fixture.root / "dependencies/schemas/dependency-lock-1.0.schema.json");
     replace(lockSchema.value.at("properties").at("schemaVersion"), "$ref", number(7));

@@ -51,7 +51,7 @@ if(BUILD_TESTING)
         LABELS quality schema dependencies unit
         TIMEOUT 30
     )
-    # The script that puts the lock's official binaries (schema 1.4 `prebuilt`) into the
+    # The script that puts the lock's official binaries (its `prebuilt` lists) into the
     # dependency prefix: it must refuse an archive whose checksum is not the lock's.
     bloom_add_test(
         NAME bloom.quality.prebuilt_fetch

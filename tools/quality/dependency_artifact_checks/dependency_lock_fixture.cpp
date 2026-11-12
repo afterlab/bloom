@@ -481,8 +481,7 @@ void validateComponent(const Value& value, const std::string& location,
     validateArtifactArray(license.at("copyrightFiles"), location + ".license.copyrightFiles",
                           context);
     validateArtifactArray(license.at("noticeFiles"), location + ".license.noticeFiles", context);
-    enumString(license.at("sourceObligation"),
-               {"none", "ship-corresponding-source", "ship-source-offer"},
+    enumString(license.at("sourceObligation"), {"none", "corresponding-source"},
                location + ".license.sourceObligation");
     const auto modified = booleanValue(license.at("modified"), location + ".license.modified");
     artifactReference(license.at("reviewRecord"), location + ".license.reviewRecord", context);
@@ -530,9 +529,9 @@ void validateComponent(const Value& value, const std::string& location,
                 "shippingRoles", "conformanceFixtureSets"},
                buildLocation);
         identifier(build.at("profileId"), buildLocation + ".profileId");
-        enumString(build.at("linkage"),
-                   {"dynamic", "static", "header-only", "executable", "data-only"},
-                   buildLocation + ".linkage");
+        const auto& linkage =
+            enumString(build.at("linkage"), {"static", "shared", "header-only", "executable"},
+                       buildLocation + ".linkage");
 
         const auto& options =
             array(build.at("cmakeOptions"), buildLocation + ".cmakeOptions", 8192);
@@ -577,8 +576,9 @@ void validateComponent(const Value& value, const std::string& location,
             capabilities, [](const Value& child) { return child.asString(); },
             buildLocation + ".capabilities");
 
-        const auto& roles =
-            array(build.at("shippingRoles"), buildLocation + ".shippingRoles", 8, 1);
+        // Only a build-only tool (linkage executable) may ship nothing.
+        const auto& roles = array(build.at("shippingRoles"), buildLocation + ".shippingRoles", 8,
+                                  linkage == "executable" ? 0 : 1);
         for (std::size_t roleIndex = 0; roleIndex < roles.size(); ++roleIndex) {
             enumString(roles[roleIndex],
                        {"library", "executable", "plugin", "data", "cmake-package", "license",

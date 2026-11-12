@@ -20,10 +20,6 @@ namespace bloom::quality::dependencies {
 
 enum class ArtifactKind {
     Lock,
-    LockV1_1,
-    LockV1_2,
-    LockV1_3,
-    LockV1_4,
     Prefix,
 };
 
@@ -67,6 +63,7 @@ struct CheckResult final {
 [[nodiscard]] auto encodeCanonical(const json::Value& value) -> std::string;
 
 void validateSchemaArtifact(const json::Value& value, ArtifactKind kind);
+void verifySchemaSet(const std::filesystem::path& root);
 [[nodiscard]] auto makeFixtureContext(const std::filesystem::path& root) -> FixtureContext;
 void validateLockFixture(const json::Value& value, const FixtureContext& context);
 void validatePrefixFixture(const json::Value& value, const json::Value& lock,

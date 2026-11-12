@@ -15,6 +15,24 @@ namespace bloom::quality::dependencies {
 
 using namespace detail;
 
+// One lock schema and one prefix-manifest schema, each at 1.0. No other file may sit beside them,
+// so a second schema version cannot come back unnoticed.
+void verifySchemaSet(const Path& root) {
+    std::error_code error;
+    for (const auto& entry :
+         std::filesystem::directory_iterator(root / Path{kSchemaDirectory}, error)) {
+        const auto name = entry.path().filename().string();
+        if (name != "dependency-lock-1.0.schema.json" &&
+            name != "prefix-manifest-1.0.schema.json") {
+            fail("schema-set", name,
+                 "the schema directory holds exactly the lock and prefix-manifest 1.0 schemas");
+        }
+    }
+    if (error) {
+        fail("schema-set", (root / Path{kSchemaDirectory}).string(), error.message());
+    }
+}
+
 auto checkRepository(const Path& inputRoot) -> CheckResult {
     std::error_code error;
     const auto root = std::filesystem::canonical(inputRoot, error);
@@ -23,17 +41,10 @@ auto checkRepository(const Path& inputRoot) -> CheckResult {
     }
     const std::array schemaArtifacts{
         std::tuple{ArtifactKind::Lock, "dependency-lock-1.0.schema.json",
-                   "a04c2bc037845234ac5232e79e6491e47bd889c34e4c8e77507549531d6afd3e"},
-        std::tuple{ArtifactKind::LockV1_1, "dependency-lock-1.1.schema.json",
-                   "d2048f3738012d8ce95ae1d681e6bf4f14f3b13b92e16affd4a10a890e8d6111"},
-        std::tuple{ArtifactKind::LockV1_2, "dependency-lock-1.2.schema.json",
-                   "4ba0732225df759b0cd579b28d1a70316c4fc243405311d28434c8d55c0fb174"},
-        std::tuple{ArtifactKind::LockV1_3, "dependency-lock-1.3.schema.json",
-                   "79f04697e1fb1322a6ef5f1e916fe705892778aa7205be7b3d3c71df35a6a22e"},
-        std::tuple{ArtifactKind::LockV1_4, "dependency-lock-1.4.schema.json",
-                   "5a64fd07078bc17e4b21cefe76a83f276da4921fd79e523ea2e0b313b0cc0f10"},
+                   "225504d96c57b1ec7fb3c2dc2de52ead52186d63ce6845c321c189a07cb77ee4"},
         std::tuple{ArtifactKind::Prefix, "prefix-manifest-1.0.schema.json",
                    "42d48bfadb647e295dd155a82ff3e873ffa63b7140615e6c122672fc7397046c"}};
+    verifySchemaSet(root);
     for (const auto& [kind, name, expectedDigest] : schemaArtifacts) {
         const auto schema = loadSchemaArtifact(root / Path{kSchemaDirectory} / name);
         if (digestHex(schema.encoded) != expectedDigest) {
@@ -59,14 +70,9 @@ auto checkRepository(const Path& inputRoot) -> CheckResult {
 }
 void validateSchemaArtifact(const Value& value, const ArtifactKind kind) {
     constexpr std::string_view draft = "https://json-schema.org/draft/2020-12/schema";
-    const auto* expectedId =
-        kind == ArtifactKind::Lock       ? "urn:afterlab:bloom:schema:dependency-lock:1.0"
-        : kind == ArtifactKind::LockV1_1 ? "urn:afterlab:bloom:schema:dependency-lock:1.1"
-        : kind == ArtifactKind::LockV1_2 ? "urn:afterlab:bloom:schema:dependency-lock:1.2"
-        : kind == ArtifactKind::LockV1_3 ? "urn:afterlab:bloom:schema:dependency-lock:1.3"
-        : kind == ArtifactKind::LockV1_4
-            ? "urn:afterlab:bloom:schema:dependency-lock:1.4"
-            : "urn:afterlab:bloom:schema:dependency-prefix-manifest:1.0";
+    const auto* expectedId = kind == ArtifactKind::Lock
+                                 ? "urn:afterlab:bloom:schema:dependency-lock:1.0"
+                                 : "urn:afterlab:bloom:schema:dependency-prefix-manifest:1.0";
     const auto* schema = value.find("$schema");
     const auto* id = value.find("$id");
     if (schema == nullptr || id == nullptr || !schema->isString() || !id->isString() ||
@@ -92,8 +98,7 @@ void validateSchemaArtifact(const Value& value, const ArtifactKind kind) {
             const auto& text = reference->asString();
             const bool allowed =
                 text.starts_with("#/") || (kind == ArtifactKind::Prefix &&
-                                           (text.starts_with("dependency-lock-1.0.schema.json#/") ||
-                                            text.starts_with("dependency-lock-1.1.schema.json#/")));
+                                           text.starts_with("dependency-lock-1.0.schema.json#/"));
             if (!allowed) {
                 fail("schema-ref", location + ".$ref", "reference is not repository-local");
             }
@@ -144,15 +149,7 @@ void validateSchemaArtifact(const Value& value, const ArtifactKind kind) {
 
     const auto* expectedValueDigest =
         kind == ArtifactKind::Lock
-            ? "2a6d32da79c344d889499e5db156a55c990a3a23da321419586714e006df5198"
-        : kind == ArtifactKind::LockV1_1
-            ? "f062116be3712cbfb7f80016926d255289af68ea6ddfb3060a6e930802d99d29"
-        : kind == ArtifactKind::LockV1_2
-            ? "1feacbc8a91dd223568a9d4f3a011cc2a6106cfc909a8071a4be5a4ef37ef9dc"
-        : kind == ArtifactKind::LockV1_3
-            ? "609e687993afa705f4629a41c58d6852ccbb64618854613cc21712f33c106437"
-        : kind == ArtifactKind::LockV1_4
-            ? "02248b9c5eaf9135c6f627ef4df2436f4b7b42b813370557274b7031be1a48a9"
+            ? "3b374c8918a0e0578b8d5a871dd995c64e2c0bc3d026709e02883f34e60010f9"
             : "cbe233295e066bc45c77fc71fa2c26aeedd2f2e5a932b8840bb23b7670533dce";
     if (digestHex(encodeCanonical(value)) != expectedValueDigest) {
         fail("schema-contract", "$", "schema value differs from the frozen artifact");

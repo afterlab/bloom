@@ -5,7 +5,7 @@
 #         -DBLOOM_DOWNLOAD_DIR=<archive cache> -DBLOOM_ALLOW_DOWNLOADS=<ON|OFF>
 #         [-DBLOOM_LIBRARY_ARCHIVES=<regex>] [-DBLOOM_CHECK_ONLY=ON] -P prebuilt-fetch.cmake
 #
-# The lock (schema 1.4) is the only place the archives are written: the component's build for the
+# The lock is the only place the archives are written: the component's build for the
 # profile of this operating system carries a `prebuilt` list, each entry one archive's HTTPS URL,
 # SHA-256 and size. Every archive is taken from the cache or, when downloads are allowed, from its
 # URL; its size and SHA-256 are compared with the lock before anything is unpacked, and an archive

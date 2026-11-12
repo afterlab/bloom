@@ -291,8 +291,8 @@ void validateProductionRuntimeFetch(const Value& runtime, const std::string& loc
     verifyProductionArtifactReference(license.at("text"), location + ".license.text", root);
 }
 
-// The official upstream binaries a profile takes instead of building the component (lock schema
-// 1.4). Each entry is one archive: where it is published, its SHA-256 and its size. Whoever
+// The official upstream binaries a profile takes instead of building the component (the
+// profile build's optional prebuilt list). Each entry is one archive: where it is published, its SHA-256 and its size. Whoever
 // fetches an archive compares both before unpacking it; the checker holds the record to a shape
 // that comparison can rely on.
 void validateProductionPrebuilt(const Value& prebuilt, const std::string& location,
@@ -323,8 +323,7 @@ void validateProductionPrebuilt(const Value& prebuilt, const std::string& locati
         archives, [](const Value& child) { return child.at("url").asString(); }, location);
 }
 
-void validateComponentProduction(const Value& value, const std::string& location, const Path& root,
-                                 const bool buildOnlyLinkage, const bool prebuiltArchives) {
+void validateComponentProduction(const Value& value, const std::string& location, const Path& root) {
     objectWithOptionalMembers(value,
                               {{"name", false},
                                {"version", false},
@@ -454,7 +453,6 @@ void validateComponentProduction(const Value& value, const std::string& location
     for (std::size_t index = 0; index < builds.size(); ++index) {
         const auto buildLocation = location + ".profileBuilds[" + std::to_string(index) + ']';
         const auto& build = builds[index];
-        // The prebuilt list exists from minor 4 on; an earlier lock stays closed to it.
         objectWithOptionalMembers(build,
                                   {{"profileId", false},
                                    {"linkage", false},
@@ -466,20 +464,14 @@ void validateComponentProduction(const Value& value, const std::string& location
                                    {"prebuilt", true}},
                                   buildLocation);
         if (const auto* prebuilt = build.find("prebuilt"); prebuilt != nullptr) {
-            if (!prebuiltArchives) {
-                fail("prebuilt", buildLocation + ".prebuilt",
-                     "binary archives are recorded from lock schema 1.4 on");
-            }
             validateProductionPrebuilt(
                 *prebuilt, buildLocation + ".prebuilt",
                 build.at("linkage").isString() ? build.at("linkage").asString() : std::string{});
         }
         identifier(build.at("profileId"), buildLocation + ".profileId");
         const auto& linkage =
-            buildOnlyLinkage
-                ? enumString(build.at("linkage"), {"static", "shared", "header-only", "executable"},
-                             buildLocation + ".linkage")
-                : enumString(build.at("linkage"), {"static", "shared"}, buildLocation + ".linkage");
+            enumString(build.at("linkage"), {"static", "shared", "header-only", "executable"},
+                       buildLocation + ".linkage");
 
         const auto& options =
             array(build.at("cmakeOptions"), buildLocation + ".cmakeOptions", 8192);
@@ -527,9 +519,8 @@ void validateComponentProduction(const Value& value, const std::string& location
             buildLocation + ".capabilities");
 
         // Empty shippingRoles is honest only for a non-shipping build-only tool (linkage
-        // executable) and only where the schema version admits that vocabulary. Every other kind
-        // still declares at least one shipped role.
-        const std::size_t minimumRoles = buildOnlyLinkage && linkage == "executable" ? 0 : 1;
+        // executable). Every other kind still declares at least one shipped role.
+        const std::size_t minimumRoles = linkage == "executable" ? 0 : 1;
         const auto& roles =
             array(build.at("shippingRoles"), buildLocation + ".shippingRoles", 8, minimumRoles);
         for (std::size_t roleIndex = 0; roleIndex < roles.size(); ++roleIndex) {
@@ -704,20 +695,12 @@ void validateProductionLockDocument(const Value& value, const Path& root) {
     }
     const auto& version = value.at("schemaVersion");
     object(version, {"major", "minor"}, "$.schemaVersion");
+    // The version is read exactly, never inferred: any other version is rejected rather than
+    // read under a looser contract.
     if (!version.at("major").isNumber() || version.at("major").asNumber().spelling != "1" ||
-        !version.at("minor").isNumber() ||
-        (version.at("minor").asNumber().spelling != "2" &&
-         version.at("minor").asNumber().spelling != "3" &&
-         version.at("minor").asNumber().spelling != "4")) {
-        fail("version", "$.schemaVersion", "expected exact version 1.2, 1.3 or 1.4");
+        !version.at("minor").isNumber() || version.at("minor").asNumber().spelling != "0") {
+        fail("version", "$.schemaVersion", "expected exact version 1.0");
     }
-    // Minor 3 admits the honest header-only and executable linkage vocabulary; minor 2 remains
-    // frozen to static/shared. The version is read exactly, never inferred, and an unknown minor
-    // is rejected above rather than falling back to a looser contract.
-    // Minor 4 keeps that vocabulary and adds the prebuilt list of a profile build.
-    const bool prebuiltArchives = version.at("minor").asNumber().spelling == "4";
-    const bool buildOnlyLinkage =
-        prebuiltArchives || version.at("minor").asNumber().spelling == "3";
 
     validateProductionUnicodeProfile(value.at("unicodeProfile"));
 
@@ -731,8 +714,7 @@ void validateProductionLockDocument(const Value& value, const Path& root) {
     const auto& components = array(value.at("components"), "$.components", 4096, 1);
     for (std::size_t index = 0; index < components.size(); ++index) {
         validateComponentProduction(components[index],
-                                    "$.components[" + std::to_string(index) + ']', root,
-                                    buildOnlyLinkage, prebuiltArchives);
+                                    "$.components[" + std::to_string(index) + ']', root);
     }
     requireOrdered(
         components, [](const Value& child) { return child.at("name").asString(); }, "$.components");

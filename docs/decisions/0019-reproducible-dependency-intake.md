@@ -4,6 +4,10 @@ Status: accepted
 
 Date: 2026-08-25
 
+Note (2026-11-12): the dependency lock now has one schema, version `1.0`, holding every reviewed
+member of the earlier lock versions. The lock schema versions this record mentions were removed;
+see [dependency intake](../architecture/dependency-intake.md).
+
 ## Context
 
 Bloom distributes a native application on Linux, macOS, and Windows and depends on Qt and an

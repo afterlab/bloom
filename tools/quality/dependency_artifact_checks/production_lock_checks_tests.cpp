@@ -42,7 +42,7 @@ void replace(Value& objectValue, const std::string_view key, Value replacement) 
 constexpr std::string_view kSyntheticEvidenceBytes =
     "synthetic evidence bytes for the production lock validator\n";
 constexpr std::string_view kFrozenLockIdentity =
-    "sha256:1ae4f153d180232bd17a2f3f1912dc3984bcf089ce2a4e517bc09a9472a6fce8";
+    "sha256:d80aeac5a8239e2c448f856a56ab3409bdc0fbe77de3b82a596ea62460ffe009";
 
 [[nodiscard]] auto evidenceDigest() -> std::string {
     return dependency::sha256DigestText(kSyntheticEvidenceBytes);
@@ -73,7 +73,7 @@ constexpr std::string_view kFrozenLockIdentity =
 [[nodiscard]] auto minimalProductionLock() -> Value {
     return object(
         {{"format", text("id.afterlab.bloom.dependencies.lock")},
-         {"schemaVersion", object({{"major", number(1)}, {"minor", number(2)}})},
+         {"schemaVersion", object({{"major", number(1)}, {"minor", number(0)}})},
          {"unicodeProfile", unicodeProfile()},
          {"profiles",
           array({object(
@@ -386,11 +386,10 @@ void testCrossReferencesAndSets(const Path& repositoryRoot, Expectations& expect
                         "ordered sets remain duplicate-free");
 }
 
-void testMinorThreeBuildOnlyLinkage(const Path& repositoryRoot, Expectations& expectations) {
+void testBuildOnlyLinkage(const Path& repositoryRoot, Expectations& expectations) {
     const ProductionFixture fixture(repositoryRoot);
 
     auto headerOnly = minimalProductionLock();
-    replace(headerOnly.at("schemaVersion"), "minor", number(3));
     auto& headerBuild =
         headerOnly.at("components").asArray().front().at("profileBuilds").asArray().front();
     replace(headerBuild, "linkage", text("header-only"));
@@ -399,10 +398,9 @@ void testMinorThreeBuildOnlyLinkage(const Path& repositoryRoot, Expectations& ex
                             dependency::encodeCanonical(headerOnly));
     const auto acceptedHeaderOnly = dependency::validateProductionLock(fixture.temporary.root());
     expectations.expect(acceptedHeaderOnly.present,
-                        "minor 3 accepts header-only linkage with a declared shipping role");
+                        "header-only linkage is accepted with a declared shipping role");
 
     auto executable = minimalProductionLock();
-    replace(executable.at("schemaVersion"), "minor", number(3));
     auto& toolBuild =
         executable.at("components").asArray().front().at("profileBuilds").asArray().front();
     replace(toolBuild, "linkage", text("executable"));
@@ -411,48 +409,37 @@ void testMinorThreeBuildOnlyLinkage(const Path& repositoryRoot, Expectations& ex
                             dependency::encodeCanonical(executable));
     const auto acceptedExecutable = dependency::validateProductionLock(fixture.temporary.root());
     expectations.expect(acceptedExecutable.present,
-                        "minor 3 accepts a build-only executable with empty shipping roles");
-
-    auto headerOnlyAt12 = headerOnly;
-    replace(headerOnlyAt12.at("schemaVersion"), "minor", number(2));
-    fixture.rejectsWith(headerOnlyAt12, "enum", expectations,
-                        "minor 2 rejects header-only linkage");
-
-    auto executableAt12 = executable;
-    replace(executableAt12.at("schemaVersion"), "minor", number(2));
-    fixture.rejectsWith(executableAt12, "enum", expectations, "minor 2 rejects executable linkage");
+                        "a build-only executable is accepted with empty shipping roles");
 
     auto emptyNonExecutable = minimalProductionLock();
-    replace(emptyNonExecutable.at("schemaVersion"), "minor", number(3));
     auto& emptyBuild =
         emptyNonExecutable.at("components").asArray().front().at("profileBuilds").asArray().front();
     replace(emptyBuild, "linkage", text("header-only"));
     replace(emptyBuild, "shippingRoles", array({}));
     fixture.rejectsWith(emptyNonExecutable, "count", expectations,
-                        "minor 3 requires a shipping role for every non-executable linkage");
+                        "every non-executable linkage requires a shipping role");
 
-    auto emptyAt12 = minimalProductionLock();
-    replace(emptyAt12.at("components").asArray().front().at("profileBuilds").asArray().front(),
+    auto emptyStatic = minimalProductionLock();
+    replace(emptyStatic.at("components").asArray().front().at("profileBuilds").asArray().front(),
             "shippingRoles", array({}));
-    fixture.rejectsWith(emptyAt12, "count", expectations,
-                        "minor 2 rejects empty shipping roles for static linkage");
+    fixture.rejectsWith(emptyStatic, "count", expectations,
+                        "static linkage requires a shipping role");
 
     auto unknownLinkage = minimalProductionLock();
-    replace(unknownLinkage.at("schemaVersion"), "minor", number(3));
     replace(unknownLinkage.at("components").asArray().front().at("profileBuilds").asArray().front(),
             "linkage", text("dynamic"));
     fixture.rejectsWith(unknownLinkage, "enum", expectations,
-                        "minor 3 rejects an unknown linkage kind");
+                        "an unknown linkage kind is rejected");
 
     auto unknownMinor = minimalProductionLock();
-    replace(unknownMinor.at("schemaVersion"), "minor", number(5));
+    replace(unknownMinor.at("schemaVersion"), "minor", number(1));
     fixture.rejectsWith(unknownMinor, "version", expectations,
-                        "an unknown schema minor is rejected rather than loosened");
+                        "any version but 1.0 is rejected rather than loosened");
 }
 
-// Minor 4: a profile build may name the official binary archives it takes instead of building the
-// component. Each is an HTTPS URL, a SHA-256 and a size; an earlier minor stays closed to the list.
-void testMinorFourPrebuiltArchives(const Path& repositoryRoot, Expectations& expectations) {
+// A profile build may name the official binary archives it takes instead of building the
+// component. Each is an HTTPS URL, a SHA-256 and a size.
+void testPrebuiltArchives(const Path& repositoryRoot, Expectations& expectations) {
     const ProductionFixture fixture(repositoryRoot);
     const auto archive = [](const std::string_view url, const std::string_view digest,
                             const std::uint64_t size) {
@@ -461,9 +448,8 @@ void testMinorFourPrebuiltArchives(const Path& repositoryRoot, Expectations& exp
                        {"archiveSizeBytes", number(size)}});
     };
     const auto digestA = "sha256:" + std::string(64, 'a');
-    const auto withPrebuilt = [](Value archives, const std::uint64_t minor = 4) {
+    const auto withPrebuilt = [](Value archives) {
         auto lock = minimalProductionLock();
-        replace(lock.at("schemaVersion"), "minor", number(minor));
         auto& build = lock.at("components").asArray().front().at("profileBuilds").asArray().front();
         replace(build, "linkage", text("shared"));
         build.asObject().emplace_back("prebuilt", std::move(archives));
@@ -476,11 +462,8 @@ void testMinorFourPrebuiltArchives(const Path& repositoryRoot, Expectations& exp
     fixture.temporary.write("dependencies/dependencies.lock.json",
                             dependency::encodeCanonical(accepted));
     expectations.expect(dependency::validateProductionLock(fixture.temporary.root()).present,
-                        "minor 4 accepts a shared build with ordered binary archives");
+                        "a shared build with ordered binary archives is accepted");
 
-    fixture.rejectsWith(
-        withPrebuilt(array({archive("https://example.invalid/a.7z", digestA, 10)}), 3), "prebuilt",
-        expectations, "minor 3 stays closed to the prebuilt list");
     // A checksum that is not a whole SHA-256 is refused where it is recorded; a whole one that is
     // not the archive's is refused where the archive is fetched (the
     // bloom.quality.prebuilt_fetch test).
@@ -612,8 +595,8 @@ auto runProductionLockTests(const std::filesystem::path& repositoryRoot) -> int 
     testArtifactReferenceDigests(repositoryRoot, expectations);
     testPatchRules(repositoryRoot, expectations);
     testCrossReferencesAndSets(repositoryRoot, expectations);
-    testMinorThreeBuildOnlyLinkage(repositoryRoot, expectations);
-    testMinorFourPrebuiltArchives(repositoryRoot, expectations);
+    testBuildOnlyLinkage(repositoryRoot, expectations);
+    testPrebuiltArchives(repositoryRoot, expectations);
     testRecipeConfigureArguments(repositoryRoot, expectations);
     testSecurityReleaseTracking(repositoryRoot, expectations);
     return expectations.failures();

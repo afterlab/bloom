@@ -18,8 +18,8 @@ profiles remain unqualified until they pass the gates below. The version 1 artif
 identity, resource, and qualification rules below are frozen; production component values and
 Unicode digests remain pending verified intake and must not be fabricated to populate the shape.
 
-Implementation status: the two exact Draft 2020-12 lock/prefix schema families, including reviewed
-lock schemas 1.2, 1.3 and 1.4, the offline checker for synthetic contract fixtures, and production lock
+Implementation status: the two exact Draft 2020-12 schemas, one lock schema and one prefix-manifest
+schema, each at version 1.0, the offline checker for synthetic contract fixtures, and production lock
 validation are implemented — including the reviewed Unicode 15.1 bootstrap tables with two-source
 digest equality, repository-artifact digest binding, and an ASCII-strict v1 string tightening that
 defers NFC machinery. The reviewed production lock contains the static baseline and FFmpeg 8.1.2,
@@ -61,9 +61,9 @@ not change: the normal root CMake build must not contain a parallel web of `Exte
 The production lock path is exactly `dependencies/dependencies.lock.json`. A qualified prefix
 contains its manifest at exactly
 `share/bloom/dependencies/prefix-manifest-v1.json`, relative to the prefix root. Schema artifacts
-live at `dependencies/schemas/dependency-lock-1.1.schema.json` and
-`dependencies/schemas/prefix-manifest-1.0.schema.json`. None of those paths may be redirected by a
-value inside an artifact.
+live at `dependencies/schemas/dependency-lock-1.0.schema.json` and
+`dependencies/schemas/prefix-manifest-1.0.schema.json`, and the directory holds nothing else. None
+of those paths may be redirected by a value inside an artifact.
 
 `dependencies/tests/fixtures/` is reserved for synthetic schema, canonical-byte, and hostile-input
 fixtures. A file below that directory is never a production lock, prefix, provenance record, or
@@ -109,7 +109,7 @@ and artifact-reference paths are at most 4,096 UTF-8 bytes and non-empty unless 
 explicitly nullable. The absolute decoded-string ceiling remains 1 MiB.
 
 The schemas use JSON Schema Draft 2020-12 with absolute IDs
-`urn:afterlab:bloom:schema:dependency-lock:1.1` and
+`urn:afterlab:bloom:schema:dependency-lock:1.0` and
 `urn:afterlab:bloom:schema:dependency-prefix-manifest:1.0`. They use repository-local `$ref` values,
 declare every required member, set `unevaluatedProperties: false` on every object, and carry the
 closed lexical, enum, and count constraints expressible in that dialect. A standard-library-only
@@ -118,37 +118,30 @@ it never resolves a remote meta-schema. Member order, canonical bytes, Unicode t
 cross-record equality, graph closure, and filesystem evidence remain explicit checker rules rather
 than claims delegated to JSON Schema.
 
-Lock schema 1.1 retains the v1 canonical ordering rules while permitting the reviewed optional
-component fields needed by non-CMake and shared-library dependencies: exact `configureArguments`,
-source archive size/retrieval date, `shared` linkage, and corresponding-source archive digest.
-Components that do not need those fields continue to use the 1.0-compatible static shape.
+There is one lock schema, version 1.0; a lock at any other version is refused rather than read
+under a looser contract, and `tools/quality/generate_dependency_lock` always writes 1.0. Beside
+the members every component carries, the schema admits these reviewed optional members:
 
-Lock schema 1.3 is the minimal honest-vocabulary extension. It copies the 1.2 shape, ordering,
-limits, and closure unchanged and alters only the `profileBuild` contract: `linkage` gains
-`header-only` (for a header/data-only dependency whose install is headers, registry data, and a
-CMake package config) and `executable` (for a non-shipping build- or qualify-time tool).
-`shippingRoles` may be an empty array only for `executable` linkage; every other linkage still
-declares at least one role. Empty roles mean the tool's installed binary is build/qualification
-support and is not part of the end-user application package; they do not exempt any installed file
-from the prefix inventory and they make no qualified-prefix claim. A reviewed executable tool that
-is a genuine runtime product instead declares its real roles: the pinned `glslangValidator` and
-`spirv-val` GPU color-compilation tools record `["executable", "license"]`, ship beside the
-desktop, CLI, and MCP executables through `cmake/BloomGpuShaderTools.cmake`, and travel with their
-reviewed license texts and a generated digest inventory rather than claiming build-only status. The frozen 1.0, 1.1, and 1.2
-schema bytes are unchanged, and a 1.2 lock remains closed to the new enums. The generator selects
-1.3 the moment a reviewed record carries a header-only or executable linkage and never downgrades
-an existing 1.3.
-
-Lock schema 1.4 adds one optional member to the `profileBuild` contract and changes nothing else:
-`prebuilt`, for a component a profile takes as official upstream binaries instead of building it.
-It is a non-empty array of at most 64 archives, ordered by URL and free of duplicates; each entry
-is a closed object with the archive's HTTPS `url`, its `archiveSha256` and its `archiveSizeBytes`
-(greater than zero). A build that carries the list has `shared` or `executable` linkage: official
-binaries are used as published and never relinked. The component's `source` record stays the
-exact source archive the binaries were built from, so the license, provenance and
-corresponding-source rules apply to it unchanged. The frozen 1.0 to 1.3 schema bytes are
-unchanged and a 1.3 lock remains closed to the list. The generator selects 1.4 the moment a
-profile build carries `prebuilt` and never downgrades an existing 1.4.
+- On a component: exact `configureArguments` (for a non-CMake build), source archive size and
+  retrieval date, the corresponding-source archive digest, and `runtimeFetch` (below).
+- In a `profileBuild`: `linkage` is `static`, `shared`, `header-only` (for a header/data-only
+  dependency whose install is headers, registry data, and a CMake package config) or `executable`
+  (for a build- or qualify-time tool). `shippingRoles` may be an empty array only for `executable`
+  linkage; every other linkage declares at least one role. Empty roles mean the tool's installed
+  binary is build/qualification support and is not part of the end-user application package; they
+  do not exempt any installed file from the prefix inventory and they make no qualified-prefix
+  claim. A reviewed executable tool that is a genuine runtime product instead declares its real
+  roles: the pinned `glslangValidator` and `spirv-val` GPU color-compilation tools record
+  `["executable", "license"]`, ship beside the desktop, CLI, and MCP executables through
+  `cmake/BloomGpuShaderTools.cmake`, and travel with their reviewed license texts and a generated
+  digest inventory rather than claiming build-only status.
+- In a `profileBuild`: `prebuilt`, for a component a profile takes as official upstream binaries
+  instead of building it. It is a non-empty array of at most 64 archives, ordered by URL and free
+  of duplicates; each entry is a closed object with the archive's HTTPS `url`, its
+  `archiveSha256` and its `archiveSizeBytes` (greater than zero). A build that carries the list has
+  `shared` or `executable` linkage: official binaries are used as published and never relinked.
+  The component's `source` record stays the exact source archive the binaries were built from, so
+  the license, provenance and corresponding-source rules apply to it unchanged.
 
 Whoever fetches a `prebuilt` archive compares its size and SHA-256 with the lock before
 unpacking it. `dependencies/superbuild/projects/prebuilt-fetch.cmake` does this for the
@@ -157,7 +150,7 @@ a wrong size or missing from an offline cache is refused and nothing is unpacked
 
 ### Runtime-fetched binary components
 
-Lock schema 1.2 adds the optional `runtimeFetch` record for a component whose distributable binary
+The optional `runtimeFetch` record is for a component whose distributable binary
 must be obtained by the end user's machine. It binds an HTTPS URL pattern, per-platform archive
 and decompressed-library SHA-256 values, the installed library name, and the vendor license
 artifact. The generated lock is still the only production lock; records under
@@ -508,8 +501,7 @@ list are shown from the `LICENSE` file in their own folder.
 
 `operatingSystem` is `linux`, `macos`, or `windows`; `architecture` is `x86_64` or `aarch64`;
 `buildConfiguration` is `debug` or `release`; `cxxRuntimeLinkage` is `dynamic` or `static`; component
-`linkage` is `static` or `shared` under lock schemas 1.0–1.2, and schemas 1.3 and 1.4 additionally
-admit `header-only` and `executable`; `shippingRoles` is a set drawn from `library`, `executable`,
+`linkage` is `static`, `shared`, `header-only`, or `executable`; `shippingRoles` is a set drawn from `library`, `executable`,
 `plugin`, `data`, `cmake-package`, `license`, `notice`, and `source`. It must contain at least one
 role for every linkage except `executable`, where the empty array is the honest record of a
 non-shipping build-only tool. `sourceObligation` is `none` or `corresponding-source`.
