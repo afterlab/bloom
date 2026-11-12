@@ -548,6 +548,13 @@ that none was built for a newer system than the bundle declares; there is no Dev
 signature or notarization, so a copy downloaded from the internet is stopped by Gatekeeper until
 the person opening it allows it.
 
+The macOS package is that bundle as `Bloom-<version>-macos-arm64.zip`
+(`bloom-package-archives`, made with the system's `ditto` so the links inside the frameworks
+and the signatures survive). `bloom-cli` and `bloom-mcp` are inside it, in `Contents/MacOS`.
+The 0.1.0 zip was unpacked into a second folder with a space in its name on the Mac that built
+it: the signature verifies, and the package check with a run passes there with only the
+system's directories on `PATH`. A second Mac was not available.
+
 The bundle declares Bloom's project document (`.bloom`, type `org.kinetik.bloom.project`), so
 the Finder offers Bloom for a project file. When a project is double-clicked, dropped on the
 Dock icon or chosen with Open With, the system sends the application a file-open event, at

@@ -307,6 +307,22 @@ if(APPLE)
                 add_dependencies(bloom-deploy-macos ${bloom_bundle_part})
             endif()
         endforeach()
+        # The published form of the macOS package: the deployed bundle as a zip, made by the
+        # system's ditto so the links inside the frameworks and the signatures survive.
+        if(bloom_bundle_complete)
+            string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" bloom_zip_processor)
+            set(bloom_macos_zip
+                "${CMAKE_BINARY_DIR}/package/Bloom-${PROJECT_VERSION}-macos-${bloom_zip_processor}.zip")
+            add_custom_target(
+                bloom-package-archives
+                COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/package"
+                COMMAND ${CMAKE_COMMAND} -E rm -f "${bloom_macos_zip}"
+                COMMAND ditto -c -k --keepParent "$<TARGET_BUNDLE_DIR:bloom>" "${bloom_macos_zip}"
+                COMMENT "Making the zip of the deployed Bloom.app"
+                VERBATIM
+            )
+            add_dependencies(bloom-package-archives bloom-deploy-macos)
+        endif()
     endif()
 endif()
 
