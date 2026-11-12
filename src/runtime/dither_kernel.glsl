@@ -14,12 +14,13 @@
 // The table, in floats:
 //   0  the amplitude in the domain's units (amount / (2^bits - 1)), the domain (0 Display, 1 Stored),
 //      the pattern's side n, 1 / (n * n)
-//   4  red's shift x, shift y and rank rotation, 0; 8 green's; 12 blue's (Monochrome: red's three times)
+//   4  red's shift x, shift y and rank rotation, then the target depth's steps 2^bits - 1;
+//      8 green's three, 0; 12 blue's three, 0 (Monochrome: red's three times)
 //  16  the data window's origin x + 0.5 and y + 0.5, 1 / scale x and 1 / scale y (the geometry)
 //  20  the pattern's n * n ranks, row major
 
 const int BDK_RANKS = 20;
-// A straight value beyond this (the largest half float) passes unchanged in the Display domain.
+// A straight value beyond this (the largest half float) passes unchanged.
 const float BDK_DISPLAY_LIMIT = 65504.0f;
 
 // 2^x for x in [-126, 126] (clamped): 2^floor(x) times a degree-9 polynomial of the fraction
@@ -130,25 +131,37 @@ BDK_FN BDK_P float bdk_threshold(int x, int y, int channel) {
     return r;
 }
 
-// One premultiplied colour channel `v` of a pixel with alpha `a` and centred threshold `n`.
+// `m` in the domain's units snapped to the nearest level of the target depth, floor(m s + 1/2) / s
+// with s = 2^bits - 1 (#676): the quantization the threshold breaks into fine noise.
+BDK_FN BDK_P float bdk_quantize(float m) {
+    BDK_P float steps = bdk_data(7);
+    BDK_P float scaled = m * steps;
+    BDK_P float lifted = scaled + 0.5f;
+    BDK_P float level = floor(lifted);
+    BDK_P float r = bdk_div(level, steps);
+    return r;
+}
+
+// One premultiplied colour channel `v` of a pixel with alpha `a` and centred threshold `n`: the
+// threshold is added to the straight value in the domain's units and the sum is quantized to the
+// target depth, then premultiplied again (#676). Amplitude 0 quantizes without dither.
 BDK_FN BDK_P float bdk_channel(float v, float a, float n) {
     BDK_P float amount = n * bdk_data(0);
-    // Nothing to add leaves the value exactly as it is (amplitude 0 is the identity).
-    if (amount == 0.0f)
-        return v;
-    if (bdk_data(1) != 0.0f) {
-        // Stored: the amplitude in the stored (working-space) value, in proportion to alpha.
-        BDK_P float scaled = amount * a;
-        BDK_P float r = v + scaled;
-        return r;
-    }
-    // Display: added to the straight value's sRGB encoding, then decoded and premultiplied again.
     BDK_P float s = bdk_div(v, a);
     if (!(abs(s) <= BDK_DISPLAY_LIMIT))
         return v;
+    if (bdk_data(1) != 0.0f) {
+        // Stored: in the stored (working-space) value.
+        BDK_P float moved = s + amount;
+        BDK_P float q = bdk_quantize(moved);
+        BDK_P float r = q * a;
+        return r;
+    }
+    // Display: in the straight value's sRGB encoding, then decoded.
     BDK_P float e = bdk_encode(s);
     BDK_P float moved = e + amount;
-    BDK_P float d = bdk_decode(moved);
+    BDK_P float q = bdk_quantize(moved);
+    BDK_P float d = bdk_decode(q);
     BDK_P float r = d * a;
     return r;
 }

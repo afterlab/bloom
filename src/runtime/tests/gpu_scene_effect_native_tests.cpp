@@ -18,6 +18,7 @@
 #include "compositing_recipe_test_support.hpp"
 #include "denoise_test_support.hpp"
 #include "depth_effect_test_support.hpp"
+#include "dither_image_effect.hpp"
 #include "dither_test_support.hpp"
 #include "film_grain_test_support.hpp"
 #include "histogram_test_support.hpp"
@@ -3416,14 +3417,124 @@ void runFilmGrains(Expectations& expectations, GpuDevice& device, GpuSceneCache&
     }
 }
 
-// #527 Dither against the CPU oracle (2e-6, exact alpha): the default blue noise, a strong dither,
-// Bayer 2, 4, 8 and 16, 10, 12 and 16 bit, the stored value, Monochrome and Held, a half-scale proxy,
+// #527 Dither against the CPU oracle (2e-6, exact alpha; #676 over the input the device gave it,
+// ditherParity): the default blue noise, a strong dither,
+// Bayer 2, 4, 8 and 16, 10, 12 and 16 bit, the node's default 4 bit and 1 bit (#676), the stored value, Monochrome and Held, a half-scale proxy,
 // a region of interest and 512 x 384 frames of both patterns; warm RAM reuse with zero dispatches; the
 // next two frames each a new placement with parity (Held the same pixels with no dispatch); a changed
 // amplitude re-running with parity; a toggle of Monochrome redrawing while each state keeps its own
 // cache entry. Then the lifecycle: a scene beyond the byte budget refused with nothing pinned, a
 // cancelled scene that publishes nothing and retires every submission, and the executor running the
 // scene afterwards with parity.
+// #676 Dither quantizes, so it amplifies a difference in its input: the generated gradient the
+// harness feeds it matches the CPU within the 2e-6 gate, not bit for bit, and where the device's
+// gradient pixel is an ulp from the CPU's, the quantized value can land one level apart. The node is
+// still held to its CPU reference exactly. `expected` is the CPU dither kernel (ditherPixel, the
+// reference the CPU evaluator runs) over each pixel's input: the CPU's input where the device's is
+// bit-identical, the device's own input where it is not. The reconstruction over the CPU's input
+// must first reproduce the CPU oracle at the strict gate on every pixel (so the frame, placement and
+// geometry are the oracle's), then the device must match `expected` at that same gate.
+struct DitherInputs final {
+    std::vector<Rgba32f> device;
+    std::vector<Rgba32f> cpu;
+};
+
+[[nodiscard]] bool ditherParity(const std::vector<Rgba32f>& actual,
+                                const std::span<const Rgba32f> oracle, const DitherInputs& inputs,
+                                const bloom::dither_test::DitherSettings& settings,
+                                const std::uint64_t idBase, const std::int64_t frame,
+                                const ImageWindow& dataWindow, const double scale,
+                                std::string& detail) {
+    const auto count = oracle.size();
+    if (actual.size() != count || inputs.device.size() != count || inputs.cpu.size() != count) {
+        detail = "size";
+        return false;
+    }
+    const auto kernel = bloom::dither_test::ditherKernel(settings, idBase + 100);
+    const auto operands = bloom::dither_test::ditherOperands(settings, static_cast<double>(frame));
+    const auto grade = bloom::runtime::detail::prepareDitherGrade(kernel, operands);
+    const auto table =
+        grade ? bloom::runtime::detail::ditherProgramData(*grade, dataWindow, scale, scale)
+              : std::nullopt;
+    if (!table) {
+        detail = "the dither table prepares";
+        return false;
+    }
+    const auto width = static_cast<std::size_t>(dataWindow.extent().width());
+    const auto run = [&](const Rgba32f& in, const std::size_t i, Rgba32f& out) {
+        std::array<float, 4> p{in.red(), in.green(), in.blue(), in.alpha()};
+        if (!bloom::runtime::detail::ditherPixel(*table, static_cast<std::int64_t>(i % width),
+                                                 static_cast<std::int64_t>(i / width), p))
+            return false;
+        const auto pixel = Rgba32f::fromPremultiplied(p[0], p[1], p[2], p[3]);
+        if (!pixel)
+            return false;
+        out = *pixel.value();
+        return true;
+    };
+    std::vector<Rgba32f> reconstructed(oracle.begin(), oracle.end());
+    std::vector<Rgba32f> expected(oracle.begin(), oracle.end());
+    std::size_t differing = 0;
+    for (std::size_t i = 0; i < count; ++i) {
+        if (!run(inputs.cpu[i], i, reconstructed[i])) {
+            detail = "the CPU kernel runs at " + std::to_string(i);
+            return false;
+        }
+        const auto& d = inputs.device[i].components();
+        const auto& c = inputs.cpu[i].components();
+        if (std::equal(d.begin(), d.end(), c.begin()) &&
+            inputs.device[i].alpha() == inputs.cpu[i].alpha())
+            continue;
+        ++differing;
+        if (!run(inputs.device[i], i, expected[i])) {
+            detail = "the CPU kernel runs over the device input at " + std::to_string(i);
+            return false;
+        }
+    }
+    std::string reconstruction;
+    if (!parity(reconstructed, oracle, reconstruction, AlphaGate::Exact)) {
+        detail = "the CPU kernel reproduces the CPU oracle: " + reconstruction;
+        return false;
+    }
+    if (!parity(actual, expected, detail, AlphaGate::Exact)) {
+        detail += " (" + std::to_string(differing) + " input pixels not bit-identical)";
+        return false;
+    }
+    return true;
+}
+
+// The Dither's input on the device and on the CPU: the same plan without the Dither, same request.
+[[nodiscard]] std::optional<DitherInputs>
+ditherInputs(GpuDevice& device, const CpuCompositionEvaluator& evaluator,
+             const CpuGpuSceneBuilder& builder,
+             const bloom::dither_test::DitherSettings& settings, const std::uint64_t idBase,
+             const std::uint32_t width, const std::uint32_t height,
+             const EvaluationRequest& request) {
+    const auto plan = bloom::dither_test::ditherPlan(settings, idBase, width, height, false);
+    auto inputRequest = request;
+    inputRequest.output = plan->output();
+    auto oracleRequest = inputRequest;
+    oracleRequest.bypassOperationCache = true;
+    const auto cpu = evaluator.evaluate(plan, oracleRequest, {});
+    const auto prepared = builder.build(plan, inputRequest);
+    auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{});
+    if (!cpu.frame() || !prepared || !cache) {
+        std::cerr << "dither input: cpu=" << (cpu.frame() != nullptr) << " prepared=" << bool(prepared)
+                  << " cache=" << cache.hasValue() << '\n';
+        return std::nullopt;
+    }
+    auto executor = GpuSceneExecutor::create(device, *cache.cache);
+    if (!executor)
+        return std::nullopt;
+    auto run = runScene(*executor.executor, prepared.scene);
+    if (run.pollResult != GpuSceneExecutorPollResult::Ready) {
+        std::cerr << "dither input: run code=" << static_cast<int>(run.code) << '\n';
+        return std::nullopt;
+    }
+    const auto pixels = cpu.frame()->processImage().pixels();
+    return DitherInputs{std::move(run.pixels), {pixels.begin(), pixels.end()}};
+}
+
 void runDithers(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
     using bloom::dither_test::DitherSettings;
     using bloom::dither_test::everyPath;
@@ -3470,6 +3581,12 @@ void runDithers(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
         held.everyFrame = false;
         cases.push_back({held, "held"});
     }
+    // #676: the node's default 4-bit target and the coarsest, 1 bit, quantize visibly.
+    for (const auto bits : {4, 1}) {
+        DitherSettings coarse;
+        coarse.bits = bits;
+        cases.push_back({coarse, bits == 4 ? "4 bit (the node's default)" : "1 bit"});
+    }
     cases.push_back({everyPath(), "a half-scale proxy", true});
     cases.push_back({ordered(8), "Bayer 8, a half-scale proxy", true});
     cases.push_back({everyPath(), "a region of interest", false, true});
@@ -3499,6 +3616,13 @@ void runDithers(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
                             name + "CPU oracle and production scene prepare");
         if (!oracle.frame() || !prepared)
             continue;
+        const auto inputs = ditherInputs(device, evaluator, builder, item.settings, id - 200,
+                                         item.width, item.height, request);
+        expectations.expect(inputs.has_value(), name + "the Dither's input evaluates on both devices");
+        if (!inputs)
+            continue;
+        const auto window = oracle.frame()->processImage().descriptor()->dataWindow();
+        const double scale = item.proxy ? 0.5 : 1.0;
         auto executor = GpuSceneExecutor::create(device, cache);
         expectations.expect(executor.hasValue(), name + "executor creates");
         if (!executor)
@@ -3507,8 +3631,9 @@ void runDithers(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
         const auto coldCounters = executor.executor->counters();
         std::string detail;
         expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready &&
-                                parity(cold.pixels, oracle.frame()->processImage().pixels(), detail,
-                                       AlphaGate::Exact),
+                                ditherParity(cold.pixels, oracle.frame()->processImage().pixels(),
+                                             *inputs, item.settings, id - 200, 5, window, scale,
+                                             detail),
                             name + "CPU parity: " + detail);
         const auto& descriptor = *oracle.frame()->processImage().descriptor();
         expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
@@ -3542,8 +3667,8 @@ void runDithers(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
             const bool held = !item.settings.everyFrame;
             expectations.expect(
                 rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
-                    parity(rerun.pixels, nextOracle.frame()->processImage().pixels(), detail,
-                           AlphaGate::Exact) &&
+                    ditherParity(rerun.pixels, nextOracle.frame()->processImage().pixels(),
+                                 *inputs, item.settings, id - 200, frame, window, scale, detail) &&
                     (held ? (nextDispatches == 0 && rerun.pixels == previous)
                           : (nextDispatches > 0 && rerun.pixels != previous)),
                 name + "frame " + std::to_string(frame) +
@@ -3563,8 +3688,10 @@ void runDithers(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
         const auto beforeChanged = executor.executor->counters();
         const auto again = runScene(*executor.executor, changed.scene);
         expectations.expect(again.pollResult == GpuSceneExecutorPollResult::Ready &&
-                                parity(again.pixels, changedOracle.frame()->processImage().pixels(),
-                                       detail, AlphaGate::Exact) &&
+                                ditherParity(again.pixels,
+                                             changedOracle.frame()->processImage().pixels(),
+                                             *inputs, changedSettings, id - 200, 5, window, scale,
+                                             detail) &&
                                 executor.executor->counters().dispatches > beforeChanged.dispatches,
                             name + "a changed amplitude re-runs with CPU parity: " + detail);
         // Toggling Monochrome redraws with parity on the same node's ids, and going back finds the
@@ -3582,9 +3709,10 @@ void runDithers(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
         const auto beforeToggle = executor.executor->counters();
         const auto flipped = runScene(*executor.executor, toggled.scene);
         expectations.expect(flipped.pollResult == GpuSceneExecutorPollResult::Ready &&
-                                parity(flipped.pixels,
-                                       toggledOracle.frame()->processImage().pixels(), detail,
-                                       AlphaGate::Exact) &&
+                                ditherParity(flipped.pixels,
+                                             toggledOracle.frame()->processImage().pixels(),
+                                             *inputs, toggledSettings, id - 200, 5, window, scale,
+                                             detail) &&
                                 flipped.pixels != cold.pixels &&
                                 executor.executor->counters().dispatches > beforeToggle.dispatches,
                             name + "toggling Monochrome redraws with CPU parity: " + detail);
@@ -3611,6 +3739,17 @@ void runDithers(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
     expectations.expect(oracle.frame() && prepared, name + "CPU oracle and production scene prepare");
     if (!oracle.frame() || !prepared)
         return;
+    const auto inputs = ditherInputs(device, evaluator, builder, everyPath(), id,
+                                     bloom::dither_test::kDitherWidth,
+                                     bloom::dither_test::kDitherHeight, request);
+    expectations.expect(inputs.has_value(), name + "the Dither's input evaluates on both devices");
+    if (!inputs)
+        return;
+    const auto window = oracle.frame()->processImage().descriptor()->dataWindow();
+    const auto parityOf = [&](const std::vector<Rgba32f>& pixels, std::string& out) {
+        return ditherParity(pixels, oracle.frame()->processImage().pixels(), *inputs, everyPath(),
+                            id, 5, window, 1.0, out);
+    };
     std::string detail;
     auto budgeted = GpuSceneExecutor::create(device, cache);
     if (!budgeted)
@@ -3623,8 +3762,7 @@ void runDithers(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
                         name + "a scene beyond the byte budget is refused and pins nothing");
     const auto after = runScene(*budgeted.executor, prepared.scene);
     expectations.expect(after.pollResult == GpuSceneExecutorPollResult::Ready &&
-                            parity(after.pixels, oracle.frame()->processImage().pixels(), detail,
-                                   AlphaGate::Exact) &&
+                            parityOf(after.pixels, detail) &&
                             !budgeted.executor->hasUnretiredSubmission() &&
                             !budgeted.executor->ownerDrainRequired(),
                         name + "the executor runs the scene after a budget refusal and retires it");
@@ -3657,8 +3795,7 @@ void runDithers(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
                         name + "a cancelled scene retires every submission and pins nothing");
     const auto reused = runScene(*cancelled.executor, prepared.scene);
     expectations.expect(reused.pollResult == GpuSceneExecutorPollResult::Ready &&
-                            parity(reused.pixels, oracle.frame()->processImage().pixels(), detail,
-                                   AlphaGate::Exact),
+                            parityOf(reused.pixels, detail),
                         name + "the executor runs the scene after a cancellation");
 }
 

@@ -2067,17 +2067,18 @@ void testDitherLowering(Expectations& expectations) {
         out.passedThrough = out.kernel == nullptr;
         return out;
     };
-    // The defaults: blue noise (64), 8 bit, display, Every Frame, seed 1, per channel, 1 LSB.
+    // The defaults: blue noise (64), 4 bit (#676: the visible target), display, Every Frame, seed 1,
+    // per channel, 1 LSB.
     {
         const auto base = lower({});
         require(base.kernel != nullptr, "Dither lowers to a dither kernel");
         const auto* amplitude = std::get_if<double>(&base.kernel->amplitude.source);
-        expectations.expect(base.kernel->blueNoise && base.kernel->side == 64 && base.kernel->bits == 8 &&
+        expectations.expect(base.kernel->blueNoise && base.kernel->side == 64 && base.kernel->bits == 4 &&
                                 !base.kernel->stored && base.kernel->everyFrame &&
                                 base.kernel->seed == 1 && !base.kernel->monochrome &&
                                 amplitude != nullptr && *amplitude == 1.0 &&
                                 base.kernel->amplitude.id == base.ids.at("amplitude"),
-                            "Dither's defaults lower blue noise, 8 bit, display, every frame, seed 1 "
+                            "Dither's defaults lower blue noise, 4 bit, display, every frame, seed 1 "
                             "and 1 LSB with the amplitude's identity");
         expectations.expect(base.timeDependent, "Every Frame varies with time");
     }
@@ -2104,8 +2105,8 @@ void testDitherLowering(Expectations& expectations) {
             expectations.expect(bayer.kernel != nullptr && bayer.kernel->side == side,
                                 "a matrix size lowers its Bayer side");
         }
-        for (const auto& [depth, bits] : std::array<std::pair<std::int64_t, std::int64_t>, 4>{
-                 {{0, 8}, {1, 10}, {2, 12}, {3, 16}}}) {
+        for (const auto& [depth, bits] : std::array<std::pair<std::int64_t, std::int64_t>, 10>{
+                 {{0, 8}, {1, 10}, {2, 12}, {3, 16}, {4, 1}, {5, 2}, {6, 3}, {7, 4}, {8, 5}, {9, 6}}}) {
             const auto deep = lower({{"bitDepth", depth}});
             expectations.expect(deep.kernel != nullptr && deep.kernel->bits == bits,
                                 "a bit depth lowers its bits");

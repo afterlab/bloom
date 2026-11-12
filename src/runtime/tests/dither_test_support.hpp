@@ -71,9 +71,11 @@ struct DitherSettings final {
 
 // Beauty -> Dither -> plain Merge -> Composition Output. The beauty is an HDR gradient whose alpha
 // runs from 0.6 to 1, so the premultiplication, values above 1 and both transfer segments are read.
+// Without `withDither` the Merge reads the beauty itself: the Dither's input, on the same ids.
 [[nodiscard]] inline std::shared_ptr<const runtime::CompiledCompositionPlan>
 ditherPlan(const DitherSettings& settings = {}, const std::uint64_t idBase = 52700,
-           const std::uint32_t width = kDitherWidth, const std::uint32_t height = kDitherHeight) {
+           const std::uint32_t width = kDitherWidth, const std::uint32_t height = kDitherHeight,
+           const bool withDither = true) {
     using namespace runtime;
     using document::NodeId;
     using document::Vec2d;
@@ -105,9 +107,12 @@ ditherPlan(const DitherSettings& settings = {}, const std::uint64_t idBase = 527
         ParameterId::fromRaw(idBase + 8),
         0};
     operations.emplace_back(std::move(gradient));
-    const auto effect = OperationIndex::fromRaw(operations.size());
-    operations.emplace_back(CompiledImageEffect{NodeId::fromRaw(idBase + 20), beauty,
-                                                ditherKernel(settings, idBase + 100)});
+    auto effect = beauty;
+    if (withDither) {
+        effect = OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(CompiledImageEffect{NodeId::fromRaw(idBase + 20), beauty,
+                                                    ditherKernel(settings, idBase + 100)});
+    }
     const auto merged = OperationIndex::fromRaw(operations.size());
     operations.emplace_back(CompiledMerge{NodeId::fromRaw(idBase + 60), {{{}, {}, effect}}});
     definition.output = OperationIndex::fromRaw(operations.size());

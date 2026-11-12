@@ -9,15 +9,16 @@
 // socket. docs/architecture/image-filters.md, "Tone Map", "Color Matrix", "HSL Qualifier",
 // "Quantize" and "Dither", are the specification.
 //
-//   Dither (`bloom.dither`) adds a tiled threshold pattern to the color before a delivery quantizes it,
-//     so smooth gradients do not band. `pattern` Ordered (a Bayer matrix of `matrixSize` 2, 4, 8 or 16)
-//     or Blue noise (a generated 64 x 64 void-and-cluster table). `amplitude` is the pattern's
-//     peak-to-peak size in steps (LSBs) of `bitDepth` (8, 10, 12 or 16 bit; 1 LSB is 1 / (2^bits - 1)),
-//     measured in `domain` Display (the straight value's sRGB encoding, where a delivery's code values
-//     are even) or Stored (the working-space value itself). `animation` Every Frame draws a new
-//     placement for each frame; Held keeps one. `seed` picks the placement; `monochrome` gives every
-//     channel red's. Alpha never changes; a pixel with alpha 0 is left as it is; amplitude 0 is the
-//     input exactly.
+//   Dither (`bloom.dither`) adds a tiled threshold pattern to the color and quantizes the sum to
+//     `bitDepth` (#676), so a gradient breaks into fine noise instead of bands. `pattern` Ordered (a
+//     Bayer matrix of `matrixSize` 2, 4, 8 or 16) or Blue noise (a generated 64 x 64
+//     void-and-cluster table). `amplitude` is the pattern's peak-to-peak size in steps (LSBs) of
+//     `bitDepth` (1 to 6, 8, 10, 12 or 16 bit; 1 LSB is 1 / (2^bits - 1)), measured and quantized in
+//     `domain` Display (the straight value's sRGB encoding, where a delivery's code values are even)
+//     or Stored (the working-space value itself). `animation` Every Frame draws a new placement for
+//     each frame; Held keeps one. `seed` picks the placement; `monochrome` gives every channel red's.
+//     Alpha never changes; a pixel with alpha 0 is left as it is; amplitude 0 quantizes without
+//     dither.
 //
 //   Quantize (`bloom.quantize`) works on the straight working-space color and, in Threshold mode,
 //     leaves alpha alone. `mode` Threshold or Posterize. Threshold: `basis` Luma (Rec. 709 luma, one
@@ -112,7 +113,11 @@ inline constexpr std::int64_t kDitherDisplay = 0;
 inline constexpr std::int64_t kDitherStored = 1;
 inline constexpr std::int64_t kDitherEveryFrame = 0;
 inline constexpr std::int64_t kDitherHeld = 1;
-inline constexpr std::array<int, 4> kDitherBitDepths{8, 10, 12, 16};
+// Stored values 0 to 3 are the depths of the first version; the coarse depths that make the
+// quantization visible were appended after them (#676), so saved projects keep their depth.
+inline constexpr std::array<int, 10> kDitherBitDepths{8, 10, 12, 16, 1, 2, 3, 4, 5, 6};
+// The default target depth: 4 bits, sixteen levels, where the dither is plainly visible.
+inline constexpr std::int64_t kDitherDefaultBitDepth = 7;
 // The Bayer side of a stored matrix size, or 0.
 [[nodiscard]] constexpr int ditherBayerSide(const std::int64_t value) noexcept {
     return value >= 0 && value <= 3 ? 2 << value : 0;
@@ -151,8 +156,8 @@ inline constexpr std::array<std::string_view, 2> kQuantizeBases{"Luma", "Per cha
 inline constexpr std::array<std::string_view, 2> kDitherPatterns{"Ordered (Bayer)", "Blue noise"};
 inline constexpr std::array<std::string_view, 4> kDitherMatrixSizes{"2 x 2", "4 x 4", "8 x 8",
                                                                     "16 x 16"};
-inline constexpr std::array<std::string_view, 4> kDitherBitDepthLabels{"8-bit", "10-bit", "12-bit",
-                                                                       "16-bit"};
+inline constexpr std::array<std::string_view, 10> kDitherBitDepthLabels{
+    "8-bit", "10-bit", "12-bit", "16-bit", "1-bit", "2-bit", "3-bit", "4-bit", "5-bit", "6-bit"};
 inline constexpr std::array<std::string_view, 2> kDitherDomains{"Display (sRGB)", "Stored value"};
 inline constexpr std::array<std::string_view, 2> kDitherAnimations{"Every Frame", "Held"};
 
@@ -224,7 +229,7 @@ inline constexpr std::array kQuantizeParameters{
 inline constexpr std::array kDitherParameters{
     choice("pattern", kDitherPatterns, kDitherBlueNoise, "Pattern"),
     choice("matrixSize", kDitherMatrixSizes, 2, "Matrix size"),
-    choice("bitDepth", kDitherBitDepthLabels, 0, "Target bit depth"),
+    choice("bitDepth", kDitherBitDepthLabels, kDitherDefaultBitDepth, "Target bit depth"),
     scalar("amplitude", 1.0, 0.0, kMaximumDitherAmplitude, "Amplitude", 0.0, 4.0, 0.05, 2, "LSB"),
     choice("domain", kDitherDomains, kDitherDisplay, "Measured in"),
     choice("animation", kDitherAnimations, kDitherEveryFrame, "Pattern changes"),

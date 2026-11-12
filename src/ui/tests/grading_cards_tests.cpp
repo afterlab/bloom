@@ -3450,8 +3450,8 @@ void ditherCard() {
                card->showsRole("bitDepth") && !card->socketY("seed").has_value(),
            "the card draws the amplitude with its socket; the choices are the node's own rows");
     expect(card->readout() ==
-               QStringLiteral("1.00 LSB of 8-bit = 0.00392 of full scale, display encoded"),
-           "the readout says what 1 LSB of 8-bit is");
+               QStringLiteral("1.00 LSB of 4-bit = 0.0667 of full scale, display encoded"),
+           "the readout says what 1 LSB of the default 4-bit target is (#676)");
 
     // The preview: the plain half holds the 16 levels in long runs, the dithered half breaks them.
     const auto runs = [](const QImage& image, const int row) {

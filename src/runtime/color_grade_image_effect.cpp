@@ -1541,7 +1541,7 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
     case ColorGradeKind::Dither:
         program.functionName = "bloom_dither";
         program.resourcePrefix = "bloom_dither_";
-        program.semanticsId = "bloom.render.dither.v1";
+        program.semanticsId = "bloom.render.dither.v2";
         break;
     case ColorGradeKind::ColorTool:
         program.functionName = "bloom_color_tool";

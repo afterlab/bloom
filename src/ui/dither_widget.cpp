@@ -189,7 +189,8 @@ DitherCardWidget::DitherCardWidget(CompositionSession& session, const document::
 
 QString DitherCardWidget::readout() const {
     const double lsb = amplitude(session_, node_);
-    const int bits = document::ditherBits(choice(session_, node_, "bitDepth", 0));
+    const int bits = document::ditherBits(
+        choice(session_, node_, "bitDepth", document::kDitherDefaultBitDepth));
     const double share = bits > 0 ? lsb / (std::ldexp(1.0, bits) - 1.0) : 0.0;
     const bool stored =
         choice(session_, node_, "domain", document::kDitherDisplay) == document::kDitherStored;

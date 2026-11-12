@@ -1217,7 +1217,7 @@ void testRecipeCommands(TestContext& test) {
                                ConstantValueSource{0.0});
 
     // #527 Dither: its amplitude, choices, seed and Monochrome edit within their domains and refuse
-    // outside them (an amplitude 0 to 16 LSBs, two patterns, four matrix sizes and bit depths).
+    // outside them (an amplitude 0 to 16 LSBs, two patterns, four matrix sizes and ten bit depths).
     const auto dither = addRecipe("bloom.dither");
     const auto dPattern = dither.outputId<ParameterId>("parameter.pattern");
     const auto dSize = dither.outputId<ParameterId>("parameter.matrixSize");
@@ -1241,8 +1241,9 @@ void testRecipeCommands(TestContext& test) {
                                ConstantValueSource{std::int64_t{2}});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *dSize,
                                ConstantValueSource{std::int64_t{4}});
+    (void)exercise<SetParameterSource>(test, fixture, *dDepth, ConstantValueSource{std::int64_t{9}});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *dDepth,
-                               ConstantValueSource{std::int64_t{4}});
+                               ConstantValueSource{std::int64_t{10}});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *dAmplitude,
                                ConstantValueSource{-0.5});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *dAmplitude,

@@ -68,6 +68,8 @@ constexpr std::size_t kDomain = 1;
 constexpr std::size_t kSide = 2;
 constexpr std::size_t kInverseCells = 3;
 constexpr std::size_t kOffsets = 4;
+// Red's fourth place: the target depth's steps, 2^bits - 1.
+constexpr std::size_t kSteps = 7;
 constexpr std::size_t kGeometry = 16;
 // A full-resolution pixel coordinate must fit an int on both devices, with room for the shift.
 constexpr double kCoordinateLimit = 1073741824.0; // 2^30
@@ -92,7 +94,7 @@ std::optional<PreparedColorGrade> prepareDitherGrade(const DitherKernel& kernel,
     if (values.size() != 2 || kernel.seed < 0 || kernel.seed > 2147483647 ||
         (bayer && !core::dither::isBayerSide(side)) ||
         (!bayer && kernel.side != core::dither::kBlueNoiseSide) ||
-        (kernel.bits != 8 && kernel.bits != 10 && kernel.bits != 12 && kernel.bits != 16))
+        kernel.bits < 1 || kernel.bits > 16)
         return std::nullopt;
     const double amplitude = values[0];
     const double frame = values[1];
@@ -108,6 +110,7 @@ std::optional<PreparedColorGrade> prepareDitherGrade(const DitherKernel& kernel,
     d[kDomain] = kernel.stored ? 1.0F : 0.0F;
     d[kSide] = static_cast<float>(side);
     d[kInverseCells] = static_cast<float>(1.0 / static_cast<double>(cells));
+    d[kSteps] = static_cast<float>(steps);
     // Held draws frame 0's placement on every frame.
     const auto framed = kernel.everyFrame ? static_cast<std::int64_t>(frame) : 0;
     for (int channel = 0; channel < 3; ++channel) {
@@ -128,8 +131,8 @@ std::optional<PreparedColorGrade> prepareDitherGrade(const DitherKernel& kernel,
         std::ranges::transform(ranks, d.begin() + static_cast<std::ptrdiff_t>(kDitherHeaderFloats),
                                [](const std::uint16_t r) { return static_cast<float>(r); });
     }
-    // An amplitude that rounds to nothing adds nothing, on any frame.
-    grade.identity = d[kAmplitude] == 0.0F;
+    // Every amplitude quantizes to the target depth (#676), so the node is never the identity.
+    grade.identity = false;
     return grade;
 }
 
@@ -183,6 +186,10 @@ bool validDitherProgramData(const std::vector<float>& d) noexcept {
     const auto whole = [](const float value, const float limit) {
         return value >= 0.0F && value < limit && value == std::floor(value);
     };
+    const float steps = d[kSteps];
+    if (!(steps >= 1.0F) || steps > 65535.0F || steps != std::floor(steps) ||
+        !isPowerOfTwo(static_cast<std::int64_t>(steps) + 1))
+        return false;
     for (std::size_t channel = 0; channel < 3; ++channel) {
         const float* o = d.data() + kOffsets + 4U * channel;
         if (!whole(o[0], sideValue) || !whole(o[1], sideValue) ||

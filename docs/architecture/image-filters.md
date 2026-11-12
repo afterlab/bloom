@@ -2113,10 +2113,12 @@ then warm RAM preview), `properties_registry_tests` and `grading_cards_tests`.
 ## Dither
 
 One node, `bloom.dither`, under **Stylize** (#527): it adds a small, tiled threshold pattern to the
-color so that a later quantization to a lower bit depth (an 8-bit export, a 10-bit display) breaks
-smooth gradients into fine noise instead of visible bands. The node quantizes nothing itself; it is
-the noise that a quantizer after it needs. It is a color grade kernel (`DitherKernel`, semantics
-`bloom.render.dither.v1`): one pointwise pass whose CPU reference (`ditherPixel`) and GPU program
+color and quantizes the sum to the **Target bit depth**, so smooth gradients break into fine noise
+instead of visible bands. Until #676 the node only added the noise and left the quantization to a
+later step: in Bloom's floating-point working format nothing quantized it, and a threshold of one
+8-bit step was too fine to see, so the node looked like a pass-through. It is a color grade kernel
+(`DitherKernel`, semantics `bloom.render.dither.v2`): one pointwise pass whose CPU reference
+(`ditherPixel`) and GPU program
 (`bloom_dither`) compile the same kernel text, `src/runtime/dither_kernel.glsl`, over one table, with
 no GPU coverage exception.
 
@@ -2135,18 +2137,23 @@ placement (temporal dither, which averages out over time); **Held** keeps frame 
 **Monochrome** gives the three channels red's placement, so the dither has no colour. A shift and a
 rotation keep the table's spectrum, so every placement is equally blue (or equally Bayer).
 
-**Amplitude.** **Amplitude** is the peak-to-peak size of the threshold in least significant bits
-(LSB) of the **Target bit depth** (8, 10, 12 or 16 bits): the added value is
-`t · amplitude / (2^bits - 1)`, so the default of 1 LSB moves a value by at most half a code value
-either way, the classic dither for rounding to that depth. It is in `[0, 16]` (soft range 0 to 4),
-animatable, and 0 is the identity, bit for bit.
+**Amplitude and quantization.** **Amplitude** is the peak-to-peak size of the threshold in least
+significant bits (LSB) of the **Target bit depth** (1 to 6, 8, 10, 12 or 16 bits; 4 by default, where
+the dither is plainly visible): the added value is `t · amplitude / (2^bits - 1)`, so the default of
+1 LSB moves a value by at most half a level either way, the classic dither for rounding to that
+depth. The sum `m` is then snapped to the nearest level, `floor(m (2^bits - 1) + 1/2) / (2^bits - 1)`,
+in the same domain. Amplitude is in `[0, 16]` (soft range 0 to 4) and animatable; 0 quantizes
+without dither. The depths 8, 10, 12 and 16 keep their stored values 0 to 3, and the coarse depths
+were appended as 4 to 9, so a saved project keeps its depth.
 
 **Domain.** The amplitude is measured either way:
 
 | Measured in | Rule |
 | --- | --- |
-| Display (sRGB), the default | The straight value `s = v / a` is encoded with the sRGB transfer (IEC 61966-2-1, odd about zero so negatives keep their sign), the amount is added, the sum is decoded and premultiplied again. An LSB is then a code value of an sRGB-encoded file, which is how 8-bit deliverables are quantized. A straight value beyond ±65504 passes unchanged. |
-| Stored value | The amount times alpha is added to the stored (working-space, premultiplied) value: for a quantization of the working values themselves (a linear or log file). |
+| Display (sRGB), the default | The straight value `s = v / a` is encoded with the sRGB transfer (IEC 61966-2-1, odd about zero so negatives keep their sign), the amount is added, the sum is quantized, decoded and premultiplied again. An LSB is then a code value of an sRGB-encoded file, which is how 8-bit deliverables are quantized. |
+| Stored value | The amount is added to the straight stored (working-space) value, the sum is quantized and premultiplied again: for a quantization of the working values themselves (a linear or log file). |
+
+In both domains a straight value beyond ±65504 passes unchanged.
 
 The transfer's power and logarithm are the field kernel's polynomials (`bdk_exp2`, `bdk_log2`), every
 intermediate a `precise` binary32 operation, so the CPU and each device give the same bits
@@ -2190,7 +2197,14 @@ length and low-frequency error with and without each pattern), `snapshot_compile
 fixtures and the native CPU/GPU parity cases (every pattern and size, bit depth, domain, Monochrome,
 Held, proxy, region of interest, warm zero-dispatch, a changed amplitude, the lifecycle), the
 node-viewer evidence scenarios `dither-*` (viewer, cold then warm RAM preview),
-`properties_registry_tests` and `grading_cards_tests`.
+`properties_registry_tests` and `grading_cards_tests`. Because the node quantizes, an input that
+differs by an ulp can land one level apart, and the generated gradient the native cases feed it
+matches the CPU within the 2e-6 gate rather than bit for bit. The native cases therefore evaluate the
+Dither's input on both routes and hold every pixel to the CPU kernel at the same strict gate: over
+the CPU's input where the device's input is bit-identical, over the device's own input where it is
+not, after checking that the kernel over the CPU's input reproduces the CPU oracle exactly. The
+node sweep's pass-through check fails any node whose default frame is the gradient it was given,
+unless `node_graphs.json` says why its defaults are the identity.
 
 ## HSL Qualifier
 

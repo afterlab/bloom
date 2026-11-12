@@ -148,24 +148,35 @@ double threshold(const DitherSettings& s, const std::int64_t x, const std::int64
     return (rotated + 0.5) / cells - 0.5;
 }
 
-// The documented pixel: `full` the full-resolution position.
-std::array<double, 4> reference(const DitherSettings& s, const Pixel p, const std::int64_t fx,
-                                const std::int64_t fy, const std::int64_t frame) {
-    std::array<double, 4> out{p[0], p[1], p[2], p[3]};
+// The documented pixel: `full` the full-resolution position. The threshold is added in the
+// domain's units and the sum quantized to the target depth (#676). `edge` marks a channel whose
+// sum lies within binary32 rounding of a level boundary, where either neighbouring level is right.
+struct Reference final {
+    std::array<double, 4> value{};
+    std::array<bool, 3> edge{};
+};
+Reference reference(const DitherSettings& s, const Pixel p, const std::int64_t fx,
+                    const std::int64_t fy, const std::int64_t frame) {
+    Reference out{{p[0], p[1], p[2], p[3]}, {}};
     const double a = p[3];
     if (a == 0.0)
         return out;
-    const double lsb = 1.0 / (std::ldexp(1.0, static_cast<int>(s.bits)) - 1.0);
+    const double steps = std::ldexp(1.0, static_cast<int>(s.bits)) - 1.0;
+    const auto quantize = [steps](const double m, bool& edge) {
+        const double lifted = m * steps + 0.5;
+        edge = std::abs(lifted - std::round(lifted)) <= 2.0e-5 * std::max(1.0, std::abs(lifted));
+        return std::floor(lifted) / steps;
+    };
     for (int c = 0; c < 3; ++c) {
-        const double amount = threshold(s, fx, fy, c, frame) * s.amplitude * lsb;
-        if (s.stored) {
-            out[static_cast<std::size_t>(c)] = p[static_cast<std::size_t>(c)] + amount * a;
-        } else {
-            const double straight = p[static_cast<std::size_t>(c)] / a;
-            if (std::abs(straight) > 65504.0)
-                continue;
-            out[static_cast<std::size_t>(c)] = decode(encode(straight) + amount) * a;
-        }
+        const auto i = static_cast<std::size_t>(c);
+        const double amount = threshold(s, fx, fy, c, frame) * s.amplitude / steps;
+        const double straight = p[i] / a;
+        if (std::abs(straight) > 65504.0)
+            continue;
+        bool edge = false;
+        out.value[i] = s.stored ? quantize(straight + amount, edge) * a
+                                : decode(quantize(encode(straight) + amount, edge)) * a;
+        out.edge[i] = edge;
     }
     return out;
 }
@@ -176,6 +187,21 @@ bool near(const float actual, const double expected, const bool stored) {
     const double tolerance = stored ? 2.0e-6 : 6.0e-6;
     return std::abs(static_cast<double>(actual) - expected) <=
            tolerance * std::max(1.0e-3, std::abs(expected)) + 1.0e-9;
+}
+
+// A quantized channel: the reference level, or at a boundary the level either side of it.
+bool nearLevel(const float actual, const Reference& want, const std::size_t c,
+               const DitherSettings& s, const float alpha) {
+    if (near(actual, want.value[c], s.stored) || !want.edge[c])
+        return near(actual, want.value[c], s.stored);
+    const double steps = std::ldexp(1.0, static_cast<int>(s.bits)) - 1.0;
+    const double a = alpha;
+    const auto neighbour = [&](const double delta) {
+        if (s.stored)
+            return (want.value[c] / a + delta / steps) * a;
+        return decode(encode(want.value[c] / a) + delta / steps) * a;
+    };
+    return near(actual, neighbour(-1.0), s.stored) || near(actual, neighbour(1.0), s.stored);
 }
 
 // A picture with every case: a gradient across both transfer segments into HDR, negative values,
@@ -235,7 +261,7 @@ void testReference() {
                 const auto q = at(output, x, y);
                 const auto want = reference(s, p, x, y, frame);
                 for (std::size_t c = 0; c < 3; ++c) {
-                    same = same && near(q[c], want[c], s.stored);
+                    same = same && nearLevel(q[c], want, c, s, p[3]);
                     moved += q[c] != p[c] ? 1 : 0;
                 }
                 alpha = alpha && q[3] == p[3];
@@ -255,18 +281,24 @@ void testReference() {
 }
 
 void testIdentityAndDomain() {
+    // #676: amplitude 0 quantizes without dither, so the node is never the identity.
     DitherSettings zero;
     zero.amplitude = 0.0;
+    zero.bits = 4;
     const auto grade = prepare(zero);
-    expect(grade && grade->identity, "amplitude 0 is the identity");
+    expect(grade && !grade->identity, "amplitude 0 is not the identity: it quantizes");
     const auto input = image(0, 0, 16, 16, varied);
     if (grade) {
         const auto output = run(*grade, input);
-        bool same = true;
+        bool levels = true;
         for (std::int64_t y = 0; y < 16; ++y)
-            for (std::int64_t x = 0; x < 16; ++x)
-                same = same && at(output, x, y) == at(input, x, y);
-        expect(same, "amplitude 0 leaves every pixel exactly as it was");
+            for (std::int64_t x = 0; x < 16; ++x) {
+                const auto p = at(input, x, y);
+                const auto want = reference(zero, p, x, y, 0);
+                for (std::size_t c = 0; c < 3; ++c)
+                    levels = levels && nearLevel(at(output, x, y)[c], want, c, zero, p[3]);
+            }
+        expect(levels, "amplitude 0 snaps every value to the nearest 4-bit level");
     }
     expect(!prepare(dither_test::everyPath())->identity, "a dither is not the identity");
     DitherSettings bad = dither_test::ordered(32);
@@ -274,9 +306,11 @@ void testIdentityAndDomain() {
     bad = {};
     bad.side = 32;
     expect(!prepare(bad), "a blue-noise side other than 64 is refused");
-    bad = {};
-    bad.bits = 9;
-    expect(!prepare(bad), "a bit depth outside 8, 10, 12 and 16 is refused");
+    for (const std::int64_t bits : {0, 17}) {
+        bad = {};
+        bad.bits = bits;
+        expect(!prepare(bad), "a bit depth outside 1 to 16 is refused");
+    }
     bad = {};
     bad.amplitude = 16.5;
     expect(!prepare(bad), "an amplitude above 16 LSBs is refused");
@@ -334,11 +368,13 @@ void testSeedsAndFrames() {
         auto other = base;
         other.seed = 2;
         expect(a != noise(other, 1), name + ": another seed gives other pixels");
-        // The noise is the pattern: a uniform spread of 1 LSB peak to peak, mean 0.
+        // 1 LSB of dither quantized to 8 bit (#676): every pixel takes one of the two codes
+        // either side of the grey, in proportions that keep its mean.
         const auto [low, high] = std::ranges::minmax(a);
         const double mean = std::accumulate(a.begin(), a.end(), 0.0) / static_cast<double>(a.size());
-        expect(low > -0.5 && high < 0.5 && high - low > 0.9 && std::abs(mean) < 0.01,
-               name + ": 1 LSB of noise spans (-0.5, 0.5) LSB with mean 0");
+        expect(low > -1.0 && high < 1.0 && std::abs(high - low - 1.0) < 1.0e-3 &&
+                   std::abs(mean) < 0.01,
+               name + ": every pixel takes one of the two neighbouring codes, with mean 0");
         // Every Frame: consecutive frames are unrelated on average; Held is one pattern.
         double sum = 0.0;
         double worst = 0.0;
@@ -424,6 +460,116 @@ void testIdentityKeys() {
     held.everyFrame = false;
     expect(key(held, 1) == key(held, 2), "Held: every frame shares one identity");
     expect(key(base, 1) == key(base, 1), "the same settings and frame share one identity");
+}
+
+// --- #676: the node visibly quantizes and dithers with its defaults ---------------------------------
+
+// The node's defaults, read from its parameter table, so a changed default is tested as shipped.
+DitherSettings nodeDefaults() {
+    DitherSettings s;
+    for (const auto& spec : document::color_cleanup_parameters::kDitherParameters) {
+        const auto value = static_cast<std::int64_t>(spec.value[0]);
+        if (spec.role == "pattern")
+            s.blueNoise = value == document::kDitherBlueNoise;
+        else if (spec.role == "matrixSize")
+            s.side = s.blueNoise ? core::dither::kBlueNoiseSide : document::ditherBayerSide(value);
+        else if (spec.role == "bitDepth")
+            s.bits = document::ditherBits(value);
+        else if (spec.role == "amplitude")
+            s.amplitude = spec.value[0];
+        else if (spec.role == "domain")
+            s.stored = value == document::kDitherStored;
+        else if (spec.role == "animation")
+            s.everyFrame = value == document::kDitherEveryFrame;
+        else if (spec.role == "seed")
+            s.seed = value;
+        else if (spec.role == "monochrome")
+            s.monochrome = spec.value[0] != 0.0;
+    }
+    return s;
+}
+
+void testVisibleWithDefaults() {
+    // A full-range gray ramp (straight 0 to 1 in the display encoding) across 256 pixels.
+    const auto ramp = image(0, 0, 256, 16, [](const std::int64_t x, std::int64_t) {
+        const auto v = static_cast<float>(decode(static_cast<double>(x) / 255.0));
+        return Pixel{v, v, v, 1.0F};
+    });
+    const auto defaults = nodeDefaults();
+    expect(defaults.bits == 4 && defaults.amplitude == 1.0 && defaults.blueNoise,
+           "the node defaults to blue noise at 1 LSB of a 4-bit target");
+    const auto output = run(*prepare(defaults, 1), ramp);
+    std::size_t changed = 0;
+    std::array<std::vector<int>, 3> codes;
+    for (std::int64_t y = 0; y < 16; ++y)
+        for (std::int64_t x = 0; x < 256; ++x)
+            for (std::size_t c = 0; c < 3; ++c) {
+                const auto out = at(output, x, y)[c];
+                changed += out != at(ramp, x, y)[c] ? 1 : 0;
+                codes[c].push_back(static_cast<int>(std::lround(encode(out) * 15.0)));
+            }
+    expect(changed > 256 * 16 * 3 / 2, "Dither with its defaults changes most of a ramp");
+    for (std::size_t c = 0; c < 3; ++c) {
+        auto distinct = codes[c];
+        std::ranges::sort(distinct);
+        distinct.erase(std::unique(distinct.begin(), distinct.end()), distinct.end());
+        bool onLevels = true;
+        for (std::int64_t y = 0; y < 16; ++y)
+            for (std::int64_t x = 0; x < 256; ++x) {
+                const double e = encode(at(output, x, y)[c]) * 15.0;
+                onLevels = onLevels && std::abs(e - std::round(e)) < 1.0e-3;
+            }
+        expect(onLevels && distinct.size() == 16 && distinct.front() == 0 && distinct.back() == 15,
+               "a ramp through the defaults has exactly the 16 levels of 4 bits in channel " +
+                   std::to_string(c));
+    }
+    // Each parameter changes the result as its label says.
+    const auto pixels = [&](const DitherSettings& s, const double frame = 1.0) {
+        const auto out = run(*prepare(s, frame), ramp);
+        std::vector<float> values;
+        for (std::int64_t y = 0; y < 16; ++y)
+            for (std::int64_t x = 0; x < 256; ++x)
+                for (std::size_t c = 0; c < 3; ++c)
+                    values.push_back(at(out, x, y)[c]);
+        return values;
+    };
+    const auto base = pixels(defaults);
+    const auto changes = [&](const std::string& what, const std::function<void(DitherSettings&)>& edit,
+                             const double frame = 1.0) {
+        auto s = defaults;
+        edit(s);
+        expect(pixels(s, frame) != base, what + " changes the output");
+    };
+    changes("Pattern (Ordered)", [](auto& s) {
+        s.blueNoise = false;
+        s.side = 8;
+    });
+    auto bayer = defaults;
+    bayer.blueNoise = false;
+    bayer.side = 4;
+    auto bayer8 = bayer;
+    bayer8.side = 8;
+    expect(pixels(bayer) != pixels(bayer8), "Matrix size changes the output");
+    changes("Target bit depth", [](auto& s) { s.bits = 5; });
+    changes("Amplitude", [](auto& s) { s.amplitude = 2.0; });
+    changes("Measured in (Stored value)", [](auto& s) { s.stored = true; });
+    changes("Seed", [](auto& s) { s.seed = 2; });
+    changes("Monochrome", [](auto& s) { s.monochrome = true; });
+    changes("Pattern changes Every Frame (another frame)", [](auto&) {}, 2.0);
+    auto held = defaults;
+    held.everyFrame = false;
+    expect(pixels(held, 1.0) == pixels(held, 2.0) && pixels(held, 1.0) != pixels(defaults, 2.0),
+           "Pattern changes Held keeps one placement");
+    // A coarser depth has fewer levels.
+    auto twoBit = defaults;
+    twoBit.bits = 2;
+    const auto coarse = run(*prepare(twoBit, 1), ramp);
+    std::vector<int> levels;
+    for (std::int64_t x = 0; x < 256; ++x)
+        levels.push_back(static_cast<int>(std::lround(encode(at(coarse, x, 0)[0]) * 3.0)));
+    std::ranges::sort(levels);
+    levels.erase(std::unique(levels.begin(), levels.end()), levels.end());
+    expect(levels.size() == 4, "a 2-bit target has four levels");
 }
 
 // --- The purpose: less banding at 8 bit -----------------------------------------------------------
@@ -634,6 +780,7 @@ int main() {
         testSeedsAndFrames();
         testRegionAndProxy();
         testIdentityKeys();
+        testVisibleWithDefaults();
         testBanding();
         testProgramText();
         testBudgetAndCancellation();
