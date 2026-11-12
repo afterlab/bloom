@@ -265,6 +265,15 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                       "the upper Solid carries a fractional translation");
         checks.expect(session.setSelectedBlendMode(core::BlendMode::Normal),
                       "the upper Solid composites source-over");
+        // The upper Solid moves, so every step of the playhead is a frame of its own to prepare.
+        checks.expect(session.currentTime() == frameTime(0) || session.setCurrentTime(frameTime(0)),
+                      "the session is at frame 0");
+        checks.expect(session.toggleKeyframe("position"), "the position keyframe is created");
+        checks.expect(session.setCurrentTime(frameTime(kRamFrameCount - 1)),
+                      "the session moves to the last frame");
+        checks.expect(session.setSelectedPosition(31.25, 11.5),
+                      "the upper Solid's last position is set");
+        checks.expect(session.setCurrentTime(frameTime(0)), "the session returns to frame 0");
     } else {
         checks.expect(session.addSolidLayer(QStringLiteral("Moving Solid"),
                                             core::Color4d{0.2, 0.4, 0.8, 1.0}),
@@ -306,6 +315,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             : runtime::detail::GpuPreviewDisplayServiceTestAccess::ownershipEpoch(*core);
     checks.expect(epoch > 0U, "the service publishes a nonzero device ownership epoch");
     const auto afterReady = service.status().counters;
+    // Where the counted frames begin. The RAM run counts from Ready; the Viewer run counts from
+    // the moment the Viewer has settled at its size (below).
+    auto windowStart = afterReady;
 
     ui::TaskUiBridge bridge(scheduler, nullptr, std::chrono::milliseconds(1));
     auto pipeline = ui::makeCompositionPreviewPipeline(fixture.compiler, fixture.evaluator,
@@ -328,14 +340,17 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const auto snapshot = session.snapshot();
 
     if (viewerRoute) {
-        // Every frame the controller publishes is a frame of this route: the first is prepared
-        // before the Viewer has a size, the next at the resolution its size selects. The first is
-        // allowed to land before the Viewer exists, so that no prepared frame is superseded
-        // unpublished and every final display transfer belongs to a verified frame.
+        // The Viewer is shown and left to settle at its size first. While it takes its size a
+        // request can be superseded after its frame was prepared, and such a frame is transferred
+        // without ever being published; which requests overlap there is a matter of timing, not
+        // of the route. The counted frames start once nothing is in flight: one frame per step of
+        // the playhead, each prepared, transferred and published exactly once.
         std::vector<routeproof::PreparedPreviewFrameHandle> published;
+        // The frame on screen when the counted frames begin; it was prepared before them.
+        routeproof::PreparedPreviewFrameHandle settledFrame;
         const auto record = [&] {
             const auto frame = controller.state().frame;
-            if (frame != nullptr &&
+            if (frame != nullptr && frame != settledFrame &&
                 std::find(published.begin(), published.end(), frame) == published.end()) {
                 published.push_back(frame);
             }
@@ -358,7 +373,6 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         layout->addWidget(viewer.get());
         host->show();
         viewer->show();
-        controller.requestRefresh();
         const auto settled = [&] {
             const auto frame = viewer->displayedFrameForTest();
             return controller.state().activity != ui::PreviewActivity::Rendering &&
@@ -375,6 +389,23 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         // to land, then require the settled state again.
         (void)waitUntil([] { return false; }, 500ms);
         displayed = displayed && waitUntil(settled, 60s);
+        if (displayed) {
+            settledFrame = controller.state().frame;
+            published.clear();
+            windowStart = service.status().counters;
+            for (std::int64_t index = 1; index < kRamFrameCount && displayed; ++index) {
+                checks.expect(session.setCurrentTime(frameTime(index)),
+                              "the playhead steps to the next frame");
+                displayed = waitUntil(
+                    [&] {
+                        const auto shown = viewer->displayedFrameForTest();
+                        return settled() && shown->desiredIdentity().time == frameTime(index);
+                    },
+                    60s);
+            }
+            checks.expect(published.size() == static_cast<std::size_t>(kRamFrameCount - 1),
+                          "each step of the playhead published exactly one frame");
+        }
         QObject::disconnect(recording);
         const auto frame = viewer->displayedFrameForTest();
         checks.expect(displayed, "the ViewerEditor displays the controller's GPU-prepared frame");
@@ -458,10 +489,10 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     // controller published to the Viewer, or the RAM range (its first frame is the foreground
     // frame). So the counters since Ready describe exactly those frames.
     const auto after = service.status().counters;
-    const auto coldDispatches = after.nativeDispatches - afterReady.nativeDispatches;
-    const auto transfers = after.packedTransfers - afterReady.packedTransfers;
-    const auto transferredBytes = after.packedTransferredBytes - afterReady.packedTransferredBytes;
-    const auto readbacks = after.fullFrameReadbacks - afterReady.fullFrameReadbacks;
+    const auto coldDispatches = after.nativeDispatches - windowStart.nativeDispatches;
+    const auto transfers = after.packedTransfers - windowStart.packedTransfers;
+    const auto transferredBytes = after.packedTransferredBytes - windowStart.packedTransferredBytes;
+    const auto readbacks = after.fullFrameReadbacks - windowStart.fullFrameReadbacks;
     checks.expect(coldDispatches > 0U, "the frames performed native dispatches");
     checks.expect(transfers == frames.size(),
                   "exactly one final display transfer was made per verified frame");
