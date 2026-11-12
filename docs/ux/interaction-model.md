@@ -437,7 +437,9 @@ as the Viewer's Custom Safe Areas dialog (0.1–100 %, one decimal).
 | Middle drag | Pan |
 | Wheel | Zoom about the pointer |
 | Trackpad pinch | Zoom about the fingers, within the wheel's limits (#696) |
-| `Tab` | Open the Add search; the new card lands with its title under the pointer |
+| `Tab` | Open the Add search; the chosen node follows the pointer until a click places it (#703) |
+| Choose a node from Add (header menu, canvas menu or the `Tab` search) | A translucent card of it follows the pointer; a click places it, Escape or a right-click cancels (#703) |
+| Click while placing, over a link the node fits | Insert the node into that link: the link's source feeds its best matching input and its best matching output feeds the link's destination, in one undo step (#703) |
 | `Ctrl+A` | Select all nodes |
 | `Delete` / `Backspace` | Delete the selection: the nodes go and their links break, in one undo step; a parameter a deleted node drove returns to its default (#704) |
 | `Ctrl+D` | Duplicate the selection and start placing it |
@@ -467,6 +469,20 @@ at 100%, centered on the graph, and zoomed out only as far as the whole graph ne
 never zooms in past 100% by itself, so a new composition's starting Merge and Output open at actual
 size. After `Ctrl+0` the canvas keeps fitting the graph instead, until the artist zooms or pans. A
 new composition's starting nodes are laid out by Arrange All's rule.
+
+Adding a node places it by hand (#703). Choosing a node from the header's Add menu, the canvas
+menu's Add or the `Tab` search creates nothing yet: a translucent card of the node (its title band,
+category, sockets and parameter names) follows the pointer, its title band centered under it. Over
+a link the node can go into -- it has an input that takes what the link carries and an output the
+link's destination takes -- the link is emphasized and the card takes the Accent outline; a click
+there inserts the node between the two nodes, wired through its best matching sockets (a socket of
+the link's exact kind before one that takes it by conversion, a node's own sockets before a
+parameter's, then declaration order; a Merge takes the link as a new layer). A click anywhere else
+places it unconnected; Arrange's clear-space rule still moves it off a card it would touch. Either
+click is one undo step. Escape or a right-click (which then opens no menu) cancels the placement,
+and nothing has been created; a focus change or another edit landing meanwhile does not end it. An Add opened by dragging a link out of a
+socket still adds at the release point and connects to that socket at once. Scripts and agents
+insert the same way with `bloom.node.insert-on-link`.
 
 An Image Preview card's context menu toggles **Show as Node Editor Background** (#490): one Image
 Preview at a time is drawn behind the graph, in viewport space, with its own Fit / 100% / zoom /

@@ -59,6 +59,7 @@ void NodeGraphicsScene::cancelGesture() {
         gesture.insertEdge->emphasize(false);
     delete gesture.line;
     delete gesture.box;
+    delete gesture.placement;
     for (const auto& [id, point] : gesture.positions) {
         if (auto* card = dynamic_cast<NodeItem*>(findNodeItem(id))) {
             card->setDragging(false);
@@ -104,12 +105,16 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         return;
     }
     auto& gesture = *interaction_;
-    if (gesture.floating && event->button() == Qt::LeftButton) {
+    suppressContextMenu_ = false;
+    // #703: a placement's left click lands on release; the press belongs to it, not to a card.
+    if ((gesture.floating || gesture.mode == NodeInteraction::Mode::Place) &&
+        event->button() == Qt::LeftButton) {
         event->accept();
         return;
     }
     if (event->button() == Qt::RightButton && gestureActive()) {
         cancelGesture();
+        suppressContextMenu_ = true;
         event->accept();
         return;
     }
@@ -391,6 +396,9 @@ void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
         updateOrderedDropIndicator(*this, gesture, event->scenePos());
         break;
     }
+    case NodeInteraction::Mode::Place:
+        updatePlacement(event->scenePos());
+        break;
     case NodeInteraction::Mode::Idle:
         break;
     }
@@ -403,6 +411,13 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
         return;
     }
     event->accept();
+    if (gesture.mode == NodeInteraction::Mode::Place) {
+        if (event->button() == Qt::LeftButton) {
+            updatePlacement(event->scenePos());
+            commitPlacement();
+        }
+        return;
+    }
     if (gesture.mode == NodeInteraction::Mode::Box) {
         auto selected = gesture.baseSelection;
         for (auto* item : items(gesture.box->rect(), Qt::IntersectsItemShape))

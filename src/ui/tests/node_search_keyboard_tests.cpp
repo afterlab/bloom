@@ -1,5 +1,6 @@
 #include "node_editor_add.hpp"
 #include "node_interaction_test_support.hpp"
+#include "node_placement_test_support.hpp"
 #include <QAbstractItemModel>
 #include <QAction>
 #include <QModelIndex>
@@ -430,6 +431,8 @@ void testSearchKeyboardAndMenus() {
                                                                     static_cast<qsizetype>(document::kLayerOutputNodeType.size())),
            "search combines display-name and socket-kind filters and lists the best match first");
     QTest::keyClick(field, Qt::Key_Return);
+    // #703: Enter starts the placement; the click at the Tab cursor places it.
+    expect(completePlacement(f.editor, cursorScene), "Enter starts placing the chosen node");
     selected = f.session.selectedNode();
     expect(selected && selected->typeId == document::kLayerOutputNodeType &&
                f.stack.size() == history + 1 &&
@@ -459,6 +462,7 @@ void testSearchKeyboardAndMenus() {
     const auto slotsBeforeText = f.session.composition()->graph().layerStack().entries().size();
     const auto edgesBeforeText = f.session.composition()->graph().edges().size();
     QTest::keyClick(field, Qt::Key_Return);
+    (void)completePlacement(f.editor, {560, 460});
     selected = f.session.selectedNode();
     expect(f.stack.size() == history + 1 && selected != nullptr &&
                selected->typeId == document::kTextSourceNodeType &&
@@ -513,7 +517,9 @@ void testSearchKeyboardAndMenus() {
     QTest::mouseClick(
         list->viewport(), Qt::LeftButton, Qt::NoModifier,
         list->visualRect(rowForKey(list->model(), document::kSolidSourceNodeType)).center());
-    expect(f.stack.size() == history + 1 && !popup->isVisible(),
+    expect(!popup->isVisible() && completePlacement(f.editor, {520, 520}),
+           "clicking a search result closes the popup and starts placing the node");
+    expect(f.stack.size() == history + 1,
            "clicking a search result adds and closes the popup");
     f.session.clearSelection();
     const auto emptyRefusals = refused.size();
@@ -718,6 +724,7 @@ void testSearchKeyboardAndMenus() {
     const auto aliasRevision = f.session.snapshot().revision();
     if (auto* solid = named(menu, "nodeAddSolidLayerAction"))
         solid->trigger();
+    (void)completePlacement(f.editor);
     expect(f.session.snapshot().revision().value() == aliasRevision.value() + 1,
            "and one entry adds its node at the click position in one transaction");
     delete menu;
@@ -726,6 +733,7 @@ void testSearchKeyboardAndMenus() {
     if (auto* reroute = named(menu, "nodeAddAction.bloom.reroute")) {
         const auto before = f.session.snapshot().revision();
         reroute->trigger();
+        (void)completePlacement(f.editor);
         expect(f.session.snapshot().revision().value() == before.value() + 1,
                "Reroute adds from the Add menu in one transaction");
     } else {

@@ -207,6 +207,12 @@ void NodeGraphicsView::resizeEvent(QResizeEvent* event) {
 }
 
 void NodeGraphicsView::contextMenuEvent(QContextMenuEvent* event) {
+    // #703: the right-click that cancelled a placement (or any gesture) is spent.
+    if (auto* graph = qobject_cast<NodeGraphicsScene*>(scene());
+        graph != nullptr && graph->takeSuppressedContextMenu()) {
+        event->accept();
+        return;
+    }
     if (event->modifiers().testFlag(Qt::ControlModifier)) {
         event->accept();
         return;

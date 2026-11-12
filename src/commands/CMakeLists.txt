@@ -27,6 +27,7 @@ target_sources(
         layer_stack_operations.cpp
         layer_timing_gesture.cpp
         node_editor_operations.cpp
+        node_link_insertion.cpp
         node_layout_arrange.cpp
         node_layout_placement.cpp
         parameter_reset_operations.cpp
@@ -70,6 +71,7 @@ target_sources(
             include/bloom/commands/layer_stack_operations.hpp
             include/bloom/commands/layer_timing_gesture.hpp
             include/bloom/commands/node_editor_operations.hpp
+            include/bloom/commands/node_link_insertion.hpp
             include/bloom/commands/node_layout_arrange.hpp
             include/bloom/commands/node_layout_placement.hpp
             include/bloom/commands/parameter_reset_operations.hpp

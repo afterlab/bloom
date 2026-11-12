@@ -128,13 +128,20 @@ void NodeGraphicsScene::setProjection(const document::Snapshot& snapshot,
         ++counters.projectionsSkipped;
         // A gesture's commit is checked against the revision it froze, so one the publication
         // moved past could only be refused; it ends here exactly as a real projection would end it.
-        if (gestureActive() && interaction_->revision != snapshot.revision())
+        // #703: a placement never froze a revision; its click adds to whatever is current.
+        if (gestureActive() && !placementActive() &&
+            interaction_->revision != snapshot.revision())
             cancelGesture();
         // The new snapshot shares this content, so holding it instead releases the older one.
         index_->projected = std::move(inputs);
         return;
     }
-    cancelGesture();
+    // #703: a placement outlives a projection (an asynchronous publication must not snatch the
+    // card from under the pointer); only the link it targeted is let go, as links are rebuilt.
+    if (placementActive())
+        releasePlacementTarget();
+    else
+        cancelGesture();
     ++counters.projections;
 
     index_->links = buildProjectionIndex(*composition);
@@ -212,6 +219,8 @@ void NodeGraphicsScene::setProjection(const document::Snapshot& snapshot,
         if (auto* card = index_->node(node.id); card->timeVarying())
             index_->timeVarying.push_back(card);
     index_->projected = std::move(inputs);
+    if (placementActive())
+        updatePlacement(interaction_->origin);
     const QRectF bounds = itemsBoundingRect();
     setSceneRect(bounds.isEmpty() ? QRectF(-kNodeSceneMargin, -kNodeSceneMargin,
                                            (kNodeSceneMargin + kNodeSceneMargin),

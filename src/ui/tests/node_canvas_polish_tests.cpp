@@ -3,6 +3,7 @@
 // footer's Arrange button, source cards without previews and the Nodes icon.
 
 #include "node_interaction_test_support.hpp"
+#include "node_placement_test_support.hpp"
 
 #include <bloom/commands/node_layout_placement.hpp>
 #include <bloom/commands/node_operations.hpp>
@@ -74,7 +75,7 @@ document::NodeId addSolidLayer(Fixture& f, const std::string& name) {
     return *node;
 }
 
-// Chooses `query`'s first match in the Add search opened at `scene`.
+// Chooses `query`'s first match in the Add search opened at `scene` and places it there (#703).
 void addFromSearch(Fixture& f, const QPointF scene, const QString& query) {
     f.editor.openAddSearch(scene, f.view()->viewport()->mapToGlobal(f.view()->mapFromScene(scene)));
     auto* popup = f.editor.findChild<kit::KSearchPopup*>();
@@ -84,6 +85,7 @@ void addFromSearch(Fixture& f, const QPointF scene, const QString& query) {
     field->setText(query);
     QTest::keyClick(field, Qt::Key_Return);
     QCoreApplication::processEvents();
+    (void)completePlacement(f.editor, scene);
 }
 
 document::NodeId newest(Fixture& f) {

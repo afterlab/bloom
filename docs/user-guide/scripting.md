@@ -99,6 +99,11 @@ built on the same command as the UI action, so it validates, labels and undoes t
   into an input that is already connected is inserted into that link, what fed the input feeding
   the new node), and
   `bloom.node.insert-reroute` inserts a Reroute into the link that feeds an input.
+  `bloom.node.insert-on-link` adds any node into the link that feeds an input, as clicking a node
+  chosen from the Node editor's Add menu onto a wire does: the link's source feeds the new node's
+  best matching input and its best matching output feeds the old destination (a socket of the
+  link's exact kind first, then one that takes it by conversion; a node's own sockets before a
+  parameter's), in one undo step. A node with no matching pair is refused.
 - Every Merge entry is a layer
   ([Layer Graph Model](../architecture/layer-graph-model.md#merge)). Every layer edit that takes
   `layer` also takes `merge` and `slot` instead; an entry without a layer gets its own entry layer

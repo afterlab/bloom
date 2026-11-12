@@ -14,6 +14,7 @@
 // about the gesture and command contracts node_interaction_tests.cpp owns.
 
 #include "node_interaction_test_support.hpp"
+#include "node_placement_test_support.hpp"
 
 #include <bloom/document/graph.hpp>
 
@@ -146,6 +147,8 @@ void testAddingAndDraggingATextLayerSurvivesTheRebuild() {
     }
     field->setText(QStringLiteral("text"));
     QTest::keyClick(field, Qt::Key_Return);
+    QCoreApplication::processEvents();
+    (void)completePlacement(f.editor, cursor);
     const auto* const selected = f.session.selectedNode();
     if (selected == nullptr || selected->typeId != document::kTextSourceNodeType) {
         expect(false, "the add search adds a text layer");

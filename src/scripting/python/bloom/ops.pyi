@@ -8303,6 +8303,87 @@ class NodeOps:
         Related: query:nodes, transact
         """
         ...
+    def insert_on_link(self, nodeType: str, node: int | Proxy, port: str = ..., role: str = ..., slot: int | Proxy = ..., position: tuple[float, float] = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.node.insert-on-link  (operation, node)
+        Adds a node INTO an existing link, as choosing a node from the Node editor's Add menu and
+        clicking on a wire does (#703): the link's source feeds the new node's best matching input and
+        the new node's best matching output feeds the link's destination. Best match: a socket of
+        exactly the link's value kind before one that takes it by conversion, a node's own transport
+        socket before a parameter's socket, then declaration order (a Merge takes the link as a new
+        layer slot). Name the link by its destination input (`node` + `port`, or `role` + `slot` for a
+        Merge stack input). The card lands at `position`, or beside it when that spot would touch
+        another card. Outputs: "node" and "editorNode" (the new node id) and "parameter.<role>". Errors:
+        "That link no longer exists" - nothing feeds that input; "The node has no input for what the
+        link carries and no output its destination takes" - pick another node type or add it with
+        bloom.node.add-at-cursor and connect it yourself; unknown node type. Undo: one step. MCP
+        example:
+        {"op":"bloom.node.insert-on-link","args":{"nodeType":"bloom.gaussian-blur","node":5,"port":"image","position":[200,0]}}.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          nodeType  str  required
+              String. The node type id to add (query kind=node-types lists them).
+              Unit: node type id (query:node-types)
+          node  id  required
+              Id. The node whose input the link feeds.
+              Unit: node id (query:nodes)
+              Range: >= 1
+          port  str  optional
+              String. That input's port name. Required unless role is given.
+              Unit: port name (query:node-types lists each type's ports)
+          role  str  optional
+              String. A Merge stack role instead of a port; use with slot.
+              Values:
+                "content"  The slot's image (layer) input
+                "audio"  The slot's audio input
+          slot  id  optional
+              Id. The Merge stack slot of that role.
+              Unit: layer-stack slot id (query:layers .slot)
+              Range: >= 1
+          position  vec2  optional
+              Vec2 [x, y] in Node canvas units: the new card's top-left. Default [0, 0].
+              Unit: node-editor layout units
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          node node
+          editorNode node
+          parameter.<role> parameter
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: node,
+          editorNode, parameter.<role> (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.node.insert-on-link","args":{"nodeType":"bloom.gaussian-blur","node":1,"port":"image"}}]}}
+          Python:
+            bloom.ops.node.insert_on_link(nodeType="bloom.gaussian-blur", node=1, port="image")
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.node.insert-on-link","args":{"nodeType":"bloom.gaussian-blur","node":1,"port":"image"}}]
+
+        Related: transact
+        """
+        ...
     def insert_reroute(self, node: int | Proxy, port: str = ..., role: str = ..., slot: int | Proxy = ..., position: tuple[float, float] = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.node.insert-reroute  (operation, node)
         Inserts a Reroute node into an existing link, as Shift+right-dragging across a wire does: the

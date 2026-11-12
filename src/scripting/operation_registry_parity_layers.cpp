@@ -6,6 +6,7 @@
 #include <bloom/commands/layer_stack_operations.hpp>
 #include <bloom/commands/node_editor_operations.hpp>
 #include <bloom/commands/node_layout_arrange.hpp>
+#include <bloom/commands/node_link_insertion.hpp>
 
 #include "operation_registry_parity.hpp"
 
@@ -135,6 +136,23 @@ const std::string kInsertReroute =
     R"(Undo: one step. )"
     R"(MCP example: {"op":"bloom.node.insert-reroute","args":{"node":5,"port":"image",)"
     R"("position":[200,0]}}.)";
+
+const std::string kInsertOnLink =
+    R"(Adds a node INTO an existing link, as choosing a node from the Node editor's Add menu and )"
+    R"(clicking on a wire does (#703): the link's source feeds the new node's best matching input )"
+    R"(and the new node's best matching output feeds the link's destination. Best match: a socket )"
+    R"(of exactly the link's value kind before one that takes it by conversion, a node's own )"
+    R"(transport socket before a parameter's socket, then declaration order (a Merge takes the link )"
+    R"(as a new layer slot). Name the link by its destination input (`node` + `port`, or `role` + )"
+    R"(`slot` for a Merge stack input). The card lands at `position`, or beside it when that spot )"
+    R"(would touch another card. )"
+    R"(Outputs: "node" and "editorNode" (the new node id) and "parameter.<role>". )"
+    R"(Errors: "That link no longer exists" - nothing feeds that input; "The node has no input for )"
+    R"(what the link carries and no output its destination takes" - pick another node type or add )"
+    R"(it with bloom.node.add-at-cursor and connect it yourself; unknown node type. )"
+    R"(Undo: one step. )"
+    R"(MCP example: {"op":"bloom.node.insert-on-link","args":{"nodeType":"bloom.gaussian-blur",)"
+    R"("node":5,"port":"image","position":[200,0]}}.)";
 
 const std::string kArrange =
     R"(Lays the node graph out from sources on the left to Composition Output on the right, as )"
@@ -396,6 +414,31 @@ void addLayerAndNodeOperations(std::vector<OperationDescriptor>& descriptors) {
                 return read.error();
             return made(std::make_unique<commands::ArrangeNodes>(
                 compositionId, std::set<NodeId>(nodes.begin(), nodes.end())));
+        });
+
+    add(descriptors, "bloom.node.insert-on-link", kInsertOnLink,
+        {composition(),
+         need("nodeType", ValueKind::String, "bloom.gaussian-blur",
+              "String. The node type id to add (query kind=node-types lists them)."),
+         need("node", ValueKind::Id, StableId{1}, "Id. The node whose input the link feeds."),
+         maybe("port", ValueKind::String, "image",
+               "String. That input's port name. Required unless role is given.", true),
+         maybe("role", ValueKind::String, "content",
+               "String. A Merge stack role instead of a port; use with slot."),
+         maybe("slot", ValueKind::Id, StableId{1}, "Id. The Merge stack slot of that role."),
+         maybe("position", ValueKind::Vec2, document::Vec2d{0.0, 0.0},
+               "Vec2 [x, y] in Node canvas units: the new card's top-left. Default [0, 0].")},
+        [](const std::string& op, const Arguments& args) {
+            Reader read(op, args);
+            const auto compositionId = read.id<CompositionId>("composition");
+            const auto type = read.text("nodeType");
+            auto destination = input(read, "node", "port", "role", "slot");
+            const auto position = read.vec2("position");
+            if (read.failed() || !type || !destination)
+                return read.error();
+            return made(std::make_unique<commands::InsertNodeOnLink>(
+                compositionId, *type, *std::move(destination),
+                position.value_or(document::Vec2d{})));
         });
 
     add(descriptors, "bloom.node.insert-reroute", kInsertReroute,

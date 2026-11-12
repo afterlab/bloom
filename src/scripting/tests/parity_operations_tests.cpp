@@ -2,6 +2,7 @@
 // exactly as transact and Python run it, makes one undo step, and undo/redo restores and replays
 // it. Every parity op also carries a full description.
 
+#include <bloom/document/value_nodes.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/node_definition_registry.hpp>
@@ -577,6 +578,71 @@ void addFeedingInserts() {
            "one undo restores the original link");
 }
 
+// #703: insert-on-link is what clicking a node from the Add menu onto a wire does: the link's
+// source feeds the new node's best matching input, its best matching output feeds the old
+// destination, the card lands at `position`, and the whole add is one undo step. A node with no
+// matching socket pair is refused without adding anything.
+void insertOnLink() {
+    Fixture fixture;
+    const auto comp = Value(StableId{fixture.main.value()});
+    auto solid = fixture.run("bloom.layer.add-solid", {{"composition", comp},
+                                                       {"name", Value("Red")},
+                                                       {"color", Value(core::Color4d{1, 0, 0, 1})}});
+    const auto layers = Fixture::outputs<document::LayerId>(solid, "layer");
+    expect(solid.succeeded() && layers.size() == 1, "insert-on-link: a solid layer is added");
+    if (layers.empty())
+        return;
+    fixture.refresh();
+    const auto* boundary = fixture.composition(fixture.main).graph().findLayer(layers.front());
+    if (boundary == nullptr)
+        return;
+    const auto layerNode = boundary->nodeId;
+    const document::InputPortRef image =
+        document::NodeInputRef{layerNode, std::string(document::kLayerOutputContentInputPort)};
+    const auto feeding =
+        [&](const document::InputPortRef& input) -> std::optional<document::OutputPortRef> {
+        fixture.refresh();
+        for (const auto& edge : fixture.composition(fixture.main).graph().edges())
+            if (edge.destination == input)
+                return edge.source;
+        return std::nullopt;
+    };
+    const auto original = feeding(image);
+    const auto nodesBefore = fixture.composition(fixture.main).graph().nodes().size();
+    auto refused = fixture.run("bloom.node.insert-on-link",
+                               {{"composition", comp},
+                                {"nodeType", Value(std::string(document::kScalarValueNodeType))},
+                                {"node", Value(StableId{layerNode.value()})},
+                                {"port", Value(std::string(document::kLayerOutputContentInputPort))}});
+    fixture.refresh();
+    expect(!refused.succeeded() &&
+               fixture.composition(fixture.main).graph().nodes().size() == nodesBefore &&
+               feeding(image) == original,
+           "insert-on-link: a node with no matching sockets is refused and adds nothing");
+    auto added = fixture.run("bloom.node.insert-on-link",
+                             {{"composition", comp},
+                              {"nodeType", Value("bloom.gaussian-blur")},
+                              {"node", Value(StableId{layerNode.value()})},
+                              {"port", Value(std::string(document::kLayerOutputContentInputPort))},
+                              {"position", Value(document::Vec2d{-4000.0, 2000.0})}});
+    const auto inserted = Fixture::outputs<document::NodeId>(added, "editorNode");
+    expect(added.succeeded() && inserted.size() == 1, "insert-on-link adds the blur");
+    if (inserted.empty() || !original)
+        return;
+    const auto fed = feeding(image);
+    expect(fed.has_value() && fed->nodeId == inserted.front() && fed->port == "image",
+           "insert-on-link: the blur's image output now feeds the layer");
+    expect(feeding(document::NodeInputRef{inserted.front(), "input"}) == original,
+           "insert-on-link: what fed the layer now feeds the blur's image input");
+    const auto& layout = fixture.composition(fixture.main).nodeLayout();
+    const auto placed = layout.find(inserted.front());
+    expect(placed != layout.end() && placed->second.position == document::Vec2d{-4000.0, 2000.0},
+           "insert-on-link: the card lands at the given position");
+    expect(fixture.session->undo().succeeded() && feeding(image) == original &&
+               fixture.composition(fixture.main).graph().nodes().size() == nodesBefore,
+           "insert-on-link: one undo removes the node and restores the link");
+}
+
 // #434 O6: a JSON script reads `null` as an omitted argument, as transact and Python do, so
 // set-parent with "parent": null clears the parent instead of refusing the script.
 void nullArguments() {
@@ -719,6 +785,7 @@ void descriptions() {
          {"bloom.layer.delete", "bloom.layer.duplicate", "bloom.layer.add-from-assets",
           "bloom.node.add-asset-source", "bloom.node.add-composition-source",
           "bloom.node.add-feeding", "bloom.node.add-fed-by", "bloom.node.insert-reroute",
+          "bloom.node.insert-on-link",
           "bloom.node.arrange", "bloom.asset.delete-items", "bloom.composition.add-from-assets",
           "bloom.parameter.reset", "bloom.node.set-parameter-value",
           "bloom.node.set-video-audio-stream", "bloom.merge.ensure-entry-layer",
@@ -1265,6 +1332,7 @@ int main() {
     parameterOperations();
     pathValues();
     addFeedingInserts();
+    insertOnLink();
     nullArguments();
     exportPresetOutputs();
     matteParentedToItsTarget();

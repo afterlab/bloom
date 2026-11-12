@@ -391,6 +391,7 @@ target_link_libraries(bloom_timeline_editor_style_test PRIVATE bloom_ui Qt6::Tes
 # Task DRIVE-1's upstream-group pin reads the timeline's own row vocabulary (upstreamGroupKey).
 target_include_directories(bloom_timeline_editor_style_test PRIVATE ..)
 target_link_libraries(bloom_node_editor_test PRIVATE bloom_ui)
+target_include_directories(bloom_node_editor_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 bloom_enable_warnings(bloom_editor_area_chrome_test)
 bloom_enable_warnings(bloom_afterlab_baseline_test)
 bloom_enable_warnings(bloom_workspace_presets_test)
@@ -1158,6 +1159,12 @@ target_link_libraries(bloom_node_opening_frame_test PRIVATE bloom_ui bloom_runti
 bloom_enable_warnings(bloom_node_opening_frame_test)
 bloom_add_test(NAME bloom.ui.node-opening-frame COMMAND bloom_node_opening_frame_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(bloom_node_placement_test node_placement_tests.cpp)
+target_include_directories(bloom_node_placement_test PRIVATE ..)
+target_link_libraries(bloom_node_placement_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
+bloom_enable_warnings(bloom_node_placement_test)
+bloom_add_test(NAME bloom.ui.node-placement COMMAND bloom_node_placement_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(bloom_node_link_detach_test node_link_detach_tests.cpp)
 target_include_directories(bloom_node_link_detach_test PRIVATE ..)
 target_link_libraries(bloom_node_link_detach_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
@@ -1592,6 +1599,15 @@ target_link_libraries(bloom_node_canvas_capture PRIVATE bloom_ui bloom_runtime_c
 target_compile_definitions(bloom_node_canvas_capture PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_node_canvas_capture)
+
+# #694 / #703 review captures of the Node editor's framing and Add Node placement (a tool, not a
+# test): bloom_node_placement_capture <directory> <1|1.5> <prefix> [new-composition|add-node].
+add_executable(bloom_node_placement_capture node_placement_capture.cpp)
+target_include_directories(bloom_node_placement_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_node_placement_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_node_placement_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_node_placement_capture)
 
 # Lane C review captures of every dialog (a tool, not a test): bloom_dialog_capture <dir> <1|1.5>.
 add_executable(bloom_dialog_capture dialog_capture.cpp)

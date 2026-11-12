@@ -1,4 +1,5 @@
 #include "editor_chrome_test_support.hpp"
+#include "node_placement_test_support.hpp"
 // Task U4 (issue #123): the Afterlab node editor's navigation, selection, typed connectors,
 // context menu and in-node editing contracts. Appended as its own executable rather than folded
 // into composition_projection_test.cpp, which owns the cross-editor projection/selection contract
@@ -647,6 +648,10 @@ void testAddFromTheCanvasIsOneUndoableCommand(Expectations& expectations) {
     const auto nodesBefore = fixture.session.composition()->graph().nodes().size();
     const auto edgesBefore = fixture.session.composition()->graph().edges().size();
     addSolidAction->trigger();
+    // #703: the chosen node follows the pointer until a click places it.
+    expectations.expect(fixture.session.composition()->graph().nodes().size() == nodesBefore &&
+                            ui::test::completePlacement(fixture.editor),
+                        "choosing Add > Solid starts its placement and adds nothing yet");
     expectations.expect(fixture.session.composition()->graph().layerStack().entries().empty(),
                         "Add > Solid on the canvas creates no stack slot");
     expectations.expect(fixture.session.composition()->graph().nodes().size() == nodesBefore + 1 &&

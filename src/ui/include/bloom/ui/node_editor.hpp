@@ -104,6 +104,19 @@ class NodeGraphicsScene final : public QGraphicsScene {
     [[nodiscard]] bool canSubmit() const { return static_cast<bool>(submit_); }
     void cancelGesture();
     void startDuplicateMove(QPointF scenePosition);
+    // #703: Add's placement. A translucent card of `type` follows the pointer, starting at
+    // `scenePosition`, until a left click places it: into the link under the pointer when the
+    // node has a matching input and output for it (commands::linkInsertionSockets), otherwise
+    // unconnected. Escape or a right-click cancels it. Nothing is created
+    // before the click, and the click is one transaction (one undo step).
+    void startPlacement(std::string type, QPointF scenePosition);
+    [[nodiscard]] bool placementActive() const;
+    // Test surface: the translucent card while placing, and the link it would go into.
+    [[nodiscard]] QGraphicsItem* placementPreviewForTest() const;
+    [[nodiscard]] std::optional<document::InputPortRef> placementTargetForTest() const;
+    // True once after a right-click cancelled a gesture: that click is spent, so the context menu
+    // event that follows it opens nothing.
+    [[nodiscard]] bool takeSuppressedContextMenu() noexcept;
     [[nodiscard]] bool gestureActive() const;
     [[nodiscard]] commands::CommandResult submit(commands::Transaction&& transaction);
     void selectAllNodes();
@@ -195,8 +208,12 @@ class NodeGraphicsScene final : public QGraphicsScene {
     void updateGroupFrame(node_editor::NodeGroupItem& group);
     void updateGroupGeometry(const std::map<document::NodeId, QPointF>& moved);
     void clearLinkAffinity();
+    void updatePlacement(QPointF cursor);
+    void releasePlacementTarget();
+    void commitPlacement();
 
     CompositionSession* session_ = nullptr;
+    bool suppressContextMenu_ = false;
     Submit submit_;
     std::unique_ptr<NodeInteraction> interaction_;
     std::unique_ptr<node_editor::NodeCanvasIndex> index_;

@@ -129,6 +129,15 @@ struct App final {
         field->setText(query);
         QTest::keyClick(field, Qt::Key_Return);
         QCoreApplication::processEvents();
+        // #703: the chosen node follows the pointer until a click places it; click where it
+        // opened, which is where Tab was pressed.
+        if (auto* preview = editor.graphScene()->placementPreviewForTest()) {
+            const QPointF at = preview->pos() + QPointF(node_editor::kCardMinimumWidth / 2.0,
+                                                        node_editor::kCardHeaderHeight / 2.0);
+            press(at);
+            release(at);
+            QCoreApplication::processEvents();
+        }
         if (session.composition()->graph().nodes().size() == before)
             return std::nullopt;
         const auto* selected = session.selectedNode();

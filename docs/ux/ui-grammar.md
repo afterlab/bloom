@@ -57,6 +57,8 @@ edit; a pointer release or key release finishes a scrub or step; in the Viewer, 
 already exists (a shape, mask, path or text mid-gesture commits at its current state, a gizmo
 drag keeps the change made so far, a region-of-interest drag keeps its region) and returns to
 Select. Nothing is thrown away by Escape: discarding is Undo, one step per completed gesture.
+Placing a node chosen from Add (#703) is the one gesture Escape ends without a result, because it
+has created nothing yet: the preview goes and the document is unchanged.
 The only text that is refused is text that does not parse, carries another unit or falls outside
 the parameter's range, and that is refused by every key alike (see "Live Value Editing").
 
@@ -739,9 +741,14 @@ View menu, the keys or the footer's Arrange button; Arrange All fits the canvas 
 Scripts and agents run the same command (`bloom.node.arrange`) with the command-side card estimate
 in place of measured sizes.
 
-Authored positions are never rearranged by creation. A card added from the canvas lands with its
-title band centered under the pointer (the Tab or right-click point; the header's Add uses the
-middle of the view). When that spot would touch another card, the new card alone moves to the
+Authored positions are never rearranged by creation. A node chosen from an Add surface is placed
+by hand (#703): a translucent preview card -- the card's own `SurfaceRaised` body, `Surface` title
+band, title, category, socket dots in their kind colors and parameter names, at `NodeCardWidth` and
+60% opacity -- follows the pointer with its title band centered under it, from the Tab or
+right-click point (the header's Add starts at the pointer when it is over the canvas, otherwise the
+middle of the view). Over a link the node can be inserted into, the link takes its hover emphasis
+and the preview an `Accent` outline at `SelectionEdge`. The click places the card where the preview
+is. When that spot would touch another card, the new card alone moves to the
 nearest `NodeGrid` position `NodeArrangeGap` past its neighbour. A new layer's Layer card goes into
 the layer column at its stack position (above the layer under it) and its source on the same row
 to the left, each moved off any card it would touch. This rule also applies to Assets drops and

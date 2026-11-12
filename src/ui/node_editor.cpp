@@ -200,6 +200,8 @@ NodeGraphEditor::NodeGraphEditor(CompositionSession& session, QWidget* parent)
     connect(&session_, &CompositionSession::snapshotChanged, this, &NodeGraphEditor::rebuild);
     // #694: another composition (or project) opens at the opening frame, as a fresh panel does.
     connect(&session_, &CompositionSession::compositionChanged, this, [this] {
+        // A placement belongs to the composition it was started in.
+        scene_->cancelGesture();
         view_->resetFraming();
         rebuild();
     });
@@ -225,7 +227,13 @@ NodeGraphEditor::NodeGraphEditor(CompositionSession& session, QWidget* parent)
     connect(view_, &NodeGraphicsView::viewChanged, scene_,
             [this] { scene_->refreshTimeValues(true); });
     connect(view_, &NodeGraphicsView::canvasKeyPressed, this, &NodeGraphEditor::handleCanvasKey);
-    connect(view_, &NodeGraphicsView::canvasFocusLost, scene_, &NodeGraphicsScene::cancelGesture);
+    // A held gesture ends when the canvas loses focus. #703: a placement does not: no button is
+    // held, the Add surface that started it takes and returns focus as it closes, and the artist
+    // ends it themselves -- a click places it, Escape or a right-click cancels it.
+    connect(view_, &NodeGraphicsView::canvasFocusLost, scene_, [this] {
+        if (!scene_->placementActive())
+            scene_->cancelGesture();
+    });
     connect(scene_, &NodeGraphicsScene::addSearchRequested, this, &NodeGraphEditor::openAddSearch);
     connect(scene_, &NodeGraphicsScene::rerouteRequested, this, &NodeGraphEditor::insertReroute);
 

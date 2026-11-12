@@ -4,13 +4,14 @@
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <functional>
+#include <string>
 #include <vector>
 
 namespace bloom::ui {
 // This is transient canvas state. Frozen revision and stable IDs prevent a gesture from editing
 // replacement project content. No draft, mutable document or command stack is retained by UI.
 struct NodeInteraction final {
-    enum class Mode { Idle, Move, Resize, Box, Link, Cut, Reroute };
+    enum class Mode { Idle, Move, Resize, Box, Link, Cut, Reroute, Place };
     Mode mode = Mode::Idle;
     document::Revision revision;
     QPointF origin;
@@ -37,6 +38,9 @@ struct NodeInteraction final {
     QGraphicsPathItem* line = nullptr;
     QGraphicsRectItem* box = nullptr;
     node_editor::NodeEdgeItem* insertEdge = nullptr;
+    // #703: the node type Add is placing and its translucent card.
+    std::string placeType;
+    QGraphicsItem* placement = nullptr;
     // The Merge pills a link drag is showing its slot caret on: the only ones a move has to clear.
     std::vector<node_editor::SocketItem*> indicated;
 };

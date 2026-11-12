@@ -1060,6 +1060,19 @@ void NodeGraphEditor::addNode(const QString& type) {
             (void)addDefaultTextLayer(session_);
         return;
     }
+    // #703: a node chosen from an Add surface is placed by the artist: a translucent card follows
+    // the pointer from where Add was opened (or from the pointer, when it is over the canvas) until
+    // a click places it, into the link under it when it fits. An Add that a link dragged out of a
+    // socket opened already knows where and what to connect, so it adds at once, as before.
+    if (!addInput_ && !addOutput_) {
+        QPointF at = addPosition_;
+        const QPoint cursor = view_->viewport()->mapFromGlobal(QCursor::pos());
+        if (view_->viewport()->rect().contains(cursor))
+            at = view_->sceneFromViewport(cursor);
+        view_->setFocus(Qt::PopupFocusReason);
+        scene_->startPlacement(type.toStdString(), at);
+        return;
+    }
     // One label, because there is one thing the canvas's Add does now: it adds the node that was
     // asked for (task FIX1, item B). "Add Solid Layer" would have been a promise about structure
     // the artist makes themselves.
