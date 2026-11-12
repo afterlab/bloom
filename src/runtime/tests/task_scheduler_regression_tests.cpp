@@ -24,6 +24,10 @@
 namespace {
 
 using namespace std::chrono_literals;
+
+// Bounds a wait only so a broken scheduler fails instead of hanging. No expectation depends on
+// how fast the scheduler is: a parallel test run can starve a worker for seconds (#708).
+constexpr auto kHangGuard = 60s;
 using bloom::runtime::TaskContext;
 using bloom::runtime::TaskGroupHandle;
 using bloom::runtime::TaskHandle;
@@ -73,7 +77,7 @@ class Gate final {
 
     [[nodiscard]] bool waitUntilEntered() {
         std::unique_lock lock(mutex_);
-        return condition_.wait_for(lock, 2s, [&] { return entered_; });
+        return condition_.wait_for(lock, kHangGuard, [&] { return entered_; });
     }
 
     void release() {
@@ -109,7 +113,7 @@ class Gate final {
 
 template <typename Value>
 [[nodiscard]] std::optional<TaskResult<Value>> awaitResult(const TaskHandle<Value>& handle) {
-    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    const auto deadline = std::chrono::steady_clock::now() + kHangGuard;
     while (std::chrono::steady_clock::now() < deadline) {
         if (auto result = handle.tryTakeResult()) {
             return result;
@@ -120,7 +124,7 @@ template <typename Value>
 }
 
 [[nodiscard]] bool awaitQuiescence(const TaskScheduler& scheduler) {
-    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    const auto deadline = std::chrono::steady_clock::now() + kHangGuard;
     while (std::chrono::steady_clock::now() < deadline) {
         if (scheduler.isQuiescent()) {
             return true;
@@ -412,7 +416,7 @@ void testTerminalResultCoherenceAndMultiworkerStress(Expectations& expectations)
     }
     std::vector<bool> consumed(handles.size(), false);
     std::size_t remaining = handles.size();
-    const auto deadline = std::chrono::steady_clock::now() + 3s;
+    const auto deadline = std::chrono::steady_clock::now() + kHangGuard;
     while (remaining != 0 && std::chrono::steady_clock::now() < deadline) {
         for (std::size_t index = 0; index < handles.size(); ++index) {
             if (consumed[index]) {
@@ -560,7 +564,7 @@ void testDestructionWhileWorkerHoldsSchedulerReference(Expectations& expectation
     bool reachedWindow = false;
     {
         std::unique_lock lock(mutex);
-        reachedWindow = changed.wait_for(lock, 2s, [&] { return entered; });
+        reachedWindow = changed.wait_for(lock, kHangGuard, [&] { return entered; });
     }
     expectations.expect(reachedWindow, "worker holds a scheduler reference while cancelling");
     scheduler.reset();
@@ -633,10 +637,10 @@ void testShutdownHandoffAndTeardownContract(Expectations& expectations) {
         queued.push_back(std::move(item.handle));
     }
 
-    const auto started = std::chrono::steady_clock::now();
     scheduler.beginShutdown();
-    const auto elapsed = std::chrono::steady_clock::now() - started;
-    expectations.expect(elapsed < 250ms,
+    // Returning while the blocker still holds its gate proves initiation only hands cancellation
+    // off and never joins running work (a wall-clock bound fails under parallel test load, #708).
+    expectations.expect(!blocker.tryTakeResult().has_value(),
                         "shutdown initiation only performs bounded cancellation handoff");
     expectations.expect(!scheduler.isAccepting(), "shutdown closes admission immediately");
     for (const auto& handle : queued) {
@@ -655,7 +659,6 @@ void testShutdownHandoffAndTeardownContract(Expectations& expectations) {
 }
 
 void testWorkerConstructionRollbackAndConfigBounds(Expectations& expectations) {
-    const auto started = std::chrono::steady_clock::now();
     bool threw = false;
     try {
         auto scheduler = bloom::runtime::detail::TaskSchedulerTestAccess::create(
@@ -668,9 +671,9 @@ void testWorkerConstructionRollbackAndConfigBounds(Expectations& expectations) {
     } catch (const std::runtime_error&) {
         threw = true;
     }
+    // Reaching this line proves the partial pool rolled back without hanging; ctest's timeout is
+    // the hang guard, not a wall-clock expectation (#708).
     expectations.expect(threw, "worker construction seam injects a deterministic failure");
-    expectations.expect(std::chrono::steady_clock::now() - started < 1s,
-                        "partially created worker pools roll back without hanging");
 
     TaskSchedulerConfig invalid = testConfig();
     invalid.cpuWorkerCount = 257;

@@ -318,8 +318,10 @@ void SchedulerState::finishRunning(const std::shared_ptr<TaskRecord>& record,
         }
     }
 
-    const TaskState publishedOutcome = record->work->publish(outcome);
+    // The group counts the task as finished before its result becomes observable, so a caller that
+    // took the result always reads the group's terminal aggregate (#708).
     groupFinished(record->group, TaskState::Running, record->groupContribution);
+    const TaskState publishedOutcome = record->work->publish(outcome);
     publishTerminalSnapshot(record, publishedOutcome);
     {
         std::lock_guard lock(mutex);
@@ -339,8 +341,8 @@ void SchedulerState::finishRunning(const std::shared_ptr<TaskRecord>& record,
 }
 
 void SchedulerState::finalizeRemoved(const std::shared_ptr<TaskRecord>& record) noexcept {
-    const TaskState publishedOutcome = record->work->publish(TaskState::Cancelled);
     groupFinished(record->group, TaskState::Queued, record->groupContribution);
+    const TaskState publishedOutcome = record->work->publish(TaskState::Cancelled);
     publishTerminalSnapshot(record, publishedOutcome);
     {
         std::lock_guard lock(mutex);

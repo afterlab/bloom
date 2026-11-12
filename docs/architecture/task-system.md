@@ -310,7 +310,8 @@ Progress is structured and rate-limited before reaching the UI. A task reports:
 
 Nested work aggregates through task groups. Progress is monotonic within a phase, but a phase may
 change its estimate as new work is discovered. The UI must not infer success from reaching 100%;
-only the terminal outcome is authoritative.
+only the terminal outcome is authoritative. A task's group counts it as finished before its result
+becomes observable, so whoever takes a result reads a group aggregate that already includes it.
 
 The kernel provides structured snapshots and group aggregation. Jobs/progress snapshots still poll
 at a bounded 100 ms default, independently of completion delivery. The shared Jobs model presents
