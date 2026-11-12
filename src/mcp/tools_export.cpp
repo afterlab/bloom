@@ -590,6 +590,34 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
                                 const WorkerLimitArguments& limits) {
     const auto& stop = call.control.stop;
     const auto routeComposition = request.composition.value();
+    // #683: right after launch the encoder probe may still be running, and a movie preset would
+    // be refused "Checking encoders…" although the answer is moments away. Like a start that
+    // waits for a running destination check, the request worker (never the owner thread) waits
+    // for that probe, bounded by limits.encoderProbeWait and cancellable; a probe that outlasts
+    // the wait keeps the typed refusal below.
+    std::shared_ptr<host::ExportPresetCatalogue> catalogue;
+    bool probing = false;
+    onOwner(
+        core,
+        [&](host::ExportQueueService* queue, std::uint64_t) {
+            if (queue == nullptr)
+                return;
+            catalogue = queue->sharedPresets();
+            const auto snapshot = catalogue ? catalogue->snapshot() : nullptr;
+            if (snapshot) {
+                const auto availability =
+                    host::exportPlatformAvailability(request.settings, snapshot->encoders);
+                probing = !availability.available &&
+                          availability.code == host::ExportAvailabilityCode::Probing;
+            }
+        },
+        stop);
+    if (probing && catalogue) {
+        static_cast<void>(catalogue->waitForEncoderProbe(
+            stop, std::chrono::steady_clock::now() + core.dependencies.limits.encoderProbeWait));
+        if (stop.stop_requested())
+            throw ToolFailure(McpToolErrorCode::Cancelled, "The request was cancelled.");
+    }
     host::ExportTransientSubmitResult submitted;
     std::optional<host::ExportQueueSubscription> sub;
     std::uint64_t generation = 0;

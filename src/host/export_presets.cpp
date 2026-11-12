@@ -11,6 +11,7 @@
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <algorithm>
+#include <condition_variable>
 #include <mutex>
 #include <random>
 #include <utility>
@@ -603,6 +604,10 @@ struct ExportPresetCatalogue::State : std::enable_shared_from_this<State> {
     bool storeLoaded = false;
     bool storeFailed = false;
     ExportEncoderStatus encoders;
+    // A refreshEncoders() probe is running; waiters wake when it answers (#683).
+    bool probing = false;
+    std::function<ExportEncoderStatus(const ExportEncoderStatus&)> probe;
+    mutable std::condition_variable_any encodersAnswered;
     std::uint64_t revision = 1;
     std::shared_ptr<const ExportPresetCatalogueSnapshot> published;
     runtime::TaskScheduler* scheduler = nullptr;
@@ -748,26 +753,62 @@ ExportDefaultPreset ExportPresetCatalogue::defaultPreset() const {
 }
 
 void ExportPresetCatalogue::setEncoderStatus(ExportEncoderStatus status) {
-    std::scoped_lock lock(state_->mutex);
-    state_->encoders = std::move(status);
-    state_->changed();
+    {
+        std::scoped_lock lock(state_->mutex);
+        state_->encoders = std::move(status);
+        state_->probing = false;
+        state_->changed();
+    }
+    state_->encodersAnswered.notify_all();
 }
 
 void ExportPresetCatalogue::refreshEncoders(runtime::TaskScheduler& scheduler) {
-    [[maybe_unused]] auto submitted = scheduler.submit<void>(
+    std::function<ExportEncoderStatus(const ExportEncoderStatus&)> probe;
+    {
+        std::scoped_lock lock(state_->mutex);
+        state_->probing = true;
+        probe = state_->probe;
+    }
+    auto submitted = scheduler.submit<void>(
         runtime::TaskRequest("Probe export encoders",
                              {runtime::TaskOwnerKind::Export, runtime::TaskOwnerId::fromRaw(1)},
                              runtime::TaskPriority::Background, runtime::TaskExecutor::BlockingIo),
-        [weak = std::weak_ptr<State>(state_),
-         initial = state_->options.initialEncoders](runtime::TaskContext&) {
-            auto status = probeExportEncoders(initial);
+        [weak = std::weak_ptr<State>(state_), initial = state_->options.initialEncoders,
+         probe = std::move(probe)](runtime::TaskContext&) {
+            auto status = probe ? probe(initial) : probeExportEncoders(initial);
             if (const auto self = weak.lock()) {
-                std::scoped_lock lock(self->mutex);
-                self->encoders = std::move(status);
-                self->changed();
+                {
+                    std::scoped_lock lock(self->mutex);
+                    self->encoders = std::move(status);
+                    self->probing = false;
+                    self->changed();
+                }
+                self->encodersAnswered.notify_all();
             }
             return runtime::TaskResult<void>::succeeded();
         });
+    if (!submitted.accepted()) {
+        {
+            std::scoped_lock lock(state_->mutex);
+            state_->probing = false;
+        }
+        state_->encodersAnswered.notify_all();
+    }
+}
+
+void ExportPresetCatalogue::setEncoderProbe(
+    std::function<ExportEncoderStatus(const ExportEncoderStatus&)> probe) {
+    std::scoped_lock lock(state_->mutex);
+    state_->probe = std::move(probe);
+}
+
+bool ExportPresetCatalogue::waitForEncoderProbe(
+    const std::stop_token& stop, const std::chrono::steady_clock::time_point deadline) const {
+    std::unique_lock lock(state_->mutex);
+    state_->encodersAnswered.wait_until(lock, stop, deadline, [&] {
+        return state_->encoders.probed || !state_->probing;
+    });
+    return state_->encoders.probed;
 }
 
 void ExportPresetCatalogue::loadUserPresets(runtime::TaskScheduler& scheduler) {

@@ -194,7 +194,10 @@ alpha: the composition background colour is display-only and is not rendered. No
 existing file silently: for `render` and `export`, `"overwrite":"ask"` (the default) and `"refuse"`
 both fail with `bloom.mcp.export-unavailable` when the destination exists, because nothing can
 answer the question over MCP; pass `"overwrite":"replace"`. Queue jobs that ask wait for
-`export.confirm-replace`.
+`export.confirm-replace`. Right after Bloom starts, the encoders are still being checked: an `export`
+of a movie preset in that moment waits for the check (up to 30 seconds, and it ends when the request
+is cancelled) and then answers with the real availability, so a client never has to retry. A check
+that takes longer still fails with `bloom.mcp.export-unavailable` and "Checking encoders…".
 ### Export worker limits
 
 `export` takes optional `workerMemoryCapBytes` (0 = no cap, up to 1 TiB) and `workerThreads` (0 =

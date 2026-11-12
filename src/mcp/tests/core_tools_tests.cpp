@@ -1746,9 +1746,11 @@ void exportAcceptsEveryListedPreset() {
         requested = settings;
         return mcp::McpUiResult{};
     };
-    // A short destination-check wait, so the case below that never gets its check stays quick.
+    // A short destination-check wait, so the case below that never gets its check stays quick;
+    // the same for the encoder probe wait (#683).
     auto limits = mcp::kMcpMessageLimits;
     limits.destinationCheckWait = std::chrono::milliseconds(2000);
+    limits.encoderProbeWait = std::chrono::milliseconds(5000);
     Live server(std::move(port), std::move(exports), folder, {}, limits);
     live = &server;
     const scripting::LiveSessionCommitter committer{
@@ -1792,7 +1794,9 @@ void exportAcceptsEveryListedPreset() {
             std::filesystem::remove_all(folder, ignored);
         }
     } release{queue, folder};
-    const auto makeQueue = [&](const host::ExportEncoderStatus& encoders) {
+    const auto makeQueue = [&](const host::ExportEncoderStatus& encoders,
+                               std::function<host::ExportEncoderStatus(
+                                   const host::ExportEncoderStatus&)> probe = {}) {
         queue.reset();
         ++generation;
         queue = std::make_unique<host::ExportQueueService>(host::ExportQueueServiceDependencies{
@@ -1804,8 +1808,13 @@ void exportAcceptsEveryListedPreset() {
             .ledger = std::make_shared<output::ExportResourceLedgerV1>(),
             .gpu = nullptr,
             .retirement = nullptr,
-            .presets = host::ExportPresetCatalogue::create(
-                {.userDataDirectory = std::nullopt, .initialEncoders = encoders}),
+            .presets = [&] {
+                auto catalogue = host::ExportPresetCatalogue::create(
+                    {.userDataDirectory = std::nullopt, .initialEncoders = encoders});
+                if (probe)
+                    catalogue->setEncoderProbe(std::move(probe));
+                return catalogue;
+            }(),
             .limits = {},
             .displayProcessor = nullptr,
             .scratchDirectory = {},
@@ -1966,6 +1975,59 @@ void exportAcceptsEveryListedPreset() {
                "the same job starts once its check has answered: " + started);
     }
     fake->setDestinationCheckDelay(std::chrono::milliseconds(0));
+
+    // #683: right after launch the encoder probe is still running. The one-call export of a movie
+    // preset waits for that probe (bounded by encoderProbeWait) and answers with the real
+    // availability; a probe that outlasts the wait is the typed "Checking encoders" refusal, and
+    // the same call succeeds once the probe has answered.
+    {
+        std::mutex probeMutex;
+        std::condition_variable probeGate;
+        bool probeReleased = false;
+        const auto slowProbe = [&](const host::ExportEncoderStatus&) {
+            std::unique_lock lock(probeMutex);
+            probeGate.wait(lock, [&] { return probeReleased; });
+            return everything;
+        };
+        const auto releaseProbe = [&] {
+            {
+                const std::lock_guard lock(probeMutex);
+                probeReleased = true;
+            }
+            probeGate.notify_all();
+        };
+        const Listed h264{.id = "builtin:h264-mp4", .extension = "mp4", .reason = {},
+                          .available = true};
+        // A probe that answers while the call waits.
+        makeQueue(host::ExportEncoderStatus{}, slowProbe);
+        queue->presets().refreshEncoders(server.scheduler);
+        fake->push({});
+        std::thread answer([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            releaseProbe();
+        });
+        const auto waited = exportWith(h264, "slow-probe");
+        answer.join();
+        expect(contains(waited, R"("isError":false)") && !contains(waited, "Checking encoders") &&
+                   contains(waited, R"("publishedFrames":)"),
+               "export waits for a running encoder probe: " + waited);
+        // A probe that outlasts the wait.
+        probeReleased = false;
+        makeQueue(host::ExportEncoderStatus{}, slowProbe);
+        queue->presets().refreshEncoders(server.scheduler);
+        const auto stuck = exportWith(h264, "stuck-probe");
+        expect(contains(stuck, R"("isError":true)") && contains(stuck, "Checking encoders"),
+               "a probe that outlasts the wait is the typed refusal: " + stuck);
+        releaseProbe();
+        expect(queue->presets().waitForEncoderProbe(
+                   {}, std::chrono::steady_clock::now() + std::chrono::seconds(60)),
+               "the released probe answers");
+        fake->push({});
+        const auto after = exportWith(h264, "after-probe");
+        expect(contains(after, R"("isError":false)") && contains(after, R"("publishedFrames":)"),
+               "the same export succeeds once the probe has answered: " + after);
+        makeQueue(everything);
+    }
 
     const auto unknown =
         call("export", R"({"composition":1,"frame":0,"preset":"builtin:no-such-preset",)"

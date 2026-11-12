@@ -761,6 +761,8 @@ class ExportQueueService final {
     // The export job a Jobs-panel task belongs to (TaskOwnerKind::Export only).
     [[nodiscard]] std::optional<ExportJobId> jobForTaskOwner(runtime::TaskOwnerId owner) const;
     [[nodiscard]] ExportPresetCatalogue& presets() const noexcept;
+    // The same catalogue, shared, for a caller that waits on it off the owner thread (#683).
+    [[nodiscard]] std::shared_ptr<ExportPresetCatalogue> sharedPresets() const noexcept;
 
     // ---- Owner thread (desktop: UI thread). Non-blocking, no I/O.
 

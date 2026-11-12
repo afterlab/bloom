@@ -7,11 +7,14 @@
 #include <bloom/output/output_analysis.hpp>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -375,6 +378,14 @@ class ExportPresetCatalogue final {
     void setEncoderStatus(ExportEncoderStatus status);
     // Headless owners: schedules the encoder probe on `scheduler`'s workers. Non-blocking.
     void refreshEncoders(runtime::TaskScheduler& scheduler);
+    // The probe refreshEncoders() runs; unset, probeExportEncoders(). A test sets a slow one before
+    // refreshEncoders() (#683).
+    void setEncoderProbe(std::function<ExportEncoderStatus(const ExportEncoderStatus&)> probe);
+    // Never on the owner thread: waits until a probe that refreshEncoders() started has answered,
+    // `stop` is requested or `deadline` passes, and returns at once when no probe is running.
+    // True when the encoders have been probed (#683).
+    [[nodiscard]] bool waitForEncoderProbe(const std::stop_token& stop,
+                                           std::chrono::steady_clock::time_point deadline) const;
 
     // Schedules the user-preset store read on `scheduler`'s blocking-I/O executor. Non-blocking;
     // the presets appear with the next catalogue revision. A missing file is an empty store; a

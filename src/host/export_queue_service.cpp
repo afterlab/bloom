@@ -1128,6 +1128,10 @@ ExportPresetCatalogue& ExportQueueService::presets() const noexcept {
     return *state_->dependencies.presets;
 }
 
+std::shared_ptr<ExportPresetCatalogue> ExportQueueService::sharedPresets() const noexcept {
+    return state_->dependencies.presets;
+}
+
 ExportAvailability
 ExportQueueService::projectAvailability(const document::ExportOutputSettings& settings) const {
     const auto& color = state_->colorSettings;

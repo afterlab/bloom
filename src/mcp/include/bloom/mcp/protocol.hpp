@@ -36,6 +36,9 @@ struct McpMessageLimits final {
     // How long export.start and export.start-all wait for a destination check that is already
     // running before they answer DestinationCheckPending.
     std::chrono::milliseconds destinationCheckWait{10000};
+    // How long the one-call export waits for an encoder probe that is already running (the probe
+    // a host starts at launch) before it answers with the "Checking encoders" refusal (#683).
+    std::chrono::milliseconds encoderProbeWait{30000};
 };
 
 inline constexpr McpMessageLimits kMcpMessageLimits{};
