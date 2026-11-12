@@ -187,11 +187,17 @@ void testApplyEmitsAndClearsDirty(Expectations& check) {
 
     auto* snap = window.findChild<QAbstractButton*>(QStringLiteral("preferencesNodeSnapSwitch"));
     snap->setChecked(true);
+    window.findChild<QAbstractButton*>(QStringLiteral("preferencesNodeShowMinimapSwitch"))
+        ->setChecked(false);
+    window.findChild<QAbstractButton*>(QStringLiteral("preferencesNodeShowZoomControlsSwitch"))
+        ->setChecked(false);
     check.expect(apply->isEnabled(), "the edit leaves Apply enabled before it is clicked");
 
     apply->click();
     check.expect(emissions == 1, "Apply emits preferencesApplied exactly once");
     check.expect(emitted.nodeSnap, "the emitted value carries the edit");
+    check.expect(!emitted.nodeShowMinimap && !emitted.nodeShowZoomControls,
+                 "the emitted value carries the view control switches");
     check.expect(!apply->isEnabled(), "a successful Apply clears the dirty state");
 }
 
@@ -589,6 +595,7 @@ void testSectionResetRestoresItsDefaults(Expectations& check) {
     auto preferences = samplePreferences();
     preferences.nodeSnap = true;
     preferences.nodeGridSize = 32.0;
+    preferences.nodeShowMinimap = false;
     preferences.timelineSnapping = false;
     ui::PreferencesWindow window(owner(), preferences);
     auto* nodes =
@@ -597,6 +604,8 @@ void testSectionResetRestoresItsDefaults(Expectations& check) {
     if (nodes != nullptr)
         emit nodes->resetRequested();
     const auto defaults = ui::defaultApplicationPreferences();
+    check.expect(window.preferences().nodeShowMinimap && window.preferences().nodeShowZoomControls,
+                 "Reset turns the view controls back on");
     check.expect(window.preferences().nodeSnap == defaults.nodeSnap &&
                      window.preferences().nodeGridSize == defaults.nodeGridSize &&
                      window.preferences().timelineSnapping == false,

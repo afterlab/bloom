@@ -630,6 +630,8 @@ target_sources(
         media_disk_cache_settings.cpp
         node_editor.cpp
         node_editor_canvas.cpp
+        node_editor_minimap.cpp
+        node_editor_view_controls.cpp
         node_editor_items.cpp
         node_search_keywords.cpp
         node_editor_interactions.cpp

@@ -1471,28 +1471,11 @@ void NodeGraphEditor::refreshSelectionReadout() {
 }
 
 void NodeGraphEditor::buildFooter() {
-    // The same fixed presets the Viewer's own zoom dropdown offers (viewer_editor.cpp's
-    // kZoomPresets) -- deliverable 4's "same items as the viewer's".
-    constexpr std::array<int, 5> kZoomPresets{25, 50, 100, 200, 400};
-
     auto* layout = &chrome_.footer;
     layout->objectName = "nodeFooter";
-    footerZoomDropdown_ = new kit::KDropdown(this);
-    footerZoomDropdown_->setObjectName(QStringLiteral("nodeZoomDropdown"));
-    footerZoomDropdown_->setAccessibleName(tr("Zoom"));
-    footerZoomDropdown_->setControlSize(kit::KDropdown::ControlSize::Dense);
-    footerZoomDropdown_->addItem(tr("Fit"), 0);
-    for (const int percent : kZoomPresets) {
-        footerZoomDropdown_->addItem(tr("%1%").arg(percent), percent);
-    }
-    connect(footerZoomDropdown_, &kit::KDropdown::currentIndexChanged, this, [this](int index) {
-        if (index <= 0) {
-            view_->frameGraph();
-            return;
-        }
-        view_->zoomToPercent(footerZoomDropdown_->itemData(index).toInt());
-    });
-    layout->addWidget(footerZoomDropdown_);
+    // #695: zoom out, the draggable zoom value and zoom in lead the row; the minimap overlay is
+    // built with them (node_editor_view_controls.cpp).
+    buildViewControls();
 
     auto* snapSwitch = new kit::KSwitch(this);
     snapSwitch->setObjectName(QStringLiteral("nodeSnapSwitch"));

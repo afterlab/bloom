@@ -73,6 +73,8 @@ void testFullRoundTrip(Expectations& check) {
     prefs.nodeLinkStyle = ui::NodeLinkStyle::Angled;
     prefs.nodeSnap = true;
     prefs.nodeGridSize = 24.0;
+    prefs.nodeShowZoomControls = false;
+    prefs.nodeShowMinimap = false;
     prefs.viewerResolution = ui::ViewerResolutionPreference::Half;
     prefs.viewerBackground = ui::ViewerBackgroundPreference::Grey;
     prefs.viewerTransparencyGrid = true;
@@ -92,6 +94,9 @@ void testFullRoundTrip(Expectations& check) {
     ui::saveApplicationPreferences(settings, prefs);
     const auto reloaded = ui::loadApplicationPreferences(settings);
     check.expect(reloaded == prefs, "every global preference round-trips through QSettings");
+    check.expect(ui::defaultApplicationPreferences().nodeShowZoomControls &&
+                     ui::defaultApplicationPreferences().nodeShowMinimap,
+                 "the zoom controls and the minimap are on by default");
     check.expect(!ui::defaultApplicationPreferences().agentsAnswerDialogs &&
                      !ui::defaultApplicationPreferences().agentsRunScripts,
                  "the agent routes are off by default");

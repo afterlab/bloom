@@ -106,6 +106,10 @@ struct ApplicationPreferences final {
     NodeLinkStyle nodeLinkStyle = NodeLinkStyle::Spline;
     bool nodeSnap = false;
     double nodeGridSize = kit::px(kit::Size::NodeGrid);
+    // #695: the canvas's view controls. The footer's zoom buttons and value, and the minimap in the
+    // canvas corner; both on by default.
+    bool nodeShowZoomControls = true;
+    bool nodeShowMinimap = true;
 
     // Viewer.
     ViewerResolutionPreference viewerResolution = ViewerResolutionPreference::Auto;

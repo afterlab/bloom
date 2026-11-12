@@ -32,6 +32,8 @@ constexpr auto kTimelineGraphEditorKey = "timeline/graph-editor";
 constexpr auto kTimelineLayerColumnWidthKey = "timeline/layer-column-width";
 constexpr auto kNodeLinkStyleKey = "nodes/link-style";
 constexpr auto kNodeSnapKey = "nodes/snap";
+constexpr auto kNodeShowZoomControlsKey = "nodes/show-zoom-controls";
+constexpr auto kNodeShowMinimapKey = "nodes/show-minimap";
 constexpr auto kNodeGridSizeKey = "nodes/grid-size";
 constexpr auto kViewerResolutionKey = "viewer/resolution";
 constexpr auto kViewerBackgroundKey = kViewerBackgroundSettingKey;
@@ -230,6 +232,9 @@ ApplicationPreferences loadApplicationPreferences(const QSettings& settings) {
     preferences.nodeLinkStyle =
         nodeLinkStyleFromString(settings.value(QLatin1String(kNodeLinkStyleKey)).toString());
     preferences.nodeSnap = settings.value(QLatin1String(kNodeSnapKey), false).toBool();
+    preferences.nodeShowZoomControls =
+        settings.value(QLatin1String(kNodeShowZoomControlsKey), true).toBool();
+    preferences.nodeShowMinimap = settings.value(QLatin1String(kNodeShowMinimapKey), true).toBool();
     preferences.nodeGridSize = positiveDoubleFromSettings(settings, kNodeGridSizeKey, 16.0);
     preferences.viewerResolution = viewerResolutionFromString(
         settings.value(QLatin1String(kViewerResolutionKey), QStringLiteral("Auto")).toString());
@@ -334,6 +339,8 @@ void saveApplicationPreferences(QSettings& settings, const ApplicationPreference
     settings.setValue(QLatin1String(kNodeLinkStyleKey),
                       QLatin1String(nodeLinkStyleValue(preferences.nodeLinkStyle)));
     settings.setValue(QLatin1String(kNodeSnapKey), preferences.nodeSnap);
+    settings.setValue(QLatin1String(kNodeShowZoomControlsKey), preferences.nodeShowZoomControls);
+    settings.setValue(QLatin1String(kNodeShowMinimapKey), preferences.nodeShowMinimap);
     settings.setValue(QLatin1String(kNodeGridSizeKey), preferences.nodeGridSize);
     settings.setValue(QLatin1String(kViewerResolutionKey),
                       QLatin1String(viewerResolutionValue(preferences.viewerResolution)));

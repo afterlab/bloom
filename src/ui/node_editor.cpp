@@ -286,6 +286,7 @@ void NodeGraphEditor::applyApplicationPreferences(const ApplicationPreferences& 
         linkStyleFromSettingsValue(QLatin1String(nodeLinkStyleValue(preferences.nodeLinkStyle))));
     scene_->setGridSnapEnabled(preferences.nodeSnap);
     scene_->setGridSize(preferences.nodeGridSize);
+    applyViewControls(preferences.nodeShowZoomControls, preferences.nodeShowMinimap);
 }
 
 NodeGraphicsView* NodeGraphEditor::graphView() const noexcept { return view_; }

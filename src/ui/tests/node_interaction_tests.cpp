@@ -304,7 +304,9 @@ void testHeaderMenusGridSnappingLinkStyleAndFooter() {
     expect(footer != nullptr, "the footer widget exists");
     if (footer != nullptr) {
         expect(
-            footer->findChild<QWidget*>(QStringLiteral("nodeZoomDropdown")) != nullptr &&
+            footer->findChild<QWidget*>(QStringLiteral("nodeZoomValue")) != nullptr &&
+                footer->findChild<QWidget*>(QStringLiteral("nodeZoomOutButton")) != nullptr &&
+                footer->findChild<QWidget*>(QStringLiteral("nodeZoomInButton")) != nullptr &&
                 f.editor.findChild<QWidget*>(QStringLiteral("nodeSnapSwitch"))->isHidden() &&
                 f.editor.findChild<QWidget*>(QStringLiteral("nodeLinkStyleDropdown"))->isHidden(),
             "the footer shows zoom and hides the legacy snap and link style controls");

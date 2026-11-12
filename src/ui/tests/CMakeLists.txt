@@ -1058,6 +1058,13 @@ target_link_libraries(bloom_node_interaction_test PRIVATE bloom_ui bloom_project
 bloom_enable_warnings(bloom_node_interaction_test)
 bloom_add_test(NAME bloom.ui.node-interaction COMMAND bloom_node_interaction_test LABELS ui integration kit TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# #695: the zoom buttons, the draggable zoom value, the minimap and the two Preferences.
+add_executable(bloom_node_view_controls_test node_view_controls_tests.cpp)
+target_include_directories(bloom_node_view_controls_test PRIVATE .. ${PROJECT_SOURCE_DIR}/src/ui)
+target_link_libraries(bloom_node_view_controls_test PRIVATE bloom_ui bloom_project Qt6::Test)
+bloom_enable_warnings(bloom_node_view_controls_test)
+bloom_add_test(NAME bloom.ui.node-view-controls COMMAND bloom_node_view_controls_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(bloom_node_layout_arrange_test node_layout_arrange_tests.cpp)
 target_include_directories(bloom_node_layout_arrange_test PRIVATE ..)
 target_link_libraries(bloom_node_layout_arrange_test PRIVATE bloom_ui)
@@ -1615,6 +1622,15 @@ target_link_libraries(bloom_node_placement_capture PRIVATE bloom_ui bloom_runtim
 target_compile_definitions(bloom_node_placement_capture PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_node_placement_capture)
+
+# #695 review captures of the node editor's view controls (a tool, not a test):
+# bloom_node_view_controls_capture <directory> <1|1.5> <before|after>.
+add_executable(bloom_node_view_controls_capture node_view_controls_capture.cpp)
+target_include_directories(bloom_node_view_controls_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_node_view_controls_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_node_view_controls_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_node_view_controls_capture)
 
 # Lane C review captures of every dialog (a tool, not a test): bloom_dialog_capture <dir> <1|1.5>.
 add_executable(bloom_dialog_capture dialog_capture.cpp)

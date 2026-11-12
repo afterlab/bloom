@@ -172,7 +172,8 @@ call goes through the same controllers the window uses, and the window shows it 
   `mediaDiskCache`, `mediaDiskCacheDirectory` (absolute, or empty for the default),
   `mediaDiskCacheBudgetBytes` (0 for the default), `timelineTimeFormat` (`frames` or `timecode`),
   `timelineSnapping`, `timelineKeyframesVisible`, `timelineGraphEditor`, `nodeLinkStyle` (`spline`,
-  `straight`, `angled`), `nodeSnap`, `nodeGridSize` (pixels), `viewerResolution` (`auto`, `full`,
+  `straight`, `angled`), `nodeSnap`, `nodeGridSize` (pixels), `nodeShowZoomControls`,
+  `nodeShowMinimap`, `viewerResolution` (`auto`, `full`,
   `half`, `quarter`), `viewerBackground` (`solid`, `gray`, `black`, `white`),
   `viewerTransparencyGrid`, `viewerSafeAreas`, `viewerCenterCross`, `viewerThirds`, `viewerRulers`,
   `viewerPixelGrid`, `importSequenceFrameRate` (`"24"`, `"24000/1001"`, or empty for one image per

@@ -201,6 +201,9 @@ const std::vector<PreferenceKey>& preferenceKeys() {
         list.push_back(choiceKey("nodeLinkStyle", &ApplicationPreferences::nodeLinkStyle,
                                  std::array<std::string_view, 3>{"spline", "straight", "angled"}));
         list.push_back(flagKey("nodeSnap", &ApplicationPreferences::nodeSnap));
+        list.push_back(
+            flagKey("nodeShowZoomControls", &ApplicationPreferences::nodeShowZoomControls));
+        list.push_back(flagKey("nodeShowMinimap", &ApplicationPreferences::nodeShowMinimap));
         list.push_back({"nodeGridSize",
                         [](const ApplicationPreferences& p) { return Value(p.nodeGridSize); },
                         [](ApplicationPreferences& p, const Value& value) {

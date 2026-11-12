@@ -204,6 +204,9 @@ enum class Size : int {
     NodeSocketDot = 8,
     NodeLinkHandleMin = 32,
     NodeColumnGap = 80,
+    // The node editor's minimap plate (#695): the overlay in the canvas's bottom-right corner.
+    NodeMinimapWidth = 200,
+    NodeMinimapHeight = 140,
     // The main window's first-show size.
     MainWindowWidth = 1600,
     MainWindowHeight = 1000,

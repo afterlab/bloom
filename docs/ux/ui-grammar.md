@@ -186,7 +186,7 @@ narrow panel), up to two fifths of the row. A label longer than that wraps and i
 Properties label is never elided. Tables with sortable columns (Assets, Jobs) use the kit theme's item-view and header
 styling at the `ListRow` pitch, with no per-row widgets.
 
-Painting outside the kit is limited to viewer canvas, node scene items, timeline
+Painting outside the kit is limited to viewer canvas, node scene items, the node editor minimap, timeline
 ruler, lanes, graph editor, work area and navigator, and the graphical grade controls a node card
 and Properties share (`NodeCardWidget`): the Grade colour wheel (`GradeWheelCanvas`) and its
 contrast-curve picture (`GradeContrastCanvas`), the Levels histogram with its handles
@@ -194,6 +194,27 @@ contrast-curve picture (`GradeContrastCanvas`), the Levels histogram with its ha
 editor), the Hue/Saturation hue strip (`HueShiftStrip`) and the Colorize gradient ramp with its
 stops (`ColorizeRampBar`). Every other grading control is a kit
 widget: a value field, or `KSlider`'s grading variant. Other surfaces compose kit widgets.
+
+### Node editor view controls (#695)
+
+The node editor footer leads with three kit controls at `Size::Control`: a zoom-out `KIconButton`
+(`nodeZoomOutButton`, `Subtract`), the zoom value (`nodeZoomValue`, a `KValueField` at
+`Size::ViewerZoomWidth`, outlined at rest, with the `%` unit) and a zoom-in `KIconButton`
+(`nodeZoomInButton`, `Add`). The value scrubs along the vertical axis
+(`KValueField::setScrubAxis`): drag up to zoom in, one percent per pixel, with the field's own
+modifiers. A click types a percentage; Reset and the context menu offer Actual Size, Fit and the
+25, 50, 100, 200 and 400 percent presets. A button disables at the canvas's zoom limit.
+
+The minimap (`nodeMinimap`, `NodeMinimap`) is the one painted overlay of the node editor: a child of
+the canvas viewport in its bottom-right corner, `Size::NodeMinimapWidth` by
+`Size::NodeMinimapHeight`, inset by `Spacing::S` from the corner. It paints a `Surface` plate with a
+`Border` hairline at `Radius::Small`; every card as a `Field` rectangle and every group frame as a
+`BorderHover` hairline outline, scaled to fit the graph together with the visible area; and the
+visible area as an `Accent` hairline rectangle under the selection wash (`kSelectionWashOpacity`).
+Hairlines snap to device pixels. It hides for an empty graph and for a canvas smaller than twice its
+size in either direction.
+
+Both are switched by Preferences (Node Graph: Show zoom controls, Show minimap), on by default.
 
 ## Export panel
 

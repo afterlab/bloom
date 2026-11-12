@@ -26,7 +26,7 @@ or create, is refused under the field and OK waits.
 | Sounds | Play sounds (master), volume, event sounds, interaction sounds, render notifications, and a Play test sound button. See [UI sound feedback](../ux/sound.md) | Immediately |
 | Viewer | Resolution, the background around the composition frame (Solid, Gray, Black, White), the transparency grid inside it, and the safe-areas, center-cross, thirds, rulers and pixel-grid overlays | Immediately |
 | Timeline | Time format, snapping, keyframes, graph editor, layer column width | Immediately |
-| Node Graph | Link style, snap to grid, grid size | Immediately |
+| Node Graph | Link style, snap to grid, grid size, **Show zoom controls** (the zoom buttons and value in the node editor footer) and **Show minimap** (the overview in the canvas corner); both on by default | Immediately |
 | Memory & Caches | RAM and VRAM headroom, **Worker memory cap** and **Worker threads** for export workers, media disk cache enable/directory/budget | Headroom on Apply or OK; worker limits on the next export you start; disk cache after restart |
 | Performance | Read-only acceleration status | Not a preference |
 

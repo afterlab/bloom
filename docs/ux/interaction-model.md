@@ -437,6 +437,10 @@ as the Viewer's Custom Safe Areas dialog (0.1–100 %, one decimal).
 | Middle drag | Pan |
 | Wheel | Zoom about the pointer |
 | Trackpad pinch | Zoom about the fingers, within the wheel's limits (#696) |
+| Footer Zoom Out / Zoom In buttons | Zoom one wheel step about the view center (#695) |
+| Drag the footer zoom value up or down | Zoom continuously about the view center, one percent per pixel; up zooms in. Shift and Ctrl scale the drag as on any value field (#695) |
+| Click the footer zoom value | Type a zoom percentage; Reset, or the context menu, offers Actual Size, Fit and 25, 50, 100, 200, 400% (#695) |
+| Press or drag in the minimap | Center the view on the point under the pointer; a drag is one continuous pan and never edits the document. Other buttons and the wheel over it do nothing (#695) |
 | `Tab` | Open the Add search; the chosen node follows the pointer until a click places it (#703) |
 | Choose a node from Add (header menu, canvas menu or the `Tab` search) | A translucent card of it follows the pointer; a click places it, Escape or a right-click cancels (#703) |
 | Click while placing, over a link the node fits | Insert the node into that link: the link's source feeds its best matching input and its best matching output feeds the link's destination, in one undo step (#703) |

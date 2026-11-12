@@ -907,6 +907,8 @@ QWidget* PreferencesWindow::buildNodeGraphPage() {
         draft.nodeLinkStyle = base.nodeLinkStyle;
         draft.nodeSnap = base.nodeSnap;
         draft.nodeGridSize = base.nodeGridSize;
+        draft.nodeShowZoomControls = base.nodeShowZoomControls;
+        draft.nodeShowMinimap = base.nodeShowMinimap;
     });
     auto* rows = section->bodyLayout();
 
@@ -957,6 +959,24 @@ QWidget* PreferencesWindow::buildNodeGraphPage() {
         const QSignalBlocker blocker(grid);
         grid->setValue(draft_.nodeGridSize);
     });
+
+    // #695: the canvas's view controls, each switchable.
+    const auto viewControl = [&](const QString& name, const QString& label, bool ApplicationPreferences::*member) {
+        auto* control = addSwitchRow(rows, content, name, label, false);
+        control->setChecked(draft_.*member);
+        connect(control, &QAbstractButton::toggled, this, [this, member](const bool value) {
+            draft_.*member = value;
+            updateApplyEnabled();
+        });
+        refreshCallbacks_.push_back([this, control, member] {
+            const QSignalBlocker blocker(control);
+            control->setChecked(draft_.*member);
+        });
+    };
+    viewControl(QStringLiteral("preferencesNodeShowZoomControlsSwitch"), tr("Show zoom controls"),
+                &ApplicationPreferences::nodeShowZoomControls);
+    viewControl(QStringLiteral("preferencesNodeShowMinimapSwitch"), tr("Show minimap"),
+                &ApplicationPreferences::nodeShowMinimap);
 
     layout->addStretch(1);
     return wrapPage(content, QStringLiteral("preferencesNodeGraphPage"));

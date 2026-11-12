@@ -57,9 +57,12 @@ struct NodeCanvasIndex;
 struct NodeProjectionIndex;
 } // namespace node_editor
 namespace kit {
+class KIconButton;
 class KLabel;
 class KSearchPopup;
+class KValueField;
 } // namespace kit
+class NodeMinimap;
 
 inline constexpr int kNodeItemKindRole = Qt::UserRole + 1;
 inline constexpr int kNodeStableIdRole = Qt::UserRole + 2;
@@ -289,6 +292,12 @@ class NodeGraphicsView final : public QGraphicsView {
     // having taken the view over: framing one selection is a deliberate placement, not "keep
     // following the whole graph".
     void frameRect(QRectF bounds);
+    // #695: scales to exactly `target` (clamped into the shared zoom bounds) about the viewport's
+    // center -- the footer's zoom value drives the view through this.
+    void zoomToFactor(double target);
+    // #695: pans, at the current zoom, so `scenePoint` sits at the viewport's center. The minimap's
+    // press and drag land here.
+    void centerOnScenePoint(QPointF scenePoint);
 
     // #490: the Image Preview the node editor draws behind the graph. The
     // background has its own Fit / 100% / zoom / pan, independent of the graph's: the Viewer's
@@ -402,6 +411,8 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider, publi
     // Test/diagnostic surface only: the footer widget's own child controls, by objectName, without
     // requiring an EditorArea to host them first.
     [[nodiscard]] QWidget* footerWidgetForTest();
+    // Test/diagnostic surface only: the minimap overlay (#695).
+    [[nodiscard]] NodeMinimap* minimapForTest() const noexcept;
 
     // The QSettings "nodes/link-style" string <-> LinkStyle mapping (task NODES-1): static so both
     // this translation unit's constructor (the initial read) and node_editor_menus.cpp's
@@ -466,6 +477,10 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider, publi
     // --- Task NODES-1: the persistent header menus (deliverable 1) and their live state. ---
     void buildHeaderMenus();
     void buildFooter();
+    // #695: the footer's zoom controls, the minimap and the two Preferences that switch them.
+    void buildViewControls();
+    void refreshZoomControls();
+    void applyViewControls(bool zoomControls, bool minimap);
     // The categorized Add submenu's actual contents: one call from buildContextMenu() (transient,
     // rebuilt fresh per popup, exactly as before this task) and one from buildHeaderMenus() (the
     // persistent header Add menu, built ONCE -- `recordInto`, when given, collects each leaf
@@ -542,7 +557,11 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider, publi
     // are: the zoom dropdown and selection readout both need to react to session/view state that
     // outlives any one popup.
     QWidget* footerWidget_ = nullptr;
-    kit::KDropdown* footerZoomDropdown_ = nullptr;
+    kit::KIconButton* footerZoomOutButton_ = nullptr;
+    kit::KValueField* footerZoomValue_ = nullptr;
+    kit::KIconButton* footerZoomInButton_ = nullptr;
+    bool zoomSyncing_ = false;
+    NodeMinimap* minimap_ = nullptr;
     kit::KSwitch* footerSnapSwitch_ = nullptr;
     kit::KDropdown* footerLinkStyleDropdown_ = nullptr;
     kit::KLabel* footerSelectionLabel_ = nullptr;
