@@ -125,6 +125,23 @@ void testHygiene(int& failures) {
     expect(containsCategory(yamlSecret, "credential"),
            "unquoted YAML secret assignments are rejected", failures);
 
+    const auto gluedUri = hygieneFixture("src/color/tests/example_tests.cpp",
+                                         "const auto uri = \"file://\" + path.string();\n");
+    expect(containsCategory(gluedUri, "file URI"),
+           "a file URI concatenated from a path in test code is rejected", failures);
+    const auto wrappedUri =
+        hygieneFixture("tests/integration/example_tests.cpp",
+                       "const auto uri = std::string{\"file:///\"} + path.string();\n");
+    expect(containsCategory(wrappedUri, "file URI"),
+           "a file URI concatenated from a wrapped scheme literal is rejected", failures);
+    expect(hygieneFixture("src/color/tests/example_tests.cpp",
+                          "const auto uri = \"file://\" ROOT \"/renders/a%20b.mp4\";\n"
+                          "const auto other = fileUriFromAbsolutePath(path).value();\n")
+               .empty(),
+           "adjacent literals and the encoding helper are accepted in test code", failures);
+    expect(hygieneFixture("src/core/file_uri.cpp", "return \"file://\" + encode(raw);\n").empty(),
+           "the encoding helper itself may concatenate", failures);
+
     const auto generated = hygieneFixture("build/output.o");
     expect(containsCategory(generated, "generated artifact"), "generated artifacts are rejected",
            failures);

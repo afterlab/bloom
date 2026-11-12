@@ -234,11 +234,27 @@ void appendContentFindings(const Path& relative, const std::string& text,
         R"bloom(^\s*(?:api[_-]?key|auth[_-]?token|password|passwd|secret|access[_-]?token)\s*:\s*([^\s#]+))bloom",
         std::regex::ECMAScript | std::regex::icase};
 
+    // A file URI glued together from the scheme and a path is wrong as soon as the path holds a
+    // space or another character that has to be percent-encoded, so test code builds one through
+    // bloom::core::fileUriFromAbsolutePath (issue #665). A literal next to a literal is fine.
+    static const std::regex concatenatedFileUri{R"bloom("file:/{2,3}"\s*[)}]?\s*\+)bloom"};
+    const auto parts = pathParts(relative);
+    const auto extension = relative.extension();
+    const auto isTestSource = std::ranges::find(parts, "tests") != parts.end() &&
+                              (extension == ".cpp" || extension == ".hpp");
+
     std::istringstream lines{text};
     std::string line;
     auto lineNumber = std::size_t{0};
     while (std::getline(lines, line)) {
         ++lineNumber;
+        if (isTestSource && line.find("\"file:/") != std::string::npos &&
+            std::regex_search(line, concatenatedFileUri)) {
+            findings.push_back({relative, "file URI",
+                                "test code concatenates a file URI; build it with "
+                                "bloom::core::fileUriFromAbsolutePath so the path is encoded",
+                                lineNumber});
+        }
         if (line.find("/home/") != std::string::npos || line.find("/Users/") != std::string::npos ||
             line.find("Users\\") != std::string::npos) {
             for (const auto* matcher : {&posixUserPath, &windowsUserPath}) {

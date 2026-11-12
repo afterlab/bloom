@@ -5,6 +5,7 @@
 // TIFF, flat EXR and ProRes must come out with the reference's bytes; a changed or missing config
 // stops the render with its reason instead of falling back to another config.
 
+#include <bloom/core/file_uri.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/export_job_runner.hpp>
@@ -195,8 +196,10 @@ bool run(const bool device, const bool requireDevice) {
     }
     std::filesystem::copy_file(root / "shot.ocioz", root / "relative" / "color" / "shot.ocioz");
 
-    const auto looseUri = "file://" + (root / "loose" / "config.ocio").string();
-    const auto archiveUri = "file://" + (root / "shot.ocioz").string();
+    // Through the one helper that percent-encodes (#665).
+    const auto looseUri =
+        bloom::core::fileUriFromAbsolutePath(root / "loose" / "config.ocio").value();
+    const auto archiveUri = bloom::core::fileUriFromAbsolutePath(root / "shot.ocioz").value();
     const auto revisionOf = [](document::OcioConfigLocator locator,
                                const std::filesystem::path& projectDirectory) {
         document::OcioConfigReference reference;

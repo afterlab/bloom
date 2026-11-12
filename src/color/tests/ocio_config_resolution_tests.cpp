@@ -17,6 +17,7 @@
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/color/ocio_cpu_input_processor.hpp>
 #include <bloom/color/ocio_gpu_program.hpp>
+#include <bloom/core/file_uri.hpp>
 
 #include <OpenColorIO/OpenColorIO.h>
 
@@ -473,10 +474,12 @@ void testArchives(const std::filesystem::path& root) {
     expect(externalRevision && resolveOcioConfig(external, *externalRevision.revision()).ready() &&
                same(helperGraded(external), reference),
            "archive: an external archive resolves and applies its LUT as the loose config does");
-    expect(parseOcioConfigLocation("file://" + archive.string()) ==
-                   OcioConfigLocation{
-                       OcioConfigLocatorKind::ExternalArchive, "file://" + archive.string(), {}} &&
-               same(helperGraded(parseOcioConfigLocation("file://" + archive.string())), reference),
+    // Through the one helper that percent-encodes, so a work folder with a space in its path
+    // gives a valid URI (#665).
+    const auto archiveUri = bloom::core::fileUriFromAbsolutePath(archive).value();
+    expect(parseOcioConfigLocation(archiveUri) ==
+                   OcioConfigLocation{OcioConfigLocatorKind::ExternalArchive, archiveUri, {}} &&
+               same(helperGraded(parseOcioConfigLocation(archiveUri)), reference),
            "archive: a file URI names the same archive");
 
     const OcioConfigLocation relative{
