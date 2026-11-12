@@ -127,6 +127,18 @@ Windows through the bundled OpenH264 and Kvazaar (ADR 0036). The Media Foundatio
 reports `NotInstalled` (#370), so FFmpeg serves every Windows operation, and streamed staged output
 stays POSIX-only.
 
+### 2026-11-12: Media Foundation provider, mid-stream fallback and macOS HEVC encode (#370)
+
+The three "not done" items above that concern providers are done. The Windows provider is a
+generation of the FFmpeg worker (`--media-foundation`): libavformat keeps the container, and the
+system's Media Foundation transforms code H.264 and HEVC pictures, on the graphics device through
+Direct3D 11 when the computer has one. The slot no longer reports `NotInstalled`. A preferred
+platform encoder that fails after it began an export no longer fails the export: the output is
+rendered again from its first frame by the bundled encoder, once, and the log and the output's
+note record it. The VideoToolbox provider encodes HEVC Main and Main 10. Streamed staged output
+stays POSIX-only. Details and what was measured are in
+[Media I/O](../architecture/media-io.md).
+
 ## Consequences
 
 ADR 0020's "typed `Unavailable`" fallback for macOS and Windows and ADR 0033's

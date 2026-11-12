@@ -393,8 +393,10 @@ another vendor; a machine with no Vulkan device; the desktop file dialogs and dr
 non-ASCII names, which need a person at the screen. The minimum version says where the binaries
 are allowed to start, not where they were tested.
 
-Video and audio on Windows are read and encoded by the bundled FFmpeg worker alone; there is no
-Media Foundation provider ([Media I/O](media-io.md)). AV1 export holds SVT-AV1 to its SSE4.2 code
+H.264 and HEVC on Windows are decoded and encoded by the system's Media Foundation transforms,
+on the graphics device when the computer has one, behind the bundled FFmpeg worker's container
+code; everything else, and anything the system refuses, is the bundled FFmpeg's
+([Media I/O](media-io.md)). AV1 export holds SVT-AV1 to its SSE4.2 code
 ([Dependency intake](dependency-intake.md)). Installed fonts are the system font collection
 DirectWrite reports, which includes the fonts a user installed for themselves. There is no installer or package yet: Bloom runs from a build folder
 with Qt's and the prefix's libraries on the search path. Continuous integration has a Windows job

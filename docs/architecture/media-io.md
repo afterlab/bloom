@@ -208,7 +208,7 @@ everywhere, so no format FFmpeg serves is ever refused for the platform:
 
 | Platform | Chain |
 | --- | --- |
-| Windows | Media Foundation (slot; no provider yet, reports NotInstalled) → FFmpeg |
+| Windows | Media Foundation (the FFmpeg worker's `--media-foundation` generation) → FFmpeg |
 | macOS | VideoToolbox/AVFoundation (`bloom-media-videotoolbox-worker`) → FFmpeg |
 | Linux | FFmpeg with VA-API (when hardware is requested) → FFmpeg software |
 
@@ -217,7 +217,16 @@ family, plus the container for encode -- using each provider's handshake declara
 that is not installed, does not declare the operation, or fails it with a typed error other than
 Cancelled, Shutdown or SourceChanged is skipped silently. Encode selection happens in
 `EncodeSessionV1::begin()`: each candidate is a full launch/handshake/`EncodeBegin` attempt whose
-refusal reaps the worker before any frame is sent; the serving provider is then pinned. Decode asks
+refusal reaps the worker before any frame is sent; the serving provider is then pinned. A
+preferred platform encoder that fails after that (its worker ends, it refuses a frame or the
+finish, or its file fails the worker's reopen check) cannot be replaced inside
+the session, because the frames it took are gone: `EncodeSessionV1::platformEncoderFailed()`
+reports it, the sequence runner ends the attempt at stage `PlatformEncoderFailed` with nothing
+published, and the export queue's movie driver and the MCP render tool start the output again from
+its first frame with `PlatformEncoderV1::Skipped`, once. The log entry
+`export.encoder.platform-fallback` and the published output's implementation note say that the
+bundled encoder rendered it again and why. A cancelled export, a changed source and the worker
+memory cap are not such failures. Decode asks
 the platform provider first and retires it for the source on its first failure, after which FFmpeg
 answers (the same sticky rule as the VA-API preview decoder). `MediaProviderProvenanceV1` records
 the serving provider and every fallback in `SequenceExportResultV1::mediaProvider`, in the export QC
@@ -247,7 +256,11 @@ not change with the provider that opened its footage:
   planes cross through the same libswscale call, with the same settings, as the FFmpeg worker's.
   Matrix, range and transfer are applied afterwards by Bloom's color conversion, as for any frame.
 - **Audio.** A request for `samples` sample frames from sample frame `frame` returns exactly that
-  block, however many decoded buffers it spans.
+  block, however many decoded buffers it spans. The provider declares uncompressed audio only.
+  AAC is described here (its frame count is the track's coded packets, priming included, as the
+  FFmpeg reader counts them) and decoded by the FFmpeg reader: the system AAC decoder's samples
+  are not the FFmpeg decoder's (measured on the parity files: up to 2.4e-07 of full scale apart),
+  and no tolerance is granted for it (#370). The session logs the routing once per stream.
 - **What it does not read.** Containers other than QuickTime and MPEG-4, codecs other than H.264,
   HEVC and ProRes, interlaced, rotated, mirrored and non-square-pixel pictures, variable frame
   cadence, edits other than one leading trim, and audio with more than two channels are refused
@@ -270,18 +283,20 @@ limited-range 8-bit 4:2:0 video.
 
 ### The macOS encoder (issues #455 and #438)
 
-On macOS, H.264 (High) and ProRes in MOV and MP4 are encoded by the system encoder through
-AVAssetWriter (`apps/bloom-media-worker/videotoolbox_provider.mm`); every other codec and container
+On macOS, H.264 (High), HEVC (Main and Main 10, issue #370) and ProRes in MOV and MP4 are encoded
+by the system encoder through AVAssetWriter (`apps/bloom-media-worker/videotoolbox_provider.mm`); every other codec and container
 is not declared by this provider and goes to FFmpeg.
 
 - **Samples.** The frame's RGBA16 is converted to the stream's own Y'CbCr sampling by the FFmpeg
   worker's output conversion (the same libswscale call, under the export's matrix, range and
   left chroma siting), and the system encoder is handed those samples: 16-bit 4:2:2 for ProRes
-  422, 16-bit 4:4:4 with the frame's own alpha for ProRes 4444, 8-bit 4:2:0 for H.264. The system
+  422, 16-bit 4:4:4 with the frame's own alpha for ProRes 4444, 8-bit 4:2:0 for H.264 and HEVC
+  Main, 10-bit 4:2:0 for HEVC Main 10 (the profile asked for is the one written). The system
   framework converts no color.
 - **Tags and rate.** The color tags are the export's (`EncodeSettingsV1::colour`), so Display P3,
   BT.2020, PQ and HLG outputs are tagged as such; a code point the system cannot write is refused
-  and FFmpeg serves the export. H.264 uses the requested bit rate. Every frame carries its own
+  and FFmpeg serves the export. H.264 and HEVC use the requested bit rate (30 and 20 Mbps when
+  none is asked for). Every frame carries its own
   duration and the track's time scale is the frame rate, so no timestamp is rounded.
 - **Encoder.** The encoder is chosen from the system's encoder list (a hardware one when the
   computer has it) and asked for by its identifier. Its name and whether it is hardware are
@@ -300,8 +315,8 @@ is not declared by this provider and goes to FFmpeg.
   made by the system encoder only, and an export it cannot make stops with
   `export.encoder.platform-refused` instead of being made by another encoder; the export queue
   then asks whether to render it with Bloom's FFmpeg encoder, and a scripted or MCP export
-  passes `encoder: "software"` to choose that. H.264 tries the system encoder and continues with
-  FFmpeg. Software: the system encoder is skipped. Hardware: the system encoder is required.
+  passes `encoder: "software"` to choose that. H.264 and HEVC try the system encoder and continue
+  with FFmpeg, also when the system encoder fails partway (the output is rendered again). Software: the system encoder is skipped. Hardware: the system encoder is required.
 
 A build without the FFmpeg package has no macOS encoder, because the conversion and the check are
 libswscale's.
@@ -316,10 +331,70 @@ system reports, with the build-tree worker as the development fallback. A macOS 
 developer build without an FFmpeg package builds no FFmpeg worker; Linux and qualified builds
 require it.
 
-Not done: a Media Foundation provider (Windows encodes H.264 and HEVC with NVENC or the bundled
-OpenH264 and Kvazaar), mid-stream encode fallback, and VideoToolbox HEVC encode. The Windows and
-macOS branches are not compiled or run in Linux validation; each is built and tested on its own
-system.
+### The Windows provider (issue #370)
+
+On Windows the platform provider is a generation of the FFmpeg worker itself
+(`bloom-media-worker --media-foundation`, provider `bloom.mediafoundation`, trust domain
+`windows-media-foundation`). libavformat reads and writes the container exactly as it does for the
+software generation, so a file is described, indexed and timed the same way whichever generation
+serves it, and only the coding of H.264 and HEVC pictures goes to the system's Media Foundation
+transforms (`apps/bloom-media-worker/mediafoundation_codec.cpp`). Nothing of a container is parsed
+or written by hand.
+
+- **Decode.** A stream's packets, as the demuxer returns them, pass libavcodec's
+  `h264_mp4toannexb` or `hevc_mp4toannexb` filter and go to the system decoder; its NV12 or P010
+  pictures come back as the planar frames the software decoder returns (8-bit, or 10-bit for HEVC
+  Main 10), with the packet's presentation time and the stream's color description, and cross
+  through the same conversion as any other frame. Both codecs are decoded to the bit by their
+  standards. The worker proves it on the first frame of every source against the software decoder
+  on an independent reader, and a source whose frame differs goes to FFmpeg with that reason.
+- **Hardware decode.** The system decoder runs on the graphics device (Direct3D 11 video decoding)
+  when the computer has one and the decoder takes it, and on the processor otherwise. The probe's
+  reader name says which for every stream, with the reason when it is the processor
+  (`Media Foundation (stream 0: Direct3D 11 hardware decode); FFmpeg-8.1.2`, or
+  `... software decode (<reason>) ...`). A device whose first frame is not the software decoder's
+  fails the proof by name, and FFmpeg's software decoder serves that source; the reason is
+  recorded in `FrameDecodeProvenance::nativeFallback`.
+- **What it does not read.** A source is refused whole at probe, with the reason, when one of its
+  H.264 or HEVC streams is interlaced, is not 4:2:0 at the depths above, has a picture extent the
+  system decoder returns differently, or has no system decoder on the computer (the HEVC decoder is
+  a separate component of Windows). FFmpeg then serves it. Every other picture codec of a source
+  is decoded by the software generation, stream by stream.
+- **Random access.** The system decoders begin at an instantaneous decoder refresh picture and
+  return nothing from any other random-access point (a recovery point of an open group of
+  pictures), where the software decoder does begin. A seek that lands on such a point is refused
+  with that reason, and FFmpeg serves the source from then on; reading such a stream forward from
+  its start is equal to the software decoder.
+- **Audio.** Uncompressed audio is the stored samples. AAC is not declared: the system's AAC
+  decoder returns 16-bit samples, which are not the FFmpeg decoder's, so FFmpeg decodes the coded
+  audio of a source whose pictures the system decodes.
+- **Encode.** H.264 (High) and HEVC (Main and Main 10) in MOV and MP4. Frames are converted to the
+  stream's own sampling by the worker's output conversion and handed to a system encoder: a
+  hardware one when the computer has it (they belong to the graphics driver), the system's
+  software one otherwise. Constant bit rate at the requested rate, no reordering, a random-access
+  point every second. The encoder's packets go to libavformat's muxer; AAC or PCM audio, the
+  container and the reopen check are the software generation's, so what the system encoder wrote
+  is read back by FFmpeg's decoder under tolerance profile v3. The color tags are the export's; a
+  code point Media Foundation has no name for is refused and the bundled encoder writes it. The
+  tags must be in the coded stream itself, not only in the container (a QuickTime file has no
+  place for the range): when the export begins, the encoder codes one probe picture, the software
+  decoder reads it back, and an encoder whose stream does not carry the requested primaries,
+  transfer, matrix and range is refused before any frame is rendered. Measured: the graphics
+  driver's hardware encoders write all four; the software H.264 encoder of Windows writes only a
+  full range and no color description, so it is refused and the bundled OpenH264 serves. The
+  system's name for the encoder and whether it is hardware are returned in `EncodeQcV1::encoder`
+  and recorded in the evidence's version field; the encoder token is `mediafoundation`.
+- **Who encodes.** As on macOS: Automatic tries the system encoder for H.264 and HEVC and
+  continues with NVENC, then the bundled OpenH264 and Kvazaar; Software skips it; Hardware requires
+  it.
+
+`bloom.media.mediafoundation-parity` runs both generations in one process over every generated
+fixture and requires each source the Media Foundation generation reads to be described and indexed
+exactly as the software generation does, and every compared frame and uncompressed audio block to
+be equal bit for bit; a source it refuses must be refused with a typed reason.
+
+The Windows and macOS branches are not compiled or run in Linux validation; each is built and
+tested on its own system.
 
 ## FFmpeg dependency intake (2026-09-17)
 
@@ -2004,7 +2079,8 @@ Linux uses FFmpeg 8.1.2 exclusively inside `bloom-media-worker`. Only
 provider-neutral protocol and client; it loads no libav library. The worker installs under
 `libexec/bloom/media/ffmpeg-v1`, with its shared closure in `lib/` and relative loader paths.
 macOS and Windows read video through the same worker behind their provider chains (ADR 0035):
-the Apple frameworks come first on macOS, and the Windows Media Foundation slot has no provider.
+the Apple frameworks come first on macOS, and the worker's Media Foundation generation comes first
+on Windows.
 
 Protocol 1, schema 2 adds bounded stream metadata, keyframe indices and planar float audio blocks.
 Probe retains codec/profile identifiers, exact rational timebase and rate, dimensions, original
@@ -2060,7 +2136,12 @@ of the asset's audio streams it plays (Properties, Audio Stream). Preview and ex
 audio buffers by asset and stream.
 
 Audio requests name a starting sample and exact count; decoding from
-the beginning preserves codec priming and refuses timestamp gaps or overlaps. A retained worker
+the beginning preserves codec priming and refuses timestamp gaps or overlaps. Every audio decoder
+is given its stream's packet time base, so a first frame the container's edit trims in part (AAC
+written by the macOS encoder: 2112 priming sample frames, the last 64 inside the first packet of
+the edit) is timed at the edit's start; without it that frame kept its packet's earlier time and
+the request from sample 0 failed with "Audio timestamp gap" (#370; `bloom.media.ffmpeg` reads two
+Apple-written files from `tests/data`). A retained worker
 keeps a separate audio reader and its decode position: a block that starts where the previous
 block ended continues the same pass, including samples already decoded past that end, so N
 sequential blocks decode the stream once. Any other start reopens the reader and decodes from the
