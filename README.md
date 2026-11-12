@@ -19,7 +19,7 @@ quietly change your picture.
 
 > [!IMPORTANT]
 > Bloom is pre-release software. There are no downloadable builds yet, so you build it from source,
-> and day-to-day development and testing happen on Linux. See [Project status](#project-status).
+> and day-to-day development and testing happen on Linux.
 
 ## A look around
 
@@ -40,90 +40,6 @@ keyframes in view.
 time and tells you how long is left. You can keep working while it runs.
 
 ![The Export queue rendering a composition at 44 percent, under the Viewer, with two more jobs queued](docs/images/readme/export-queue.webp)
-
-## What works today
-
-**Build a shot**
-
-- Video, image sequences, audio, text, shapes, solids and nested compositions as layers, plus
-  gradient and checker generators in the node graph.
-- Parenting, track mattes, masks, blend modes, shy, solo, lock and time remapping.
-- Move, scale and rotate layers right in the Viewer. Draw shapes, paths and masks with the Pen.
-
-**Animate**
-
-- Keyframe any property and shape the motion in the Graph Editor, with value and speed graphs.
-- Easy Ease, plus a full set of easing curves, from Sine through Elastic.
-- Undo and redo for every edit, whether it came from a panel, a script or an agent.
-
-**Work in nodes**
-
-- Gaussian and box blur, exposure, offset, multiply, invert, crop, pad, flip, quarter-turn rotate,
-  resize and fit, image mix, alpha and channel operations, Cryptomatte, and OpenColorIO transforms
-  and LUTs.
-- Drive parameters from value and math nodes.
-
-**See it**
-
-- A GPU Viewer with RAM Preview, channel and alpha views, and exposure control.
-- OpenColorIO color management with a scene-linear working space. New projects use Bloom Neutral,
-  and the ACES 1.3 CG configuration is built in.
-
-**Deliver it**
-
-- H.264, HEVC, AV1, VP9, ProRes and DNxHR movies; OpenEXR, PNG and TIFF sequences; WAV audio.
-- Projects save as `.bloom` files, written atomically and validated when they open.
-
-**Automate it**
-
-- Script Bloom in Python, render headlessly with `bloom-cli`, or let an AI agent work in the open
-  app through the built-in [MCP](https://modelcontextprotocol.io) server. All three use the same
-  operations as the UI.
-
-**Make it yours**
-
-- Every panel can be swapped for another. Start from the Default, Node, Animation or Export
-  workspace, then save your own layouts.
-
-## Project status
-
-Bloom is in active development and isn't ready for production work yet. Here's where things stand.
-The full, current priority order lives in [issue #384](https://github.com/kinetik-gg/bloom/issues/384).
-
-**Being worked on now**
-
-- Export reliability: exports started from the app
-  ([#385](https://github.com/kinetik-gg/bloom/issues/385)), ProRes 4444
-  ([#406](https://github.com/kinetik-gg/bloom/issues/406)), and DPX and video export fixes
-  ([#369](https://github.com/kinetik-gg/bloom/issues/369)).
-- Playback and export speed: using more of the hardware, pipelined GPU uploads and a benchmark
-  suite ([#386](https://github.com/kinetik-gg/bloom/issues/386),
-  [#405](https://github.com/kinetik-gg/bloom/issues/405),
-  [#395](https://github.com/kinetik-gg/bloom/issues/395)).
-- Interpret Footage: per-asset frame rate, alpha, fields, pixel aspect and color
-  ([#381](https://github.com/kinetik-gg/bloom/issues/381)).
-- Every artist action available to agents, with self-describing help
-  ([#389](https://github.com/kinetik-gg/bloom/issues/389),
-  [#390](https://github.com/kinetik-gg/bloom/issues/390)).
-
-**Next: core compositing**
-
-- A standalone Transform node.
-- Cryptomatte and node mattes as masks, and proxy generation.
-
-**Later**
-
-- Corner Pin, ST Map and Displace; node groups; SVG import; shaped text and text on a path; time
-  and audio-analysis nodes.
-
-**Platforms.** Linux, macOS and Windows are all first-class targets, and a feature isn't finished
-until it works the same on all three. Today Bloom is developed on Linux, and its test suite also
-runs on macOS and on Windows. GPU rendering has been exercised on all three, on one machine each
-([what was measured](docs/architecture/platform-support.md)). Windows reads and writes video
-through the bundled FFmpeg only, and has no installer yet
-([#304](https://github.com/kinetik-gg/bloom/issues/304),
-[#370](https://github.com/kinetik-gg/bloom/issues/370),
-[#371](https://github.com/kinetik-gg/bloom/issues/371)).
 
 ## Build from source
 
