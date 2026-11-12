@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -25,7 +26,9 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #if defined(BLOOM_VIDEOTOOLBOX_LAYOUT_CONVERSION)
@@ -49,6 +52,91 @@ extern "C" {
 #endif
 
 namespace bloom::media::videotoolbox {
+
+namespace {
+bool pcmCodec(const std::string_view codec) { return codec == "pcm_s16le" || codec == "pcm_s24le"; }
+// One stored sample into a digest, in the layout ReopenedPcm::digest names.
+void hashPcm(core::Sha256Hasher& hasher, const std::int32_t sample, const bool twentyFourBits) {
+    const auto bits = static_cast<std::uint32_t>(sample);
+    const std::array<std::byte, 4> bytes{static_cast<std::byte>(bits & 0xFFU),
+                                         static_cast<std::byte>((bits >> 8U) & 0xFFU),
+                                         static_cast<std::byte>((bits >> 16U) & 0xFFU),
+                                         static_cast<std::byte>((bits >> 24U) & 0xFFU)};
+    (void)hasher.update(std::span<const std::byte>(bytes.data(), twentyFourBits ? 4U : 2U));
+}
+} // namespace
+
+std::int32_t pcmSample(const float value, const bool twentyFourBits) noexcept {
+    // Clipping first changes no result (everything outside clips to the same two values) and
+    // keeps the rounding inside the range of its integer type.
+    const float bounded = std::clamp(value, -1.0F, 1.0F);
+    if (!twentyFourBits)
+        return static_cast<std::int32_t>(
+            std::clamp<long>(std::lrintf(bounded * 32768.0F), -32768L, 32767L));
+    const auto scaled = std::clamp<long long>(std::llrintf(bounded * 2147483648.0F),
+                                              std::numeric_limits<std::int32_t>::min(),
+                                              std::numeric_limits<std::int32_t>::max());
+    return static_cast<std::int32_t>(static_cast<std::uint32_t>(scaled) & ~std::uint32_t{255});
+}
+
+provider::Result<ReopenedPcm> reopenedPcm(const std::string& path, const std::uint32_t stream,
+                                          const provider::EncodeSettingsV1& settings,
+                                          const provider::Digest& expected) {
+    const auto refused = [](std::string detail) {
+        return provider::Unavailable{provider::Error::Corrupt, std::move(detail)};
+    };
+    if (!pcmCodec(settings.audioCodec))
+        return refused("Reopened audio is not PCM");
+    const bool wide = settings.audioCodec == "pcm_s24le";
+    // The reader returns each stored integer divided by its full scale, which a float holds
+    // exactly for 16 and for 24 bits, so the stored integer comes back by multiplying.
+    const float scale = wide ? 8388608.0F : 32768.0F;
+    Reader reader;
+    provider::CallRequest call;
+    call.capability.role = provider::Role::AudioDecode;
+    call.capability.codec = settings.audioCodec;
+    call.source = path;
+    call.stream = stream;
+    core::Sha256Hasher actual;
+    ReopenedPcm result;
+    while (result.samples < settings.audioSamples) {
+        call.frame = result.samples;
+        call.samples = static_cast<std::uint32_t>(std::min<std::uint64_t>(
+            provider::Limits::audioSamples, settings.audioSamples - result.samples));
+        const auto decoded = reader.call(call);
+        const auto* block = std::get_if<provider::AudioBlock>(&decoded);
+        if (block == nullptr) {
+            const auto* error = std::get_if<provider::Unavailable>(&decoded);
+            return refused(
+                "Reopened audio sample count differs: " + std::to_string(result.samples) + " of " +
+                std::to_string(settings.audioSamples) + " sample frames" +
+                (error != nullptr ? " (" + error->detail + ")" : std::string{}));
+        }
+        if (block->channels.size() != settings.channels || block->channels.front().empty())
+            return refused("Reopened audio layout differs");
+        const auto frames = block->channels.front().size();
+        for (std::size_t frame = 0; frame < frames; ++frame)
+            for (const auto& channel : block->channels) {
+                const float value = channel[frame];
+                const auto stored = std::lrintf(value * scale);
+                if (static_cast<float>(stored) / scale != value ||
+                    static_cast<float>(stored) < -scale || static_cast<float>(stored) >= scale)
+                    return refused("Reopened PCM representation differs");
+                hashPcm(actual, static_cast<std::int32_t>(wide ? stored * 256 : stored), wide);
+            }
+        result.samples += frames;
+    }
+    // Nothing may follow the sample frames that were written.
+    call.frame = result.samples;
+    call.samples = 1;
+    if (std::holds_alternative<provider::AudioBlock>(reader.call(call)))
+        return refused("Reopened audio sample count differs: more than " +
+                       std::to_string(settings.audioSamples) + " sample frames");
+    result.digest = actual.finalize();
+    if (result.digest != expected)
+        return refused("Reopened PCM samples differ");
+    return result;
+}
 
 #if !defined(BLOOM_VIDEOTOOLBOX_LAYOUT_CONVERSION)
 
@@ -250,6 +338,8 @@ struct Encoder::State final {
     bool finished = false;
     provider::Bytes firstReference;
     provider::Bytes lastReference;
+    // The audio the encoder was given: a PCM output's stored integers (the layout
+    // ReopenedPcm::digest names), an AAC output's float samples.
     core::Sha256Hasher audioHasher;
     // AVAssetWriter interleaves its inputs: it stops taking video until audio has caught up, and
     // the reverse. The host sends a frame and then the audio up to it, so whichever the writer is
@@ -649,25 +739,45 @@ void Encoder::State::audio(const provider::AudioBlock& block) {
         block.pts != reducedRational(static_cast<std::int64_t>(sampleCount),
                                      static_cast<std::int64_t>(settings.sampleRate)))
         throw Unavailable{Error::IdentityMismatch, "Audio does not match frozen encode request"};
-    // Interleaved float; the writer converts to the output's PCM depth or encodes AAC itself.
+    // Interleaved. A PCM output is handed the integers it stores, converted here by the FFmpeg
+    // worker's rule (pcmSample), so the writer converts nothing, the same audio gives the same
+    // samples on every platform, and the reopen check can require them exactly (#666). AAC is
+    // handed float and encoded by the writer.
     const auto channels = static_cast<std::uint32_t>(block.channels.size());
     const auto frames = block.channels[0].size();
     if (frames == 0)
         throw Unavailable{Error::InvalidValue, "Empty audio block"};
-    std::vector<float> interleaved(frames * channels);
+    const bool pcm = pcmCodec(settings.audioCodec);
+    const bool wide = settings.audioCodec == "pcm_s24le";
+    const std::uint32_t sampleBytes =
+        pcm ? (wide ? 3U : 2U) : static_cast<std::uint32_t>(sizeof(float));
+    std::vector<std::uint8_t> interleaved(frames * channels * sampleBytes);
     for (std::size_t frame = 0; frame < frames; ++frame)
-        for (std::uint32_t channel = 0; channel < channels; ++channel)
-            interleaved[frame * channels + channel] = block.channels[channel][frame];
+        for (std::uint32_t channel = 0; channel < channels; ++channel) {
+            const float value = block.channels[channel][frame];
+            auto* const target = interleaved.data() + (frame * channels + channel) * sampleBytes;
+            if (!pcm) {
+                std::memcpy(target, &value, sizeof(float));
+                (void)audioHasher.update(std::as_bytes(std::span(&value, std::size_t{1})));
+                continue;
+            }
+            const auto stored = pcmSample(value, wide);
+            hashPcm(audioHasher, stored, wide);
+            // 16 bits as they are; 24 bits are the upper three bytes of the 32.
+            const auto bits = static_cast<std::uint32_t>(stored) >> (wide ? 8U : 0U);
+            for (std::uint32_t byte = 0; byte < sampleBytes; ++byte)
+                target[byte] = static_cast<std::uint8_t>((bits >> (8U * byte)) & 0xFFU);
+        }
     AudioStreamBasicDescription format{};
     format.mSampleRate = static_cast<double>(block.sampleRate);
     format.mFormatID = kAudioFormatLinearPCM;
-    format.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
-    format.mBytesPerPacket = format.mBytesPerFrame =
-        channels * static_cast<std::uint32_t>(sizeof(float));
+    format.mFormatFlags = (pcm ? kAudioFormatFlagIsSignedInteger : kAudioFormatFlagIsFloat) |
+                          kAudioFormatFlagIsPacked;
+    format.mBytesPerPacket = format.mBytesPerFrame = channels * sampleBytes;
     format.mFramesPerPacket = 1;
     format.mChannelsPerFrame = channels;
-    format.mBitsPerChannel = 32;
-    const auto bytes = interleaved.size() * sizeof(float);
+    format.mBitsPerChannel = sampleBytes * 8U;
+    const auto bytes = interleaved.size();
     CMAudioFormatDescriptionRef description = nullptr;
     CMBlockBufferRef data = nullptr;
     CMSampleBufferRef sample = nullptr;
@@ -691,11 +801,6 @@ void Encoder::State::audio(const provider::AudioBlock& block) {
     if (!made || sample == nullptr)
         throw Unavailable{Error::Oversized, "Audio sample buffer allocation"};
     pendingAudio.push_back(sample);
-    for (std::size_t index = 0; index < frames; ++index)
-        for (const auto& channel : block.channels) {
-            const float value = channel[index];
-            (void)audioHasher.update(std::as_bytes(std::span(&value, std::size_t{1})));
-        }
     sampleCount += frames;
     // Audio blocks are small; a few seconds of them may wait for video.
     drainTo(std::numeric_limits<std::size_t>::max(), videoClosed ? 0 : 256,
@@ -787,8 +892,18 @@ provider::EncodeQcV1 Encoder::State::finish() {
                     sound.channelLayout.size() == settings.channels &&
                     sound.codec == settings.audioCodec,
                 "Reopened audio layout differs");
-        qc.audioSamples = sampleCount;
-        qc.audio = audioHasher.finalize();
+        if (pcmCodec(settings.audioCodec)) {
+            // pcm=exact: the samples the file holds, decoded from it, are the ones it was given.
+            const auto reopened = reopenedPcm(path, 1, settings, audioHasher.finalize());
+            if (const auto* error = std::get_if<Unavailable>(&reopened))
+                throw *error;
+            qc.audioSamples = std::get<ReopenedPcm>(reopened).samples;
+            qc.audio = std::get<ReopenedPcm>(reopened).digest;
+        } else {
+            // AAC is encoded by the system, and what it decodes to is not compared here.
+            qc.audioSamples = sampleCount;
+            qc.audio = audioHasher.finalize();
+        }
     }
 
     for (const bool last : {false, true}) {

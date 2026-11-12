@@ -306,13 +306,22 @@ is not declared by this provider and goes to FFmpeg.
   computer has it) and asked for by its identifier. Its name and whether it is hardware are
   returned in `EncodeQcV1::encoder` and recorded in the export evidence's version field.
 - **Audio.** The system writer accepts video only while audio keeps up, and the reverse, so frames
-  and audio blocks wait in the worker (frames up to 256 MiB) until the writer takes them.
+  and audio blocks wait in the worker (frames up to 256 MiB) until the writer takes them. A PCM
+  output is handed the integers it stores: the worker converts each float sample by the FFmpeg
+  worker's rule (round to the nearest even at full scale, clip, and for 24 bits keep the upper
+  24 of 32) and the writer converts nothing, so the same audio gives the same stored samples as
+  an FFmpeg export. AAC is handed float and encoded by the system.
 - **Reopen check.** The finished file is reopened with the macOS reader and checked under the same
   tolerance profile v3 as the FFmpeg worker: frame count, rate, duration, stream layout, the
   first and last frames compared in the sampling the reopened stream declares, the maximum gated
   after each frame's largest 0.01% of color samples are set aside, the mean, and alpha for the
   4444 profiles. The system encoder writes a 4444 stream without an alpha channel when every
-  frame is opaque; such a stream is compared with an opaque picture.
+  frame is opaque; such a stream is compared with an opaque picture. PCM sound is checked under
+  the profile's `pcm=exact`: the track is decoded from the file, and it has to hold exactly the
+  requested number of sample frames and exactly the integers the worker handed the writer
+  (`reopenedPcm`); one wrong sample or one sample frame too few or too many fails the export
+  with `Reopened PCM samples differ` or `Reopened audio sample count differs`. AAC written by
+  the system encoder is checked for its layout only; what it decodes to is not compared.
 
 - **Who encodes.** The export's encoder setting decides
   (`host::exportHardwareRoute`, `EncodeSessionOptionsV1::platformEncoder`). Automatic: ProRes is

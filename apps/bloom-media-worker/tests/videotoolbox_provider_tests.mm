@@ -6,15 +6,24 @@
 #include "videotoolbox_provider.hpp"
 #include "videotoolbox_reader.hpp"
 
+#include <bloom/core/sha256.hpp>
 #include <bloom/media/provider/protocol.hpp>
 #include <bloom/media/provider/videotoolbox_manifest.hpp>
 
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <limits>
+#include <span>
+#include <vector>
 #include <numeric>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <variant>
 
 namespace {
@@ -233,6 +242,181 @@ void testEncodeRoundTrip() {
               "encode read returns the artifact head");
     }
 }
+// Issue #666. A movie with PCM sound is reopened and its sound decoded: the file has to hold
+// exactly the integers Bloom's conversion gives for the audio it was handed (tolerance profile
+// `pcm=exact`), and a file or an expectation with one wrong sample is refused.
+void testReopenedPcmIsExact(const std::string& codec) {
+    using namespace bloom::media;
+    const bool wide = codec == "pcm_s24le";
+    const auto note = [&codec](const char* text) { return codec + ": " + text; };
+    provider::EncodeSettingsV1 settings;
+    settings.container = "mov";
+    settings.videoCodec = "prores";
+    settings.profile = "hq";
+    settings.width = 64;
+    settings.height = 48;
+    settings.rate = {24, 1};
+    settings.frames = 3;
+    settings.audioCodec = codec;
+    settings.sampleRate = 48000;
+    settings.channels = 2;
+    settings.audioSamples = 6000;
+
+    // Known by hand, not by the function under test.
+    check(videotoolbox::pcmSample(0.5F, false) == 16384 &&
+              videotoolbox::pcmSample(1.0F, false) == 32767 &&
+              videotoolbox::pcmSample(1.5F, false) == 32767 &&
+              videotoolbox::pcmSample(-1.0F, false) == -32768 &&
+              videotoolbox::pcmSample(-3.0F, false) == -32768 &&
+              videotoolbox::pcmSample(0.5F / 32768.0F, false) == 0 &&
+              videotoolbox::pcmSample(1.5F / 32768.0F, false) == 2,
+          "16-bit conversion rounds to the nearest even and clips");
+    check(videotoolbox::pcmSample(0.5F, true) == 0x40000000 &&
+              videotoolbox::pcmSample(1.0F, true) == 0x7FFFFF00 &&
+              videotoolbox::pcmSample(-1.0F, true) == std::numeric_limits<std::int32_t>::min() &&
+              videotoolbox::pcmSample(1.0F / 8388608.0F, true) == 256,
+          "24-bit conversion keeps the upper 24 of 32 bits and clips");
+
+    // Two different channels: a slow ramp of exactly representable steps with values past full
+    // scale at its ends, and a faster pattern of values that need rounding.
+    auto audio = provider::AudioBlock{};
+    audio.pts = reduced(0, 1);
+    audio.sampleRate = settings.sampleRate;
+    audio.channelLayout = {"L", "R"};
+    audio.channels.assign(2, std::vector<float>(settings.audioSamples, 0.0F));
+    for (std::size_t index = 0; index < settings.audioSamples; ++index) {
+        audio.channels[0][index] = (static_cast<float>(index) - 3000.0F) * 11.0F / 32768.0F;
+        audio.channels[1][index] =
+            static_cast<float>(static_cast<int>((index * 7919U) % 2001U) - 1000) / 997.0F;
+    }
+    // The stored integers and their digest, written out here: 16 bits as two little-endian
+    // bytes, 24 bits as four with the low one zero.
+    const auto digestOf = [wide](const provider::AudioBlock& block) {
+        bloom::core::Sha256Hasher hasher;
+        for (std::size_t frame = 0; frame < block.channels[0].size(); ++frame)
+            for (const auto& channel : block.channels) {
+                const auto bits =
+                    static_cast<std::uint32_t>(videotoolbox::pcmSample(channel[frame], wide));
+                const std::array<std::byte, 4> bytes{static_cast<std::byte>(bits & 0xFFU),
+                                                     static_cast<std::byte>((bits >> 8U) & 0xFFU),
+                                                     static_cast<std::byte>((bits >> 16U) & 0xFFU),
+                                                     static_cast<std::byte>((bits >> 24U) & 0xFFU)};
+                (void)hasher.update(std::span<const std::byte>(bytes.data(), wide ? 4U : 2U));
+            }
+        return hasher.finalize();
+    };
+    const auto expected = digestOf(audio);
+
+    videotoolbox::Encoder encoder;
+    auto begin = encoder.call(provider::MessageKind::EncodeBegin, settings);
+    check(!std::get_if<provider::Unavailable>(&begin), note("encode begin accepted").c_str());
+    for (std::uint64_t index = 0; index < settings.frames; ++index) {
+        provider::FrameProduct frame;
+        frame.format = provider::PixelFormat::Rgba16;
+        frame.pts = reduced(static_cast<std::int64_t>(index) * settings.rate.denominator,
+                            settings.rate.numerator);
+        provider::CpuPlane plane;
+        plane.width = 64;
+        plane.height = 48;
+        plane.stride = 64 * 8;
+        plane.bytes.assign(64U * 48U * 8U, std::byte{0x40});
+        frame.planes.push_back(std::move(plane));
+        auto accepted = encoder.call(provider::MessageKind::Frame, frame);
+        check(!std::get_if<provider::Unavailable>(&accepted), note("frame accepted").c_str());
+    }
+    auto sound = encoder.call(provider::MessageKind::Audio, audio);
+    check(!std::get_if<provider::Unavailable>(&sound), note("audio accepted").c_str());
+    auto finished = encoder.call(provider::MessageKind::EncodeFinish, std::monostate{});
+    const auto* qc = std::get_if<provider::EncodeQcV1>(&finished);
+    if (qc == nullptr) {
+        const auto* error = std::get_if<provider::Unavailable>(&finished);
+        check(false,
+              note(error != nullptr ? error->detail.c_str() : "encode finish failed").c_str());
+        return;
+    }
+    check(qc->audioSamples == settings.audioSamples,
+          note("the reopened track holds every sample frame").c_str());
+    check(qc->audio == expected,
+          note("the reopened samples are exactly the converted audio").c_str());
+
+    // The artifact, as the host would read it.
+    std::vector<std::byte> artifact;
+    for (;;) {
+        auto read = encoder.call(provider::MessageKind::EncodeRead,
+                                 static_cast<std::uint64_t>(artifact.size()));
+        const auto* chunk = std::get_if<provider::EncodedChunkV1>(&read);
+        if (chunk == nullptr || chunk->bytes.empty())
+            break;
+        artifact.insert(artifact.end(), chunk->bytes.begin(), chunk->bytes.end());
+    }
+    check(artifact.size() == qc->bytes, note("the whole artifact is read back").c_str());
+    const auto write = [](const std::filesystem::path& path, const std::vector<std::byte>& bytes) {
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        file.write(reinterpret_cast<const char*>(bytes.data()),
+                   static_cast<std::streamsize>(bytes.size()));
+        return file.good();
+    };
+    const auto folder = std::filesystem::temp_directory_path();
+    const auto good = folder / ("bloom-vt-pcm-good-" + codec + ".mov");
+    const auto wrong = folder / ("bloom-vt-pcm-wrong-" + codec + ".mov");
+    const auto refusedWith = [](const provider::Result<videotoolbox::ReopenedPcm>& result,
+                                const std::string_view fragment) {
+        const auto* error = std::get_if<provider::Unavailable>(&result);
+        return error != nullptr && error->detail.find(fragment) != std::string::npos;
+    };
+    check(write(good, artifact), note("the artifact is written to a file").c_str());
+    const auto same = videotoolbox::reopenedPcm(good.string(), 1, settings, expected);
+    check(std::holds_alternative<videotoolbox::ReopenedPcm>(same) &&
+              std::get<videotoolbox::ReopenedPcm>(same).digest == expected,
+          note("the check passes on the artifact as written").c_str());
+
+    // Wrong expectation: the same file checked against audio that differs in one sample.
+    auto other = audio;
+    other.channels[1][4321] += 0.25F;
+    check(refusedWith(videotoolbox::reopenedPcm(good.string(), 1, settings, digestOf(other)),
+                      "Reopened PCM samples differ"),
+          note("audio that differs in one sample is refused").c_str());
+
+    // Wrong file: one stored sample of the artifact is changed. The samples are stored as they
+    // are, so sixteen consecutive sample frames of the audio are found in the file.
+    std::vector<std::byte> pattern;
+    for (std::size_t frame = 2000; frame < 2016; ++frame)
+        for (const auto& channel : audio.channels) {
+            const auto bits =
+                static_cast<std::uint32_t>(videotoolbox::pcmSample(channel[frame], wide)) >>
+                (wide ? 8U : 0U);
+            for (std::uint32_t byte = 0; byte < (wide ? 3U : 2U); ++byte)
+                pattern.push_back(static_cast<std::byte>((bits >> (8U * byte)) & 0xFFU));
+        }
+    const auto found =
+        std::search(artifact.begin(), artifact.end(), pattern.begin(), pattern.end());
+    check(found != artifact.end(), note("the stored samples are found in the artifact").c_str());
+    if (found != artifact.end()) {
+        auto tampered = artifact;
+        const auto offset = static_cast<std::size_t>(found - artifact.begin()) + pattern.size() / 2;
+        tampered[offset] ^= std::byte{0x10};
+        check(write(wrong, tampered), note("the changed artifact is written").c_str());
+        check(refusedWith(videotoolbox::reopenedPcm(wrong.string(), 1, settings, expected),
+                          "Reopened PCM samples differ"),
+              note("a file with one changed sample is refused").c_str());
+    }
+
+    // Wrong length: the file checked as if it should hold one sample frame fewer, or one more.
+    auto shorter = settings;
+    shorter.audioSamples -= 1;
+    check(refusedWith(videotoolbox::reopenedPcm(good.string(), 1, shorter, expected),
+                      "sample count differs"),
+          note("a track longer than expected is refused").c_str());
+    auto longer = settings;
+    longer.audioSamples += 1;
+    check(refusedWith(videotoolbox::reopenedPcm(good.string(), 1, longer, expected),
+                      "sample count differs"),
+          note("a track shorter than expected is refused").c_str());
+    std::error_code ignored;
+    std::filesystem::remove(good, ignored);
+    std::filesystem::remove(wrong, ignored);
+}
+
 void testRegistryQualification() {
     using namespace bloom::media;
     const auto hello = provider::videoToolboxHandshake();
@@ -268,6 +452,8 @@ int main() {
         }
         testProbeAndDecode(path);
         testEncodeRoundTrip();
+        testReopenedPcmIsExact("pcm_s16le");
+        testReopenedPcmIsExact("pcm_s24le");
         testEncodeEdgeCases();
         testRegistryQualification();
         std::filesystem::remove(path);
