@@ -155,7 +155,16 @@ std::optional<std::filesystem::path> absolutePathFromFileUri(const std::string_v
     if (decoded.find('\\') != std::string::npos)
         return std::nullopt;
 #endif
-    if (!parsed->authority.empty() && !localHost(parsed->authority)) {
+#if defined(_WIN32)
+    // "localhost" before a drive letter is this computer's own disk. Before anything else it is
+    // a share on this computer (\\localhost\share), which only its server name can reach.
+    const bool drive =
+        decoded.size() >= 3 && decoded[0] == '/' && alpha(decoded[1]) && decoded[2] == ':';
+    const bool remote = !parsed->authority.empty() && (!localHost(parsed->authority) || !drive);
+#else
+    const bool remote = !parsed->authority.empty() && !localHost(parsed->authority);
+#endif
+    if (remote) {
 #if defined(_WIN32)
         decoded = "//" + parsed->authority + decoded;
 #else
@@ -171,6 +180,11 @@ std::optional<std::filesystem::path> absolutePathFromFileUri(const std::string_v
         std::u8string(reinterpret_cast<const char8_t*>(decoded.data()), decoded.size()));
     if (!path.is_absolute())
         return std::nullopt;
+#if defined(_WIN32)
+    // Backslashes, as the system writes paths: a network share's root name (\\server\share)
+    // compares equal only to the same spelling.
+    path.make_preferred();
+#endif
     return path;
 }
 

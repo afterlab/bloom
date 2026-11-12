@@ -1,14 +1,19 @@
 #include <bloom/core/file_uri.hpp>
 
 #include <filesystem>
-#include <stdexcept>
+#include <iostream>
 #include <string_view>
 
 namespace {
-void require(bool condition) {
-    if (!condition)
-        throw std::runtime_error("file URI regression");
+int gFailures = 0;
+// Reports the line of every failed expectation instead of stopping at the first.
+void requireAt(const bool condition, const int line) {
+    if (!condition) {
+        ++gFailures;
+        std::cerr << "FAILED: file URI expectation at line " << line << '\n';
+    }
 }
+#define require(condition) requireAt((condition), __LINE__)
 void rejected(std::string_view uri) {
     require(!bloom::core::absolutePathFromFileUri(uri));
     require(!bloom::core::isAbsoluteFileUri(uri));
@@ -35,6 +40,12 @@ int main() {
     const auto unc = std::filesystem::path(L"\\\\server\\share\\image.png");
     require(fileUriFromAbsolutePath(unc) == "file://server/share/image.png");
     require(absolutePathFromFileUri("file://server/share/image.png") == unc);
+    // A share on this computer is reached by its server name; before a drive letter the same
+    // name means this computer's own disk.
+    const auto own = std::filesystem::path(L"\\\\localhost\\share\\image.png");
+    const auto ownUri = fileUriFromAbsolutePath(own);
+    require(ownUri && absolutePathFromFileUri(*ownUri) == own);
+    require(absolutePathFromFileUri("file://localhost/C:/Media/caf%C3%A9%20image.png") == drive);
 #endif
     // A foreign platform's valid locator must still open and round-trip in a project.
     require(bloom::core::isAbsoluteFileUri("file://server/share/image.png"));
@@ -64,5 +75,5 @@ int main() {
     require(absolutePathFromFileUri("FILE:///tmp/name.png") ==
                 std::filesystem::path("/tmp/name.png") ||
             !std::filesystem::path("/tmp/name.png").is_absolute());
-    return 0;
+    return gFailures == 0 ? 0 : 1;
 }
