@@ -34,7 +34,10 @@ without changing its aspect ratio; it never loads anything.
 The panel switcher is the icon variant of **KDropdown**, with the same height, styling,
 interaction and popup. Menus are created only through `kit::makeMenu`. A popup is a
 `KPopupWindow` and a list in one is a `KPopupList` (dropdowns, the Add search, the color picker);
-no surface positions, shadows or dismisses a popup of its own.
+no surface positions, shadows or dismisses a popup of its own. A popup, a menu and a tool tip are
+frameless windows that opt out of the operating system's own drop shadow, so the kit's one
+elevation shadow is the only one and no hairline or fringe shows around it (#706); the
+`bloom.ui.popup-shadow` test writes a capture per platform.
 Dialogs are `KDialog` and its forms: `kit::confirm`, `kit::inform`, `kit::promptText`,
 `kit::promptRange`, `kit::chooseFile` and the `KTaskDialog` progress-then-summary modal (see
 "Dialogs" below). The toolbar under the menu bar is the `ContextBar`; the one active tool
@@ -286,7 +289,11 @@ segments:
 - **Viewer**: Render (GPU or CPU, tinted Ok, Warn or Error by the color state), Exposure, Channel,
   Dropped (a dash outside a playback run), and Decode while the composition reads video. The full
   color-state and readiness sentences ("Qualified · Bloom Neutral", "Shown EV 0 · RGBA · Current")
-  are the tooltips. A previous display shows Muted values.
+  are the tooltips. A previous display shows Muted values once it has stayed behind for 300 ms, and
+  the Activity text says "Rendering frame" only after the same delay, so playback, where every
+  frame is briefly behind, does not blink the bar. A cell, a tone or a tooltip that did not change is
+  not set again, and a widget repaints at most once per presented frame and only when what it shows
+  changed (#685).
 - **Activity**: the transient or persistent notice, else RAM-preview progress (a `KProgressBar` and
   "Caching frames for RAM preview · 12 of 386"), else a preview that is rendering, failed,
   unsupported or cancelled, else the Faint placeholder "Idle". The compile-failure Details button

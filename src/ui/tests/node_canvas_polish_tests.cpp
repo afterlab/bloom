@@ -612,7 +612,7 @@ void testGlowingPathPresets() {
            ("undone, the card names the target again (" + colorLabel().toStdString() + ")").c_str());
 }
 
-// #509: Text & Paths offers "Stroke the Selected Text" and "Stroke the Selected Layer's Masks". They
+// #509, #702: the canvas menu offers "Stroke Selected Text" and "Stroke Selected Layer's Masks". They
 // are disabled, saying why, until a layer that shows text (or has a path mask) is selected; then one
 // adds the stroke on its own layer, parented to the text's layer at the identity, in one undo step.
 void testOutlineStrokeMenu() {

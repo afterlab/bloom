@@ -87,7 +87,9 @@ Space for Hand: Space is play/pause. Middle-drag pans and the wheel zooms with a
 Creation tools stay one-shot in every Viewer: committing a shape, mask, Pen path or text returns the
 application to Select, a zero-size press keeps the tool, and choosing a tool alone never authors
 anything. Properties' Cryptomatte "Pick in Viewer" chooses the Cryptomatte tool for the whole
-application; it stays chosen for further picks, as it did, until another tool is chosen.
+application; it stays chosen for further picks, as it did, until another tool is chosen. The
+Cryptomatte picker button sits in the tool strip only while a Cryptomatte node is selected or the
+Cryptomatte tool is the active one, and is hidden otherwise (#686).
 
 The bar's buttons, toggles and segmented controls never take keyboard focus. A field in the bar
 (stroke width, font, size, Align To) commits on Enter or Escape like every field and then returns
@@ -434,9 +436,10 @@ as the Viewer's Custom Safe Areas dialog (0.1–100 %, one decimal).
 | `Home` | Fit the graph (alias) |
 | Middle drag | Pan |
 | Wheel | Zoom about the pointer |
+| Trackpad pinch | Zoom about the fingers, within the wheel's limits (#696) |
 | `Tab` | Open the Add search; the new card lands with its title under the pointer |
 | `Ctrl+A` | Select all nodes |
-| `Delete` / `Backspace` | Remove the selection |
+| `Delete` / `Backspace` | Delete the selection: the nodes go and their links break, in one undo step; a parameter a deleted node drove returns to its default (#704) |
 | `Ctrl+D` | Duplicate the selection and start placing it |
 | `Ctrl+G` | Group the selection in a node group |
 | `Ctrl+Shift+G` | Ungroup every node group the selection is in |
@@ -453,7 +456,8 @@ as the Viewer's Custom Safe Areas dialog (0.1–100 %, one decimal).
 | Left drag from a socket | Connect, rewire, or disconnect |
 | `Ctrl` + right drag | Cut every wire crossed |
 | `Shift` + right drag | Add a reroute on the wire crossed |
-| Right-click a card, a group frame, a link, or the canvas | Context menu |
+| Right-click a card, a group frame, a link, or the canvas | Context menu. On a card in the selection the whole selection stays and the menu acts on all of it; on a card outside it, that card alone is selected (#705) |
+| Left drag on empty canvas | Box selection; its border is a constant one screen pixel at every zoom (#697) |
 | `Alt` + wheel | Zoom the Image Preview background about the pointer (#490) |
 | `Alt` + middle drag | Pan the Image Preview background (#490) |
 
@@ -462,6 +466,15 @@ Preview at a time is drawn behind the graph, in viewport space, with its own Fit
 pan (the Viewer's `ViewTransform`) and View ▸ Background for Fit, Actual Size, Zoom In/Out, Show and
 Clear. Which node is the background and whether it is shown are session state, never saved or
 undoable; a newly chosen background starts fitted.
+
+Dissolve takes every selected node out (#704): it reconnects each consumer of the node's output to
+what feeds its input where the types allow, and otherwise deletes the node and breaks its links, as
+Delete does. Both are one undo step for the whole selection. Only the composition Output, the Merge
+feeding it and locked nodes stay.
+
+The node context menu's **Add Node** submenu lists nodes by name only; stroking the selected
+layer's letters or masks (#509) is an action beside it, **Stroke Selected Text** and **Stroke
+Selected Layer's Masks** (#702).
 
 Mute, collapse, and dissolve are context-menu commands in this editor and bind no key; collapse is
 also the caret at the head of every card's title. The footer's Arrange button runs Arrange All. A group's own
@@ -600,6 +613,7 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | Timeline Add → Adjustment Layer | Adds an Adjustment node and a new entry for it above the selected row (else at the top) of the row's Merge, named Adjustment Layer N, in one undo step |
 | Right-click a row → Insert Layer Node / Remove Layer Node | Puts a Layer node in front of the entry, which adopts the entry's values, or dissolves the entry's Layer node and returns its values to the entry; the picture does not change |
 | Right-click empty layer-table space | Add submenu (Solid, Text, the shapes and Adjustment Layer); direct Keyframes, Graph Editor, Snap to Frames, Zoom to Fit, Select All and Deselect All actions. Opening or dismissing the menu preserves selection |
+| Trackpad pinch over the ruler, the lanes, the work-area row or the keyframe panel | Zoom time about the fingers, within the wheel's limits; in the Graph Editor the values zoom about the fingers too (#696) |
 | `Ctrl+wheel` over ruler or lanes | Zoom time about the pointer; the pointer's time stays fixed until a composition boundary clamps the range |
 | `Shift+wheel` or horizontal wheel | Scroll the visible time range |
 | Drag the navigator window | Scroll; drag either window edge to resize the visible range; `Escape` cancels |
@@ -811,7 +825,9 @@ Export is a queue in a replaceable **Export** panel, never a dialog. **File → 
 panel and select the job. Edits to the queue are undoable commands; Start, Stop and the like act on
 the run and are not. A command that cannot run keeps its control visible and gives the reason as its
 tooltip or an inline line. Waiting for the Viewer is a neutral state, not an error. Failures read as
-sentences; technical detail sits behind **Details** in the log. See
+sentences; technical detail sits behind **Details** in the log. The queue's columns, the current
+render's bar and the strip above them fill the panel at every width; the Composition column takes
+the slack (#691). See
 [The Export panel](../user-guide/exporting-video.md).
 
 ## Retired Bindings

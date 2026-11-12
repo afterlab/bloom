@@ -142,6 +142,17 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         event->accept();
         return;
     }
+    // #705: a right-click on a card that is part of the selection leaves the whole selection alone,
+    // so the menu that follows is the multi-node menu; a card outside the selection becomes the
+    // selection. The default press would deselect everything but the card, and the menu then read
+    // the one node.
+    if (event->button() == Qt::RightButton && !fieldAt(*this, event->scenePos()))
+        if (auto* card = cardAt(*this, event->scenePos())) {
+            if (!session_->selectedNodes().contains(card->id()))
+                session_->selectNodes({card->id()}, card->id());
+            event->accept();
+            return;
+        }
     if (event->button() != Qt::LeftButton) {
         QGraphicsScene::mousePressEvent(event);
         return;
@@ -278,7 +289,11 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         gesture.baseSelection = session_->selectedNodes();
     else
         session_->clearSelection();
-    gesture.box = addRect({}, QPen(kit::color(kit::Color::Accent), kit::kHairlineWidth));
+    // #697: a cosmetic pen is a fixed number of screen pixels, so the marquee's border does not
+    // grow or shrink with the canvas zoom.
+    QPen boxPen(kit::color(kit::Color::Accent), kit::kHairlineWidth);
+    boxPen.setCosmetic(true);
+    gesture.box = addRect({}, boxPen);
     gesture.box->setZValue(10);
     gesture.box->setData(kNodeItemKindRole, QStringLiteral("selection-preview"));
     event->accept();

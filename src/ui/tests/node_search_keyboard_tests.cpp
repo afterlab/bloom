@@ -7,6 +7,7 @@
 #include <QShortcut>
 #include <QStringList>
 #include <algorithm>
+#include <functional>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/value_nodes.hpp>
@@ -669,8 +670,7 @@ void testSearchKeyboardAndMenus() {
             {"Text Source", "Rectangle", "Ellipse", "Polygon", "Star", "Line", "Path", "Triangle",
              "Function Plot", "Axes", "Axis Tick", "Transform Path", "Trim Path", "Offset Path",
              "Boolean Paths", "Merge Paths", "Round Corners", "Path Stroke", "Mask Path",
-             "Text Outline", "Resample Path", "Warp Path", "Warp Path (Function)", "Shape Morph",
-             "Stroke the Selected Text", "Stroke the Selected Layer's Masks"},
+             "Text Outline", "Resample Path", "Warp Path", "Warp Path (Function)", "Shape Morph"},
             "Text & Paths holds Text and the shape presets");
         hasGroup("Utilities",
                  {"Combine XY", "Combine XYZ", "Group Input", "Group Output", "Node Group", "Reroute",
@@ -684,6 +684,30 @@ void testSearchKeyboardAndMenus() {
                  "and maps");
         hasGroup("Tracking & Analysis", {"Histogram", "Image Compare", "Image Statistics", "Audio Amplitude", "Audio Waveform", "Audio Spectrum"},
                  "Tracking & Analysis holds the analysis nodes");
+        // #702: every leaf under Add Node is a node (or preset) name; no row carries a
+        // descriptive sentence, and the in-place strokes sit beside the submenu, not in it.
+        {
+            std::function<void(QMenu*)> walk = [&](QMenu* parent) {
+                for (auto* entry : parent->actions()) {
+                    if (auto* sub = entry->menu()) {
+                        walk(sub);
+                        continue;
+                    }
+                    if (entry->isSeparator())
+                        continue;
+                    const auto text = entry->text();
+                    expect(!text.contains(QStringLiteral("Stroke the")) &&
+                               !text.contains(QStringLiteral("selected"), Qt::CaseInsensitive) &&
+                               text.split(QLatin1Char(' ')).size() <= 5,
+                           ("an Add Node entry shows only a name: " + text.toStdString()).c_str());
+                }
+            };
+            walk(addMenu);
+            auto* strokeText = named(menu, "nodeAddOutlineStroke.text");
+            expect(strokeText != nullptr &&
+                       strokeText->text() == QStringLiteral("Stroke Selected Text"),
+                   "the in-place stroke is a separate action beside Add Node");
+        }
         for (const auto* empty : {"Instances & Particles"})
             expect(addMenu->findChild<QMenu*>(QStringLiteral("nodeAddCategoryMenu.") +
                                               QString::fromUtf8(empty)) == nullptr,

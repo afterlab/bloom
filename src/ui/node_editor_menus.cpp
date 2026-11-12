@@ -35,11 +35,6 @@
 namespace bloom::ui {
 using namespace node_editor;
 namespace {
-// #509: the Add menu's in-place outline strokes, recorded among the Add items under these names
-// instead of a node type: their state follows the selected layer, not what can be added.
-constexpr std::string_view kOutlineStrokeTextItem = "#outline-stroke.text";
-constexpr std::string_view kOutlineStrokeMasksItem = "#outline-stroke.masks";
-
 // Why the selected layer cannot be stroked in place from `source`, or empty when it can.
 QString outlineStrokeRefusal(const bool canSubmit, const CompositionSession& session,
                              const commands::OutlineStrokeSource source) {
@@ -275,12 +270,11 @@ void NodeGraphEditor::dissolveSelectedNode() {
     const auto nodes = commandTargets();
     if (nodes.empty())
         return;
-    if (nodes.size() != 1) {
-        showStatus(tr("Dissolve requires exactly one selected node"));
-        return;
-    }
+    // #704, #705: every selected node, one undo step. Each reconnects through where its types
+    // allow and is otherwise deleted with its links broken.
     commands::Transaction transaction("Edit Nodes", session_.snapshot().revision());
-    transaction.emplace<commands::DissolveNode>(session_.compositionId(), *nodes.begin());
+    for (const auto id : nodes)
+        transaction.emplace<commands::DissolveNode>(session_.compositionId(), id);
     (void)scene_->submit(std::move(transaction));
 }
 
@@ -594,41 +588,6 @@ void NodeGraphEditor::populateAddMenu(QMenu* menu,
                     recordInto->emplace_back(item, std::string(document::kNodeGroupNodeType));
             }
         }
-        // #509: stroke the selected layer's letters or masks in place, in one undo step: the
-        // stroke's layer is parented to the layer at the identity, so it lies on them however the
-        // layer is placed (commands::StrokeLayerOutline).
-        if (group == document::NodeGroup::TextPaths) {
-            for (const auto source :
-                 {commands::OutlineStrokeSource::Text, commands::OutlineStrokeSource::Masks}) {
-                const bool text = source == commands::OutlineStrokeSource::Text;
-                auto* item = sectionMenu->addAction(text ? tr("Stroke the Selected Text")
-                                                         : tr("Stroke the Selected Layer's Masks"));
-                item->setObjectName(text ? QStringLiteral("nodeAddOutlineStroke.text")
-                                         : QStringLiteral("nodeAddOutlineStroke.masks"));
-                const auto refusal = outlineStrokeRefusal(scene_->canSubmit(), session_, source);
-                item->setToolTip(refusal);
-                item->setEnabled(refusal.isEmpty());
-                connect(item, &QAction::triggered, this, [this, source, text] {
-                    const auto layer = session_.selection().contextualLayer;
-                    if (!layer ||
-                        !outlineStrokeRefusal(scene_->canSubmit(), session_, source).isEmpty())
-                        return;
-                    commands::Transaction transaction(text ? "Stroke Text" : "Stroke Masks",
-                                                      addRevision_);
-                    transaction.emplace<commands::StrokeLayerOutline>(session_.compositionId(),
-                                                                      *layer, source);
-                    const auto result = scene_->submit(std::move(transaction));
-                    if (const auto id =
-                            result.outputId<document::NodeId>(commands::kOutlineStrokeStrokeOutput);
-                        result.succeeded() && id)
-                        session_.selectNode(*id);
-                    view_->setFocus(Qt::PopupFocusReason);
-                });
-                if (recordInto != nullptr)
-                    recordInto->emplace_back(
-                        item, std::string(text ? kOutlineStrokeTextItem : kOutlineStrokeMasksItem));
-            }
-        }
     }
 }
 
@@ -644,15 +603,6 @@ void NodeGraphEditor::refreshAddMenuState() {
     addInput_.reset();
     addOutput_.reset();
     for (const auto& [item, typeId] : addMenuItems_) {
-        if (typeId == kOutlineStrokeTextItem || typeId == kOutlineStrokeMasksItem) {
-            const auto refusal = outlineStrokeRefusal(scene_->canSubmit(), session_,
-                                                      typeId == kOutlineStrokeTextItem
-                                                          ? commands::OutlineStrokeSource::Text
-                                                          : commands::OutlineStrokeSource::Masks);
-            item->setToolTip(refusal);
-            item->setEnabled(refusal.isEmpty());
-            continue;
-        }
         if (scene_->canSubmit()) {
             const auto refusal = addNodeRefusal(snapshot, typeId);
             item->setToolTip(refusal);
@@ -759,7 +709,9 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
                            writer = new NodePathWriter(session_, this);
                        writer->request(id);
                    });
-        if (nodes.size() == 1 && commands::canDissolveNode(graphComposition, *nodes.begin()))
+        if (std::ranges::all_of(nodes, [&](const auto id) {
+                return commands::canDissolveNode(graphComposition, id);
+            }))
             action(tr("Dissolve"), QStringLiteral("nodeDissolveAction"),
                    [this] { dissolveSelectedNode(); });
         const bool allMuted = std::ranges::all_of(
@@ -834,6 +786,39 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
     addMenu->setObjectName(QStringLiteral("nodeAddMenu"));
     addMenu->setEnabled(session_.composition() != nullptr);
     populateAddMenu(addMenu);
+    // #509, #702: stroking the selected layer's letters or masks in place is an action on the
+    // selection, not a node, so it sits beside the Add Node submenu instead of among the node
+    // entries, whose rows carry only the node name. One undo step
+    // (commands::StrokeLayerOutline): the stroke's layer is parented to the layer at the identity,
+    // so it lies on them however the layer is placed.
+    for (const auto source :
+         {commands::OutlineStrokeSource::Text, commands::OutlineStrokeSource::Masks}) {
+        const bool text = source == commands::OutlineStrokeSource::Text;
+        auto* item = action(text ? tr("Stroke Selected Text") : tr("Stroke Selected Layer's Masks"),
+                            text ? QStringLiteral("nodeAddOutlineStroke.text")
+                                 : QStringLiteral("nodeAddOutlineStroke.masks"),
+                            [this, source, text] {
+                                const auto layer = session_.selection().contextualLayer;
+                                if (!layer || !outlineStrokeRefusal(scene_->canSubmit(), session_,
+                                                                    source)
+                                                   .isEmpty())
+                                    return;
+                                commands::Transaction transaction(text ? "Stroke Text"
+                                                                       : "Stroke Masks",
+                                                                  addRevision_);
+                                transaction.emplace<commands::StrokeLayerOutline>(
+                                    session_.compositionId(), *layer, source);
+                                const auto result = scene_->submit(std::move(transaction));
+                                if (const auto id = result.outputId<document::NodeId>(
+                                        commands::kOutlineStrokeStrokeOutput);
+                                    result.succeeded() && id)
+                                    session_.selectNode(*id);
+                                view_->setFocus(Qt::PopupFocusReason);
+                            });
+        const auto refusal = outlineStrokeRefusal(scene_->canSubmit(), session_, source);
+        item->setToolTip(refusal);
+        item->setEnabled(refusal.isEmpty());
+    }
     menu->addSeparator();
     auto* organize = menu->addMenu(tr("Organize"));
     organize->setObjectName(QStringLiteral("nodeOrganizeMenu"));
@@ -1239,6 +1224,9 @@ void NodeGraphEditor::buildHeaderMenus() {
                                                QStringLiteral("nodeDeleteAction"),
                                                [this] { removeSelectedNodes(); }),
                                         QKeySequence(Qt::Key_Delete));
+    // #704: Backspace, the Delete key of a Mac keyboard, deletes as well; the first stays the one
+    // the menu shows.
+    deleteAction_->setShortcuts({QKeySequence(Qt::Key_Delete), QKeySequence(Qt::Key_Backspace)});
     connect(headerNodeMenu_, &QMenu::aboutToShow, this, &NodeGraphEditor::refreshNodeMenuState);
 
     // `bar` (created above) stays alive and usable through headerMenuForTest() even before
@@ -1305,8 +1293,8 @@ void NodeGraphEditor::refreshNodeMenuState() {
         return;
     }
     const auto& graphComposition = *session_.composition();
-    dissolveAction_->setEnabled(nodes.size() == 1 &&
-                                commands::canDissolveNode(graphComposition, *nodes.begin()));
+    dissolveAction_->setEnabled(std::ranges::all_of(
+        nodes, [&](const auto id) { return commands::canDissolveNode(graphComposition, id); }));
     const bool allMuted = std::ranges::all_of(
         nodes, [&](const auto id) { return layoutFor(*session_.composition(), id).muted; });
     const bool allCollapsed = std::ranges::all_of(
