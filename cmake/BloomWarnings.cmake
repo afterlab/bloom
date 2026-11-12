@@ -2,6 +2,40 @@ include_guard(GLOBAL)
 
 option(BLOOM_WARNINGS_AS_ERRORS "Treat warnings in Bloom-owned targets as errors" ON)
 
+# Whether the C++ standard library's own code uses a declaration it marks deprecated, in a way
+# the compiler reports against Bloom's sources. The library of the oldest Linux system a package
+# is built on does (its std::stable_sort calls std::get_temporary_buffer, deprecated since
+# C++17, and a current Clang reports the use). Nothing in Bloom can change that, so with such a
+# library a deprecated declaration is a warning and not an error; every other build keeps it an
+# error, which is where a deprecated use in Bloom's own code is caught.
+function(bloom_standard_library_uses_deprecated variable)
+    if(NOT DEFINED BLOOM_STANDARD_LIBRARY_USES_DEPRECATED)
+        include(CheckCXXSourceCompiles)
+        set(CMAKE_REQUIRED_FLAGS "-Werror=deprecated-declarations")
+        set(CMAKE_REQUIRED_QUIET ON)
+        check_cxx_source_compiles("
+            #include <algorithm>
+            #include <vector>
+            struct Item { int key; int value; };
+            int main() {
+                std::vector<Item> items(4);
+                std::stable_sort(items.begin(), items.end(),
+                                 [](const Item& a, const Item& b) { return a.key < b.key; });
+                return items.front().value;
+            }" BLOOM_STANDARD_LIBRARY_IS_FREE_OF_DEPRECATED)
+        if(BLOOM_STANDARD_LIBRARY_IS_FREE_OF_DEPRECATED)
+            set(uses OFF)
+        else()
+            set(uses ON)
+            message(STATUS "Bloom warnings: the C++ standard library uses declarations it "
+                           "deprecates; their use is a warning in this build, not an error")
+        endif()
+        set(BLOOM_STANDARD_LIBRARY_USES_DEPRECATED ${uses} CACHE INTERNAL
+            "Whether the C++ standard library's own code uses deprecated declarations")
+    endif()
+    set(${variable} ${BLOOM_STANDARD_LIBRARY_USES_DEPRECATED} PARENT_SCOPE)
+endfunction()
+
 function(bloom_enable_strict_floating_point target)
     if(NOT TARGET ${target})
         message(
@@ -114,6 +148,10 @@ function(bloom_enable_warnings target)
         )
         if(BLOOM_WARNINGS_AS_ERRORS)
             target_compile_options(${target} PRIVATE -Werror)
+            bloom_standard_library_uses_deprecated(deprecated)
+            if(deprecated)
+                target_compile_options(${target} PRIVATE -Wno-error=deprecated-declarations)
+            endif()
         endif()
     elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_options(

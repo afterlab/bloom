@@ -15,7 +15,8 @@ std::optional<OutputAnalysisRoundedBinary32V1> roundOutputAnalysisPositiveRation
     int exponent = 0;
     if (value.numerator >= value.denominator) {
         const auto integral = value.numerator / value.denominator;
-        exponent = std::bit_width(integral) - 1;
+        // The cast is for standard libraries from before std::bit_width returned int.
+        exponent = static_cast<int>(std::bit_width(integral)) - 1;
     } else {
         std::uint64_t scaledNumerator = value.numerator;
         while (scaledNumerator < value.denominator) {
