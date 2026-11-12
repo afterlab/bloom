@@ -77,6 +77,14 @@ void runNativeBatchComparison(Expectations& expectations, GpuDevice& device, con
             expectations.expect(busy.scene.ready && executors[1]->counters().nativeBatches == 0 &&
                                     executors[1]->counters().nativeBatchFallbacks > 0,
                                 "batch slot: occupied owner permits serial native fallback");
+            // #711: every executor on this device shares ONE queue-timing owner, and a span still
+            // in flight makes the next span Busy. Each span this probe starts therefore retires
+            // before the next one begins; otherwise the serial executor's first cold span below
+            // finds this one still pending whenever the GPU is slower than the host (a loaded
+            // machine), and never publishes its own.
+            const auto busyTiming = benchmarkQueueSample(*executors[1]);
+            expectations.expect(!clockSupported || busyTiming.status == TimingStatus::Available,
+                                "batch slot: the fallback run's queue span retires");
             busy.scene.image.reset();
             cache.cache->clear();
             blocker.reset();
@@ -85,6 +93,9 @@ void runNativeBatchComparison(Expectations& expectations, GpuDevice& device, con
             expectations.expect(
                 retried.scene.ready && executors[1]->counters().nativeBatches > 0,
                 "batch slot: same executor retries and batches after prior owner releases");
+            const auto retriedTiming = benchmarkQueueSample(*executors[1]);
+            expectations.expect(!clockSupported || retriedTiming.status == TimingStatus::Available,
+                                "batch slot: the batched run's queue span retires");
             retried.scene.image.reset();
             cache.cache->clear();
         }
