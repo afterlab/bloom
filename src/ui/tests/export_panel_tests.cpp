@@ -1021,10 +1021,15 @@ void saveAsPreset(TestContext& context) {
             }
             return false;
         };
+        // Read once per turn and judged on that reading: the store replaces its file, so a second
+        // look right after a successful one can meet the file while it is being replaced.
         timer.restart();
-        while (!written() && timer.elapsed() < 20000)
+        bool landed = written();
+        while (!landed && timer.elapsed() < 20000) {
             QTest::qWait(5);
-        context.expect(written(), "the store file holds the saved preset");
+            landed = written();
+        }
+        context.expect(landed, "the store file holds the saved preset");
         scheduler.beginShutdown();
         while (!scheduler.isQuiescent())
             QTest::qWait(1);
