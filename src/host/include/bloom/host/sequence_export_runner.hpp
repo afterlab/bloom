@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace bloom::host {
 namespace detail {
@@ -180,6 +181,9 @@ struct SequenceExportResultV1 {
     // "ffmpeg-dnxhr"); empty for
     // an audio-only output.
     std::string encoder;
+    // How the export's audio sources were routed away from the platform media framework
+    // (CompositionOutputStreamV1::sourceRoutingNotes); the export log records each.
+    std::vector<std::string> sourceRouting;
     std::uint64_t encodedFrames = 0;
     // Native provenance/counters accumulated over the per-frame output attempts (diagnostics
     // only). `gpuEvaluatedFrames` counts frames whose attempt actually ran the GPU bridge;

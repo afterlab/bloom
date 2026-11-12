@@ -372,6 +372,9 @@ if(BUILD_TESTING)
         target_link_libraries(bloom_host_export_audio_formats_test PRIVATE bloom_host
                                                                            bloom_commands)
         add_dependencies(bloom_host_export_audio_formats_test bloom-media-worker)
+        # The movie with AAC written by the macOS encoder (tests/data/provenance.md).
+        target_compile_definitions(bloom_host_export_audio_formats_test PRIVATE
+            BLOOM_MEDIA_CODEC_FIXTURES="${PROJECT_SOURCE_DIR}/apps/bloom-media-worker/tests/data")
         bloom_enable_warnings(bloom_host_export_audio_formats_test)
         bloom_add_test(NAME bloom.host.export-audio-formats
                        COMMAND bloom_host_export_audio_formats_test

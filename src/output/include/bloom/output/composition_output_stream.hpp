@@ -3,6 +3,8 @@
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <string>
+#include <vector>
 
 namespace bloom::output {
 // #570: what the export is asked to do to the programme's loudness.
@@ -68,6 +70,10 @@ class CompositionOutputStreamV1 final {
     // True after an audio source failed to read or decode for the mix (#428): the failure that
     // writeFrame returned belongs to the audio source stage, not the encoder.
     [[nodiscard]] bool audioSourceFailed() const noexcept;
+    // How the audio sources read so far were routed away from the platform media framework (ADR
+    // 0035): each source's name and VideoDecodeSession::routingNotes sentence. Read before the
+    // stream is closed, for the export log.
+    [[nodiscard]] std::vector<std::string> sourceRoutingNotes() const;
     // The failure is the required platform encoder refusing the encode (EncodeSessionV1).
     [[nodiscard]] bool platformEncoderRefused() const noexcept;
     // The preferred platform encoder began the stream and then failed it (EncodeSessionV1): the

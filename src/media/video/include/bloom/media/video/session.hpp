@@ -10,7 +10,9 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <string>
 #include <utility>
+#include <vector>
 namespace bloom::media::video {
 [[nodiscard]] bool isVideoExtension(const std::filesystem::path& path);
 using Cancel = std::function<bool()>;
@@ -189,6 +191,11 @@ class VideoDecodeSession final {
     // it; one before all of them sends the decoder back to a keyframe. A snapshot, like
     // occupancy().
     [[nodiscard]] DecoderReach reach(std::uint32_t stream, std::uint64_t frame);
+    // How this session's reads were routed away from the platform media framework so far (ADR
+    // 0035), one sentence each: the framework failed a read and was retired for the source, or it
+    // does not declare a stream's codec and FFmpeg decodes that stream. For the log a user or an
+    // agent reads; empty when the framework served everything or the platform has none.
+    [[nodiscard]] std::vector<std::string> routingNotes() const;
     [[nodiscard]] static std::string defaultWorker();
     // The host's hardware decode route (Linux): NVDEC through FFmpeg's CUDA hwaccel when the
     // NVIDIA kernel driver is loaded, else VA-API when a DRM render node exists, else None.

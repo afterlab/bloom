@@ -161,6 +161,8 @@ struct VideoDecodeSession::State {
     // Streams whose codec the platform provider does not declare, already reported (guarded by
     // the session mutex, as every call is).
     std::set<std::uint32_t> undeclaredNoted;
+    // VideoDecodeSession::routingNotes (guarded by hardwareMutex).
+    std::vector<std::string> routingNotes;
     // Hardware decode generation (Linux: VA-API or NVDEC, ADR 0027). Created on first eligible
     // request and permanently retired for this session after its first typed hardware refusal.
     HardwareRoute hardwareRoute = HardwareRoute::None;
@@ -302,6 +304,12 @@ struct VideoDecodeSession::State {
         const std::lock_guard lock(hardwareMutex);
         return nativeFallback;
     }
+    // Records a routing sentence for routingNotes() and writes it to the process's error stream.
+    void noteRouting(std::string sentence) {
+        std::cerr << "Bloom media: " << sentence << '\n';
+        const std::lock_guard lock(hardwareMutex);
+        routingNotes.push_back(std::move(sentence));
+    }
     void releaseRetainedWorkers() {
         pool.releaseRetained();
         if (nativePool)
@@ -335,6 +343,10 @@ VideoDecodeSession::VideoDecodeSession(
                                      std::move(spoolDirectory), std::move(retirement),
                                      std::move(launched))) {}
 VideoDecodeSession::~VideoDecodeSession() = default;
+std::vector<std::string> VideoDecodeSession::routingNotes() const {
+    const std::lock_guard lock(state_->hardwareMutex);
+    return state_->routingNotes;
+}
 std::string VideoDecodeSession::defaultWorker() { return ffmpegWorkerExecutable(); }
 WorkerReply
 VideoDecodeSession::call(Role role, const ProbeResult* source, std::uint32_t stream,
@@ -368,16 +380,16 @@ VideoDecodeSession::call(Role role, const ProbeResult* source, std::uint32_t str
             if (error == nullptr || !mediaFallbackPermittedV1(*error))
                 return reply;
             state_->retireNative(error->detail);
-            std::cerr << "Bloom media: " << nativeMediaProviderId() << " read failed ("
-                      << error->detail << "); FFmpeg serves this source\n";
+            state_->noteRouting(std::string(nativeMediaProviderId()) + " read failed (" +
+                                error->detail + "); FFmpeg serves this source");
         } else if (source && (role == Role::VideoDecode || role == Role::AudioDecode) &&
                    state_->undeclaredNoted.insert(stream).second) {
             // The platform provider reads the source but does not declare this stream's codec
             // (AAC, whose system decoders do not return the FFmpeg decoder's samples): FFmpeg
             // decodes the stream. Recorded once per stream, as the fallbacks are.
-            std::cerr << "Bloom media: " << nativeMediaProviderId() << " does not declare "
-                      << source->streams[stream].codec << " decode; FFmpeg decodes stream "
-                      << stream << " of this source\n";
+            state_->noteRouting(std::string(nativeMediaProviderId()) + " does not declare " +
+                                source->streams[stream].codec + " decode; FFmpeg decodes stream " +
+                                std::to_string(stream) + " of this source");
         }
     }
     auto* workers = hardware ? state_->hardwareWorkers() : &state_->pool;

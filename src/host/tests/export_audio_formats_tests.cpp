@@ -216,7 +216,9 @@ struct Fixture {
 
     // The composition carries one audio layer reading `source`.
     // `compilable == false` leaves the compiler's registry empty, so no composition compiles.
-    Fixture(const std::string& name, const WavEncoding source, const bool compilable = true)
+    // `media`, when given, is the source instead of a written WAV: a copy of that file.
+    Fixture(const std::string& name, const WavEncoding source, const bool compilable = true,
+            const std::filesystem::path& media = {})
         : folder(scratch(name)), session(makeSession(identity, folder)) {
         if (compilable && !runtime::registerBuiltInNodeDefinitions(registry))
             throw std::runtime_error("registry");
@@ -243,11 +245,17 @@ struct Fixture {
                                                  .backend = nullptr});
         std::filesystem::create_directories(folder / "scratch");
         std::filesystem::create_directories(folder / "Exports");
-        const auto wav = writeWav(folder / "tone.wav", source);
+        auto wav = folder / "tone.wav";
+        if (media.empty()) {
+            wav = writeWav(wav, source);
+        } else {
+            wav = folder / media.filename();
+            std::filesystem::copy_file(media, wav);
+        }
         commands::Transaction import("Import");
         import.emplace<commands::ImportAssets>(std::vector<std::filesystem::path>{wav}, folder);
         if (!session.execute(std::move(import)).changed())
-            throw std::runtime_error("import the WAV source");
+            throw std::runtime_error("import the audio source");
         audio = currentSnapshot(session).project().assets().back().id;
         commands::Transaction layer("Add audio layer");
         layer.emplace<commands::AddDroppedLayers>(composition(),
@@ -899,8 +907,40 @@ void testLoudnessNormalization() {
 
 } // namespace
 
+// ADR 0035: a source stream the platform media framework reads but does not decode is said in the
+// export's log, where a user or an agent reads it. The source is a movie with AAC written by the
+// macOS encoder: the macOS and Windows frameworks do not declare AAC decode (their samples are not
+// the FFmpeg decoder's), so FFmpeg decodes it; Linux has no platform framework and logs nothing.
+void testSourceRoutingIsLogged() {
+    Fixture f("routing", WavEncoding::Pcm16, true,
+              std::filesystem::path(BLOOM_MEDIA_CODEC_FIXTURES) / "apple-h264-aac.mp4");
+    document::ExportOutputSettings settings;
+    settings.format = ExportFormat::Wav;
+    settings.codecProfile = "s24";
+    settings.includeAudio = true;
+    const auto job = f.addJob(settings, "Exports/routing.wav");
+    const auto finished = f.run(job, "AAC source");
+    expect(published(finished), "a movie with AAC audio exports its audio");
+    std::size_t routed = 0;
+    for (const auto& entry : f.service->log(job, 0).entries)
+        if (entry.code == "export.source.routing") {
+            ++routed;
+            std::cout << "  " << entry.code << ": " << entry.message << '\n';
+            expect(entry.message.find("apple-h264-aac.mp4") != std::string::npos &&
+                       entry.message.find("does not declare aac decode; FFmpeg decodes stream") !=
+                           std::string::npos,
+                   "the routing entry names the source, the codec and the decoder");
+        }
+#if defined(__APPLE__) || defined(_WIN32)
+    expect(routed == 1, "the export log says once that FFmpeg decodes the AAC stream");
+#else
+    expect(routed == 0, "without a platform media framework nothing is routed");
+#endif
+}
+
 int main() {
     try {
+        testSourceRoutingIsLogged();
         testSourceFormatsAcrossPresets();
         testUndecodableSourceIsRefusedBeforeRendering();
         testSurroundSourceDownmixesToStereo();

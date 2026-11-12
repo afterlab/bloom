@@ -260,7 +260,11 @@ not change with the provider that opened its footage:
   AAC is described here (its frame count is the track's coded packets, priming included, as the
   FFmpeg reader counts them) and decoded by the FFmpeg reader: the system AAC decoder's samples
   are not the FFmpeg decoder's (measured on the parity files: up to 2.4e-07 of full scale apart),
-  and no tolerance is granted for it (#370). The session logs the routing once per stream.
+  and no tolerance is granted for it (#370). The routing is recorded once per stream:
+  `VideoDecodeSession::routingNotes()` holds the sentence ("videotoolbox does not declare
+  aac decode; FFmpeg decodes stream 1 of this source"), and an export writes it to its job log
+  as an `export.source.routing` entry naming the source, where a user or an agent reads it. The
+  same entry is written on Windows, whose provider does not declare AAC either.
 - **What it does not read.** Containers other than QuickTime and MPEG-4, codecs other than H.264,
   HEVC and ProRes, interlaced, rotated, mirrored and non-square-pixel pictures, variable frame
   cadence, edits other than one leading trim, and audio with more than two channels are refused
@@ -381,8 +385,15 @@ or written by hand.
   decoder reads it back, and an encoder whose stream does not carry the requested primaries,
   transfer, matrix and range is refused before any frame is rendered. Measured: the graphics
   driver's hardware encoders write all four; the software H.264 encoder of Windows writes only a
-  full range and no color description, so it is refused and the bundled OpenH264 serves. The
-  system's name for the encoder and whether it is hardware are returned in `EncodeQcV1::encoder`
+  full range and no color description, so it is refused and the bundled OpenH264 serves. What
+  that means in practice, measured on a computer with NVIDIA graphics: Media Foundation serves
+  H.264 and HEVC exports tagged BT.709 with a limited range, through the NVIDIA encoders, at
+  1280x720 and above. An export tagged with the sRGB transfer, which is what Bloom's default sRGB
+  display asks for, goes to the bundled encoder (OpenH264 or Kvazaar), because no system encoder
+  on that computer wrote the sRGB transfer into the stream; so does a full-range or BT.2020 PQ
+  H.264 export, and an extent the hardware encoder does not take (64x48). The refusal and the
+  encoder that served are in the export's provenance. Decoding HEVC through Media Foundation has
+  not been measured: it needs a run from the Windows desktop. The system's name for the encoder and whether it is hardware are returned in `EncodeQcV1::encoder`
   and recorded in the evidence's version field; the encoder token is `mediafoundation`.
 - **Who encodes.** As on macOS: Automatic tries the system encoder for H.264 and HEVC and
   continues with NVENC, then the bundled OpenH264 and Kvazaar; Software skips it; Hardware requires

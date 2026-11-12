@@ -496,6 +496,7 @@ struct detail::SequenceExportWorkV1 {
         const auto served = encoder->handshake();
         auto provenance = encoder->provenance();
         const auto loudnessReport = encoder->loudnessReport();
+        auto sourceRouting = encoder->sourceRoutingNotes();
         if (provenance.fellBack())
             std::cerr << "Bloom export: media provider " << provenance.diagnostic() << '\n';
         require(qc.frames == settings().frames && qc.audioSamples == settings().audioSamples &&
@@ -579,6 +580,7 @@ struct detail::SequenceExportWorkV1 {
         outcome.loudness = loudnessReport;
         outcome.toleranceProfile = media::provider::encodeToleranceName(settings());
         outcome.encoder = encoderToken(served);
+        outcome.sourceRouting = std::move(sourceRouting);
         outcome.expectedColourTags =
             settings().videoCodec.empty() ? ColourTags{} : settings().colour;
         // FFmpeg's MXF writes the matrix but neither the primaries nor the transfer, so a DNxHR

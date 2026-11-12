@@ -121,6 +121,10 @@ struct CompositionOutputStreamV1::State {
     platform::ProcessCancellation cancellation;
     std::unique_ptr<EncodeSessionV1> encoder;
     std::map<runtime::AudioStreamKey, OwnedAudioBuffer> audioBuffers;
+    // The decode session of every audio source opened for the mix, with the source's name, for
+    // sourceRoutingNotes. Weak: the buffers own the sessions and decide when they retire.
+    std::vector<std::pair<std::string, std::weak_ptr<media::video::VideoDecodeSession>>>
+        audioDecoders;
     bool started = false;
     // An audio source failed to read or decode (#428); see loadSource.
     bool audioSourceFailed = false;
@@ -151,6 +155,7 @@ struct CompositionOutputStreamV1::State {
             std::shared_ptr<ExportResourceReservationV1> retainedClaim;
             std::shared_ptr<ExportResourceReservationV1> scratchClaim;
             const auto decoder = std::make_shared<media::video::VideoDecodeSession>(path);
+            audioDecoders.emplace_back(path.filename().string(), decoder);
             const auto probe = checked(decoder->probe(cancel));
             require(probe.sourceDigest == asset->contentDigest, "Audio source changed",
                     Error::SourceChanged);
@@ -497,6 +502,14 @@ std::optional<AudioLoudnessReportV1> CompositionOutputStreamV1::loudnessReport()
 }
 bool CompositionOutputStreamV1::audioSourceFailed() const noexcept {
     return state_->audioSourceFailed;
+}
+std::vector<std::string> CompositionOutputStreamV1::sourceRoutingNotes() const {
+    std::vector<std::string> notes;
+    for (const auto& [name, weak] : state_->audioDecoders)
+        if (const auto decoder = weak.lock())
+            for (auto& note : decoder->routingNotes())
+                notes.push_back(name + ": " + std::move(note));
+    return notes;
 }
 bool CompositionOutputStreamV1::platformEncoderRefused() const noexcept {
     return state_->encoder->platformEncoderRefused();

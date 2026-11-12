@@ -1762,6 +1762,10 @@ class MediaDriver final : public DriverBase {
             static_cast<std::uint64_t>(result.workerMemory.waited.count())};
         if (report_.failure)
             return void(done_ = true);
+        // ADR 0035: a source stream the platform media framework did not decode is said in the
+        // log, where a user or an agent reads it.
+        for (const auto& note : result.sourceRouting)
+            log(runtime::DiagnosticSeverity::Information, "export.source.routing", note);
         if (!result.published()) {
             if (stopRequested_ ||
                 (result.failure && result.failure->reason == media::provider::Error::Cancelled))
