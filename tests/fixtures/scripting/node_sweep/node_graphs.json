@@ -1,13 +1,66 @@
 {
- "comment": "Graphs for node types the sweep's default graph (gradient -> node -> layer output) cannot build, and the reason for each type that has none. A type with an image output that needs an entry here and has none fails bloom.sweep.nodes.",
+ "comment": "Graphs for node types the sweep's default graph (gradient -> node -> layer output) cannot build, and the reason for each type that has none. A type with an image output that needs an entry here and has none fails bloom.sweep.nodes. identityAtDefaults lists the node types whose default frame on the default graph is the gradient itself, with the reason; any other node whose frame is the gradient fails the sweep, so a node that silently does nothing is caught (#676).",
  "nodes": {
-  "bloom.composition-source": {"graph": "composition-source"},
-  "bloom.image-source": {"graph": "image-asset"},
-  "bloom.video-source": {"graph": "video-asset"},
-  "bloom.channel-pass": {"graph": "channels"},
-  "bloom.channel-shuffle": {"graph": "channels"},
-  "bloom.cryptomatte": {"excluded": "Needs an OpenEXR file with Cryptomatte layers and their manifest, which no scripting operation creates. Covered by bloom.runtime.cryptomatte."},
-  "bloom.node-group": {"excluded": "A reusable group definition cannot be created through the scripting operations the sweep drives. Covered by bloom.runtime.gpu_node_group_native and bloom.runtime.node-group-reopen."},
-  "bloom.group-input": {"excluded": "Exists only inside a reusable group definition, which the scripting operations cannot create. Covered by bloom.runtime.gpu_node_group_native and bloom.runtime.node-group-reopen."}
+  "bloom.composition-source": {
+   "graph": "composition-source"
+  },
+  "bloom.image-source": {
+   "graph": "image-asset"
+  },
+  "bloom.video-source": {
+   "graph": "video-asset"
+  },
+  "bloom.channel-pass": {
+   "graph": "channels"
+  },
+  "bloom.channel-shuffle": {
+   "graph": "channels"
+  },
+  "bloom.cryptomatte": {
+   "excluded": "Needs an OpenEXR file with Cryptomatte layers and their manifest, which no scripting operation creates. Covered by bloom.runtime.cryptomatte."
+  },
+  "bloom.node-group": {
+   "excluded": "A reusable group definition cannot be created through the scripting operations the sweep drives. Covered by bloom.runtime.gpu_node_group_native and bloom.runtime.node-group-reopen."
+  },
+  "bloom.group-input": {
+   "excluded": "Exists only inside a reusable group definition, which the scripting operations cannot create. Covered by bloom.runtime.gpu_node_group_native and bloom.runtime.node-group-reopen."
+  }
+ },
+ "identityAtDefaults": {
+  "bloom.box-blur": "The default size is zero: no blur until a size is set.",
+  "bloom.chromatic-aberration": "The default shift is zero: the channels stay aligned until an amount is set.",
+  "bloom.color-matrix": "The default matrix is the identity.",
+  "bloom.corner-pin": "The default corners are the image's own corners.",
+  "bloom.crop": "The default crop box is the whole frame.",
+  "bloom.curves": "The default curves are straight lines through the identity.",
+  "bloom.depth-fog": "The gradient carries no depth, so the fog has nothing to read; the node is covered with a depth source by bloom.runtime's depth tests.",
+  "bloom.displace": "No displacement map is connected by default, so nothing moves.",
+  "bloom.edge-extend": "The gradient fills the frame with opaque pixels, so there is no edge to extend.",
+  "bloom.exposure": "The default exposure is 0 stops.",
+  "bloom.frame-rate-hold": "The gradient is the same on every frame, so holding a frame gives the same frame.",
+  "bloom.gaussian-blur": "The default radius is zero: no blur until a radius is set.",
+  "bloom.grade": "The default lift, gamma, gain and offset are the identity.",
+  "bloom.hue-saturation": "The default hue shift is zero and the saturation 1.",
+  "bloom.image-clamp": "The gradient already lies inside the default clamp range.",
+  "bloom.image-map-range": "The default ranges map 0 to 1 onto 0 to 1.",
+  "bloom.image-math": "The default operation with its default operand leaves the image as it is.",
+  "bloom.image-mix": "Both inputs are the gradient on the default graph, so any mix of them is the gradient.",
+  "bloom.layer-output": "A pass-through by design: it marks the layer's result.",
+  "bloom.layer-stack": "A stack of the one gradient layer is that layer.",
+  "bloom.lens-distortion": "The default distortion is zero.",
+  "bloom.levels": "The default input and output ranges are 0 to 1 with gamma 1: the identity.",
+  "bloom.light-wrap": "Both inputs are the gradient and it is opaque everywhere, so no background light wraps in.",
+  "bloom.multiply": "The default factor is 1.",
+  "bloom.ocio-colour-space-transform": "The default source and destination are the working space, so the transform is the identity.",
+  "bloom.ocio-file-transform": "No LUT file is chosen by default, so the node passes its input through.",
+  "bloom.offset": "The default offset is zero.",
+  "bloom.pad": "The default padding is zero.",
+  "bloom.reroute": "A pass-through by design: it only routes a link.",
+  "bloom.rolling-shutter": "The gradient does not move, so a rolling shutter has nothing to skew.",
+  "bloom.st-map": "No ST map is connected by default, so nothing moves.",
+  "bloom.stabilize": "No tracking data is set by default, so nothing moves.",
+  "bloom.transform-2d": "The default transform is the identity.",
+  "bloom.vector-motion-blur": "No motion vectors are connected by default, so nothing blurs.",
+  "bloom.z-defocus": "The gradient carries no depth, so nothing is defocused; the node is covered with a depth source by its own tests."
  }
 }

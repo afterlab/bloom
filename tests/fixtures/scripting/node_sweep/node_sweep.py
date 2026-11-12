@@ -10,10 +10,13 @@ added later is swept without editing this file. For each type with an image outp
      working default graph nor a declaration fails the sweep.
   2. One frame is rendered twice: with the GPU device, and with every Vulkan driver hidden so the
      CPU reference renders it.
-  3. The two frames are compared: identical files, or every finite component within the
+  3. A node on the default graph whose GPU frame is the gradient itself fails, unless
+     node_graphs.json declares under identityAtDefaults why its defaults are the identity (#676):
+     a node that silently does nothing is caught even though both routes agree.
+  4. The two frames are compared: identical files, or every finite component within the
      repository's documented GPU gate (2e-6 absolute or relative to the CPU value,
      docs/architecture/gpu-backend.md) and every non-finite component equal.
-  4. The route and both digests are compared with the committed baseline for this platform.
+  5. The route and both digests are compared with the committed baseline for this platform.
 
 The sweep fails when a node moves off the GPU, loses parity, changes a digest without a baseline
 update, has no baseline row, or when the baseline names a node the registry no longer has.
@@ -424,7 +427,11 @@ def render(mcp, env, work, node_type, builder, tag):
 
 def sweep(arguments):
     with open(os.path.join(HERE, 'node_graphs.json'), encoding='utf-8') as file:
-        declarations = json.load(file)['nodes']
+        graphs = json.load(file)
+    declarations = graphs['nodes']
+    # #676: a node whose default frame is its input unchanged must say why its defaults are the
+    # identity; any other node that passes the gradient through untouched silently does nothing.
+    identity_at_defaults = graphs.get('identityAtDefaults', {})
     baseline = {'nodes': {}}
     if os.path.exists(arguments.baseline):
         with open(arguments.baseline, encoding='utf-8') as file:
@@ -467,6 +474,12 @@ def sweep(arguments):
                 if cpu['provenance'] != 'cpu-reference':
                     raise SweepError('the reference render did not run on the CPU reference path')
                 parity, largest = compare_frames(gpu['path'], cpu['path'])
+                if (builder == 'chain' and type_id != SOURCE and
+                        type_id not in identity_at_defaults and gpu['digest'] == probe['digest']):
+                    raise SweepError('passes its input through unchanged with its default '
+                                     'parameters; a node that changes pixels must change the '
+                                     'gradient, or node_graphs.json must declare under '
+                                     'identityAtDefaults why its defaults are the identity')
                 record.update(route=gpu['provenance'], gpu=gpu['digest'], cpu=cpu['digest'],
                               parity=parity, largestDifference=largest)
                 if gpu['provenance'] != 'gpu':
