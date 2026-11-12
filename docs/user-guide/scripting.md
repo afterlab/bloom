@@ -121,7 +121,7 @@ Project Settings > Color is not a document edit, so it is not an operation: MCP'
 choose the OCIO configuration (`"neutral"`, `"aces"` or `"current"`) and working color space
 exactly as the dialog does, and return the resulting `config`, the stored working-space id
 (`workingSpace` / `working_space`) and its label (`workingSpaceLabel` / `working_space_label`, for
-example `lin_rec709_scene` reads "Linear Rec.709 (sRGB)"). Like the dialog, the change is not undoable, marks the project dirty
+example `lin_rec709_scene` reads "Linear Rec.709 (sRGB)"). Pass `file` (with `project_relative=True` for a path under the project folder, and optional `context` variables) to select an external OCIO configuration; `config="clear"` returns to Bloom Neutral. Like the dialog, the change is one undo step, marks the project dirty
 and changes how every composition renders. In the desktop application's Script editor,
 `Host.set_color_settings` answers `unavailable`: use Project Settings > Color there (agents use
 the MCP tool, which the window applies).

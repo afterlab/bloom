@@ -3,6 +3,7 @@
 #include <bloom/runtime/headless_font_transport.hpp>
 #include <bloom/scripting/operation_reference.hpp>
 
+#include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
@@ -49,7 +50,8 @@ void bindHost(nb::module_& module) {
         .def("history", &NativeHost::history)
         .def("save", &NativeHost::save)
         .def("set_color_settings", &NativeHost::setColorSettings, nb::arg("config"),
-             nb::arg("working_space") = nb::none())
+             nb::arg("working_space") = nb::none(), nb::arg("file") = nb::none(),
+             nb::arg("project_relative") = false, nb::arg("context") = nb::none())
         .def("render", &NativeHost::render)
         .def("events", &NativeHost::events)
         .def("tasks", &NativeHost::tasks)

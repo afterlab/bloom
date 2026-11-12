@@ -2,10 +2,12 @@
 
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/export_queue_operations.hpp>
+#include <bloom/commands/operations.hpp>
 #include <bloom/host/export_presets.hpp>
 
 #include <exception>
 #include <limits>
+#include <map>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -80,6 +82,18 @@ const document::Snapshot& DecodedProjectSnapshotResult::snapshot() const& {
     return *snapshot_;
 }
 
+struct ProjectSession::ColorState final {
+    std::optional<document::ColorSettings> current;
+    std::uint64_t currentId = 0;
+    std::uint64_t nextId = 1;
+    // Every state this session has had, by the number the document carries (state 0 is the one
+    // the project opened with). Small: one entry per change of the settings.
+    std::map<std::uint64_t, document::ColorSettings> states;
+    // True while setColorSettings itself runs the command, which reports its own change.
+    bool quiet = false;
+    std::function<void()> changed;
+};
+
 ProjectSession::ProjectSession(const ProjectSessionId projectSessionId,
                                std::unique_ptr<document::Document> document,
                                std::unique_ptr<commands::CommandStack> commandStack,
@@ -92,13 +106,15 @@ ProjectSession::ProjectSession(const ProjectSessionId projectSessionId,
                                std::vector<project::ManifestRequirement> retainedRequirements)
     : projectSessionId_(projectSessionId), contentKind_(ProjectSessionContentKind::DecodedDocument),
       editability_(editability), displayPath_(std::move(displayPath)),
-      cleanRevision_(cleanRevision), colorSettings_(std::move(colorSettings)),
+      cleanRevision_(cleanRevision), color_(makeColorState(std::move(colorSettings))),
       // Design decision 1: wrap the by-value optional into the session's owning shared view.
       roundTrip_(roundTrip.has_value()
                      ? std::make_shared<const project::RoundTripState>(std::move(*roundTrip))
                      : nullptr),
       schemaMinor_(schemaMinor), retainedRequirements_(std::move(retainedRequirements)),
-      document_(std::move(document)), commandStack_(std::move(commandStack)), valid_(true) {}
+      document_(std::move(document)), commandStack_(std::move(commandStack)), valid_(true) {
+    attachColorObserver();
+}
 
 ProjectSession::ProjectSession(const ProjectSessionId projectSessionId,
                                ProjectDisplayPath preservedDisplayPath) noexcept
@@ -118,7 +134,7 @@ ProjectSession::ProjectSession(ProjectSession&& other) noexcept
           std::exchange(other.newestAcceptedPublicationIntent_, PublicationIntentId{})),
       contentKind_(other.contentKind_), editability_(other.editability_),
       displayPath_(std::move(other.displayPath_)), cleanRevision_(other.cleanRevision_),
-      colorSettings_(std::move(other.colorSettings_)),
+      color_(std::move(other.color_)),
       colorSettingsDirty_(std::exchange(other.colorSettingsDirty_, false)),
       roundTrip_(std::move(other.roundTrip_)),
       schemaMinor_(std::exchange(other.schemaMinor_, std::uint32_t{0})),
@@ -432,7 +448,13 @@ SessionInstallStatus ProjectSession::installDecodedReplacement(const OpenIntentC
 
     document_ = std::move(content.document_);
     commandStack_ = std::move(freshStack);
-    colorSettings_ = std::move(content.colorSettings_);
+    {
+        // The handler a window installed outlives the content it was watching.
+        auto handler = color_ != nullptr ? std::move(color_->changed) : std::function<void()>{};
+        color_ = makeColorState(std::move(content.colorSettings_));
+        color_->changed = std::move(handler);
+    }
+    attachColorObserver();
     colorSettingsDirty_ = false;
     roundTrip_ = std::move(sharedRoundTrip);
     schemaMinor_ = content.schemaMinor_;
@@ -470,7 +492,7 @@ ProjectSession::installPreservedReadOnlyReplacement(const OpenIntentCapture inte
     // Mirrors createPreservedReadOnly()'s internal state exactly.
     document_.reset();
     commandStack_.reset();
-    colorSettings_.reset();
+    color_.reset();
     colorSettingsDirty_ = false;
     roundTrip_.reset();
     schemaMinor_ = 0;
@@ -538,36 +560,93 @@ ProjectSessionCommandResult ProjectSession::redo(const commands::CommandOrigin o
     return {.status = ProjectSessionCommandStatus::Completed, .command = commandStack_->redo(origin)};
 }
 
+std::shared_ptr<ProjectSession::ColorState>
+ProjectSession::makeColorState(std::optional<document::ColorSettings> settings) {
+    auto state = std::make_shared<ColorState>();
+    if (settings.has_value())
+        state->states.emplace(0, *settings);
+    state->current = std::move(settings);
+    return state;
+}
+
+const document::ColorSettings* ProjectSession::currentColorSettings() const noexcept {
+    return color_ != nullptr && color_->current.has_value() ? &*color_->current : nullptr;
+}
+
+void ProjectSession::setColorSettingsChangedHandler(std::function<void()> handler) {
+    if (color_ != nullptr)
+        color_->changed = std::move(handler);
+}
+
+void ProjectSession::attachColorObserver() {
+    if (!commandStack_ || !document_ || !color_)
+        return;
+    // Undo and Redo restore the document's snapshot, color-settings state number included; this
+    // follows it. The observer holds the shared state and the document, never the session, which
+    // may move.
+    static_cast<void>(commandStack_->addObserver([weak = std::weak_ptr<ColorState>(color_),
+                                document = document_.get()](const commands::CommandEvent&) {
+        const auto state = weak.lock();
+        if (!state)
+            return;
+        const auto id = document->snapshot().project().colorSettingsState();
+        if (id == state->currentId)
+            return;
+        const auto found = state->states.find(id);
+        if (found == state->states.end())
+            return;
+        state->currentId = id;
+        state->current = found->second;
+        if (!state->quiet && state->changed)
+            state->changed();
+    }));
+}
+
 ProjectSessionColorSettingsStatus
 ProjectSession::setColorSettings(document::ColorSettings settings) {
     if (!isValid())
         return ProjectSessionColorSettingsStatus::InvalidSession;
-    if (contentKind_ != ProjectSessionContentKind::DecodedDocument)
+    if (contentKind_ != ProjectSessionContentKind::DecodedDocument || color_ == nullptr)
         return ProjectSessionColorSettingsStatus::ReadOnly;
     if (!settings.validate().ok())
         return ProjectSessionColorSettingsStatus::InvalidSettings;
-    if (colorSettings_.has_value() && *colorSettings_ == settings)
+    if (color_->current.has_value() && *color_->current == settings)
         return ProjectSessionColorSettingsStatus::NoChange;
-    auto previous = std::exchange(colorSettings_, std::move(settings));
-    colorSettingsDirty_ = true;
+    const auto previous = color_->current;
+    const auto id = color_->nextId++;
+    color_->states.emplace(id, settings);
+    commands::Transaction transaction("Change Project Color Settings",
+                                      document_->snapshot().revision());
+    transaction.emplace<commands::SetProjectColorSettingsState>(id);
     if (previous.has_value())
-        followViewerDefaultExportView(*previous, *colorSettings_);
+        followViewerDefaultExportView(*previous, settings, transaction);
+    color_->quiet = true;
+    const auto result = commandStack_->execute(std::move(transaction));
+    color_->quiet = false;
+    if (result.status != commands::CommandStatus::Succeeded) {
+        color_->states.erase(id);
+        return ProjectSessionColorSettingsStatus::InvalidSettings;
+    }
+    color_->currentId = id;
+    color_->current = std::move(settings);
     return ProjectSessionColorSettingsStatus::Updated;
 }
 
 void ProjectSession::followViewerDefaultExportView(const document::ColorSettings& previous,
-                                                   const document::ColorSettings& current) {
+                                                   const document::ColorSettings& current,
+                                                   commands::Transaction& transaction) {
     if (previous.ocioConfig == current.ocioConfig)
         return; // the same configuration offers the same display/view list
-    const auto before = exportDisplayViews(previous);
-    const auto after = exportDisplayViews(current);
+    const auto folder =
+        displayPath_ ? displayPath_->value().parent_path() : std::filesystem::path{};
+    const auto before = exportDisplayViews(previous, folder);
+    const auto after = exportDisplayViews(current, folder);
     const auto* from = color::viewerDefaultDisplayView(before);
     const auto* to = color::viewerDefaultDisplayView(after);
     if (from == nullptr || to == nullptr ||
         (from->display == to->display && from->view == to->view))
         return;
     const auto snapshot = document_->snapshot();
-    commands::Transaction transaction("Follow the Viewer's Default View", snapshot.revision());
     for (const auto& job : snapshot.project().exportJobs())
         for (const auto& output : job.outputs) {
             if (output.settings.displayName != from->display ||
@@ -578,8 +657,6 @@ void ProjectSession::followViewerDefaultExportView(const document::ColorSettings
             settings.viewName = to->view;
             transaction.emplace<commands::SetExportOutputSettings>(output.id, std::move(settings));
         }
-    if (!transaction.empty())
-        (void)commandStack_->execute(std::move(transaction));
 }
 
 ProjectSessionSavepointStatus ProjectSession::acceptSavepoint(
@@ -632,15 +709,15 @@ SessionSaveInputResult ProjectSession::captureRecoveryInput() const {
     if (contentKind_ != ProjectSessionContentKind::DecodedDocument) {
         return SessionSaveInputResult(SessionSaveInputStatus::ReadOnly);
     }
-    if (!colorSettings_.has_value()) {
+    if (currentColorSettings() == nullptr) {
         return SessionSaveInputResult(SessionSaveInputStatus::ColorSettingsUnavailable);
     }
     // No path gate and no intent matching: see the declaration's comment. The capture still names
     // the session's CURRENT plain-save intent so the value is self-describing, but nothing in the
     // recovery path ever presents it back to the session.
     return SessionSaveInputResult(SessionSaveInput(
-        document_->snapshot(), *colorSettings_, roundTrip_, schemaMinor_, retainedRequirements_,
-        displayPath_, capturePlainSavePathIntent(), captureResultAcceptance()));
+        document_->snapshot(), *currentColorSettings(), roundTrip_, schemaMinor_,
+        retainedRequirements_, displayPath_, capturePlainSavePathIntent(), captureResultAcceptance()));
 }
 
 SessionSaveInputResult
@@ -651,7 +728,7 @@ ProjectSession::captureSaveInput(const SessionPathIntentCapture intent) const {
     if (contentKind_ != ProjectSessionContentKind::DecodedDocument) {
         return SessionSaveInputResult(SessionSaveInputStatus::ReadOnly);
     }
-    if (!colorSettings_.has_value()) {
+    if (currentColorSettings() == nullptr) {
         return SessionSaveInputResult(SessionSaveInputStatus::ColorSettingsUnavailable);
     }
     // Mirrors acceptSavepoint()'s own ExistingPath/no-displayPath check, but reported first and
@@ -669,7 +746,7 @@ ProjectSession::captureSaveInput(const SessionPathIntentCapture intent) const {
     // see design decision 1: the capture keeps the CURRENT round-trip state alive independently of
     // this session, even across a later replacement install on this same session.
     return SessionSaveInputResult(
-        SessionSaveInput(document_->snapshot(), *colorSettings_, roundTrip_, schemaMinor_,
+        SessionSaveInput(document_->snapshot(), *currentColorSettings(), roundTrip_, schemaMinor_,
                          retainedRequirements_, displayPath_, intent, captureResultAcceptance()));
 }
 

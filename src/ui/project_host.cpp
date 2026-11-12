@@ -1140,6 +1140,12 @@ void ProjectHost::replaceWithNewProject() {
     // The queue service borrows the session: stop it and let it go before the session does.
     retireExportQueue(host::ExportStopCause::ProjectClosing);
     session_.emplace(std::move(created).takeSession());
+    // Undo and Redo of a color-settings change reach the windows through the same signals as the
+    // dialog's own change. The handler outlives the content installs the session goes through.
+    session_->setColorSettingsChangedHandler([this] {
+        emit dirtyStateChanged();
+        emit colorSettingsChanged();
+    });
     createExportQueue();
     emit exportQueueReplaced();
     recoveryOwnerToken_.swap(nextRecoveryOwnerToken);

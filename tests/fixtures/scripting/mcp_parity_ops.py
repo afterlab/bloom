@@ -164,8 +164,8 @@ class ParityOperations(unittest.TestCase):
         neutral = self.server.tool('project.set-color-settings', {'config': 'neutral'})
         self.assertEqual((neutral['config'], neutral['workingSpace']),
                          ('neutral', 'lin_rec709_scene'))
-        self.assertEqual(self.server.revision(), revision,
-                         'colour settings are not a document edit and make no history step')
+        self.assertGreater(self.server.revision(), revision,
+                           'a colour settings change is a history entry')
 
     def test_profiler_snapshot(self):
         # #423: bloom-mcp samples its own process; absent values are null, never 0.

@@ -10,6 +10,7 @@
 
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -37,9 +38,12 @@ class NativeHost final {
                                     std::uint64_t revision);
     [[nodiscard]] nb::dict history(bool redo);
     void save(const std::string& path);
-    // Project Settings > Colour (Session::setColorSettings): not undoable, marks the project dirty.
-    [[nodiscard]] nanobind::dict setColorSettings(const std::string& config,
-                                                  std::optional<std::string> workingSpace);
+    // Project Settings > Colour (Session::setColorSettings): one undoable history entry, marks the
+    // project dirty. `file` (config "file") is an external or project-relative OCIO configuration.
+    [[nodiscard]] nanobind::dict setColorSettings(
+        const std::string& config, std::optional<std::string> workingSpace,
+        std::optional<std::string> file, bool projectRelative,
+        std::optional<std::map<std::string, std::string>> context);
     // #645 bloom.viewer.set_level: the desktop Viewer's drill level (Session::setViewerLevel).
     [[nodiscard]] nb::dict setViewerLevel(std::vector<std::uint64_t> level,
                                           std::optional<std::uint64_t> points);

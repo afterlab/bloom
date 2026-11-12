@@ -2,6 +2,9 @@
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_config_resolution.hpp>
+#include <bloom/core/file_uri.hpp>
+#include <bloom/host/export_job_runner.hpp>
 
 #include <algorithm>
 #include <array>
@@ -17,7 +20,7 @@ constexpr std::array<std::string_view, 5> kAcesSpaces{
 } // namespace
 
 std::optional<ProjectColorConfig> parseProjectColorConfig(const std::string_view name) {
-    if (name == "neutral")
+    if (name == "neutral" || name == "clear")
         return ProjectColorConfig::BloomNeutral;
     if (name == "aces")
         return ProjectColorConfig::AcesCg;
@@ -108,6 +111,176 @@ ProjectColorResolution resolveProjectColorSettings(const document::ColorSettings
     auto settings = document::makeBloomNeutralColorSettingsV1(color::kBloomNeutralV1ConfigDigest);
     settings.processColorSpaceId = std::move(working);
     return {std::move(settings), {}};
+}
+
+namespace {
+
+// What went wrong with a configuration, in words an artist can act on. `name` is the file's name.
+[[nodiscard]] std::string plainFailure(const color::OcioBuiltInResolutionResult& result,
+                                       const std::string& name) {
+    using Outcome = color::OcioBuiltInRegistryOutcome;
+    switch (result.outcome()) {
+    case Outcome::Missing:
+        return "Bloom can't find or read \"" + name +
+               "\". Check that the file exists, that it is a regular file and not a link, and "
+               "that you can read it.";
+    case Outcome::MissingResource:
+        return "\"" + name +
+               "\" refers to a file (such as a LUT) that is not in its folder or archive. Put the "
+               "referenced files next to it, or choose a configuration that includes them.";
+    case Outcome::Invalid:
+        switch (result.invalidReason()) {
+        case color::OcioBuiltInInvalidReason::ResourceTableLimitExceeded:
+            return "\"" + name +
+                   "\" is too large to use: its folder or archive holds too many files or too "
+                   "many bytes. Choose a smaller configuration.";
+        case color::OcioBuiltInInvalidReason::ValidateFailed:
+            return "OpenColorIO read \"" + name + "\" but found it is not a valid configuration.";
+        default:
+            return "OpenColorIO couldn't read \"" + name +
+                   "\" as a color configuration. Check that it is a config.ocio file or an .ocioz "
+                   "archive that works in other OpenColorIO applications.";
+        }
+    case Outcome::LocatorKindRequiresHelper:
+        switch (result.helperError()) {
+        case color::OcioHelperError::HelperCancelled:
+            return "Reading \"" + name + "\" was cancelled.";
+        case color::OcioHelperError::HelperDeadline:
+            return "Reading \"" + name +
+                   "\" took too long and was stopped. Try a smaller configuration.";
+        case color::OcioHelperError::HelperMemoryLimit:
+            return "\"" + name + "\" needs more memory than the color helper may use.";
+        case color::OcioHelperError::HelperUnavailable:
+            return "Bloom's color helper isn't available on this computer, so it can't read an "
+                   "external color configuration.";
+        default:
+            return "Bloom's color helper stopped while reading \"" + name + "\". Try again.";
+        }
+    case Outcome::Changed:
+        return "\"" + name + "\" changed while Bloom was reading it. Try again.";
+    default:
+        break;
+    }
+    return "Bloom can't use \"" + name + "\" as a color configuration.";
+}
+
+[[nodiscard]] std::string pathText(const std::filesystem::path& path) {
+    const auto text = path.u8string();
+    return {reinterpret_cast<const char*>(text.data()), text.size()};
+}
+
+} // namespace
+
+ProjectColorResolution resolveProjectColorConfigFile(
+    const document::ColorSettings& original, const ProjectColorConfigFile& file,
+    std::optional<std::string> workingColorSpaceId, const std::filesystem::path& projectDirectory,
+    const std::function<bool()>& cancellation) {
+    if (file.path.empty())
+        return {std::nullopt, "Choose a color configuration file: a config.ocio or an .ocioz archive."};
+    document::OcioConfigReference reference;
+    reference.schemaVersion = document::kOcioConfigReferenceSchemaVersionV1;
+    reference.contextVariables = file.contextVariables;
+    std::ranges::sort(reference.contextVariables, {}, &document::OcioContextVariable::name);
+    std::string name;
+    if (file.projectRelative) {
+        const auto relative = std::filesystem::path(
+            std::u8string(reinterpret_cast<const char8_t*>(file.path.data()), file.path.size()));
+        if (projectDirectory.empty())
+            return {std::nullopt, "Save the project first: a project-relative configuration is "
+                                  "found beside the project file."};
+        if (relative.is_absolute() || relative.has_root_name() ||
+            std::ranges::any_of(relative, [](const auto& part) { return part == ".."; }))
+            return {std::nullopt, "A project-relative configuration must be a path below the "
+                                  "project's folder, without \"..\"."};
+        if (relative.extension() != ".ocioz")
+            return {std::nullopt, "A project-relative configuration must be an .ocioz archive."};
+        reference.locator = document::ProjectRelativeOciozLocator{relative.generic_string()};
+        reference.portability = document::OcioConfigPortability::ProjectRelative;
+        name = pathText(relative.filename());
+    } else {
+        std::filesystem::path path;
+        if (file.path.rfind("file:", 0) == 0) {
+            const auto resolved = core::absolutePathFromFileUri(file.path);
+            if (!resolved)
+                return {std::nullopt, "That file location isn't a file on this computer."};
+            path = *resolved;
+        } else {
+            path = std::filesystem::path(std::u8string(
+                reinterpret_cast<const char8_t*>(file.path.data()), file.path.size()));
+        }
+        if (!path.is_absolute())
+            return {std::nullopt, "Give the full path of the file, or choose a project-relative "
+                                  "archive."};
+        const auto uri = core::fileUriFromAbsolutePath(path);
+        if (!uri)
+            return {std::nullopt, "That file location can't be stored in a project."};
+        name = pathText(path.filename());
+        if (name == "config.ocio")
+            reference.locator = document::ExternalOcioConfigLocator{*uri};
+        else if (path.extension() == ".ocioz")
+            reference.locator = document::ExternalOciozLocator{*uri};
+        else
+            return {std::nullopt, "Choose a file named config.ocio, or an archive that ends in "
+                                  ".ocioz."};
+        reference.portability = document::OcioConfigPortability::External;
+    }
+
+    // The configuration is read in the supervised helper: once with no expected revision, which
+    // reports the current one, then pinned to it.
+    const auto text = ocioConfigIntentLocation(reference, projectDirectory);
+    const std::string working = workingColorSpaceId.value_or(std::string{});
+    const auto probe = color::resolveOcioConfig(text, core::Sha256Digest{}, working, cancellation);
+    if (probe.outcome() != color::OcioBuiltInRegistryOutcome::Changed ||
+        !probe.recomputedRevision().has_value())
+        return {std::nullopt, plainFailure(probe, name)};
+    const auto revision = *probe.recomputedRevision();
+    auto resolution = color::resolveOcioConfig(text, revision, working, cancellation);
+    if (!resolution.ready()) {
+        if (working.empty() || resolution.outcome() != color::OcioBuiltInRegistryOutcome::Invalid)
+            return {std::nullopt, plainFailure(resolution, name)};
+        return {std::nullopt, "The working color space \"" + working + "\" is not a scene-linear "
+                                  "space in \"" + name + "\"."};
+    }
+    const auto config = std::move(resolution).takeResolved();
+    if (!config.has_value())
+        return {std::nullopt, "Bloom can't use \"" + name + "\" as a color configuration."};
+    reference.expectedRevision = {document::OcioRevisionAlgorithm::Sha256, revision};
+    auto settings = original;
+    settings.processColorSpaceId = std::string(config->processColorSpaceId());
+    settings.ocioConfig = std::move(reference);
+    if (const auto valid = settings.validate(); !valid.ok())
+        return {std::nullopt, "\"" + name + "\" can't be stored in the project: " +
+                                  std::string(valid.issues().front().message)};
+    return {std::move(settings), {}};
+}
+
+ProjectColorConfigDescription describeProjectColorConfig(const document::ColorSettings& settings) {
+    ProjectColorConfigDescription description;
+    const auto& reference = settings.ocioConfig;
+    const auto digest = reference.expectedRevision.digest.toLowercaseHex();
+    description.revision.assign(digest.data(), digest.size());
+    description.contextVariables = reference.contextVariables;
+    const auto asPath = [](const std::string& uri) {
+        const auto path = core::absolutePathFromFileUri(uri);
+        return path ? pathText(*path) : uri;
+    };
+    if (const auto* builtIn = std::get_if<document::BuiltInOcioConfigLocator>(&reference.locator)) {
+        description.kind = builtIn->uri == color::kAcesCgV1ConfigUri ? "aces" : "neutral";
+        description.location = builtIn->uri;
+    } else if (const auto* relative =
+                   std::get_if<document::ProjectRelativeOciozLocator>(&reference.locator)) {
+        description.kind = "project-relative-archive";
+        description.location = relative->path;
+    } else if (const auto* archive =
+                   std::get_if<document::ExternalOciozLocator>(&reference.locator)) {
+        description.kind = "external-archive";
+        description.location = asPath(archive->uri);
+    } else if (const auto* loose =
+                   std::get_if<document::ExternalOcioConfigLocator>(&reference.locator)) {
+        description.kind = "external-config";
+        description.location = asPath(loose->uri);
+    }
+    return description;
 }
 
 } // namespace bloom::host

@@ -627,8 +627,12 @@ void colorSettings() {
     expect(neutral.code == "updated" && neutral.settings &&
                neutral.settings->processColorSpaceId == "lin_rec709_scene",
            "neutral takes its only working space");
-    expect(fixture.session->snapshot().revision() == revision,
-           "color settings are not a document edit");
+    expect(fixture.session->snapshot().revision() != revision,
+           "a color settings change is a history entry");
+    expect(fixture.session->undo().succeeded(), "color settings undo");
+    auto restored = fixture.session->setColorSettings("neutral", std::nullopt);
+    expect(restored.code == "no-change" || restored.code == "updated",
+           "color settings can be set again after undo");
 }
 
 void descriptions() {

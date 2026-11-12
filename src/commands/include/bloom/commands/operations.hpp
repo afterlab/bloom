@@ -180,6 +180,20 @@ class SetProjectName final : public Operation {
     std::string name_;
 };
 
+// Moves the project to another of the session's color-settings states
+// (document::Project::colorSettingsState). The host session records the settings of each state;
+// this command is what makes a change of them an undoable history entry.
+class SetProjectColorSettingsState final : public Operation {
+  public:
+    explicit SetProjectColorSettingsState(std::uint64_t state) noexcept : state_(state) {}
+
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    std::uint64_t state_;
+};
+
 class AddComposition final : public Operation {
   public:
     AddComposition(std::string name, document::CompositionFormat format,

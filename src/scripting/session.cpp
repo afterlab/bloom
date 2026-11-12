@@ -174,16 +174,27 @@ SessionViewerLevelResult Session::setViewerLevel(std::vector<std::uint64_t> leve
 
 SessionColorSettingsResult
 Session::setColorSettings(const std::string_view config,
-                          std::optional<std::string> workingColorSpaceId) {
-    const auto choice = host::parseProjectColorConfig(config);
+                          std::optional<std::string> workingColorSpaceId,
+                          const std::optional<host::ProjectColorConfigFile>& file) {
+    const bool fromFile = config == "file";
+    const auto choice = fromFile ? std::optional(host::ProjectColorConfig::Current)
+                                 : host::parseProjectColorConfig(config);
     if (!choice)
-        return {"invalid-config", R"(Expected config "neutral", "aces" or "current")",
+        return {"invalid-config",
+                R"(Expected config "neutral", "aces", "current", "clear" or "file")",
                 std::nullopt};
-    auto current = renderSourceSnapshot().colorSettings;
+    if (fromFile && !file)
+        return {"invalid-config", R"(config "file" needs the configuration file to use)",
+                std::nullopt};
+    const auto source = renderSourceSnapshot();
+    auto current = source.colorSettings;
     if (!current)
         return {"unavailable", "This session has no project color settings", std::nullopt};
-    auto resolved =
-        host::resolveProjectColorSettings(*current, *choice, std::move(workingColorSpaceId));
+    auto resolved = fromFile
+                        ? host::resolveProjectColorConfigFile(*current, *file, workingColorSpaceId,
+                                                              source.assetBaseDirectory)
+                        : host::resolveProjectColorSettings(*current, *choice,
+                                                            std::move(workingColorSpaceId));
     if (!resolved.settings)
         return {"invalid-settings", std::move(resolved.reason), current};
     // An attached (live) session does not own the project session: the desktop application

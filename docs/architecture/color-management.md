@@ -811,11 +811,19 @@ color intent carries the location as text (`color::ocioConfigLocationText`): a b
 unchanged, otherwise the file's location, its kind and the context variables, so a different
 context is a different cache key.
 
-Not covered by this version: macOS and Windows report `HelperUnavailable` for the three file
-kinds (their confinement is not wired to the config group); the resolution takes no cancellation
-callback, so a caller cannot interrupt a parse before its deadline; the Viewer, thumbnails and
-the color pickers still resolve built-ins only; and Project Settings, Python and MCP cannot yet
-select an external config, only keep one a project already references.
+macOS and Windows resolve external configs through the same confined helper as Linux, using the
+LUT worker's launch and shared-file abstractions. The helper receives the config bytes and applies
+loose files and `.ocioz` archives (read in memory by a small zip reader into the same table a loose
+config uses). Resolution takes a cancellation callback and parses without holding a shared lock:
+requests for the same config wait for one parse, other configs parse concurrently.
+
+The Viewer, RAM preview, thumbnails, color pickers and every export path derive the config request
+from one source (`ocioConfigIntentLocation` on the project's settings and folder), so preview and
+export resolve the same config. UI-thread callers use a non-blocking lookup of already-resolved
+configs; workers resolve with the blocking call. Project Settings, Python and MCP select, show and
+clear an external or project-relative config as one undoable "Change Project Color Settings"
+command (clearing returns to Bloom Neutral), with plain-language errors. The display and view
+listing receives the project folder so project-relative configs resolve.
 
 ## Configuration Resolution States
 

@@ -249,6 +249,13 @@ class Project final {
     [[nodiscard]] ExtensionRecord* findExtensionRecord(ExtensionRecordId id);
 
     void setName(std::string name) { name_ = std::move(name); }
+    // Project color settings live in the project session, not in the document (they are archive
+    // state, saved beside it). This number names which of the session's color-settings states the
+    // document is in: 0 is the state the project was opened or created with, and each command that
+    // changes the settings moves it. Undo and redo restore it with the rest of the snapshot, so the
+    // session follows the history (docs/architecture/project-session.md).
+    [[nodiscard]] std::uint64_t colorSettingsState() const noexcept { return colorSettingsState_; }
+    void setColorSettingsState(std::uint64_t state) noexcept { colorSettingsState_ = state; }
     [[nodiscard]] bool addComposition(Composition composition);
     [[nodiscard]] bool removeComposition(CompositionId id);
     [[nodiscard]] bool addExtensionRecord(ExtensionRecord record);
@@ -317,6 +324,7 @@ class Project final {
     void validateExportQueue(ValidationResult& result) const;
     ProjectId id_;
     std::string name_;
+    std::uint64_t colorSettingsState_ = 0;
     std::vector<Composition> compositions_;
     detail::SharedRecords<AssetRecord> assets_;
     detail::SharedRecords<AssetFolder> assetFolders_;

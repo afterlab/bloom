@@ -135,8 +135,8 @@ void projectTools(std::vector<ReferenceEntry>& out) {
         ReferenceKind::Tool, "project.set-color-settings", "project",
         "Set the project's OCIO configuration and working colour space (Project Settings > "
         "Colour).",
-        "Not undoable and not in the history: it marks the project unsaved and changes how every "
-        "composition renders, so set it before authoring colour.");
+        "One undoable history entry (Change Project Color Settings): it marks the project unsaved "
+        "and changes how every composition renders, so set it before authoring colour.");
     color.effects = {.dirtiesProject = true};
     addArguments(color,
                  {{.name = "config",
@@ -145,8 +145,23 @@ void projectTools(std::vector<ReferenceEntry>& out) {
                    .summary = "The OCIO configuration.",
                    .choices = {{"neutral", "Bloom Neutral v1"},
                                {"aces", "ACES 1.3 CG (built in)"},
-                               {"current", "Keep the project's own (the only choice for an "
-                                           "external configuration)"}}},
+                               {"current", "Keep the project's own"},
+                               {"clear", "Leave an external configuration for Bloom Neutral"},
+                               {"file", "Use the OCIO configuration at file"}}},
+                  {.name = "file",
+                   .type = "string",
+                   .summary = "With config file: an absolute path of a loose config.ocio or an "
+                              ".ocioz archive, or with projectRelative a path below the "
+                              "project's folder.",
+                   .range = "1 to 16384 bytes"},
+                  {.name = "projectRelative",
+                   .type = "boolean",
+                   .summary = "Treat file as relative to the saved project's folder.",
+                   .defaultValue = "false"},
+                  {.name = "context",
+                   .type = "object",
+                   .summary = "The OCIO context variables as {name: value}.",
+                   .range = "at most 256 entries"},
                   {.name = "workingSpace",
                    .type = "string",
                    .summary = "The working colour space: lin_rec709_scene for neutral; ACEScg, "
@@ -155,7 +170,7 @@ void projectTools(std::vector<ReferenceEntry>& out) {
                    .range = "at most 256 bytes",
                    .defaultValue = "the project's when the configuration stays, else the "
                                    "configuration's first"}});
-    color.result = "{succeeded, code: updated|no-change, message, config, workingSpace}";
+    color.result = "{succeeded, code: updated|no-change, message, config, configKind, configLocation, configRevision, context, workingSpace, workingSpaceLabel}";
     color.errors = {
         refusal("invalid-config", "the configuration cannot be used", "choose neutral or aces"),
         refusal("invalid-settings", "the configuration does not offer workingSpace",

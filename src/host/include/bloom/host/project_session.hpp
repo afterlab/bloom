@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -682,14 +683,21 @@ class ProjectSession final {
     [[nodiscard]] ProjectSessionStateSnapshot stateSnapshot() const;
     [[nodiscard]] DecodedProjectSnapshotResult decodedSnapshot() const;
     // Borrowed current project colour settings for UI projections. Null for preserved read-only
-    // content; the pointer remains valid until the next session replacement.
+    // content; the pointer remains valid until the next session replacement or the next change of
+    // the settings (setColorSettings, undo, redo).
     [[nodiscard]] const document::ColorSettings* colorSettings() const noexcept {
-        return colorSettings_.has_value() ? &*colorSettings_ : nullptr;
+        return color_ != nullptr ? currentColorSettings() : nullptr;
     }
+    // Called after Undo or Redo (or any command that is not setColorSettings) moves the project to
+    // other color settings, so a window can follow. Survives a replacement install. Runs on the
+    // thread that executed the command.
+    void setColorSettingsChangedHandler(std::function<void()> handler);
+    // Changing the settings is an undoable command, "Change Project Color Settings", in the
+    // project's history (#680): Undo restores the previous configuration and working space.
     // Issue #409: a changed configuration also moves every display-referred export output that
-    // recorded the previous configuration's Viewer default display/view to the new one's, in one
-    // undoable "Follow the Viewer's Default View" command, so switching configurations keeps those
-    // outputs exporting. An output naming any other display/view keeps it.
+    // recorded the previous configuration's Viewer default display/view to the new one's, in that
+    // same command, so switching configurations keeps those outputs exporting. An output naming
+    // any other display/view keeps it.
     [[nodiscard]] ProjectSessionColorSettingsStatus
     setColorSettings(document::ColorSettings settings);
 
@@ -764,8 +772,16 @@ class ProjectSession final {
     friend class ProjectSessionCreateResult;
     friend class ProjectSessionTestAccess;
 
+    // The color-settings states of this session (see document::Project::colorSettingsState) and
+    // the settings in force. Shared with the history observer, which follows Undo and Redo.
+    struct ColorState;
+    [[nodiscard]] static std::shared_ptr<ColorState>
+    makeColorState(std::optional<document::ColorSettings> settings);
+    [[nodiscard]] const document::ColorSettings* currentColorSettings() const noexcept;
+    void attachColorObserver();
     void followViewerDefaultExportView(const document::ColorSettings& previous,
-                                       const document::ColorSettings& current);
+                                       const document::ColorSettings& current,
+                                       commands::Transaction& transaction);
 
     // Not noexcept: wrapping a present `roundTrip` into the session's owning
     // std::shared_ptr<const project::RoundTripState> (design decision 1) allocates a control block,
@@ -819,7 +835,7 @@ class ProjectSession final {
     // SessionSaveInputStatus::ColorSettingsUnavailable's comment above -- because
     // captureSaveInput() must still refuse cleanly rather than save an absent value if some
     // future construction path is added that does not supply one.
-    std::optional<document::ColorSettings> colorSettings_;
+    std::shared_ptr<ColorState> color_;
     bool colorSettingsDirty_ = false;
     // Owning, nullable, shared (design decision 1 -- see the file-level comment above): swapped
     // wholesale on a replacement install; a shared_ptr copy already handed out by

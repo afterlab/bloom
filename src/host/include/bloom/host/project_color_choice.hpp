@@ -6,10 +6,13 @@
 #include <bloom/document/color_settings.hpp>
 
 #include <cstdint>
+#include <filesystem>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace bloom::host {
 
@@ -20,7 +23,8 @@ enum class ProjectColorConfig : std::uint8_t {
     AcesCg,
 };
 
-// "neutral", "aces" or "current"; nullopt for anything else.
+// "neutral", "aces" or "current"; "clear" is Bloom Neutral too (it stops using an external
+// configuration); nullopt for anything else.
 [[nodiscard]] std::optional<ProjectColorConfig> parseProjectColorConfig(std::string_view name);
 [[nodiscard]] std::string_view projectColorConfigName(ProjectColorConfig config) noexcept;
 
@@ -52,5 +56,42 @@ struct ProjectColorResolution final {
 [[nodiscard]] ProjectColorResolution
 resolveProjectColorSettings(const document::ColorSettings& original, ProjectColorConfig config,
                             std::optional<std::string> workingColorSpaceId);
+
+// An OCIO configuration chosen by a file instead of a built-in (Project Settings > Color, the MCP
+// tool and Python all build one of these). `path` is an absolute path or file: URI of a loose
+// config's config.ocio or of an .ocioz archive; with `projectRelative` it is instead a path below
+// the project's folder to an .ocioz archive, so the project can move with it. `contextVariables`
+// are the project's OCIO context variables.
+struct ProjectColorConfigFile final {
+    std::string path;
+    bool projectRelative = false;
+    std::vector<document::OcioContextVariable> contextVariables;
+};
+
+// The settings that choosing `file` describes, or the reason in plain language why it can't be
+// used (a file that is missing or not a color configuration, a LUT it needs that is not beside
+// it, a helper that could not start). Reading the configuration parses it in the supervised color
+// helper and can block: call it from a worker or a client thread, never the UI thread.
+// `projectDirectory` is the folder of the saved project (empty while unsaved). An omitted working
+// space takes the configuration's own scene-linear role. `cancellation`, when set, ends the wait.
+[[nodiscard]] ProjectColorResolution
+resolveProjectColorConfigFile(const document::ColorSettings& original,
+                              const ProjectColorConfigFile& file,
+                              std::optional<std::string> workingColorSpaceId,
+                              const std::filesystem::path& projectDirectory,
+                              const std::function<bool()>& cancellation = {});
+
+// What the settings' configuration is, for people and agents to read back: `kind` is "neutral",
+// "aces", "project-relative-archive", "external-archive" or "external-config"; `location` the
+// built-in URI, the project-relative path, or the file's absolute path (file URIs are shown as
+// paths).
+struct ProjectColorConfigDescription final {
+    std::string kind;
+    std::string location;
+    std::string revision;
+    std::vector<document::OcioContextVariable> contextVariables;
+};
+[[nodiscard]] ProjectColorConfigDescription
+describeProjectColorConfig(const document::ColorSettings& settings);
 
 } // namespace bloom::host

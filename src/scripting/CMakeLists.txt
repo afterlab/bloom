@@ -171,11 +171,27 @@ if(BUILD_TESTING)
         LABELS unit scripting host output
         TIMEOUT 300
     )
+    # Project color settings: an external or project-relative OCIO configuration is selected, read
+    # back, cleared and undone through the Session (#680). The helper reads it, so this runs on every
+    # target that has one.
+    bloom_find_dependency(OpenColorIO)
+    add_executable(bloom_scripting_project_color_config_file_test
+                   tests/project_color_config_file_tests.cpp)
+    target_link_libraries(bloom_scripting_project_color_config_file_test
+                          PRIVATE bloom_scripting OpenColorIO::OpenColorIO)
+    bloom_enable_warnings(bloom_scripting_project_color_config_file_test)
+    bloom_add_test(
+        NAME bloom.scripting.project-color-config-file
+        COMMAND bloom_scripting_project_color_config_file_test
+        LABELS unit scripting host color
+        TIMEOUT 300
+    )
     # #465: PNG, TIFF, flat EXR and ProRes with an external loose config, an external archive and
     # a project-relative archive, resolved through the supervised helper, against the built-in.
-    # Linux only: the config request group has a confined helper on Linux alone. Elsewhere an
-    # external config is refused as HelperUnavailable, which bloom.color.ocio-config-resolution
-    # checks, so there is no export to compare and the test is not built.
+    # Built on Linux only: the comparison renders through the media worker and the packaged
+    # GPU tools, which the other targets' test setup has not been wired for. The config request
+    # group itself is checked on every target by bloom.color.ocio-config-resolution and
+    # bloom.scripting.project-color-config-file.
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     bloom_find_dependency(OpenColorIO)
     add_executable(bloom_scripting_external_config_render_test

@@ -994,6 +994,18 @@ OperationResult SetProjectName::apply(document::Draft& draft) const {
     return OperationResult::applied();
 }
 
+std::string_view SetProjectColorSettingsState::typeId() const noexcept {
+    return "bloom.project.set-color-settings-state";
+}
+
+OperationResult SetProjectColorSettingsState::apply(document::Draft& draft) const {
+    if (draft.project().colorSettingsState() == state_) {
+        return OperationResult::noChange();
+    }
+    draft.project().setColorSettingsState(state_);
+    return OperationResult::applied();
+}
+
 std::string_view AddComposition::typeId() const noexcept { return "bloom.composition.add"; }
 
 OperationResult AddComposition::apply(document::Draft& draft) const {

@@ -4,6 +4,7 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/color_settings.hpp>
+#include <bloom/host/project_color_choice.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
@@ -193,11 +194,15 @@ class Session final {
     [[nodiscard]] const std::filesystem::path& displayPath() const noexcept { return displayPath_; }
     [[nodiscard]] SessionRenderSourceSnapshot renderSourceSnapshot() const;
     // Project Settings > Colour, exactly as the dialog applies it (host/project_color_choice.hpp):
-    // `config` is "neutral", "aces" or "current"; an omitted working space keeps the project's when
-    // the configuration stays, else takes the configuration's default. Not undoable; it marks the
-    // project dirty and changes how every composition renders.
+    // `config` is "neutral", "aces", "current" (keep, and so read back), "clear" (leave an
+    // external configuration for Bloom Neutral) or "file" (use `file`, an external or
+    // project-relative OCIO configuration; it is read in the supervised color helper, so this
+    // blocks). An omitted working space keeps the project's when the configuration stays, else
+    // takes the configuration's default. One undoable history entry, "Change Project Color
+    // Settings"; it marks the project dirty and changes how every composition renders.
     [[nodiscard]] SessionColorSettingsResult
-    setColorSettings(std::string_view config, std::optional<std::string> workingColorSpaceId);
+    setColorSettings(std::string_view config, std::optional<std::string> workingColorSpaceId,
+                     const std::optional<host::ProjectColorConfigFile>& file = std::nullopt);
     // #645: the desktop Viewer's drill level (entered group layers, outermost first, and a shape of
     // that level in point editing), set as a double-click sets it. A headless session has no
     // Viewer and refuses with "not-live".

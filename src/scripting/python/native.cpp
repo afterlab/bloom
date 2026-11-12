@@ -2,6 +2,7 @@
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/project_color_choice.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
+#include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
 
 #include <nanobind/stl/string.h>
@@ -642,7 +643,9 @@ nb::dict NativeHost::setViewerLevel(std::vector<std::uint64_t> level,
 }
 
 nb::dict NativeHost::setColorSettings(const std::string& config,
-                                      std::optional<std::string> workingSpace) {
+                                      std::optional<std::string> workingSpace,
+                                      std::optional<std::string> file, const bool projectRelative,
+                                      std::optional<std::map<std::string, std::string>> context) {
     if (std::this_thread::get_id() != owner_) {
         throw std::runtime_error("Color settings change on the host authoring thread");
     }
@@ -650,7 +653,16 @@ nb::dict NativeHost::setColorSettings(const std::string& config,
     SessionColorSettingsResult result;
     {
         const nb::gil_scoped_release release;
-        result = session_->setColorSettings(config, std::move(workingSpace));
+        std::optional<host::ProjectColorConfigFile> chosen;
+        if (file) {
+            chosen.emplace();
+            chosen->path = std::move(*file);
+            chosen->projectRelative = projectRelative;
+            if (context)
+                for (auto& [name, value] : *context)
+                    chosen->contextVariables.push_back({name, std::move(value)});
+        }
+        result = session_->setColorSettings(config, std::move(workingSpace), chosen);
     }
     if (!result.succeeded()) {
         throw std::runtime_error(result.code + ": " + result.message);
@@ -663,6 +675,15 @@ nb::dict NativeHost::setColorSettings(const std::string& config,
         row["working_space"] = result.settings->processColorSpaceId;
         row["working_space_label"] =
             std::string(host::workingColorSpaceLabel(result.settings->processColorSpaceId));
+        // What the configuration is, to read it back.
+        const auto description = host::describeProjectColorConfig(*result.settings);
+        row["config_kind"] = description.kind;
+        row["config_location"] = description.location;
+        row["config_revision"] = description.revision;
+        nb::dict variables;
+        for (const auto& variable : description.contextVariables)
+            variables[nb::str(variable.name.c_str())] = variable.value;
+        row["context"] = variables;
     }
     return row;
 }
