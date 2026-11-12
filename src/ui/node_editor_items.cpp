@@ -341,7 +341,7 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         LibraryName{document::kFieldSampleNodeType, "Field Sample"},
         LibraryName{document::kFieldRasterizeNodeType, "Rasterize Field"},
     };
-    const auto* const match = std::ranges::find(kLibraryNames, typeId, &LibraryName::typeId);
+    const auto match = std::ranges::find(kLibraryNames, typeId, &LibraryName::typeId);
     if (match != kLibraryNames.end())
         return QCoreApplication::translate("node_editor", match->name);
     // Task UTIL-1's library carries its own name in its descriptor, beside the shape that name

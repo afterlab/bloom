@@ -2181,7 +2181,7 @@ namespace {
     static constexpr std::array<std::string_view, 13> kindNames{
         "image", "sequence",  "video", "audio", "font",     "curve", "ramp",
         "table", "point-set", "path",  "mask",  "analysis", "opaque"};
-    const auto* kindIt = std::find(kindNames.begin(), kindNames.end(), kindText);
+    const auto kindIt = std::find(kindNames.begin(), kindNames.end(), kindText);
     if (kindIt == kindNames.end()) {
         state.fail(DocumentDecodeError::DomainViolation, joinPath(path, "kind"));
         return false;

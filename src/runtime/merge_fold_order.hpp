@@ -35,7 +35,8 @@ struct EvaluationStep final {
 mergeFoldSteps(const CompiledCompositionPlan& plan) {
     const auto& operations = plan.operations();
     const auto count = operations.size();
-    constexpr auto kNone = std::numeric_limits<std::size_t>::max();
+    // Static: MSVC rejects an automatic constant as a default member of a local class (C2587).
+    static constexpr auto kNone = std::numeric_limits<std::size_t>::max();
     struct Owner final {
         std::size_t merge = kNone;
         std::size_t entry = 0;

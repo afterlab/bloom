@@ -131,7 +131,7 @@ static_assert(kSurfaceLadder.size() == static_cast<std::size_t>(kSurfaceLevelCou
 } // namespace
 
 QColor color(const Color token) {
-    const auto* const entry = std::ranges::find(kColors, token, &ColorEntry::token);
+    const auto entry = std::ranges::find(kColors, token, &ColorEntry::token);
     if (entry == kColors.end()) {
         return {};
     }
@@ -141,7 +141,7 @@ QColor color(const Color token) {
 QString hex(const Color token) { return color(token).name(QColor::HexRgb); }
 
 Color surfaceStep(const Color token, const int steps) {
-    const auto* const level = std::ranges::find(kSurfaceLadder, token);
+    const auto level = std::ranges::find(kSurfaceLadder, token);
     if (level == kSurfaceLadder.end()) {
         return token;
     }

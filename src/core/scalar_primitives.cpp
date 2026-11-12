@@ -425,7 +425,7 @@ std::span<const ScalarPrimitiveSignature> scalarPrimitiveSignatures() noexcept {
 }
 
 const ScalarPrimitiveSignature* scalarPrimitiveSignature(const ScalarPrimitive primitive) noexcept {
-    const auto* const match =
+    const auto match =
         std::ranges::find(kSignatures, primitive, &ScalarPrimitiveSignature::primitive);
     return match == kSignatures.end() ? nullptr : &*match;
 }

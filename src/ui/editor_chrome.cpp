@@ -317,7 +317,7 @@ class ChromeRow final : public kit::KSurface {
                     entry.setCompact(compact);
             }
             const bool collapsed = collapsesAt(entry, level_) && shown(entry);
-            overflowChanged = overflowChanged || collapsed != collapsedEntries_[index];
+            overflowChanged = overflowChanged || collapsed != (collapsedEntries_[index] != 0);
             collapsedEntries_[index] = collapsed;
             overflowing = overflowing || (collapsed && entry.overflow != nullptr);
         }

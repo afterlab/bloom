@@ -1,3 +1,4 @@
+#include <bloom/platform/private_temporary_directory.hpp>
 #include <bloom/platform/staged_artifact.hpp>
 
 #include <algorithm>
@@ -40,13 +41,9 @@ class Expectations final {
 class TempDirectory final {
   public:
     TempDirectory() {
-        std::array<char, 64> pattern{};
-        constexpr std::string_view prefix = "/tmp/bloom-staged-artifact-XXXXXX";
-        std::ranges::copy(prefix, pattern.begin());
-        const auto* result = ::mkdtemp(pattern.data());
-        if (result != nullptr) {
-            path_ = result;
-        }
+        if (auto created =
+                bloom::platform::createPrivateTemporaryDirectory("bloom-staged-artifact-"))
+            path_ = std::move(*created);
     }
 
     TempDirectory(const TempDirectory&) = delete;

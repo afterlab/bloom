@@ -1,6 +1,7 @@
 #include "schema_check_helpers.hpp"
 
 #include <algorithm>
+#include <array>
 #include <string>
 
 namespace bloom::quality {
@@ -95,7 +96,7 @@ void validateDocumentSchemaV1_3(const json::Value& schema) {
                      R"({"$ref":"#/$defs/keyframeInterpolation-1.3"})",
                      "$.$defs." + std::string{keyframe} + ".properties.outgoingInterpolation");
     }
-    static const std::array curveSpecs{
+    static const std::array<ExpectedBranch, 3> curveSpecs{
         ExpectedBranch{"scalar", {"id", "kind", "keyframes"}, {"id", "kind", "keyframes"}},
         ExpectedBranch{"vec2", {"id", "kind", "keyframes"}, {"id", "kind", "keyframes"}},
         ExpectedBranch{"color4", {"id", "kind", "keyframes"}, {"id", "kind", "keyframes"}},

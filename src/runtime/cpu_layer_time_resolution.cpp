@@ -9,6 +9,7 @@
 #include "cpu_composition_evaluator_support.hpp"
 #include "cpu_composition_resolution.hpp"
 
+#include <bloom/core/int128.hpp>
 #include <bloom/core/value_primitives.hpp>
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/composition_time.hpp>
@@ -97,7 +98,7 @@ sampleAt(const CompiledCompositionPlan& plan, const ResolvedEvaluation& base,
 std::optional<core::RationalTime> offsetTime(const core::RationalTime parent,
                                              const TimeSampleKernel& sample,
                                              const document::FrameRate rate) {
-    using Wide = __int128;
+    using Wide = core::Int128;
     // #566: the frame `max(frame - lag, 0)` of the grid, the look-back window's sample.
     if (sample.lookBack) {
         const auto frame = valueGraphFrameIndex(parent, rate);

@@ -190,7 +190,7 @@ bool propertiesRowInactive(const document::Composition& composition,
         Label{"bloom.field-rasterize.arrowSpacing", "Arrow spacing"},
         Label{"bloom.field-rasterize.arrowScale", "Arrow length per unit"},
     };
-    const auto* found = std::ranges::find(kLabels, schemaKey, &Label::key);
+    const auto found = std::ranges::find(kLabels, schemaKey, &Label::key);
     if (found == kLabels.end())
         return std::nullopt;
     return QCoreApplication::translate("PropertiesRow", found->text);

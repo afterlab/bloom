@@ -483,7 +483,7 @@ class Evaluator final {
         if (first > available_.size() || count > available_.size() - first)
             return;
         std::fill(available_.begin() + static_cast<std::ptrdiff_t>(first),
-                  available_.begin() + static_cast<std::ptrdiff_t>(first + count), 1);
+                  available_.begin() + static_cast<std::ptrdiff_t>(first + count), std::uint8_t{1});
     }
 
     void evaluateOperation(const runtime::CompiledValueOperation& operation);
@@ -1719,7 +1719,7 @@ std::optional<std::int64_t> valueGraphFrameIndex(const core::RationalTime time,
     }
     const auto reduce = [](std::int64_t& left, std::int64_t& right) noexcept {
         const auto magnitude = [](const std::int64_t value) noexcept {
-            return value < 0 ? -static_cast<std::uint64_t>(value)
+            return value < 0 ? std::uint64_t{0} - static_cast<std::uint64_t>(value)
                              : static_cast<std::uint64_t>(value);
         };
         const auto divisor = std::gcd(magnitude(left), magnitude(right));

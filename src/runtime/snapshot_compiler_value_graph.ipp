@@ -1094,7 +1094,7 @@ void swapValueProgram(FunctionBodyBuild& build) {
         if (requiresPostImage)
             std::fill(postImageValueOutputs_.begin() +
                           static_cast<std::ptrdiff_t>(valueOutputCount_),
-                      postImageValueOutputs_.end(), 1);
+                      postImageValueOutputs_.end(), std::uint8_t{1});
         valueOutputCount_ += outputCount;
     }
     return true;

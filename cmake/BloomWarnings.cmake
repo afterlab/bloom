@@ -58,6 +58,12 @@ function(bloom_enable_warnings target)
             ${target}
             PRIVATE
                 /W4
+                # Structure padding from alignas (cache-line isolated counters) is intentional.
+                /wd4324
+                # Locals named `data` are common and QWidget exposes a legacy public `data` member.
+                /wd4458
+                # Pragmas addressed to other compilers (clang diagnostic) are not errors here.
+                /wd4068
                 /permissive-
                 /w14242
                 /w14254
@@ -143,4 +149,14 @@ function(bloom_enable_warnings target)
     endif()
 
     bloom_enable_clang_tidy(${target})
+endfunction()
+
+# A test that includes a shared support header uses only some of its helpers; the rest are not an
+# error in that one program.
+function(bloom_allow_unused_functions target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /wd4505)
+    else()
+        target_compile_options(${target} PRIVATE -Wno-unused-function)
+    endif()
 endfunction()

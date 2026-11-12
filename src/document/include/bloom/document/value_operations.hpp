@@ -69,7 +69,7 @@ scalarOperationFromStoredValue(const std::int64_t value) noexcept {
 // How many scalar operands a Math node's operation actually reads. The node declares three input
 // sockets and three operands, and the unused trailing ones are hidden on the card and ignored by
 // the kernel rather than defaulted to something the operation would silently fold in.
-[[nodiscard]] constexpr std::uint8_t
+[[nodiscard]] inline std::uint8_t
 scalarOperationOperandCount(const core::primitives::ScalarPrimitive operation) noexcept {
     const auto* signature = core::primitives::scalarPrimitiveSignature(operation);
     return signature == nullptr ? 0 : signature->inputCount;

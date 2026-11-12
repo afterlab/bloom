@@ -36,11 +36,15 @@ target_sources(
             include/bloom/core/camera_shake.hpp
             include/bloom/core/light_flicker.hpp
             include/bloom/core/motion_values.hpp
+            include/bloom/core/checked_arithmetic.hpp
             include/bloom/core/color.hpp
             include/bloom/core/float_chars.hpp
             include/bloom/core/floating_point.hpp
+            include/bloom/core/executable_suffix.hpp
+            include/bloom/core/standard_streams.hpp
             include/bloom/core/frame_time_mapping.hpp
             include/bloom/core/id.hpp
+            include/bloom/core/int128.hpp
             include/bloom/core/pixel_aspect_ratio.hpp
             include/bloom/core/rational_interval.hpp
             include/bloom/core/rational_time.hpp
@@ -221,6 +225,20 @@ if(BUILD_TESTING)
     target_link_libraries(bloom_core_utf8_test PRIVATE bloom_core)
     bloom_enable_warnings(bloom_core_utf8_test)
     bloom_add_test(NAME bloom.core.utf8 COMMAND bloom_core_utf8_test LABELS unit text)
+
+    add_executable(bloom_core_checked_arithmetic_test tests/checked_arithmetic_tests.cpp)
+    target_link_libraries(bloom_core_checked_arithmetic_test PRIVATE bloom_core)
+    bloom_enable_warnings(bloom_core_checked_arithmetic_test)
+    bloom_add_test(
+        NAME bloom.core.checked-arithmetic
+        COMMAND bloom_core_checked_arithmetic_test
+        LABELS unit
+    )
+
+    add_executable(bloom_core_int128_test tests/int128_tests.cpp)
+    target_link_libraries(bloom_core_int128_test PRIVATE bloom_core)
+    bloom_enable_warnings(bloom_core_int128_test)
+    bloom_add_test(NAME bloom.core.int128 COMMAND bloom_core_int128_test LABELS unit)
 
     add_executable(bloom_core_file_uri_test tests/file_uri_tests.cpp)
     target_link_libraries(bloom_core_file_uri_test PRIVATE bloom_core)

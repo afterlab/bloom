@@ -904,15 +904,13 @@ std::int64_t axisTickCount(const double minimum, const double maximum,
 }
 
 const ValueUtilityDescriptor* findValueUtilityDescriptor(const ValueUtilityKernel kernel) noexcept {
-    const auto* const match =
-        std::ranges::find(kDescriptors, kernel, &ValueUtilityDescriptor::kernel);
-    return match == kDescriptors.end() ? nullptr : match;
+    const auto match = std::ranges::find(kDescriptors, kernel, &ValueUtilityDescriptor::kernel);
+    return match == kDescriptors.end() ? nullptr : &*match;
 }
 
 const ValueUtilityDescriptor* findValueUtilityDescriptor(const std::string_view typeId) noexcept {
-    const auto* const match =
-        std::ranges::find(kDescriptors, typeId, &ValueUtilityDescriptor::typeId);
-    return match == kDescriptors.end() ? nullptr : match;
+    const auto match = std::ranges::find(kDescriptors, typeId, &ValueUtilityDescriptor::typeId);
+    return match == kDescriptors.end() ? nullptr : &*match;
 }
 
 bool isPathSourceCandidate(const CanonicalGraph& graph, const ValueUtilityKernel kernel,

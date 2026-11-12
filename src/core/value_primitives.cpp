@@ -82,7 +82,7 @@ std::span<const VectorPrimitiveSignature> vectorPrimitiveSignatures() noexcept {
 }
 
 const VectorPrimitiveSignature* vectorPrimitiveSignature(const VectorPrimitive primitive) noexcept {
-    const auto* const match =
+    const auto match =
         std::ranges::find(kSignatures, primitive, &VectorPrimitiveSignature::primitive);
     return match == kSignatures.end() ? nullptr : &*match;
 }

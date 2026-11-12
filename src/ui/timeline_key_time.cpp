@@ -1,5 +1,6 @@
 #include "timeline_key_time.hpp"
 
+#include <bloom/core/checked_arithmetic.hpp>
 #include <bloom/runtime/layer_time_projection.hpp>
 
 #include <cstdint>
@@ -14,7 +15,7 @@ namespace {
 [[nodiscard]] std::optional<std::int64_t> checkedMultiply(const std::int64_t a,
                                                           const std::int64_t b) {
     std::int64_t result = 0;
-    if (__builtin_mul_overflow(a, b, &result))
+    if (core::mulOverflows(a, b, result))
         return std::nullopt;
     return result;
 }
@@ -37,7 +38,7 @@ std::optional<core::RationalTime> keyTimeOfCompositionTime(const KeyClock& clock
     const auto right = checkedMultiply(start.numerator(), time.denominator());
     const auto denominator = checkedMultiply(time.denominator(), start.denominator());
     std::int64_t difference = 0;
-    if (!left || !right || !denominator || __builtin_sub_overflow(*left, *right, &difference))
+    if (!left || !right || !denominator || core::subOverflows(*left, *right, difference))
         return std::nullopt;
     const auto numerator = checkedMultiply(difference, clock->speed.numerator());
     const auto scaledDenominator = checkedMultiply(*denominator, clock->speed.denominator());

@@ -49,13 +49,13 @@ lowerDepthChannelSet(const document::NodeRecord& node, const document::EdgeRecor
     if (name.empty())
         return static_cast<std::uint8_t>(mask ? 3 : 0);
     if (name == "r" || name == "red")
-        return 0;
+        return std::uint8_t{0};
     if (name == "g" || name == "green")
-        return 1;
+        return std::uint8_t{1};
     if (name == "b" || name == "blue")
-        return 2;
+        return std::uint8_t{2};
     if (name == "a" || name == "alpha")
-        return 3;
+        return std::uint8_t{3};
     return std::nullopt;
 }
 

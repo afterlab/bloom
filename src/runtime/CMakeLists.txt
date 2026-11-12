@@ -425,6 +425,13 @@ target_include_directories(
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/clipper2/include"
 )
 target_link_libraries(bloom_runtime_evaluator PRIVATE bloom_runtime_clipper2)
+if(MSVC)
+    # The vendored clipping headers instantiate templates whose code generation reports
+    # unreachable code (C4702) in the including translation unit, where a pragma around the
+    # include cannot reach. Only the two files that include them are exempt.
+    set_source_files_properties(value_utility_path.cpp value_utility_path_stroke.cpp
+                                PROPERTIES COMPILE_OPTIONS /wd4702)
+endif()
 bloom_enable_warnings(bloom_runtime_evaluator)
 bloom_enable_strict_floating_point(bloom_runtime_evaluator)
 

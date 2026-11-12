@@ -8,6 +8,7 @@
 #include "gpu_blend_private.hpp"
 
 #include <bloom/core/blend_mode.hpp>
+#include <bloom/core/checked_arithmetic.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -36,8 +37,8 @@ namespace bloom::render::blend_plan_detail {
     std::int64_t delta = 0;
     // Overlap on this axis is exactly delta in (-outputExtent, sourceExtent); a subtraction
     // overflow or anything outside that range cannot overlap and is forced transparent.
-    if (__builtin_sub_overflow(destinationOrigin, sourceOrigin, &delta) ||
-        delta <= -outputExtent64 || delta >= sourceExtent64) {
+    if (core::subOverflows(destinationOrigin, sourceOrigin, delta) || delta <= -outputExtent64 ||
+        delta >= sourceExtent64) {
         out = static_cast<std::int32_t>(-(outputExtent64 + sourceExtent64));
         return true;
     }

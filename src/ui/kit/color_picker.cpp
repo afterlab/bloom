@@ -534,11 +534,11 @@ QSize KColorPicker::sizeHint() const { return size(); }
 QSize KColorPicker::minimumSizeHint() const { return size(); }
 
 void KColorPicker::onModelChanged(const int index) {
-    const QVariant data = modelSelector_->itemData(index);
-    if (!data.isValid()) {
+    const QVariant modelData = modelSelector_->itemData(index);
+    if (!modelData.isValid()) {
         return;
     }
-    model_ = static_cast<ColorModel>(data.toInt());
+    model_ = static_cast<ColorModel>(modelData.toInt());
     rebuildChannelFields();
 }
 

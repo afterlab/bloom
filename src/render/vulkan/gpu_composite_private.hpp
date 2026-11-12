@@ -7,6 +7,7 @@
 // consumes the existing GpuImageImpl/GpuRendererAccess seams declared in gpu_image_private.hpp and
 // gpu_device_private.hpp.
 
+#include <bloom/core/checked_arithmetic.hpp>
 #include <bloom/render/gpu_composite.hpp>
 
 #include "gpu_composite_memory.hpp"
@@ -124,12 +125,12 @@ compositeDispatchGroupCount(const std::uint64_t pixels) noexcept {
 // overflow uint64 for a hostile request, so it must never wrap into a small "fits" value.
 [[nodiscard]] inline bool compositeMultiplyOverflows(const std::uint64_t a, const std::uint64_t b,
                                                      std::uint64_t& out) noexcept {
-    return __builtin_mul_overflow(a, b, &out);
+    return core::mulOverflows(a, b, out);
 }
 
 [[nodiscard]] inline bool compositeAddOverflows(const std::uint64_t a, const std::uint64_t b,
                                                 std::uint64_t& out) noexcept {
-    return __builtin_add_overflow(a, b, &out);
+    return core::addOverflows(a, b, out);
 }
 
 // The ACTUAL bytes VMA allocated for a composite metadata/status buffer (allocator rounding

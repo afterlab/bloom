@@ -140,7 +140,7 @@ checkAttributeAllowlist(const Imf::Header& header) noexcept {
     std::array<bool, output::detail::kFlatExrHeaderAttributesV1.size()> seen{};
     for (auto it = header.begin(); it != header.end(); ++it) {
         const std::string_view name = it.name();
-        const auto* const matchIt =
+        const auto matchIt =
             std::ranges::find_if(output::detail::kFlatExrHeaderAttributesV1,
                                  [&](const auto& entry) { return entry.name == name; });
         if (matchIt == output::detail::kFlatExrHeaderAttributesV1.end()) {

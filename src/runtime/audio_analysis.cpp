@@ -1,5 +1,6 @@
 #include <bloom/runtime/audio_analysis.hpp>
 
+#include <bloom/core/int128.hpp>
 #include <bloom/media/audio/audio.hpp>
 #include <bloom/media/image.hpp>
 #include <bloom/media/video/audio.hpp>
@@ -192,10 +193,10 @@ std::optional<AudioAnalysisQuery> audioAmplitudeQuery(const CompiledValueAudioAm
         return std::nullopt;
     // The offset in whole milliseconds, added to the time exactly.
     const auto millis = static_cast<std::int64_t>(std::llround(offsetSeconds * 1000.0));
-    const __int128 numerator = static_cast<__int128>(time.numerator()) * 1000 +
-                               static_cast<__int128>(millis) * time.denominator();
-    const __int128 denominator = static_cast<__int128>(time.denominator()) * 1000;
-    constexpr __int128 limit = std::numeric_limits<std::int64_t>::max();
+    const core::Int128 numerator =
+        core::Int128(time.numerator()) * 1000 + core::Int128(millis) * time.denominator();
+    const core::Int128 denominator = core::Int128(time.denominator()) * 1000;
+    constexpr core::Int128 limit = std::numeric_limits<std::int64_t>::max();
     if (numerator > limit || numerator < -limit || denominator > limit)
         return std::nullopt;
     const auto shifted = core::RationalTime::create(static_cast<std::int64_t>(numerator),

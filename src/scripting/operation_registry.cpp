@@ -229,7 +229,7 @@ using AnimationValue = std::variant<double, document::Vec2d, document::Vec3d, co
     }
     constexpr std::array<std::string_view, 7> names{"rectangle", "ellipse", "triangle", "polygon",
                                                     "star",      "line",    "path"};
-    const auto* const found = std::ranges::find(names, *name);
+    const auto found = std::ranges::find(names, *name);
     return found == names.end() ? std::nullopt
                                 : std::optional(static_cast<document::ShapeKind>(
                                       std::distance(names.begin(), found)));
@@ -243,7 +243,7 @@ using AnimationValue = std::variant<double, document::Vec2d, document::Vec3d, co
     constexpr std::array<std::string_view, 13> names{
         "image", "sequence",  "video", "audio", "font",     "curve", "ramp",
         "table", "point-set", "path",  "mask",  "analysis", "opaque"};
-    const auto* const found = std::ranges::find(names, *name);
+    const auto found = std::ranges::find(names, *name);
     return found == names.end() ? std::nullopt
                                 : std::optional(static_cast<document::DataBlockKind>(
                                       std::distance(names.begin(), found)));

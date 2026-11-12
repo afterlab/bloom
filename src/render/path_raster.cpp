@@ -528,7 +528,7 @@ PathBounds PathRaster::bounds(bool fill, bool stroke) const noexcept {
 bool PathRaster::coverageRow(std::int64_t x, std::int64_t y, std::span<std::uint8_t> row,
                              PathFillRule rule, bool stroke,
                              const PathCancellation& cancelled) const {
-    std::fill(row.begin(), row.end(), 0);
+    std::fill(row.begin(), row.end(), std::uint8_t{0});
     std::vector<Crossing> fill, outline, clip;
     for (int sy = 0; sy < 4; ++sy) {
         if (stopped(cancelled))

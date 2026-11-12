@@ -171,8 +171,8 @@ static_assert(std::is_sorted(kSrgbHalfCodeLinearThresholds.begin(),
 }
 
 [[nodiscard]] std::uint8_t referenceSrgbByte(const double linear) noexcept {
-    const auto* const transition = std::upper_bound(kSrgbHalfCodeLinearThresholds.begin(),
-                                                    kSrgbHalfCodeLinearThresholds.end(), linear);
+    const auto transition = std::upper_bound(kSrgbHalfCodeLinearThresholds.begin(),
+                                             kSrgbHalfCodeLinearThresholds.end(), linear);
     return static_cast<std::uint8_t>(
         std::distance(kSrgbHalfCodeLinearThresholds.begin(), transition));
 }

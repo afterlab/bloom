@@ -3,6 +3,7 @@
 #include <bloom/ui/timeline_frame_math.hpp>
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/core/int128.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/host/project_color_choice.hpp>
 
@@ -85,13 +86,13 @@ workingColorSpaceChoices(const document::ColorSettings& settings) {
 
 QString formatExactSeconds(const core::RationalTime time) {
     constexpr int kDecimalPlaces = 3;
-    constexpr unsigned __int128 kScale = 1000;
+    // The magnitude of any int64 numerator times 1000 needs more than 64 bits, so the scaling is
+    // done in 128-bit; every value here is non-negative.
+    constexpr core::Int128 kScale = 1000;
     const std::int64_t numerator = time.numerator();
-    const auto denominator = static_cast<unsigned __int128>(time.denominator());
+    const core::Int128 denominator = time.denominator();
     const bool negative = numerator < 0;
-    const auto magnitude = negative
-                               ? static_cast<unsigned __int128>(-static_cast<__int128>(numerator))
-                               : static_cast<unsigned __int128>(numerator);
+    const core::Int128 magnitude = negative ? -core::Int128(numerator) : core::Int128(numerator);
     const auto wholeSeconds = static_cast<qulonglong>(magnitude / denominator);
     const auto remainder = magnitude % denominator;
     const auto scaledFraction = static_cast<qulonglong>((remainder * kScale) / denominator);

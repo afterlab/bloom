@@ -71,9 +71,9 @@ KDropdown::KDropdown(QWidget* parent) : QWidget(parent) {
 
 KDropdown::~KDropdown() = default;
 
-int KDropdown::addItem(const QString& text, const QVariant& data) {
+int KDropdown::addItem(const QString& text, const QVariant& userData) {
     auto* item = new QStandardItem(text);
-    item->setData(data, kDataRole);
+    item->setData(userData, kDataRole);
     item->setEditable(false);
     model_->appendRow(item);
     const int index = model_->rowCount() - 1;
@@ -126,9 +126,9 @@ void KDropdown::setItemToolTip(const int index, const QString& toolTip) {
     }
 }
 
-int KDropdown::findData(const QVariant& data) const {
+int KDropdown::findData(const QVariant& userData) const {
     for (int index = 0; index < model_->rowCount(); ++index) {
-        if (itemData(index) == data) {
+        if (itemData(index) == userData) {
             return index;
         }
     }
@@ -137,8 +137,8 @@ int KDropdown::findData(const QVariant& data) const {
 
 QVariant KDropdown::currentData() const { return itemData(currentIndex_); }
 
-int KDropdown::addItem(const QIcon& icon, const QString& text, const QVariant& data) {
-    const int index = addItem(text, data);
+int KDropdown::addItem(const QIcon& icon, const QString& text, const QVariant& userData) {
+    const int index = addItem(text, userData);
     model_->item(index)->setIcon(icon);
     invalidateWidest();
     return index;

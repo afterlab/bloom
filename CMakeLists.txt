@@ -15,6 +15,26 @@ project(
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+if(MSVC)
+    # Sources are UTF-8 and use the standard __cplusplus value; the Windows headers must not define
+    # the min/max macros (std::numeric_limits<T>::max() is written throughout), and the C runtime's
+    # getenv/strerror family is used deliberately.
+    add_compile_options(/utf-8 /Zc:__cplusplus)
+    # Executables get the 8 MiB main-thread stack Linux and macOS give by default; the Windows
+    # default of 1 MiB overflows in the application and in the GPU and scripting test programs
+    # (exit 0xC00000FD).
+    add_link_options("$<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:/STACK:8388608>")
+    # Every executable carries cmake/windows/bloom.manifest: a UTF-8 narrow-string code page, so
+    # file names outside ASCII survive every std::string path in Bloom and in the libraries it
+    # links, and long-path awareness.
+    add_link_options(
+        "$<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:/MANIFEST:EMBED>"
+        "$<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/cmake/windows/bloom.manifest>")
+    # NOMINMAX and WIN32_LEAN_AND_MEAN are defined empty, the value several translation units
+    # define them with, so those definitions are identical redefinitions.
+    add_compile_definitions(NOMINMAX= WIN32_LEAN_AND_MEAN= _CRT_SECURE_NO_WARNINGS _USE_MATH_DEFINES)
+endif()
+
 # The macOS media worker's VideoToolbox/AVFoundation provider is Objective-C++ (.mm). Enable the
 # language only where it exists; every other target stays pure C++.
 if(APPLE)
@@ -71,11 +91,11 @@ bloom_configure_quality_tools()
 
 # Tests that read media made by the FFmpeg worker's fixture generator. They are registered where
 # that worker is always built and its process isolation is supported: Linux, and a qualified macOS
-# build. Set here because src/runtime's tests need it before apps/bloom-media-worker is added.
+# or Windows build. Set here because src/runtime's tests need it before apps/bloom-media-worker is added.
 set(BLOOM_MEDIA_FIXTURE_TESTS OFF)
 if(BUILD_TESTING
    AND (CMAKE_SYSTEM_NAME STREQUAL "Linux"
-        OR (APPLE AND BLOOM_DEPENDENCY_MODE STREQUAL "qualified")))
+        OR ((APPLE OR WIN32) AND BLOOM_DEPENDENCY_MODE STREQUAL "qualified")))
     set(BLOOM_MEDIA_FIXTURE_TESTS ON)
 endif()
 

@@ -212,7 +212,7 @@ QHash<CacheKey, QPixmap>& cache() {
 std::span<const IconId> iconIds() { return allIconIds(); }
 
 QString iconResourcePath(const IconId id, const IconWeight weight) {
-    const auto* const asset = std::ranges::find(iconAssets(), id, &IconAsset::id);
+    const auto asset = std::ranges::find(iconAssets(), id, &IconAsset::id);
     if (asset == iconAssets().end()) {
         return {};
     }
