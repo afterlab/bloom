@@ -72,7 +72,7 @@ session save/open with asynchronous execution, new-project Bloom Neutral color, 
 surface with byte-exact Save Copy for preserved projects, and a File menu driving it all — gated
 by both required Linux CI jobs (native quality and Qt desktop). The 16 ms pointer cadence,
 timeline key projection, and direct manipulation remain the next implementation slices; from the
-format contract, migration fixtures and cross-platform publication parity remain future work.
+format contract, fixtures and cross-platform publication parity remain future work.
 
 Linux native/core validation is the current automated merge gate. It does not establish desktop or
 platform parity. Before a feature is called cross-platform complete, its relevant shared, desktop,
@@ -462,7 +462,7 @@ container I/O and asynchronous application orchestration remain pending.
 
 Land in reviewable increments:
 
-1. strict bounded JSON parser/writer, duplicate-key rejection, migrations, move-only unknown-member
+1. strict bounded JSON parser/writer, duplicate-key rejection, move-only unknown-member
    round-trip state, schemas, deterministic golden bytes, and exact durable `ColorSettings`
    round-trip
 2. constrained ZIP reader/writer with entry/path/attribute/CRC/resource validation and no extraction
@@ -516,7 +516,7 @@ implemented on Linux. The constrained PNG codec and export color-preparation wir
 implemented. MEDIA-4 adds supervised TIFF sequences, ProRes preview MOV, DNxHR MXF and PCM
 WAV/BWF exports with close/reopen verification and atomic movie publication; see
 [Exporting video](user-guide/exporting-video.md). The supervised external-config helper and durable
-project-level color-settings attachment (a future schema-minor migration) remain pending.
+project-level color-settings attachment remain pending.
 
 Implement:
 
@@ -611,7 +611,7 @@ These are deliberate deferrals, not permission for the current boundaries to mak
 
 | Slice | Implemented scope | Remaining editor scope |
 | --- | --- | --- |
-| N1 + N2 | Durable schema-1.1 node layout and migration; five socket kinds; honest text refusal; compiler mute; atomic node, wire, layer-name and layout commands; session selection sets | Node editor authoring gestures, multi-selection presentation and command wiring |
+| N1 + N2 | Durable node layout; five socket kinds; honest text refusal; compiler mute; atomic node, wire, layer-name and layout commands; session selection sets | Node editor authoring gestures, multi-selection presentation and command wiring |
 
 The contracts and current topology refusals are owned by
 [`layer-graph-model.md`](architecture/layer-graph-model.md). CPU primitives remain unchanged;

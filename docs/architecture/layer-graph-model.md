@@ -135,9 +135,9 @@ Timeline row, Properties and the node graph all edit the same stored values.
   rotation turn about the composition frame's centre plus the anchor, and the default position is
   that centre, so an entry layer at its defaults is the identity whatever its content's bounds. A
   Layer node keeps the `Content` pivot (the centre of its local content bounds) unless it adopted an
-  entry's values. Documents saved before 1.37 have no entry layers: a plain entry behaves as an
+  entry's values. A plain entry without an entry layer behaves as an
   entry layer at its defaults, and the first edit of any of its controls creates the entry layer in
-  the same undo step (`EntryLayerEdit`). No document is migrated.
+  the same undo step (`EntryLayerEdit`).
 - **Layer node.** A Layer node is a handle for the same controls in the node graph: there is one
   stored set of values. Inserting or removing a Layer node never changes the picture -- it adopts
   the entry's values, or returns its own to the entry, in a single undo step. The command stack's
@@ -710,9 +710,7 @@ the bounds), so `position` is the block's left edge, centre or right edge and a 
 from it. The Viewer's anchor and scale handles use the same pivot. The CPU reference and the GPU
 preparation compute the layout and the pivot with the same helpers (`resolveTextAnchorMode`,
 `textBlockPivotX`). Stored 0..2 never carried a placement meaning (the Layer Output centred the
-content bounds whatever they said), so they keep `c` at the bounds centre and a project saved
-before value 3 existed renders where it always did; no document minor changed, nothing is migrated,
-and a document with value 3 is refused by an earlier build as an out-of-domain value. New Text
+content bounds whatever they said), so they keep `c` at the bounds centre. New Text
 (`AddTextLayer` and the Text node's default) stores 3. An effect that rebuilds its bounds (instead of
 passing its input's through) drops `pivotX` and keeps the bounds centre.
 
@@ -1031,7 +1029,7 @@ card eyebrow and the scripting/MCP `category` read it. The vocabulary is the art
 coming from another compositor looks for the node -- so it is not derived from `NodeLoweringKind`, which
 spans several groups at once. A registered node in no group fails `bloom.document.node-groups`.
 Groups are NOT persisted -- a document stores the node's type id -- so moving a type between groups
-needs no migration and no schema step.
+needs no schema step.
 
 `NodeDefinition::category` (`NodeCategory`) is a different thing: a node's authoring family, which
 behaviour reads. Grade, Color and Filters image effects take the optional effect mask, the mask
@@ -1394,8 +1392,8 @@ layer (`RenameLayer`) turns following off, and `SetLayerNameFollowsSource(true)`
 and shows the source's current name (refused for a layer without a source). Its `inPoint` defaults
 to zero. A zero stored `outPoint` is the full-duration sentinel; `endPoint(duration)` resolves it to
 the composition end. An explicit range satisfies `0 <= in < out <= duration`. Commands snap to the
-composition frame grid; the exact composition end is also a valid endpoint. Existing documents
-therefore retain full-range rendering without migration-injected data.
+composition frame grid; the exact composition end is also a valid endpoint. A document that stores no range
+therefore renders the full duration.
 
 **Layer-owned time** ([ADR 0024](../decisions/0024-layer-owned-time.md), issue #353;
 implemented). The boundary also owns its time mapping: exact `startTime`

@@ -10,8 +10,8 @@
 // writes the same bytes again. Editing the definition after reopening still reaches the instance.
 //
 // The document format did not move for groups: a definition is an ordinary composition holding a
-// Group Output, and an instance is an ordinary node, so there is no older-version behaviour to
-// check beyond the node-group frame migration in src/project/tests/node_group_persistence_tests.cpp.
+// Group Output, and an instance is an ordinary node, so there is no version-specific behaviour to
+// check beyond what src/project/tests/node_group_persistence_tests.cpp covers.
 
 #include "node_group_document_support.hpp"
 

@@ -44,7 +44,7 @@ whole-value assumptions are deliberately recorded here before the component-curv
 | Timeline lanes | `TimelineKeyframeRow`, grid projection, hit-testing, drag ghosts, and selection dispatch in `src/ui/timeline_ruler.*` and `src/ui/timeline_keyframe_gestures.cpp` project one lane per parameter curve. Property rows read Vec2 as two fields and one diamond. | KEY-2 owns component lanes and component diamonds. KEY-1 changes only the session seam and leaves widget wiring untouched. |
 | Compiler/evaluator | `CompiledVec2Curve`/`CompiledColor4Curve` tables are indexed once per parameter; snapshot lowering and CPU preflight/sample/resolve paths assume one whole-value curve and one segment identity. | Compile component tables and sample each component, composing the same typed value for consumers while keeping curve identity and semantics versions stable. |
 | Persistence | Canonical JSON emits `kind: "vec2"`/`"color4"` records with whole-value keys; decode validates those shapes. | The schema writes flat component keys and optional animation defaults. |
-| Identity goldens | Runtime sampling tests pin the sampling version and vector behavior; output-analysis and process-frame identity tests pin evaluator/sampling versions and derived digests; UI golden images cover the existing whole-property indicators. | Re-run the identity checks on the final commit. Do not change evaluator or sampling versions when migrated-document samples remain bit-identical; document any justified change and re-derive affected goldens only if required. |
+| Identity goldens | Runtime sampling tests pin the sampling version and vector behavior; output-analysis and process-frame identity tests pin evaluator/sampling versions and derived digests; UI golden images cover the existing whole-property indicators. | Re-run the identity checks on the final commit. Do not change evaluator or sampling versions when samples remain bit-identical; document any justified change and re-derive affected goldens only if required. |
 
 The implementation touch points are therefore `src/document/animation.*` and parameter schema
 predicates, `src/commands/animation_operations.*`, `src/runtime/animation_sampling.*`, curve
@@ -1538,7 +1538,7 @@ checked rational with the existing nanosecond fallback and `ArithmeticOverflow` 
 
 Source-level timing composes inside the layer: `source time = sourceMapping(c)`. Image, video and
 audio `startFrame`/`loopMode`, and composition-source `timeOffset`/`timeScale`/`loopMode`, are not
-migrated; they remain the only timing for a source consumed without a layer. Layer-creating commands
+moved onto layers; they remain the only timing for a source consumed without a layer. Layer-creating commands
 leave the source at identity and put timing on the layer.
 
 The compiler places operations in time scopes. A layer with identity timing creates no scope, so a

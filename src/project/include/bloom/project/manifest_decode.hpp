@@ -38,7 +38,7 @@
 // a newer *Bloom* manifest just because its containerVersion happens to parse as {1, minor > 0}.
 //
 // Version gates: containerVersion.major or document.schemaVersion.major != 1 is a typed
-// UnsupportedMajorVersion decode error (migration is out of scope of this module). An exact
+// UnsupportedMajorVersion decode error. An exact
 // containerVersion {1,0} decodes strictly: an unrecognized member anywhere in the manifest (root,
 // either version object, the document object, or a requirement) is a typed UnknownMember/
 // MemberOutOfOrder decode error. A same-major newer-minor containerVersion ({1, minor > 0}) is
@@ -111,8 +111,7 @@ enum class ManifestDecodeError : std::uint8_t {
     // A version object's `major`/`minor` JSON-number token is not a canonical non-negative integer
     // spelling (fraction, exponent, leading zero, or a `+`/`-` sign) or does not fit uint32.
     InvalidJsonUInt32,
-    // containerVersion.major or document.schemaVersion.major is not 1 (decode refuses; migration is
-    // out of scope of this module).
+    // containerVersion.major or document.schemaVersion.major is not 1 (decode refuses).
     UnsupportedMajorVersion,
     // `format` is not exactly "org.kinetik.bloom.project".
     InvalidFormat,

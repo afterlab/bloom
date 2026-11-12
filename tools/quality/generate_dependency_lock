@@ -3,7 +3,7 @@
 
 The checked-in lock is an output artifact. Existing records are carried forward from the
 previous lock, while new component records are supplied as separate reviewed JSON inputs. This
-keeps schema migrations and component intake reproducible without hand-editing the lock bytes.
+keeps schema changes and component intake reproducible without hand-editing the lock bytes.
 """
 
 from __future__ import annotations
