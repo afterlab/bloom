@@ -286,6 +286,11 @@ struct GpuDeviceCreationOptions final {
     // never project state. Empty keeps the device's pipeline cache in memory only (tests, tools).
     // The directory is created on the first write.
     std::filesystem::path pipeline_cache_directory{};
+    // Models a card with this much device-local memory (#682): every device-local heap is capped
+    // at it in the allocator, so allocations beyond it fail and the live budget never reports
+    // more. 0 (the default) is the whole device. Tests use it to plan for small cards on any
+    // machine; nothing else sets it.
+    std::uint64_t device_memory_limit_bytes = 0;
 };
 
 // What the device's pipeline cache started from (#457). `NotPersistent`: no cache directory was

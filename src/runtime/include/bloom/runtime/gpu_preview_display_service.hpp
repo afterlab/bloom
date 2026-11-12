@@ -313,6 +313,9 @@ struct GpuPreviewDisplayServiceOptions final {
     // Per-user directory for the device's persisted pipeline cache (#457); empty keeps it in
     // memory. Hosts pass platform::gpuPipelineCacheDirectory().
     std::filesystem::path pipelineCacheDirectory{};
+    // Tests only: model a card with this much device-local memory
+    // (render::GpuDeviceCreationOptions::device_memory_limit_bytes, #682). 0 is the whole device.
+    std::uint64_t deviceMemoryLimitBytes = 0;
     // Presentation ownership. Default Disabled keeps the compute-only device exactly as before.
     GpuPreviewDisplayServicePresentationMode presentation =
         GpuPreviewDisplayServicePresentationMode::Disabled;

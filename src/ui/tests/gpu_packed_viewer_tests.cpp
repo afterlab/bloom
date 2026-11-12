@@ -195,6 +195,9 @@ bool gFootage2k = false;
 bool gQuarter = false;
 bool gColdFootage = false;
 bool gAppScheduler = false;
+// #682: model a card with this much device-local memory (0: the whole device), so the RAM fill is
+// planned for a small card on any machine.
+std::uint64_t gDeviceMemoryLimit = 0;
 } // namespace
 // Cache qualification reuses the explicit retirement teardown guard above.
 #include "gpu_packed_cache100_proof.ipp"
@@ -237,6 +240,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             gColdFootage = true;
         } else if (argument == "--app-scheduler") {
             gAppScheduler = true;
+        } else if (argument == "--device-memory-gib") {
+            if (++index >= argc)
+                return 2;
+            gDeviceMemoryLimit = static_cast<std::uint64_t>(std::max(1, std::atoi(argv[index])))
+                                 << 30U;
         } else if (argument == "--bench-project") {
             if (++index >= argc)
                 return 2;

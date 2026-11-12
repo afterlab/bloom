@@ -170,6 +170,7 @@ struct DeviceSelection final {
     VkPhysicalDeviceProperties properties{};
     std::array<std::uint8_t, VK_UUID_SIZE> deviceUuid{};
     std::uint64_t deviceMemoryBytes = 0;
+    VkPhysicalDeviceMemoryProperties memory{};
     bool unifiedMemory = false;
     bool memoryBudgetSupported = false;
     bool portabilitySubset = false;
@@ -289,6 +290,7 @@ selectPhysicalDevice(const vk::raii::Instance& instance) {
         std::copy(std::begin(idProperties.deviceUUID), std::end(idProperties.deviceUUID),
                   selection.deviceUuid.begin());
         selection.deviceMemoryBytes = deviceLocalBytes;
+        selection.memory = memoryProperties2.memoryProperties;
         selection.unifiedMemory = unifiedMemory;
         selection.memoryBudgetSupported =
             deviceExtensionAvailable(instance, device, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
@@ -688,7 +690,10 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     control->maxComputeWorkGroupInvocations =
         selection->properties.limits.maxComputeWorkGroupInvocations;
     control->maxComputeWorkGroupSizeX = selection->properties.limits.maxComputeWorkGroupSize[0];
-    control->deviceLocalBytes = selection->deviceMemoryBytes;
+    control->deviceLocalBytes = options.device_memory_limit_bytes != 0
+                                    ? std::min(selection->deviceMemoryBytes,
+                                               options.device_memory_limit_bytes)
+                                    : selection->deviceMemoryBytes;
     control->unifiedMemory = selection->unifiedMemory;
     control->deviceUuid = selection->deviceUuid;
     control->memoryBudgetEnabled = selection->memoryBudgetSupported;
@@ -717,6 +722,20 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     if (selection->memoryBudgetSupported) {
         allocatorInfo.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
     }
+    // #682: a modelled smaller card. The allocator caps each device-local heap, refuses what
+    // would exceed it, and clamps its live budget to it.
+    std::array<VkDeviceSize, VK_MAX_MEMORY_HEAPS> heapLimits{};
+    if (options.device_memory_limit_bytes != 0) {
+        const auto& heaps = selection->memory;
+        for (std::uint32_t heap = 0; heap < VK_MAX_MEMORY_HEAPS; ++heap)
+            heapLimits[heap] =
+                heap < heaps.memoryHeapCount &&
+                        (heaps.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0U
+                    ? std::min<VkDeviceSize>(heaps.memoryHeaps[heap].size,
+                                             options.device_memory_limit_bytes)
+                    : VK_WHOLE_SIZE;
+        allocatorInfo.pHeapSizeLimit = heapLimits.data();
+    }
     if (vmaCreateAllocator(&allocatorInfo, &control->allocator) != VK_SUCCESS) {
         return {nullptr, diagnostic(GpuDiagnosticCode::AllocatorUnavailable,
                                     "the Vulkan Memory Allocator could not be initialized")};
@@ -744,7 +763,7 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     impl->report.timeline_semaphore = true;
     impl->report.memory_budget_supported = selection->memoryBudgetSupported;
     impl->report.cross_submission_timestamps = calibratedExtension != nullptr;
-    impl->report.device_memory_bytes = selection->deviceMemoryBytes;
+    impl->report.device_memory_bytes = impl->control->deviceLocalBytes;
 
     GpuPresentationStatus presentationStatus;
     presentationStatus.platform = presentationPlatform;
