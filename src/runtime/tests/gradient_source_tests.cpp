@@ -125,8 +125,9 @@ int main() {
         std::cerr << "multi-stop gradients sort, hold and make hard edges\n";
         return 1;
     }
-    // A two-stop table at 0 and 1 gives schema 1's start/end pixels bit for bit: the old reference
-    // interpolated (1 - t) * from + t * to over the same Float32 phase.
+    // A two-stop table at 0 and 1 gives schema 1's start/end pixels bit for bit: (1 - t) * from +
+    // t * to over the same Float32 phase, in native GradientV1's Float32 sequence (#676: two rounded
+    // products and one sum per component, then one rounded product with alpha).
     {
         const bloom::core::Color4d from{-0.25, 2.0, 0.5, 0.75};
         const bloom::core::Color4d to{1.0, -0.5, 0.25, 0.25};
@@ -135,17 +136,19 @@ int main() {
         for (int column = -1; column <= 8; ++column) {
             const double x = column + 0.5;
             const auto phase = static_cast<float>(std::clamp(x / 7.0, 0.0, 1.0));
-            const auto t = static_cast<double>(phase);
-            const double u = 1.0 - t;
             const float remaining = 1.0F - phase;
             const float fromAlpha = static_cast<float>(from.alpha) * remaining;
             const float toAlpha = static_cast<float>(to.alpha) * phase;
             const float alpha = fromAlpha + toAlpha;
-            const auto a = static_cast<double>(alpha);
+            const auto channel = [&](const double a, const double b) {
+                const float first = static_cast<float>(a) * remaining;
+                const float second = static_cast<float>(b) * phase;
+                const float straight = first + second;
+                return straight * alpha;
+            };
             const auto old = bloom::render::Rgba32f::fromPremultiplied(
-                static_cast<float>((u * from.red + t * to.red) * a),
-                static_cast<float>((u * from.green + t * to.green) * a),
-                static_cast<float>((u * from.blue + t * to.blue) * a), alpha);
+                channel(from.red, to.red), channel(from.green, to.green),
+                channel(from.blue, to.blue), alpha);
             const auto now = gradientPixel(two, x, 0.5);
             same = same && old && now && old.value()->red() == now.value()->red() &&
                    old.value()->green() == now.value()->green() &&

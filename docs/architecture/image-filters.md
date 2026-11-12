@@ -2198,12 +2198,12 @@ fixtures and the native CPU/GPU parity cases (every pattern and size, bit depth,
 Held, proxy, region of interest, warm zero-dispatch, a changed amplitude, the lifecycle), the
 node-viewer evidence scenarios `dither-*` (viewer, cold then warm RAM preview),
 `properties_registry_tests` and `grading_cards_tests`. Because the node quantizes, an input that
-differs by an ulp can land one level apart, and the generated gradient the native cases feed it
-matches the CPU within the 2e-6 gate rather than bit for bit. The native cases therefore evaluate the
-Dither's input on both routes and hold every pixel to the CPU kernel at the same strict gate: over
-the CPU's input where the device's input is bit-identical, over the device's own input where it is
-not, after checking that the kernel over the CPU's input reproduces the CPU oracle exactly. The
-node sweep's pass-through check fails any node whose default frame is the gradient it was given,
+differs by an ulp can land one level apart, so the gradient that the coverage fixtures and native
+cases feed it is bit-exact between the CPU reference and native GradientV1 (see
+[Evaluation primitives](evaluation-primitives.md), the gradient's Float32 sequence). The native
+cases evaluate the Dither's input on both routes and require it bit-identical, check that the CPU
+kernel over that input reproduces the CPU oracle exactly, and hold the device to the oracle at the
+strict gate. The node sweep's pass-through check fails any node whose default frame is the gradient it was given,
 unless `node_graphs.json` says why its defaults are the identity.
 
 ## HSL Qualifier

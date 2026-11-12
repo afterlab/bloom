@@ -3417,7 +3417,7 @@ void runFilmGrains(Expectations& expectations, GpuDevice& device, GpuSceneCache&
     }
 }
 
-// #527 Dither against the CPU oracle (2e-6, exact alpha; #676 over the input the device gave it,
+// #527 Dither against the CPU oracle (2e-6, exact alpha; #676 over a bit-identical input,
 // ditherParity): the default blue noise, a strong dither,
 // Bayer 2, 4, 8 and 16, 10, 12 and 16 bit, the node's default 4 bit and 1 bit (#676), the stored value, Monochrome and Held, a half-scale proxy,
 // a region of interest and 512 x 384 frames of both patterns; warm RAM reuse with zero dispatches; the
@@ -3426,14 +3426,12 @@ void runFilmGrains(Expectations& expectations, GpuDevice& device, GpuSceneCache&
 // cache entry. Then the lifecycle: a scene beyond the byte budget refused with nothing pinned, a
 // cancelled scene that publishes nothing and retires every submission, and the executor running the
 // scene afterwards with parity.
-// #676 Dither quantizes, so it amplifies a difference in its input: the generated gradient the
-// harness feeds it matches the CPU within the 2e-6 gate, not bit for bit, and where the device's
-// gradient pixel is an ulp from the CPU's, the quantized value can land one level apart. The node is
-// still held to its CPU reference exactly. `expected` is the CPU dither kernel (ditherPixel, the
-// reference the CPU evaluator runs) over each pixel's input: the CPU's input where the device's is
-// bit-identical, the device's own input where it is not. The reconstruction over the CPU's input
-// must first reproduce the CPU oracle at the strict gate on every pixel (so the frame, placement and
-// geometry are the oracle's), then the device must match `expected` at that same gate.
+// #676 Dither quantizes, so an input an ulp apart can land one level apart: the generated gradient
+// the harness feeds it is bit-exact between the CPU reference and native GradientV1, and the check
+// requires it. Every pixel of the Dither's input must be bit-identical on both routes; the CPU
+// dither kernel (ditherPixel, the reference the CPU evaluator runs) over that input must reproduce
+// the CPU oracle at the strict gate (so the frame, placement and geometry are the oracle's); then
+// the device must match the oracle at that same gate.
 struct DitherInputs final {
     std::vector<Rgba32f> device;
     std::vector<Rgba32f> cpu;
@@ -3473,34 +3471,29 @@ struct DitherInputs final {
         return true;
     };
     std::vector<Rgba32f> reconstructed(oracle.begin(), oracle.end());
-    std::vector<Rgba32f> expected(oracle.begin(), oracle.end());
     std::size_t differing = 0;
     for (std::size_t i = 0; i < count; ++i) {
+        const auto& d = inputs.device[i].components();
+        const auto& c = inputs.cpu[i].components();
+        if (!std::equal(d.begin(), d.end(), c.begin()) ||
+            inputs.device[i].alpha() != inputs.cpu[i].alpha())
+            ++differing;
         if (!run(inputs.cpu[i], i, reconstructed[i])) {
             detail = "the CPU kernel runs at " + std::to_string(i);
             return false;
         }
-        const auto& d = inputs.device[i].components();
-        const auto& c = inputs.cpu[i].components();
-        if (std::equal(d.begin(), d.end(), c.begin()) &&
-            inputs.device[i].alpha() == inputs.cpu[i].alpha())
-            continue;
-        ++differing;
-        if (!run(inputs.device[i], i, expected[i])) {
-            detail = "the CPU kernel runs over the device input at " + std::to_string(i);
-            return false;
-        }
+    }
+    if (differing != 0) {
+        detail = "the Dither's input is bit-identical on both routes (" +
+                 std::to_string(differing) + " pixels differ)";
+        return false;
     }
     std::string reconstruction;
     if (!parity(reconstructed, oracle, reconstruction, AlphaGate::Exact)) {
         detail = "the CPU kernel reproduces the CPU oracle: " + reconstruction;
         return false;
     }
-    if (!parity(actual, expected, detail, AlphaGate::Exact)) {
-        detail += " (" + std::to_string(differing) + " input pixels not bit-identical)";
-        return false;
-    }
-    return true;
+    return parity(actual, oracle, detail, AlphaGate::Exact);
 }
 
 // The Dither's input on the device and on the CPU: the same plan without the Dither, same request.

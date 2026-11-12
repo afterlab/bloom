@@ -201,6 +201,10 @@ gradientTintAt(const std::vector<document::GradientStop>& stops, const double t)
 // yields the first stop's colour. Repeat=1 wraps at integer boundaries; repeat=2 mirrors there.
 // The colour is held before the first stop and from the last; between two stops it interpolates
 // by u = (phase - position) * inverse span in Float32, exactly as native GradientV1.
+// Wherever the stops' colours are finite in Float32 (every gradient native GradientV1 prepares),
+// colour and alpha follow GradientV1's Float32 operations exactly, so the device's gradient is the
+// CPU's bit for bit and a quantizing node after it (Dither, Quantize) gives the same levels on
+// both (#676). A stop beyond Float32 keeps binary64, which only the CPU evaluates.
 [[nodiscard]] inline render::ImageResult<render::Rgba32f>
 gradientPixel(const ResolvedGradient& gradient, const double authorX,
               const double authorY) noexcept {
@@ -243,8 +247,27 @@ gradientPixel(const ResolvedGradient& gradient, const double authorX,
         return render::Rgba32f::fromPremultiplied(straight[0] * alpha, straight[1] * alpha,
                                                   straight[2] * alpha, alpha);
     }
-    const auto held = [](const core::Color4d& color) {
+    // A stop's straight colour in Float32, as GradientV1's stop table holds it, when every
+    // component is finite there.
+    const auto single = [](const core::Color4d& color) -> std::optional<std::array<float, 3>> {
+        const std::array values{static_cast<float>(color.red), static_cast<float>(color.green),
+                                static_cast<float>(color.blue)};
+        if (!std::ranges::all_of(values, [](const float v) { return std::isfinite(v); }))
+            return std::nullopt;
+        return values;
+    };
+    // The straight colour premultiplied once: one rounded Float32 product per channel, as
+    // GradientV1 writes it.
+    const auto premultiply = [](const std::array<float, 3>& straight, const float alpha) {
+        const float red = straight[0] * alpha;
+        const float green = straight[1] * alpha;
+        const float blue = straight[2] * alpha;
+        return render::Rgba32f::fromPremultiplied(red, green, blue, alpha);
+    };
+    const auto held = [&](const core::Color4d& color) {
         const auto alpha = static_cast<float>(color.alpha);
+        if (const auto straight = single(color))
+            return premultiply(*straight, alpha);
         const auto a = static_cast<double>(alpha);
         return render::Rgba32f::fromPremultiplied(static_cast<float>(color.red * a),
                                                   static_cast<float>(color.green * a),
@@ -261,15 +284,29 @@ gradientPixel(const ResolvedGradient& gradient, const double authorX,
     const auto& from = stops[index];
     const auto& to = stops[index + 1];
     const float local = (phase - from.position) * from.inverseSpan;
-    const auto u = static_cast<double>(local);
-    const double remainingU = 1.0 - u;
-    // Alpha is part of the bit-exact CPU/GPU parity gate, so it follows the native GradientV1
-    // Float32 sequence exactly: Float32 factor and stop alphas, two correctly rounded products and
-    // one sum, never contracted into an FMA. RGB keeps binary64 interpolation (2e-6 bound).
+    // The native GradientV1 Float32 sequence: Float32 factor and stop values, two correctly
+    // rounded products and one sum per component, never contracted into an FMA, then one rounded
+    // product with alpha per colour channel. Alpha is held to it on every gradient; the colour
+    // wherever both stops are finite in Float32 (#676).
     const float remaining = 1.0F - local;
     const float firstAlpha = static_cast<float>(from.color.alpha) * remaining;
     const float secondAlpha = static_cast<float>(to.color.alpha) * local;
     const float alpha = firstAlpha + secondAlpha;
+    const auto fromColor = single(from.color);
+    const auto toColor = single(to.color);
+    if (fromColor && toColor) {
+        std::array<float, 3> straight{};
+        for (std::size_t channel = 0; channel < straight.size(); ++channel) {
+            const float first = (*fromColor)[channel] * remaining;
+            const float second = (*toColor)[channel] * local;
+            straight[channel] = first + second;
+        }
+        return premultiply(straight, alpha);
+    }
+    // A stop beyond Float32 (only the CPU evaluates it): binary64 weights, so a finite sample
+    // between oversized endpoints survives.
+    const auto u = static_cast<double>(local);
+    const double remainingU = 1.0 - u;
     const auto a = static_cast<double>(alpha);
     return render::Rgba32f::fromPremultiplied(
         static_cast<float>((remainingU * from.color.red + u * to.color.red) * a),

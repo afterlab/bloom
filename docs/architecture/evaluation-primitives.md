@@ -897,7 +897,11 @@ independent alpha; the result is premultiplied once for the process image. The p
 binary64 and rounded once to Float32 (Mirror folds that Float32 value); alpha is then interpolated
 in Float32 as two rounded products and one sum without fused multiply-add, so the CPU reference and
 native GradientV1 agree bit-exactly on alpha. A two-stop table at 0 and 1 has a local factor equal
-to the phase, so it reproduces version 1's start/end pixels bit for bit. RGB interpolates in binary64 within the 2e-6 parity bound. Negative and HDR RGB are retained when the resulting
+to the phase, so it reproduces version 1's start/end pixels bit for bit. RGB follows the same
+Float32 sequence (two rounded products and one sum per channel, then one rounded product with alpha),
+so the two agree bit-exactly on the whole pixel and a quantizing node after a gradient (Dither,
+Quantize) reaches the same levels on both (#676). Only a stop whose color is not finite in Float32,
+which GradientV1 refuses, interpolates in binary64 on the CPU. Negative and HDR RGB are retained when the resulting
 Float32 process pixel is finite. The fractional right/bottom extent coverage scales the final
 premultiplied pixel. ROI clips the requested output while preserving full source coordinates and
 the composition display window.

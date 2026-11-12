@@ -365,9 +365,10 @@ void main() {
         else t = clamp(t, 0.0, 1.0);
     }
     // Held before the first stop and from the last; between two stops the weighted endpoints avoid
-    // overflowing the difference of opposite-sign HDR colours.
+    // overflowing the difference of opposite-sign HDR colours. Colour and alpha are bit-exact with
+    // the CPU reference (gradientPixel): rounded products and sums, never fused (#676).
     int n = p.table.x;
-    vec4 straight;
+    precise vec4 straight;
     precise float straightAlpha;
     if (p.table.y != 0 || p.table.z != 0) {
         // #546: any other mode than Linear in RGB.
@@ -391,9 +392,11 @@ void main() {
         vec4 a = bloom_gradient_stops.values[2 * i + 1];
         vec4 b = bloom_gradient_stops.values[2 * i + 3];
         precise float u = (t - head.x) * head.y;
-        straight = a * (1.0 - u) + b * u;
-        // Alpha is bit-exact with the CPU reference: two rounded products and one sum, no FMA.
+        // Two rounded products and one sum per component, no FMA.
         precise float remaining = 1.0 - u;
+        precise vec4 first = a * remaining;
+        precise vec4 second = b * u;
+        straight = first + second;
         precise float firstAlpha = a.a * remaining;
         precise float secondAlpha = b.a * u;
         straightAlpha = firstAlpha + secondAlpha;
@@ -401,6 +404,7 @@ void main() {
     float coverage = clamp(p.extent.z - float(index.x + p.flags.y), 0.0, 1.0) *
                      clamp(p.extent.w - float(index.y + p.flags.z), 0.0, 1.0);
     precise float alpha = straightAlpha * coverage;
+    precise vec3 premultiplied = straight.rgb * alpha;
     imageStore(bloom_gradient_output, index,
-               alpha == 0.0 ? vec4(0.0) : vec4(straight.rgb * alpha, alpha));
+               alpha == 0.0 ? vec4(0.0) : vec4(premultiplied, alpha));
 }
