@@ -7,6 +7,8 @@
 #include <QElapsedTimer>
 #include <QSignalSpy>
 #include <QTcpServer>
+
+#include <algorithm>
 #include <QTcpSocket>
 #include <QThread>
 #include <QTimer>
@@ -84,6 +86,36 @@ void testTransport() {
                         QByteArray(64, 'x');
         const auto result = transport.get(loop.url(), 16, never, {});
         expect(result.status == FontHttpStatus::TooLarge, "a body over the cap is refused");
+        expect(result.error.find("the server sent more than 16 bytes") != std::string::npos &&
+                   result.body.empty(),
+               "an oversized body is reported in plain words and none of it is kept");
+    }
+    {
+        // A server that announces no length and sends far more than the cap is cut off while
+        // the body arrives: the transport never holds more than the cap and one buffer of it.
+        Loopback loop;
+        loop.response = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n" +
+                        QByteArray(8 * 1024 * 1024, 'x');
+        std::uint64_t most = 0;
+        const auto result =
+            transport.get(loop.url(), 1U << 20U, never,
+                          [&](std::uint64_t received, std::uint64_t) { most = std::max(most, received); });
+        expect(result.status == FontHttpStatus::TooLarge && result.body.empty(),
+               "a body of unannounced length over the cap is cut off");
+        expect(result.error.find("the server sent more than 1 MB") != std::string::npos,
+               "the cut-off names the limit in plain words");
+        expect(most < 4U * 1024U * 1024U,
+               "the oversized download stops near the cap, not after the whole body");
+    }
+    {
+        // The whole download has a time limit, not only a stall limit.
+        Loopback loop;
+        loop.stall = true;
+        ui::QtFontTransport brief(150);
+        const auto result = brief.get(loop.url(), 1024, never, {});
+        expect(result.status == FontHttpStatus::Failed &&
+                   result.error.find("took longer than") != std::string::npos,
+               "a download that outlasts the time limit is stopped and says so");
     }
     {
         Loopback loop;

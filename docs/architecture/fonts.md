@@ -81,7 +81,12 @@ static instance; axes in a request are sorted with lowercase tags first. Font fi
 from `https://fonts.gstatic.com/`. The family version is read from the file URL.
 
 The transport is a seam (`FontTransport`). The desktop application installs a Qt Network
-implementation. The command-line tools, the MCP server and Python install a headless one
+implementation that holds the limits itself rather than leaving them to Qt: it takes the response
+in small pieces as it arrives and cuts the download off the moment it passes the size cap (1 MiB
+for a stylesheet, 32 MiB for a font file), with or without an announced length, asks for an
+uncompressed response, and stops a download that stalls for 20 seconds or lasts longer than two
+minutes. A server that sends too much cannot make Bloom hold it in memory, and the user is told
+that the server sent too much. The command-line tools, the MCP server and Python install a headless one
 (`makeHeadlessFontTransport`, `src/runtime/headless_font_transport_curl.cpp`) at start-up: a blocking,
 cancellable HTTPS GET with a size cap and a stall timeout, run on the same font worker and writing the
 same per-user cache. It speaks through the system's own HTTP client library, loaded when first needed,
