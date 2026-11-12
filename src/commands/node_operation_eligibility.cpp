@@ -16,55 +16,36 @@
 #include <variant>
 
 namespace bloom::commands {
-namespace {
-// Validation refuses a surviving parameter whose driver names a node that no longer exists.
-[[nodiscard]] bool survivorsDrivenBy(const document::Composition& composition,
-                                     const std::set<document::NodeId>& removed) {
-    for (const auto& node : composition.graph().nodes()) {
-        if (removed.contains(node.id))
-            continue;
-        for (const auto& binding : node.parameters) {
-            const auto* parameter = composition.parameters().find(binding.parameterId);
-            const auto* driver =
-                parameter ? std::get_if<document::DriverBindingSource>(&parameter->source)
-                          : nullptr;
-            if (driver != nullptr && removed.contains(driver->sourceNodeId))
-                return true;
-        }
-    }
-    return false;
-}
-} // namespace
-
-bool canRemoveNodes(const document::Composition& composition,
-                    const std::set<document::NodeId>& nodes) {
-    if (nodes.empty())
-        return true; // NoChange.
-    const auto& graph = composition.graph();
-    for (const auto id : nodes)
-        if (!graph.findNode(id) || detail::protectedNode(graph, id) || composition.nodeLocked(id))
-            return false;
-    return !survivorsDrivenBy(composition, nodes);
-}
-
-bool canDissolveNode(const document::Composition& composition, const document::NodeId nodeId,
-                     const document::NodeDefinitionRegistry& registry) {
+namespace detail {
+std::optional<DissolvePath> dissolvePath(const document::Composition& composition,
+                                         const document::NodeId nodeId,
+                                         const document::NodeDefinitionRegistry& registry) {
     const auto& graph = composition.graph();
     const auto* node = graph.findNode(nodeId);
-    if (!node || detail::protectedNode(graph, nodeId) || composition.nodeLocked(nodeId))
-        return false;
+    if (node == nullptr)
+        return std::nullopt;
     const auto* definition = registry.find(node->typeId, node->schemaVersion);
-    if (!definition)
-        return false;
-    const auto input = std::ranges::find(definition->inputs, document::SocketValueKind::Image,
-                                         &document::InputPortDefinition::valueKind);
-    const auto output = std::ranges::find(definition->outputs, document::SocketValueKind::Image,
-                                          &document::OutputPortDefinition::valueKind);
-    if (input == definition->inputs.end() || output == definition->outputs.end())
-        return false;
+    if (definition == nullptr)
+        return std::nullopt;
+    auto input = std::ranges::find(definition->inputs, document::SocketValueKind::Image,
+                                   &document::InputPortDefinition::valueKind);
+    auto output = std::ranges::find(definition->outputs, document::SocketValueKind::Image,
+                                    &document::OutputPortDefinition::valueKind);
+    if (input == definition->inputs.end() || output == definition->outputs.end()) {
+        // No Image pair: the first output that has an input of its own kind.
+        input = definition->inputs.end();
+        for (output = definition->outputs.begin(); output != definition->outputs.end(); ++output) {
+            input = std::ranges::find(definition->inputs, output->valueKind,
+                                      &document::InputPortDefinition::valueKind);
+            if (input != definition->inputs.end())
+                break;
+        }
+        if (input == definition->inputs.end())
+            return std::nullopt;
+    }
     const auto* incoming = detail::inputEdge(graph, document::NodeInputRef{nodeId, input->name});
     if (!incoming)
-        return false;
+        return std::nullopt;
     // Each consumer is re-linked to the dissolved node's upstream source; CanonicalGraph::addEdge
     // refuses a link whose source and destination kinds no longer connect.
     const auto sourceKind = graph.outputKind(incoming->source, registry);
@@ -75,7 +56,7 @@ bool canDissolveNode(const document::Composition& composition, const document::N
         const auto targetKind = graph.inputKind(edge.destination, registry);
         if (sourceKind && targetKind &&
             !graph.acceptsConnection(*sourceKind, edge.destination, registry))
-            return false;
+            return std::nullopt;
     }
     // #502: a Layer node's slots take its upstream; an upstream Layer node becomes their layer,
     // which a Merge already holding that Layer node as another entry refuses.
@@ -94,10 +75,31 @@ bool canDissolveNode(const document::Composition& composition, const document::N
                     std::ranges::any_of(stack->entries(), [&](const auto& entry) {
                         return entry.slotId != slot->slotId && entry.layerId == upstream->layerId;
                     }))
-                    return false;
+                    return std::nullopt;
             }
     }
-    return !survivorsDrivenBy(composition, {nodeId});
+    return DissolvePath{input->name, output->name, incoming->source};
+}
+} // namespace detail
+
+// #704: Delete removes any node that is not the composition's Output (or the Merge feeding it) or
+// locked; a surviving parameter this node drove goes back to its registered default.
+bool canRemoveNodes(const document::Composition& composition,
+                    const std::set<document::NodeId>& nodes) {
+    if (nodes.empty())
+        return true; // NoChange.
+    const auto& graph = composition.graph();
+    for (const auto id : nodes)
+        if (!graph.findNode(id) || detail::protectedNode(graph, id) || composition.nodeLocked(id))
+            return false;
+    return true;
+}
+
+// #704: Dissolve is available wherever Delete is. It reconnects through the node where its types
+// allow (detail::dissolvePath) and otherwise deletes it, breaking its links.
+bool canDissolveNode(const document::Composition& composition, const document::NodeId nodeId,
+                     const document::NodeDefinitionRegistry& /*registry*/) {
+    return canRemoveNodes(composition, {nodeId});
 }
 
 bool canSetNodeMuted(const document::Composition& composition, const document::NodeId nodeId,

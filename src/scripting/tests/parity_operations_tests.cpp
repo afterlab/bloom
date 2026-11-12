@@ -322,6 +322,84 @@ void nodeOperations() {
     expect(!missing.succeeded(), "a missing asset makes no source node");
 }
 
+// #704: MCP and Python remove and dissolve through the same commands as the canvas. A node that
+// drives a parameter deletes (the parameter returns to its default), Dissolve reconnects through a
+// pass-through node and otherwise deletes, and each is one undo step.
+void removeAndDissolveOperations() {
+    Fixture fixture;
+    const auto comp = Value(StableId{fixture.main.value()});
+    const auto addNode = [&](const std::string& type) {
+        auto result = fixture.run("bloom.node.add", {{"composition", comp}, {"nodeType", Value(type)}});
+        const auto found = Fixture::outputs<document::NodeId>(result, "node");
+        expect(found.size() == 1, "a node is added: " + type);
+        return found.empty() ? document::NodeId{} : found.front();
+    };
+    const auto exists = [&](const document::NodeId id) {
+        fixture.refresh();
+        return fixture.composition(fixture.main).graph().findNode(id) != nullptr;
+    };
+    const auto steps = [&] {
+        std::size_t count = 0;
+        while (fixture.session->undo().succeeded())
+            ++count;
+        for (std::size_t index = 0; index < count; ++index)
+            (void)fixture.session->redo();
+        return count;
+    };
+    (void)steps;
+
+    const auto source = addNode("bloom.solid-source");
+    const auto feed = [&](const document::NodeId from) {
+        auto fed = fixture.run("bloom.node.add-fed-by",
+                               {{"composition", comp},
+                                {"nodeType", Value("bloom.gaussian-blur")},
+                                {"node", Value(StableId{from.value()})},
+                                {"port", Value("image")}});
+        const auto nodes = Fixture::outputs<document::NodeId>(fed, "editorNode");
+        expect(fed.succeeded() && nodes.size() == 1, "a blur is fed by the previous node");
+        return nodes.empty() ? document::NodeId{} : nodes.front();
+    };
+    const auto blur = feed(source);
+    const auto layer = feed(blur);
+    const auto layerOut = addNode("bloom.layer-output");
+    // Dissolve reconnects the layer to the source.
+    auto dissolved = fixture.run("bloom.node.dissolve",
+                                 {{"composition", comp}, {"node", Value(StableId{blur.value()})}});
+    expect(dissolved.succeeded() && !exists(blur), "Dissolve through a connected node");
+    {
+        const auto& graph = fixture.composition(fixture.main).graph();
+        expect(std::ranges::any_of(graph.edges(),
+                                   [&](const auto& edge) {
+                                       const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
+                                       return edge.source.nodeId == source && input != nullptr &&
+                                              input->nodeId == layer;
+                                   }),
+               "reconnects the consumer to the source");
+    }
+    expect(fixture.session->undo().succeeded() && exists(blur), "one undo restores the blur");
+    // A node with nothing to reconnect through dissolves by deleting.
+    expect(fixture.run("bloom.node.dissolve", {{"composition", comp}, {"node", Value(StableId{source.value()})}})
+               .succeeded() &&
+               !exists(source),
+           "Dissolve of a source deletes it");
+    expect(fixture.session->undo().succeeded() && exists(source), "in one undo step");
+    // A value node that drives a parameter deletes.
+    const auto scalar = addNode("bloom.value-scalar");
+    auto driven = fixture.run("bloom.node.connect",
+                              {{"composition", comp}, {"sourceNode", Value(StableId{scalar.value()})},
+                               {"sourcePort", Value("value")}, {"targetNode", Value(StableId{layerOut.value()})},
+                               {"port", Value("opacity")}});
+    expect(driven.succeeded(), "a scalar drives the layer's opacity");
+    auto removed = fixture.run("bloom.node.remove",
+                               {{"composition", comp}, {"nodes", Value(ids({scalar.value()}))}});
+    expect(removed.succeeded() && !exists(scalar), "Remove deletes a node that drives a parameter");
+    expect(fixture.session->undo().succeeded() && exists(scalar), "in one undo step");
+    auto dissolvedValue = fixture.run("bloom.node.dissolve",
+                                      {{"composition", comp}, {"node", Value(StableId{scalar.value()})}});
+    expect(dissolvedValue.succeeded() && !exists(scalar), "Dissolve deletes a node that drives a parameter");
+    expect(fixture.session->undo().succeeded() && exists(scalar), "in one undo step");
+}
+
 void parameterOperations() {
     Fixture fixture;
     auto solid = fixture.run("bloom.layer.add-solid",
@@ -1183,6 +1261,7 @@ int main() {
     layerOperations();
     addFromAssets();
     nodeOperations();
+    removeAndDissolveOperations();
     parameterOperations();
     pathValues();
     addFeedingInserts();

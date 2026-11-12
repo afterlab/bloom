@@ -363,6 +363,56 @@ removalTouchedNodes(const document::Composition& composition,
     return touched;
 }
 
+
+// #704: a surviving parameter that one of `removed` drives goes back to the constant its registered
+// default names (what an explicit disconnect lands on), a gradient stop to the colour and position
+// it was authored with. Without this the removal fails validation on a driver naming a node that
+// no longer exists. Returns a failure when a parameter has no default to go back to.
+[[nodiscard]] std::optional<OperationResult>
+releaseDriversOf(document::Composition& composition, const std::set<document::NodeId>& removed,
+                 const document::NodeDefinitionRegistry& registry) {
+    struct Driven {
+        document::NodeId node;
+        document::ParameterBinding binding;
+    };
+    std::vector<Driven> driven;
+    for (const auto& node : composition.graph().nodes()) {
+        if (removed.contains(node.id))
+            continue;
+        for (const auto& binding : node.parameters) {
+            const auto* parameter = composition.parameters().find(binding.parameterId);
+            const auto* driver =
+                parameter ? std::get_if<document::DriverBindingSource>(&parameter->source)
+                          : nullptr;
+            if (driver != nullptr && removed.contains(driver->sourceNodeId))
+                driven.push_back({node.id, binding});
+        }
+    }
+    for (const auto& [nodeId, binding] : driven) {
+        if (document::parseGradientStopPort(binding.role)) {
+            auto* node = composition.graph().findNode(nodeId);
+            std::erase_if(node->parameters, [&](const document::ParameterBinding& candidate) {
+                return candidate.parameterId == binding.parameterId;
+            });
+            static_cast<void>(composition.parameters().erase(binding.parameterId));
+            continue;
+        }
+        auto fallback = detail::registeredDefault(composition.graph(), nodeId, binding.role, registry);
+        if (!fallback.has_value())
+            return OperationResult::rejected(
+                OperationIssueCode::Unsupported,
+                "Node " + std::to_string(nodeId.value()) + " parameter \"" + binding.role +
+                    "\" is driven by a removed node and has no registered default to return to");
+        if (!composition.parameters().setSource(binding.parameterId,
+                                                document::ConstantValueSource{*std::move(fallback)}))
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidValue,
+                "The registered default for parameter " +
+                    std::to_string(binding.parameterId.value()) + " violates its schema");
+    }
+    return std::nullopt;
+}
+
 } // namespace
 
 std::string_view RemoveNodes::typeId() const noexcept { return "bloom.node.remove"; }
@@ -411,6 +461,8 @@ OperationResult RemoveNodes::apply(document::Draft& draft) const {
     const auto reachableBefore = document::RenderReachability::of(*composition, registry_);
     const auto touched = removalTouchedNodes(*composition, nodes_);
     auto footprint = removalTimeFootprint(*composition, nodes_);
+    if (const auto failure = releaseDriversOf(*composition, nodes_, registry_))
+        return *failure;
     for (const auto id : nodes_) {
         (void)composition->graph().eraseNode(id);
         composition->nodeLayout().erase(id);
@@ -892,26 +944,17 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
             OperationIssueCode::Unsupported,
             "Node " + std::to_string(nodeId_.value()) +
                 " is the composition Output or the Merge connected to it and cannot be dissolved");
+    // #704: Dissolve reconnects through the node where its types allow and otherwise deletes it,
+    // breaking its links, exactly as Delete does.
+    const auto path = detail::dissolvePath(*composition, nodeId_, registry_);
+    if (!path)
+        return RemoveNodes(compositionId_, {nodeId_}, registry_).apply(draft);
     const auto* definition = registry_.find(node->typeId, node->schemaVersion);
-    if (!definition)
-        return OperationResult::rejected(OperationIssueCode::Unsupported,
-                                         "Node " + std::to_string(nodeId_.value()) + " (" +
-                                             node->typeId + ") has no registered socket schema");
-    const auto input = std::ranges::find(definition->inputs, document::SocketValueKind::Image,
-                                         &document::InputPortDefinition::valueKind);
-    const auto output = std::ranges::find(definition->outputs, document::SocketValueKind::Image,
-                                          &document::OutputPortDefinition::valueKind);
-    if (input == definition->inputs.end() || output == definition->outputs.end())
-        return OperationResult::rejected(OperationIssueCode::Unsupported,
-                                         "Node " + std::to_string(nodeId_.value()) + " (" +
-                                             node->typeId +
-                                             ") has no Image input and Image output pair to dissolve through");
+    const auto output = std::ranges::find(definition->outputs, path->output,
+                                          &document::OutputPortDefinition::name);
+    const auto input = std::ranges::find(definition->inputs, path->input,
+                                         &document::InputPortDefinition::name);
     const auto* incoming = detail::inputEdge(graph, document::NodeInputRef{nodeId_, input->name});
-    if (!incoming)
-        return OperationResult::rejected(OperationIssueCode::MissingReference,
-                                         "Node " + std::to_string(nodeId_.value()) +
-                                             " has nothing connected to its \"" + input->name +
-                                             "\" Image input, so it cannot be dissolved");
     const auto source = incoming->source;
     const bool layerNode = node->typeId == document::kLayerOutputNodeType;
     std::optional<document::OutputPortRef> audioSource;
@@ -995,6 +1038,8 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
         for (const auto slot : emptied)
             (void)graph.merge(stack.nodeId())->erase(slot);
     }
+    if (const auto failure = releaseDriversOf(*composition, {nodeId_}, registry_))
+        return *failure;
     (void)graph.eraseNode(nodeId_);
     composition->nodeLayout().erase(nodeId_);
     (void)detail::detachFromNodeGroups(*composition, {nodeId_});

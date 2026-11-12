@@ -8,6 +8,7 @@
 #include <bloom/document/value_nodes.hpp>
 
 #include <algorithm>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -130,8 +131,8 @@ void testBase(TestContext& test) {
     const Checker checker(test, fixture);
     test.expect(!canRemoveNodes(checker.comp, {kLayerStackNodeId}),
                 "protected Merge cannot be removed");
-    test.expect(!canDissolveNode(checker.comp, kFirstLayerNodeId),
-                "a Layer Output without a connected image input cannot be dissolved");
+    test.expect(canDissolveNode(checker.comp, kFirstLayerNodeId),
+                "#704: a Layer Output without a connected image input dissolves by deleting");
     test.expect(canRemoveNodes(checker.comp, {kFirstLayerNodeId}), "a Layer Output can be removed");
     test.expect(!canRemoveNodes(checker.comp, {NodeId::fromRaw(9999)}), "missing node refused");
 }
@@ -158,7 +159,8 @@ void testLinkedGraph(TestContext& test) {
     test.expect(canDissolveNode(checker.comp, loose), "connected pass-through dissolves");
     test.expect(canDissolveNode(checker.comp, kFirstLayerNodeId),
                 "a Layer node fed by a Layer node dissolves; its entry takes the upstream layer");
-    test.expect(!canDissolveNode(checker.comp, source), "a source without image input refuses");
+    test.expect(canDissolveNode(checker.comp, source),
+                "#704: a source without an image input dissolves by deleting");
     test.expect(canSetNodeMuted(checker.comp, source, true), "already-muted is NoChange, accepted");
 }
 
@@ -172,8 +174,9 @@ void testDrivenParameter(TestContext& test) {
         throw std::logic_error("eligibility driver");
     Checker(test, fixture).run();
     const Checker checker(test, fixture);
-    test.expect(!canRemoveNodes(checker.comp, {scalar}),
-                "removing the driver of a surviving parameter is refused");
+    test.expect(canRemoveNodes(checker.comp, {scalar}),
+                "#704: removing the driver of a surviving parameter is accepted; the parameter "
+                "returns to its default");
     test.expect(canRemoveNodes(checker.comp, {scalar, kFirstLayerNodeId}),
                 "removing driver and driven node together is accepted");
 }
@@ -226,6 +229,144 @@ void testNoValidationAndNoDocumentCopy(TestContext& test) {
                 "eligibility predicates answer lock queries from the published index");
     (void)sink;
 }
+
+// #704: Delete and Dissolve work on every registered node type, alone and wired, and each is one
+// undo step. A type the menu offers Delete or Dissolve for is deleted or dissolved by the command;
+// the ones the commands refuse are only the composition Output and its Merge.
+void testEveryNodeTypeRemovesAndDissolves(TestContext& test) {
+    const auto& registry = builtInNodeDefinitions();
+    std::size_t tried = 0;
+    for (const auto& definition : registry.definitions()) {
+        const std::string type = definition.key.typeId;
+        Fixture fixture;
+        const auto added = apply<AddNode>(fixture, type, Vec2d{});
+        const auto id = added.outputId<NodeId>(kAddNodeOutput);
+        if (!id)
+            continue; // A singleton already present, or a type with its own creation command.
+        ++tried;
+        const auto describe = [&](const char* what) { return std::string(what) + " " + type; };
+        // Wire it: one provider node per kind of output the registry offers, each connected to the
+        // first input of the node that accepts it; then its first output into a Layer node.
+        std::map<int, std::pair<NodeId, std::string>> providers;
+        for (const auto& provider : registry.definitions()) {
+            if (provider.outputs.empty() || provider.key.typeId == type)
+                continue;
+            const int kind = static_cast<int>(provider.outputs.front().valueKind);
+            if (providers.contains(kind))
+                continue;
+            const auto sourceId =
+                apply<AddNode>(fixture, provider.key.typeId, Vec2d{}).outputId<NodeId>(kAddNodeOutput);
+            if (sourceId)
+                providers.emplace(kind, std::pair{*sourceId, provider.outputs.front().name});
+        }
+        for (const auto& input : definition.inputs)
+            for (const auto& [kind, provider] : providers)
+                if (apply<ConnectPorts>(fixture, OutputPortRef{provider.first, provider.second},
+                                        InputPortRef{NodeInputRef{*id, input.name}})
+                        .changed())
+                    break;
+        for (const auto& output : definition.outputs) {
+            if (apply<ConnectPorts>(fixture, OutputPortRef{*id, output.name},
+                                    InputPortRef{NodeInputRef{kFirstLayerNodeId, "image"}})
+                    .changed())
+                break;
+            if (apply<ConnectPorts>(
+                    fixture, OutputPortRef{*id, output.name},
+                    InputPortRef{NodeInputRef{kFirstLayerNodeId, std::string(kOpacityParameterRole)}})
+                    .changed())
+                break;
+        }
+        const auto before = fixture.stack.size();
+        const auto composition = fixture.document.snapshot().project().findComposition(kCompositionId);
+        const bool locked = composition != nullptr && composition->nodeLocked(*id);
+        test.expect(!locked, describe("added node is not locked"));
+        for (const bool dissolve : {false, true}) {
+            const auto result =
+                dissolve ? apply<DissolveNode>(fixture, *id) : apply<RemoveNodes>(fixture, std::set<NodeId>{*id});
+            const bool removed = !fixture.document.snapshot()
+                                      .project()
+                                      .findComposition(kCompositionId)
+                                      ->graph()
+                                      .findNode(*id);
+            const bool protectedNode = type == kCompositionOutputNodeType;
+            test.expect(protectedNode || (result.succeeded() && removed),
+                        describe(dissolve ? "Dissolve removes" : "Delete removes"));
+            if (!result.succeeded())
+                continue;
+            test.expect(fixture.stack.size() == before + 1,
+                        describe(dissolve ? "Dissolve is one undo step for" : "Delete is one undo step for"));
+            test.expect(fixture.stack.undo().succeeded(), describe("undo restores after"));
+            test.expect(fixture.document.snapshot()
+                            .project()
+                            .findComposition(kCompositionId)
+                            ->graph()
+                            .findNode(*id) != nullptr,
+                        describe("undo brings the node back for"));
+        }
+    }
+    test.expect(tried > 100, "the loop reaches the registry (" + std::to_string(tried) + " types)");
+}
+
+void testDissolveReconnectsOrDeletes(TestContext& test) {
+    Fixture fixture;
+    const auto source = addNode(fixture, kSolidSourceNodeType);
+    const auto middle = addNode(fixture, kLayerOutputNodeType);
+    connect(fixture, source, NodeInputRef{middle, "image"});
+    if (!apply<ConnectPorts>(fixture, OutputPortRef{middle, "image"},
+                             InputPortRef{NodeInputRef{kFirstLayerNodeId, "image"}})
+             .changed())
+        throw std::logic_error("dissolve consumer");
+    // Types allow: the consumer is reconnected to the source.
+    test.expect(apply<DissolveNode>(fixture, middle).succeeded(), "Dissolve through a connected node");
+    const auto& graph = fixture.document.snapshot().project().findComposition(kCompositionId)->graph();
+    test.expect(!graph.findNode(middle) &&
+                    std::ranges::any_of(graph.edges(),
+                                        [&](const auto& edge) {
+                                            const auto* destination =
+                                                std::get_if<NodeInputRef>(&edge.destination);
+                                            return edge.source.nodeId == source && destination != nullptr &&
+                                                   destination->nodeId == kFirstLayerNodeId;
+                                        }),
+                "Dissolve reconnects the consumer to the source when the types allow");
+    // Nothing to reconnect through: the node is deleted and its links break.
+    const auto loose = addNode(fixture, kSolidSourceNodeType);
+    connect(fixture, loose, NodeInputRef{kSecondLayerNodeId, "image"});
+    test.expect(apply<DissolveNode>(fixture, loose).succeeded(), "Dissolve of a source deletes it");
+    const auto& after = fixture.document.snapshot().project().findComposition(kCompositionId)->graph();
+    test.expect(!after.findNode(loose) &&
+                    std::ranges::none_of(after.edges(),
+                                         [&](const auto& edge) { return edge.source.nodeId == loose; }),
+                "and breaks its links");
+}
+
+// A value node that drives a surviving parameter deletes, and the parameter returns to its default.
+void testDeleteBreaksDrivenParameter(TestContext& test) {
+    Fixture fixture;
+    const auto scalar = addNode(fixture, kScalarValueNodeType);
+    if (!apply<ConnectPorts>(
+             fixture, OutputPortRef{scalar, std::string(kValuePortName)},
+             InputPortRef{NodeInputRef{kFirstLayerNodeId, std::string(kOpacityParameterRole)}})
+             .changed())
+        throw std::logic_error("driver");
+    const auto before = fixture.stack.size();
+    test.expect(apply<RemoveNodes>(fixture, std::set<NodeId>{scalar}).succeeded(),
+                "Delete of a node that drives a surviving parameter");
+    test.expect(fixture.stack.size() == before + 1, "in one undo step");
+    const auto& composition = *fixture.document.snapshot().project().findComposition(kCompositionId);
+    const auto* layer = composition.graph().findNode(kFirstLayerNodeId);
+    const auto binding = std::ranges::find(layer->parameters, std::string(kOpacityParameterRole),
+                                           &ParameterBinding::role);
+    const auto* parameter = binding == layer->parameters.end()
+                                ? nullptr
+                                : composition.parameters().find(binding->parameterId);
+    test.expect(parameter != nullptr &&
+                    std::holds_alternative<ConstantValueSource>(parameter->source),
+                "the driven parameter is a constant again");
+    test.expect(fixture.stack.undo().succeeded() &&
+                    fixture.document.snapshot().project().findComposition(kCompositionId)->graph().findNode(
+                        scalar) != nullptr,
+                "and undo gives the driver back");
+}
 } // namespace
 } // namespace bloom::commands::test
 
@@ -237,6 +378,9 @@ int main() {
         bloom::commands::test::testDrivenParameter(test);
         bloom::commands::test::testLocked(test);
         bloom::commands::test::testNoValidationAndNoDocumentCopy(test);
+        bloom::commands::test::testDissolveReconnectsOrDeletes(test);
+        bloom::commands::test::testDeleteBreaksDrivenParameter(test);
+        bloom::commands::test::testEveryNodeTypeRemovesAndDissolves(test);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

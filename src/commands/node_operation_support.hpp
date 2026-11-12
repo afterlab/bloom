@@ -133,6 +133,19 @@ registeredDefault(const document::CanonicalGraph& graph, const document::NodeId 
                                                     : std::optional(declared->defaultValue);
 }
 
+// The one input/output pair a Dissolve reconnects through: the node's Image input and Image output
+// when it has both, otherwise its first output with an input of the same kind. It exists only when
+// that input has an incoming edge and every consumer of the output accepts the input's source;
+// without it a Dissolve deletes the node and breaks its links (#704).
+struct DissolvePath final {
+    std::string input;
+    std::string output;
+    document::OutputPortRef source;
+};
+[[nodiscard]] std::optional<DissolvePath>
+dissolvePath(const document::Composition& composition, document::NodeId nodeId,
+             const document::NodeDefinitionRegistry& registry);
+
 inline bool protectedNode(const document::CanonicalGraph& graph, const document::NodeId id) {
     const auto* node = graph.findNode(id);
     return graph.outputMergeId() == id ||

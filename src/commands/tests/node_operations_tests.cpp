@@ -513,8 +513,11 @@ void testValidityQuery(TestContext& test) {
                 "menu query accepts a valid duplicate without issuing IDs");
     test.expect(!canApplyNodeOperation(before, RemoveNodes(kCompositionId, {kLayerStackNodeId})),
                 "menu query refuses protected removal");
-    test.expect(!canApplyNodeOperation(before, DissolveNode(kCompositionId, kFirstLayerNodeId)),
-                "menu query refuses participating Layer Output dissolve");
+    test.expect(canApplyNodeOperation(before, DissolveNode(kCompositionId, kFirstLayerNodeId)),
+                "#704: menu query accepts a Layer Output dissolve with nothing to reconnect "
+                "through; it deletes the node");
+    test.expect(!canApplyNodeOperation(before, DissolveNode(kCompositionId, kLayerStackNodeId)),
+                "menu query refuses a protected Merge dissolve");
     const auto after = fixture.document.snapshot();
     test.expect(sameTruth(before, after) && before.revision() == after.revision() &&
                     before.ids().highWater() == after.ids().highWater() &&
@@ -1846,7 +1849,10 @@ void testRemoveAndDissolve(TestContext& test) {
                         dissolved.graph().edges(),
                         [&](const auto& edge) { return edge.source.nodeId == source; }) == 2,
                 "dissolve removes orphan parameters/layout and reconnects every consumer");
-    refuse<DissolveNode>(test, fixture, OperationIssueCode::Unsupported, source);
+    // #704: a node with nothing to reconnect through dissolves by deleting; only the protected
+    // Merge refuses.
+    test.expect(canApplyNodeOperation(fixture.document.snapshot(), DissolveNode(kCompositionId, source)),
+                "a source with no image input dissolves by deleting");
     refuse<DissolveNode>(test, fixture, OperationIssueCode::Unsupported, kLayerStackNodeId);
     refuse<DissolveNode>(test, fixture, OperationIssueCode::InvalidTarget, NodeId::fromRaw(999));
     refuse<RemoveNodes>(test, fixture, OperationIssueCode::Unsupported,
