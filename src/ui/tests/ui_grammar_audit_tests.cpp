@@ -327,6 +327,12 @@ int run(int argc, char** argv) {
     // Eleven tools in eight slots: the four shapes share one.
     expect(choices.size() == 8, fixture.window.get(), "eight tool slots for the eleven tools");
     for (auto* choice : choices) {
+        // #686: the Cryptomatte picker is in the strip only while a Cryptomatte node is selected or
+        // the tool is chosen, so with neither it is hidden by design.
+        if (choice->objectName() == QStringLiteral("contextBarToolCryptomatte")) {
+            expect(choice->isHidden(), choice, "the Cryptomatte picker is hidden without a context");
+            continue;
+        }
         expect(choice->isEnabled() && choice->focusPolicy() == Qt::NoFocus, choice,
                "tools are enabled and never take focus");
         expect(choice->height() == kit::px(kit::Size::Control) && !choice->toolTip().isEmpty(),

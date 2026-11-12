@@ -1613,6 +1613,30 @@ target_compile_definitions(bloom_timeline_graph_capture PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_timeline_graph_capture)
 
+# UI bug batch review captures (a tool, not a test): bloom_bug_batch_capture [directory] [parts].
+add_executable(bloom_bug_batch_capture bug_batch_capture.cpp)
+target_include_directories(bloom_bug_batch_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_bug_batch_capture PRIVATE bloom_ui bloom_project bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_bug_batch_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_bug_batch_capture)
+
+add_executable(bloom_ui_bug_batch_test ui_bug_batch_tests.cpp)
+target_include_directories(bloom_ui_bug_batch_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_ui_bug_batch_test PRIVATE bloom_ui bloom_project bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_ui_bug_batch_test PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_ui_bug_batch_test)
+bloom_add_test(NAME bloom.ui.bug-batch COMMAND bloom_ui_bug_batch_test LABELS ui integration kit TIMEOUT 240
+               ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+
+# #706: the soft popup shadow and its capture (popup-shadow-<platform>.png in the working directory).
+add_executable(bloom_popup_shadow_test popup_shadow_tests.cpp)
+target_link_libraries(bloom_popup_shadow_test PRIVATE bloom_ui_kit Qt6::Test)
+bloom_enable_warnings(bloom_popup_shadow_test)
+bloom_add_test(NAME bloom.ui.popup-shadow COMMAND bloom_popup_shadow_test LABELS ui unit kit TIMEOUT 60
+               ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+
 add_executable(bloom_popup_capture popup_capture.cpp)
 target_link_libraries(bloom_popup_capture PRIVATE bloom_ui_kit)
 bloom_enable_warnings(bloom_popup_capture)

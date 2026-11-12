@@ -155,12 +155,11 @@ void testSearchKeyboardAndMenus() {
     expect(triggerNodeMenuAction(f, "nodeCollapseAction"), "and offers Expand next");
     expect(!f.session.composition()->nodeLayout().at(b).collapsed, "Expand expands selected cards");
     QSignalSpy refused(&f.session, &CompositionSession::commandRejected);
-    // A multi-selection has no Dissolve to reach at all: the menu is the only route to it and the
-    // menu only offers operations the command layer accepts for the current selection.
+    // #704: a multi-selection is offered Dissolve when the command layer accepts it for every node.
     {
         std::unique_ptr<QMenu> multiMenu(f.editor.contextMenuForTest(true));
-        expect(named(multiMenu.get(), "nodeDissolveAction") == nullptr,
-               "a multi-selection is offered no Dissolve to refuse");
+        expect(named(multiMenu.get(), "nodeDissolveAction") != nullptr,
+               "a multi-selection is offered Dissolve");
     }
     // And the keys these used to own are bound by nothing.
     const auto beforeRetired = f.stack.size();
@@ -204,11 +203,11 @@ void testSearchKeyboardAndMenus() {
     f.session.selectNode(a);
     auto* menu = f.editor.contextMenuForTest(true);
     expect(named(menu, "nodeDuplicateAction") && named(menu, "nodeDeleteAction") &&
-               !named(menu, "nodeDissolveAction") && named(menu, "nodeMuteAction") &&
+               named(menu, "nodeDissolveAction") && named(menu, "nodeMuteAction") &&
                named(menu, "nodeCollapseAction") && !named(menu, "nodeRenameAction"),
            "source node menu shows exactly the commands accepted for its selection");
-    expect(!named(menu, "nodeDissolveAction"),
-           "a source with no Image input is offered no Dissolve -- the menu is its only route");
+    expect(named(menu, "nodeDissolveAction"),
+           "a source with no Image input is offered Dissolve, which deletes it (#704)");
     delete menu;
     const auto stackId = f.session.composition()->graph().layerStack().nodeId();
     f.session.selectNode(stackId);

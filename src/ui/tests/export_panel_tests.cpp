@@ -1644,8 +1644,14 @@ void narrowAndWide(TestContext& context) {
     auto* header = rig.list()->header();
     context.expect(!header->isSectionHidden(ep::StartedColumn) && !header->isSectionHidden(ep::RenderTimeColumn),
                    "a wide panel shows every column");
-    context.expect(header->sectionSize(ep::CompositionColumn) < 600 && header->sectionSize(ep::StatusColumn) < 600,
-                   "columns keep the width of their content on a wide panel");
+    context.expect(header->sectionSize(ep::StatusColumn) < 600,
+                   "columns other than Composition keep the width of their content on a wide panel");
+    {
+        const int last = ep::ActionsColumn;
+        const int right = header->sectionViewportPosition(last) + header->sectionSize(last);
+        context.expect(std::abs(right - rig.list()->viewport()->width()) <= 1,
+                       "the Composition column takes the slack, so the columns fill a wide panel (#691)");
+    }
     context.expect(!rig.editor->outputLine(J(2), O(21))->folded(), "a wide panel keeps an output on one line");
     rig.area->resize(420, 760);
     QApplication::processEvents();
