@@ -18,6 +18,7 @@
 #include <QToolButton>
 #include <algorithm>
 #include <array>
+#include <bloom/commands/node_unused_operations.hpp>
 #include <bloom/commands/path_glow_presets.hpp>
 #include <bloom/commands/path_outline_stroke.hpp>
 #include <bloom/ui/image_preview_controller.hpp>
@@ -285,6 +286,31 @@ void NodeGraphEditor::removeSelectedNodes() {
     commands::Transaction transaction("Edit Nodes", session_.snapshot().revision());
     transaction.emplace<commands::RemoveNodes>(session_.compositionId(), nodes);
     (void)scene_->submit(std::move(transaction));
+}
+
+// #701: every node with no path to the Output, as one transaction. The scene's submit reports a
+// refusal itself; what stays, and why, is said the way Delete says it.
+void NodeGraphEditor::deleteUnusedNodes() {
+    if (!scene_->canSubmit() || session_.composition() == nullptr) {
+        showStatus(tr("Node command submission is unavailable"));
+        return;
+    }
+    if (scene_->gestureActive())
+        scene_->cancelGesture();
+    const auto unused = commands::findUnusedNodes(*session_.composition());
+    QString staying;
+    if (!unused.staying.empty())
+        staying = tr("%n unused node(s) stay: %1", "", static_cast<int>(unused.staying.size()))
+                      .arg(removalRefusalText(commands::nodeRemovalRefusal(
+                          *session_.composition(), *unused.staying.begin())));
+    if (unused.removable.empty()) {
+        showStatus(staying.isEmpty() ? tr("Every node has a path to the Output") : staying);
+        return;
+    }
+    commands::Transaction transaction("Delete Unused Nodes", session_.snapshot().revision());
+    transaction.emplace<commands::DeleteUnusedNodes>(session_.compositionId());
+    if (scene_->submit(std::move(transaction)).succeeded() && !staying.isEmpty())
+        showStatus(staying);
 }
 
 void NodeGraphEditor::duplicateSelectedNodes() {
@@ -1165,6 +1191,9 @@ void NodeGraphEditor::buildHeaderMenus() {
         action(organizeMenu, tr("Arrange Selection"), QStringLiteral("nodeArrangeSelectionAction"),
                [this] { arrangeSelectedNodes(); }),
         QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_A));
+    deleteUnusedAction_ = action(organizeMenu, tr("Delete Unused Nodes"),
+                                 QStringLiteral("nodeDeleteUnusedAction"),
+                                 [this] { deleteUnusedNodes(); });
     withDisplayShortcut(action(headerViewMenu_, tr("Actual Size"),
                                QStringLiteral("nodeActualSizeAction"),
                                [this] { view_->zoomToActualSize(); }),
@@ -1301,6 +1330,9 @@ void NodeGraphEditor::refreshViewMenuState() {
     if (arrangeSelectionAction_ != nullptr)
         arrangeSelectionAction_->setEnabled(scene_->canSubmit() && composition != nullptr &&
                                             !session_.selectedNodes().empty());
+    if (deleteUnusedAction_ != nullptr)
+        deleteUnusedAction_->setEnabled(scene_->canSubmit() && composition != nullptr &&
+                                        !composition->graph().nodes().empty());
     if (gridSnapAction_ != nullptr) {
         gridSnapAction_->setChecked(scene_->gridSnapEnabled());
     }
@@ -1503,6 +1535,18 @@ void NodeGraphEditor::buildFooter() {
     footerSelectionLabel_->setTypeRole(kit::TypeRole::UiSmall);
     footerSelectionLabel_->setTone(kit::Color::Muted);
     layout->addWidget(footerSelectionLabel_);
+
+    // #701: Delete Unused beside Arrange, the broom Arrange used to carry: one RemoveNodes
+    // transaction over every node with no path to the Output.
+    footerDeleteUnusedButton_ =
+        new kit::KButton(kit::IconId::DeleteUnused, tr("Delete Unused"), this);
+    footerDeleteUnusedButton_->setObjectName(QStringLiteral("nodeDeleteUnusedButton"));
+    footerDeleteUnusedButton_->setAccessibleName(tr("Delete Unused Nodes"));
+    footerDeleteUnusedButton_->setToolTip(
+        tr("Delete Unused Nodes: delete every node with no path to the Output"));
+    connect(footerDeleteUnusedButton_, &kit::KButton::clicked, this,
+            [this] { deleteUnusedNodes(); });
+    layout->addWidget(footerDeleteUnusedButton_);
 
     // Task N1, item 13: Arrange at the footer's right edge, a labelled button like the Viewer
     // footer's RAM Preview -- the same Arrange All the View menu and Ctrl+Shift+A run, through the

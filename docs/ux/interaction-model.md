@@ -508,7 +508,16 @@ layer's letters or masks (#509) is an action beside it, **Stroke Selected Text**
 Selected Layer's Masks** (#702).
 
 Mute, collapse, and dissolve are context-menu commands in this editor and bind no key; collapse is
-also the caret at the head of every card's title. The footer's Arrange button runs Arrange All. A group's own
+also the caret at the head of every card's title. The footer's Arrange button runs Arrange All, and the Delete Unused button beside it runs Delete
+Unused Nodes (#701): every node with no path to the composition's Output is deleted in one undo step.
+A path follows links, a Merge's slots, a layer's parent and matte sources, and drivers (a value node
+driving a parameter of a node on the path is on the path too). The removal is Delete's, so links
+break, a parameter a deleted node drove returns to its default, and the Output, the Merge connected
+to it and the nodes of a locked layer stay; the status line says why. A frame loses its deleted
+members and one left empty goes. A Node Group on the path stays with its inside untouched; one off
+the path is deleted like any node, and inside a group's own graph the Group Input and Group Output
+stay. With nothing unused, nothing changes and no undo step is made. `bloom.node.delete-unused`
+runs the same command through MCP and Python. A group's own
 `Rename` is likewise a menu command and a double-click: `Enter` keeps its one meaning, so it never
 becomes "rename whichever thing is selected".
 
@@ -531,6 +540,7 @@ Invert bind no new keys; Arrange uses the two explicit node-canvas bindings belo
 | View | Link Style | Spline / Straight / Angled (see below); the same choice the footer's dropdown offers |
 | View → Organize | Arrange All | Lays out every node like the layer stack, fits the graph, and commits one `MoveNodes` transaction; the footer's Arrange button runs the same command |
 | View → Organize | Arrange Selection | Lays out the selected induced subgraph in place and commits one `MoveNodes` transaction |
+| View → Organize | Delete Unused Nodes | Deletes every node with no path to the Output as one `RemoveNodes` transaction; the footer's Delete Unused button runs the same command |
 | Select | None | Clears the selection |
 | Select | Invert | Selects every unselected node, deselecting every selected one |
 | Select | Linked Upstream | Extends the selection to every node reachable by following links backward, transitively |

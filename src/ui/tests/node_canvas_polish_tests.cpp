@@ -729,7 +729,8 @@ void testPlaybackRefreshIsBounded() {
            "playback refreshes only the visible animated cards, once per frame");
 }
 
-// Item 14: the Nodes editor's glyph is Phosphor tree-structure, and graph is gone.
+// Item 14: the Nodes editor's glyph is Phosphor tree-structure. `graph` came back in #701 as the
+// footer Arrange glyph and nothing else uses it.
 void testNodesIcon() {
     expect(kit::iconResourcePath(kit::IconId::Nodes, kit::IconWeight::Bold)
                .endsWith(QStringLiteral("tree-structure-bold.svg")),
@@ -739,8 +740,9 @@ void testNodesIcon() {
     for (const auto id : kit::iconIds())
         for (const auto weight : {kit::IconWeight::Regular, kit::IconWeight::Bold,
                                   kit::IconWeight::Fill})
-            expect(!kit::iconResourcePath(id, weight).contains(QStringLiteral("/graph")),
-                   "no glyph is the retired graph asset");
+            expect(kit::iconResourcePath(id, weight).contains(QStringLiteral("/graph")) ==
+                       (id == kit::IconId::Arrange),
+                   "only Arrange uses the graph asset");
 }
 } // namespace bloom::ui::test
 

@@ -437,6 +437,8 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider, publi
     void toggleSelectedMuted(bool muted);
     void renameSelectedLayer();
     void arrangeAllNodes();
+    // #701: delete every node with no path to the Output, one undo step.
+    void deleteUnusedNodes();
     void arrangeSelectedNodes();
     // Ctrl+G / Ctrl+Shift+G, and the same two commands the context menu reaches. Ungrouping with no
     // explicit frame removes every frame the selection sits in.
@@ -526,6 +528,7 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider, publi
     QAction* deleteAction_ = nullptr;
     QAction* arrangeAllAction_ = nullptr;
     QAction* arrangeSelectionAction_ = nullptr;
+    QAction* deleteUnusedAction_ = nullptr;
     // #490: View > Background, enabled while an Image Preview is the background.
     QMenu* backgroundMenu_ = nullptr;
     QAction* backgroundShowAction_ = nullptr;
@@ -544,6 +547,7 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider, publi
     kit::KDropdown* footerLinkStyleDropdown_ = nullptr;
     kit::KLabel* footerSelectionLabel_ = nullptr;
     kit::KButton* footerArrangeButton_ = nullptr;
+    kit::KButton* footerDeleteUnusedButton_ = nullptr;
 };
 
 } // namespace bloom::ui

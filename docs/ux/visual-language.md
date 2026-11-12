@@ -357,7 +357,7 @@ Phosphor Icons is Bloom's default interface icon family.
   comes from the host control's metrics, so it takes only the role's weight
   (`iconWeight(IconRole::Chrome)`) and keeps that box.
 - Add another upstream weight only when a role needs it. The vendored subset carries `regular`,
-  `fill` and `bold` complete over every Phosphor-backed id (90 `IconId`s: 84 vendored glyphs per
+  `fill` and `bold` complete over every Phosphor-backed id (91 `IconId`s: 85 vendored glyphs per
   weight, two ids that reuse another's glyph -- Subtract and Search -- and four shape-tool glyphs
   Bloom draws itself), because a role
   that asks for a weight must find it for every icon: a missing file renders as a silent blank,
@@ -379,6 +379,8 @@ Phosphor Icons is Bloom's default interface icon family.
   a selection or toggle) and where it is the artist's data (layer and bar label colors, socket
   kinds). The Timeline clip bars' data-type colors are bar fills, not icons, and keep their table
   below.
+- The Node editor footer's Arrange is the `graph` glyph (linked nodes: a layout) and Delete Unused is
+  the `broom` (#701): a broom sweeps away, a graph is arranged, so neither is read as the other.
 - A composition is the `film-strip` glyph wherever one is meant (an Assets row, New Composition,
   the Viewer's composition picker); an image sequence is the `images` stack; RAM Preview has its own
   `lightning` glyph (the pinned Phosphor release has no memory-chip glyph). The Profiler panel is

@@ -2,6 +2,10 @@
 // arranged multi-layer graph, collapsed cards, a coloured group frame, a Merge with three inputs,
 // the canvas at 25%, the footer and every Fields card (#525). A tool, not a test:
 //   bloom_node_canvas_capture <directory> <1|1.5> [path-socket]
+//   bloom_node_canvas_capture <directory> 1 delete-unused <before|after>
+// `delete-unused` (#701) takes the footer and a graph with a dead-end branch under the exact names
+// 701-<tag>-footer.png and 701-<tag>-graph.png; where the Delete Unused button exists it is then
+// clicked for the 701-after-graph.png.
 // `path-socket` takes only the Path socket (#589) beside its neighbors, at 2000, 900 and 480 wide.
 #include "window_fixture.hpp"
 
@@ -14,6 +18,7 @@
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
+#include <bloom/document/image_preview.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/kit/button.hpp>
@@ -223,6 +228,64 @@ int capture(int argc, char** argv) {
         (void)session.setParameterValue(value, square(140.0), "Path");
         (void)session.setCurrentTime(frame(6));
         shootCards("between-keys");
+        return gFailures == 0 ? 0 : 1;
+    }
+
+    // #701: the footer and a graph with nodes off the output path, before and after Delete Unused.
+    if (argc > 4 && QString::fromLatin1(argv[3]) == QStringLiteral("delete-unused")) {
+        const QString tag = QString::fromLatin1(argv[4]);
+        const auto saveExact = [&](const QImage& image, const QString& name) {
+            const auto path = gDirectory + QLatin1Char('/') + name + QStringLiteral(".png");
+            if (image.isNull() || !image.save(path)) {
+                std::cerr << "could not write " << path.toStdString() << '\n';
+                ++gFailures;
+                return;
+            }
+            std::cout << path.toStdString() << ' ' << image.width() << 'x' << image.height() << '\n';
+        };
+        const auto addNode = [&](std::string_view type, document::Vec2d at) {
+            commands::Transaction add("Add Node", session.snapshot().revision());
+            add.emplace<commands::AddNode>(composition, std::string(type), at);
+            return session.executeNodeTransaction(std::move(add))
+                .outputId<document::NodeId>(commands::kAddNodeOutput);
+        };
+        // A dead-end branch (blur into an Image Preview), a loose source and a chain feeding only
+        // an unused node.
+        const auto preview = addNode(document::kImagePreviewNodeType, {0, 0});
+        const auto loose = addNode(document::kSolidSourceNodeType, {0, 0});
+        const auto feeder = addNode(document::kSolidSourceNodeType, {0, 0});
+        const auto unusedBlur = addNode("bloom.gaussian-blur", {0, 0});
+        if (!preview || !loose || !feeder || !unusedBlur)
+            return 1;
+        commands::Transaction wire("Wire Dead End", session.snapshot().revision());
+        wire.emplace<commands::ConnectPorts>(composition, document::OutputPortRef{blurNode, "image"},
+                                             document::NodeInputRef{*preview, "image"});
+        wire.emplace<commands::ConnectPorts>(composition, document::OutputPortRef{*feeder, "image"},
+                                             document::NodeInputRef{*unusedBlur, "input"});
+        run(session, std::move(wire));
+        sizeArea(*fixture.window, *area, QSize(1100, 640));
+        settle();
+        const auto arrangeButton = area->findChild<kit::KButton*>(QStringLiteral("nodeArrangeButton"));
+        if (arrangeButton == nullptr)
+            return 1;
+        arrangeButton->click();
+        settle();
+        const auto shootFooter = [&](const QString& name) {
+            const auto whole = area->grab().toImage();
+            const int strip = static_cast<int>(48 * whole.devicePixelRatio());
+            saveExact(whole.copy(0, whole.height() - strip, whole.width(), strip), name);
+        };
+        editor->graphView()->frameGraph();
+        settle(120);
+        shootFooter(QStringLiteral("701-%1-footer").arg(tag));
+        saveExact(area->grab().toImage(), QStringLiteral("701-%1-graph").arg(tag));
+        if (auto* button = area->findChild<kit::KButton*>(QStringLiteral("nodeDeleteUnusedButton"))) {
+            button->click();
+            settle();
+            editor->graphView()->frameGraph();
+            settle(120);
+            saveExact(area->grab().toImage(), QStringLiteral("701-after-graph"));
+        }
         return gFailures == 0 ? 0 : 1;
     }
 

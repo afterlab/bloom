@@ -128,6 +128,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `regular/gear.svg` | `5c0cb3ba307c72babf78d952d9140c682ff30307fedc7fbb87c9a293c1e2fd64` |
 | `regular/tree-structure.svg` | `435126c4983113a50be7a20eae30d149b57e0419e531cb0c3ea8a5acddbeedf3` |
 | `regular/broom.svg` | `e0805212cc05dd85c80cad8a62684a6705b2a8329ced7c2363d74747d01c3fb4` |
+| `regular/graph.svg` | `0a863bd9d39960eb220400400332ee1b3ada0e6ce309b89b202bb0784e4e28aa` |
 | `regular/hand-grabbing.svg` | `5c07fc19f6101a86c10cfa3cb4685c388cd0b89a69aa46caa92e44b5ba599977` |
 | `regular/hand.svg` | `b845c51acbe69c5ac2ec208c5648806f33c0a86b06d2dfa53ebe599ccb0f9c65` |
 | `regular/image.svg` | `642a0575f7b5a7ea2f5fefa6f27a5dc57683911845b85213a7e33652c2a3179d` |
@@ -213,6 +214,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `fill/gear-fill.svg` | `564f53f72b0bd4371dc14a3d39a3fcf4c5a1a74d285eb56fff465a954f993ec8` |
 | `fill/tree-structure-fill.svg` | `017c075836959342432111139a8c3cdca57d49f5a07545fb3764dba6a8539ff4` |
 | `fill/broom-fill.svg` | `ad930cea491e00b5c742f4a97668b5bd96eecdb312adc26fe2f7007f8acbc139` |
+| `fill/graph-fill.svg` | `73eea2682fd6c43d58d448107bd01c65cd662c3890bea8d28b39964031bdd110` |
 | `fill/hand-fill.svg` | `9a1598a0dce127935ad97ede769c77629f422de7a1eabe54b4ec1b2d0c19369b` |
 | `fill/hand-grabbing-fill.svg` | `df9ace3ad62fe54f8f876b140c2824a7cf1ae55a087cd31649f3c562e465a39b` |
 | `fill/image-fill.svg` | `8cbeb0cac6e7f683e08d8a71a5db21c10435c39d0487c3277b75b146a86abf42` |
@@ -298,6 +300,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `bold/gear-bold.svg` | `b70f71ce6d08d59ee13575d7278737ff6dc2011adb5d126c9090641bc783fdd2` |
 | `bold/tree-structure-bold.svg` | `90c8d2346b3ae9395bd5ecb4fc1b9710c918a8fc1ea9c0e0f9d2f57894ff5287` |
 | `bold/broom-bold.svg` | `1832df84481164eb448b996befd705f87d61f6917a1b632d515ecff9a6b08028` |
+| `bold/graph-bold.svg` | `967c65d7659edbaf8ccdad545b8b8c9408805bf2c167377984a6c78e84a46690` |
 | `bold/hand-bold.svg` | `901ad6b152b237edf30c5713e0676f1cfd3142672e209b3efc3062b23836a62a` |
 | `bold/hand-grabbing-bold.svg` | `6304ebb420306735baf4131a3c57724e738763ec15e65d6ccf6d97406e684946` |
 | `bold/image-bold.svg` | `d99ef65cc79a3db6a0b213c878238e06689ef701285f207629b49868808b852e` |
@@ -339,7 +342,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 
 ## Manifest
 
-SHA-256 of sorted `<sha256>  <filename>\n` lines for all SVGs above: `47506a7a4fc3eceea43dcaab498b64c1312f1f10c122b298e74586766933ebc2`.
+SHA-256 of sorted `<sha256>  <filename>\n` lines for all SVGs above: `6460a26b734d960dbc06926c13d9feed1c3e8b34800a80c524e2e4f1ff1a47f8`.
 
 ```sh
 (cd regular && sha256sum *.svg; cd ../fill && sha256sum *.svg; cd ../bold && sha256sum *.svg) | LC_ALL=C sort | sha256sum
@@ -369,3 +372,8 @@ The Viewer pin (issue #536, 2026-11-05) downloaded the same pinned archive, veri
 above from the downloaded bytes, and extracted `push-pin` in regular, fill and bold from `assets/`
 without modification, for the Viewer's follow/pin control. The manifest digest above was
 recomputed over the whole checked-in subset with the command shown.
+The Delete Unused Nodes button (issue #701, 2026-11-13) restored `graph` in regular, fill and bold,
+byte-identical to the files removed with the Node editor icon change and to the pinned archive's
+`assets/`, as the Arrange glyph; the footer's new Delete Unused button takes the `broom` Arrange
+used before. The manifest digest above was recomputed over the whole checked-in subset with the
+command shown.

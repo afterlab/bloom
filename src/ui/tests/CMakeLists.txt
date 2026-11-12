@@ -1078,6 +1078,13 @@ bloom_add_test(NAME bloom.ui.node-card COMMAND bloom_node_card_test LABELS ui in
 # Task N1: the node canvas -- cursor placement, overlap-free adds, the layer-stack Arrange and its
 # footer button, collapse, frame colour, constant-width links, Merge's per-slot sockets, source
 # cards without previews and the Nodes icon.
+# #701: Delete Unused Nodes from the footer button and View > Organize, one undo step.
+add_executable(bloom_node_delete_unused_test node_delete_unused_tests.cpp)
+target_include_directories(bloom_node_delete_unused_test PRIVATE ..)
+target_link_libraries(bloom_node_delete_unused_test PRIVATE bloom_ui bloom_project Qt6::Test)
+bloom_enable_warnings(bloom_node_delete_unused_test)
+bloom_add_test(NAME bloom.ui.node-delete-unused COMMAND bloom_node_delete_unused_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(bloom_node_canvas_polish_test node_canvas_polish_tests.cpp)
 target_include_directories(bloom_node_canvas_polish_test PRIVATE ..)
 target_link_libraries(bloom_node_canvas_polish_test PRIVATE bloom_ui bloom_project Qt6::Test)

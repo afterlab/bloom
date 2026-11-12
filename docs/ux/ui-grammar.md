@@ -766,8 +766,12 @@ cards (Image, Video, Audio, Shape) carry no preview: their rows start under the 
 missing or unreadable asset shows a `Warn` badge at the right of the header. Merge's ordered
 multi-input gives each stack slot its own attach point, the middle of its pill segment.
 
-The footer's right edge holds the Arrange button: a labelled `KButton` with the `Arrange` glyph and
-an "Arrange" label (the Viewer footer's RAM Preview shape), running Arrange All.
+The footer's right edge holds two labelled `KButton`s in the Viewer footer's RAM Preview shape:
+Delete Unused with the `DeleteUnused` glyph (a broom: sweeping away what does nothing) and a "Delete
+Unused" label, running Delete Unused Nodes, then Arrange at the very edge with the `Arrange` glyph (a
+graph of linked nodes, which reads as layout) and an "Arrange" label, running Arrange All. Delete
+Unused removes every node with no path to the Output as one undo step and reports in the status line
+what stayed; with nothing unused it changes nothing.
 
 
 Keyframe diamonds have four forms: a muted outline for a constant, a gold outline for an animated

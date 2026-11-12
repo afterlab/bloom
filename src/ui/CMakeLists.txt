@@ -194,6 +194,7 @@ qt_add_resources(bloom_ui_kit "afterlab_icons"
         kit/third_party/phosphor-icons/regular/lightning.svg
         kit/third_party/phosphor-icons/regular/export.svg
         kit/third_party/phosphor-icons/regular/broom.svg
+        kit/third_party/phosphor-icons/regular/graph.svg
         kit/third_party/phosphor-icons/regular/ghost.svg
         kit/third_party/phosphor-icons/regular/funnel-simple.svg
         kit/third_party/phosphor-icons/regular/plugs-connected.svg
@@ -281,6 +282,7 @@ qt_add_resources(bloom_ui_kit "afterlab_icons"
         kit/third_party/phosphor-icons/bold/lightning-bold.svg
         kit/third_party/phosphor-icons/bold/export-bold.svg
         kit/third_party/phosphor-icons/bold/broom-bold.svg
+        kit/third_party/phosphor-icons/bold/graph-bold.svg
         kit/third_party/phosphor-icons/bold/ghost-bold.svg
         kit/third_party/phosphor-icons/bold/funnel-simple-bold.svg
         kit/third_party/phosphor-icons/bold/plugs-connected-bold.svg
@@ -356,6 +358,7 @@ qt_add_resources(bloom_ui_kit "afterlab_icons"
         kit/third_party/phosphor-icons/fill/lightning-fill.svg
         kit/third_party/phosphor-icons/fill/export-fill.svg
         kit/third_party/phosphor-icons/fill/broom-fill.svg
+        kit/third_party/phosphor-icons/fill/graph-fill.svg
         kit/third_party/phosphor-icons/fill/ghost-fill.svg
         kit/third_party/phosphor-icons/fill/funnel-simple-fill.svg
         kit/third_party/phosphor-icons/fill/plugs-connected-fill.svg

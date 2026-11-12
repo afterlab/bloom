@@ -126,8 +126,10 @@ enum class IconId : std::uint8_t {
     McpServer,
     // The Export panel (a box with an outgoing arrow).
     ExportPanel,
-    // The Node editor footer's Arrange (a broom: tidy the graph).
+    // The Node editor footer's Arrange (a graph of linked nodes: lay the graph out).
     Arrange,
+    // The Node editor footer's Delete Unused (a broom: sweep away what does nothing).
+    DeleteUnused,
     // The Timeline's Shy switch and master Shy toggle (a ghost: the pinned set has no
     // compositor-style "peeking" glyph), and its label filter (a funnel).
     Shy,
