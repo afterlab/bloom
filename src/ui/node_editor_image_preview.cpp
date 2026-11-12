@@ -16,7 +16,9 @@
 #include <QPainter>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <cstdint>
 
 namespace bloom::ui {
 namespace {
@@ -48,8 +50,10 @@ void paintPreviewImage(QPainter& painter, const QRectF& target,
         kit::drawAlphaCheckerboard(painter, target, kit::px(kit::Spacing::S),
                                    kit::Color::ViewerCheckerLight, kit::Color::ViewerCheckerDark);
     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    // A picture still being replaced is drawn as it is: dimming it for the frame it takes to
+    // arrive would flicker during playback. Only a failed request dims it.
     painter.setOpacity(painter.opacity() *
-                       (preview.state == ImagePreviewController::State::Ready ? 1.0 : 0.6));
+                       (preview.state == ImagePreviewController::State::Failed ? 0.6 : 1.0));
     painter.drawImage(target, preview.image);
     painter.restore();
 }
@@ -70,12 +74,19 @@ void paintBadge(QPainter& painter, const QRectF& target, const QString& text) {
     painter.restore();
 }
 
+std::atomic<std::uint64_t> thumbnailPaints{0};
+
 } // namespace
 
 namespace node_editor {
 
+std::uint64_t imagePreviewPaintCount() noexcept {
+    return thumbnailPaints.load(std::memory_order_relaxed);
+}
+
 void paintImagePreview(QPainter& painter, const QRectF& rect, CompositionSession* session,
                        const document::NodeId node) {
+    thumbnailPaints.fetch_add(1, std::memory_order_relaxed);
     painter.save();
     painter.setPen(Qt::NoPen);
     painter.setBrush(kit::color(kit::Color::Background));

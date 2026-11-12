@@ -134,9 +134,17 @@ class ImagePreviewController final : public QObject {
         return lastWorkerThread_;
     }
 
+    // #685: requests the picture a card last drawn for the current time and document, without a
+    // redraw. A view calls it when the playhead moves, so the card repaints only if the new
+    // picture differs from the one it shows, and at most once for the frame.
+    void refresh(document::NodeId node);
+
   signals:
     // A prepared image arrived, or the document or the time moved: redraw every preview.
     void changed();
+    // #685: what a card or the background shows may differ: the document moved, a different image
+    // arrived, or a request failed. Unlike changed(), the playhead alone does not emit it.
+    void previewChanged();
     // The background node or its visibility changed.
     void backgroundChanged();
 
@@ -203,6 +211,7 @@ class ImagePreviewController final : public QObject {
     [[nodiscard]] bool startConvert(document::NodeId node, Pending& pending,
                                     const PreviewPreparationResultHandle& result);
     void fail(document::NodeId node, const Key& key, QString message);
+    void notify();
     void poll();
     void resetForProject();
 
@@ -213,6 +222,8 @@ class ImagePreviewController final : public QObject {
     document::ProjectId project_{};
     std::map<document::NodeId, Pending> pending_;
     std::map<document::NodeId, Key> wanted_;
+    // The device size each node was last drawn at, so refresh() asks for the same identity.
+    std::map<document::NodeId, QSize> drawnSize_;
     std::map<document::NodeId, Shown> shown_;
     std::vector<Kept> kept_;
     // The default colour channels (R, G, B, A) of a ChannelSet source, per revision and source.

@@ -29,6 +29,7 @@
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/workspace_host.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
+#include <bloom/ui/image_preview_controller.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/timeline_editor.hpp>
@@ -59,6 +60,10 @@ struct WindowFixture {
     EditorRegistry registry;
     // Set by `author` to give the window an export queue (ADR 0033); null leaves it without one.
     ExportQueueAdapter* exportQueue = nullptr;
+    // Set by `author` to give the window the Image Preview controller the application creates
+    // (#490); left false, the Image Preview nodes draw nothing, as before.
+    bool imagePreviews = false;
+    std::unique_ptr<ImagePreviewController> imagePreviewController;
     std::unique_ptr<MainWindow> window;
 
     // NOLINTBEGIN(clang-analyzer-cplusplus.NewDeleteLeaks) -- QApplication owns its style.
@@ -149,6 +154,9 @@ struct WindowFixture {
                                        exportQueue, nullptr, nullptr, nullptr,
                                        viewerPreviews.get()))
             throw std::runtime_error("Editor registration failed");
+        if (imagePreviews)
+            imagePreviewController =
+                std::make_unique<ImagePreviewController>(session, *preview, scheduler, bridge);
         window = std::make_unique<MainWindow>(registry, session, projectHost, nullptr,
                                               preview.get(), nullptr, nullptr,
                                               evaluator.operationCache().get());
@@ -215,6 +223,8 @@ struct WindowFixture {
     }
     ~WindowFixture() {
         window.reset();
+        if (imagePreviewController)
+            imagePreviewController->cancel();
         assets->cancel();
         viewerPreviews->beginShutdown();
         preview->beginShutdown();

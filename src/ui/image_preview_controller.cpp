@@ -262,11 +262,11 @@ ImagePreviewController::ImagePreviewController(CompositionSession& session,
             backgroundComposition_.reset();
             emit backgroundChanged();
         }
-        emit changed();
+        notify();
     });
     connect(&session_, &CompositionSession::compositionChanged, this, [this] {
         emit backgroundChanged();
-        emit changed();
+        notify();
     });
     connect(&session_, &CompositionSession::currentTimeChanged, this,
             &ImagePreviewController::changed);
@@ -276,7 +276,7 @@ ImagePreviewController::ImagePreviewController(CompositionSession& session,
         kept_.clear();
         for (auto& [node, shown] : shown_)
             shown.key.reset();
-        emit changed();
+        notify();
     });
     session_.setImagePreviews(this);
 }
@@ -363,6 +363,7 @@ ImagePreviewController::Preview ImagePreviewController::preview(const document::
     if (session_.snapshot().project().id() != project_)
         resetForProject();
     const auto key = keyFor(node, devicePixels);
+    drawnSize_.insert_or_assign(node, devicePixels);
     auto& shown = shown_[node];
     if (!key) {
         drop(node);
@@ -394,6 +395,34 @@ ImagePreviewController::Preview ImagePreviewController::preview(const document::
             .state = State::Pending,
             .cpu = shown.cpu,
             .message = tr("Preparing preview…")};
+}
+
+void ImagePreviewController::refresh(const document::NodeId node) {
+    if (session_.snapshot().project().id() != project_)
+        return;
+    const auto size = drawnSize_.find(node);
+    if (size == drawnSize_.end())
+        return;
+    const auto key = keyFor(node, size->second);
+    if (!key)
+        return;
+    auto& shown = shown_[node];
+    if (shown.key == key || shown.failed == key)
+        return;
+    if (const auto kept = std::ranges::find(kept_, *key, &Kept::key); kept != kept_.end()) {
+        kept->used = ++uses_;
+        const bool differs = shown.image != kept->image;
+        shown.key = key;
+        shown.image = kept->image;
+        shown.cpu = kept->cpu;
+        shown.failed.reset();
+        if (pending_.contains(node))
+            want(node, *key);
+        if (differs)
+            emit previewChanged();
+        return;
+    }
+    want(node, *key);
 }
 
 ImagePreviewController::Histogram ImagePreviewController::histogram(const document::NodeId node) {
@@ -474,7 +503,7 @@ void ImagePreviewController::setHistogramsShown(const bool shown) {
     if (histogramsShown_ == shown)
         return;
     histogramsShown_ = shown;
-    emit changed();
+    notify();
 }
 
 void ImagePreviewController::want(const document::NodeId node, const Key& key) {
@@ -640,11 +669,17 @@ void ImagePreviewController::fail(const document::NodeId node, const Key& key, Q
     auto& shown = shown_[node];
     shown.failed = key;
     shown.failure = std::move(message);
+    notify();
+}
+
+void ImagePreviewController::notify() {
     emit changed();
+    emit previewChanged();
 }
 
 void ImagePreviewController::poll() {
     bool published = false;
+    bool pictureChanged = false;
     std::vector<document::NodeId> finished;
     for (auto& [node, pending] : pending_) {
         if (pending.listing) {
@@ -713,6 +748,10 @@ void ImagePreviewController::poll() {
                 kept_.push_back(
                     Kept{pending.key, (*value)->image, (*value)->bins, pending.cpu, ++uses_});
             auto& shown = shown_[node];
+            // The same pixels for a new identity (an unchanged picture at a new time) need no
+            // redraw of a card.
+            if (shown.image != (*value)->image || shown.failed)
+                pictureChanged = true;
             shown.key = pending.key;
             shown.image = (*value)->image;
             shown.bins = (*value)->bins;
@@ -740,6 +779,8 @@ void ImagePreviewController::poll() {
         bridge_.wake();
     if (published)
         emit changed();
+    if (pictureChanged)
+        emit previewChanged();
 }
 
 std::optional<document::NodeId> ImagePreviewController::backgroundNode() const {

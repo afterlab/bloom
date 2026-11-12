@@ -165,7 +165,18 @@ NodeGraphEditor::NodeGraphEditor(CompositionSession& session, QWidget* parent)
     // moves; the background repaints with it. Painting only reads what is prepared.
     if (auto* previews = session_.imagePreviews()) {
         view_->setImagePreviews(previews);
-        connect(previews, &ImagePreviewController::changed, this, [this] {
+        // #685: the playhead alone does not repaint a card: its picture is requested here, and
+        // the card repaints once, when a different picture arrives.
+        connect(&session_, &CompositionSession::currentTimeChanged, this, [this, previews] {
+            if (!isVisible())
+                return;
+            for (auto* item : scene_->nodeItems())
+                if (item->isImagePreview())
+                    previews->refresh(item->id());
+            if (const auto background = previews->backgroundNode())
+                previews->refresh(*background);
+        });
+        connect(previews, &ImagePreviewController::previewChanged, this, [this] {
             if (!isVisible())
                 return;
             for (auto* item : scene_->nodeItems())

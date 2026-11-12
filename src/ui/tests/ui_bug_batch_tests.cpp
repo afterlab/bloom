@@ -7,6 +7,7 @@
 #include "export_render_list.hpp"
 #include "export_test_support.hpp"
 #include "native_gesture_support.hpp"
+#include "node_editor_items.hpp"
 #include "node_interaction_test_support.hpp"
 #include "viewer_editor_internal.hpp"
 #include "window_fixture.hpp"
@@ -18,6 +19,7 @@
 #include <QKeyEvent>
 #include <QStandardPaths>
 #include <QStringList>
+#include <bloom/commands/node_editor_operations.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/ui/context_bar.hpp>
@@ -37,6 +39,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 
 namespace {
 using namespace bloom;
@@ -712,6 +715,74 @@ void testPlaybackRepaints() {
     expect(nodeWidgetPaints <= 2, "a node widget does not repaint for a changed playhead alone");
 }
 
+// #685: the Image Preview node's thumbnail paints inside the node editor's viewport, so its own
+// paints are counted. Content that does not move with time is not repainted by the playhead, and
+// content that changes every frame is repainted at most once per presented frame.
+void testImagePreviewPlaybackRepaints() {
+    constexpr int kFrames = 24;
+    for (const bool animated : {false, true}) {
+        test::WindowFixture fixture([&](test::WindowFixture& f) {
+            f.imagePreviews = true;
+            if (!f.session.addSolidLayer("Red", {1.0, 0.0, 0.0, 1.0}))
+                throw std::runtime_error("Image Preview fixture layer failed");
+            const auto layers = f.session.composition()->graph().layerOutputs();
+            const auto& layer = layers.front();
+            if (animated) {
+                std::optional<document::ParameterId> opacity;
+                const auto* layerNode = f.session.composition()->graph().findNode(layer.nodeId);
+                for (const auto& binding : layerNode != nullptr
+                                               ? layerNode->parameters
+                                               : std::vector<document::ParameterBinding>{})
+                    if (binding.role == document::kOpacityParameterRole)
+                        opacity = binding.parameterId;
+                if (!opacity)
+                    throw std::runtime_error("Image Preview fixture opacity missing");
+                commands::Transaction automate("Animate", f.session.snapshot().revision());
+                automate.emplace<commands::CreateAnimationForParameter>(
+                    f.session.compositionId(), *opacity, core::RationalTime{});
+                automate.emplace<commands::SetKeyframeAtTimeForParameter>(
+                    f.session.compositionId(), *opacity, core::RationalTime{}, 0.05);
+                automate.emplace<commands::SetKeyframeAtTimeForParameter>(
+                    f.session.compositionId(), *opacity, *core::RationalTime::create(kFrames, 24),
+                    1.0);
+                if (!f.session.executeTransaction(std::move(automate)).succeeded())
+                    throw std::runtime_error("Image Preview fixture animation failed");
+            }
+            commands::Transaction add("Add Image Preview", f.session.snapshot().revision());
+            add.emplace<commands::AddEditorNode>(
+                f.session.compositionId(), std::string(document::kImagePreviewNodeType),
+                document::Vec2d{400.0, 0.0}, std::nullopt,
+                document::OutputPortRef{layer.nodeId, layer.outputPort});
+            if (!f.session.executeNodeTransaction(std::move(add)).changed())
+                throw std::runtime_error("Image Preview fixture node failed");
+        });
+        const char* label = animated ? "an animated" : "a static";
+        // Let the first thumbnail arrive and settle.
+        settle(600);
+        for (int i = 0; i < 10; ++i)
+            settle(100);
+        const auto before = node_editor::imagePreviewPaintCount();
+        for (int frame = 1; frame <= kFrames; ++frame) {
+            if (const auto time = core::RationalTime::create(frame, 24))
+                static_cast<void>(fixture.session.setCurrentTime(*time));
+            settle(60);
+        }
+        settle(200);
+        const auto paints = node_editor::imagePreviewPaintCount() - before;
+        std::cout << "image-preview " << (animated ? "animated" : "static") << ": frames=" << kFrames
+                  << " thumbnailPaints=" << paints << '\n';
+        if (animated)
+            expect(paints <= static_cast<std::uint64_t>(kFrames) + 2,
+                   (std::string(label) + " Image Preview paints at most once per frame: " +
+                    std::to_string(paints))
+                       .c_str());
+        else
+            expect(paints <= 2, (std::string(label) + " Image Preview does not repaint: " +
+                                 std::to_string(paints))
+                                    .c_str());
+    }
+}
+
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName("BloomBugBatchTests");
@@ -734,6 +805,7 @@ int main(int argc, char** argv) {
     }
     testAlignOnSvgLayerAndParts();
     testPlaybackRepaints();
+    testImagePreviewPlaybackRepaints();
     if (test::failures != 0) {
         std::cerr << test::failures << " UI bug batch checks failed\n";
         return 1;

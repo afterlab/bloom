@@ -133,6 +133,8 @@ class NodeGroupItem;
 // session's ImagePreviewController at the size the painter draws it.
 void paintImagePreview(QPainter& painter, const QRectF& rect, CompositionSession* session,
                        document::NodeId node);
+// Test seam: how many Image Preview thumbnails have been painted in this process.
+[[nodiscard]] std::uint64_t imagePreviewPaintCount() noexcept;
 QString displayTypeName(std::string_view typeId);
 // The artist-facing name of a node TYPE (task S1, item 7). Four built-ins are named rather than
 // spelled out of their type id -- Solid, Layer, Merge, Output -- and everything else falls back to
