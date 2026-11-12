@@ -62,7 +62,7 @@ struct FakeGvfsRoot {
     FakeGvfsRoot() {
         require(root.isValid(), "fake gvfs root directory created");
         QDir base(root.path());
-        require(base.mkpath(QStringLiteral("smb-share:server=10.10.10.20,share=production")),
+        require(base.mkpath(QStringLiteral("smb-share:server=192.0.2.20,share=production")),
                 "production mount directory created");
         require(base.mkpath(QStringLiteral(
                     "smb-share:domain=WORKGROUP,server=FileServer,share=Archive,user=alice")),
@@ -70,7 +70,7 @@ struct FakeGvfsRoot {
         // Not an smb-share mount: mountedNetworkShares()/localPathForUrl() must ignore it.
         require(base.mkpath(QStringLiteral("Trash")), "unrelated gvfs entry created");
         productionMount =
-            base.filePath(QStringLiteral("smb-share:server=10.10.10.20,share=production"));
+            base.filePath(QStringLiteral("smb-share:server=192.0.2.20,share=production"));
         archiveMount = base.filePath(QStringLiteral(
             "smb-share:domain=WORKGROUP,server=FileServer,share=Archive,user=alice"));
     }
@@ -89,7 +89,7 @@ void mappingTests() {
     }
     {
         // Percent-decoded remainder joined onto the mount directory.
-        const QUrl url(QStringLiteral("smb://10.10.10.20/production/sub%20dir/photo.png"));
+        const QUrl url(QStringLiteral("smb://192.0.2.20/production/sub%20dir/photo.png"));
         const auto local = ui::localPathForUrl(url, root);
         require(local.has_value() &&
                     *local == fake.productionMount + QStringLiteral("/sub dir/photo.png"),
@@ -111,7 +111,7 @@ void mappingTests() {
                 "share-name matching does not also fold case");
     }
     {
-        const QUrl url(QStringLiteral("smb://10.10.10.20/temporary/x.png"));
+        const QUrl url(QStringLiteral("smb://192.0.2.20/temporary/x.png"));
         require(!ui::localPathForUrl(url, root).has_value(),
                 "an smb:// URL naming an unmounted share resolves to nullopt");
     }
@@ -121,7 +121,7 @@ void mappingTests() {
                 "a non-file/smb scheme resolves to nullopt");
     }
     {
-        const QUrl url(QStringLiteral("smb://10.10.10.20/production/x.png"));
+        const QUrl url(QStringLiteral("smb://192.0.2.20/production/x.png"));
         require(!ui::localPathForUrl(url, QString()).has_value(),
                 "an empty gvfsRoot (no GVFS on this platform) never resolves an smb:// URL");
     }
@@ -144,16 +144,16 @@ void mountedSharesTest() {
 }
 
 void shareLabelTests() {
-    require(ui::smbShareLabel(QUrl(QStringLiteral("smb://10.10.10.20/temporary/x.png"))) ==
-                QStringLiteral("10.10.10.20/temporary"),
+    require(ui::smbShareLabel(QUrl(QStringLiteral("smb://192.0.2.20/temporary/x.png"))) ==
+                QStringLiteral("192.0.2.20/temporary"),
             "smbShareLabel names host/share even when the share is not mounted");
-    require(!ui::smbShareLabel(QUrl(QStringLiteral("smb://10.10.10.20/"))).has_value(),
+    require(!ui::smbShareLabel(QUrl(QStringLiteral("smb://192.0.2.20/"))).has_value(),
             "smbShareLabel needs a share segment");
     require(!ui::smbShareLabel(QUrl(QStringLiteral("file:///tmp/x.png"))).has_value(),
             "smbShareLabel only names smb:// URLs");
     require(ui::networkShareLabel(QStringLiteral(
-                "smb-share:domain=WORKGROUP,server=10.10.10.20,share=archive,user=alice")) ==
-                QStringLiteral("10.10.10.20/archive"),
+                "smb-share:domain=WORKGROUP,server=192.0.2.20,share=archive,user=alice")) ==
+                QStringLiteral("192.0.2.20/archive"),
             "a mount directory reads as host/share, whatever other fields it carries");
     require(!ui::networkShareLabel(QStringLiteral("renders")).has_value(),
             "an ordinary folder name is not a share");
@@ -223,7 +223,7 @@ void assetTreeDropTest() {
 
     {
         QMimeData mime;
-        mime.setUrls({QUrl(QStringLiteral("smb://10.10.10.20/production/network-photo.png"))});
+        mime.setUrls({QUrl(QStringLiteral("smb://192.0.2.20/production/network-photo.png"))});
         require(drop(*tree->viewport(), mime), "an smb:// drop onto a mounted share is accepted");
     }
     // Wait for the import's own state; CTest's timeout bounds a hang, not a wall-clock guess.
@@ -235,15 +235,14 @@ void assetTreeDropTest() {
 
     {
         QMimeData mime;
-        mime.setUrls({QUrl(QStringLiteral("smb://10.10.10.20/temporary/missing.png"))});
+        mime.setUrls({QUrl(QStringLiteral("smb://192.0.2.20/temporary/missing.png"))});
         require(drop(*tree->viewport(), mime),
                 "an smb:// URL naming an unmounted share is still accepted at drag time");
     }
     QApplication::processEvents();
     require(session.snapshot().project().assets().size() == 1,
             "the unmounted-share drop imported nothing");
-    require(refused ==
-                QStringLiteral("Connect to 10.10.10.20/temporary in your file manager first"),
+    require(refused == QStringLiteral("Connect to 192.0.2.20/temporary in your file manager first"),
             "the unmounted share produces the documented notice, not a silent drop");
 
     {

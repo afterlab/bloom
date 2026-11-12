@@ -104,7 +104,7 @@ int main() {
     // The project directory and the "mount" directory share only `scratchRoot` as a common
     // ancestor -- exactly the shape a real GVFS mount has relative to a project saved under the
     // artist's home directory. The mount directory's own name matches this machine's real mounts
-    // literally (see /run/user/<uid>/gvfs/smb-share:server=10.10.10.20,share=production), colon
+    // literally (see /run/user/<uid>/gvfs/smb-share:server=192.0.2.20,share=production), colon
     // included: a purely lexical relative path from the project directory can't avoid that colon
     // showing up as one of its own components.
     const auto projectDirectory = scratchRoot / "project";
@@ -113,11 +113,11 @@ int main() {
     // \\server\share), which this test cannot make. The folder beside the project is therefore
     // reached by a project-relative locator, and the same import, relink and save/open steps are
     // checked for that; file_uri_tests.cpp covers the share spelling itself.
-    const auto mountDirectory = scratchRoot / "mount" / "smb-share,server=10.10.10.20";
+    const auto mountDirectory = scratchRoot / "mount" / "smb-share,server=192.0.2.20";
     const std::string expectedPortability = "project-relative";
 #else
     const auto mountDirectory =
-        scratchRoot / "mount" / "smb-share:server=10.10.10.20,share=production";
+        scratchRoot / "mount" / "smb-share:server=192.0.2.20,share=production";
     const std::string expectedPortability = "external";
 #endif
     std::filesystem::create_directories(projectDirectory);

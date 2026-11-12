@@ -21,7 +21,7 @@ struct ParsedMountName {
     QString share;
 };
 
-// Parses a GVFS mount directory's own name, e.g. `smb-share:server=10.10.10.20,share=production`
+// Parses a GVFS mount directory's own name, e.g. `smb-share:server=192.0.2.20,share=production`
 // or `smb-share:domain=WORKGROUP,server=host,share=archive,user=alice` (fields in any order;
 // unrecognized fields, such as `domain=`/`user=`, are ignored).
 [[nodiscard]] std::optional<ParsedMountName> parseMountName(const QString& entryName) {
