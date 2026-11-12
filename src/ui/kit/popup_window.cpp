@@ -93,12 +93,19 @@ PopupPlacement placePopup(const PopupPlacementRequest& request) {
     return {{x, belowTop, width, height}, false};
 }
 
+// Qt::FramelessWindowHint and Qt::NoDropShadowWindowHint (#706): the popup paints its own soft
+// shadow into a translucent gutter, and a window is only translucent when it is frameless. Without
+// the hints Windows and macOS add the system's drop shadow to the window as well; it is computed
+// from the window's alpha and, around a translucent frame, comes out as a hard dark edge in place
+// of the painted blur.
 // Qt::BypassGraphicsProxyWidget: when the anchor lives inside a QGraphicsProxyWidget (a node card
 // row), Qt would otherwise embed this popup into the scene as a sub-proxy, where it lands behind
 // the card and never receives the pointer (owner, 2026-09-15). The flag keeps it a real top-level
 // popup, still parented to the anchor so a Wayland compositor can position it against its parent.
 KPopupWindow::KPopupWindow(QWidget* parent, const Elevation elevation)
-    : QWidget(parent, Qt::Popup | Qt::BypassGraphicsProxyWidget), elevation_(elevation),
+    : QWidget(parent, Qt::Popup | Qt::FramelessWindowHint | Qt::BypassGraphicsProxyWidget |
+                       Qt::NoDropShadowWindowHint),
+      elevation_(elevation),
       gutter_(popupGutter(elevation)) {
     setAttribute(Qt::WA_DeleteOnClose, false);
     translucent_ = popupTranslucencySupported();

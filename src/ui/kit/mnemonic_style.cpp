@@ -309,8 +309,12 @@ void AltUnderlineProxyStyle::polish(QWidget* widget) {
         // The frame below is drawn with rounded corners and casts the Popup shadow; without this
         // the corner pixels and the shadow gutter would be an opaque plate. Where the platform does
         // not guarantee transparency the menu is a square, gutterless plate instead.
-        if (popupTranslucencySupported())
+        if (popupTranslucencySupported()) {
             widget->setAttribute(Qt::WA_TranslucentBackground, true);
+            // #706: the menu paints its own shadow; the system's would add a hard edge around it.
+            widget->setWindowFlag(Qt::FramelessWindowHint, true);
+            widget->setWindowFlag(Qt::NoDropShadowWindowHint, true);
+        }
         // The shadow falls right and below, in a transparent gutter the menu lays its rows out
         // inside of (QMenu honours contents margins). Top and left stay flush, so a menu still
         // opens exactly at its anchor.
@@ -330,6 +334,8 @@ void AltUnderlineProxyStyle::polish(QWidget* widget) {
         widget->setFont(font(TypeRole::Ui));
         // The tip's frame is rounded (Radius::Small); its corners stay unpainted.
         widget->setAttribute(Qt::WA_TranslucentBackground, true);
+        widget->setWindowFlag(Qt::FramelessWindowHint, true);
+        widget->setWindowFlag(Qt::NoDropShadowWindowHint, true);
         widget->installEventFilter(tooltipWrapper());
     }
     QProxyStyle::polish(widget);
