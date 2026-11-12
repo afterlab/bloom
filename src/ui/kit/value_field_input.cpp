@@ -299,7 +299,15 @@ void KValueField::finishScrub() {
     update();
 }
 
+void KValueField::setScrubAxis(const ScrubAxis axis) { scrubAxis_ = axis; }
+
+double KValueField::scrubCoordinate(const QPointF& position) const noexcept {
+    return scrubAxis_ == ScrubAxis::Vertical ? -position.y() : position.x() + wrapOffset_;
+}
+
 void KValueField::wrapPointer(const QPointF& global) {
+    if (scrubAxis_ == ScrubAxis::Vertical)
+        return;
     wrapPointerAtScreenEdge(*this, global, wrapOffset_);
 }
 
@@ -331,17 +339,17 @@ void KValueField::mouseMoveEvent(QMouseEvent* event) {
         QWidget::mouseMoveEvent(event);
         return;
     }
-    const double x = event->position().x() + wrapOffset_;
+    const double x = scrubCoordinate(event->position());
     const double threshold = QApplication::startDragDistance();
     const double scale = scrubScale(event->modifiers());
     if (!scrubbing_) {
-        if (std::abs(x - pressPosition_.x()) < threshold) {
+        if (std::abs(x - scrubCoordinate(pressPosition_)) < threshold) {
             event->accept();
             return;
         }
         scrubbing_ = true;
         firstSegment_ = true;
-        segmentStartX_ = pressPosition_.x();
+        segmentStartX_ = scrubCoordinate(pressPosition_);
         segmentBase_ = value_;
         segmentIntegerBase_ = integerValue_;
         segmentScale_ = scale;

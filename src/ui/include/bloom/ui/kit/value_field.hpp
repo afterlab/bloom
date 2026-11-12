@@ -69,7 +69,15 @@ class KValueField final : public QWidget {
     Q_OBJECT
 
   public:
+    // The pointer axis a scrub follows. Horizontal (the default) is right-to-increase; Vertical is
+    // drag-up-to-increase and does not wrap the pointer at the screen edge (#695, the node
+    // editor's zoom value).
+    enum class ScrubAxis : std::uint8_t { Horizontal, Vertical };
+
     explicit KValueField(QWidget* parent = nullptr);
+
+    void setScrubAxis(ScrubAxis axis);
+    [[nodiscard]] ScrubAxis scrubAxis() const noexcept { return scrubAxis_; }
 
     // Compact properties mode places the label inside the field.
     void setCompact(bool compact);
@@ -320,6 +328,9 @@ class KValueField final : public QWidget {
     bool scrubbing_ = false;
     bool firstSegment_ = true;
     QPointF pressPosition_;
+    ScrubAxis scrubAxis_ = ScrubAxis::Horizontal;
+    // The pointer coordinate along the scrub axis (up is positive for Vertical).
+    [[nodiscard]] double scrubCoordinate(const QPointF& position) const noexcept;
     double segmentStartX_ = 0.0;
     double segmentBase_ = 0.0;
     std::int64_t segmentIntegerBase_ = 0;
