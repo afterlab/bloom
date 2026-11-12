@@ -24,16 +24,23 @@ std::FILE* privateSpool() {
 #if defined(_WIN32)
     wchar_t directory[MAX_PATH + 1] = {};
     wchar_t name[MAX_PATH + 1] = {};
-    if (GetTempPathW(MAX_PATH + 1, directory) == 0 ||
-        GetTempFileNameW(directory, L"blm", 0, name) == 0)
+    if (GetTempPathW(MAX_PATH + 1, directory) == 0)
         return nullptr;
-    const HANDLE handle =
-        CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                    FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
-    if (handle == INVALID_HANDLE_VALUE) {
-        DeleteFileW(name);
-        return nullptr;
+    // Another program may hold a file the instant it appears (a scanner opening the new name),
+    // which fails the exclusive open below; a new name a moment later is free.
+    HANDLE handle = INVALID_HANDLE_VALUE;
+    for (int attempt = 0; attempt < 8 && handle == INVALID_HANDLE_VALUE; ++attempt) {
+        if (attempt != 0)
+            Sleep(25);
+        if (GetTempFileNameW(directory, L"blm", 0, name) == 0)
+            continue;
+        handle = CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                             FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+        if (handle == INVALID_HANDLE_VALUE)
+            DeleteFileW(name);
     }
+    if (handle == INVALID_HANDLE_VALUE)
+        return nullptr;
     const int descriptor =
         _open_osfhandle(reinterpret_cast<std::intptr_t>(handle), _O_RDWR | _O_BINARY);
     if (descriptor < 0) {
@@ -148,6 +155,9 @@ struct PrivateAvio {
 };
 struct EncodeTrack {
     AVCodecContext* codec = nullptr;
+    // The platform generation's encoder for the track, in place of an opened `codec`; `codec`
+    // then only holds the stream's parameters.
+    std::unique_ptr<PlatformEncoder> platform;
     AVStream* stream = nullptr;
     AVFrame* frame = av_frame_alloc();
     AVFrame* hardwareFrame = av_frame_alloc();
@@ -216,6 +226,15 @@ AVPixelFormat dpxPixelFormat(const EncodeSettingsV1& s) {
 }
 bool hardwareCodec(const EncodeSettingsV1& s) {
     return s.videoCodec == "h264" || s.videoCodec == "hevc";
+}
+// The platform generation's encoder. Everywhere but Windows there is none.
+std::unique_ptr<PlatformEncoder> openPlatformEncoder(const PlatformEncoding& encoding) {
+#if defined(_WIN32)
+    return platformEncoder(encoding);
+#else
+    static_cast<void>(encoding);
+    throw Unavailable{Error::Unavailable, "This platform has no media framework generation"};
+#endif
 }
 // The bundled web encoders: libvpx (VP9) and SVT-AV1 (AV1), software only.
 bool webCodec(const EncodeSettingsV1& s) { return s.videoCodec == "vp9" || s.videoCodec == "av1"; }
@@ -314,11 +333,29 @@ struct Encoder::State {
     // software generation (OpenH264, Kvazaar).
     bool hardware = false;
     bool nvenc = false;
-    State(EncodeSettingsV1 s, const bool useHardware, const int stagedOutput, const bool useNvenc)
+    // The platform generation: H.264 and HEVC pictures are coded by the system's encoder; the
+    // audio, the container and the reopen check are the software generation's.
+    bool platform = false;
+    State(EncodeSettingsV1 s, const bool useHardware, const int stagedOutput, const bool useNvenc,
+          const bool usePlatform)
         : settings(std::move(s)), file(settings.byteLimit, stagedOutput), io(file, true),
-          hardware(useHardware), nvenc(useNvenc) {}
+          hardware(useHardware), nvenc(useNvenc), platform(usePlatform) {}
     ~State() { avformat_free_context(format); }
+    void write(EncodeTrack& track) {
+        av_packet_rescale_ts(track.packet, track.codec->time_base, track.stream->time_base);
+        track.packet->stream_index = track.stream->index;
+        require(av_interleaved_write_frame(format, track.packet) >= 0,
+                "Mux failed or artifact exceeds limit", Error::Io);
+    }
     void packets(EncodeTrack& track, AVFrame* frame) {
+        if (track.platform) {
+            track.platform->send(frame);
+            while (track.platform->receive(*track.packet)) {
+                write(track);
+                av_packet_unref(track.packet);
+            }
+            return;
+        }
         AVFrame* submitted = frame;
         if (frame != nullptr && track.hardwareFrames != nullptr) {
             // Issue #394: return the previous frame's surface to the pool first. The encoder holds
@@ -345,21 +382,27 @@ struct Encoder::State {
                 if (track.packet->duration == 0 && track.codec->codec_type == AVMEDIA_TYPE_VIDEO &&
                     webCodec(settings))
                     track.packet->duration = 1;
-                av_packet_rescale_ts(track.packet, track.codec->time_base, track.stream->time_base);
-                track.packet->stream_index = track.stream->index;
-                require(av_interleaved_write_frame(format, track.packet) >= 0,
-                        "Mux failed or artifact exceeds limit", Error::Io);
+                write(track);
             }
             av_packet_unref(track.packet);
         }
         require(status == AVERROR(EAGAIN) || status == AVERROR_EOF, "Encoder packet failure");
     }
     void openTrack(EncodeTrack& track, const std::string& name, bool video) {
-        const auto* codec = avcodec_find_encoder_by_name(name.c_str());
-        require(codec != nullptr, "Encoder is not in the intake", Error::Unavailable);
+        // The platform generation codes the picture track with the system's encoder: there is no
+        // libavcodec encoder, and the context only carries the stream's parameters to the muxer.
+        const bool system = video && platform;
+        const auto* codec = system ? nullptr : avcodec_find_encoder_by_name(name.c_str());
+        require(system || codec != nullptr, "Encoder is not in the intake", Error::Unavailable);
+        require(!system || hardwareCodec(settings),
+                "The platform generation encodes H.264 and HEVC only", Error::Unavailable);
         track.codec = avcodec_alloc_context3(codec);
         require(track.codec && track.frame && track.packet, "Encoder allocation", Error::Oversized);
         auto& c = *track.codec;
+        if (system) {
+            c.codec_type = AVMEDIA_TYPE_VIDEO;
+            c.codec_id = settings.videoCodec == "hevc" ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
+        }
         c.thread_count =
             video && !imageCodec(settings) ? static_cast<int>(settings.threads) : 1;
         // Issue #406: the host resolves ProRes's automatic thread count against the address space
@@ -530,9 +573,33 @@ struct Encoder::State {
         }
         if (settings.videoCodec == "tiff" && video)
             av_dict_set(&options, "compression_algo", "raw", 0);
-        const auto status = avcodec_open2(&c, codec, &options);
-        av_dict_free(&options);
-        require(status >= 0, "Encoder refused profile or stream layout", Error::Unavailable);
+        if (system) {
+            av_dict_free(&options);
+            PlatformEncoding encoding;
+            encoding.codec = c.codec_id;
+            encoding.width = c.width;
+            encoding.height = c.height;
+            encoding.rate = c.framerate;
+            encoding.format = c.pix_fmt;
+            encoding.bitRate = c.bit_rate;
+            encoding.interval = c.gop_size;
+            encoding.colour = {c.color_primaries, c.color_trc, c.colorspace, c.color_range};
+            track.platform = openPlatformEncoder(encoding);
+            // Parameter sets the encoder states up front go into the sample description; one
+            // that states them only in the stream leaves the muxer to take them from there.
+            const auto sets = track.platform->parameterSets();
+            if (!sets.empty()) {
+                c.extradata = static_cast<std::uint8_t*>(
+                    av_mallocz(sets.size() + AV_INPUT_BUFFER_PADDING_SIZE));
+                require(c.extradata != nullptr, "Encoder allocation", Error::Oversized);
+                std::memcpy(c.extradata, sets.data(), sets.size());
+                c.extradata_size = static_cast<int>(sets.size());
+            }
+        } else {
+            const auto status = avcodec_open2(&c, codec, &options);
+            av_dict_free(&options);
+            require(status >= 0, "Encoder refused profile or stream layout", Error::Unavailable);
+        }
         if (format) {
             track.stream = avformat_new_stream(format, nullptr);
             require(track.stream, "Mux stream allocation", Error::Oversized);
@@ -886,7 +953,10 @@ struct Encoder::State {
         qc.colour = {parameters.color_primaries, parameters.color_trc, parameters.color_space,
                      parameters.color_range};
         qc.container = containerToken(*input.format, parameters, settings);
-        if (videoTrack.codec->codec != nullptr && videoTrack.codec->codec->name != nullptr)
+        if (videoTrack.platform)
+            qc.encoder = videoTrack.platform->name() +
+                         (videoTrack.platform->hardware() ? " (hardware)" : " (software)");
+        else if (videoTrack.codec->codec != nullptr && videoTrack.codec->codec->name != nullptr)
             qc.encoder = videoTrack.codec->codec->name;
         if (const auto* name = avcodec_profile_name(parameters.codec_id, parameters.profile))
             qc.profile = name;
@@ -1047,8 +1117,9 @@ struct Encoder::State {
             require(qc.audio == expectedPcm.finalize(), "Reopened PCM samples differ");
     }
 };
-Encoder::Encoder(const bool hardware, const int stagedOutput, const bool nvenc)
-    : hardware_(hardware), nvenc_(nvenc), stagedOutput_(stagedOutput) {}
+Encoder::Encoder(const bool hardware, const int stagedOutput, const bool nvenc,
+                 const Generation generation)
+    : hardware_(hardware), nvenc_(nvenc), stagedOutput_(stagedOutput), generation_(generation) {}
 Encoder::~Encoder() = default;
 provider::Payload Encoder::call(provider::MessageKind kind, const provider::Payload& payload) {
     try {
@@ -1056,7 +1127,8 @@ provider::Payload Encoder::call(provider::MessageKind kind, const provider::Payl
         if (kind == MessageKind::EncodeBegin) {
             require(!state_, "Encoder already initialized", Error::UnexpectedMessage);
             state_ = std::make_unique<State>(std::get<EncodeSettingsV1>(payload), hardware_,
-                                             std::exchange(stagedOutput_, -1), nvenc_);
+                                             std::exchange(stagedOutput_, -1), nvenc_,
+                                             generation_ == Generation::Platform);
             state_->open();
         } else {
             require(state_ != nullptr, "Encoder is not initialized", Error::UnexpectedMessage);

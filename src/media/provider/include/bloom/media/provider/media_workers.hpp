@@ -3,11 +3,12 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // Worker executables and the per-platform provider chains (ADR 0035). Every operating system
 // ships the bundled LGPL FFmpeg worker as the last provider; the platform media framework comes
 // first where Bloom has a provider for it:
-//   Windows: Media Foundation (no provider yet; the slot reports NotInstalled) -> FFmpeg
+//   Windows: the FFmpeg worker's Media Foundation generation -> FFmpeg
 //   macOS:   VideoToolbox/AVFoundation -> FFmpeg
 //   Linux:   FFmpeg with VA-API -> FFmpeg software
 namespace bloom::media::provider {
@@ -34,9 +35,12 @@ inline constexpr std::string_view kVideoToolboxWorkerGeneration = "videotoolbox-
                                                          std::string_view name);
 // The bundled FFmpeg worker: the installed copy, else this build tree's worker, else empty.
 [[nodiscard]] std::string ffmpegWorkerExecutable();
-// The platform media framework's worker (VideoToolbox on macOS); empty when this platform has no
-// native provider worker in this build.
+// The platform media framework's worker: the VideoToolbox worker on macOS; on Windows the FFmpeg
+// worker, whose Media Foundation generation nativeWorkerArguments() selects. Empty when this
+// platform has no native provider worker in this build.
 [[nodiscard]] std::string nativeWorkerExecutable();
+// What the native provider's worker is started with, ahead of the pool's own arguments.
+[[nodiscard]] std::vector<std::string> nativeWorkerArguments();
 // The platform's native provider id ("videotoolbox", "media-foundation"), or empty on Linux.
 [[nodiscard]] std::string_view nativeMediaProviderId() noexcept;
 // The native provider's handshake for this platform; empty declarations when there is none.

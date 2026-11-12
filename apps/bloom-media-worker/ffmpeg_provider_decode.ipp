@@ -28,12 +28,61 @@ struct Device final {
            a.height == b.height && a.stream == b.stream && a.samples == b.samples &&
            a.sourceDigest == b.sourceDigest && a.snapshotBytes == b.snapshotBytes;
 }
+// The platform generation reads a source only when it decodes every H.264 and HEVC stream of it;
+// otherwise the source is refused here, at probe, with the reason, and the provider chain hands
+// it whole to the software generation. Returns the reader's name for the probe: the framework
+// and, stream by stream, whether its decoder runs on the graphics device or on the processor and
+// why (the provenance of the decode).
+std::string requirePlatformStreams(const Input& input) {
+    std::string decoders;
+    for (unsigned index = 0; index < input.format->nb_streams; ++index) {
+        const auto& stream = *input.format->streams[index];
+        const auto codec = stream.codecpar->codec_id;
+        if (stream.codecpar->codec_type != AVMEDIA_TYPE_VIDEO ||
+            (codec != AV_CODEC_ID_H264 && codec != AV_CODEC_ID_HEVC))
+            continue;
+        const auto decoder = openPlatformDecoder(stream);
+        decoders += std::string(decoders.empty() ? " (" : "; ") + "stream " +
+                    std::to_string(index) + ": " + decoder->note();
+    }
+    return "Media Foundation" + (decoders.empty() ? decoders : decoders + ")") + "; FFmpeg-8.1.2";
+}
+// The probe of a source the platform generation reads: the software generation's description
+// under the platform reader's name.
+provider::ProbeResult platformProbe(Input& input, const provider::Digest& digest,
+                                    const std::uint64_t bytes) {
+    auto reader = requirePlatformStreams(input);
+    auto result = probe(input, digest, bytes);
+    // The name is bounded text of the contract; the reasons are short sentences.
+    if (reader.size() > provider::Limits::stringBytes)
+        reader.resize(provider::Limits::stringBytes);
+    result.version = std::move(reader);
+    return result;
+}
+constexpr const char* kPlatformDiffers =
+    "The platform decoder's frame differs from the software reference; software decode required";
+constexpr const char* kPlatformHardwareDiffers =
+    "The platform's hardware decoder returns a frame that differs from the software reference; "
+    "software decode required";
 } // namespace
+provider::Handshake generationHandshake(const Generation generation) {
+#if defined(_WIN32)
+    if (generation == Generation::Platform)
+        return provider::mediaFoundationHandshake();
+#endif
+    require(generation == Generation::Software, "This platform has no media framework generation",
+            provider::Error::Unavailable);
+    return provider::ffmpegHandshake();
+}
 struct DecodeSession::State final {
-    State(bool hardwareValue, provider::HardwareDecodeDevice deviceValue)
-        : hardware(hardwareValue), kind(deviceValue) {}
+    State(bool hardwareValue, provider::HardwareDecodeDevice deviceValue,
+          const Generation generationValue)
+        : hardware(hardwareValue), kind(deviceValue), generation(generationValue) {}
     bool hardware = false;
     provider::HardwareDecodeDevice kind = provider::HardwareDecodeDevice::Vaapi;
+    Generation generation = Generation::Software;
+    // Platform generation: the first frame of the opened source equalled the software decoder's.
+    bool platformProven = false;
     provider::Digest digest;
     std::uint64_t bytes = 0;
     std::unique_ptr<Input> input;
@@ -52,6 +101,7 @@ struct DecodeSession::State final {
     bool forward = false;
     std::optional<std::pair<provider::CallRequest, provider::FrameProduct>> ahead;
     void reset() {
+        platformProven = false;
         lastVideo.reset();
         forward = false;
         ahead.reset();
@@ -62,15 +112,19 @@ struct DecodeSession::State final {
         audio = {};
     }
 };
-DecodeSession::DecodeSession(bool hardware, provider::HardwareDecodeDevice device)
-    : state_(std::make_unique<State>(hardware, device)) {}
+DecodeSession::DecodeSession(bool hardware, provider::HardwareDecodeDevice device,
+                             const Generation generation)
+    : state_(std::make_unique<State>(hardware, device, generation)) {}
 DecodeSession::~DecodeSession() = default;
 provider::Payload DecodeSession::call(const provider::CallRequest& request) {
     auto& state = *state_;
     try {
         av_log_set_level(AV_LOG_ERROR);
+        const bool platform = state.generation == Generation::Platform;
+        require(!(platform && state.hardware), "Unsupported worker generation",
+                provider::Error::Unavailable);
         const auto handshake = state.hardware ? provider::ffmpegHardwareDecodeHandshake(state.kind)
-                                              : provider::ffmpegHandshake();
+                                              : generationHandshake(state.generation);
         require(std::ranges::any_of(handshake.declarations,
                                     [&](const auto& declaration) {
                                         return declaration.capability == request.capability;
@@ -87,8 +141,11 @@ provider::Payload DecodeSession::call(const provider::CallRequest& request) {
             state.digest = request.sourceDigest;
             state.bytes = request.snapshotBytes;
         }
-        if (request.capability.role == provider::Role::Probe)
+        if (request.capability.role == provider::Role::Probe) {
+            if (platform)
+                return platformProbe(*state.input, state.digest, state.bytes);
             return probe(*state.input, state.digest, state.bytes);
+        }
         if (request.capability.role == provider::Role::DemuxIndex) {
             if (!state.demux) {
                 // Index scanning must not disturb the retained video decoder's packet cursor.
@@ -122,6 +179,7 @@ provider::Payload DecodeSession::call(const provider::CallRequest& request) {
         if (state.videoStream && request.stream != *state.videoStream) {
             state.input = openInput(request);
             state.cursor = {};
+            state.platformProven = false;
         }
         if (!state.hardware) {
             // #474: playback that falls behind skips frames but keeps moving forward. The frame
@@ -137,8 +195,23 @@ provider::Payload DecodeSession::call(const provider::CallRequest& request) {
                 return result;
             }
             state.ahead.reset();
-            auto result = video(*state.input, request, nullptr, &state.cursor);
+            auto result = video(*state.input, request, nullptr, &state.cursor, state.generation);
             state.videoStream = request.stream;
+            if (platform && !state.platformProven) {
+                // As the hardware generations do: the first frame of a source is proven against
+                // the software reference decoder on an independent reader of the same immutable
+                // input. H.264 and HEVC are decoded to the bit, so a decoder that agrees here is
+                // the standard's decoder.
+                // A graphics device that fails it is named, and the source goes to software
+                // decode with that reason.
+                auto reference = openInput(request);
+                require(video(*reference, request, nullptr) == result,
+                        state.input->platform && state.input->platform->hardware()
+                            ? kPlatformHardwareDiffers
+                            : kPlatformDiffers,
+                        provider::Error::IdentityMismatch);
+                state.platformProven = true;
+            }
             return result;
         }
         // Hardware mode: walk the discovered render nodes until one decodes this stream on the
@@ -204,16 +277,21 @@ void DecodeSession::decodeAhead() {
         // are those the request would decode. Past the end, or on any failure, nothing is held
         // and the session resets exactly as a failed request does, so the next request reopens
         // the source and decodes (and reports) its frame itself.
-        auto product = video(*state.input, next, nullptr, &state.cursor);
+        auto product = video(*state.input, next, nullptr, &state.cursor, state.generation);
         state.ahead.emplace(std::move(next), std::move(product));
     } catch (...) {
         state.reset();
     }
 }
-provider::Payload call(const provider::CallRequest& request, bool hardware) {
+provider::Payload call(const provider::CallRequest& request, bool hardware,
+                       const Generation generation) {
     try {
         av_log_set_level(AV_LOG_ERROR);
-        const auto h = provider::ffmpegHandshake(hardware);
+        const bool platform = generation == Generation::Platform;
+        require(!(platform && hardware), "Unsupported worker generation",
+                provider::Error::Unavailable);
+        const auto h = platform ? generationHandshake(generation)
+                                : provider::ffmpegHandshake(hardware);
         require(
             std::ranges::any_of(h.declarations,
                                 [&](const auto& d) { return d.capability == request.capability; }),
@@ -227,9 +305,10 @@ provider::Payload call(const provider::CallRequest& request, bool hardware) {
                     provider::Error::SourceChanged);
         auto input = openInput(request);
         provider::Payload result;
-        if (request.capability.role == provider::Role::Probe)
-            result = probe(*input, digest, bytes);
-        else if (request.capability.role == provider::Role::DemuxIndex)
+        if (request.capability.role == provider::Role::Probe) {
+            result = platform ? platformProbe(*input, digest, bytes)
+                              : probe(*input, digest, bytes);
+        } else if (request.capability.role == provider::Role::DemuxIndex)
             result = index(*input);
         else {
             require(request.stream < input->format->nb_streams, "Stream does not exist");
@@ -244,7 +323,7 @@ provider::Payload call(const provider::CallRequest& request, bool hardware) {
                                 .has_value(),
                             "VA-API device unavailable", provider::Error::Unavailable);
                 try {
-                    result = video(*input, request, device.context);
+                    result = video(*input, request, device.context, nullptr, generation);
                 } catch (const HardwareMiss&) {
                     throw provider::Unavailable{provider::Error::Unavailable,
                                                 "Hardware decode not active"};

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <mach-o/dyld.h>
 #elif defined(_WIN32)
+#include <bloom/media/provider/mediafoundation_manifest.hpp>
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -95,9 +96,19 @@ std::string nativeWorkerExecutable() {
     return installedOrBuilt(kVideoToolboxWorkerGeneration, "bloom-media-videotoolbox-worker",
                             nullptr);
 #endif
+#elif defined(_WIN32)
+    // Media Foundation is a generation of the FFmpeg worker (nativeWorkerArguments).
+    return ffmpegWorkerExecutable();
 #else
-    // Windows: the Media Foundation provider slot has no worker yet. Linux has no separate
-    // platform framework provider; VA-API is a mode of the FFmpeg worker.
+    // Linux has no separate platform framework provider; VA-API is a mode of the FFmpeg worker.
+    return {};
+#endif
+}
+
+std::vector<std::string> nativeWorkerArguments() {
+#if defined(_WIN32)
+    return {"--media-foundation"};
+#else
     return {};
 #endif
 }
@@ -115,6 +126,8 @@ std::string_view nativeMediaProviderId() noexcept {
 Handshake nativeMediaHandshake() {
 #if defined(__APPLE__)
     return videoToolboxHandshake();
+#elif defined(_WIN32)
+    return mediaFoundationHandshake();
 #else
     return {};
 #endif

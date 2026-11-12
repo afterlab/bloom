@@ -85,6 +85,9 @@ int main(int argc, char** argv) {
     bool hardwareDecode = false;
     auto decodeDevice = provider::HardwareDecodeDevice::Vaapi;
     bool nvenc = false;
+    // The Media Foundation generation (Windows): this worker's demuxer, muxer and frame handling
+    // with the system's H.264 and HEVC decoders and encoders (platform_codec.hpp).
+    auto generation = ffmpeg::Generation::Software;
     bool frameArena = false;
     int stagedOutput = -1;
     for (int i = 1; i < argc; ++i) {
@@ -104,6 +107,10 @@ int main(int argc, char** argv) {
             decodeDevice = provider::HardwareDecodeDevice::Nvdec;
         } else if (argument == "--retained-video")
             retainedVideo = true;
+#if defined(_WIN32)
+        else if (argument == "--media-foundation")
+            generation = ffmpeg::Generation::Platform;
+#endif
         else if (argument == "--frame-arena")
             frameArena = true;
         else if (argument == "--staged-output")
@@ -124,6 +131,9 @@ int main(int argc, char** argv) {
     }
     if (nvenc && (hardware || hardwareDecode || retainedVideo))
         return 2; // NVENC is an encode-only generation of its own.
+    const bool platform = generation == ffmpeg::Generation::Platform;
+    if (platform && (hardware || hardwareDecode || nvenc))
+        return 2; // The media framework generation is one of its own as well.
     hardware = hardware && ffmpeg::hardwareEncodeAvailable();
     // Without a working NVIDIA driver the generation answers with the software handshake, which
     // the host does not expect, so the encode chain moves on to its next provider.
@@ -133,6 +143,7 @@ int main(int argc, char** argv) {
     // it.
     const auto handshake = hardwareDecode ? provider::ffmpegHardwareDecodeHandshake(decodeDevice)
                            : nvenc        ? provider::ffmpegNvencHandshake()
+                           : platform     ? ffmpeg::generationHandshake(generation)
                                           : provider::ffmpegHandshake(hardware);
 #if defined(_WIN32)
     // Streamed staged publication (ADR 0033 section 16) inherits a descriptor; Windows exports
@@ -143,10 +154,10 @@ int main(int argc, char** argv) {
     if (stagedOutput >= 0 && (retainedVideo || ::fcntl(stagedOutput, F_GETFD) < 0))
         return 2;
 #endif
-    ffmpeg::Encoder encoder(hardware, stagedOutput, nvenc);
+    ffmpeg::Encoder encoder(hardware, stagedOutput, nvenc, generation);
     std::unique_ptr<ffmpeg::DecodeSession> decoder;
     if (retainedVideo)
-        decoder = std::make_unique<ffmpeg::DecodeSession>(hardwareDecode, decodeDevice);
+        decoder = std::make_unique<ffmpeg::DecodeSession>(hardwareDecode, decodeDevice, generation);
 #endif
     try {
         std::uint64_t session = 0, sequence = 0;
@@ -202,7 +213,7 @@ int main(int argc, char** argv) {
                 message->kind == provider::MessageKind::Call
                     ? (decoder ? decoder->call(std::get<provider::CallRequest>(message->payload))
                                : ffmpeg::call(std::get<provider::CallRequest>(message->payload),
-                                              hardware))
+                                              hardware, generation))
                     : encoder.call(message->kind, message->payload);
 #endif
             auto kind = provider::MessageKind::Failure;

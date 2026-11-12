@@ -1,9 +1,13 @@
 #include "ffmpeg_provider.hpp"
 #include "ffmpeg_reopen_compare.hpp"
 #include "lossy_audio_compare.hpp"
+#include "platform_codec.hpp"
 #include <algorithm>
 #include <array>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
+#if defined(_WIN32)
+#include <bloom/media/provider/mediafoundation_manifest.hpp>
+#endif
 #include <bloom/platform/file_snapshot.hpp>
 #include <cmath>
 #include <cstdio>
@@ -75,6 +79,8 @@ Rational timestamp(std::int64_t value, AVRational base) {
 struct Input {
     AVFormatContext* format = nullptr;
     AVCodecContext* codec = nullptr;
+    // The platform generation's decoder for the stream, in place of `codec`.
+    std::unique_ptr<PlatformDecoder> platform;
     AVPacket* packet = av_packet_alloc();
     AVFrame* frame = av_frame_alloc();
     AVFrame* transfer = av_frame_alloc();
@@ -395,8 +401,22 @@ void configureThreads(AVCodecContext& codec, const AVCodecParameters& p) {
                        p.codec_id == AV_CODEC_ID_MJPEG || p.codec_id == AV_CODEC_ID_TIFF;
     codec.thread_type = intra ? FF_THREAD_SLICE : FF_THREAD_FRAME | FF_THREAD_SLICE;
 }
+// The platform generation's decoder for a stream. Everywhere but Windows there is none.
+std::unique_ptr<PlatformDecoder> openPlatformDecoder(const AVStream& stream) {
+#if defined(_WIN32)
+    return platformDecoder(stream, true);
+#else
+    static_cast<void>(stream);
+    throw Unavailable{Error::Unavailable, "This platform has no media framework generation"};
+#endif
+}
 // A null device selects the software reference decoder.
-void decoder(Input& input, const AVStream& stream, AVBufferRef* device) {
+void decoder(Input& input, const AVStream& stream, AVBufferRef* device,
+             const Generation generation = Generation::Software) {
+    if (generation == Generation::Platform) {
+        input.platform = openPlatformDecoder(stream);
+        return;
+    }
     requireDecoder(*stream.codecpar);
     // Software AV1 is dav1d (preferred by FFmpeg's registry); hardware AV1 uses FFmpeg's native
     // AV1 decoder, which decodes through a hwaccel only.
@@ -453,9 +473,35 @@ std::vector<std::string> renderNodes() {
         result.push_back(std::move(node.second));
     return result;
 }
+// Forgets the decoder's state after a seek.
+void flushDecoder(Input& input) {
+    if (input.platform)
+        input.platform->flush();
+    else
+        avcodec_flush_buffers(input.codec);
+}
 // Receive before sending; drain delayed frames at EOF. A packet is never dropped on EAGAIN.
 bool next(Input& input, unsigned stream, bool& eof) {
     while (true) {
+        if (input.platform) {
+            const auto step = input.platform->receive(*input.frame);
+            if (step == PlatformDecoder::Step::Frame)
+                return true;
+            if (step == PlatformDecoder::Step::End)
+                return false;
+            require(!eof, "Decode failed");
+            int read = 0;
+            do {
+                av_packet_unref(input.packet);
+                read = av_read_frame(input.format, input.packet);
+            } while (read >= 0 && input.packet->stream_index != static_cast<int>(stream));
+            if (read == AVERROR_EOF)
+                eof = true;
+            else
+                require(read >= 0, "Invalid media packet");
+            input.platform->send(eof ? nullptr : input.packet);
+            continue;
+        }
         const int received = avcodec_receive_frame(input.codec, input.frame);
         if (received == 0) {
             require((input.frame->flags & AV_FRAME_FLAG_CORRUPT) == 0, "Corrupt decoded frame");
@@ -808,7 +854,8 @@ std::int64_t seekTimestamp(const VideoCursor& cursor, const std::int64_t target)
     return dts == AV_NOPTS_VALUE ? pts : std::min(pts, dts);
 }
 FrameProduct video(Input& input, const CallRequest& request, AVBufferRef* device,
-                   VideoCursor* retained = nullptr) {
+                   VideoCursor* retained = nullptr,
+                   const Generation generation = Generation::Software) {
     const auto& stream = *input.format->streams[request.stream];
     require(stream.codecpar->codec_type == AVMEDIA_TYPE_VIDEO, "Requested stream is not video");
     extent(stream.codecpar->width, stream.codecpar->height);
@@ -840,7 +887,7 @@ FrameProduct video(Input& input, const CallRequest& request, AVBufferRef* device
                         av_seek_frame(input.format, static_cast<int>(request.stream),
                                       std::min(start, first->timestamp), AVSEEK_FLAG_BACKWARD) >= 0,
                     "Cannot seek video", Error::Unavailable);
-            avcodec_flush_buffers(input.codec);
+            flushDecoder(input);
             cursor.eof = false;
         }
         int read = 0;
@@ -874,7 +921,7 @@ FrameProduct video(Input& input, const CallRequest& request, AVBufferRef* device
         cursor.indexed = true;
     };
     if (!cursor.indexed) {
-        decoder(input, stream, device);
+        decoder(input, stream, device, generation);
         if (admitProvisional(*input.format->streams[request.stream], rate, cursor))
             cursor.indexed = true;
         else
@@ -925,7 +972,7 @@ FrameProduct video(Input& input, const CallRequest& request, AVBufferRef* device
             require(av_seek_frame(input.format, static_cast<int>(request.stream), timestamp,
                                   AVSEEK_FLAG_BACKWARD) >= 0,
                     "Cannot seek video", Error::Unavailable);
-            avcodec_flush_buffers(input.codec);
+            flushDecoder(input);
             cursor.eof = false;
             seeked = true;
         };

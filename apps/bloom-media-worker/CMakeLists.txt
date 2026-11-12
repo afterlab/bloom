@@ -95,6 +95,25 @@ if(bloom_ffmpeg_worker)
     target_link_libraries(bloom_media_ffmpeg_worker_provider PRIVATE bloom_media_provider bloom_platform_process
                           bloom_media_ffmpeg_reopen_compare
                           FFmpeg::avformat FFmpeg::avcodec FFmpeg::avfilter FFmpeg::swscale FFmpeg::swresample)
+    if(WIN32)
+        # The worker's Media Foundation generation (ADR 0035; issue #370), first in the Windows
+        # provider chain: libavformat reads and writes the container as it does for the software
+        # generation, and the system's transforms code H.264 and HEVC pictures
+        # (platform_codec.hpp). It is the same worker started with --media-foundation.
+        add_library(bloom_media_mediafoundation_worker_provider STATIC mediafoundation_codec.cpp)
+        target_link_libraries(bloom_media_mediafoundation_worker_provider
+                              PRIVATE bloom_media_provider FFmpeg::avformat FFmpeg::avcodec
+                                      FFmpeg::avutil mfplat mfuuid mf strmiids d3d11 dxguid ole32 oleaut32)
+        bloom_enable_warnings(bloom_media_mediafoundation_worker_provider)
+        target_link_libraries(bloom_media_ffmpeg_worker_provider
+                              PRIVATE bloom_media_mediafoundation_worker_provider)
+        target_sources(bloom_media_provider
+                       PRIVATE "${PROJECT_SOURCE_DIR}/src/media/provider/mediafoundation_manifest.cpp")
+        target_compile_definitions(bloom_media_provider PRIVATE
+            BLOOM_MEDIAFOUNDATION_BUILD_ID="media-foundation-v1:${bloom_media_build_digest}"
+            BLOOM_MEDIAFOUNDATION_FIXTURE_ID="${bloom_ffmpeg_fixture_digest}"
+            BLOOM_MEDIAFOUNDATION_ENCODE_FIXTURE_ID="${bloom_ffmpeg_encode_fixture_digest}")
+    endif()
     bloom_enable_warnings(bloom_media_ffmpeg_worker_provider)
     add_executable(bloom-media-worker main.cpp)
     target_link_libraries(bloom-media-worker PRIVATE bloom_media_provider bloom_media_ffmpeg_worker_provider
@@ -274,6 +293,10 @@ if(BLOOM_MEDIA_FIXTURE_TESTS)
     target_link_libraries(bloom_media_ffmpeg_fixture_worker_provider PRIVATE bloom_media_provider bloom_platform_process
                           bloom_media_ffmpeg_reopen_compare
                           FFmpeg::avformat FFmpeg::avcodec FFmpeg::avfilter FFmpeg::swscale FFmpeg::swresample)
+    if(WIN32)
+        target_link_libraries(bloom_media_ffmpeg_fixture_worker_provider
+                              PRIVATE bloom_media_mediafoundation_worker_provider)
+    endif()
     bloom_enable_warnings(bloom_media_ffmpeg_fixture_worker_provider)
     add_executable(bloom_media_generate_fixtures tests/generate_fixtures.cpp)
     target_include_directories(bloom_media_generate_fixtures PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -346,6 +369,9 @@ if(BLOOM_MEDIA_FIXTURE_TESTS)
     target_include_directories(bloom_media_ffmpeg_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     target_link_libraries(bloom_media_ffmpeg_test PRIVATE bloom_media_worker_host)
     target_compile_definitions(bloom_media_ffmpeg_test PRIVATE BLOOM_FFMPEG_WORKER="$<TARGET_FILE:bloom-media-worker>")
+    # Apple-written AAC references (tests/data/provenance.md).
+    target_compile_definitions(bloom_media_ffmpeg_test PRIVATE
+        BLOOM_MEDIA_CODEC_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
     bloom_enable_warnings(bloom_media_ffmpeg_test)
     add_dependencies(bloom_media_ffmpeg_test bloom-media-worker bloom_media_generate_fixtures)
     include(BloomTesting)
@@ -366,6 +392,8 @@ if(BLOOM_MEDIA_FIXTURE_TESTS)
                     "-framework VideoToolbox" "-framework CoreFoundation" "-framework Foundation")
         set_target_properties(bloom_media_videotoolbox_parity_test PROPERTIES
                               BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}/lib")
+        target_compile_definitions(bloom_media_videotoolbox_parity_test PRIVATE
+            BLOOM_MEDIA_CODEC_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
         bloom_enable_warnings(bloom_media_videotoolbox_parity_test)
         target_compile_options(bloom_media_videotoolbox_parity_test
                                PRIVATE -Wno-deprecated-declarations -Wno-old-style-cast)
@@ -375,6 +403,26 @@ if(BLOOM_MEDIA_FIXTURE_TESTS)
                                "${CMAKE_CURRENT_BINARY_DIR}/parity-scratch"
                        LABELS unit media TIMEOUT 180)
         set_tests_properties(bloom.media.videotoolbox-parity PROPERTIES FIXTURES_REQUIRED media3)
+    endif()
+    if(WIN32)
+        # The worker's Media Foundation generation against its software generation on the same
+        # files, in one process (#370). Windows only: Media Foundation is a Windows framework; the
+        # macOS counterpart is bloom.media.videotoolbox-parity, and Linux has no platform media
+        # framework generation.
+        add_executable(bloom_media_mediafoundation_parity_test
+                       tests/mediafoundation_parity_tests.cpp)
+        target_include_directories(bloom_media_mediafoundation_parity_test
+                                   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+        target_link_libraries(bloom_media_mediafoundation_parity_test
+                              PRIVATE bloom_media_provider bloom_media_ffmpeg_worker_provider)
+        bloom_enable_warnings(bloom_media_mediafoundation_parity_test)
+        bloom_add_test(NAME bloom.media.mediafoundation-parity
+                       COMMAND bloom_media_mediafoundation_parity_test
+                               "${CMAKE_CURRENT_BINARY_DIR}/fixtures"
+                               "${CMAKE_CURRENT_BINARY_DIR}/encode-fixtures"
+                       LABELS unit media TIMEOUT 300)
+        set_tests_properties(bloom.media.mediafoundation-parity PROPERTIES
+                             FIXTURES_REQUIRED "media3;media-encode")
     endif()
     bloom_add_test(NAME bloom.media.ffmpeg COMMAND bloom_media_ffmpeg_test
                    "${CMAKE_CURRENT_BINARY_DIR}/fixtures" LABELS unit media security TIMEOUT 120)

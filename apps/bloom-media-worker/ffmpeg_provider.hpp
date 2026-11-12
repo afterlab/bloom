@@ -1,14 +1,22 @@
 #pragma once
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/provider/protocol.hpp>
+#include <cstdint>
 #include <memory>
 namespace bloom::media::ffmpeg {
 // Worker-local decoder for one immutable inherited source generation. The host bounds its
 // lifetime, request count and cancellation with ProcessSupervisor.
+// The worker's generations. Software is FFmpeg's own decoders and the bundled encoders. Platform
+// keeps FFmpeg's demuxer, muxer and frame handling and codes H.264 and HEVC pictures with the
+// operating system's media framework (platform_codec.hpp): Media Foundation on Windows, and not
+// available elsewhere.
+enum class Generation : std::uint8_t { Software, Platform };
 class DecodeSession final {
   public:
-    explicit DecodeSession(bool hardware = false, provider::HardwareDecodeDevice device =
-                                                      provider::HardwareDecodeDevice::Vaapi);
+    explicit DecodeSession(
+        bool hardware = false,
+        provider::HardwareDecodeDevice device = provider::HardwareDecodeDevice::Vaapi,
+        Generation generation = Generation::Software);
     ~DecodeSession();
     [[nodiscard]] provider::Payload call(const provider::CallRequest& request);
     // Called after a reply is written, before the next request is read. When software video
@@ -25,7 +33,8 @@ class Encoder final {
     // `stagedOutput` >= 0: the inherited staged artifact descriptor the first encode session
     // writes into (ADR 0033 section 16).
     // `nvenc`: the NVIDIA NVENC generation (h264_nvenc, hevc_nvenc); `hardware`: VA-API.
-    explicit Encoder(bool hardware = false, int stagedOutput = -1, bool nvenc = false);
+    explicit Encoder(bool hardware = false, int stagedOutput = -1, bool nvenc = false,
+                     Generation generation = Generation::Software);
     ~Encoder();
     [[nodiscard]] provider::Payload call(provider::MessageKind, const provider::Payload&);
 
@@ -35,8 +44,12 @@ class Encoder final {
     bool hardware_ = false;
     bool nvenc_ = false;
     int stagedOutput_ = -1;
+    Generation generation_ = Generation::Software;
 };
-[[nodiscard]] provider::Payload call(const provider::CallRequest& request, bool hardware = false);
+[[nodiscard]] provider::Payload call(const provider::CallRequest& request, bool hardware = false,
+                                     Generation generation = Generation::Software);
+// The handshake a worker of `generation` answers with.
+[[nodiscard]] provider::Handshake generationHandshake(Generation generation);
 [[nodiscard]] bool hardwareEncodeAvailable();
 // `--probe-vaapi`: prints "bloom-vaapi-probe-v2", then one line per VA-API render node:
 // "<render node> <h264> <hevc> <hevc-main10>" (1 when the encode entry point opens at that depth),
