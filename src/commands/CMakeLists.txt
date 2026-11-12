@@ -39,6 +39,7 @@ target_sources(
         path_glow_presets.cpp
         path_outline_stroke.cpp
         node_operation_eligibility.cpp
+        node_unused_operations.cpp
         node_layout_operations.cpp
         render_footprint.cpp
         result.cpp
@@ -74,6 +75,7 @@ target_sources(
             include/bloom/commands/node_link_insertion.hpp
             include/bloom/commands/node_layout_arrange.hpp
             include/bloom/commands/node_layout_placement.hpp
+            include/bloom/commands/node_unused_operations.hpp
             include/bloom/commands/parameter_reset_operations.hpp
             include/bloom/commands/project_item_operations.hpp
             include/bloom/commands/video_source_operations.hpp

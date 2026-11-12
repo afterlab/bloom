@@ -67,6 +67,12 @@ bloom_enable_warnings(bloom_commands_node_eligibility_test)
 bloom_add_test(NAME bloom.commands.node-eligibility COMMAND bloom_commands_node_eligibility_test
                LABELS commands unit)
 
+add_executable(bloom_commands_node_unused_test node_unused_tests.cpp)
+target_link_libraries(bloom_commands_node_unused_test PRIVATE bloom_commands)
+bloom_enable_warnings(bloom_commands_node_unused_test)
+bloom_add_test(NAME bloom.commands.node-unused COMMAND bloom_commands_node_unused_test
+               LABELS commands unit)
+
 add_executable(bloom_commands_render_footprint_test render_footprint_tests.cpp)
 target_link_libraries(bloom_commands_render_footprint_test PRIVATE bloom_commands)
 bloom_enable_warnings(bloom_commands_render_footprint_test)
