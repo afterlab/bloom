@@ -435,7 +435,8 @@ void testLooseWithLut(const std::filesystem::path& root) {
     expect(resolveOcioConfig(location, *first).outcome() ==
                OcioBuiltInRegistryOutcome::MissingResource,
            "lut config: a file above the root is not a resource");
-    write(folder / "config.ocio", lutConfig((root / "outside.spi1d").string()));
+    // generic_string: forward slashes, so a Windows drive path is not read as YAML escapes.
+    write(folder / "config.ocio", lutConfig((root / "outside.spi1d").generic_string()));
     expect(resolveOcioConfig(location, *first).outcome() ==
                OcioBuiltInRegistryOutcome::MissingResource,
            "lut config: an absolute path is not a resource");
@@ -443,8 +444,10 @@ void testLooseWithLut(const std::filesystem::path& root) {
     std::error_code linked;
     std::filesystem::create_symlink(root / "outside.spi1d", folder / "luts" / "grade.spi1d",
                                     linked);
-    expect(!linked && resolveOcioConfig(location, *first).outcome() ==
-                          OcioBuiltInRegistryOutcome::MissingResource,
+    // Windows creates a symbolic link only with the privilege or Developer Mode; without it there
+    // is no link to refuse.
+    expect(linked || resolveOcioConfig(location, *first).outcome() ==
+                         OcioBuiltInRegistryOutcome::MissingResource,
            "lut config: a symbolic link is never followed");
     std::filesystem::remove(folder / "luts" / "grade.spi1d");
     write(folder / "luts" / "grade.spi1d", curve(0.3F));
