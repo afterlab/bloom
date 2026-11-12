@@ -172,7 +172,9 @@ pixel. A surface that knows a truer color than its pixels answers through
 A raised surface also steps up one level on the surface ladder and keeps its hairline. Elevation is
 never the only thing separating a surface from what is behind it. `kit::drawElevationShadow()`
 paints a token's shadow from a cached nine-patch (one blur per token, radius and device pixel
-ratio). A menu casts the Popup shadow into a transparent gutter on its right and bottom edges, so
+ratio). The blur is read as a CSS box-shadow blur: a gaussian whose standard deviation is half the
+blur, so the soft edge reaches the full blur beyond the surface; the last few percent of its tail are
+faded out so the shadow ends in full transparency at the gutter's edge (#706). A menu casts the Popup shadow into a transparent gutter on its right and bottom edges, so
 its top-left corner still opens exactly at its anchor; a `KPopupWindow` casts it into a gutter on
 every side. A shadow exists only where the platform guarantees per-pixel transparency (Wayland,
 Windows, macOS; not X11, where a compositing manager is optional): elsewhere a popup or menu has no

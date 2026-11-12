@@ -381,12 +381,19 @@ void fillCheckerCells(QPainter& painter, const QRectF& bounds, const int cellPx,
 namespace {
 
 // A blurred rounded square, alpha only, whose middle row and column are flat: the nine-patch
-// source for drawElevationShadow(). Three box-blur passes approximate a gaussian closely enough
-// for a shadow.
+// source for drawElevationShadow(). The token's blur is a CSS box-shadow blur radius (#706): a
+// gaussian whose standard deviation is half the blur, so the soft edge reaches the full blur
+// beyond the caster, where the gutter ends. The gaussian's last few percent beyond that are
+// faded out linearly, so the shadow ends in full transparency at the gutter's edge instead of
+// in a faint cut.
 QImage renderShadowTile(const int blurPx, const int cornerPx, const QColor& tint, const qreal dpr) {
     const int blur = std::max(1, static_cast<int>(std::lround(blurPx * dpr)));
     const int corner = static_cast<int>(std::lround(cornerPx * dpr));
-    const int core = 2 * corner + 1;
+    // The normalized gaussian, three standard deviations either side.
+    const double sigma = std::max(0.5, static_cast<double>(blur) / 2.0);
+    const int reach = static_cast<int>(std::ceil(3.0 * sigma));
+    // Wide enough that the middle row and column see each edge alone, as a long caster's would.
+    const int core = 2 * (corner + reach) + 1;
     const int side = core + 2 * blur;
     std::vector<float> alpha(static_cast<std::size_t>(side * side), 0.0F);
     {
@@ -405,31 +412,41 @@ QImage renderShadowTile(const int blurPx, const int cornerPx, const QColor& tint
                     static_cast<float>(line[x]) / 255.0F;
         }
     }
-    const int radius = std::max(1, blur / 3);
+    std::vector<float> weights(static_cast<std::size_t>(2 * reach + 1));
+    double total = 0.0;
+    for (int offset = -reach; offset <= reach; ++offset) {
+        const double value = std::exp(-0.5 * (offset * offset) / (sigma * sigma));
+        weights[static_cast<std::size_t>(offset + reach)] = static_cast<float>(value);
+        total += value;
+    }
+    for (auto& weight : weights)
+        weight = static_cast<float>(static_cast<double>(weight) / total);
     std::vector<float> scratch(alpha.size());
-    std::vector<float> prefix(static_cast<std::size_t>(side + 1));
     const auto at = [side](const bool horizontal, const int line, const int index) {
         return static_cast<std::size_t>(horizontal ? line * side + index : index * side + line);
     };
     const auto pass = [&](const bool horizontal) {
         for (int line = 0; line < side; ++line) {
-            prefix[0] = 0.0F;
-            for (int index = 0; index < side; ++index)
-                prefix[static_cast<std::size_t>(index + 1)] =
-                    prefix[static_cast<std::size_t>(index)] + alpha[at(horizontal, line, index)];
             for (int index = 0; index < side; ++index) {
-                const int low = std::max(0, index - radius);
-                const int high = std::min(side, index + radius + 1);
-                scratch[at(horizontal, line, index)] = (prefix[static_cast<std::size_t>(high)] -
-                                                        prefix[static_cast<std::size_t>(low)]) /
-                                                       static_cast<float>(2 * radius + 1);
+                float sum = 0.0F;
+                const int low = std::max(0, index - reach);
+                const int high = std::min(side - 1, index + reach);
+                for (int source = low; source <= high; ++source)
+                    sum += alpha[at(horizontal, line, source)] *
+                           weights[static_cast<std::size_t>(source - index + reach)];
+                scratch[at(horizontal, line, index)] = sum;
             }
         }
         alpha.swap(scratch);
     };
-    for (int iteration = 0; iteration < 3; ++iteration) {
-        pass(true);
-        pass(false);
+    pass(true);
+    pass(false);
+    // What is left of a straight edge's gaussian at the gutter's edge (the middle of the tile's
+    // left column), taken off every pixel so the shadow fades to nothing there.
+    const float floor = alpha[static_cast<std::size_t>((side / 2) * side)];
+    if (floor > 0.0F && floor < 1.0F) {
+        for (auto& value : alpha)
+            value = std::max(0.0F, (value - floor) / (1.0F - floor));
     }
     QImage tile(side, side, QImage::Format_ARGB32_Premultiplied);
     for (int y = 0; y < side; ++y) {

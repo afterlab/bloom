@@ -20,6 +20,7 @@
 #include <QToolTip>
 #include <QWidget>
 
+#include <algorithm>
 #include <iostream>
 #include <set>
 
@@ -114,16 +115,43 @@ int main(int argc, char** argv) {
         if (top->inherits("QTipLabel") && kit::popupTranslucencySupported())
             checkWindowFlags(*top, "a tooltip");
 
-    // The review capture: the popup over a light plate and over a dark one.
+    // The review capture: the popup over a light plate and over a dark one, then its bottom-right
+    // corner over the light plate four times enlarged (pixel for pixel), where the blur is easy to
+    // see at a glance.
     if (!shot.isNull()) {
-        QImage sheet(shot.width() * 2 + 30, shot.height() + 20, QImage::Format_ARGB32_Premultiplied);
+        constexpr int kZoom = 4;
+        const QRect corner = popup != nullptr
+                                 ? QRect(popup->frameRect().right() - 23,
+                                         popup->frameRect().bottom() - 23, 24, 24)
+                                       .united(QRect(shot.width() - 1, shot.height() - 1, 1, 1))
+                                 : QRect();
+        QImage cornerShot(corner.size(), QImage::Format_ARGB32_Premultiplied);
+        cornerShot.fill(QColor(236, 236, 236));
+        {
+            QPainter cornerPainter(&cornerShot);
+            cornerPainter.drawImage(QPoint(0, 0), shot, corner);
+        }
+        const QImage enlarged = cornerShot.scaled(corner.size() * kZoom, Qt::IgnoreAspectRatio,
+                                                  Qt::FastTransformation);
+        const int plates = shot.width() * 2 + 30;
+        QImage sheet(plates + enlarged.width() + 20,
+                     std::max(shot.height(), enlarged.height()) + 20,
+                     QImage::Format_ARGB32_Premultiplied);
         sheet.fill(Qt::transparent);
         QPainter painter(&sheet);
         painter.fillRect(QRect(0, 0, shot.width() + 15, sheet.height()), QColor(236, 236, 236));
         painter.fillRect(QRect(shot.width() + 15, 0, shot.width() + 15, sheet.height()), QColor(46, 46, 52));
+        painter.fillRect(QRect(plates, 0, enlarged.width() + 20, sheet.height()), QColor(236, 236, 236));
         painter.drawImage(QPoint(8, 10), shot);
         painter.drawImage(QPoint(shot.width() + 23, 10), shot);
+        painter.drawImage(QPoint(plates + 10, 10), enlarged);
         painter.end();
+        if (popup != nullptr) {
+            std::cout << "shadow alpha below the frame:";
+            for (const int value : alphaProfile(shot, popup->frameRect(), true))
+                std::cout << ' ' << value;
+            std::cout << '\n';
+        }
         QString path = argc > 1 ? QString::fromLocal8Bit(argv[1])
                                 : qEnvironmentVariable("BLOOM_POPUP_SHADOW_PNG");
         if (path.isEmpty())

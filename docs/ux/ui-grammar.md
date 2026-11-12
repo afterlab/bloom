@@ -37,7 +37,9 @@ interaction and popup. Menus are created only through `kit::makeMenu`. A popup i
 no surface positions, shadows or dismisses a popup of its own. A popup, a menu and a tool tip are
 frameless windows that opt out of the operating system's own drop shadow, so the kit's one
 elevation shadow is the only one and no hairline or fringe shows around it (#706); the
-`bloom.ui.popup-shadow` test writes a capture per platform.
+`bloom.ui.popup-shadow` test checks the shadow fades through several levels to full transparency
+and writes a capture per platform (a dropdown over a light and a dark plate, and its corner
+enlarged).
 Dialogs are `KDialog` and its forms: `kit::confirm`, `kit::inform`, `kit::promptText`,
 `kit::promptRange`, `kit::chooseFile` and the `KTaskDialog` progress-then-summary modal (see
 "Dialogs" below). The toolbar under the menu bar is the `ContextBar`; the one active tool
