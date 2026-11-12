@@ -2,6 +2,7 @@
 #include <array>
 #include <bloom/media/provider/protocol.hpp>
 #include <chrono>
+#include <cstddef>
 #include <iostream>
 #if defined(__linux__) || defined(__APPLE__)
 #include <cerrno>
@@ -14,9 +15,34 @@
 #include <windows.h>
 #endif
 namespace bloom::media::worker {
-// Bytes already in std::cin's buffer are invisible to the descriptor poll below, so a request the
+#if defined(__linux__) || defined(__APPLE__)
+// The worker's input is read from the descriptor itself, exactly as many bytes as the message
+// has, into the message's own storage. std::cin is not used for it: a standard library may read
+// a synchronized std::cin one character at a time through the C stream, taking its lock for
+// each (libc++ does), and a frame is tens of megabytes (issue #672). Nothing is buffered here,
+// so the descriptor poll below sees every byte that has not been read.
+inline bool bufferedInput() { return false; }
+inline bool readInput(std::byte* data, std::size_t size) {
+    while (size != 0) {
+        const auto count = ::read(STDIN_FILENO, data, size);
+        if (count < 0 && errno == EINTR)
+            continue;
+        if (count <= 0)
+            return false;
+        data += count;
+        size -= static_cast<std::size_t>(count);
+    }
+    return true;
+}
+#else
+// Bytes already in std::cin's buffer are invisible to the pipe check below, so a request the
 // previous read pulled in ahead of its own message is never waited for.
 inline bool bufferedInput() { return std::cin.rdbuf()->in_avail() > 0; }
+inline bool readInput(std::byte* data, std::size_t size) {
+    return static_cast<bool>(
+        std::cin.read(reinterpret_cast<char*>(data), static_cast<std::streamsize>(size)));
+}
+#endif
 inline provider::Result<provider::Message>
 read(std::chrono::milliseconds idleTimeout = std::chrono::milliseconds{0}) {
 #if defined(__linux__) || defined(__APPLE__)
@@ -58,15 +84,14 @@ read(std::chrono::milliseconds idleTimeout = std::chrono::milliseconds{0}) {
     (void)idleTimeout;
 #endif
     std::array<std::byte, 4> prefix{};
-    if (!std::cin.read(reinterpret_cast<char*>(prefix.data()), 4))
+    if (!readInput(prefix.data(), prefix.size()))
         return provider::Unavailable{provider::Error::Truncated, "Worker input closed"};
     const auto length = provider::messageLength(prefix);
     if (const auto* e = std::get_if<provider::Unavailable>(&length))
         return *e;
     provider::Bytes bytes(prefix.begin(), prefix.end());
     bytes.resize(4U + std::get<std::uint32_t>(length));
-    if (!std::cin.read(reinterpret_cast<char*>(bytes.data() + 4),
-                       static_cast<std::streamsize>(bytes.size() - 4)))
+    if (!readInput(bytes.data() + 4, bytes.size() - 4))
         return provider::Unavailable{provider::Error::Truncated, "Worker input truncated"};
     return provider::decodeMessage(bytes);
 }

@@ -1493,7 +1493,11 @@ qualification expectations; a worker cannot promote its own authority. A rejecte
 advances protocol state. Transport 0 copies length-prefixed planes over pipes; transport 1
 reserves shared-memory slabs and cannot be selected for execution in this version. A retained Linux
 decoder's frame arena is a host-granted capability under transport 0, not transport 1: messages
-still cross the pipe, and only those frames' plane bytes cross the arena.
+still cross the pipe, and only those frames' plane bytes cross the arena. On Linux and macOS the
+worker reads each message from the pipe's descriptor, exactly its length, into the message's own
+storage (`worker_io.hpp`); it does not read through `std::cin`, which the macOS standard library
+serves one locked character at a time and which made every frame sent to a macOS worker cost
+millions of single-byte reads (#672).
 
 `MediaWorkerPool` submits only `BlockingIo` tasks with indeterminate activity, cancellation,
 diagnostics and bounded process-slot admission. The scheduler bounds queued requests; terminal
