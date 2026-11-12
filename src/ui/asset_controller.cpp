@@ -1084,10 +1084,14 @@ void AssetController::startSvgPlacement(std::string label, std::vector<document:
         emit diagnostic(tr("Another import is still running; add these when it finishes"));
         return;
     }
-    // One question for the whole batch: the remembered answer, or the chooser.
-    chooseSvgImportMode(svgAssets.size(), [this, label = std::move(label), svgAssets = std::move(svgAssets),
-                                           build = std::move(build), committed = std::move(committed)](
-                                              const std::optional<commands::SvgImportMode> mode) mutable {
+    // One question for the whole batch: the remembered answer, or the chooser. The count is read
+    // before the list moves into the callback: the order of the two arguments is the compiler's.
+    const auto svgAssetCount = svgAssets.size();
+    chooseSvgImportMode(svgAssetCount, [this, label = std::move(label),
+                                        svgAssets = std::move(svgAssets), build = std::move(build),
+                                        committed = std::move(committed)](
+                                           const std::optional<commands::SvgImportMode>
+                                               mode) mutable {
         if (!mode)
             return;
         if (busy_ || !host_.canSave()) {
