@@ -1122,8 +1122,18 @@ swap and steady low stalls are normal while memory is plentiful). Eviction is de
 user purge is the only full clear and also trims the heap (`requestHostTrim`). The ledger counts
 the reusable bytes each application released; the monitor then calls `releaseFreedHostMemory()` (glibc `malloc_trim`), and
 `configureHostMemoryReturn()` fixes glibc's mmap threshold at 1 MiB when sampling starts, so freed
-pixel buffers are unmapped rather than left resident in heap arenas. macOS and Windows allocators
-already return large blocks on free.
+pixel buffers are unmapped rather than left resident in heap arenas. The Windows allocator returns
+large blocks on free. The macOS allocator does not: it keeps freed large blocks charged to the
+process, up to about a gigabyte of them, and its pressure relief does not release them. So on
+macOS every block of 1 MiB or more is mapped from the system and unmapped when freed: the pixel
+buffers that ask for a host block themselves (`core::allocateHostBlock`), and, through the core
+library's replacement of `operator new` and `operator delete`
+(`src/core/host_block_operator_new.cpp`), every other large block C++ code in the process
+allocates, such as the vectors behind evaluated and display images, cached half-float frames,
+decoded planes, audio and readbacks. Memory a C library takes from `malloc` is not covered.
+`bloom.ui.host-memory-return` holds this: a gigabyte each of evaluated float frames, composite
+cache frames and decoded video frames, with every page written, is let go, and the process's
+footprint (resident set on Linux) has to come back to within 96 MiB of where it started.
 
 Evict-on-demand: a `GpuProcessingPhasePolicy::reserve` that returns `AwaitingCapacity` on the host
 domain calls its retention reclaimers with the shortfall (need minus free) and records it

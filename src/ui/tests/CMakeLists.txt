@@ -1337,6 +1337,20 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# Issue #673: what a large render leaves in memory, in the types that hold it, goes back to the
+# operating system when it is let go. Two gigabytes at its peak, so it does not share the
+# machine with another memory-heavy test.
+add_executable(bloom_ui_host_memory_return_test host_memory_return_tests.cpp)
+target_link_libraries(bloom_ui_host_memory_return_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_host_memory_return_test)
+bloom_add_test(
+    NAME bloom.ui.host-memory-return
+    COMMAND bloom_ui_host_memory_return_test
+    LABELS ui unit cache
+    TIMEOUT 300
+)
+set_tests_properties(bloom.ui.host-memory-return PROPERTIES RUN_SERIAL TRUE)
+
 # Task CACHE-2: the media disk cache's QSettings surface and status-bar/menu-facing pure logic,
 # independent of a full evaluator or window (see main_window_chrome_tests.cpp and
 # window_status_bar's own coverage there for the widget-level wiring).

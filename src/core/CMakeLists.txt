@@ -19,6 +19,7 @@ target_sources(
         file_uri.cpp
         float_chars.cpp
         host_block.cpp
+        host_block_operator_new.cpp
         safe_parse.cpp
         specified_log2.cpp
         telemetry_counters.cpp

@@ -10,6 +10,12 @@
 // directly and unmapped when freed; smaller blocks, and every block on other platforms, come
 // from operator new.
 //
+// The same holds for a block that never calls these functions: on macOS this library replaces
+// operator new and operator delete, so a block of kMappedHostBlockBytes or more that any C++
+// code in the process allocates (a vector of pixels, a decoded plane, cached samples) is mapped
+// and unmapped the same way (host_block_operator_new.cpp; issue #673). Memory a C library takes from malloc
+// is not covered.
+//
 // The pointer is aligned for any scalar type, as operator new's is. A mapped block arrives
 // zeroed; no caller may rely on that. Which of the two a block is follows from its size alone, so
 // the block carries nothing of its own and is freed with the size it was asked for.
