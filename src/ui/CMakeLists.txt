@@ -566,6 +566,7 @@ target_sources(
         asset_data_thumbnail.hpp
         cryptomatte_controller.cpp
         channel_set_controller.cpp
+        application_identity.cpp
         context_bar.cpp
         context_bar_options.cpp
         context_bar_options.hpp
@@ -835,6 +836,7 @@ target_sources(
             include/bloom/ui/qualified_display_processor_bootstrap.hpp
             include/bloom/ui/task_monitor_model.hpp
             include/bloom/ui/task_ui_bridge.hpp
+            include/bloom/ui/application_identity.hpp
             include/bloom/ui/preview_frame_trace.hpp
             include/bloom/ui/text_box_overlay.hpp
             include/bloom/ui/third_party_license_catalog.hpp

@@ -32,6 +32,7 @@
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/scripting/live_session_host.hpp>
 #include <bloom/ui/acceleration_status.hpp>
+#include <bloom/ui/application_identity.hpp>
 #include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 #include <bloom/ui/asset_controller.hpp>
@@ -107,9 +108,9 @@ int main(int argc, char* argv[]) try {
     QThreadPool::globalInstance()->setStackSize(
         static_cast<uint>(bloom::core::kWorkerThreadStackBytes));
 
-    QCoreApplication::setApplicationName("Bloom");
-    QCoreApplication::setApplicationVersion("0.1.0");
-    QCoreApplication::setOrganizationName("Kinetik");
+    // Bloom's names and settings store; the package check's own when it starts this program
+    // (application_identity.hpp). Before anything reads a setting.
+    static_cast<void>(bloom::ui::installApplicationIdentity());
 
     // The Kinetik visual language is installed once, application-wide, before any widget exists
     // (task U1, issue #117). It replaces MainWindow::applyFoundationTheme(): the palette, the

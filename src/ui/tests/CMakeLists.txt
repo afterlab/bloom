@@ -3013,6 +3013,12 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
 )
 
+# The names and settings store Bloom starts with, and the package check's own profile.
+add_executable(bloom_application_identity_test application_identity_tests.cpp)
+target_link_libraries(bloom_application_identity_test PRIVATE bloom_ui Qt6::Core)
+bloom_enable_warnings(bloom_application_identity_test)
+bloom_add_test(NAME bloom.ui.application-identity COMMAND bloom_application_identity_test LABELS ui unit TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # #489: the font picker and field, and the Qt network transport against a loopback server.
 add_executable(bloom_font_picker_test font_picker_tests.cpp)
 target_include_directories(bloom_font_picker_test PRIVATE ..)
