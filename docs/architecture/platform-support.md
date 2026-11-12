@@ -273,8 +273,9 @@ packaged; a developer build links the host's Qt and Python, which a package cann
   the programs through their own install rules, then Qt, the interpreter and the records
   through the shared scripts in `cmake/package` (`stage_qt.cmake`, `stage_python.cmake`,
   `stage_records.cmake`, and on Linux `stage_linux_runtime.cmake`). The `bloom-package` target
-  installs into the build tree and checks the result; on Linux `bloom-package-archives` then
-  makes the two published files.
+  installs into the build tree and checks the result; `bloom-package-archives` then makes the
+  published files, two on Linux and a zip on Windows. A Windows package also gets the Visual
+  C++ runtime (`stage_msvc_runtime.cmake`).
 - On macOS the build fills `Bloom.app` in the build tree with the same scripts every time it
   builds, so that the bundle can be signed once it is complete; `bloom-deploy-macos` signs and
   checks it.
@@ -378,6 +379,28 @@ The images were entered without a container runtime, so in them the AppImage was
 its own runtime and not mounted; the FUSE mount was exercised on the workstation. The run in
 the images has no display and no GPU. A window on each of those systems' own desktops was not
 part of this.
+
+### Windows Package
+
+The Windows package is a folder, published as `Bloom-<version>-windows-x86_64.zip`
+(`bloom-package-archives`). There is no installer and the programs are not signed. Unpacked
+anywhere, it runs from there: nothing is written outside the folder to make it work, and
+nothing has to be installed first.
+
+The Visual C++ runtime is not part of Windows, so the package carries the redistributable
+libraries of the toolset that built it (`cmake/package/stage_msvc_runtime.cmake`). A Windows
+program looks for a library beside itself first, so they are beside every program: in the
+package folder, with the shader tools and with each media worker. `licenses/msvc-runtime`
+names them, with their checksums and the terms they are redistributed under. The universal C
+runtime is part of Windows 10 and later and is not carried. The check fails when a Visual
+C++ runtime library is loaded from the Windows system directory instead of the package.
+
+The 0.1.0 package was unpacked into a second folder with a space in its name and checked
+there, contents and a run, with only the Windows directories on `PATH` and none of the build
+tools' variables set: every library the packaged `bloom-cli` and the packaged application
+loaded came from the folder or from Windows. That was on the one Windows computer that also
+built it; a computer that never had the build tools was not available, and the load record is
+what stands in for it.
 
 ## Capability Reporting And Graceful Degradation
 

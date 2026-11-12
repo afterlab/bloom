@@ -6,7 +6,8 @@
 # cmake/package, the locked Qt (stage_qt.cmake), the carried interpreter (stage_python.cmake) and
 # the license texts, notices and dependency lock (stage_records.cmake). The scripts are the same
 # for every operating system; where each part goes is cmake/BloomPackageLayout.cmake's. A Linux
-# package also carries a few distribution libraries Qt loads (stage_linux_runtime.cmake).
+# package also carries a few distribution libraries Qt loads (stage_linux_runtime.cmake), a
+# Windows package the Visual C++ runtime beside each program (stage_msvc_runtime.cmake).
 #
 # Only a qualified build with the locked interpreter and the desktop application can be
 # packaged: a developer build links the host's Qt and Python, which a package cannot carry. Such
@@ -14,8 +15,8 @@
 #
 #   bloom-package         installs the package into <build>/package/<name> and checks it
 #                         (cmake/package/check_package.cmake, with a run of the packaged programs)
-#   bloom-package-archives   (Linux) that tree as a tar and as an AppImage
-#                         (cmake/package/make_archives.cmake)
+#   bloom-package-archives   that tree in its published form: on Linux a tar and an AppImage
+#                         (cmake/package/make_archives.cmake), on Windows a zip
 #   bloom.package.check   the same check as a test, with the cases it must reject
 #                         (cmake/package/check_package_test.cmake)
 #
@@ -92,6 +93,30 @@ function(bloom_add_package_rules)
                     -P \"${scripts}/stage_records.cmake\"
                 COMMAND_ERROR_IS_FATAL ANY)
         ")
+        if(BLOOM_PACKAGE_OPERATING_SYSTEM STREQUAL "windows")
+            # The redistributable Visual C++ runtime of this toolset, named by CMake; the
+            # universal C runtime is Windows' own.
+            set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
+            set(CMAKE_INSTALL_UCRT_LIBRARIES FALSE)
+            set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_NO_WARNINGS TRUE)
+            include(InstallRequiredSystemLibraries)
+            if(NOT CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+                message(FATAL_ERROR
+                    "Bloom package: the Visual C++ redistributable libraries were not found; a "
+                    "Windows package cannot be made without them (VCToolsRedistDir).")
+            endif()
+            list(JOIN CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS "|" bloom_package_msvc_runtime)
+            install(CODE "
+                execute_process(
+                    COMMAND \"${CMAKE_COMMAND}\" \"-DROOT=\${bloom_package_root}\"
+                        \"-DRUNTIME=${bloom_package_msvc_runtime}\"
+                        \"-DVERSION=MSVC ${CMAKE_CXX_COMPILER_VERSION}\"
+                        \"-DPYTHON_DIR=${BLOOM_PACKAGE_PYTHON_DIR}\"
+                        \"-DRECORD_DIR=${BLOOM_PACKAGE_RECORD_DIR}\"
+                        -P \"${scripts}/stage_msvc_runtime.cmake\"
+                    COMMAND_ERROR_IS_FATAL ANY)
+            ")
+        endif()
         if(BLOOM_PACKAGE_OPERATING_SYSTEM STREQUAL "linux")
             install(CODE "
                 execute_process(
@@ -121,6 +146,20 @@ function(bloom_add_package_rules)
             COMMENT "Installing ${BLOOM_PACKAGE_NAME} and checking it is self-contained"
             VERBATIM
         )
+        if(BLOOM_PACKAGE_OPERATING_SYSTEM STREQUAL "windows")
+            # The published form: the folder as a zip. No installer.
+            add_custom_target(
+                bloom-package-archives
+                COMMAND ${CMAKE_COMMAND} -E rm -f
+                    "${CMAKE_BINARY_DIR}/package/${BLOOM_PACKAGE_NAME}.zip"
+                COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_BINARY_DIR}/package"
+                    ${CMAKE_COMMAND} -E tar cf "${BLOOM_PACKAGE_NAME}.zip" --format=zip
+                    "${BLOOM_PACKAGE_NAME}"
+                DEPENDS bloom-package
+                COMMENT "Making ${BLOOM_PACKAGE_NAME}.zip"
+                VERBATIM
+            )
+        endif()
         if(BLOOM_PACKAGE_OPERATING_SYSTEM STREQUAL "linux")
             # The two published forms of that tree. Not part of bloom-package's own work, so
             # the check never waits for the compression.
