@@ -114,6 +114,8 @@ int main() {
               "a device reports a measured zero");
         check(classify(Code::AwaitingCapacity, *policy) == OutputAnalysisCapacityRefusalV1::Wait,
               "device memory held by other programs makes AwaitingCapacity a wait");
+        check(classify(Code::BudgetRefused, *policy) == OutputAnalysisCapacityRefusalV1::Wait,
+              "device memory held by other programs makes BudgetRefused a wait");
     }
     {
         // #709: a query the driver did not answer is no sample, never zero capacity.
@@ -137,6 +139,8 @@ int main() {
               "a device reports all of its memory free");
         check(classify(Code::AwaitingCapacity, *policy) == OutputAnalysisCapacityRefusalV1::NeverFits,
               "an idle device and an empty root report NeverFits");
+        check(classify(Code::BudgetRefused, *policy) == OutputAnalysisCapacityRefusalV1::NeverFits,
+              "an idle device and an empty root report a refused budget as NeverFits");
     }
     {
         // Device room that grows while a frame waits restarts the stall clock.

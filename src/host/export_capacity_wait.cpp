@@ -52,6 +52,26 @@ bool processingCapacityHeldElsewhereV1(const runtime::GpuProcessingPhasePolicy* 
            (ownPhases == 0 && (held.totalHostClaimBytes > 0 || held.totalDeviceClaimBytes > 0));
 }
 
+namespace {
+// #709: the device's room can come back by itself when the device reported but has no usable
+// sample (the query failed; never read as zero room), or when its measured room is below the
+// device ceiling, which means other programs hold that memory now. Neither is proof that a frame
+// cannot fit; admission already treats such memory as returnable (#539).
+bool deviceRoomMayReturnV1(const runtime::GpuProcessingPhasePolicy* policy) noexcept {
+    if (policy == nullptr)
+        return false;
+    const auto snapshot = policy->snapshot();
+    const auto& reservations = snapshot.reservations;
+    const bool deviceUnmeasured =
+        snapshot.deviceReports != 0 &&
+        (!reservations.deviceReady || !reservations.deviceCapacityBytes);
+    const bool deviceHeldOutside =
+        reservations.deviceCapacityBytes && reservations.deviceCeilingBytes &&
+        *reservations.deviceCapacityBytes < *reservations.deviceCeilingBytes;
+    return deviceUnmeasured || deviceHeldOutside;
+}
+} // namespace
+
 OutputAnalysisCapacityRefusalV1
 outputAnalysisCapacityRefusalV1(const OutputAnalysisAttemptOutcomeV1& outcome,
                                 const runtime::GpuProcessingPhasePolicy* policy,
@@ -68,23 +88,19 @@ outputAnalysisCapacityRefusalV1(const OutputAnalysisAttemptOutcomeV1& outcome,
             // no usable sample (the query failed; never read as zero room), and device memory
             // that other programs hold now (the measured room is below the device ceiling): their
             // memory can come back, as admission already assumes (#539).
-            if (policy != nullptr && !processingCapacityHeldElsewhereV1(policy, ownPhases)) {
-                const auto snapshot = policy->snapshot();
-                const auto& reservations = snapshot.reservations;
-                const bool deviceMeasured =
-                    snapshot.deviceReports == 0 ||
-                    (reservations.deviceReady && reservations.deviceCapacityBytes);
-                const bool deviceHeldOutside =
-                    reservations.deviceCapacityBytes && reservations.deviceCeilingBytes &&
-                    *reservations.deviceCapacityBytes < *reservations.deviceCeilingBytes;
-                if (reservations.hostReady && reservations.hostCapacityBytes && deviceMeasured &&
-                    !deviceHeldOutside)
+            if (policy != nullptr && !processingCapacityHeldElsewhereV1(policy, ownPhases) &&
+                !deviceRoomMayReturnV1(policy)) {
+                const auto reservations = policy->snapshot().reservations;
+                if (reservations.hostReady && reservations.hostCapacityBytes)
                     return OutputAnalysisCapacityRefusalV1::NeverFits;
             }
             return OutputAnalysisCapacityRefusalV1::Wait;
         }
+        // A refused budget is a wait by the same rule (#709): the device room it was refused
+        // against may be memory other programs hold now, as under a parallel test run.
         if (*code == runtime::GpuProcessFrameDiagnosticCode::BudgetRefused)
-            return processingCapacityHeldElsewhereV1(policy, ownPhases)
+            return processingCapacityHeldElsewhereV1(policy, ownPhases) ||
+                           deviceRoomMayReturnV1(policy)
                        ? OutputAnalysisCapacityRefusalV1::Wait
                        : OutputAnalysisCapacityRefusalV1::NeverFits;
     }
