@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+"""Makes Bloom's application icon files for the three platforms from one source image.
+
+    python3 tools/quality/generate_app_icons            writes the files
+    python3 tools/quality/generate_app_icons --check    fails when a file is not what the source gives
+
+Source: apps/bloom/icon/bloom-1024.png, a 1024 x 1024 8-bit RGBA PNG. Replacing that one file
+and running this script is all a new icon needs.
+
+    apps/bloom/macos/Bloom.icns                                    16 to 1024 pixels
+    apps/bloom/windows/Bloom.ico                                   16 to 256 pixels
+    apps/bloom/linux/icons/<size>x<size>/org.kinetik.bloom.png     16 to 512 pixels
+
+Only the Python standard library is used, so the result is the same bytes on every machine:
+the PNG reader and writer, the scaling (an area average of premultiplied color) and the three
+containers are in this file.
+"""
+
+from __future__ import annotations
+
+import struct
+import sys
+import zlib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+SOURCE = ROOT / "apps/bloom/icon/bloom-1024.png"
+ICNS = ROOT / "apps/bloom/macos/Bloom.icns"
+ICO = ROOT / "apps/bloom/windows/Bloom.ico"
+LINUX = ROOT / "apps/bloom/linux/icons"
+LINUX_SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
+ICO_SIZES = (16, 24, 32, 48, 64, 128, 256)
+# The type of each image in an icns file: 16 and 32 points, then the larger ones, with the
+# double-density variants (a 32-pixel image is also 16 points at double density, and so on).
+ICNS_TYPES = (
+    (b"icp4", 16), (b"icp5", 32), (b"icp6", 64), (b"ic07", 128), (b"ic08", 256),
+    (b"ic09", 512), (b"ic10", 1024), (b"ic11", 32), (b"ic12", 64), (b"ic13", 256),
+    (b"ic14", 512),
+)
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def read_png(path: Path) -> tuple[int, list[bytearray]]:
+    """Returns the side and the rows (RGBA bytes) of a square 8-bit RGBA PNG file."""
+    return decode_png(path.read_bytes(), str(path))
+
+
+def decode_png(data: bytes, path: str) -> tuple[int, list[bytearray]]:
+    if data[:8] != PNG_SIGNATURE:
+        raise ValueError(f"{path} is not a PNG image")
+    offset, compressed, header = 8, bytearray(), None
+    while offset < len(data):
+        length, kind = struct.unpack(">I4s", data[offset:offset + 8])
+        body = data[offset + 8:offset + 8 + length]
+        offset += 12 + length
+        if kind == b"IHDR":
+            header = struct.unpack(">IIBBBBB", body)
+        elif kind == b"IDAT":
+            compressed += body
+    if header is None:
+        raise ValueError(f"{path} has no header")
+    width, height, depth, color, _, _, interlace = header
+    if width != height or depth != 8 or color != 6 or interlace != 0:
+        raise ValueError(f"{path} must be square, 8-bit RGBA and not interlaced")
+    raw = zlib.decompress(bytes(compressed))
+    stride = width * 4
+    rows: list[bytearray] = []
+    previous = bytearray(stride)
+    position = 0
+    for _ in range(height):
+        kind = raw[position]
+        line = bytearray(raw[position + 1:position + 1 + stride])
+        position += 1 + stride
+        if kind == 1:
+            for i in range(4, stride):
+                line[i] = (line[i] + line[i - 4]) & 255
+        elif kind == 2:
+            for i in range(stride):
+                line[i] = (line[i] + previous[i]) & 255
+        elif kind == 3:
+            for i in range(stride):
+                left = line[i - 4] if i >= 4 else 0
+                line[i] = (line[i] + ((left + previous[i]) >> 1)) & 255
+        elif kind == 4:
+            for i in range(stride):
+                a = line[i - 4] if i >= 4 else 0
+                b = previous[i]
+                c = previous[i - 4] if i >= 4 else 0
+                estimate = a + b - c
+                pa, pb, pc = abs(estimate - a), abs(estimate - b), abs(estimate - c)
+                predictor = a if pa <= pb and pa <= pc else (b if pb <= pc else c)
+                line[i] = (line[i] + predictor) & 255
+        elif kind != 0:
+            raise ValueError(f"{path} uses an unknown row filter")
+        rows.append(line)
+        previous = line
+    return width, rows
+
+
+def write_png(side: int, rows: list[bytearray]) -> bytes:
+    def chunk(kind: bytes, body: bytes) -> bytes:
+        return (struct.pack(">I", len(body)) + kind + body
+                + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF))
+
+    raw = b"".join(b"\x00" + bytes(row) for row in rows)
+    return (PNG_SIGNATURE + chunk(b"IHDR", struct.pack(">IIBBBBB", side, side, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+
+
+def scale(side: int, rows: list[bytearray], target: int) -> list[bytearray]:
+    """Area average, in premultiplied color, exact in integers."""
+    if target == side:
+        return rows
+    # Each source pixel is `target` units wide on a grid where a target pixel is `side` units.
+    spans = []
+    for index in range(target):
+        start, end = index * side, (index + 1) * side
+        first, last = start // target, (end - 1) // target
+        weights = []
+        for source in range(first, last + 1):
+            covered = min(end, (source + 1) * target) - max(start, source * target)
+            weights.append((source, covered))
+        spans.append(weights)
+    # Columns first, premultiplying as it goes.
+    narrowed = []
+    for row in rows:
+        line = []
+        for weights in spans:
+            r = g = b = a = 0
+            for source, weight in weights:
+                base = source * 4
+                alpha = row[base + 3] * weight
+                r += row[base] * alpha
+                g += row[base + 1] * alpha
+                b += row[base + 2] * alpha
+                a += alpha
+            line.append((r, g, b, a))
+        narrowed.append(line)
+    result = []
+    area = side * side
+    for weights in spans:
+        out = bytearray(target * 4)
+        for x in range(target):
+            r = g = b = a = 0
+            for source, weight in weights:
+                pr, pg, pb, pa = narrowed[source][x]
+                r += pr * weight
+                g += pg * weight
+                b += pb * weight
+                a += pa * weight
+            if a:
+                out[x * 4] = (r + a // 2) // a
+                out[x * 4 + 1] = (g + a // 2) // a
+                out[x * 4 + 2] = (b + a // 2) // a
+                out[x * 4 + 3] = (a + area // 2) // area
+        result.append(out)
+    return result
+
+
+def icns(images: dict[int, bytes]) -> bytes:
+    body = b"".join(kind + struct.pack(">I", len(images[size]) + 8) + images[size]
+                    for kind, size in ICNS_TYPES)
+    return b"icns" + struct.pack(">I", len(body) + 8) + body
+
+
+def ico(pixels: dict[int, list[bytearray]], images: dict[int, bytes]) -> bytes:
+    """256 pixels as PNG; the smaller sizes as 32-bit bitmaps, which every tool reads."""
+    entries = []
+    for size in ICO_SIZES:
+        if size == 256:
+            entries.append((size, images[size]))
+            continue
+        rows = pixels[size]
+        color = bytearray()
+        for row in reversed(rows):
+            for x in range(size):
+                r, g, b, a = row[x * 4:x * 4 + 4]
+                color += bytes((b, g, r, a))
+        mask_stride = ((size + 31) // 32) * 4
+        mask = bytes(mask_stride * size)
+        header = struct.pack("<IiiHHIIiiII", 40, size, size * 2, 1, 32, 0,
+                             len(color) + len(mask), 0, 0, 0, 0)
+        entries.append((size, header + bytes(color) + mask))
+    directory = struct.pack("<HHH", 0, 1, len(entries))
+    offset = 6 + 16 * len(entries)
+    for size, body in entries:
+        directory += struct.pack("<BBBBHHII", size % 256, size % 256, 0, 0, 1, 32, len(body),
+                                 offset)
+        offset += len(body)
+    return directory + b"".join(body for _, body in entries)
+
+
+def content(path: Path, data: bytes) -> list[object]:
+    """What a written file holds, without the compression: a compressor is free to give other
+    bytes for the same image on another machine, so --check compares pixels."""
+    name = str(path)
+    if path.suffix == ".png":
+        return [decode_png(data, name)]
+    if path.suffix == ".icns":
+        if data[:4] != b"icns" or struct.unpack(">I", data[4:8])[0] != len(data):
+            raise ValueError(f"{name} is not an icns file")
+        parts: list[object] = []
+        offset = 8
+        while offset < len(data):
+            kind, length = struct.unpack(">4sI", data[offset:offset + 8])
+            parts.append((kind, decode_png(data[offset + 8:offset + length], name)))
+            offset += length
+        return parts
+    reserved, kind, count = struct.unpack("<HHH", data[:6])
+    if reserved != 0 or kind != 1:
+        raise ValueError(f"{name} is not an ico file")
+    parts = []
+    for index in range(count):
+        entry = struct.unpack("<BBBBHHII", data[6 + 16 * index:22 + 16 * index])
+        body = data[entry[7]:entry[7] + entry[6]]
+        parts.append((entry[:6], decode_png(body, name) if body[:8] == PNG_SIGNATURE else body))
+    return parts
+
+
+def main() -> int:
+    check = sys.argv[1:] == ["--check"]
+    if sys.argv[1:] and not check:
+        print(__doc__)
+        return 2
+    side, rows = read_png(SOURCE)
+    if side != 1024:
+        raise ValueError(f"{SOURCE} must be 1024 pixels square, not {side}")
+    sizes = sorted({size for _, size in ICNS_TYPES} | set(ICO_SIZES) | set(LINUX_SIZES))
+    pixels = {size: scale(side, rows, size) for size in sizes}
+    images = {size: write_png(size, pixels[size]) for size in sizes}
+    outputs = {ICNS: icns(images), ICO: ico(pixels, images)}
+    for size in LINUX_SIZES:
+        outputs[LINUX / f"{size}x{size}" / "org.kinetik.bloom.png"] = images[size]
+    stale = []
+    for path, data in outputs.items():
+        if check:
+            try:
+                same = path.exists() and content(path, path.read_bytes()) == content(path, data)
+            except (ValueError, struct.error, zlib.error, IndexError):
+                same = False
+            if not same:
+                stale.append(str(path.relative_to(ROOT)))
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+    if stale:
+        print("not what apps/bloom/icon/bloom-1024.png gives (run tools/quality/generate_app_icons):")
+        for name in stale:
+            print(f"  {name}")
+        return 1
+    print(f"{len(outputs)} icon files {'match' if check else 'written from'} "
+          f"{SOURCE.relative_to(ROOT)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

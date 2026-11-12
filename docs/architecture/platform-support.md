@@ -556,6 +556,15 @@ project opens exactly as through File, Open: unsaved changes are asked about fir
 that arrives during another project operation waits for it, and a file that cannot be opened
 is reported the same way. The package check fails on a bundle that does not declare the type.
 
+### Application Icon
+
+One source image, `apps/bloom/icon/bloom-1024.png`, gives the icon files of all three
+platforms through `tools/quality/generate_app_icons`: the macOS icon file, the Windows icon
+that is compiled into `Bloom.exe`, and the Linux icons from 16 to 512 pixels that a package
+installs with its desktop entry. The `bloom.quality.app_icons` test fails when a checked-in
+icon file is not what the source image gives. The source image is still the generated
+placeholder; the real artwork replaces that one file.
+
 Media on macOS is read and encoded by the Apple frameworks first, with the bundled FFmpeg worker
 behind them ([Media I/O](media-io.md)). Continuous integration builds macOS in qualified mode on
 hosted Apple silicon runners; a hosted runner may have no usable GPU device, and its GPU tests

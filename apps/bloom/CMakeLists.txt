@@ -46,13 +46,21 @@ install(
 )
 bloom_package_search_path(bloom "${BLOOM_PACKAGE_PROGRAM_DIR}")
 
-# Linux: the desktop entry and icon, where a desktop looks for them under an installation
-# prefix. An AppImage shows the same two at its top (cmake/package/make_archives.cmake). The
-# icon is the 256-pixel image of the macOS icon file.
+# The application icon on every platform comes from one source image,
+# apps/bloom/icon/bloom-1024.png, through tools/quality/generate_app_icons: the macOS icon file
+# above, the Windows icon in the program, and the Linux icons at each size.
+#
+# Linux: the desktop entry and the icons, where a desktop looks for them under an installation
+# prefix. An AppImage shows the entry and one icon at its top as well
+# (cmake/package/make_archives.cmake).
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     install(FILES linux/org.kinetik.bloom.desktop DESTINATION share/applications)
-    install(FILES linux/org.kinetik.bloom.png
-            DESTINATION share/icons/hicolor/256x256/apps)
+    foreach(bloom_icon_size IN ITEMS 16 24 32 48 64 128 256 512)
+        install(FILES linux/icons/${bloom_icon_size}x${bloom_icon_size}/org.kinetik.bloom.png
+                DESTINATION share/icons/hicolor/${bloom_icon_size}x${bloom_icon_size}/apps)
+    endforeach()
+elseif(WIN32)
+    target_sources(bloom PRIVATE windows/bloom.rc)
 endif()
 
 # Stage the qualified GPU shader tools into the executable-relative private directory (inside the
@@ -299,6 +307,21 @@ if(APPLE)
                 add_dependencies(bloom-deploy-macos ${bloom_bundle_part})
             endif()
         endforeach()
+    endif()
+endif()
+
+# The icon files are what the one source image gives (pixels compared, so a different
+# compression library does not matter).
+if(BUILD_TESTING)
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        include(BloomTesting)
+        bloom_add_test(
+            NAME bloom.quality.app_icons
+            COMMAND "${Python3_EXECUTABLE}" -I
+                "${PROJECT_SOURCE_DIR}/tools/quality/generate_app_icons" --check
+            LABELS quality
+            TIMEOUT 120)
     endif()
 endif()
 

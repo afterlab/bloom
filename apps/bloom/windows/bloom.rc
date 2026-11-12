@@ -1,0 +1,3 @@
+// The application icon of Bloom.exe (apps/bloom/icon/bloom-1024.png through
+// tools/quality/generate_app_icons). The first icon of a program is the one Windows shows for it.
+IDI_ICON1 ICON "Bloom.ico"
