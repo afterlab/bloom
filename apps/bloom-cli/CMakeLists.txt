@@ -21,7 +21,7 @@ endif()
 # Stage the qualified GPU shader tools beside this executable so CLI/export shader compilation
 # works out of the box; an unqualified or CPU-stub build gets a typed unavailable definition.
 include(BloomGpuShaderTools)
-bloom_package_gpu_shader_tools(bloom-cli)
+bloom_package_gpu_shader_tools(bloom-cli INSTALL)
 # macOS has no system Vulkan: package the locked loader and driver beside the executable.
 bloom_package_vulkan_runtime(bloom-cli)
 

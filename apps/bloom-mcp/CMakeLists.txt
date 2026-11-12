@@ -19,7 +19,7 @@ endif()
 # Stage the qualified GPU shader tools beside this executable so MCP-driven export shader
 # compilation works out of the box; an unqualified or CPU-stub build gets a typed definition.
 include(BloomGpuShaderTools)
-bloom_package_gpu_shader_tools(bloom-mcp)
+bloom_package_gpu_shader_tools(bloom-mcp INSTALL)
 # macOS has no system Vulkan: package the locked loader and driver beside the executable.
 bloom_package_vulkan_runtime(bloom-mcp)
 

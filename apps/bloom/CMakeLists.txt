@@ -67,7 +67,7 @@ endif()
 # .app bundle on macOS) so desktop colour compilation works out of the box; an unqualified or
 # CPU-stub build gets a typed unavailable definition and the CPU reference path.
 include(BloomGpuShaderTools)
-bloom_package_gpu_shader_tools(bloom)
+bloom_package_gpu_shader_tools(bloom INSTALL)
 
 # --- Bundled compute-only Vulkan loader (Linux native-backend builds only) -----------------------
 #

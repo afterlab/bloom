@@ -250,13 +250,20 @@ function(_bloom_gpu_tools_json_array items out_var)
     set(${out_var} "${_rendered}" PARENT_SCOPE)
 endfunction()
 
-# bloom_package_gpu_shader_tools(<target>) attaches staging to <target>, creates the ALL target
-# <target>-gpu-shader-tools, adds the install rules for the active platform, and publishes the
-# relative-layout compile definitions. Callers are app targets; this function owns no process,
-# no compiler invocation, and no runtime resolution policy.
+# bloom_package_gpu_shader_tools(<target> [INSTALL]) attaches staging to <target>, creates the
+# ALL target <target>-gpu-shader-tools, and publishes the relative-layout compile definitions.
+# INSTALL also adds the install rules for the active platform: only the shipped programs pass it.
+# A test program stages the tools beside itself in the build tree and installs nothing, so
+# installing a package never needs a test that was not built (#710). This function owns no
+# process, no compiler invocation, and no runtime resolution policy.
 function(bloom_package_gpu_shader_tools target)
     if(NOT TARGET "${target}")
         message(FATAL_ERROR "bloom_package_gpu_shader_tools: unknown target '${target}'")
+    endif()
+    cmake_parse_arguments(PARSE_ARGV 1 _tools "INSTALL" "" "")
+    if(_tools_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR
+            "bloom_package_gpu_shader_tools: unknown arguments '${_tools_UNPARSED_ARGUMENTS}'")
     endif()
 
     set(_dir "bloom-gpu-tools")
@@ -394,35 +401,37 @@ function(bloom_package_gpu_shader_tools target)
         VERBATIM)
     add_dependencies(${target} ${target}-gpu-shader-tools)
 
-    get_target_property(_is_bundle ${target} MACOSX_BUNDLE)
-    if(APPLE AND _is_bundle)
-        set(_install_dir "$<TARGET_BUNDLE_DIR_NAME:${target}>/Contents/MacOS/${_dir}")
-    elseif(APPLE)
-        set(_install_dir "bin/${_dir}")
-    else()
-        # Beside the installed program (BloomPackageLayout.cmake).
-        set(_install_dir "${BLOOM_PACKAGE_PROGRAM_DIR}/${_dir}")
-    endif()
-    install(PROGRAMS
-        "$<TARGET_FILE_DIR:${target}>/${_dir}/${_glslang_name}"
-        "$<TARGET_FILE_DIR:${target}>/${_dir}/${_spirv_name}"
-        DESTINATION "${_install_dir}")
-    install(FILES
-        "$<TARGET_FILE_DIR:${target}>/${_dir}/inventory.json"
-        DESTINATION "${_install_dir}")
-    set(_evidence_install "")
-    foreach(_evidence_name IN LISTS _evidence_staged_names)
-        list(APPEND _evidence_install
-            "$<TARGET_FILE_DIR:${target}>/${_dir}/${_evidence_name}")
-    endforeach()
-    install(FILES ${_evidence_install} DESTINATION "${_install_dir}/licenses")
-    if(_all_private_names)
-        set(_private_install "")
-        foreach(_private_name IN LISTS _all_private_names)
-            list(APPEND _private_install
-                "$<TARGET_FILE_DIR:${target}>/${_dir}/${_private_name}")
+    if(_tools_INSTALL)
+        get_target_property(_is_bundle ${target} MACOSX_BUNDLE)
+        if(APPLE AND _is_bundle)
+            set(_install_dir "$<TARGET_BUNDLE_DIR_NAME:${target}>/Contents/MacOS/${_dir}")
+        elseif(APPLE)
+            set(_install_dir "bin/${_dir}")
+        else()
+            # Beside the installed program (BloomPackageLayout.cmake).
+            set(_install_dir "${BLOOM_PACKAGE_PROGRAM_DIR}/${_dir}")
+        endif()
+        install(PROGRAMS
+            "$<TARGET_FILE_DIR:${target}>/${_dir}/${_glslang_name}"
+            "$<TARGET_FILE_DIR:${target}>/${_dir}/${_spirv_name}"
+            DESTINATION "${_install_dir}")
+        install(FILES
+            "$<TARGET_FILE_DIR:${target}>/${_dir}/inventory.json"
+            DESTINATION "${_install_dir}")
+        set(_evidence_install "")
+        foreach(_evidence_name IN LISTS _evidence_staged_names)
+            list(APPEND _evidence_install
+                "$<TARGET_FILE_DIR:${target}>/${_dir}/${_evidence_name}")
         endforeach()
-        install(FILES ${_private_install} DESTINATION "${_install_dir}")
+        install(FILES ${_evidence_install} DESTINATION "${_install_dir}/licenses")
+        if(_all_private_names)
+            set(_private_install "")
+            foreach(_private_name IN LISTS _all_private_names)
+                list(APPEND _private_install
+                    "$<TARGET_FILE_DIR:${target}>/${_dir}/${_private_name}")
+            endforeach()
+            install(FILES ${_private_install} DESTINATION "${_install_dir}")
+        endif()
     endif()
 
     target_compile_definitions(${target} PRIVATE

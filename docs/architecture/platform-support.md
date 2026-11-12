@@ -275,7 +275,10 @@ packaged; a developer build links the host's Qt and Python, which a package cann
   `stage_records.cmake`, and on Linux `stage_linux_runtime.cmake`). The `bloom-package` target
   installs into the build tree and checks the result; `bloom-package-archives` then makes the
   published files, two on Linux and a zip on Windows. A Windows package also gets the Visual
-  C++ runtime (`stage_msvc_runtime.cmake`).
+  C++ runtime (`stage_msvc_runtime.cmake`). Only the shipped programs have install rules for
+  the shader tools (`bloom_package_gpu_shader_tools(<target> INSTALL)`); a test program stages
+  them beside itself in the build tree only, so `bloom-package` builds everything the install
+  needs from an empty build folder without building the tests (#710).
 - On macOS the build fills `Bloom.app` in the build tree with the same scripts every time it
   builds, so that the bundle can be signed once it is complete; `bloom-deploy-macos` signs and
   checks it.
