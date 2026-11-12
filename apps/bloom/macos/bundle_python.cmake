@@ -6,9 +6,11 @@
 #
 #   Contents/Frameworks/libpython3.X.dylib          the interpreter, found through the executable's
 #                                                   @executable_path/../Frameworks search path
-#   Contents/Resources/python/lib/python3.X         the standard library and its extension modules
-#   Contents/Resources/python/licenses              the license texts of CPython and of the
-#                                                   libraries linked into its modules
+#   Contents/Resources/python/lib/python3.X         the standard library, its extension modules
+#                                                   and the bundled packages (site-packages)
+#   Contents/Resources/python/licenses              the license texts of CPython, of the
+#                                                   libraries linked into its modules and of
+#                                                   the bundled packages
 #   Contents/Resources/bloom-python/bloom           Bloom's own Python package
 #
 # runtime.cpp gives the interpreter Contents/Resources/python as its home. Nothing is rewritten:
@@ -41,28 +43,28 @@ endif()
 set(home "${BUNDLE}/Contents/Resources/python")
 file(REMOVE_RECURSE "${home}" "${BUNDLE}/Contents/Resources/bloom-python")
 
-# Left out: compiled caches and the files for building extensions against this interpreter, the
-# Tk programs (there is no _tkinter), pip's installer (the bundled interpreter installs nothing)
-# and the empty third-party directory.
+# Left out: compiled caches and the files for building extensions against this interpreter. (The
+# parts of the standard library that cannot work in the carried interpreter are already removed
+# from the prefix; see dependencies/superbuild/projects/python-install.cmake.)
 file(COPY "${library}" DESTINATION "${home}/lib"
      PATTERN "__pycache__" EXCLUDE
-     PATTERN "config-3.*" EXCLUDE
-     PATTERN "site-packages" EXCLUDE
-     PATTERN "ensurepip" EXCLUDE
-     PATTERN "idlelib" EXCLUDE
-     PATTERN "tkinter" EXCLUDE
-     PATTERN "turtledemo" EXCLUDE
-     PATTERN "turtle.py" EXCLUDE)
+     PATTERN "config-3.*" EXCLUDE)
+if(NOT EXISTS "${home}/lib/${library_name}/site-packages/numpy/__init__.py")
+    message(FATAL_ERROR "bundle_python.cmake: ${PYTHON_HOME} has no numpy, the bundled package "
+                        "set's one member")
+endif()
 file(COPY "${interpreter}" DESTINATION "${BUNDLE}/Contents/Frameworks")
 file(COPY "${PACKAGE_DIR}/bloom" DESTINATION "${BUNDLE}/Contents/Resources/bloom-python"
      PATTERN "__pycache__" EXCLUDE)
 
 # CPython, then what its modules link statically: OpenSSL (ssl, hashlib), liblzma (lzma),
-# Zstandard (compression.zstd) and Expat (pyexpat).
-foreach(component IN ITEMS python openssl xz zstd expat)
-    file(GLOB texts "${LICENSES}/${component}/LICENSE*" "${LICENSES}/${component}/COPYING*"
-                    "${LICENSES}/${component}/HACL-LICENSE"
-                    "${LICENSES}/${component}/incorporated-software.rst")
+# Zstandard (compression.zstd), zlib, bzip2 (bz2), SQLite (sqlite3), libffi (ctypes) and Expat
+# (pyexpat); then the bundled packages. Every file of a component's record directory is a license
+# or notice text except the intake records and the archive signatures.
+foreach(component IN ITEMS python openssl xz zstd zlib bzip2 sqlite libffi expat numpy)
+    file(GLOB texts "${LICENSES}/${component}/*")
+    list(FILTER texts EXCLUDE REGEX
+         "/(provenance|review|security)\\.md$|\\.(asc|sig|sigstore|provenance\\.json)$")
     if(NOT texts)
         message(FATAL_ERROR "bundle_python.cmake: no license text for ${component} in ${LICENSES}")
     endif()

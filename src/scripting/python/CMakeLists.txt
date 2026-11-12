@@ -43,7 +43,8 @@ configure_file(_bloom.pyi "${CMAKE_BINARY_DIR}/python/_bloom.pyi" COPYONLY)
 install(FILES _bloom.pyi DESTINATION lib/bloom/python)
 install(DIRECTORY bloom DESTINATION lib/bloom/python PATTERN "__pycache__" EXCLUDE)
 
-add_library(bloom_python_runtime STATIC runtime.cpp $<TARGET_OBJECTS:bloom_python_binding>)
+add_library(bloom_python_runtime STATIC runtime.cpp interpreter_home.cpp
+    $<TARGET_OBJECTS:bloom_python_binding>)
 target_link_libraries(bloom_python_runtime PUBLIC bloom_scripting PRIVATE nanobind::core Python3::Python)
 target_include_directories(bloom_python_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(bloom_python_runtime PRIVATE
@@ -123,6 +124,35 @@ if(BUILD_TESTING)
     bloom_add_test(NAME bloom.scripting.python-first-five-minutes
         COMMAND bloom-cli run "${PROJECT_SOURCE_DIR}/examples/scripting/first_five_minutes.py"
         LABELS scripting python integration device)
+    # The lookup of the carried interpreter inside a package (interpreter_home.hpp).
+    add_executable(bloom_python_interpreter_home_test
+        "${PROJECT_SOURCE_DIR}/tests/scripting/interpreter_home_tests.cpp" interpreter_home.cpp)
+    target_compile_features(bloom_python_interpreter_home_test PRIVATE cxx_std_20)
+    target_include_directories(bloom_python_interpreter_home_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    bloom_enable_warnings(bloom_python_interpreter_home_test)
+    bloom_add_test(NAME bloom.scripting.python-interpreter-home
+        COMMAND bloom_python_interpreter_home_test
+        LABELS scripting python unit)
+    # Issue #677: the carried interpreter has one module set and gives one result on Linux, macOS
+    # and Windows. Registered only where the build embeds the locked interpreter of the dependency
+    # prefix: a developer build against the host's Python (and a qualified build against a prefix
+    # from before the interpreter was locked) has that host's modules and libraries, which these
+    # tests would rightly fail.
+    if(BLOOM_LOCKED_PYTHON_HOME)
+        bloom_add_test(NAME bloom.scripting.python-module-set
+            COMMAND bloom-cli run
+                "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_module_set.py"
+            ENVIRONMENT
+                "BLOOM_PYTHON_MODULE_SET=${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_module_set.txt"
+            LABELS scripting python integration)
+        bloom_add_test(NAME bloom.scripting.python-same-result
+            COMMAND bloom-cli run
+                "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_same_result.py"
+            ENVIRONMENT
+                "BLOOM_PYTHON_SAME_RESULT=${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_same_result.txt"
+            LABELS scripting python integration TIMEOUT 120)
+    endif()
     # #343: import an SVG, move and key one point of a compound shape, read it back, undo.
     bloom_add_test(NAME bloom.scripting.python-svg-import
         COMMAND bloom-cli run "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_svg_import.py"

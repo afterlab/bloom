@@ -136,24 +136,13 @@ if(BUILD_TESTING)
         )
         # The scenario suite runner's MCP client (against the same server), playback rate,
         # baseline comparison, pass criteria and parity gate (tools/bench, issue #540).
-        # The bench tools are host tools and import numpy. The interpreter a qualified macOS
-        # build embeds has the standard library only, so there the host's python3 runs them when
-        # it has numpy. Without one the test is still registered and fails saying what is missing.
-        set(bloom_bench_python "${Python3_EXECUTABLE}")
-        if(BLOOM_LOCKED_PYTHON_HOME)
-            find_program(BLOOM_HOST_PYTHON NAMES python3
-                DOC "Host python3 with numpy, for the tools/bench tests")
-            if(BLOOM_HOST_PYTHON)
-                execute_process(COMMAND "${BLOOM_HOST_PYTHON}" -I -c "import numpy"
-                    RESULT_VARIABLE bloom_host_numpy OUTPUT_QUIET ERROR_QUIET)
-                if(bloom_host_numpy EQUAL 0)
-                    set(bloom_bench_python "${BLOOM_HOST_PYTHON}")
-                endif()
-            endif()
-        endif()
+        # The bench tools import numpy. A build with the locked interpreter runs them with it:
+        # it carries numpy (issue #677), so the suite needs no Python on the computer. A
+        # developer build against the host's interpreter uses that one, and the tests that need
+        # numpy skip themselves when it has none.
         bloom_add_test(
             NAME bloom.bench.scenario-suite
-            COMMAND "${bloom_bench_python}" -I "${PROJECT_SOURCE_DIR}/tools/bench/test_run_scenarios.py"
+            COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/tools/bench/test_run_scenarios.py"
                 $<TARGET_FILE:bloom_mcp_http_test_host>
             LABELS mcp unit
             TIMEOUT 120

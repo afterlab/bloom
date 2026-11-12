@@ -1,4 +1,5 @@
 #include "runtime.hpp"
+#include "interpreter_home.hpp"
 #include "native.hpp"
 
 #include <nanobind/stl/shared_ptr.h>
@@ -11,10 +12,6 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
-
-#if defined(__APPLE__)
-#include <mach-o/dyld.h>
-#endif
 
 // CPython fixes this symbol spelling for the private _bloom module.
 extern "C" PyObject* PyInit__bloom(); // NOLINT(bugprone-reserved-identifier)
@@ -38,64 +35,16 @@ void checkStatus(const PyStatus status) {
     }
 }
 
-#if defined(__APPLE__)
-// Bloom carries its own interpreter on macOS: the standard library is inside the application
-// bundle (Contents/Resources/python) and, for a program run from the build tree, in the
-// dependency prefix the build names. CPython compiles in the directory it was installed to, which
-// does not exist on another machine, so the home is given to it. Empty when neither is there: the
-// interpreter then finds its library the way it always has.
-std::filesystem::path runningExecutable() {
-    std::uint32_t size = 0;
-    static_cast<void>(::_NSGetExecutablePath(nullptr, &size));
-    std::string buffer(size, '\0');
-    if (::_NSGetExecutablePath(buffer.data(), &size) != 0) {
-        return {};
-    }
-    std::error_code error;
-    auto resolved = std::filesystem::canonical(std::filesystem::path(buffer.c_str()), error);
-    return error ? std::filesystem::path{} : resolved;
-}
-
-bool holdsStandardLibrary(const std::filesystem::path& home) {
-    const auto library =
-        home / "lib" /
-        ("python" + std::to_string(PY_MAJOR_VERSION) + "." + std::to_string(PY_MINOR_VERSION));
-    std::error_code error;
-    return std::filesystem::is_regular_file(library / "os.py", error);
-}
-
-std::filesystem::path bundleResources() {
-    const auto program = runningExecutable();
-    return program.empty() ? std::filesystem::path{}
-                           : program.parent_path().parent_path() / "Resources";
-}
-
-std::filesystem::path carriedPythonHome() {
-    if (const auto resources = bundleResources(); !resources.empty()) {
-        if (auto home = resources / "python"; holdsStandardLibrary(home)) {
-            return home;
-        }
-    }
+// The carried interpreter for this process (interpreter_home.hpp): the package's, or the
+// dependency prefix's when the program runs from the build tree.
+CarriedPython carriedPython() {
 #if defined(BLOOM_PYTHON_HOME)
-    if (std::filesystem::path home(BLOOM_PYTHON_HOME); holdsStandardLibrary(home)) {
-        return home;
-    }
+    const std::filesystem::path buildHome(BLOOM_PYTHON_HOME);
+#else
+    const std::filesystem::path buildHome;
 #endif
-    return {};
+    return locateCarriedPython(runningProgram(), buildHome, PY_MAJOR_VERSION, PY_MINOR_VERSION);
 }
-
-// The carried interpreter's OpenSSL has no certificate directory of its own, so that it trusts
-// nothing by accident. It is pointed at the operating system's certificate file, which keeps
-// HTTPS from scripts verified. A choice the user made in the environment is left alone.
-void trustSystemCertificates() {
-    constexpr auto* systemCertificates = "/etc/ssl/cert.pem";
-    std::error_code error;
-    if (std::getenv("SSL_CERT_FILE") == nullptr && std::getenv("SSL_CERT_DIR") == nullptr &&
-        std::filesystem::is_regular_file(systemCertificates, error)) {
-        static_cast<void>(::setenv("SSL_CERT_FILE", systemCertificates, 0));
-    }
-}
-#endif
 
 } // namespace
 
@@ -114,15 +63,14 @@ EmbeddedPython::EmbeddedPython(const std::filesystem::path& executable,
     config.site_import = 0;
     config.install_signal_handlers = 0;
     const auto program = executable.empty() ? std::string("bloom-cli") : executable.string();
+    const auto carried = carriedPython();
     std::string initializationFailure;
     try {
         checkStatus(PyConfig_SetBytesString(&config, &config.program_name, program.c_str()));
-#if defined(__APPLE__)
-        if (const auto home = carriedPythonHome(); !home.empty()) {
-            checkStatus(PyConfig_SetBytesString(&config, &config.home, home.c_str()));
+        if (!carried.home.empty()) {
+            checkStatus(PyConfig_SetString(&config, &config.home, carried.home.wstring().c_str()));
             trustSystemCertificates();
         }
-#endif
         checkStatus(Py_InitializeFromConfig(&config));
     } catch (...) {
         PyConfig_Clear(&config);
@@ -144,17 +92,20 @@ EmbeddedPython::EmbeddedPython(const std::filesystem::path& executable,
         auto package = !executable.empty() && std::filesystem::is_directory(installed / "bloom")
                            ? installed
                            : std::filesystem::path(BLOOM_PYTHON_PACKAGE_PATH);
-#if defined(__APPLE__)
-        // Inside the application bundle the package sits with the other resources.
-        if (const auto resources = bundleResources(); !resources.empty()) {
-            if (const auto bundled = resources / "bloom-python";
-                std::filesystem::is_directory(bundled / "bloom")) {
-                package = bundled;
-            }
-        }
-#endif
+        // Inside a package Bloom's own package sits where the platform's layout puts it.
+        if (!carried.package.empty())
+            package = carried.package;
         auto sys = nb::module_::import_("sys");
         sys.attr("path").attr("insert")(0, package.string());
+        // The carried interpreter's bundled packages (numpy). The interpreter runs isolated with
+        // the site module off, so its third-party directory is named here; packages a user
+        // installs elsewhere are not searched.
+        if (!carried.home.empty()) {
+            const auto bundled = sitePackages(carried.home, PY_MAJOR_VERSION, PY_MINOR_VERSION);
+            std::error_code error;
+            if (std::filesystem::is_directory(bundled, error))
+                sys.attr("path").attr("append")(bundled.string());
+        }
         auto console = nb::module_::import_("bloom._console").attr("Console")();
         state_->console = console.release().ptr();
     } catch (const std::exception& error) {

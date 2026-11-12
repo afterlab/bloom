@@ -1,0 +1,14 @@
+# The digests python_same_result.py must print on every platform (issue #677): one per section and
+# one over all of them. Written by running the script without BLOOM_PYTHON_SAME_RESULT set, with
+# the carried interpreter (CPython 3.14.7, numpy 2.5.4). A line that changes here means a script
+# no longer computes what it did: say why in the commit that changes it.
+integers        fcdeee1854b2ecc1a701012736f008fc4338f8b86f74eb17b742699ab7109bb1
+floats          b99cc7d61fbaa18f2d8f2d0fc2ae2bcb1dd81d7611f8f9e7503538ca41942307
+sorting         4b8d815dfc6a92ae70265c1ed86fcf1580bb370c2920e06776bdc7f85450bf7f
+reductions      1a2d25fbd0a35211c4e0549787f125d4cefcf69fd79b43879f45c72823fe638b
+linear-algebra  31a79fa46e5bf17fd1140e480e066ad89e975be02635b045726b6f472d24fdd1
+hashing         1a55bdbe2850ddb98d2f7e87e429077f9b8ea3866812c9e0b272242361461e92
+compression     bae12689453dd1b7c6d54e95e1b7d5a2172db8f02331e3288dbbc15e4f93d8a1
+database        adc1b8d1d2e79b1f043b0e06585321e46c8ccc6ff881dedd87c80f3c02bd2e5f
+decimal         54054066881e1e8247ff869038533a19a70b61ac2b098dafc78a17b72a9af295
+all             c7cef11480d641b9bdb65c2ee66d9e39eb8238f8d577a22f13e82f96f9f30543

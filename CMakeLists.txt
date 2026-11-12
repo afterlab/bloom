@@ -66,24 +66,40 @@ bloom_disable_floating_point_contraction()
 # package, and conformance builds use qualified mode.
 bloom_consume_dependency_prefix()
 
-# A qualified macOS build takes CPython from the dependency prefix, where the superbuild puts the
-# locked interpreter, and from nowhere else: the application bundle carries that interpreter, so
-# every part of the build (the embedded runtime, the extension module, the tests that run scripts)
-# must agree on it. Other platforms use the host's CPython.
-if(APPLE AND BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
-    if(EXISTS "${BLOOM_DEPENDENCY_PREFIX}/python/bin/python3")
+# A qualified build takes CPython from the dependency prefix, where the superbuild puts the locked
+# interpreter that every package carries (issue #677): every part of the build (the embedded
+# runtime, the extension module, the tests that run scripts) must agree on it.
+#
+# macOS has no other interpreter to take, so a qualified macOS build without it refuses to
+# configure. A qualified Linux or Windows build against a prefix that was built before the
+# interpreter was locked still configures, with the host's CPython, and says so; such a build
+# cannot be packaged (the package rules require the carried interpreter).
+if(BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
+    if(WIN32)
+        set(bloom_locked_python_program "${BLOOM_DEPENDENCY_PREFIX}/python/python.exe")
+    else()
+        set(bloom_locked_python_program "${BLOOM_DEPENDENCY_PREFIX}/python/bin/python3")
+    endif()
+    if(EXISTS "${bloom_locked_python_program}")
         set(BLOOM_LOCKED_PYTHON_HOME "${BLOOM_DEPENDENCY_PREFIX}/python")
         set(Python3_ROOT_DIR "${BLOOM_LOCKED_PYTHON_HOME}")
+        set(Python3_FIND_STRATEGY LOCATION)
         set(Python3_FIND_FRAMEWORK NEVER)
+        set(Python3_FIND_REGISTRY NEVER)
         set(Python3_FIND_VIRTUALENV STANDARD)
-    elseif(BLOOM_BUILD_PYTHON)
+        message(STATUS "Bloom Python: the locked interpreter in ${BLOOM_LOCKED_PYTHON_HOME}")
+    elseif(APPLE AND BLOOM_BUILD_PYTHON)
         message(FATAL_ERROR
             "BLOOM_BUILD_PYTHON is ON, but the dependency prefix has no locked CPython "
             "(${BLOOM_DEPENDENCY_PREFIX}/python). Build the superbuild's bloom_dependency_python "
             "target; a qualified macOS build does not use another interpreter.")
-    else()
+    elseif(APPLE)
         # No discovery: a host interpreter must not be embedded by accident.
         set(BLOOM_BUILD_PYTHON OFF CACHE BOOL "Build the Python bridge and embedded interpreter")
+    else()
+        message(STATUS "Bloom Python: the dependency prefix has no locked CPython "
+            "(${BLOOM_DEPENDENCY_PREFIX}/python); this build uses the host's interpreter and "
+            "cannot be packaged.")
     endif()
 endif()
 
