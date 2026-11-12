@@ -6,6 +6,8 @@
 #include <QCoreApplication>
 #include <QMetaObject>
 #include <QTimer>
+#include <algorithm>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/scripting/events.hpp>
 #include <bloom/scripting/live_session_host.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -182,6 +184,15 @@ void LiveSessionAdapter::publish() {
     for (const auto id : session_.selectedNodes())
         context.selection.push_back(id.value());
     context.layers = scripting::selectedLayers(snapshot, *context.composition, context.selection);
+    // #693: a selected Merge entry's own layer (an imported SVG, a part of one) is a selected layer
+    // for Align, Distribute and every other operation that defaults to the selection.
+    if (const auto* composition = session_.composition())
+        for (const auto& entry : session_.selectedEntries())
+            if (const auto* layer =
+                    document::mergeEntryLayer(composition->graph(), entry.merge, entry.slot);
+                layer != nullptr &&
+                std::ranges::find(context.layers, layer->layerId.value()) == context.layers.end())
+                context.layers.push_back(layer->layerId.value());
     for (const auto group : session_.viewerLevel().groups)
         context.level.push_back(group.value());
     if (const auto points = session_.viewerLevel().points)

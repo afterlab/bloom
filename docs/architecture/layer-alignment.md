@@ -40,6 +40,12 @@ the same evaluator semantics:
   (the toolbar's buttons and Composition > Align) uses that frame only while its source revision,
   composition and time are the session's current ones, and is disabled with a reason otherwise; it
   orders the selected layers top of the stack first and takes the primary selected layer as the key.
+  A layer that is a Merge entry's own (an imported SVG, a part inside an editable SVG, any group
+  child) is selected as its entry, not as a node; the selected layers are the nodes' layers and
+  every selected entry's layer (`document::mergeEntryLayer`), and the key falls back to the
+  contextual layer (#693). The live session adapter publishes the same set as the default `layers`
+  of Align, Distribute and every operation that defaults to the selection, so the toolbar, MCP and
+  Python agree.
 - **Headless.** `runtime::queryLayerBounds` compiles the snapshot and evaluates the frame with the
   CPU reference evaluator (full resolution, look nodes included, media revalidated), then applies
   the same filter. It is heavy and runs on the calling client thread (script, MCP or CLI), never

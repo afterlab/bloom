@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <source_location>
 #include <string>
@@ -414,11 +415,57 @@ void testHeadlessBoundsMatchGpuScenePreparation() {
 
 } // namespace
 
+// #693: Align works on an imported SVG's layer and on a part inside an editable SVG through the
+// JSON operation path MCP and Python use, as one undo step, and lines the part's bounds up.
+void testSvgLayerAndPartsAlign() {
+    const auto svg = std::filesystem::temp_directory_path() / "align-svg-parts.svg";
+    std::ofstream(svg, std::ios::binary)
+        << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><circle cx="60" cy="60" r="44" fill="#ee3377"/><g id="box"><rect x="110" y="26" width="72" height="68" rx="10" fill="#3377dd"/></g></svg>)svg";
+    for (const char* mode : {"layer", "shapes"}) {
+        Fixture fixture;
+        const auto added =
+            fixture.op("bloom.layer.add-svg", {{"composition", Value(StableId{fixture.composition.value()})},
+                                               {"path", Value(svg.string())},
+                                               {"mode", Value(std::string(mode))}});
+        expect(added.succeeded(), std::string("the SVG imports as ") + mode);
+        const auto snapshot = fixture.session->snapshot();
+        const auto& graph = snapshot.project().findComposition(fixture.composition)->graph();
+        std::vector<document::LayerId> targets;
+        for (const auto& layer : graph.layerOutputs())
+            if (layer.name == "logo" || layer.name == "align-svg-parts" || layer.name == "box" ||
+                layer.name == "circle" || layer.name == "rect")
+                targets.push_back(layer.layerId);
+        expect(!targets.empty(), "the import made layers to align");
+        for (const auto layer : targets) {
+            const auto before = fixture.measure();
+            const auto found = std::ranges::find(before, layer, &commands::LayerAlignmentGeometry::layer);
+            expect(found != before.end(), "the SVG layer has bounds to align");
+            if (found == before.end())
+                continue;
+            const auto result = fixture.op("bloom.layer.align-layers",
+                                           {{"edge", Value("left")},
+                                            {"target", Value("composition")},
+                                            {"layers", ValueArray{Value(StableId{layer.value()})}}});
+            expect(result.succeeded(), std::string("Align Left on an SVG layer or part (") + mode + ") succeeds");
+            const auto after = fixture.measure();
+            const auto moved = std::ranges::find(after, layer, &commands::LayerAlignmentGeometry::layer);
+            expect(moved != after.end() && near(moved->bounds.left, 0.0),
+                   "the layer's left edge lies on the composition's");
+            expect(fixture.session->undo().succeeded(), "the alignment undoes");
+            const auto restored = fixture.measure();
+            const auto back = std::ranges::find(restored, layer, &commands::LayerAlignmentGeometry::layer);
+            expect(back != restored.end() && near(back->bounds.left, found->bounds.left),
+                   "in one step: the layer is where it was");
+        }
+    }
+}
+
 int main() {
     testParentedAndTransformedLayersAlignVisually();
     testDistributeAndKeyedPosition();
     testScriptingErrors();
     testHeadlessBoundsMatchGpuScenePreparation();
+    testSvgLayerAndPartsAlign();
     if (failures != 0) {
         std::cerr << failures << " layer alignment checks failed\n";
         return 1;

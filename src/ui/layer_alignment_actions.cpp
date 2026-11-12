@@ -1,6 +1,7 @@
 #include <bloom/ui/layer_alignment_actions.hpp>
 
 #include <bloom/commands/transaction.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/host/layer_alignment.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -167,17 +168,31 @@ std::vector<document::LayerId> LayerAlignmentActions::selectedLayers() const {
     for (const auto node : session_.selectedNodes())
         if (const auto layer = session_.layerForNode(node))
             selected.insert(*layer);
+    // #693: a layer that is a Merge entry's own (an imported SVG, a part inside one, any group
+    // child) is selected as its entry, not as a node.
+    for (const auto& entry : session_.selectedEntries())
+        if (const auto* layer =
+                document::mergeEntryLayer(composition->graph(), entry.merge, entry.slot))
+            selected.insert(layer->layerId);
     // Top of the stack first: a stable order, so a distribution's ties always break the same way.
     const auto entries = composition->graph().layerStack().entries();
     for (auto entry = entries.rbegin(); entry != entries.rend(); ++entry)
         if (selected.contains(entry->layerId))
             layers.push_back(entry->layerId);
+    // #693: a layer outside the composition's own stack (a part inside a group, an editable SVG's
+    // shapes) follows, in id order.
+    for (const auto layer : selected)
+        if (std::ranges::find(layers, layer) == layers.end())
+            layers.push_back(layer);
     return layers;
 }
 
 std::optional<document::LayerId> LayerAlignmentActions::keyLayer() const {
     const auto* node = session_.selectedNode();
-    return node != nullptr ? session_.layerForNode(node->id) : std::nullopt;
+    if (node != nullptr)
+        return session_.layerForNode(node->id);
+    // #693: the primary selection is an entry layer.
+    return session_.selection().contextualLayer;
 }
 
 QString LayerAlignmentActions::keyLayerName() const {
@@ -205,13 +220,16 @@ QString LayerAlignmentActions::unavailableReason(const LayerArrangement arrangem
         return tr("Select two or more layers, or align to the composition");
     if (preview_ == nullptr)
         return tr("Alignment measures the Viewer's frame, and no Viewer preview is running");
-    const auto frame = preview_->state().frame;
+    const auto state = preview_->state();
+    const auto frame = state.frame;
     if (frame == nullptr)
         return tr("Waiting for the Viewer to show the current frame");
     const auto& identity = frame->desiredIdentity();
+    // #693: current means the frame answers the preview's own latest request. A layout-only edit
+    // (a moved node) advances the document revision without a new render, and the frame stays
+    // the answer, so the revision is not compared with the live one.
     if (identity.compositionId != session_.compositionId() ||
-        identity.sourceRevision != session_.snapshot().revision() ||
-        identity.time != session_.currentTime())
+        state.freshness != FrameFreshness::Current || identity.time != session_.currentTime())
         return tr("Waiting for the Viewer to show the current frame");
     return {};
 }
