@@ -23,12 +23,19 @@ function(_bloom_reconfigure_write_tool path label)
     file(CHMOD "${path}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
 endfunction()
 
-_bloom_reconfigure_write_tool("${_work}/good/bin/glslangValidator" "glslangValidator")
-_bloom_reconfigure_write_tool("${_work}/good/bin/spirv-val" "spirv-val")
-_bloom_reconfigure_write_tool("${_work}/good2/bin/spirv-val" "spirv-val")
-_bloom_reconfigure_write_tool("${_work}/outside/glslangValidator" "outside glslangValidator")
-file(CREATE_LINK "${_work}/outside/glslangValidator"
-    "${_work}/good2/bin/glslangValidator" SYMBOLIC)
+# A program's file name ends in ".exe" on Windows; the probe looks for that name there.
+set(_exe "")
+if(CMAKE_HOST_WIN32)
+    set(_exe ".exe")
+endif()
+_bloom_reconfigure_write_tool("${_work}/good/bin/glslangValidator${_exe}" "glslangValidator")
+_bloom_reconfigure_write_tool("${_work}/good/bin/spirv-val${_exe}" "spirv-val")
+_bloom_reconfigure_write_tool("${_work}/good2/bin/spirv-val${_exe}" "spirv-val")
+_bloom_reconfigure_write_tool("${_work}/outside/glslangValidator${_exe}" "outside glslangValidator")
+# Making a symbolic link needs a privilege an ordinary Windows account does not hold; the
+# containment case runs wherever the link can be made.
+file(CREATE_LINK "${_work}/outside/glslangValidator${_exe}"
+    "${_work}/good2/bin/glslangValidator${_exe}" SYMBOLIC RESULT _link_result)
 
 function(_bloom_reconfigure_case name prefix expected)
     execute_process(
@@ -58,13 +65,19 @@ _bloom_reconfigure_case("switch-to-good" "${_work}/good" "TRUE|available")
 _bloom_reconfigure_case("switch-to-missing" "${_work}/missing" "FALSE|missing-tools")
 _bloom_reconfigure_case("switch-back-to-good" "${_work}/good" "TRUE|available")
 
-file(REMOVE "${_work}/good/bin/spirv-val")
+file(REMOVE "${_work}/good/bin/spirv-val${_exe}")
 _bloom_reconfigure_case("tool-removed" "${_work}/good" "FALSE|missing-tools")
 
-_bloom_reconfigure_write_tool("${_work}/good/bin/spirv-val" "spirv-val")
+_bloom_reconfigure_write_tool("${_work}/good/bin/spirv-val${_exe}" "spirv-val")
 _bloom_reconfigure_case("tool-restored" "${_work}/good" "TRUE|available")
 
-_bloom_reconfigure_case("symlink-outside" "${_work}/good2" "FALSE|tool-outside-prefix")
+if(_link_result EQUAL 0)
+    _bloom_reconfigure_case("symlink-outside" "${_work}/good2" "FALSE|tool-outside-prefix")
+elseif(CMAKE_HOST_WIN32)
+    message(STATUS "SKIP: symlink-outside: this account cannot create a symbolic link")
+else()
+    message(FATAL_ERROR "could not create the symbolic link fixture: ${_link_result}")
+endif()
 
 if(_failures)
     message(FATAL_ERROR "GPU shader tools reconfigure failures:${_failures}")

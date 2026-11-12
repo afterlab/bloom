@@ -1,4 +1,5 @@
 #include <bloom/color/gpu_shader_compiler.hpp>
+#include <bloom/core/executable_suffix.hpp>
 #include <bloom/core/sha256.hpp>
 
 #include <algorithm>
@@ -102,9 +103,18 @@ class FixtureDirectory final {
         }
     }
     [[nodiscard]] std::string tool(const std::string& name) {
+#if defined(_WIN32)
+        // A program under another name: a copy, because making a link needs a privilege that an
+        // ordinary Windows account does not hold.
+        const auto link = path_ / (name + ".exe");
+        std::error_code error;
+        std::filesystem::copy_file(helper_, link, std::filesystem::copy_options::overwrite_existing,
+                                   error);
+#else
         const auto link = path_ / name;
         std::error_code error;
         std::filesystem::create_symlink(helper_, link, error);
+#endif
         return link.string();
     }
 
@@ -197,8 +207,13 @@ void testStaticRejections(Expectations& expectations, const std::string& glslang
     request = baseRequest("/nonexistent/glslangValidator", spirvVal);
     expectations.expect(code(compiler.compile(request)) == GpuShaderCompileError::InvalidTool,
                         "a nonexistent tool path is rejected");
-    // /usr/bin/true exists on Linux and macOS; /bin/true is not on macOS.
+    // /usr/bin/true exists on Linux and macOS; /bin/true is not on macOS. Windows has no such
+    // program: the fixture tool under its own name exits with success and writes nothing.
+#if defined(_WIN32)
+    request = baseRequest(BLOOM_GPU_SHADER_TEST_HELPER, spirvVal);
+#else
     request = baseRequest("/usr/bin/true", spirvVal);
+#endif
     expectations.expect(code(compiler.compile(request)) == GpuShaderCompileError::ToolCrashed,
                         "a wrong tool that writes no SPIR-V is rejected");
     request = baseRequest(glslang, spirvVal);
@@ -278,7 +293,7 @@ void testSamePathReplacement(Expectations& expectations, const std::string& glsl
         expectations.expect(false, "replacement fixture directory is available");
         return;
     }
-    const auto tool = directory / "glslangValidator";
+    const auto tool = directory / "glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
     std::filesystem::copy_file(glslang, tool, std::filesystem::copy_options::overwrite_existing,
                                error);
     expectations.expect(!error, "copied tool is created");
@@ -413,7 +428,7 @@ void testSameSizeSameMtimeReplacement(Expectations& expectations, const std::str
         expectations.expect(false, "same-size fixture directory is available");
         return;
     }
-    const auto tool = directory / "glslangValidator";
+    const auto tool = directory / "glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
     std::filesystem::copy_file(glslang, tool, std::filesystem::copy_options::overwrite_existing,
                                error);
     const auto size = std::filesystem::file_size(tool, error);

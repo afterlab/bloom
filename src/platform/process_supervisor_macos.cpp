@@ -185,7 +185,8 @@ ProcessResult<std::unique_ptr<ProcessSupervisor>>
 ProcessSupervisor::launch(const ProcessOptions& options) {
     // Staged streaming publication is Linux-only in this release (ADR 0033 sections 15 and 16),
     // and so is the shared frame arena (#474).
-    if (options.stagedOutput || options.frameArena)
+    // Launch-time confinement is the Windows form; a worker here confines itself.
+    if (options.stagedOutput || options.frameArena || options.confined)
         return ProcessFailure{ProcessError::Spawn, ENOTSUP};
     if (options.executable.empty() || options.executable.front() != '/' ||
         options.executable.find('\0') != std::string::npos ||
@@ -364,6 +365,9 @@ void ProcessSupervisor::stop(std::span<const std::byte> message) {
     state_->reaped = true;
 }
 std::int64_t ProcessSupervisor::processId() const { return state_->pid; }
+std::optional<std::uint64_t> ProcessSupervisor::shareHandle(void*, std::uint32_t) {
+    return std::nullopt;
+}
 std::optional<ProcessMemory> ProcessSupervisor::memory() const {
     if (state_->reaped || state_->pid <= 0)
         return std::nullopt;

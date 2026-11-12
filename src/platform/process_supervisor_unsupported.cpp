@@ -20,6 +20,9 @@ ProcessResult<int> ProcessSupervisor::finish(ProcessDeadline) {
 }
 void ProcessSupervisor::stop(std::span<const std::byte>) {}
 std::int64_t ProcessSupervisor::processId() const { return -1; }
+std::optional<std::uint64_t> ProcessSupervisor::shareHandle(void*, std::uint32_t) {
+    return std::nullopt;
+}
 std::optional<ProcessExit> ProcessSupervisor::waitExit(std::chrono::milliseconds) {
     return std::nullopt;
 }

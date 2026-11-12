@@ -229,12 +229,28 @@ std::from_chars_result fromCharsPortable(const char* const first, const char* co
 
 } // namespace float_chars_detail
 
+#if !defined(__APPLE__)
+namespace {
+// The standard conversion, with the value left alone on every failure. One standard library
+// stores an infinity or a zero for a magnitude outside the range; the contract here does not.
+template <typename Value>
+std::from_chars_result fromCharsStandard(const char* const first, const char* const last,
+                                         Value& value, const std::chars_format format) noexcept {
+    Value read{};
+    const auto result = std::from_chars(first, last, read, format);
+    if (result.ec == std::errc{})
+        value = read;
+    return result;
+}
+} // namespace
+#endif
+
 std::from_chars_result fromChars(const char* const first, const char* const last, double& value,
                                  const std::chars_format format) noexcept {
 #if defined(__APPLE__)
     return float_chars_detail::fromCharsPortable(first, last, value, format);
 #else
-    return std::from_chars(first, last, value, format);
+    return fromCharsStandard(first, last, value, format);
 #endif
 }
 
@@ -243,7 +259,7 @@ std::from_chars_result fromChars(const char* const first, const char* const last
 #if defined(__APPLE__)
     return float_chars_detail::fromCharsPortable(first, last, value, format);
 #else
-    return std::from_chars(first, last, value, format);
+    return fromCharsStandard(first, last, value, format);
 #endif
 }
 

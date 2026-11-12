@@ -332,7 +332,9 @@ template <class Float>
     const char* const last = first + text.size();
     Float standard = Float{42};
     Float portable = Float{42};
-    const auto expected = std::from_chars(first, last, standard, format);
+    // Through Bloom's entry, which is the standard library's conversion here with the value left
+    // alone on every failure (one standard library stores a value for a magnitude out of range).
+    const auto expected = bloom::core::fromChars(first, last, standard, format);
     const auto actual =
         bloom::core::float_chars_detail::fromCharsPortable(first, last, portable, format);
     if (expected.ec != actual.ec || expected.ptr != actual.ptr) {

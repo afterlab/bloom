@@ -10,7 +10,7 @@
 
 int main(int argc, char** argv) {
     std::string name = argc > 0 && argv[0] != nullptr ? argv[0] : "";
-    const auto slash = name.find_last_of('/');
+    const auto slash = name.find_last_of("/\\");
     if (slash != std::string::npos)
         name = name.substr(slash + 1);
     for (int index = 1; index < argc; ++index) {

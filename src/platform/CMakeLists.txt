@@ -48,7 +48,8 @@ elseif(APPLE)
     target_link_libraries(bloom_platform PUBLIC "-framework CoreText" "-framework CoreFoundation")
 elseif(WIN32)
     # Windows reads the system and per-user font folders itself (font_catalog_directory.cpp).
-    target_sources(bloom_platform PRIVATE font_catalog_windows.cpp staged_artifact_unsupported.cpp)
+    # Win32 handles, volume/file-index identities and MoveFileExW publication.
+    target_sources(bloom_platform PRIVATE font_catalog_windows.cpp staged_artifact_windows.cpp)
 else()
     target_sources(bloom_platform PRIVATE font_catalog_unavailable.cpp staged_artifact_unsupported.cpp)
 endif()
@@ -81,7 +82,9 @@ target_compile_features(bloom_platform PUBLIC cxx_std_20)
 target_link_libraries(bloom_platform PUBLIC bloom_core)
 bloom_enable_warnings(bloom_platform)
 
-if(BUILD_TESTING AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE))
+# The font catalog, cache directory and staged-artifact providers exist for Linux, macOS and
+# Windows; any other system links the unavailable stand-ins, which have nothing to test.
+if(BUILD_TESTING AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE OR WIN32))
     include(BloomTesting)
     add_executable(bloom_platform_font_catalog_test tests/font_catalog_tests.cpp)
     target_compile_definitions(
@@ -95,14 +98,18 @@ if(BUILD_TESTING AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE))
         COMMAND bloom_platform_font_catalog_test
         LABELS unit platform text
     )
-    add_executable(bloom_platform_staged_artifact_test tests/staged_artifact_tests.cpp)
-    target_link_libraries(bloom_platform_staged_artifact_test PRIVATE bloom_platform)
-    bloom_enable_warnings(bloom_platform_staged_artifact_test)
-    bloom_add_test(
-        NAME bloom.platform.staged_artifact
-        COMMAND bloom_platform_staged_artifact_test
-        LABELS unit platform persistence output
-    )
+    if(NOT WIN32)
+        # Written against POSIX descriptors, modes and symbolic links. The Windows provider has its
+        # own test of the same contract, bloom.platform.staged_artifact_windows, below.
+        add_executable(bloom_platform_staged_artifact_test tests/staged_artifact_tests.cpp)
+        target_link_libraries(bloom_platform_staged_artifact_test PRIVATE bloom_platform bloom_platform_process)
+        bloom_enable_warnings(bloom_platform_staged_artifact_test)
+        bloom_add_test(
+            NAME bloom.platform.staged_artifact
+            COMMAND bloom_platform_staged_artifact_test
+            LABELS unit platform persistence output
+        )
+    endif()
     add_executable(bloom_platform_cache_directory_test tests/cache_directory_tests.cpp)
     target_link_libraries(bloom_platform_cache_directory_test PRIVATE bloom_platform)
     bloom_enable_warnings(bloom_platform_cache_directory_test)
@@ -110,6 +117,19 @@ if(BUILD_TESTING AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE))
         NAME bloom.platform.cache_directory
         COMMAND bloom_platform_cache_directory_test
         LABELS unit platform cache
+    )
+endif()
+
+# The Windows staged-artifact provider (Win32 handles, file identities, MoveFileExW publication).
+if(BUILD_TESTING AND WIN32)
+    include(BloomTesting)
+    add_executable(bloom_platform_staged_artifact_windows_test tests/staged_artifact_windows_tests.cpp)
+    target_link_libraries(bloom_platform_staged_artifact_windows_test PRIVATE bloom_platform)
+    bloom_enable_warnings(bloom_platform_staged_artifact_windows_test)
+    bloom_add_test(
+        NAME bloom.platform.staged_artifact_windows
+        COMMAND bloom_platform_staged_artifact_windows_test
+        LABELS unit platform persistence output
     )
 endif()
 
@@ -173,6 +193,17 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_platform_private_temporary_directory_test)
     bloom_add_test(NAME bloom.platform.private-temporary-directory
                    COMMAND bloom_platform_private_temporary_directory_test LABELS unit platform)
+    # The supervisor's contract against children that are the test program itself, so the same
+    # cases run on Linux, macOS and Windows with no helper tool.
+    add_executable(bloom_platform_process_supervisor_test tests/process_supervisor_tests.cpp)
+    target_link_libraries(bloom_platform_process_supervisor_test PRIVATE bloom_platform_process)
+    if(WIN32)
+        # The confinement case asks the system for a socket and expects a refusal.
+        target_link_libraries(bloom_platform_process_supervisor_test PRIVATE ws2_32)
+    endif()
+    bloom_enable_warnings(bloom_platform_process_supervisor_test)
+    bloom_add_test(NAME bloom.platform.process-supervisor
+                   COMMAND bloom_platform_process_supervisor_test LABELS unit platform)
     # #495: the idle-priority scope compiles everywhere; its observable effect is checked on Linux.
     add_executable(bloom_platform_thread_priority_test tests/thread_priority_tests.cpp)
     target_link_libraries(bloom_platform_thread_priority_test PRIVATE bloom_platform_process)
@@ -188,11 +219,16 @@ if(BUILD_TESTING)
 endif()
 
 if(BUILD_TESTING AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE))
+    # Inherited descriptor numbers (the source snapshot and staged output a child receives) are a
+    # POSIX mechanism; the Windows supervisor refuses a launch that asks for them.
     add_executable(bloom_platform_process_descriptor_test tests/process_descriptor_tests.cpp)
     target_link_libraries(bloom_platform_process_descriptor_test PRIVATE bloom_platform_process)
     bloom_enable_warnings(bloom_platform_process_descriptor_test)
     bloom_add_test(NAME bloom.platform.process_descriptors
                    COMMAND bloom_platform_process_descriptor_test LABELS unit platform process)
+endif()
+# Source identity is implemented for Linux, macOS and Windows only.
+if(BUILD_TESTING AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE OR WIN32))
     add_executable(bloom_platform_source_identity_test tests/source_identity_tests.cpp)
     target_link_libraries(bloom_platform_source_identity_test PRIVATE bloom_platform_process)
     bloom_enable_warnings(bloom_platform_source_identity_test)

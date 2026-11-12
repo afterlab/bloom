@@ -81,8 +81,8 @@ if(BUILD_TESTING)
 
     if(BLOOM_DEPENDENCY_PREFIX)
         set(bloom_gpu_shader_test_environment
-            "BLOOM_GLSLANG_VALIDATOR=${BLOOM_DEPENDENCY_PREFIX}/bin/glslangValidator"
-            "BLOOM_SPIRV_VAL=${BLOOM_DEPENDENCY_PREFIX}/bin/spirv-val"
+            "BLOOM_GLSLANG_VALIDATOR=${BLOOM_DEPENDENCY_PREFIX}/bin/glslangValidator${CMAKE_EXECUTABLE_SUFFIX}"
+            "BLOOM_SPIRV_VAL=${BLOOM_DEPENDENCY_PREFIX}/bin/spirv-val${CMAKE_EXECUTABLE_SUFFIX}"
         )
     else()
         set(bloom_gpu_shader_test_environment "")

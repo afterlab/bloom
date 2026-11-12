@@ -174,6 +174,9 @@ ProcessSupervisor::ProcessSupervisor(std::unique_ptr<State> state) : state_(std:
 ProcessSupervisor::~ProcessSupervisor() { stop(); }
 ProcessResult<std::unique_ptr<ProcessSupervisor>>
 ProcessSupervisor::launch(const ProcessOptions& options) {
+    // Launch-time confinement is the Windows form; a worker here confines itself.
+    if (options.confined)
+        return ProcessFailure{ProcessError::Spawn, ENOTSUP};
     if (options.executable.empty() || options.executable.front() != '/' ||
         options.executable.find('\0') != std::string::npos ||
         options.addressSpaceBytes < 64ULL * 1024U * 1024U || options.openFiles < 8 ||
@@ -372,6 +375,9 @@ void ProcessSupervisor::stop(std::span<const std::byte> message) {
     state_->reaped = true;
 }
 std::int64_t ProcessSupervisor::processId() const { return state_->pid; }
+std::optional<std::uint64_t> ProcessSupervisor::shareHandle(void*, std::uint32_t) {
+    return std::nullopt;
+}
 namespace {
 // "VmRSS:    1234 kB" -> bytes, or nothing when the line is absent.
 std::optional<std::uint64_t> statusKilobytes(const std::string& text, const std::string_view key) {

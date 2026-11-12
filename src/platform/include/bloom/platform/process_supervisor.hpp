@@ -73,6 +73,14 @@ struct ProcessOptions {
     // Issue #474: the shared frame arena the child writes decoded planes into, installed as
     // child fd 6 (Linux). Other platforms refuse a launch that asks for it.
     std::shared_ptr<const SharedFrameArena> frameArena{};
+    // Windows: the child starts with no ambient authority. Its token names no account or group it
+    // could open a file, a device or another process with, and holds no privilege; its job denies
+    // the desktop, the clipboard and other processes' window handles. What it can use is what it is
+    // handed: its pipes, and the objects given through shareHandle. processWorkerBootstrap() in
+    // the child completes the confinement, so nothing the worker reads afterwards meets more.
+    // Linux and macOS workers confine themselves once they hold their descriptors (seccomp and
+    // Landlock, the system sandbox); a launch that asks for this there is refused.
+    bool confined = false;
 };
 // Blocking API. Call only on a BlockingIo executor. No detached threads or host signal handlers.
 // The trusted worker must call processWorkerBootstrap() before loading provider code.
@@ -100,6 +108,11 @@ class ProcessSupervisor final {
     // The child's memory right now, or nothing once it has been reaped or when the platform cannot
     // report it. Non-blocking; any thread that owns the supervisor.
     [[nodiscard]] std::optional<ProcessMemory> memory() const;
+    // Windows: gives the child its own handle to a kernel object this process holds (`handle` is
+    // the HANDLE), with exactly the access rights in `access`, and returns the child's handle
+    // value. This is how a confined child receives shared memory. Nothing where descriptors
+    // travel over a socket instead (Linux, macOS), or when the child has ended.
+    [[nodiscard]] std::optional<std::uint64_t> shareHandle(void* handle, std::uint32_t access);
 
   private:
     struct State;

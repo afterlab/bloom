@@ -1,5 +1,7 @@
 #include <bloom/color/gpu_shader_compiler.hpp>
 #include <bloom/color/gpu_shader_tool_resolver.hpp>
+#include <bloom/core/environment.hpp>
+#include <bloom/core/executable_suffix.hpp>
 #include <bloom/core/sha256.hpp>
 
 #include <chrono>
@@ -80,11 +82,13 @@ std::string inventoryText(const bool relocated, const std::string& glslangStaged
                        "\"version\":1,\"layout\":\"executable-relative\","
                        "\"directory\":\"bloom-gpu-tools\",\"relocated\":";
     text += relocated ? "true" : "false";
-    text += ",\"tools\":[{\"name\":\"glslangValidator\",\"file\":\"glslangValidator\","
+    text += ",\"tools\":[{\"name\":\"glslangValidator\",\"file\":"
+            "\"glslangValidator" BLOOM_EXECUTABLE_SUFFIX "\","
             "\"component\":\"glslang\",\"componentVersion\":\"16.4.0\","
             "\"source\":\"bin/glslangValidator\",\"sourceSha256\":\"" +
             glslangSource + "\",\"stagedSha256\":\"" + glslangStaged +
-            "\",\"runtimeLibraries\":[]},{\"name\":\"spirv-val\",\"file\":\"spirv-val\","
+            "\",\"runtimeLibraries\":[]},{\"name\":\"spirv-val\",\"file\":\"spirv-"
+            "val" BLOOM_EXECUTABLE_SUFFIX "\","
             "\"component\":\"spirv-tools\",\"componentVersion\":\"b707790\","
             "\"source\":\"bin/spirv-val\",\"sourceSha256\":\"" +
             spirvSource + "\",\"stagedSha256\":\"" + spirvStaged +
@@ -114,11 +118,12 @@ class Fixture final {
             app << "fake application executable\n";
         }
         fs::create_directory(tools(), error);
-        fs::copy_file(glslang, tools() / "glslangValidator", fs::copy_options::overwrite_existing,
-                      error);
-        fs::copy_file(spirvVal, tools() / "spirv-val", fs::copy_options::overwrite_existing, error);
-        glslangDigest_ = hashFile(tools() / "glslangValidator");
-        spirvDigest_ = hashFile(tools() / "spirv-val");
+        fs::copy_file(glslang, tools() / "glslangValidator" BLOOM_EXECUTABLE_SUFFIX,
+                      fs::copy_options::overwrite_existing, error);
+        fs::copy_file(spirvVal, tools() / "spirv-val" BLOOM_EXECUTABLE_SUFFIX,
+                      fs::copy_options::overwrite_existing, error);
+        glslangDigest_ = hashFile(tools() / "glslangValidator" BLOOM_EXECUTABLE_SUFFIX);
+        spirvDigest_ = hashFile(tools() / "spirv-val" BLOOM_EXECUTABLE_SUFFIX);
         writeInventory(false, sha256Text(glslangDigest_), sha256Text(spirvDigest_),
                        sha256Text(glslangDigest_), sha256Text(spirvDigest_));
     }
@@ -159,8 +164,8 @@ GpuShaderToolPackage packageFor(const Fixture& fixture) {
     GpuShaderToolPackage package;
     package.toolsDirectory = "bloom-gpu-tools";
     package.inventoryName = "inventory.json";
-    package.glslangValidatorName = "glslangValidator";
-    package.spirvValName = "spirv-val";
+    package.glslangValidatorName = "glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
+    package.spirvValName = "spirv-val" BLOOM_EXECUTABLE_SUFFIX;
     package.glslangStagedDigest = fixture.glslangDigest();
     package.spirvValStagedDigest = fixture.spirvDigest();
     return package;
@@ -170,8 +175,8 @@ GpuShaderToolPackage relocatedPackage() {
     GpuShaderToolPackage package;
     package.toolsDirectory = "bloom-gpu-tools";
     package.inventoryName = "inventory.json";
-    package.glslangValidatorName = "glslangValidator";
-    package.spirvValName = "spirv-val";
+    package.glslangValidatorName = "glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
+    package.spirvValName = "spirv-val" BLOOM_EXECUTABLE_SUFFIX;
     package.relocated = true;
     return package;
 }
@@ -186,25 +191,28 @@ void testValidStagedToolsCompile(Expectations& expectations, const std::string& 
     GpuShaderToolResolver resolver;
     const auto resolved = resolver.resolve(fixture.app(), packageFor(fixture));
     expectations.expect(resolved.ok, "valid staged tools resolve");
-    expectations.expect(
-        resolved.paths.glslangValidator.ends_with("bloom-gpu-tools/glslangValidator"),
-        "resolved glslang path is inside the owned tools directory");
-    expectations.expect(resolved.paths.spirvVal.ends_with("bloom-gpu-tools/spirv-val"),
+    expectations.expect(fs::path(resolved.paths.glslangValidator)
+                            .generic_string()
+                            .ends_with("bloom-gpu-tools/glslangValidator" BLOOM_EXECUTABLE_SUFFIX),
+                        "resolved glslang path is inside the owned tools directory");
+    expectations.expect(fs::path(resolved.paths.spirvVal)
+                            .generic_string()
+                            .ends_with("bloom-gpu-tools/spirv-val" BLOOM_EXECUTABLE_SUFFIX),
                         "resolved spirv path is inside the owned tools directory");
     (void)resolver.resolve(fixture.app(), packageFor(fixture));
     expectations.expect(resolver.stats().cacheHits == 1 && resolver.stats().resolves == 1,
                         "startup qualification is hashed once and cached");
     if (!resolved.ok)
         return;
-    ::setenv("PATH", "", 1);
-    ::setenv("LD_LIBRARY_PATH", "", 1);
+    static_cast<void>(bloom::core::setEnvironmentVariable("PATH", ""));
+    static_cast<void>(bloom::core::setEnvironmentVariable("LD_LIBRARY_PATH", ""));
     GpuShaderCompiler compiler;
     GpuShaderCompileRequest request;
     request.computeShaderText = std::string(kComputeShader);
     request.tools = resolved.paths;
     const auto compiled = compiler.compile(request);
-    ::unsetenv("PATH");
-    ::unsetenv("LD_LIBRARY_PATH");
+    static_cast<void>(bloom::core::unsetEnvironmentVariable("PATH"));
+    static_cast<void>(bloom::core::unsetEnvironmentVariable("LD_LIBRARY_PATH"));
     expectations.expect(compiled.status == GpuShaderCompileStatus::Compiled && compiled.artifact,
                         "resolved tools compile+validate with a scrubbed PATH");
 }
@@ -213,7 +221,7 @@ void testMissingTool(Expectations& expectations, const std::string& glslang,
                      const std::string& spirvVal) {
     Fixture fixture(glslang, spirvVal);
     std::error_code error;
-    fs::remove(fixture.tools() / "glslangValidator", error);
+    fs::remove(fixture.tools() / "glslangValidator" BLOOM_EXECUTABLE_SUFFIX, error);
     GpuShaderToolResolver resolver;
     expectations.expect(codeOf(resolver.resolve(fixture.app(), packageFor(fixture))) ==
                             GpuShaderToolResolveError::ToolsMissing,
@@ -236,11 +244,19 @@ void testSymlinkOutside(Expectations& expectations, const std::string& glslang,
     Fixture fixture(glslang, spirvVal);
     std::error_code error;
     fs::create_directory(fixture.bin() / "outside", error);
-    fs::copy_file(fixture.tools() / "spirv-val", fixture.bin() / "outside" / "glslangValidator",
+    fs::copy_file(fixture.tools() / "spirv-val" BLOOM_EXECUTABLE_SUFFIX,
+                  fixture.bin() / "outside" / "glslangValidator" BLOOM_EXECUTABLE_SUFFIX,
                   fs::copy_options::overwrite_existing, error);
-    fs::remove(fixture.tools() / "glslangValidator", error);
-    fs::create_symlink(fixture.bin() / "outside" / "glslangValidator",
-                       fixture.tools() / "glslangValidator", error);
+    fs::remove(fixture.tools() / "glslangValidator" BLOOM_EXECUTABLE_SUFFIX, error);
+    fs::create_symlink(fixture.bin() / "outside" / "glslangValidator" BLOOM_EXECUTABLE_SUFFIX,
+                       fixture.tools() / "glslangValidator" BLOOM_EXECUTABLE_SUFFIX, error);
+#if defined(_WIN32)
+    // Making a link needs a privilege that an ordinary Windows account does not hold.
+    if (error) {
+        std::cout << "SKIP: this account cannot create a symbolic link\n";
+        return;
+    }
+#endif
     GpuShaderToolResolver resolver;
     expectations.expect(codeOf(resolver.resolve(fixture.app(), packageFor(fixture))) ==
                             GpuShaderToolResolveError::OutsideToolsDirectory,
@@ -358,6 +374,13 @@ void testInventorySymlinkEscape(Expectations& expectations, const std::string& g
     fs::remove(fixture.tools() / "inventory.json", error);
     fs::create_symlink(fixture.bin() / "outside" / "inventory.json",
                        fixture.tools() / "inventory.json", error);
+#if defined(_WIN32)
+    // Making a link needs a privilege that an ordinary Windows account does not hold.
+    if (error) {
+        std::cout << "SKIP: this account cannot create a symbolic link\n";
+        return;
+    }
+#endif
     GpuShaderToolResolver resolver;
     expectations.expect(codeOf(resolver.resolve(fixture.app(), packageFor(fixture))) ==
                             GpuShaderToolResolveError::OutsideToolsDirectory,

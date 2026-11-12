@@ -1,3 +1,8 @@
+// rand_s, used once to prime the system random source before a confined worker locks down.
+#define _CRT_RAND_S
+#include <cstdlib>
+
+#include <bloom/platform/file_snapshot.hpp>
 #include <bloom/platform/process_supervisor.hpp>
 
 #if !defined(_WIN32)
@@ -39,14 +44,25 @@
 //   * stop(): cancellation message -> grace -> closed stdin -> grace -> TerminateJobObject. There
 //   is
 //     no SIGTERM for a console-less child; end of input is the cooperative request.
-//   * the inherited source snapshot (fd 4) and staged output (fd 5) capabilities are POSIX
-//     descriptors; a launch that asks for either is refused and the host takes its path/copy route.
+//   * the source snapshot (fd 4 on POSIX) is inherited as a read-only handle whose value the
+//     child reads from BLOOM_PROCESS_SNAPSHOT. The staged output (fd 5) and the shared frame arena
+//     are POSIX descriptors; a launch that asks for either is refused and the host takes its
+//     path/copy route.
+//   * a confined launch (ProcessOptions::confined) gives the child a restricted primary token:
+//     every account and group in it is deny-only, the only restricting identifier is the null
+//     one, and no privilege is left, so no access check that names a file, a device, a registry
+//     key or a process can pass. The process cannot start under that token (the loader has to
+//     open its libraries), so its first thread starts impersonating a restricted token with the
+//     launching user's own access; processWorkerBootstrap() lowers the process to the untrusted
+//     integrity level and drops the impersonation before the worker reads any input. The job also
+//     denies the desktop, the clipboard, global atoms and other processes' window handles.
 // The environment holds only LC_ALL=C, TZ=UTC, SystemRoot (required by system DLL loading), the
 // gate, and the caller's explicit entries.
 namespace bloom::platform {
 namespace {
 using Clock = std::chrono::steady_clock;
 constexpr wchar_t kGateVariable[] = L"BLOOM_PROCESS_GATE";
+constexpr wchar_t kConfinedVariable[] = L"BLOOM_PROCESS_CONFINED";
 
 class Handle final {
   public:
@@ -186,10 +202,15 @@ bool makePipe(const bool parentWrites, Handle& parent, Handle& child) {
     return GetOverlappedResult(parent.get(), &overlapped, &ignored, TRUE) != 0;
 }
 
-ProcessError transferError(const DWORD error) {
-    return error == ERROR_BROKEN_PIPE || error == ERROR_NO_DATA || error == ERROR_PIPE_NOT_CONNECTED
-               ? ProcessError::Crashed
-               : ProcessError::Io;
+// A pipe whose other end is gone. For a read that is the end of the stream, which the contract
+// reports as Crashed with native code 0 exactly like a POSIX read that returns 0: callers that
+// stream a tool's output to its end test for that pair. A write keeps the system code.
+ProcessFailure transferFailure(const DWORD error, const bool writing) {
+    const bool peerGone =
+        error == ERROR_BROKEN_PIPE || error == ERROR_NO_DATA || error == ERROR_PIPE_NOT_CONNECTED;
+    if (!peerGone)
+        return ProcessFailure{ProcessError::Io, static_cast<int>(error)};
+    return ProcessFailure{ProcessError::Crashed, writing ? static_cast<int>(error) : 0};
 }
 
 ProcessResult<std::size_t> transfer(HANDLE pipe, std::span<std::byte> bytes,
@@ -215,8 +236,9 @@ ProcessResult<std::size_t> transfer(HANDLE pipe, std::span<std::byte> bytes,
         const BOOL started =
             writing ? WriteFile(pipe, output.data() + offset, chunk, nullptr, &overlapped)
                     : ReadFile(pipe, bytes.data() + offset, chunk, nullptr, &overlapped);
-        if (!started && GetLastError() != ERROR_IO_PENDING)
-            return ProcessFailure{transferError(GetLastError()), static_cast<int>(GetLastError())};
+        if (const DWORD error = started ? ERROR_SUCCESS : GetLastError();
+            !started && error != ERROR_IO_PENDING)
+            return transferFailure(error, writing);
         // Wait in short steps so cancellation and the shared deadline stay responsive.
         std::optional<ProcessFailure> abandoned;
         while (WaitForSingleObject(event.get(), 10) == WAIT_TIMEOUT) {
@@ -234,12 +256,73 @@ ProcessResult<std::size_t> transfer(HANDLE pipe, std::span<std::byte> bytes,
         if (abandoned)
             return *abandoned;
         if (!done)
-            return ProcessFailure{transferError(GetLastError()), static_cast<int>(GetLastError())};
+            return transferFailure(GetLastError(), writing);
         if (count == 0 && !writing)
             return ProcessFailure{ProcessError::Crashed, 0};
         offset += count;
     }
     return offset;
+}
+
+// One token information class, read whole.
+std::vector<std::byte> tokenInformation(HANDLE token, const TOKEN_INFORMATION_CLASS kind) {
+    DWORD size = 0;
+    GetTokenInformation(token, kind, nullptr, 0, &size);
+    std::vector<std::byte> storage(size);
+    if (size == 0 || !GetTokenInformation(token, kind, storage.data(), size, &size))
+        storage.clear();
+    return storage;
+}
+
+// The two tokens of a confined launch, made from this process's own.
+struct ConfinedTokens {
+    Handle primary;       // what the child process is: no usable identity, no privilege
+    Handle impersonation; // what its first thread is until the worker bootstrap drops it
+};
+std::optional<ConfinedTokens> confinedTokens() {
+    HANDLE raw = nullptr;
+    if (!OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT, &raw))
+        return std::nullopt;
+    const Handle own(raw);
+    const auto userStorage = tokenInformation(own.get(), TokenUser);
+    const auto groupStorage = tokenInformation(own.get(), TokenGroups);
+    if (userStorage.empty() || groupStorage.empty())
+        return std::nullopt;
+    const auto* user = reinterpret_cast<const TOKEN_USER*>(userStorage.data());
+    const auto* groups = reinterpret_cast<const TOKEN_GROUPS*>(groupStorage.data());
+    // Every identity the token carries, except its integrity label, which is not an identity.
+    std::vector<SID_AND_ATTRIBUTES> identities{{user->User.Sid, 0}};
+    for (DWORD index = 0; index < groups->GroupCount; ++index)
+        if ((groups->Groups[index].Attributes & SE_GROUP_INTEGRITY) == 0)
+            identities.push_back({groups->Groups[index].Sid, 0});
+    std::array<std::byte, SECURITY_MAX_SID_SIZE> nullStorage{};
+    DWORD nullSize = static_cast<DWORD>(nullStorage.size());
+    if (!CreateWellKnownSid(WinNullSid, nullptr, nullStorage.data(), &nullSize))
+        return std::nullopt;
+    SID_AND_ATTRIBUTES nobody{nullStorage.data(), 0};
+
+    ConfinedTokens tokens;
+    HANDLE primary = nullptr;
+    if (!CreateRestrictedToken(own.get(), DISABLE_MAX_PRIVILEGE,
+                               static_cast<DWORD>(identities.size()), identities.data(), 0, nullptr,
+                               1, &nobody, &primary))
+        return std::nullopt;
+    tokens.primary.reset(primary);
+    // The same access as this process, but as a restricted token: a restricted process may only
+    // impersonate one.
+    HANDLE same = nullptr;
+    if (!CreateRestrictedToken(own.get(), DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr,
+                               static_cast<DWORD>(identities.size()), identities.data(), &same))
+        return std::nullopt;
+    const Handle sameAccess(same);
+    HANDLE impersonation = nullptr;
+    if (!DuplicateTokenEx(sameAccess.get(), TOKEN_IMPERSONATE | TOKEN_QUERY | TOKEN_ADJUST_DEFAULT,
+                          nullptr, SecurityImpersonation, TokenImpersonation, &impersonation))
+        return std::nullopt;
+    tokens.impersonation.reset(impersonation);
+    return tokens;
 }
 } // namespace
 
@@ -273,7 +356,7 @@ ProcessSupervisor::~ProcessSupervisor() { stop(); }
 
 ProcessResult<std::unique_ptr<ProcessSupervisor>>
 ProcessSupervisor::launch(const ProcessOptions& options) {
-    if (options.inputSnapshot || options.stagedOutput || options.frameArena)
+    if (options.stagedOutput || options.frameArena)
         return ProcessFailure{ProcessError::Spawn, ERROR_NOT_SUPPORTED};
     std::wstring executable;
     if (!widen(options.executable, executable) || executable.empty() ||
@@ -313,6 +396,21 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
     if (!SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits,
                                  sizeof(limits)))
         return ProcessFailure{ProcessError::ResourceLimit, static_cast<int>(GetLastError())};
+    std::optional<ConfinedTokens> tokens;
+    if (options.confined) {
+        JOBOBJECT_BASIC_UI_RESTRICTIONS desktop{};
+        desktop.UIRestrictionsClass =
+            JOB_OBJECT_UILIMIT_DESKTOP | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS |
+            JOB_OBJECT_UILIMIT_EXITWINDOWS | JOB_OBJECT_UILIMIT_GLOBALATOMS |
+            JOB_OBJECT_UILIMIT_HANDLES | JOB_OBJECT_UILIMIT_READCLIPBOARD |
+            JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS | JOB_OBJECT_UILIMIT_WRITECLIPBOARD;
+        if (!SetInformationJobObject(job.get(), JobObjectBasicUIRestrictions, &desktop,
+                                     sizeof(desktop)))
+            return ProcessFailure{ProcessError::ResourceLimit, static_cast<int>(GetLastError())};
+        tokens = confinedTokens();
+        if (!tokens)
+            return ProcessFailure{ProcessError::Spawn, static_cast<int>(GetLastError())};
+    }
 
     // Deterministic environment: the baseline, then explicit entries replace same-named ones.
     std::vector<std::wstring> environment{L"LC_ALL=C", L"TZ=UTC"};
@@ -324,6 +422,22 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
     }
     environment.push_back(std::wstring(kGateVariable) + L"=" +
                           std::to_wstring(reinterpret_cast<std::uintptr_t>(childGate.get())));
+    if (options.confined)
+        environment.push_back(std::wstring(kConfinedVariable) + L"=1");
+    // The snapshot handle is private to this process; the child gets an inheritable duplicate.
+    Handle childSnapshot;
+    if (options.inputSnapshot) {
+        HANDLE duplicate = nullptr;
+        if (options.inputSnapshot->nativeHandle() == nullptr ||
+            !DuplicateHandle(GetCurrentProcess(),
+                             static_cast<HANDLE>(options.inputSnapshot->nativeHandle()),
+                             GetCurrentProcess(), &duplicate, 0, TRUE, DUPLICATE_SAME_ACCESS))
+            return ProcessFailure{ProcessError::Spawn, static_cast<int>(GetLastError())};
+        childSnapshot.reset(duplicate);
+        environment.push_back(
+            std::wstring(L"BLOOM_PROCESS_SNAPSHOT=") +
+            std::to_wstring(reinterpret_cast<std::uintptr_t>(childSnapshot.get())));
+    }
     for (const auto& entry : options.environment) {
         std::wstring wide;
         const auto separator = entry.find('=');
@@ -358,8 +472,9 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
         appendQuoted(commandLine, wide);
     }
 
-    std::array<HANDLE, 4> inherited{childInput.get(), childOutput.get(), nul.get(),
-                                    childGate.get()};
+    std::vector<HANDLE> inherited{childInput.get(), childOutput.get(), nul.get(), childGate.get()};
+    if (childSnapshot.valid())
+        inherited.push_back(childSnapshot.get());
     AttributeList attributes(1);
     if (attributes.get() == nullptr ||
         !UpdateProcThreadAttribute(attributes.get(), 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
@@ -374,16 +489,32 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
     startup.StartupInfo.hStdError = nul.get();
     startup.lpAttributeList = attributes.get();
     PROCESS_INFORMATION created{};
-    if (!CreateProcessW(executable.c_str(), commandLine.data(), nullptr, nullptr, TRUE,
-                        CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT |
-                            EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
-                        block.data(), nullptr, &startup.StartupInfo, &created))
+    // A confined child gets no console at all: a hidden console is a second program started with
+    // the child's own token, which that token cannot do.
+    const DWORD creation = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT |
+                           EXTENDED_STARTUPINFO_PRESENT |
+                           (tokens ? DETACHED_PROCESS : CREATE_NO_WINDOW);
+    const BOOL started =
+        tokens ? CreateProcessAsUserW(tokens->primary.get(), executable.c_str(), commandLine.data(),
+                                      nullptr, nullptr, TRUE, creation, block.data(), nullptr,
+                                      &startup.StartupInfo, &created)
+               : CreateProcessW(executable.c_str(), commandLine.data(), nullptr, nullptr, TRUE,
+                                creation, block.data(), nullptr, &startup.StartupInfo, &created);
+    if (!started)
         return ProcessFailure{ProcessError::Spawn, static_cast<int>(GetLastError())};
     auto state = std::make_unique<State>();
     state->process.reset(created.hProcess);
     state->thread.reset(created.hThread);
     state->pid = created.dwProcessId;
     state->options = options;
+    // The suspended first thread starts as the launching user so the loader can open the
+    // program's libraries; the worker bootstrap drops this.
+    if (tokens && !SetThreadToken(&created.hThread, tokens->impersonation.get())) {
+        const auto error = static_cast<int>(GetLastError());
+        TerminateProcess(state->process.get(), 1);
+        WaitForSingleObject(state->process.get(), INFINITE);
+        return ProcessFailure{ProcessError::Spawn, error};
+    }
     if (!AssignProcessToJobObject(job.get(), state->process.get())) {
         const auto error = static_cast<int>(GetLastError());
         TerminateProcess(state->process.get(), 1);
@@ -397,6 +528,7 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
     childInput.reset();
     childOutput.reset();
     childGate.reset();
+    childSnapshot.reset();
     nul.reset();
     if (ResumeThread(state->thread.get()) == static_cast<DWORD>(-1)) {
         const auto error = static_cast<int>(GetLastError());
@@ -464,6 +596,16 @@ void ProcessSupervisor::stop(std::span<const std::byte> message) {
 }
 
 std::int64_t ProcessSupervisor::processId() const { return state_->pid; }
+std::optional<std::uint64_t> ProcessSupervisor::shareHandle(void* handle,
+                                                            const std::uint32_t access) {
+    if (state_->reaped || !state_->process.valid() || handle == nullptr)
+        return std::nullopt;
+    HANDLE shared = nullptr;
+    if (!DuplicateHandle(GetCurrentProcess(), static_cast<HANDLE>(handle), state_->process.get(),
+                         &shared, access, FALSE, 0))
+        return std::nullopt;
+    return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(shared));
+}
 std::optional<ProcessMemory> ProcessSupervisor::memory() const {
     if (state_->reaped || state_->process.get() == nullptr)
         return std::nullopt;
@@ -501,6 +643,35 @@ bool processWorkerBootstrap() {
     char ready = 0;
     DWORD read = 0;
     const BOOL ok = ReadFile(gate.get(), &ready, 1, &read, nullptr);
-    return ok && read == 1 && ready == 'R';
+    if (!ok || read != 1 || ready != 'R')
+        return false;
+    wchar_t confined[4] = {};
+    if (GetEnvironmentVariableW(kConfinedVariable, confined, 4) == 0)
+        return true;
+    SetEnvironmentVariableW(kConfinedVariable, nullptr);
+    // A confined launch: while this thread still has the launching user's access, lower the
+    // process to the untrusted integrity level, then drop that access for good. From here the
+    // process is only what its restricted token allows.
+    // The system random source opens its provider on first use, which a confined process cannot
+    // do; libraries that seed themselves from it (an XML parser's hash salt) end the process when
+    // it fails. Use it once now so it stays usable.
+    unsigned int primed = 0;
+    if (rand_s(&primed) != 0)
+        return false;
+    HANDLE processToken = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_DEFAULT | TOKEN_QUERY, &processToken))
+        return false;
+    const Handle token(processToken);
+    std::array<std::byte, SECURITY_MAX_SID_SIZE> storage{};
+    DWORD size = static_cast<DWORD>(storage.size());
+    if (!CreateWellKnownSid(WinUntrustedLabelSid, nullptr, storage.data(), &size))
+        return false;
+    TOKEN_MANDATORY_LABEL label{};
+    label.Label.Sid = storage.data();
+    label.Label.Attributes = SE_GROUP_INTEGRITY;
+    if (!SetTokenInformation(token.get(), TokenIntegrityLevel, &label,
+                             sizeof(label) + GetLengthSid(storage.data())))
+        return false;
+    return IsTokenRestricted(token.get()) != 0 && RevertToSelf() != 0;
 }
 } // namespace bloom::platform
