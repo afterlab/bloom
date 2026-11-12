@@ -818,8 +818,9 @@ void testSession(const std::filesystem::path& root) {
         expect(stalledPid > 0 && ::kill(static_cast<pid_t>(stalledPid), 0) != 0,
                "session: the helper that missed its deadline was terminated and reaped");
     }
+#endif
 
-    // The resolver replaces a kept helper that died.
+    // The resolver replaces a kept helper that died or was released.
     const auto folder = root / "graded";
     const auto location = loose(folder);
     const auto revision = revisionOf(location);
@@ -828,7 +829,6 @@ void testSession(const std::filesystem::path& root) {
     releaseExternalOcioConfigs();
     expect(revision.has_value() && same(helperGraded(location), referenceGraded(folder)),
            "session: after its helpers were released the resolver starts a new one");
-#endif
 }
 
 } // namespace
