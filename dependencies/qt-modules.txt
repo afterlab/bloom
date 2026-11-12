@@ -18,7 +18,8 @@ module Gui all package
 module Widgets all package
 module Network all package
 module Svg all package
-module DBus linux package
+# Qt Gui loads Qt D-Bus on Linux and on macOS.
+module DBus linux macos package
 module Test all build
 
 # Libraries the plugins below load.
