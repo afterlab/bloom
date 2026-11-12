@@ -238,6 +238,72 @@ void testClearOnlyKnownFiles(const std::filesystem::path& dir) {
            "atomic write leaves no temp file");
 }
 
+// Issue #675: a preview route holds one proof per display, each in its own file, and a platform
+// that proves both displays is covered only when both are there.
+void testBothPreviewDisplays(const std::filesystem::path& dir) {
+    namespace io = bloom::gpu_route_proof_io;
+    const std::string nonce = "unit-nonce-4";
+    expect(io::writeRunNonce(dir, nonce) == RouteProofIoStatus::Ok, "two-display nonce writes");
+    expect(io::clearKnownProofFiles(dir) == RouteProofIoStatus::Ok, "two-display directory clears");
+    const auto resident = unitPreviewProof();
+    auto painted = unitPreviewProof();
+    painted.harness = GpuRouteHarnessKind::ViewerPreviewHostPainted;
+    painted.readbackSubmissions = painted.verifiedFrames;
+    painted.payloads = painted.verifiedFrames;
+    painted.transferredBytes = 4096;
+    const auto accepted = [&](const bool alsoResident, const bool hostPainted) {
+        for (const auto& result : io::readKnownRouteProofs(dir, nonce, alsoResident)) {
+            if (result.routeId == resident.routeId && result.hostPainted == hostPainted) {
+                return result.accepted;
+            }
+        }
+        return false;
+    };
+    const auto owed = [&](const bool alsoResident) {
+        std::size_t count = 0;
+        for (const auto& result : io::readKnownRouteProofs(dir, nonce, alsoResident)) {
+            count += result.routeId == resident.routeId ? 1U : 0U;
+        }
+        return count;
+    };
+    expect(owed(false) == 1 && owed(true) == 2,
+           "a preview route owes the host-painted proof, and the resident one where both are "
+           "proven");
+
+    expect(io::writeRouteProof(dir, nonce, resident) == RouteProofIoStatus::Ok,
+           "the resident proof writes");
+    expect(!accepted(true, true) && accepted(true, false),
+           "a resident proof alone leaves the host-painted proof missing");
+    expect(!accepted(false, true),
+           "a resident proof does not stand in for the host-painted one on any platform");
+
+    expect(io::writeRouteProof(dir, nonce, painted) == RouteProofIoStatus::Ok,
+           "the host-painted proof writes next to the resident one");
+    expect(std::filesystem::exists(io::routeProofPath(dir, resident.routeId, false)) &&
+               std::filesystem::exists(io::routeProofPath(dir, resident.routeId, true)),
+           "neither writer replaces the other's file");
+    expect(accepted(true, true) && accepted(true, false) && accepted(false, true),
+           "both proofs are accepted, each from its own file");
+
+    std::error_code error;
+    std::filesystem::remove(io::routeProofPath(dir, resident.routeId, false), error);
+    expect(accepted(true, true) && !accepted(true, false),
+           "a host-painted proof alone leaves the resident proof missing where both are proven");
+
+    // A proof of one display sitting in the other display's file proves the wrong thing.
+    std::filesystem::copy_file(io::routeProofPath(dir, resident.routeId, true),
+                               io::routeProofPath(dir, resident.routeId, false), error);
+    GpuRouteExecutionProof loaded;
+    expect(io::readRouteProof(dir, resident.routeId, nonce, loaded, false) ==
+               RouteProofIoStatus::DuplicateOrConflicting,
+           "a host-painted proof in the resident file is refused");
+
+    expect(io::clearKnownProofFiles(dir) == RouteProofIoStatus::Ok &&
+               !std::filesystem::exists(io::routeProofPath(dir, resident.routeId, false)) &&
+               !std::filesystem::exists(io::routeProofPath(dir, resident.routeId, true)),
+           "clearing removes the proofs of both displays");
+}
+
 } // namespace
 
 int main() {
@@ -248,6 +314,7 @@ int main() {
     testValidationNegatives();
     testCodecNegatives(dir);
     testClearOnlyKnownFiles(dir);
+    testBothPreviewDisplays(dir);
     std::filesystem::remove_all(dir, error);
     if (g_failures != 0) {
         std::cerr << g_failures << " route-proof io expectation(s) failed\n";

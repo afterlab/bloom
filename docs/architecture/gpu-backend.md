@@ -62,7 +62,10 @@ and what was not is in [platform-support.md](platform-support.md#macos); the dec
 [ADR 0006](../decisions/0006-gpu-backend.md) and, for a device whose memory is the system's,
 [ADR 0039](../decisions/0039-unified-memory-devices.md). macOS has no native presentation route:
 its preview is prepared on the device and painted by the widget, and the route proof contract
-holds its preview proofs to that rule. The Cross-Platform Spike Gate at the end of this document
+holds its preview proofs to that rule. The Viewer paints the same way on Linux and Windows, so the
+contract holds every platform's preview proofs to the host-painted rule; Linux, which also has
+the Wayland surface the resident service presents through, owes the resident proofs as well.
+The Cross-Platform Spike Gate at the end of this document
 has not been run as a whole on macOS or Windows, so the direction's acceptance still waits on it.
 
 Windows (2026-11-12). Where an entry below says Windows GPU execution is unqualified it describes

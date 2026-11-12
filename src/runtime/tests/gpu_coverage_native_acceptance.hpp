@@ -62,14 +62,6 @@ namespace bloom::gpu_coverage_gate {
                 bloom::gpu_route_proof_io::readKnownRouteProofs(routeProofDirectory, routeNonce);
         }
     }
-    const auto findRouteProof = [&routeProofs](const std::string& id) {
-        for (const auto& result : routeProofs) {
-            if (result.routeId == id) {
-                return &result;
-            }
-        }
-        return static_cast<const bloom::gpu_route_proof_io::RouteProofLoadResult*>(nullptr);
-    };
     std::size_t passed = 0;
     std::size_t failed = 0;
     std::size_t missing = 0;
@@ -83,18 +75,38 @@ namespace bloom::gpu_coverage_gate {
                 ++missing;
                 continue;
             }
-            const auto* proof = findRouteProof(id);
-            if (proof != nullptr && proof->accepted) {
-                std::cout << "PASS(route-proof) " << id << ": nonce " << routeNonce << ", frames "
-                          << proof->proof.verifiedFrames << ", submissions "
-                          << proof->proof.readbackSubmissions << ", payloads "
-                          << proof->proof.payloads << ", bytes " << proof->proof.transferredBytes
-                          << '\n';
+            // A preview route owes one proof per display this platform proves, and is covered only
+            // when every one of them is accepted.
+            std::size_t owed = 0;
+            std::size_t accepted = 0;
+            for (const auto& proof : routeProofs) {
+                if (proof.routeId != id) {
+                    continue;
+                }
+                ++owed;
+                const auto* const display =
+                    bloom::runtime::gpuRouteAllowsFinalReadback(id)
+                        ? ""
+                        : (proof.hostPainted ? " [host-painted]" : " [resident]");
+                if (proof.accepted) {
+                    std::cout << "PASS(route-proof) " << id << display << ": nonce " << routeNonce
+                              << ", frames " << proof.proof.verifiedFrames << ", submissions "
+                              << proof.proof.readbackSubmissions << ", payloads "
+                              << proof.proof.payloads << ", bytes " << proof.proof.transferredBytes
+                              << '\n';
+                    ++accepted;
+                } else {
+                    std::cerr << "MISSING(route-proof) " << id << display << ": " << proof.detail
+                              << " (owner " << routeOwner(id) << ")\n";
+                }
+            }
+            if (owed == 0) {
+                std::cerr << "MISSING(route-proof) " << id << ": " << routeProofUnavailable
+                          << " (owner " << routeOwner(id) << ")\n";
+            }
+            if (owed != 0 && accepted == owed) {
                 ++passed;
             } else {
-                std::cerr << "MISSING(route-proof) " << id << ": "
-                          << (proof == nullptr ? routeProofUnavailable : proof->detail)
-                          << " (owner " << routeOwner(id) << ")\n";
                 ++missing;
             }
             continue;

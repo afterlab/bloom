@@ -1273,17 +1273,19 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
-# The preview route proofs of a platform that prepares the preview on the device and paints it on
-# the host (macOS and Windows; gpuPreviewRouteDisplay() in the route proof contract). They need no native
-# presentation surface and no Qt Vulkan feature, so they are built outside the Vulkan block. Each is
-# a CTest fixture setup the runtime native acceptance gate requires: nonce setup -> writers -> gate.
-# Linux proves the resident route with the harnesses in the Vulkan block below; those two writers
-# are not registered where the host-painted ones are, because each route has exactly one writer.
-set(bloom_preview_proofs_host_painted OFF)
+# The host-painted preview route proofs: the preview is prepared on the device and painted by the
+# host, which is how the Viewer shows a frame on every platform (gpuPreviewRouteDisplay() in the
+# route proof contract; issue #675). They need no native presentation surface and no Qt Vulkan
+# feature, so they are built outside the Vulkan block and run offscreen. Each is a CTest fixture
+# setup the runtime native acceptance gate requires: nonce setup -> writers -> gate.
+# Linux owes the resident proofs as well (gpuPreviewRouteAlsoProvesResident()), written by the
+# harnesses in the Vulkan block below into their own files, so there a preview route has two
+# writers, one per display, and the gate requires both.
+set(bloom_preview_proofs_resident ON)
 if(APPLE OR WIN32)
-    set(bloom_preview_proofs_host_painted ON)
+    set(bloom_preview_proofs_resident OFF)
 endif()
-if(bloom_preview_proofs_host_painted AND BLOOM_RENDER_ENABLE_VULKAN AND TARGET Vulkan::Headers)
+if(BLOOM_RENDER_ENABLE_VULKAN AND TARGET Vulkan::Headers)
     add_executable(bloom_ui_gpu_host_painted_preview_route_proof_test
         gpu_host_painted_preview_route_proof_tests.cpp
         gpu_route_proof_harness_support.hpp
@@ -2541,7 +2543,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
     bloom_enable_warnings(bloom_ui_gpu_viewer_route_proof_test)
     bloom_enable_strict_floating_point(bloom_ui_gpu_viewer_route_proof_test)
-    if(NOT bloom_preview_proofs_host_painted)
+    if(bloom_preview_proofs_resident)
         bloom_add_test(
             NAME bloom.ui.gpu_viewer_route_proof
             COMMAND bloom_ui_gpu_viewer_route_proof_test
@@ -2647,7 +2649,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
     bloom_enable_warnings(bloom_ui_gpu_ram_preview_route_proof_test)
     bloom_enable_strict_floating_point(bloom_ui_gpu_ram_preview_route_proof_test)
-    if(NOT bloom_preview_proofs_host_painted)
+    if(bloom_preview_proofs_resident)
         bloom_add_test(
             NAME bloom.ui.gpu_ram_preview_route_proof
             COMMAND bloom_ui_gpu_ram_preview_route_proof_test

@@ -81,9 +81,13 @@ routeProofNoncePath(const std::filesystem::path& directory) {
     return directory / "nonce";
 }
 
+// A preview route can hold two proofs, one per display: the host-painted proof has its own file so
+// a platform that proves both (Linux) keeps both, and neither writer replaces the other's.
 [[nodiscard]] inline std::filesystem::path routeProofPath(const std::filesystem::path& directory,
-                                                          const std::string_view routeId) {
-    return directory / ("route." + std::string{routeId} + ".proof");
+                                                          const std::string_view routeId,
+                                                          const bool hostPainted = false) {
+    return directory /
+           ("route." + std::string{routeId} + (hostPainted ? ".host-painted.proof" : ".proof"));
 }
 
 // A single-line token must be nonempty, within the bound, and free of the record separators.
@@ -163,14 +167,16 @@ routeProofNoncePath(const std::filesystem::path& directory) {
     return RouteProofIoStatus::Ok;
 }
 
-// Removes only the six known proof files. The nonce file, the directory, and every other file are
-// left alone.
+// Removes only the known proof files: one per route, and the host-painted one of each. The nonce
+// file, the directory, and every other file are left alone.
 [[nodiscard]] inline RouteProofIoStatus
 clearKnownProofFiles(const std::filesystem::path& directory) {
     std::error_code error;
     for (const auto& routeId : knownRouteIds()) {
-        std::filesystem::remove(routeProofPath(directory, routeId), error);
-        error.clear();
+        for (const bool hostPainted : {false, true}) {
+            std::filesystem::remove(routeProofPath(directory, routeId, hostPainted), error);
+            error.clear();
+        }
     }
     return RouteProofIoStatus::Ok;
 }
@@ -349,16 +355,19 @@ writeRouteProof(const std::filesystem::path& directory, const std::string_view n
     }
     std::error_code error;
     std::filesystem::create_directories(directory, error);
-    return writeBoundedFileAtomic(routeProofPath(directory, proof.routeId),
-                                  serializeRouteProof(nonce, proof));
+    return writeBoundedFileAtomic(
+        routeProofPath(directory, proof.routeId,
+                       bloom::runtime::gpuRouteHarnessIsHostPainted(proof.harness)),
+        serializeRouteProof(nonce, proof));
 }
 
 [[nodiscard]] inline RouteProofIoStatus
 readRouteProof(const std::filesystem::path& directory, const std::string_view routeId,
-               const std::string_view expectedNonce,
-               bloom::runtime::GpuRouteExecutionProof& proof) {
+               const std::string_view expectedNonce, bloom::runtime::GpuRouteExecutionProof& proof,
+               const bool hostPainted = false) {
     RouteProofIoStatus status = RouteProofIoStatus::Ok;
-    const auto content = readBoundedFile(routeProofPath(directory, routeId), kMaxFileBytes, status);
+    const auto content =
+        readBoundedFile(routeProofPath(directory, routeId, hostPainted), kMaxFileBytes, status);
     if (!content.has_value()) {
         return status;
     }
@@ -422,6 +431,11 @@ readRouteProof(const std::filesystem::path& directory, const std::string_view ro
         !parsedSubmissions.has_value() || !parsedPayloads.has_value() || !parsedBytes.has_value()) {
         return RouteProofIoStatus::Malformed;
     }
+    // Each display has its own file; a proof of the other display in it proves the wrong thing.
+    if (bloom::runtime::gpuRouteHarnessIsHostPainted(
+            static_cast<bloom::runtime::GpuRouteHarnessKind>(*parsedHarness)) != hostPainted) {
+        return RouteProofIoStatus::DuplicateOrConflicting;
+    }
     proof.routeId = *fileRoute;
     proof.harness = static_cast<bloom::runtime::GpuRouteHarnessKind>(*parsedHarness);
     proof.processIdentityDigest = *processIdentity;
@@ -437,38 +451,53 @@ readRouteProof(const std::filesystem::path& directory, const std::string_view ro
 
 struct RouteProofLoadResult final {
     std::string routeId;
+    // Which of a preview route's two proofs this is; false for an export route.
+    bool hostPainted = false;
     RouteProofIoStatus status = RouteProofIoStatus::Missing;
     std::string detail;
     bloom::runtime::GpuRouteExecutionProof proof;
     bool accepted = false;
 };
 
-// Reads the six known proofs and runs the typed validation. A proof is accepted only when the codec
-// status is Ok, the typed validation passes, and the proof's own route matches. Every failure is
-// named by status or contract issue.
-[[nodiscard]] inline std::vector<RouteProofLoadResult>
-readKnownRouteProofs(const std::filesystem::path& directory, const std::string_view expectedNonce) {
+// Reads every proof this platform owes and runs the typed validation: one per export route, the
+// host-painted proof of each preview route, and its resident proof as well where the platform
+// proves both displays. A proof is accepted only when the codec status is Ok, the typed validation
+// passes, and the proof's own route matches. Every failure is named by status or contract issue.
+[[nodiscard]] inline std::vector<RouteProofLoadResult> readKnownRouteProofs(
+    const std::filesystem::path& directory, const std::string_view expectedNonce,
+    const bool alsoResident = bloom::runtime::gpuPreviewRouteAlsoProvesResident()) {
     std::vector<RouteProofLoadResult> results;
-    for (const auto& routeId : knownRouteIds()) {
+    const auto load = [&](const std::string& routeId, const bool hostPainted) {
         RouteProofLoadResult result;
         result.routeId = routeId;
+        result.hostPainted = hostPainted;
         bloom::runtime::GpuRouteExecutionProof proof;
-        result.status = readRouteProof(directory, routeId, expectedNonce, proof);
+        result.status = readRouteProof(directory, routeId, expectedNonce, proof, hostPainted);
         if (result.status != RouteProofIoStatus::Ok) {
             result.detail = std::string{routeProofIoStatusName(result.status)};
             results.push_back(std::move(result));
-            continue;
+            return;
         }
         const auto issues = bloom::runtime::validateGpuRouteExecutionProof(proof);
         if (!issues.empty()) {
             result.status = RouteProofIoStatus::Malformed;
             result.detail = issues.front().detail;
             results.push_back(std::move(result));
-            continue;
+            return;
         }
         result.proof = std::move(proof);
         result.accepted = true;
         results.push_back(std::move(result));
+    };
+    for (const auto& routeId : knownRouteIds()) {
+        if (bloom::runtime::gpuRouteAllowsFinalReadback(routeId)) {
+            load(routeId, false);
+            continue;
+        }
+        load(routeId, true);
+        if (alsoResident) {
+            load(routeId, false);
+        }
     }
     return results;
 }

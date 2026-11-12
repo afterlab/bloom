@@ -528,8 +528,10 @@ What was measured, on an Apple M4 running macOS 26 (2026-11-12), in a qualified 
   surface route exists. The route proof contract therefore holds the macOS preview proofs to
   the host-painted rule: every frame prepared on the device and equal to the CPU reference in
   every pixel, exactly one final display transfer per frame, no other readback and no frame on
-  the CPU path. Every other platform proves the resident route, and a host-painted proof is
-  refused there.
+  the CPU path. Windows is held to the same rule. Linux paints the Viewer the same way and is
+  held to it too; because Linux also has the Wayland surface the resident service presents
+  through, its acceptance requires the resident proofs as well, so each Linux preview route is
+  proven twice, once per display, and a missing proof of either kind fails the acceptance.
 
 Not measured: any macOS release from 13.3 to 25, and an Intel Mac. The deployment target says
 where the binaries are allowed to start, not where they were tested.

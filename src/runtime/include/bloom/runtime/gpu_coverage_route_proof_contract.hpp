@@ -41,14 +41,21 @@ enum class GpuRouteHarnessKind : std::uint8_t {
 // on the device and transferred once for the widget to paint.
 enum class GpuPreviewRouteDisplay : std::uint8_t { Resident, HostPainted };
 
-// The display the preview route proofs of this platform are held to. macOS and Windows have no
-// native presentation surface for the resident route, so their preview proofs are the
-// host-painted ones; Linux proves the resident route and a host-painted proof is refused there.
+// The display the application puts a preview frame on screen with, and so the display the preview
+// route proofs are held to. It is host-painted on every platform: the Viewer paints the transferred
+// display image on Linux, macOS and Windows alike (issue #675).
 [[nodiscard]] constexpr GpuPreviewRouteDisplay gpuPreviewRouteDisplay() noexcept {
-#if defined(__APPLE__) || defined(_WIN32)
     return GpuPreviewRouteDisplay::HostPainted;
+}
+
+// Whether this platform must prove the resident preview route as well. Linux has the native
+// presentation surface the resident service needs, so its resident proofs stay required next to
+// the host-painted ones; macOS and Windows have no such surface and prove host-painted only.
+[[nodiscard]] constexpr bool gpuPreviewRouteAlsoProvesResident() noexcept {
+#if defined(__APPLE__) || defined(_WIN32)
+    return false;
 #else
-    return GpuPreviewRouteDisplay::Resident;
+    return true;
 #endif
 }
 
