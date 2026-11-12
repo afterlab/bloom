@@ -92,6 +92,25 @@ class ParityOperations(unittest.TestCase):
         self.assertEqual((neutral['working_space'], neutral['working_space_label']),
                          ('lin_rec709_scene', 'Linear Rec.709 (sRGB)'))
 
+    def test_project_color_config_file(self):
+        # #680: a configuration file that cannot be read is refused in plain words and changes
+        # nothing; "clear" goes back to the built-in configuration as an undoable step.
+        root = pathlib.Path(self.directory.name)
+        broken = root / 'broken' / 'config.ocio'
+        broken.parent.mkdir()
+        broken.write_text('this: is: not: [a config\n', encoding='utf-8')
+        with self.assertRaises(RuntimeError) as refusal:
+            self.host.set_color_settings('file', file=str(broken))
+        self.assertTrue(str(refusal.exception).strip())
+        with self.assertRaises(RuntimeError):
+            self.host.set_color_settings('file')
+        aces = self.host.set_color_settings('aces')
+        self.assertEqual((aces['code'], aces['config_kind']), ('updated', 'aces'))
+        cleared = self.host.set_color_settings('clear')
+        self.assertEqual((cleared['code'], cleared['config_kind']), ('updated', 'neutral'))
+        bloom.transactions.undo()
+        self.assertEqual(self.host.set_color_settings('aces')['code'], 'no-change')
+
     def test_new_composition_from_assets_and_delete(self):
         root = pathlib.Path(self.directory.name)
         still = write_png(root / 'plate.png', width=64, height=32)

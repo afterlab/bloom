@@ -29,6 +29,7 @@
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <filesystem>
+#include <vector>
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QGraphicsProxyWidget>
@@ -326,6 +327,32 @@ void relativeArchiveIntentPin() {
     expect(session.colorIntent().ocioConfigUri ==
                host::ocioConfigIntentLocation(settings.ocioConfig, folder),
            "preview color intent equals the export intent for the same project folder");
+    // #680: the same holds for every locator kind a project can use, with and without a folder:
+    // the Viewer, RAM preview, thumbnails and color pickers all read the session's intent, and an
+    // export resolves the location host::ocioConfigIntentLocation gives, so any difference fails.
+    for (const auto& locator : std::vector<document::OcioConfigLocator>{
+             document::ProjectRelativeOciozLocator{"color/config.ocioz"},
+             document::ExternalOciozLocator{"file:///looks/show.ocioz"},
+             document::ExternalOcioConfigLocator{"file:///looks/show/config.ocio"}}) {
+        auto each = settings;
+        each.ocioConfig.locator = locator;
+        each.ocioConfig.portability =
+            std::holds_alternative<document::ProjectRelativeOciozLocator>(locator)
+                ? document::OcioConfigPortability::ProjectRelative
+                : document::OcioConfigPortability::External;
+        expect(each.validate().ok(), "an external or project-relative reference is valid data");
+        session.setColorSettings(each);
+        for (const auto& projectFolder :
+             {std::filesystem::path{}, std::filesystem::path("/projects") / "show"}) {
+            session.setProjectDirectory(projectFolder);
+            expect(session.colorIntent().ocioConfigUri ==
+                           host::ocioConfigIntentLocation(each.ocioConfig, projectFolder) &&
+                       session.colorIntent().ocioConfigRevision ==
+                           each.ocioConfig.expectedRevision.digest,
+                   "preview and export resolve the same config location and revision");
+        }
+    }
+    session.setColorSettings(settings);
     session.setProjectDirectory({});
     const auto resolution =
         color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn, intent.ocioConfigUri,

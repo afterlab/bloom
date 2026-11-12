@@ -167,6 +167,26 @@ class ParityOperations(unittest.TestCase):
         self.assertGreater(self.server.revision(), revision,
                            'a colour settings change is a history entry')
 
+    def test_project_color_config_file(self):
+        # #680: a configuration file that cannot be read is refused in plain words and changes
+        # nothing; "clear" goes back to the built-in configuration.
+        broken = pathlib.Path(self.directory.name) / 'broken' / 'config.ocio'
+        broken.parent.mkdir()
+        broken.write_text('this: is: not: [a config\n', encoding='utf-8')
+        revision = self.server.revision()
+        refused = self.server.tool('project.set-color-settings',
+                                   {'config': 'file', 'file': str(broken)})
+        self.assertFalse(refused['succeeded'])
+        self.assertEqual(refused['code'], 'invalid-settings')
+        self.assertTrue(refused['message'].strip(), refused)
+        self.assertEqual(self.server.revision(), revision)
+        missing = self.server.tool('project.set-color-settings', {'config': 'file'})
+        self.assertFalse(missing['succeeded'])
+        aces = self.server.tool('project.set-color-settings', {'config': 'aces'})
+        self.assertEqual((aces['code'], aces['configKind']), ('updated', 'aces'))
+        cleared = self.server.tool('project.set-color-settings', {'config': 'clear'})
+        self.assertEqual((cleared['code'], cleared['configKind']), ('updated', 'neutral'))
+
     def test_profiler_snapshot(self):
         # #423: bloom-mcp samples its own process; absent values are null, never 0.
         result = self.server.tool('profiler.snapshot', {})
