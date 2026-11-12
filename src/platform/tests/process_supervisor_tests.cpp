@@ -27,6 +27,10 @@
 #ifndef _WIN32
 #include <sys/wait.h>
 #endif
+#if defined(__APPLE__)
+#include <cerrno>
+#include <csignal>
+#endif
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -297,6 +301,42 @@ void testMemoryLimit(const std::string& self) {
     child->stop();
 }
 
+#if defined(__APPLE__)
+// Issue #664. macOS has no kernel limit a parent can put on a child's memory, so the supervisor
+// polices the worker's physical footprint itself while it waits on the worker's pipes
+// (docs/architecture/platform-support.md, "Worker Memory"). A worker that goes over its budget is
+// stopped and the caller is told why; the same worker inside its budget is left alone.
+void testMacosFootprintBudget(const std::string& self) {
+    constexpr std::uint64_t kBudget = 256ULL * 1024 * 1024;
+    // The child touches one gibibyte, four times this budget, and then stays alive.
+    auto over = launch(self, "--child-allocate", kBudget);
+    expect(over != nullptr, "a worker with a small memory budget launches");
+    if (over) {
+        const auto stream = readToEnd(*over, Clock::now() + 60s);
+        expect(stream.end.code == ProcessError::ResourceLimit && stream.end.nativeCode == ENOMEM,
+               "a worker over its memory budget is reported as a resource limit");
+        const auto exit = over->waitExit(5s);
+        expect(exit.has_value() && exit->signaled && exit->code == SIGKILL,
+               "a worker over its memory budget is killed, not left running");
+        expect(!over->memory().has_value(), "the stopped worker has been reaped");
+        over->stop();
+    }
+
+    // Twice what the child touches: the same allocation is inside this budget.
+    auto within = launch(self, "--child-allocate", 2ULL * 1024 * 1024 * 1024);
+    expect(within != nullptr, "a worker with a budget above its use launches");
+    if (within) {
+        const auto stream = readToEnd(*within, Clock::now() + 60s);
+        expect(stream.text == "allocated" && stream.end.code == ProcessError::Crashed &&
+                   stream.end.nativeCode == 0,
+               "a worker inside its memory budget runs to its end");
+        const auto finished = within->finish(Clock::now() + 30s);
+        expect(std::holds_alternative<int>(finished) && std::get<int>(finished) == 0,
+               "a worker inside its memory budget exits normally");
+    }
+}
+#endif
+
 // A confined launch: Windows gives the child no ambient authority and hands it memory by handle;
 // Linux and macOS confine inside the worker and refuse the option.
 void testConfined(const std::string& self) {
@@ -409,6 +449,9 @@ int main(const int argc, char** argv) {
     testExitCode(path);
     testDeadlineCancelAndStop(path);
     testMemoryLimit(path);
+#if defined(__APPLE__)
+    testMacosFootprintBudget(path);
+#endif
     testConfined(path);
     if (gFailures != 0) {
         std::cerr << gFailures << " process supervisor expectation(s) failed\n";

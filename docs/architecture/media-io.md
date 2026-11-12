@@ -1510,7 +1510,8 @@ so the limits are kept another way: the parent sends the open-file limit with th
 the worker's bootstrap installs it and a zero core limit before provider code loads, and the parent
 reads the worker's physical memory footprint while it waits on the worker's pipes and kills a
 worker that passes the address-space number, reporting `ResourceLimit`. A footprint is never larger
-than an address space, so the same number is no stricter than on Linux. Windows
+than an address space, so the same number is no stricter than on Linux; what this does and does
+not guarantee is in [platform-support.md](platform-support.md#worker-memory). Windows
 (ADR 0035) uses byte-mode named pipes with overlapped I/O under the same deadline and cancellation,
 a gate pipe whose inherited handle the child reads from `BLOOM_PROCESS_GATE`, an explicit inherited
 handle list (its pipe ends, the gate and `NUL` for stderr), and a job object with the

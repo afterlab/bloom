@@ -557,6 +557,39 @@ The 0.1.0 zip was unpacked into a second folder with a space in its name on the 
 it: the signature verifies, and the package check with a run passes there with only the
 system's directories on `PATH`. A second Mac was not available.
 
+### Worker Memory
+
+Bloom runs media, color and export work in worker processes, each launched with a memory budget
+(`ProcessOptions::addressSpaceBytes`). On Linux the budget is a kernel address-space limit and on
+Windows a job limit. macOS gives a parent no way to set a limit on a child, and refuses an
+address-space limit below the shared system libraries every process maps, so the budget is kept
+by the parent there:
+
+- What is measured is the worker's physical footprint, the number the system's own memory
+  accounting charges to the process: memory it has written to, including what the system has
+  compressed or swapped. Memory that is reserved but never touched, and unmodified pages of
+  mapped files and libraries, are not part of it.
+- The parent reads the footprint on every turn of its wait on the worker's pipes, at most ten
+  milliseconds apart. A worker over its budget is killed with its process group, and the request
+  fails with `ResourceLimit`, which the caller reports as the worker passing its memory limit.
+  `bloom.platform.process-supervisor` holds this: a worker that touches four times its budget is
+  killed and reported, and the same worker with a budget above its use runs to its end.
+
+What this does not guarantee:
+
+- It is not a kernel limit. An allocation inside the worker is never refused, so a worker cannot
+  handle the limit itself; it is stopped from outside.
+- A worker can be over its budget for as long as one interval between two readings, and by as
+  much as it can touch in that time.
+- The footprint is read only while the parent is reading from or writing to that worker. A
+  worker the parent is not waiting on (a retained worker between two requests, or a worker that
+  has been asked to finish) is not policed until the next request.
+- A reservation larger than the budget succeeds, where Linux would refuse it. Code that relies
+  on a refused reservation to stay inside its budget does not get one here.
+- It protects neither the rest of the system nor Bloom's own process from memory pressure in
+  the meantime; the host's memory budget and pressure monitor
+  ([GPU backend](gpu-backend.md)) do that for Bloom itself.
+
 The bundle declares Bloom's project document (`.bloom`, type `org.kinetik.bloom.project`), so
 the Finder offers Bloom for a project file. When a project is double-clicked, dropped on the
 Dock icon or chosen with Open With, the system sends the application a file-open event, at
