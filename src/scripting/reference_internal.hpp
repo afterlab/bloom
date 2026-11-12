@@ -33,7 +33,14 @@ struct ArgumentSpec final {
     std::string_view unit = {};
     std::string_view range = {};
     std::string_view defaultValue = {};
+    // MSVC builds a wrong program from a default member initializer on an initializer list, so
+    // the member has none there; an omitted member of an aggregate is empty either way. The other
+    // compilers ask for the default when designated initializers leave the member out.
+#if defined(_MSC_VER) && !defined(__clang__)
+    std::initializer_list<std::pair<std::string_view, std::string_view>> choices;
+#else
     std::initializer_list<std::pair<std::string_view, std::string_view>> choices = {};
+#endif
 };
 [[nodiscard]] ReferenceArgument argument(const ArgumentSpec& spec);
 [[nodiscard]] ReferenceEntry makeEntry(ReferenceKind kind, std::string name, std::string area,
