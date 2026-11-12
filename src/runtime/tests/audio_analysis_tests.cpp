@@ -212,8 +212,16 @@ void unavailableSources() {
     const auto doomed = apt::makeAudioFixture(scratch, "plot_fixture_doomed.wav");
     auto values = apt::spectrumValues();
     expect(render(apt::audioPlotPlan(values, 347500, doomed), scratch).evaluated, "a present file evaluates");
-    // The file is changed since import: its digest no longer matches.
+    // The file is changed since import: its digest no longer matches. #707: an artist's edit lands
+    // well after the import, but this rewrite follows it at once, with the same size; where the
+    // file clock ticks coarsely (the Windows system time, and no change journal on the volume) both
+    // writes could share one modification and change time, so the source identity, which is the
+    // contract for "unchanged", could not tell them apart and the analysis read the stale verified
+    // digest. The rewritten file is dated a few seconds later, as an edit after an import is.
+    const auto imported = std::filesystem::last_write_time(scratch / "plot_fixture_doomed.wav");
     apt::writeFixtureWav(scratch / "plot_fixture_doomed.wav", 0.125);
+    std::filesystem::last_write_time(scratch / "plot_fixture_doomed.wav",
+                                     imported + std::chrono::seconds(3));
     runtime::clearAudioAnalysis();
     const auto changed = render(apt::audioPlotPlan(values, 347500, doomed), scratch);
     expect(!changed.evaluated, "a changed file is refused");
