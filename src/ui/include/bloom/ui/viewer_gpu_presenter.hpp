@@ -75,6 +75,8 @@ enum class ViewerGpuInputKind : std::uint8_t {
     MouseMove,
     MouseDoubleClick,
     Wheel,
+    // A trackpad gesture (#696): `nativeGesture` is its Qt::NativeGestureType, `gestureValue` its value.
+    NativeGesture,
     KeyPress,
     KeyRelease,
     Enter,
@@ -98,6 +100,8 @@ struct ViewerGpuInputEvent final {
     QPoint angleDelta;
     Qt::ScrollPhase scrollPhase = Qt::NoScrollPhase;
     bool inverted = false;
+    int nativeGesture = 0;
+    double gestureValue = 0.0;
     int key = 0;
     bool autoRepeat = false;
     // Key text (key press/release) or the commit string (InputMethod).

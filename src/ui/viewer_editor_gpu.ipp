@@ -529,6 +529,13 @@ void ViewerEditor::forwardGpuInput(const ViewerGpuInputEvent& event) {
         dispatch(&forwarded);
         break;
     }
+    case ViewerGpuInputKind::NativeGesture: {
+        QNativeGestureEvent forwarded(static_cast<Qt::NativeGestureType>(event.nativeGesture),
+                                      QPointingDevice::primaryPointingDevice(), 2, local, local,
+                                      global, event.gestureValue, QPointF{}, 0);
+        dispatch(&forwarded);
+        break;
+    }
     case ViewerGpuInputKind::KeyPress:
     case ViewerGpuInputKind::KeyRelease: {
         QKeyEvent forwarded(event.kind == ViewerGpuInputKind::KeyPress ? QEvent::KeyPress

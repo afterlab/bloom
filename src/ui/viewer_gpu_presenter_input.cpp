@@ -8,6 +8,7 @@
 #include <QInputMethodEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QNativeGestureEvent>
 #include <QWheelEvent>
 
 #include <functional>
@@ -60,6 +61,17 @@ bool forwardViewerGpuInput(QEvent* event, QPointF& lastLocal, QPointF& lastGloba
         input.angleDelta = wheel->angleDelta();
         input.scrollPhase = wheel->phase();
         input.inverted = wheel->inverted();
+        updateLastPosition(lastLocal, lastGlobal, input.local, input.global);
+        break;
+    }
+    case QEvent::NativeGesture: {
+        input.kind = ViewerGpuInputKind::NativeGesture;
+        auto* gesture = static_cast<QNativeGestureEvent*>(event);
+        input.local = gesture->position();
+        input.global = gesture->globalPosition();
+        input.modifiers = gesture->modifiers();
+        input.nativeGesture = static_cast<int>(gesture->gestureType());
+        input.gestureValue = gesture->value();
         updateLastPosition(lastLocal, lastGlobal, input.local, input.global);
         break;
     }

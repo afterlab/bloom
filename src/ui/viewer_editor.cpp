@@ -19,12 +19,15 @@
 #include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 
+#include <bloom/commands/layer_stack_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/pinch_zoom.hpp>
 #include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/playback_controller.hpp>
@@ -59,6 +62,8 @@
 #include <QListView>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QNativeGestureEvent>
+#include <QPointingDevice>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -281,6 +286,10 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     : QWidget(parent), session_(session), previewController_(&previewController),
       sharedPreview_(previewController), ramPreview_(ramPreview) {
     sharedPreviewLink_ = new QObject(this);
+    // #696: a trackpad pinch zooms the Viewer about the fingers; its limits are the wheel's.
+    kit::installPinchZoom(*this, [this](const QPointF position, const double factor) {
+        zoomAboutPosition(position, factor);
+    });
     setObjectName("viewerEditor");
     setAccessibleName(tr("Composition viewer"));
     // Assets items dropped on the Viewer become layers at the playhead, centred (#380).
@@ -1627,12 +1636,21 @@ void ViewerEditor::wheelEvent(QWheelEvent* event) {
         QWidget::wheelEvent(event);
         return;
     }
-    const double factor = std::pow(kZoomStepFactor, notches);
+    zoomAboutPosition(event->position(), std::pow(kZoomStepFactor, notches));
+    event->accept();
+}
+
+// The one zoom the wheel and a trackpad pinch (#696) share, so both honour the same limits.
+void ViewerEditor::zoomAboutPosition(const QPointF position, const double factor) {
+    if (dragActive_ || panActive_ || creation_)
+        return;
+    const auto geometry = currentDisplayGeometry();
+    if (!geometry.has_value())
+        return;
     transform_ = zoomAboutPoint(transform_, canvasRect(), geometry->extent, geometry->pixelAspect,
-                                event->position(), factor);
+                                position, factor);
     refreshZoomDropdown();
     update();
-    event->accept();
 }
 
 void ViewerEditor::keyPressEvent(QKeyEvent* event) {
@@ -1708,16 +1726,29 @@ void ViewerEditor::keyPressEvent(QKeyEvent* event) {
     if (!dragActive_ && !panActive_) {
 
         if (event->modifiers() == Qt::NoModifier || event->modifiers() == Qt::ShiftModifier) {
-            if (event->key() == Qt::Key_Delete) {
+            // #704: Backspace deletes as well as Delete (it is the Delete key on a Mac keyboard).
+            if (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) {
                 std::set<document::NodeId> nodes;
                 for (const auto node : session_.selectedNodes())
                     if (session_.layerForNode(node))
                         nodes.insert(node);
-                if (!nodes.empty()) {
+                // A selected Merge entry's own layer goes with its entry.
+                std::vector<document::LayerId> entryLayers;
+                if (const auto* composition = session_.composition())
+                    for (const auto& entry : session_.selectedEntries())
+                        if (const auto* layer = document::mergeEntryLayer(
+                                composition->graph(), entry.merge, entry.slot);
+                            layer != nullptr && layer->entryOwned())
+                            entryLayers.push_back(layer->layerId);
+                if (!nodes.empty() || !entryLayers.empty()) {
                     commands::Transaction transaction("Delete Layers",
                                                       session_.snapshot().revision());
-                    transaction.emplace<commands::RemoveNodes>(session_.compositionId(),
-                                                               std::move(nodes));
+                    if (!nodes.empty())
+                        transaction.emplace<commands::RemoveNodes>(session_.compositionId(),
+                                                                   std::move(nodes));
+                    if (!entryLayers.empty())
+                        transaction.emplace<commands::DeleteLayers>(session_.compositionId(),
+                                                                    std::move(entryLayers));
                     (void)session_.executeTransaction(std::move(transaction));
                 }
                 event->accept();

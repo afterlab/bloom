@@ -11,6 +11,7 @@
 #include <bloom/ui/timeline_frame_math.hpp>
 
 #include <bloom/ui/kit/painting.hpp>
+#include <bloom/ui/kit/pinch_zoom.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <bloom/core/frame_time_mapping.hpp>
@@ -263,6 +264,10 @@ class TimelineKeyframeRow final : public QWidget {
     }
 
     void setRuler(TimelineRuler& ruler) {
+        if (ruler_ == nullptr)
+            kit::installPinchZoom(*this, [this](const QPointF position, const double factor) {
+                ruler_->zoomBy(factor, position.x());
+            });
         ruler_ = &ruler;
         connect(&ruler, &TimelineRuler::axisChanged, this, [this] { update(); });
         update();
@@ -735,6 +740,10 @@ TimelineRuler::TimelineRuler(CompositionSession& session,
     connect(&session_, &CompositionSession::snapshotChanged, this, &TimelineRuler::axisChanged);
     connect(&session_, &CompositionSession::snapshotChanged, this,
             qOverload<>(&TimelineRuler::update));
+    // #696: a pinch zooms the time axis about the fingers, as Ctrl and the wheel do.
+    kit::installPinchZoom(*this, [this](const QPointF position, const double factor) {
+        zoomBy(factor, position.x());
+    });
 }
 
 void TimelineRuler::setTimecodeLabels(const bool timecode) {
@@ -1070,6 +1079,10 @@ TimelineKeyframePanel::TimelineKeyframePanel(CompositionSession& session, QWidge
 }
 
 void TimelineKeyframePanel::setRuler(TimelineRuler& ruler) {
+    if (ruler_ == nullptr)
+        kit::installPinchZoom(*this, [this](const QPointF position, const double factor) {
+            ruler_->zoomBy(factor, position.x());
+        });
     ruler_ = &ruler;
     for (auto* row : rows_) {
         row->setRuler(ruler);

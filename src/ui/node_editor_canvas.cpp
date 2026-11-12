@@ -8,6 +8,7 @@
 #include <QShowEvent>
 #include <QWheelEvent>
 #include <algorithm>
+#include <bloom/ui/kit/pinch_zoom.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 #include <cmath>
@@ -41,6 +42,12 @@ NodeGraphicsView::NodeGraphicsView(QWidget* parent) : QGraphicsView(parent) {
     // Viewer's own rule.
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
+    // #696: a trackpad pinch zooms about the fingers, through the same function the wheel uses, so
+    // the zoom limits are the wheel's.
+    kit::installPinchZoom(*viewport(), [this](const QPointF position, const double factor) {
+        if (!panActive_)
+            zoomAboutViewportPoint(position, factor);
+    });
 }
 
 double NodeGraphicsView::zoomFactor() const noexcept { return transform().m11(); }

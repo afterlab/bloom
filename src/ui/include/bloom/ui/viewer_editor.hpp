@@ -513,6 +513,8 @@ class ViewerEditor final : public QWidget,
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    // Zooms about `position` (widget coordinates) by `factor`; the wheel and a pinch both use it.
+    void zoomAboutPosition(QPointF position, double factor);
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
     [[nodiscard]] bool refreshAnchorDrag(QKeyEvent* event);

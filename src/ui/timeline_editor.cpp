@@ -4,6 +4,7 @@
 #include <QSignalBlocker>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/pinch_zoom.hpp>
 #include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/timeline_editor.hpp>
 #include <bloom/ui/timeline_graph_view.hpp>
@@ -1761,6 +1762,10 @@ TimelineLaneRegion::TimelineLaneRegion(CompositionSession& session, TimelineRule
                                        QScrollBar& scrollBar, QWidget* parent)
     : QWidget(parent), session_(session), ruler_(ruler), scrollBar_(scrollBar) {
     setObjectName(QStringLiteral("timelineLaneRegion"));
+    // #696: a pinch over the lanes zooms the time axis about the fingers.
+    kit::installPinchZoom(*this, [this](const QPointF position, const double factor) {
+        ruler_.zoomBy(factor, position.x());
+    });
     setFocusPolicy(Qt::StrongFocus);
     setAccessibleName(tr("Layer lanes"));
     setMouseTracking(true);

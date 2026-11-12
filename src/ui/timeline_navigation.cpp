@@ -2,6 +2,7 @@
 
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/painting.hpp>
+#include <bloom/ui/kit/pinch_zoom.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
 
 #include <QKeyEvent>
@@ -274,6 +275,10 @@ void TimelineRuler::wheelEvent(QWheelEvent* event) {
 }
 
 void TimelineWorkAreaRow::setRuler(TimelineRuler& ruler) {
+    if (ruler_ == nullptr)
+        kit::installPinchZoom(*this, [this](const QPointF position, const double factor) {
+            ruler_->zoomBy(factor, position.x());
+        });
     ruler_ = &ruler;
     strip_->setRuler(ruler);
     connect(&ruler, &TimelineRuler::axisChanged, this, [this] { update(); });

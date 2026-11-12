@@ -34,6 +34,7 @@ target_sources(
         kit/dropdown_popup.cpp
         kit/popup_window.cpp
         kit/popup_list.cpp
+        kit/pinch_zoom.cpp
         kit/accessibility.cpp
         kit/fonts.cpp
         kit/icons.cpp
@@ -88,6 +89,7 @@ target_sources(
             include/bloom/ui/kit/dropdown_popup.hpp
             include/bloom/ui/kit/popup_window.hpp
             include/bloom/ui/kit/popup_list.hpp
+            include/bloom/ui/kit/pinch_zoom.hpp
             include/bloom/ui/kit/accessibility.hpp
             include/bloom/ui/kit/fonts.hpp
             include/bloom/ui/kit/icons.hpp

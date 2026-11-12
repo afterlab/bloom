@@ -13,6 +13,7 @@
 #include <bloom/runtime/curve_compilation.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/painting.hpp>
+#include <bloom/ui/kit/pinch_zoom.hpp>
 #include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/tokens.hpp>
@@ -133,6 +134,12 @@ TimelineGraphView::TimelineGraphView(CompositionSession& session, TimelineRuler&
                                      QWidget* parent)
     : QWidget(parent), session_(session), ruler_(ruler) {
     setObjectName(QStringLiteral("timelineGraphView"));
+    // #696: a pinch zooms both axes of the graph about the fingers: time as Ctrl and the wheel do,
+    // values as the plain wheel does.
+    kit::installPinchZoom(*this, [this](const QPointF position, const double factor) {
+        ruler_.zoomBy(factor, position.x());
+        zoomValues(1.0 / factor, position.y());
+    });
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_OpaquePaintEvent, true);
     setMouseTracking(true);
