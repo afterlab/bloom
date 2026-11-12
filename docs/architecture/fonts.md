@@ -28,9 +28,7 @@ ignores members it does not know, so a newer build's extra members do not stop a
 opening the project. Encoding then decoding returns the same ID. The built-in face is
 `source=builtin;family=DejaVu Sans;style=Book;weight=400;italic=false`.
 
-The document version is unchanged (1.43). The parameter was already a String and the schema did not
-move; the writer simply no longer emits Font assets, and the open path converts older projects (see
-Migration).
+The parameter is a String; the writer emits no Font assets.
 
 ## Resolution
 
@@ -135,15 +133,6 @@ Google row uses a name-only subset (`text=`) fetched only for rows in view and c
 current row with the pointer or the arrow keys previews the font live in the Viewer; Escape reverts;
 choosing commits exactly one undo step. A style selector beside the field lists weights, italics and
 named instances, and a Google family with variable axes shows a field for each axis other than weight.
-
-## Migration
-
-Opening a project that holds Font assets converts them (`src/project/document_font_migration.cpp`):
-an embedded face becomes a `builtin` ID, a system face becomes a `system` ID with weight and slope
-read from its style name, and a text node's old reference (an asset ID, a number 0 to 3, or a
-`family|style|digest` reference) becomes the matching ID. Anything unrecognized becomes the built-in
-face. The Font assets and their data blocks are then removed. A project saved afterward carries IDs
-only.
 
 ## Platform notes
 

@@ -204,12 +204,6 @@ The hue curves use the same colour wheel and brightness weights as Hue/Saturatio
 channel curves and before **Clamp**. Like the rest of the node they don't convert colour, so HDR
 values and render passes keep their range.
 
-### Older projects
-
-A project saved before Curves had a graph stored five points per channel. It opens with those
-points as the new curves, exactly. If a point was animated, it opens at its first key; if it was
-linked from another node, it opens at its starting value. Hue curves start empty.
-
 ## Hue/Saturation
 
 **Hue** turns every colour around the colour wheel, in degrees. **Saturation** scales how colourful
@@ -277,8 +271,7 @@ Gradient Map shows its **Gradient** as an editable bar with a stop under it for 
 
 The diamond beside the gradient keys the whole gradient at the playhead. Between two keys with the
 same number of stops each stop moves and changes colour smoothly; adding or removing a stop between
-keys switches at the next key. A Colorize node from an older project keeps its Shadows, Midtones and
-Highlights ramp until you first edit the gradient, which starts from that same ramp. Black & White shows a slider per colour over a track from black to that colour. The card
+keys switches at the next key. Black & White shows a slider per colour over a track from black to that colour. The card
 shows only the current mode's controls; the others keep their values.
 
 ## Vignette

@@ -668,7 +668,7 @@ space; EXR AP0, AP1, and Rec.709/D65 chromaticities map to `ACES2065-1`, `ACEScg
 chromaticities assumes the working space with a warning. The exact config revision is part of every
 resolved input identity.
 
-#### Interpret Footage (#381, document 1.34)
+#### Interpret Footage (#381)
 
 Interpretation is project truth on the asset, edited only through `SetAssetInterpretation` (one
 undo entry for a whole selection; the Assets panel's Interpret Footage dialog, Paste
@@ -2155,7 +2155,7 @@ rest of Bloom sees display geometry:
   identity matrix tag and are interpreted only through a config input space. The TIFF decoder runs
   without `AV_EF_EXPLODE`, which otherwise rejects descriptive tags its own encoder writes.
 
-Document 1.25 records each video stream's field order and timecode type (drop-frame or non-drop),
+The document records each video stream's field order and timecode type (drop-frame or non-drop),
 shown in the Assets tooltip and in the Video node's Properties, and the Video node can choose which
 of the asset's audio streams it plays (Properties, Audio Stream). Preview and export decode and key
 audio buffers by asset and stream.
@@ -2424,9 +2424,9 @@ Issue #365 interpretation rules:
   transfer), resolves in Auto to the config's sRGB-texture space
   ([ADR 0032](../decisions/0032-sdr-video-colour-default.md)): the YUV conversion applies the
   stream's matrix (Rec.601 for SD by the size convention) and range, and the resulting R'G'B' is
-  interpreted with the sRGB display transfer, as players and Bloom's 8-bit stills are shown. Before
-  document 1.28 these streams resolved to the config's Rec.709 video space, which in Bloom Neutral
-  was scene-linear, so the encoded signal was shown pale. The Rec.709 camera inverse OETF
+  interpreted with the sRGB display transfer, as players and Bloom's 8-bit stills are shown. The
+  config's Rec.709 video space is scene-linear in Bloom Neutral and would show the encoded signal
+  pale. The Rec.709 camera inverse OETF
   (`Rec.709 Camera (Bloom)`), Rec.2100 PQ/HLG and log spaces stay explicit Input Color choices.
   The assumption is shown as the note "Color tags missing — assumed Rec.709 with the sRGB
   transfer. Change in Assets → Interpret Footage" (Rec.601 for SD; "assumed Rec.2020" without the

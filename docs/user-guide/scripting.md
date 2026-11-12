@@ -139,7 +139,7 @@ validation and undo: `bloom.export.add-job` (returns `exportJob` and one `export
 `bloom.export.move-jobs`, `bloom.export.set-job-name`, `set-job-range`, `set-job-enabled`,
 `set-job-label-color`, `bloom.export.add-output`, `bloom.export.remove-output`,
 `bloom.export.set-output-settings`, `set-output-destination`, `set-output-enabled`,
-`set-output-import` and `bloom.export.apply-preset`. An output travels as the document 1.29 JSON
+`set-output-import` and `bloom.export.apply-preset`. An output travels as a JSON
 object: `{"preset", "settings": {"format", "codecProfile", ...}, "destination": {"portability",
 "path", "overwrite"}, "enabled", "importIntoAssets"}`, each field optional. An output that names a
 built-in `preset` and gives no `settings` takes that preset's settings, as `apply-preset` does

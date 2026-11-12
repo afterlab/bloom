@@ -71,9 +71,9 @@ could decode.
   cancellable, with progress in Jobs) hashes members still pending a digest and verifies recorded
   digests. Its hashes enter the memo, so a refuted file is reported at its next use and the caches
   holding frames made from it are purged. A save records what the memo has already verified
-  (document 1.36: a member may carry its stamp and its digest) and never waits; a member without a
+  (a member may carry its stamp and its digest) and never waits; a member without a
   digest saves pending. See
-  [`project-format.md`](../architecture/project-format.md#verified-member-digests-in-document-136).
+  [`project-format.md`](../architecture/project-format.md#verified-member-digests).
 - Decode still reads only the immutable revision (image) or snapshot (video), so old and new bytes
   never mix. Pixels are unchanged: a deferred and a digest-first capture decode identical pixels
   (`bloom.media.image` tests).

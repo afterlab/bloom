@@ -303,8 +303,8 @@ other effect; each pass allocates through the frame budget and refuses with the 
 ## Project format
 
 The motion-blur nodes are new types. Transform 2D stays at schema 1 and gains `motionBlur` and the
-shutter's parameters as optional bindings: opening an older project binds them at their defaults (off),
-so its picture is unchanged. See [Project format, "Transform 2D Motion Blur"](project-format.md#transform-2d-motion-blur).
+shutter's parameters as optional bindings; an unbound role lowers at its default (off). See
+[Project format, "Node Version Validation"](project-format.md#node-version-validation).
 
 ## Sources
 

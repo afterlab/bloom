@@ -205,8 +205,7 @@ would create a cycle. If a source composition is deleted, choose a replacement i
 Nested audio follows the same offset, speed and loop settings. Multiple nested layers mix
 together; a composition without audio is silent. Layer mute, solo and time ranges apply.
 
-Folder edits, names, tags and moves are undoable and saved with the project; composition folders
-need project schema 1.27, and older projects open with their compositions at the top level. Use
+Folder edits, names, tags and moves are undoable and saved with the project. Use
 **Replace Footage…** for missing media; it preserves the asset's name, folder and tags.
 
 ## Importing Video

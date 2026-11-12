@@ -4,6 +4,10 @@ Status: accepted (lane decision under issue #360; the supervisor may renumber at
 
 Date: 2026-10-23
 
+Note (2026-11-12): the project schema is now one current version, document `1.0`. The document
+version steps and migrations this record mentions were removed; no older project is converted. See
+[project format](../architecture/project-format.md).
+
 ## Context
 
 Bloom has no layer mask, track matte or Mask value type:

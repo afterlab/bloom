@@ -53,8 +53,8 @@ counts or triggers cancellation at a chosen poll.
   and the filled outline merged with its text covers exactly the letters.
 - Persistence: `bloom.project.path-nodes` saves and reopens every path and analysis node byte
   identically and undoes and redoes operand edits, stamps and sources included;
-  `bloom.runtime.path-stroke-stamp-migration` opens a Path Stroke saved before stamps with them bound
-  at Dot, Automatic, 0 and renders it bit-identically.
+  `bloom.runtime.path-stroke-stamp-persistence` saves and reopens a Path Stroke with a turned
+  Square stamp and renders it bit-identically.
 - Device: `bloom.runtime.gpu_path_processing_native` renders each kernel through the production GPU
   scene path against the CPU reference, cold and warm, with operand-edit invalidation, unrelated-edit
   no-ops, a keyed Trim Path end, HDR and alpha, a data window, and a region of interest; each stamp

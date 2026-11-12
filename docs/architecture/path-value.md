@@ -22,8 +22,8 @@ existed before compound paths holds a simple value, and `PathValue::fromContour`
 
 ### Which fill rule wins
 
-The value's explicit rule wins over Shape Source's `fillRule` parameter. `Inherit`, the default and
-what every project older than document 1.43 holds, means "use the parameter". So a Shape Source whose
+The value's explicit rule wins over Shape Source's `fillRule` parameter. `Inherit`, the default, means
+"use the parameter". So a Shape Source whose
 path has no opinion behaves exactly as it always has, and a producer that needs a rule for its contours
 to mean what it intends (a hole cut by even-odd) cannot have that undone downstream.
 `detail::shapeFillRule` in `src/runtime/shape_geometry.hpp` is the one place both evaluators ask.
@@ -139,8 +139,7 @@ anchors meeting an open one needs 4097), the earlier key holds as it did before 
 
 This is a change for documents older than #597: keys of different shapes used to hold the earlier key
 and now morph. Keys of matching shapes and Hold keys render as they did, so making the earlier key a
-Hold key gives the old picture back (the path-value migration test proves this on a document saved
-before 1.43).
+Hold key gives the old picture back.
 
 While interpolating or morphing, the anchor points and handles move; the fill rule, groups, group
 attributes (a group's colour), closed flags and anchor modes are the earlier key's until the later key
@@ -231,11 +230,10 @@ flattener keeps its own existing subdivision arithmetic, so one-contour renderin
 
 ## Persistence
 
-Document 1.43 (`docs/architecture/project-format.md`, "Compound Paths In Document 1.43") keeps the
-existing `{kind, anchors, closed}` spelling for every value a one-contour path can express, and writes
-`{kind, contours, fillRule?, groups?}` otherwise. One value has one spelling. An older project opens with
-one contour wherever it had a path, on shapes, masks, data blocks, field and curve parameters and keys,
-and its re-encoded document is the same bytes apart from its minor.
+The document (`docs/architecture/project-format.md`, "Compound Paths") keeps the `{kind, anchors,
+closed}` spelling for every value a one-contour path can express, and writes
+`{kind, contours, fillRule?, groups?}` otherwise. One value has one spelling. A flat path decodes as
+one contour, on shapes, masks, data blocks, field and curve parameters and keys.
 
 An empty open flat path decodes as zero contours, the empty value, so no consumer sees a contour with
 nothing in it that the older build did not have.

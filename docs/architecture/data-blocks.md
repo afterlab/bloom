@@ -1,6 +1,6 @@
 # Data blocks
 
-Data blocks are first-class, typed records in document schema 1.18. They are the durable values
+Data blocks are first-class, typed records in the project document. They are the durable values
 that nodes and sources read; they are not render plans or an implicit event bus. A block carries a
 stable ID, kind, type/schema identity, media type, provenance, optional owner and subject, bounded
 payload, and tags.
@@ -26,6 +26,5 @@ produces a data block, reports progress/cancellation/diagnostics through the tas
 mutates an existing block or writes directly into the value graph. Readers are ordinary value nodes
 and remain deterministic once their input block is selected.
 
-Schema 1.17 projects migrate additively: they gain an empty `dataBlocks` collection and a zero
-`dataBlock` allocator high-water value. Existing plan semantics and identity goldens are unchanged;
-the new node types only participate when authored in a document.
+A project always carries a `dataBlocks` collection, empty when it has none, and a `dataBlock`
+allocator high-water value. The data-block node types only participate when authored in a document.

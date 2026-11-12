@@ -14,20 +14,14 @@ processor cache remain pending.
 
 Updated: 2026-11-06
 
-## Version 1.20 Decisions — Asset Input Transforms
+## Asset Input Transforms
 
-Document schema 1.20 gives every image and video asset a durable `inputColorSpaceId` beside the
+Every image and video asset has a durable `inputColorSpaceId` beside the
 legacy integer interpretation. An empty id is Auto. A non-empty id is resolved only in the exact
 OCIO configuration and revision selected by the project; it must name a non-data color space.
 Image and Video source nodes retain their integer `colorSpace` rows (`0` inherits the asset, and
 the legacy `sRGB`/`Linear`/`Raw` values remain for compatibility) and add a non-animatable string
 `inputColorSpaceId` row. An empty node id inherits the asset's id or automatic interpretation.
-
-The deterministic 1.19 → 1.20 migration retains the legacy enum and adds the equivalent config id:
-`Auto` becomes empty, `Srgb` becomes the selected config's sRGB-texture id,
-`Linear` becomes the working-space id, and `Raw` remains empty and data/no-conversion. The
-configuration is resolved before the migration result is accepted; if it is unavailable, the
-durable id is not guessed.
 
 `color::CpuColorSpaceProcessor` is the general CPU-only input path. It builds an OCIO
 `ColorSpaceTransform` from a non-data source id to the effective working-space id, preserves alpha
@@ -67,12 +61,11 @@ decode (`-vf scale=in_color_matrix=bt709:in_range=tv:out_range=full`) and matche
 stills without adjustment. Under the ACES config the Viewer also starts on the untone-mapped sRGB
 view, so video there matches a player too, and thumbnails and exports that name no view use the
 same pair; only an explicitly chosen view (such as the review preset's) applies the ACES output
-transform. Before document 1.28, Auto
-resolved these streams to the config's Rec.709 video space, which in Bloom Neutral was the
-scene-linear `lin_rec709_scene`: the encoded R'G'B' entered the working space as linear light and
-the display encoded it again, so video looked pale ([ADR 0032](../decisions/0032-sdr-video-colour-default.md)).
-The resolved input space is part of every video cache key, so frames, thumbnails and RAM-preview
-entries made under the old default are never reused. A reference test compares both the CPU
+transform. Resolving these streams to the config's Rec.709 video space, which in Bloom Neutral is the
+scene-linear `lin_rec709_scene`, would let the encoded R'G'B' enter the working space as linear light
+for the display to encode again, so video would look pale
+([ADR 0032](../decisions/0032-sdr-video-colour-default.md)). The resolved input space is part of
+every video cache key. A reference test compares both the CPU
 reference and the GPU route with FFmpeg's decode of generated H.264 color patches (within 2 codes
 per channel, mean 0.75).
 
@@ -203,9 +196,7 @@ anywhere. Because the definition uses OCIO built-ins, transform identity include
 Version 1 (before issue #369) used OCIO's scale unchanged, so HLG reference white was 0.795 (a third
 of a stop, about 24 codes of 8-bit sRGB below SDR white); the identity change re-decodes every
 cached HLG frame, thumbnail and proxy. BT.2408 is the only HLG mapping; there is no per-asset
-choice of HLG reference white (issue #407). Opening a project saved before document 1.32 that has
-HLG footage shows a one-time note that it now looks about 1.26 times brighter (see
-[project format](project-format.md#keyframe-handle-modes-in-document-132)).
+choice of HLG reference white (issue #407).
 
 ### DPX film-scan input spaces (#426)
 
@@ -260,9 +251,9 @@ space, config, display, or packing change cannot reuse differently displayed pix
 The CPU AP0 EXR read is pinned against the OCIO reference processor to an absolute channel delta of
 `1e-5`; Neutral sRGB PNG defaults retain the existing byte-identical goldens.
 
-## Current Version 1.19 Decisions — Working Color Space
+## Working Color Space
 
-Document schema 1.19 revises the earlier fixed-process-space decision. `ColorSettings.processColorSpaceId`
+`ColorSettings.processColorSpaceId`
 is the project's working color space: it must resolve, in the selected OCIO configuration, to a
 non-data scene-linear color space. The durable identity is the color-space id together with the
 selected configuration's content revision. A composition may carry an optional
@@ -1029,7 +1020,7 @@ numbers, and commits convert back through the session `colorConverter` and exist
 Regression pins cover display `#F03B2E` becoming approximately reference
 `(0.871367, 0.043735, 0.027321)`, the Properties and node-chip pixels matching that pick, the
 qualified viewer pipeline producing RGBA8 `(240, 59, 46, 255)`, stable repeated hex edits, HDR edits,
-and unchanged stored color numbers after a production 1.9-to-1.10 document migration. UI pins
+and unchanged stored color numbers across save and reopen. UI pins
 run at DPR 1, 1.25, 1.5 and 2.
 
 ## Alpha And Pixel Flow

@@ -692,7 +692,7 @@ ignores in an elevated process; run the suite from an ordinary, non-elevated acc
 Export runs on every platform ([ADR 0035](../decisions/0035-media-provider-fallback-chain.md),
 which supersedes the Linux-only statement of [ADR 0033](../decisions/0033-export-queue.md),
 section 15).
-The export queue model, persistence (document 1.29), availability, the Export panel, presets and
-scripting edits are identical on Linux, macOS and Windows; a 1.29 project saved on any platform opens
+The export queue model, persistence, availability, the Export panel, presets and
+scripting edits are identical on Linux, macOS and Windows; a project saved on any platform opens
 on every other. Preset availability is computed per codec and encoder
 on every platform; there is no per-platform refusal code. User presets live in the platform user-data directory.

@@ -98,7 +98,6 @@ controls at their defaults, the nested graph gives the same pixels as flattening
 Merge. Bloom never flattens it for you: blend modes other than Normal see a different backdrop inside
 a group, which is often exactly why you group.
 
-## Older projects
+## Entry controls
 
-Projects saved before every entry became a layer open unchanged. A plain entry shows its controls
-at their defaults; the first edit stores them on the entry.
+A plain entry shows its controls at their defaults; the first edit stores them on the entry.

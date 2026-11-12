@@ -384,7 +384,7 @@ In the registered parameter order the blend mode comes last, after the four geom
 opacity: it is the only Layer Output parameter that is not a continuous value at all. That order is
 what the properties grid, the node card, and the timeline all read.
 
-`kLayerOutputNodeSchemaVersion` is `4`. Earlier Layer versions are rejected on open; see
+`kLayerOutputNodeSchemaVersion` is `5`. Other Layer versions are rejected on open; see
 [`project-format.md`](project-format.md), "Node Version Validation".
 
 ## Parameters And Properties
@@ -754,7 +754,7 @@ reissued after an undo and layout identity still never advances the node waterma
 group held them, because a node belongs to exactly one. `UngroupNodes(groupId)` removes the frame
 and nothing else -- every member keeps its position, width, collapse, mute and wiring.
 `RenameGroup(groupId, name)` changes the name in place; an identical name is a no-op.
-`SetGroupColor(groupId, color)` sets the frame's optional 8-bit sRGB tint (document 1.31), or clears
+`SetGroupColor(groupId, color)` sets the frame's optional 8-bit sRGB tint, or clears
 it to the neutral frame; like every group command it is not render-affecting, so it invalidates no
 render cache. The frame's context menu offers None and the eight Timeline label swatches
 (`bloom.node-group.set-color` for scripts and agents).
@@ -1203,7 +1203,7 @@ the sampled value at the session time.
 
 Four literal kinds stay constant-or-driven, and deliberately: **Vector 3**, **Integer**, **Boolean**
 and **String** each need a curve KIND the document does not have (a Vec3 curve, or a Hold-only integer
-or boolean curve), which is a document-format change with its own schema ladder step rather than a
+or boolean curve), which is a document-format change to the project schema rather than a
 widening of the animatable set. Every generic OPERAND schema also stays constant-or-driven: an operand
 is a value a node reads, and the artist already shapes it with a curve upstream -- wire an animated
 Scalar node into the socket -- so a curve of its own would be a second authoring path to one picture.
@@ -1375,7 +1375,7 @@ and offscreen event tests apply to Linux, macOS and Windows; this change's execu
 ## Layer Timeline Contract
 
 A `LayerOutputBoundary` owns range, visibility (`enabled`, default true), `solo` (false),
-`locked` (false), optional RGB `labelColor`, and the two document 1.30 presentation flags `shy`
+`locked` (false), optional RGB `labelColor`, and the two presentation flags `shy`
 (false) and `nameFollowsSource`. Neither flag is an evaluation input; their commands
 (`SetLayerShy`, `SetLayerNameFollowsSource`) declare `renderAffecting() == false`, and
 `document::evaluationView(LayerOutputBoundary)` resets both alongside `name`, so the command stack's

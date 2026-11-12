@@ -1,66 +1,25 @@
 # Bloom Project Format
 
-The current document schema is 1.43. It lets a path value hold several contours, a fill rule and keyed
-groups of contours (see "Compound Paths In Document 1.43"). Document 1.42 let a layer mask take its
-shape, and a track matte its coverage, from a node's Mask output (see "Matte Sources In Document
-1.42"). Document 1.41 let a
-gradient value carry its interpolation, colour mode and hue direction (see "Gradient Modes In
-Document 1.41"). Document 1.40 let a value node drive a
-gradient stop's colour or position through a stop link (see "Gradient Stop Links In Document
-1.40"). Document 1.39 moved the
-Linear and Radial Gradient generators' start and end colours and Glow's tint and outer tint onto
-gradient values, and opens an older document's colour pairs as two-stop gradients (see "Gradient
-Colour Pairs In Document 1.39"). Document 1.38
-added the gradient value -- a multi-stop colour ramp, a parameter constant and a whole-value
-animation curve -- that Colorize's Gradient Map maps through (see "Gradient Values In Document
-1.38"). Document 1.37 let a Merge entry own its layer controls -- a
-layer output record that names its slot and binds its own parameters -- added the layer `pivot`, and
-added the Adjustment node type (see "Entry Layers In Document 1.37"). Document 1.36 let a stamped image-sequence
-member also carry the content digest a full hash verified for the bytes that carried its stamp (see
-"Verified Member Digests In Document 1.36"). Document 1.35 let an image-sequence member carry the file stamp import listed
-instead of its content digest (see "Sequence Member Stamps In Document 1.35"). Document 1.34
-added the optional Interpret Footage members of an asset's
-interpretation, a sequence's imported frame range and a video stream's coded pixel aspect ratio (see "Interpret Footage In Document
-1.34"). Document 1.33 added the export formats `vp9-webm`, `av1-webm` and `av1-mp4` and their codec
-profiles (see "Export Formats In Document 1.33"). Document 1.32 added the optional
-keyframe member `handleMode` (see "Keyframe Handle Modes In Document 1.32"). Document 1.31 added the optional node group `color` (see "Node Group
-Colors In Document 1.31"). Document 1.30 added Robert Penner's keyframe easing equations (ten
-interpolation tokens and the optional keyframe `easing` member) and the optional presentation-only
-layer members `shy` and `nameFollowsSource` (see "Easing And Layer Flags In Document 1.30").
-Document 1.29 added the export queue: the required last project member `exportQueue` and the
-`exportJob`/`exportOutput` allocator namespaces (see "Export Queue In Document 1.29"). Document 1.28
-changed no member: it marks projects saved after ordinary and untagged SDR video in Auto began to be
-shown through the sRGB texture space (see "Video Color Default In Document 1.28"). Document 1.27
-added the optional composition `folder`, the Assets folder that holds a composition (see
-"Composition Folders In Document 1.27"), on top of the 1.26 Image source node v2 (optional `part`
-and `layer` parameters and a `channels` output; see "Channel Sets In Document 1.26") and optional
-composition `timecode` (see "Composition Timecode In Document 1.26"), the 1.25 video stream field
-order and timecode type and the optional Video node audio stream selection (see "Video Stream
-Metadata In Document 1.25"), the 1.24 optional layer masks and track matte on Layer Output
-boundaries, the Path animation curve kind and the optional `layerMask` allocator namespace (see
-"Layer Masks In Document 1.24") on top of the 1.23 layer-owned time members (see "Layer Time In
-Document 1.23"), the 1.22 explicit external file-URI asset locators, the 1.21 LUT asset kind, 1.20
-config-managed asset input color-space ids, the 1.19 optional per-composition working color-space
-override, the 1.18 `project.dataBlocks` collection, and the `dataBlock` allocator namespace. See
-[data blocks](data-blocks.md) for the model and provenance contract.
+The project format has one current schema: container `1.0`, document schema `1.0`
+(`schemas/project/document-1.0.schema.json`) and manifest schema `1.0`
+(`schemas/project/manifest-1.0.schema.json`). There is no older version and nothing converts a
+file from one: a document either is `1.0`, is a newer minor of major 1 opened through the
+preservation rules below, or is refused.
 
 Status: accepted
 
 Implementation status: bounded reservations and PMR allocation, canonical integer/rational,
 Base64, UTF-8 string, and shared count/write JSON-layout primitives, canonical manifest encoding
-and schema checks, the normative document `1.4` schema artifact and checks, manifest requirement
+and schema checks, the normative document `1.0` schema artifact and checks, manifest requirement
 validation, durable allocator high-water state, opaque extension envelopes, the Linux
-staged-artifact close/reopen verification foundation, the version 1 canonical document writer
-over immutable snapshots with explicitly supplied color settings, strict bounded JSON parsing
-into a Bloom-owned DOM, typed document decode and reconstruction through checked model surfaces,
-newer-minor unknown-member round-trip capture and write overlay, and the constrained ZIP
-container reader and writer, and the document `1.0` → `1.1` node-layout, `1.1` → `1.2` node-group,
-`1.2` → `1.3` animation-breadth, `1.3` → `1.4` value-graph, and `1.8` → `1.9` component-keyframe
-migrations are implemented.
-Format-specific semantic verification of
-the complete save/reopen pipeline, and cross-platform publication parity remain pending.
+staged-artifact close/reopen verification foundation, the canonical document writer over immutable
+snapshots with explicitly supplied color settings, strict bounded JSON parsing into a Bloom-owned
+DOM, typed document decode and reconstruction through checked model surfaces, newer-minor
+unknown-member round-trip capture and write overlay, and the constrained ZIP container reader and
+writer are implemented. Format-specific semantic verification of the complete save/reopen
+pipeline, and cross-platform publication parity remain pending.
 
-Updated: 2026-09-18
+Updated: 2026-11-12
 
 ## Purpose And Ownership
 
@@ -68,7 +27,7 @@ Updated: 2026-09-18
 reopen and evaluate a project; it is not a general VFX interchange format. Adopted standards remain
 explicit adapters at their own boundaries.
 
-`src/project` owns schemas, migrations, constrained-container validation, deterministic encoding,
+`src/project` owns schemas, constrained-container validation, deterministic encoding,
 unknown-member round-trip state, and save staging. `src/platform` owns narrow filesystem identity,
 flush, and atomic-publication primitives. `src/document` owns format-independent durable values and
 validation. No JSON or ZIP implementation type enters document, command, runtime, UI, or public
@@ -82,33 +41,50 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.24`.
-The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
-Version objects
-always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
+The container version is `1.0` and the document schema version is `1.0`. Version objects always
+contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
-The schemas use JSON Schema Draft 2020-12. Versioned artifacts through `1.11` remain checked as
-historical fixtures, with the current `1.24` contract also enforced by the canonical writer and
-decoder tests. The manifest artifact still requires container `1.0`; its document
-declaration follows the current document minor. Every historical artifact from `1.0` through `1.11`,
-manifest and document, remains checked, and each version's checker validates what its own minor adds
-and then reduces the artifact to its predecessor so the older checks run unchanged.
+The schemas use JSON Schema Draft 2020-12, declare the 2020-12 `$schema`, and use only
+repository-local `$ref` targets. Their `$id`s are `urn:afterlab:bloom:schema:project-document:1.0`
+and `urn:afterlab:bloom:schema:project-manifest:1.0`. Some `$defs` names carry a numeric suffix
+(`layerOutput-1.37`, `parameterSource-1.4`); the suffix is part of the definition's name only and
+names no document version. The manifest artifact requires container `1.0` and declares document
+schema `1.0` through the same `documentSchemaVersion` definition the document uses.
 
-Document `1.16` adds asset folders, display names, tags and ordering (see "Asset Organization" below).
+The repository check `bloom.quality.project_schemas` keeps exactly this pair in
+`schemas/project`. It checks the header, the version, the definitions Project I/O relies on (decimal
+patterns, text ceilings, rationals, color settings, the manifest generator), the rules every schema
+keeps (references resolve, every definition is reachable, every described object says whether it
+keeps unknown members, every array is bounded), and finally every schema node against the lock
+`tools/quality/project_schema_checks/project_schema_lock.cpp`. A schema edit regenerates the lock
+with `generate_schema_lock` in the same change. A generic schema validator is useful for
+fixtures, but it does not replace Bloom's duplicate-key, resource, canonical-decimal,
+cross-reference, allocator, graph, and preservation validation.
 
-Document `1.21` adds the `lut` asset-kind token. LUT records use the existing file locator,
+The project definition requires `colorSettings`; the OCIO reference definition requires every
+member specified below and selects one closed locator shape with `oneOf`. These definitions
+validate structure and lexical bounds. Project I/O additionally validates locator normalization,
+digest spelling, sorted context variables, locator/portability agreement, and the fixed v1 process
+Color Interop ID. The manifest's `requirement-1.0` definition carries the exact provider,
+capability, schema-version, and node-type-coverage members specified below.
+
+Known object definitions permit additional members through `unevaluatedProperties: true` so a
+compatible newer minor can be retained. Discriminator values and array element categories remain
+closed. The compatibility decoder, not the generic schema alone, determines whether an unknown
+member is safely additive.
+
+Asset kinds are `image`, `sequence`, `audio`, `video` and `lut`; the schema also names the retired
+`font` kind, which the writer never emits. LUT records use the file locator,
 content digest, name, folder, tags and order; dimensions are zero and there is no sequence or
-video-stream descriptor. The `1.20` → `1.21` migration changes only the document version.
-Earlier schema minors reject `lut`. The container remains `1.0`; LUT bytes stay external assets.
-The existing opaque data-block projection identifies them as `bloom.color.lut-asset` without
-introducing another data-block kind or duplicating the durable asset record.
+video-stream descriptor. LUT bytes stay external assets. The opaque data-block projection identifies
+them as `bloom.color.lut-asset` without introducing another data-block kind or duplicating the
+durable asset record.
 
-Document `1.22` adds `portability: "external"` for file assets whose path cannot be represented
-as a project-relative path, including different Windows drives and colon-bearing mounted path
-components. `path` and `relinkHint` both contain the same absolute RFC 8089 file URI. The
-`1.21` → `1.22` migration only advances the version; existing project-relative paths retain
-their relative-first resolution and absolute fallback hint. Saving never rewrites an existing
-locator solely because the project moved. Relink can replace either form with a fresh locator.
+`portability: "external"` serves file assets whose path cannot be represented as a project-relative
+path, including different Windows drives and colon-bearing mounted path components. `path` and
+`relinkHint` both contain the same absolute RFC 8089 file URI. A project-relative path keeps its
+relative-first resolution and absolute fallback hint. Saving never rewrites a locator solely because
+the project moved. Relink can replace either form with a fresh locator.
 
 Both OCIO nodes use registry schema version 1 and ordinary node/parameter persistence. Their
 constant parameters are `from`, `to`, `bypass` for CST, and `lut` (integer asset id),
@@ -116,55 +92,28 @@ constant parameters are `from`, `to`, `bypass` for CST, and `lut` (integer asset
 `processSpace`, `bypass`, `look` for File Transform. Empty space ids mean the composition working
 space. `bypassLookNodes` is a request option and is never stored in the project.
 
-Document `1.20` adds `inputColorSpaceId` to every asset interpretation and adds the matching
-non-animatable String parameter to image and video source nodes. The empty id is Auto/inherit; a
-non-empty id is an exact non-data color-space id in the project's OCIO configuration. The legacy
-integer interpretation and image/video `colorSpace` parameter remain for compatibility.
+Every asset interpretation carries `inputColorSpaceId`, and image and video source nodes carry the
+matching non-animatable String parameter. The empty id is Auto/inherit; a non-empty id is an exact
+non-data color-space id in the project's OCIO configuration. The integer interpretation and
+image/video `colorSpace` parameter remain (see "Asset Input Color Spaces").
 
-Document `1.14` adds the bounded `path` constant value (see "Path values" below).
+The text source stores a font ID and optional box, wrap, vertical-alignment, anchor, and overflow
+parameters (see "Font IDs And Text Layout"). Fonts are not assets ([Fonts](fonts.md)): a text node
+stores a font ID, and no font file is bundled or saved.
 
-Document `1.15` added the `Font` asset kind and the text-source font reference plus optional box,
-wrap, vertical-alignment, anchor, and overflow parameters. The `Font` asset kind is retired (issue
-489, [Fonts](fonts.md)): fonts are not assets, a text node stores a font ID, and no font file is
-bundled or saved. The schema minor is unchanged. Opening a project that holds Font assets converts
-them and the text references to font IDs (see "Font IDs And Text Layout" below); the migration
-preserves existing point-text behavior and the writer no longer emits Font assets.
-
-Document `1.4` adds exactly two discriminated-union arms and no member anywhere: a `vec3` constant
-value -- the third authoring vector width, with its own kind token rather than a third component on
-`vec2`, because the discriminators name TYPES -- and a `driver` parameter source carrying
-`sourceNodeId` and `outputPort`, structurally an edge source that lands in parameter-address space. A
-`1.3` document can contain neither, so the `1.3` → `1.4` migration rewrites only the version, exactly
-as the `1.2` → `1.3` step does. A live driver source is no longer an unsupported save feature: the
-writer can describe every parameter source the document layer holds. They declare the 2020-12
-`$schema` and use only repository-local `$ref` targets during validation. A generic schema validator
-is useful for fixtures, but it does not replace Bloom's duplicate-key, resource, canonical-decimal,
-cross-reference, allocator, graph, and preservation validation.
-
-`document-1.4.schema.json` retains required `$defs` named `colorSettings-1.0`,
-`ocioConfigReference-1.0`, `ocioConfigLocator-1.0`, and `ocioContextVariable-1.0`. The project
-definition requires `colorSettings`; the OCIO reference definition requires every member specified
-below and selects one closed locator shape with `oneOf`. These definitions validate structure and
-lexical bounds. Project I/O additionally validates locator normalization, digest spelling, sorted
-context variables, locator/portability agreement, and the fixed v1 process Color Interop ID.
-`manifest-1.2.schema.json` retains a required `requirement-1.0` definition with the exact provider,
-capability, schema-version, and node-type-coverage members specified below.
-
-Known versioned object definitions permit additional members through
-`unevaluatedProperties: true` so a compatible newer minor can be retained. Discriminator values and
-array element categories remain closed. The compatibility decoder, not the generic schema alone,
-determines whether an unknown member is safely additive.
+The `vec3` constant value is the third authoring vector width, with its own kind token rather than a
+third component on `vec2`, because the discriminators name TYPES. The `driver` parameter source
+carries `sourceNodeId` and `outputPort`, structurally an edge source that lands in parameter-address
+space; the writer can describe every parameter source the document layer holds.
 
 `manifest.json` and `document.json` are strict UTF-8 [RFC 8259] JSON. The reader rejects a BOM,
 invalid UTF-8 or Unicode scalar sequences, lone escaped surrogates, duplicate decoded object keys,
 comments, trailing commas, non-finite values, and JSON5 extensions before constructing trusted
 document state.
 
-### Path values (document 1.14)
+### Path values
 
-Document 1.14 adds a constant `path` value. The version-only 1.13 → 1.14 migration changes no
-existing value or pixel. Container version remains 1.0; the manifest declares whatever the current
-document minor is, which is 1.18 since typed data blocks landed on top.
+A constant may be a `path` value:
 
 ```json
 {"kind":"path","anchors":[{"point":{"x":0,"y":0},"outHandle":{"x":20,"y":0}},{"point":{"x":40,"y":40},"inHandle":{"x":40,"y":20}}],"closed":false}
@@ -177,11 +126,10 @@ handle coincides with its anchor. Anchor and point objects are closed, including
 The path value envelope retains the usual additive-member preservation contract.
 
 There are at most 4,096 anchors, checked before decoded anchor allocation; empty paths and open
-paths are valid. The decoder rejects this discriminator in minor 1.13 or earlier. `PathValue` is a
-separate document parameter alternative, with no numeric promotion, driver socket or animation
-support in v1. `schemas/project/document-1.14.schema.json` froze this structural contract and
-`schemas/project/document-1.15.schema.json` carries it forward unchanged under the `-1.14` `$defs`
-names; typed validation also enforces finite coordinates.
+paths are valid. `PathValue` is a separate document parameter alternative with no numeric
+promotion; it animates as a whole value (see "Layer Masks") and may hold several contours (see
+"Compound Paths"). The schema's `-1.14` `$defs` hold this structural contract; typed validation
+also enforces finite coordinates.
 
 ## Constrained ZIP Profile
 
@@ -259,7 +207,7 @@ headless/application policy bounded by the implementation's checked absolute cei
 happens implicitly because a file requests more memory.
 
 The resident budget is not an archive-size alias. It charges all simultaneously live memory owned
-or conservatively reserved by one Open, Save, migration, or Save Copy operation: compressed input,
+or conservatively reserved by one Open, Save, or Save Copy operation: compressed input,
 expanded entries, parser DOM and indexes, duplicate-key tables, decoded `Document`,
 `RoundTripState`, opaque payloads, preserved archive bytes, canonical output, and reopen-validation
 state. The operation allocator performs checked addition before every reservation and rejects an
@@ -306,12 +254,23 @@ The canonical manifest has members in this exact order:
       "minor": 0
     }
   },
-  "requirements": []
+  "requirements": [],
+  "generator": {
+    "name": "Bloom",
+    "version": "0.1.0"
+  }
 }
 ```
 
 `format` and `document.path` are exact. The schema version repeated at the root of `document.json`
-must equal the manifest declaration; disagreement is corruption, not a migration request.
+must equal the manifest declaration; disagreement is corruption.
+
+`generator` records which application wrote the file: `name` is the application (`Bloom`) and
+`version` the build's project version. Every save writes it, last. It is informational only:
+reading accepts a manifest without it, and nothing decides how to read, render or save a project
+from it. A present generator holds exactly `name` then `version`, each a non-empty string of at most
+256 UTF-8 bytes; anything else is a malformed manifest. Save Copy republishes the opened bytes, so a
+copy keeps the generator of the file it copies.
 
 A requirement record has members in this order:
 
@@ -339,8 +298,8 @@ Opening never installs, enables, imports, migrates, or executes a provider.
 The foundation node-type set is derived from the built-in node-definition registry. It includes
 `bloom.composition-source` and the built-in structural, media, shape and value nodes. These types
 are exempt from requirement coverage and must not appear in `providedNodeTypeIds`. Composition
-sources store their references and time mapping as ordinary parameters; they add no document field
-and require no migration or schema increment beyond 1.16. For every other
+sources store their references and time mapping as ordinary parameters; they add no document field.
+For every other
 distinct `NodeRecord.typeId` in the complete project, exactly one requirement lists that exact ID.
 Conversely, every listed node type must occur in at least one `NodeRecord`; therefore the union of
 all lists is exactly the project's distinct non-foundation node-type set. Missing coverage,
@@ -389,8 +348,7 @@ not compact fragments, demonstrate canonical layout.
 - A rational object has `numerator`, then `denominator`. Its denominator is positive, the pair is
   already reduced, and zero is represented only as `{ "numerator": "0", "denominator": "1" }`.
 
-Non-canonical integer and rational strings are rejected rather than silently normalized. A
-supported older schema may normalize them only through an explicit migration fixture.
+Non-canonical integer and rational strings are rejected rather than silently normalized.
 
 ### Float64
 
@@ -492,7 +450,7 @@ Compositions are sorted by numeric `CompositionId`. `duration` is a positive nor
 `pixelAspect` and `frameRate` use canonical decimal-string rational objects and must also satisfy
 their owning unsigned domain and normalization rules.
 
-Schema `1.0` freezes the live value domains exactly:
+The schema fixes the live value domains exactly:
 
 | Value | Accepted domain |
 | --- | --- |
@@ -536,8 +494,8 @@ exact order:
 
 The built-in URI above is exact; the all-zero digest illustrates the 64-hex-character shape only and
 must be replaced by the qualified build profile's real revision. `processColorSpaceId` is owned by
-`colorSettings` and is the selected scene-linear working-space identifier in document schema 1.19.
-Existing 1.18 projects retain `lin_rec709_scene` during the 1.18 → 1.19 migration.
+`colorSettings` and is the selected scene-linear working-space identifier; a composition may
+override it with its own `workingColorSpaceId`.
 `expectedRevision` is owned by `colorSettings.ocioConfig`; it identifies the referenced
 configuration bytes and never replaces or duplicates the process-space ID. The process encoding is
 therefore known even while the referenced OCIO configuration is missing. Changing a display, view,
@@ -614,23 +572,17 @@ Sources have these exact shapes:
 ```json
 { "kind": "constant", "value": {} }
 { "kind": "animation-curve", "curveId": "1" }
+{ "kind": "driver", "sourceNodeId": "4", "outputPort": "value" }
 ```
 
-Those are the only parameter-source discriminators in document schema `1.0`. Drivers are deferred
-until a schema defines their declaration table, ownership, references, and source encoding. A future
-driver source encountered through a newer compatible container is unknown core semantics: Bloom
-preserves the bounded archive as `PreservedReadOnly` rather than constructing a lossy placeholder
-or rewriting the source.
+Those are the only parameter-source discriminators. An unknown source kind encountered through a
+newer compatible minor is unknown core semantics: Bloom preserves the bounded archive as
+`PreservedReadOnly` rather than constructing a lossy placeholder or rewriting the source.
 
-Every parameter source the document layer can hold is writable from document `1.4` on. A
-`DriverBindingSource` is the durable `{sourceNodeId, outputPort}` pair it addresses, so the writer
-describes it the way it describes an edge source, and there is no parameter-source admission pass left
+Every parameter source the document layer can hold is writable. A `DriverBindingSource` is the
+durable `{sourceNodeId, outputPort}` pair it addresses, so the writer describes it the way it describes an edge source, and there is no parameter-source admission pass left
 to fail: a driver's own well-formedness -- a valid node id and valid structural port text -- is already
 refused by `ParameterStore` on insert, so a second check here could only ever be unreachable.
-
-Earlier minors had no shape for a driver at all, which is why a `1.3`-or-older archive carrying an
-on-disk `driver` source is a preserved-read-only result rather than a decode: the kind is gated on the
-minor that declares it, exactly as the `color4` animation-curve kind is.
 
 Constant values have one of these shapes and member orders:
 
@@ -676,15 +628,15 @@ Animation curve records are sorted by numeric `AnimationCurveId` and have one of
 }
 ```
 
-A scalar key has `id`, `time`, `value`, `outgoingInterpolation`, then the two OPTIONAL `1.12` ease
-handles described under **Ease Handles In Document 1.12**; a `vec2` key replaces `value`
+A scalar key has `id`, `time`, `value`, `outgoingInterpolation`, then the two OPTIONAL ease
+handles described under **Ease Handles**; a `vec2` key replaces `value`
 with an object containing `x`, then `y`; a `color4` key replaces it with an object containing `red`,
 `green`, `blue`, then `alpha` -- the same authoring order and straight-alpha meaning a constant
 `color4` parameter value already uses, with `alpha` confined to `[0, 1]`. Interpolation is
-`hold`, `linear`, `ease-in-out`, or from document `1.30` one of `sine`, `quad`, `cubic`, `quart`,
-`quint`, `expo`, `circ`, `back`, `bounce`, `elastic`, and a key may end with the optional `1.30`
-`easing` object (see **Easing And Layer Flags In Document 1.30**). The `color4` curve kind and the
-`ease-in-out` token both arrive in document `1.3`; see **Animation Breadth In Document 1.3**.
+`hold`, `linear`, `ease-in-out`, or one of `sine`, `quad`, `cubic`, `quart`, `quint`, `expo`,
+`circ`, `back`, `bounce`, `elastic`, and a key may end with the optional `easing` object (see
+**Easing And Layer Flags**). Component keys are described under **Component Keyframes** and the
+curve kinds under **Animation Values**.
 
 Keys are written in strictly increasing exact rational time. Equal normalized times are invalid, so
 `KeyframeId` never breaks a tie. Curves are non-empty; the final key's interpolation is canonical
@@ -743,16 +695,16 @@ Each value is inclusive:
 - a value below `uint64` maximum makes the next allocation `highestIssued + 1`
 - `18446744073709551615` means that maximum was issued and the namespace is permanently exhausted
 
-The allocator namespaces in schema `1.0` are exactly `composition`, `node`, `edge`, `layer`,
-`layerSlot`, `parameter`, `animationCurve`, `keyframe`, `driverBinding`, and `extensionRecord`.
-Schema `1.2` appends one more, `nodeGroup`, after `extensionRecord`; see **Node Groups In Document
-1.2**. No other member is accepted as a known namespace at the version that declares it. Every
+The allocator namespaces are exactly, in order, `composition`, `node`, `edge`, `layer`,
+`layerSlot`, `parameter`, `animationCurve`, `keyframe`, `driverBinding`, `extensionRecord`,
+`nodeGroup`, `asset`, the optional `assetFolder`, `dataBlock`, the optional `layerMask`,
+`exportJob`, and `exportOutput`. No other member is accepted as a known namespace. Every
 high-water value is an unsigned decimal string in `0..18446744073709551615`. Every declared object
 ID is an unsigned decimal string in `1..18446744073709551615`. The document's sole `ProjectId` has
 the same nonzero typed-ID domain but is not allocator-backed.
 
-`driverBinding` remains required even though no driver declaration table is serialized and, from
-document `1.4` on, no record carries a `DriverBindingId` at all -- a driver source is the node-and-port
+`driverBinding` remains required even though no driver declaration table is serialized and no
+record carries a `DriverBindingId` at all -- a driver source is the node-and-port
 pair it addresses. The live allocator may have issued driver IDs before that model; Save preserves
 that inclusive high-water so reopen can never reuse one, and a nonzero `driverBinding` high-water with
 nothing referencing it is valid and expected.
@@ -789,10 +741,9 @@ from locked layers) and its render reachability, both built once at freeze time.
 `RenderReachability::computations()`) let tests prove an edit's cost does not grow with unrelated
 compositions.
 
-`ProjectId` is not allocator-backed because one container owns one project. A normal schema `1.0`
-document missing any high-water member, including `driverBinding`, is invalid. Reconstruction from
-surviving IDs is permitted only inside an explicit migration from identified pre-1.0 development
-schemas and is never the normal v1 decode path.
+`ProjectId` is not allocator-backed because one container owns one project. A document missing any
+required high-water member, including `driverBinding`, is invalid; high water is never
+reconstructed from surviving IDs.
 
 ## Opaque Extension Envelope
 
@@ -886,13 +837,13 @@ Canonical ordering uses semantic values, never serialized decimal-string lexical
 | host reference entries | UTF-8 key |
 | retained unknown object members | UTF-8 key after known members |
 
-## Versions, Migrations, And Preservation
+## Versions And Preservation
 
 Container and document versions use independent `{major, minor}` values:
 
+- there is one current schema, container `1.0` and document `1.0`; nothing converts a file from
+  another version
 - unknown major versions are rejected without mutation
-- document 1.15 is the minimum loadable schema; earlier minors fail with
-  `UnsupportedSchemaVersion`, without migration or mutation
 - a newer minor opens editable only when every unknown construct is additive, bounded, and
   provably preservable
 - unknown core discriminators are never guessed
@@ -945,110 +896,21 @@ Open editability is explicit:
 ### Node Version Validation
 
 A node's `schemaVersion` is independent of the document schema. Built-in nodes must match their
-current registry definitions: Solid v2, Text v2, Layer v4, and Merge v2. Other built-in kinds retain
-their current registered versions. Retired per-kind reroutes are unsupported; only `bloom.reroute`
-is current. Unknown optional-module kinds retain the existing preservation contract.
+registry definitions: Solid v2, Text v2, Layer v5, and Merge v2. Other built-in kinds keep their
+registered versions. Retired per-kind reroutes are unsupported; only `bloom.reroute` is current.
+Unknown optional-module kinds keep the preservation contract.
 
-Project I/O checks node versions before applying the document schema floor. An unsupported node
+Project I/O checks node versions before decoding the rest of the document. An unsupported node
 fails with one `UnsupportedNodeVersion` error carrying its `nodeTypeId`, `nodeVersion`, and exact
 schema-version path. Reconstruction applies the same registry validation to decoded envelopes and
 names the node ID. Old or future versions of a known kind are never silently upgraded, downgraded,
-or interpreted through another definition. No parameters or IDs are injected and no edges are dropped.
-The one typed exception is Curves schema 1, which opens as schema 2 through the documented
-migration below ("Curves Schema 2"); any other old Curves shape still fails.
+or interpreted through another definition. No parameters or IDs are injected and no edges are
+dropped.
 
-#### Curves Schema 2
-
-Opening a project (#493) migrates each `bloom.curves` node of schema 1 (five Vector 2 points per
-channel, `<channel>Point1`..`Point5`, schema keys `bloom.curves.<channel>.point-<n>`) to schema 2
-(one Path point-list per channel and four hue curves, see
-[image filters](image-filters.md#levels-curves-and-huesaturation)). The decoder admits that one old
-version and `migrateLegacyCurvesNodes` rewrites the decoded envelope before reconstruction, on the
-open path only (never in save verification); the document schema version is unchanged and the next
-save writes schema 2.
-
-- Each channel's five points, in point order, become that channel's curve. A constant point is
-  copied exactly. An animated point takes its first key per component (a component without keys
-  takes the record's default value, then the identity default) and its animation curve is removed.
-  A driven point (a driver binding, not an edge) takes the identity default its node started with;
-  the value node that drove it stays in the graph, no longer bound.
-- No id is allocated: each channel's curve reuses its first point's parameter id, and the four hue
-  curves reuse the master channel's second to fifth point ids, starting empty (the identity). The
-  remaining point records are removed. The clamp record is unchanged.
-- A schema 1 node missing any point binding is not migrated and fails as an unsupported node
-  version.
-
-#### Transform 2D Motion Blur
-
-Opening a project (#484) binds every optional `bloom.transform-2d` motion-blur parameter a node lacks:
-`motionBlur`, the shutter's `shutterAngle`, `shutterOffset`, `shutterPhase`, `shutterCurve`,
-`shutterShape`, `quality`, `minSamples`, `maxSamples` and `jitter`.
-`migrateLegacyTransformMotionBlur` rewrites the decoded envelope as the Glow migration below does, on
-the open path only. The node stays at schema 1 and the document schema version is unchanged. `motionBlur`
-defaults to off, and the compiler already lowered an unbound role with that default, so the plan and
-every pixel are the same. [Motion blur](motion-blur.md) specifies the nodes.
-
-#### Film Grain Monochrome
-
-Opening a project (#486) binds the optional `bloom.film-grain` parameter `monochrome` on a node that
-lacks it. `migrateLegacyFilmGrainMonochrome` rewrites the decoded envelope as the Glow migration below
-does, on the open path only. The node stays at schema 1 and the document schema version is unchanged.
-`monochrome` defaults to off, and the compiler already lowered an unbound role with that default, so the
-plan and every pixel are the same. [Image filters](image-filters.md#film-grain) specifies the node.
-
-#### Procedural Warp Asymmetric Split
-
-Opening a project (#510) binds the optional `bloom.procedural-warp` parameters `asymmetric` (off) and
-`oppositeDistance` (40 px) on a node that lacks them. `migrateLegacyProceduralWarpSplit` rewrites the
-decoded envelope as the Film Grain Monochrome migration does, on the open path only. The node stays at
-schema 1 and the document schema version is unchanged. With `asymmetric` off the lowering and the kernel
-operands are those of the symmetric split, so every pixel is the same, and a node that was never migrated
-(no binding) lowers the same way. [Image filters](image-filters.md) specifies the node.
-
-#### Film Grain Sensor Noise
-
-Opening a project (#565) binds the optional `bloom.film-grain` parameters `mode`, `shadowWeighting`,
-`chromaBlotches`, `blotchSize` and `fixedPattern` on a node that lacks them, through the same
-migration as `monochrome`. The node stays at schema 1 and the document schema version is unchanged.
-`mode` defaults to Film, which reads none of the others, so the plan and every pixel are the same.
-The compiler also lowers an unbound role at its default. [Image filters](image-filters.md#film-grain)
-specifies the node.
-
-#### Path Stroke Stamps
-
-Opening a project (#509) binds the optional `bloom.path-stroke` parameters `stamp`, `stampAlign` and
-`stampRotation` on a node that lacks them. `migrateLegacyPathStrokeStamps` rewrites the decoded
-envelope as the Glow migration below does, on the open path only. The node stays at schema 1 and the
-document schema version is unchanged. `stamp` defaults to Dot, `stampAlign` to Automatic and
-`stampRotation` to 0, which stamp exactly the round dots a node saved before them drew, so the plan
-and every pixel are the same. The compiler also lowers an unbound role at its default.
-[Path processing](path-processing.md) specifies the node.
-
-#### Glow Controls
-
-Opening a project (#534) binds every optional `bloom.glow` parameter a node lacks: the #506 mode and
-shared controls (`mode`, `exponent`, the per-channel radius, `gradient`, `tintGradient`, `points`,
-`angle`, `length`, `chromatic`, `dirtAmount`, `rollOff`), which a Glow saved before #506 never had.
-`migrateLegacyGlowNodes` rewrites the decoded envelope before reconstruction, on the open path only
-(never in save verification). Each missing role gets a new constant record at its definition
-default on a newly allocated parameter id (the allocator high water advances); bound roles keep
-their ids and values. The document schema version is unchanged; the node is at schema 2 by then
-(the colour pair migration below runs first and turns a saved `outerTint` into `tintGradient`). The
-compiler already lowered an unbound role with that default, so the plan and every pixel are the
-same, and Properties and the node card then show the full control set, as for a new Glow.
-
-The five old identity points are an exact identity in schema 2, and five-point curves prepare the
-same segments as before, so a migrated project renders as it did.
-
-The canonical writer is **1.24** and the load floor is **1.15**. Opening 1.15 applies the additive
-asset metadata defaults during typed decoding and reports the resulting document as 1.24. The
-registered 1.15 → 1.16, 1.16 → 1.17, 1.17 → 1.18, 1.18 → 1.19, 1.19 → 1.20,
-1.20 → 1.21, 1.21 → 1.22, 1.22 → 1.23 and 1.23 → 1.24 DOM
-transforms are tested against the same decoded result. The input-id step adds only the deterministic
-mapping, preserving inheritance and `lin_rec709_scene`; the LUT and locator steps advance only
-the version, and the layer-time step also advances the Layer Output node schema (below). No other node version, parameter source or rendering meaning changes. The earlier numbered ladder remains independently
-tested bookkeeping and does not admit files below the load floor. Historical schema
-artifacts describe their own versions and do not imply that those documents can be loaded.
+A node may leave any optional parameter role unbound. The compiler lowers an unbound optional role
+at its definition default, so a node without, for example, a Transform 2D motion-blur, Film Grain
+Monochrome or Sensor Noise, Procedural Warp split, Path Stroke stamp or Glow mode binding renders as
+a node bound at those defaults.
 
 ## Project I/O Boundary
 
@@ -1180,7 +1042,7 @@ Bloom does not claim otherwise.
 
 ## Asset Locators
 
-Document 1.10 stores asset paths alongside stable records in `Project::assets`:
+The document stores asset paths alongside stable records in `Project::assets`:
 
 - nodes reference stable asset IDs, never filesystem paths
 - project-relative paths use UTF-8 and `/` separators
@@ -1190,7 +1052,7 @@ Document 1.10 stores asset paths alongside stable records in `Project::assets`:
 - saving does not case-fold asset paths or resolve their symlinks
 - embedded entry paths obey the container path profile when a later version introduces them
 
-The closed image asset records are specified under **Images And Backgrounds In Document 1.10**.
+The closed image asset records are specified under **Images And Backgrounds**.
 
 ## Qualified Implementations
 
@@ -1222,10 +1084,9 @@ Acquisition, lock, offline build, provenance, and release evidence follow
   zeros, exponent boundaries, and invalid overflow
 - Unicode scalar, combining/non-normalized, astral, control, escaped-key collision, malformed UTF-8,
   and lone-surrogate fixtures
-- scalar/Vec2/Color4 animation, the `ease-in-out` token, the `1.2` → `1.3` version-only migration and
-  its minor gating, curve/key ownership, final-key normalization, graph connectivity, Layer
-  Stack order, the `1.3` → `1.4` version-only migration, the `vec3` constant and `driver`
-  parameter-source kinds and their minor gating, a live driver source encoding as the node-and-port
+- scalar/Vec2/Color4 animation, the `ease-in-out` token, curve/key ownership, final-key
+  normalization, graph connectivity, Layer Stack order, the `vec3` constant and `driver`
+  parameter-source kinds, a live driver source encoding as the node-and-port
   pair it addresses, retained `driverBinding` high-water with no record referencing it, and
   source/schema mismatches
 - exact composition-domain boundaries for dimensions, pixel-count product, positive normalized
@@ -1262,159 +1123,100 @@ Acquisition, lock, offline build, provenance, and release evidence follow
 [yyjson 0.12.0]: https://github.com/ibireme/yyjson/releases/tag/0.12.0
 
 
-## Node Layout In Document 1.1
+## Node Layout
 
-`document-1.1.schema.json` adds a required `nodeLayout` member after `graph` in each composition.
-It is an array sorted by numeric `nodeId`; each record has exactly `nodeId`, `position` (`x`, `y`),
-`width`, `collapsed`, and `muted`, in that order. Position and width are finite Float64 values;
-width is positive. The booleans default to false. Unknown-node records survive with document
-warning diagnostics. Layout identity never advances node allocation watermarks. Future-minor
-additive members on layout records and their positions use normal round-trip preservation.
+Each composition has a required `nodeLayout` member after `graph`. It is an array sorted by numeric
+`nodeId`; each record has exactly `nodeId`, `position` (`x`, `y`), `width`, `collapsed`, and
+`muted`, in that order. Position and width are finite Float64 values; width is positive. The
+booleans default to false. Unknown-node records survive with document warning diagnostics. Layout
+identity never advances node allocation watermarks. Future-minor additive members on layout records
+and their positions use normal round-trip preservation. Color-setting, OCIO, node, container, and
+extension schema versions are independent of the document schema version.
 
-The production `1.0` → `1.1` DOM migration preserves all existing fields and numeric spellings,
-changes only the document schema version, and appends the original four-column default layout
-in stored node order. It charges the operation budget and reparses before trusted decode. Old files
-are never rewritten by Open. Color-setting, OCIO, node,
-container, and extension schema versions remain independent and unchanged.
+## Node Groups
 
-## Node Groups In Document 1.2
+Each composition has a required `nodeGroups` member after `nodeLayout`. It is an array sorted by
+numeric `groupId`; each record has exactly `groupId`, `name`, `members`, and `padding` (`x`, `y`),
+in that order, then the optional `color` (see "Node Group Colors"). `members` is an array of node
+object ids sorted ascending and duplicate-free, `name` is a human-facing name, and both padding
+components are finite and nonnegative. Membership disjointness across groups and member existence
+are document-model validation rather than wire shape: a member naming an unknown node survives with
+a warning diagnostic, and a node claimed by two groups is a document error. Group identity never
+advances node allocation watermarks. Future-minor additive members on group records and their
+padding use normal round-trip preservation. Group ids come from the `nodeGroup` allocator
+namespace, the eleventh member of `highestIssued`, after `extensionRecord`.
 
-`document-1.2.schema.json` adds a required `nodeGroups` member after `nodeLayout` in each
-composition. It is an array sorted by numeric `groupId`; each record has exactly `groupId`, `name`,
-`members`, and `padding` (`x`, `y`), in that order. `members` is an array of node object ids sorted
-ascending and duplicate-free, `name` is a human-facing name, and both padding components are finite
-and nonnegative. Membership disjointness across groups and member existence are document-model
-validation rather than wire shape: a member naming an unknown node survives with a warning
-diagnostic, and a node claimed by two groups is a document error. Group identity never advances node
-allocation watermarks. Future-minor additive members on group records and their padding use normal
-round-trip preservation.
+## Animation Values
 
-`1.2` also adds the `nodeGroup` allocator namespace as the eleventh member of `highestIssued`, after
-`extensionRecord`. That member was previously unknown additive data, and giving it allocator meaning
-is exactly what an additive minor is for: a reader that does not know it preserves it as unknown
-singleton data, and a `1.2` reader understands it. The eleven-member shape is therefore its own
-`highestIssued-1.2` definition, and the historical ten-member `highestIssued-1.0` definition is left
-exactly as it shipped.
+Animation curves have the kinds `scalar`, `vec2`, `vec3`, `color4`, `path` and `gradient`. A
+`color4` key carries `red`, `green`, `blue`, then `alpha` in that order -- the authoring order and
+straight-alpha meaning the constant `color4` parameter value uses. `red`, `green`, and `blue` are
+any finite number, so negative and HDR channels survive exactly; `alpha` is confined to `[0, 1]`,
+the authoring-color contract a constant color satisfies. The `outgoingInterpolation` tokens are
+`hold`, `linear`, `ease-in-out` and the easing equations of "Easing And Layer Flags", accepted on
+every curve kind's keys.
 
-The production `1.1` → `1.2` DOM migration preserves all existing fields and numeric spellings,
-changes only the document schema version, appends an empty `nodeGroups` array to every composition,
-and appends a zero `nodeGroup` high water: groups did not exist in `1.1`, so there is nothing to
-infer from an older file. It charges the operation budget and reparses before trusted decode, and
-each step refuses any document that is not its own source version, so the chain cannot be entered
-twice or out of order.
+## Timeline Fields
 
-## Animation Breadth In Document 1.3
-
-`document-1.3.schema.json` adds nothing to the MEMBER space and everything to the animation VALUE
-space. Its whole delta is two additions inside `animationCurves`:
-
-- a third curve kind, `color4`, whose keys carry a `value` object of `red`, `green`, `blue`, then
-  `alpha` in that order -- the authoring order and straight-alpha meaning the constant `color4`
-  parameter value already uses. `red`, `green`, and `blue` are any finite number, so negative and HDR
-  channels survive exactly; `alpha` is confined to `[0, 1]`, which is the authoring-color contract a
-  constant color already satisfies.
-- a third `outgoingInterpolation` token, `ease-in-out`, accepted on every curve kind's keys.
-
-Because the historical `animationCurve-1.0`, `scalarKeyframe-1.0`, and `vec2Keyframe-1.0` definitions
-are frozen, `1.3` mints its own `animationCurve-1.3`, `scalarKeyframe-1.3`, `vec2Keyframe-1.3`,
-`color4Keyframe-1.3`, `color4Value-1.3`, and `keyframeInterpolation-1.3`, and leaves the older ones
-exactly as they shipped -- the same precedent `highestIssued-1.2` set. Both additions are gated on the
-minor that DECLARES them: a file claiming `1.2` while carrying a `color4` curve or an `ease-in-out`
-token is a malformed `1.2` file and is refused, naming the exact member, while a file claiming a later
-minor carries them normally.
-
-The production `1.2` → `1.3` DOM migration is version-only: it preserves all existing fields and
-numeric spellings and changes nothing but the document schema version. A `1.2` file can contain
-neither of `1.3`'s additions, so there is nothing to add or infer -- the step exists so the chain has
-no hole, not because a `1.2` file is missing anything. It charges the operation budget and reparses
-before trusted decode, and each step refuses any document that is not its own source version, so the
-chain cannot be entered twice or out of order. Current writes emit at least minor 3.
-
-## Timeline Fields In Document 1.5
-
-The `1.4` → `1.5` migration changes only the root document version. All additions are optional,
-so a migrated file needs no inserted default members. The production migration chain has no gaps.
-Container version and node schema versions remain unchanged. Both 1.5 schema artifacts are
-validated by the schema checker, which removes the new constraints and reuses the 1.4 ladder.
-
-After a layer boundary's existing four members, optional known members appear in this order:
+After a layer boundary's first four members, optional known members appear in this order:
 `inPoint`, `outPoint`, `enabled`, `solo`, `locked`, `labelColor`. Times use the canonical rational
 object. Zero `inPoint` and the zero full-duration `outPoint` sentinel are omitted by the writer.
 Flags are omitted at their defaults (true, false, false respectively). A label is exactly three
 JSON unsigned integers in `[0,255]`, in red/green/blue order; no alpha or color-space transform is
 implied. A missing label uses the kind color. Unknown members still follow known members under
-the existing additive-minor preservation rules.
+the additive-minor preservation rules.
 
 After `nodeGroups`, a composition may contain `workArea`, with `start`, then `end` canonical
 rational objects. Absence means `[0,duration)`; a present range satisfies
 `0 <= start < end <= duration`. Layer ranges obey the same domain after resolving the duration
 sentinel. Invalid ranges are refused during trusted document construction. The writer preserves
-explicit ranges and work areas through close/reopen verification; old document pixels and output
-identity goldens do not change.
+explicit ranges and work areas through close/reopen verification.
 
-## Merge Collections In Document 1.6
+## Merge Collections
 
-The `1.5` → `1.6` ladder step changes only the root version. The original `graph.layerStack`
-record retains its node ID and ordered slots; it is `null` only when no Merge exists. Optional
-trailing `graph.merges` records carry additional Merges, each with `nodeId`, ordered `entries`, and
-optional `enabled` (default true). Every Merge node owns one collection. Entries retain `slotId`
-and `layerId`; `layerId: null` denotes a plain image input, whose node and port come from its edge.
-An absent `merges` field means no additional Merges. Slot IDs remain project-unique and participate
-in allocator high-water validation. Output wiring determines the timeline Merge independently of
-the primary persistence record. Historical schema artifacts remain unchanged; 1.6 checkers reduce
-the new artifacts to 1.5 and run the complete historical ladder.
+The `graph.layerStack` record holds the primary Merge's node ID and ordered slots; it is `null` only
+when no Merge exists. Optional trailing `graph.merges` records carry additional Merges, each with
+`nodeId`, ordered `entries`, and optional `enabled` (default true). Every Merge node owns one
+collection. Entries carry `slotId` and `layerId`; `layerId: null` denotes a plain image input,
+whose node and port come from its edge. An absent `merges` field means no additional Merges. Slot
+IDs are project-unique and participate in allocator high-water validation. Output wiring
+determines the timeline Merge independently of the primary persistence record.
 
+## Content Bounds
 
-## Content Bounds Introduced In Document 1.7
-
-Solid v2 introduced explicit Scalar width and height. Text v2, Layer v4 (v5 from 1.23), and Merge v2 use local
-content bounds. These are now the only supported definitions; the current 1.24 schema includes
-those contracts together with per-component animation, image assets, and audio. Documents carrying
-older node versions fail validation. There is no coordinate conversion or compatibility evaluator.
+Solid v2 has explicit Scalar width and height. Text v2, Layer v5, and Merge v2 use local content
+bounds. These are the only supported definitions; documents carrying older node versions fail
+validation. There is no coordinate conversion or compatibility evaluator.
 
 Composition-sized Solid dimensions use the exact proxy extent to avoid rounding an extra column
-or row into local bounds. Current pixel and semantic identity goldens remain unchanged.
+or row into local bounds.
 
-## Viewer Safe Areas In Document 1.8
+## Viewer Safe Areas
 
-The `1.7` → `1.8` migration appends an optional `safeAreas` object to each composition, before
-`workArea` when that member is present. It contains `action`, then `title`, as finite normalized
-percentages in `(0, 1]`, with `title <= action`; migrated compositions receive the default
-`action: 0.9`, `title: 0.8` pair. The canonical writer omits that default pair and emits authored
-non-default settings in the same position, so old canonical bytes remain stable while custom
-safe-area choices are durable across save/reopen. Missing `safeAreas` in a 1.8 document has the
-same default meaning. Preset selection and custom edits are ordinary undoable composition
-commands. These values affect viewer guide painting only: they never alter render pixels, cached
-frames, exports, or evaluation.
+A composition may carry an optional `safeAreas` object, before `workArea` when that member is
+present. It contains `action`, then `title`, as finite normalized percentages in `(0, 1]`, with
+`title <= action`. The canonical writer omits the default `action: 0.9`, `title: 0.8` pair and
+emits authored non-default settings in the same position, so custom safe-area choices are durable
+across save/reopen. Missing `safeAreas` means the default pair. Preset selection and custom edits
+are ordinary undoable composition commands. These values affect viewer guide painting only: they
+never alter render pixels, cached frames, exports, or evaluation.
 
-## Component Keyframes In Document 1.9
+## Component Keyframes
 
-The `1.8` → `1.9` ladder step changes vector and color animation records from whole-value keys to
-flat scalar component keys. A `vec2` key names `x` or `y`; a `vec3` key names `x`, `y`, or `z`; a
-`color4` key names `red`, `green`, `blue`, or `alpha`. Every component key retains the legacy key's
-exact rational `time` and `outgoingInterpolation`. Component timelines are independently ordered,
-so a component can be keyed without creating sibling keys. An animated parameter may carry an
-optional typed `source.defaultValue`; an unkeyed component samples that default.
+Vector and color animation records are flat scalar component keys. A `vec2` key names `x` or `y`;
+a `vec3` key names `x`, `y`, or `z`; a `color4` key names `red`, `green`, `blue`, or `alpha`. Every
+component key carries an exact rational `time` and `outgoingInterpolation`. Component timelines are
+independently ordered, so a component can be keyed without creating sibling keys. An animated
+parameter may carry an optional typed `source.defaultValue`; an unkeyed component samples that
+default.
 
-The migration is deterministic DOM-to-DOM. The first component keeps each legacy key's
-`KeyframeId`; generated sibling IDs are allocated from a reserved range above the old
-`idAllocation.highestIssued.keyframe`, and the final high-water value is written before the project
-records. This preserves all old IDs, prevents collisions, and makes repeated migration byte
-deterministic. Since the split copies exact values, times, and interpolation modes, migrated
-`Hold`, `Linear`, and `EaseInOut` samples are bit-identical to the legacy whole-value samples. The
-document and manifest artifacts are `document-1.9.schema.json` and `manifest-1.9.schema.json`; the
-historical `1.8` artifacts remain unchanged.
+## Images And Backgrounds
 
+The manifest reserves `bloom.image-source` as a built-in type. Container and node schema versions
+are independent.
 
-## Images And Backgrounds In Document 1.10
-
-The introduction artifacts are `document-1.10.schema.json` and `manifest-1.10.schema.json`.
-The manifest reserves `bloom.image-source` as a built-in type. Container and node schema versions remain independent.
-Migration 1.9 → 1.10 appends empty project `assets`, opaque black composition `backgroundColor`,
-and `idAllocation.highestIssued.asset: "0"`; all existing IDs and authored values are retained.
-
-Canonical order is `project`'s existing members followed by `assets`; each composition appends
-`backgroundColor` after its optional work area. Background is a four-number straight RGBA array,
+`project` carries `assets` after `compositions`; each composition carries `backgroundColor` after
+its optional work area. Background is a four-number straight RGBA array,
 default `[0.0, 0.0, 0.0, 1.0]`. It is viewer presentation metadata and does not fill export alpha.
 The Viewer displays it, opaque, inside the composition frame behind transparent pixels (unless the
 Viewer's Transparency Grid is on); changing it is not render-affecting.
@@ -1429,30 +1231,24 @@ file URIs validated before use, never synthetic percent-encoded relative paths. 
 encodes UTF-8 bytes, a local drive as `file:///C:/...`, and a UNC share as
 `file://server/share/...`. Invalid escapes, NUL, non-file schemes and relative paths are rejected.
 The digest is lowercase SHA-256 of image bytes; a sequence digest hashes ordered decimal frame
-numbers plus `:` and each member's lowercase digest (from 1.35, a stamped member's provisional
-identity, which a verified digest recorded beside the stamp from 1.36 does not change; see
-"Sequence Member Stamps In Document 1.35" and "Verified Member Digests In Document 1.36"). Interpretation holds integer `colorSpace`
+numbers plus `:` and each member's lowercase digest (a stamped member's provisional identity, which
+a verified digest recorded beside the stamp does not change; see "Sequence Member Stamps" and
+"Verified Member Digests"). Interpretation holds integer `colorSpace`
 (0 Auto, 1 sRGB, 2 Linear, 3 Raw), string `inputColorSpaceId`, and `alphaAssociation` (0 Straight,
 1 Premultiplied). The string is written after the legacy integer and before `alphaAssociation`; an
 empty string means Auto. A non-empty value is an exact non-data color-space id in the project's
 selected OCIO configuration. New imports leave the legacy enum at Auto so format metadata and EXR
-chromaticities remain automatic; the enum is retained for compatibility and deterministic migration
-of older documents.
+chromaticities remain automatic.
 
 The manifest contains `pattern`, `padding`, decimal-string `first` and `last`, sorted `members`
-(frame, locator, and a digest or, from 1.35, a file stamp, or from 1.36 both), and explicit
+(frame, locator, and a digest, a file stamp, or both), and explicit
 decimal-string `gaps`. A still carries an empty manifest.
 Sequence ranges and gaps must agree with their members. Dimensions and locator lengths are
 validated before publication. Missing files do not invalidate the document or remove its assets.
 `RemoveAsset` preserves referencing nodes so they can warn; Relink retains the stable asset ID.
 Import, relink, removal, layer placement and background editing use ordinary command transactions.
 
-## Audio Assets And Graph Sources In Document 1.11
-
-Document `1.11` is an additive schema step. Migration `1.10 → 1.11` changes only the root minor
-version and preserves every existing object, ID, parameter source, graph edge, asset and authored
-value. The canonical writer and manifest declaration emit `1.11`; the floor has since moved to `1.15`.
-Earlier documents are rejected; the numbered transform is retained only as historical schema bookkeeping.
+## Audio Assets And Graph Sources
 
 An Audio asset uses the same stable `AssetRecord` identity and file `AssetLocator` as
 an image, with `kind: "audio"`, the existing content digest and interpretation envelope, and the
@@ -1463,18 +1259,12 @@ waveform buckets remain derived runtime state. Missing audio remains a valid ref
 relinkable without changing its `AssetId`.
 
 The `bloom.audio-source` node stores the stable audio asset ID as a String parameter, its integer
-start frame, and its linear level. Layer Output, Layer Stack and Composition Output gain the typed
+start frame, and its linear level. Layer Output, Layer Stack and Composition Output have the typed
 audio ports described in [`layer-graph-model.md`](layer-graph-model.md); these are ordinary graph
 nodes and edges, not an opaque timeline extension. `AddAudioLayer` allocates and persists the source,
-boundary, slot and edge identities atomically. Existing image-only documents contain no audio
-edges and decode to the same image graph and pixels.
+boundary, slot and edge identities atomically. An image-only document contains no audio edges.
 
-## Ease Handles In Document 1.12
-
-Document `1.12` is an additive schema step. Migration `1.11 -> 1.12` changes only the root minor
-version; it adds no member, because every `1.11` key holds the default handle. The canonical writer
-and manifest declaration emitted `1.12`; the load floor is now `1.15`. Earlier documents are rejected;
-the numbered transform is retained only as historical schema bookkeeping.
+## Ease Handles
 
 A scalar keyframe and a component keyframe may each carry `outgoingHandle` and `incomingHandle`,
 in that order, after `outgoingInterpolation`. Each is a CLOSED object of `time` then `value`, both
@@ -1485,23 +1275,12 @@ the sampler apply, so a file can never carry a handle the model would refuse. Th
 not a round-trip attachment point: an unknown member inside one is `UnknownMember`.
 
 Both members are OPTIONAL and are emitted ONLY when the handle is non-default -- the default being
-`time = 1/3` and `value = 0`, tested BITWISE. An existing document therefore re-encodes
-byte-identically apart from its declared minor, and no identity or sampling version moves; see
-[`animation-and-time.md`](animation-and-time.md), "Ease handles", for what the handles mean and why
-a default-handled key still samples bit-for-bit as it did. A handle offsets one scalar axis, so
-only the scalar and component keyframe definitions carry the members at all.
+`time = 1/3` and `value = 0`, tested BITWISE; see [`animation-and-time.md`](animation-and-time.md),
+"Ease handles", for what the handles mean. A handle offsets one scalar axis, so only the scalar,
+component, Path and Gradient keyframe definitions carry the members, through the schema's
+`keyframeHandle-1.12` definition.
 
-The document and manifest artifacts are `document-1.12.schema.json` and
-`manifest-1.12.schema.json`, whose `keyframeHandle-1.12` definition is referenced from the scalar
-and the three component keyframe definitions; the historical `1.11` artifacts remain unchanged.
-
-## Layer Parenting In Document 1.13
-
-Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.39`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
-only the root minor.
-The current artifacts are `document-1.39.schema.json` and `manifest-1.39.schema.json`; the
-historical parenting artifacts remain versioned at 1.18.
+## Layer Parenting
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
 Its value is the canonical decimal-string LayerId of another boundary in the same composition.
@@ -1511,35 +1290,19 @@ it does not change Merge membership, stack order, opacity or visibility.
 
 ## Font IDs And Text Layout
 
-Text fonts are stored as font IDs ([Fonts](fonts.md)); a project holds no Font asset and no font
-bytes. A document written before issue 489 may hold Font assets (kind `font`, an `Asset` envelope
-followed by a closed `font` object with `family`, `style` and `faceIndex`, and a `system` or
-`builtin` locator). The open path converts each into a font ID (an embedded face becomes a
-`builtin` ID, a system face a `system` ID whose weight and slope come from its style name), rewrites
-every text `font` reference that named one (a decimal asset id, an integer 0 to 3, or a
-`family|style|digest` reference), and removes the Font assets and their data blocks. A reference
-that names nothing becomes the built-in DejaVu Sans. Saving writes IDs only.
+Text fonts are stored as font IDs ([Fonts](fonts.md)); a project holds no font bytes and the
+writer emits no Font asset. Saving writes IDs only.
 
 Text v2 appends `font` as a String holding the encoded font ID, then `box` as a Vec2 width/height in
 pixels, `wrap` as a Boolean, `verticalAlignment`, `anchorMode`, and `overflow` as Integer selectors.
-A zero box is point text; a non-zero box is the authored local bounds. These fields are optional
-while reading the pre-1.15 text grammar and canonicalized to the defaults above during migration.
-The writer retains the parameter sources in their stable graph order.
+A zero box is point text; a non-zero box is the authored local bounds. The writer retains the
+parameter sources in their stable graph order.
 
-The introduction artifacts are `document-1.15.schema.json` and `manifest-1.15.schema.json`; the
-`1.14 -> 1.15` migration is intentionally small and preserves all prior IDs, values, graph edges,
-and unknown additive members.
+## Asset Organization
 
-## Asset Organization In Document 1.16
-
-Document `1.16` adds organization metadata without changing media identity or evaluation. The
-introduction artifacts are `document-1.16.schema.json` and `manifest-1.16.schema.json`. Container
-version remains `1.0`; the load floor remains `1.15` so existing projects can acquire these
-additive defaults when opened. The current writer saves 1.24; opening alone leaves the
-original file untouched.
-
-Each asset appends `name`, optional `folder`, `tags`, then `order` after its existing media
-payload (`manifest`, and optional `font` or `audio`). `name` is a non-empty display name of at
+Organization metadata never changes media identity or evaluation. Each asset carries `name`,
+optional `folder`, `tags`, then `order` after its media payload (`manifest`, and optional `font` or
+`audio`). `name` is a non-empty display name of at
 most 4,096 UTF-8 bytes. It is independent of the locator: rename never renames a file on disk.
 `folder` is a non-zero decimal-string `AssetFolderId`; absence denotes the project root, and
 `null` is not accepted. `tags` is an array of at most 64 non-empty UTF-8 strings, each at most
@@ -1547,18 +1310,18 @@ most 4,096 UTF-8 bytes. It is independent of the locator: rename never renames a
 unsorted or duplicate tags are rejected. `order` is a canonical unsigned 64-bit decimal string,
 including `"0"`, for the asset's position within its folder.
 
-The project may append `assetFolders` after `assets`. Its records are ordered by ID and have the
+The project may carry `assetFolders` after `assets`. Its records are ordered by ID and have the
 closed member order `id`, `name`, optional `parent`. Folder names use the same human-facing name
 bound as assets; `parent` is another non-zero `AssetFolderId`, omitted for root folders. An empty
 folder collection is omitted by the canonical writer. Folder IDs have their own allocator
-namespace: `idAllocation.highestIssued` may append `assetFolder` after `asset`, omitted only
+namespace: `idAllocation.highestIssued` may carry `assetFolder` after `asset`, omitted only
 when zero. Deletion and undo preserve this high-water mark, so identities are never reused.
 
 Project validation refuses folder cycles, dangling parent/asset folder references, duplicate
 folder identities and duplicate names among sibling folders. Sibling names compare exactly;
 case-insensitive search is a UI behavior. Folders are virtual project organization, with no
-filesystem directory creation or media relocation. Since 1.27 a folder may also hold compositions
-(see "Composition Folders In Document 1.27"); removing a folder moves its assets, compositions and
+filesystem directory creation or media relocation. A folder may also hold compositions (see
+"Composition Folders"); removing a folder moves its assets, compositions and
 child folders up to its parent.
 
 The asset array stays sorted by stable ID for canonical encoding. The panel orders each folder's
@@ -1569,20 +1332,16 @@ a complete permutation of one folder's assets. Folder removal promotes direct ch
 the parent and appends its assets in their existing order. If promotion would duplicate a sibling
 folder name, removal is refused atomically until the conflicting folder is renamed.
 
-The 1.15 → 1.16 migration derives display names lexically from locator file stems, preserves
-multiple dots before the final extension and leaves dotfile names intact. An empty locator stem
-uses the captured font family, or `Asset` when no family exists. Builtin font locators identify a
-captured face rather than a file, so those use the captured family and style. Migrated assets have no folder,
-empty tags, and positions matching their former ID-ordered listing. The migration preserves every
-asset ID, locator, digest, media descriptor, graph node and parameter source. Relink likewise keeps
-name, folder, tags and order. No organization command changes render pixels.
+Import derives display names lexically from locator file stems, preserves multiple dots before the
+final extension and leaves dotfile names intact; an empty stem uses `Asset`. Relink keeps name,
+folder, tags and order. No organization command changes render pixels.
 
-## Layer Time In Document 1.23
+## Layer Time
 
-Document `1.23` persists the layer-owned time model of
-[ADR 0024](../decisions/0024-layer-owned-time.md). A Layer Output boundary in `layerOutputs` gains
+The document persists the layer-owned time model of
+[ADR 0024](../decisions/0024-layer-owned-time.md). A Layer Output boundary in `layerOutputs` has
 five optional members, written after `parent` in this order and only when they differ from the
-identity default, so a layer without timing keeps its pre-1.23 bytes:
+identity default, so a layer without timing carries none of them:
 
 | Member | Encoding | Default (omitted) |
 | --- | --- | --- |
@@ -1591,45 +1350,35 @@ identity default, so a layer without timing keeps its pre-1.23 bytes:
 | `contentExtent` | `{"kind":"fixed","duration":<positive rational time>,"frameRate":<frame-rate object as in a composition format>}` or `{"kind":"source","node":<node id string>}` | Unbounded |
 | `beforeMode`, `afterMode` | `"none"`, `"hold"`, `"loop"` or `"pingPong"` | `"none"` |
 
-The decoder reads these members only in documents at `1.23` or later; an earlier minor rejects them
-as unknown members. A present member is strict: a speed outside the range above, an unknown mode or
+A present member is strict: a speed outside the range above, an unknown mode or
 extent kind, or a fixed extent with a non-positive duration is a decode error rather than a silent
 identity. The explicit layer range (`inPoint`, `outPoint`) may lie outside `[0, duration]`.
 
-The Layer Output node schema advances 4 → 5 to declare the optional, animatable Float64 parameter
-role `timeRemap` (schema key `bloom.layer.time-remap`). The parameter is not required, so no
-binding or parameter record is inserted. The `1.22` → `1.23` DOM step advances the version and
-rewrites every `bloom.layer-output` node record whose `schemaVersion` is 3 or 4 to 5, leaving all
-bindings and values unchanged; opening an older document through typed decoding applies the same
-node-schema upgrade. A document opened from `1.22` therefore saves as `1.23` with identity timing
-and no layer time member.
+The Layer Output node (schema 5) declares the optional, animatable Float64 parameter role
+`timeRemap` (schema key `bloom.layer.time-remap`). The parameter is not required, so a layer without
+Time Remap has no binding or parameter record for it.
 
-## Channel Sets In Document 1.26
+## Channel Sets
 
-Document `1.26` persists the multi-channel nodes of
+The document persists the multi-channel nodes of
 [ADR 0026](../decisions/0026-multi-channel-and-data-images.md):
 
-- `bloom.image-source` advances to node schema 2. It gains the optional String parameters `part`
+- `bloom.image-source` is at node schema 2. It has the optional String parameters `part`
   (`bloom.image.part`, an OpenEXR part name; empty is the first part) and `layer`
   (`bloom.image.layer`, the color layer; empty is the root layer), and a `channels` ChannelSet
   output beside `image`.
-- `bloom.channel-shuffle`, `bloom.channel-copy` and `bloom.channel-remove` (node schema 1) are new
-  node types. Their String parameters are bounded to 256 bytes (channel names) or 4096 bytes
+- `bloom.channel-shuffle`, `bloom.channel-copy` and `bloom.channel-remove` are at node schema 1. Their String parameters are bounded to 256 bytes (channel names) or 4096 bytes
   (patterns).
-- The Composition Output gains an optional `channels` input and an optional `layers` parameter
+- The Composition Output has an optional `channels` input and an optional `layers` parameter
   (`bloom.composition-output.layers`) for layered OpenEXR output.
-- `bloom.cryptomatte` (node schema 1, #364) is a new node type: `channels` (ChannelSet) and `image`
+- `bloom.cryptomatte` (node schema 1, #364) has `channels` (ChannelSet) and `image`
   inputs, `mask` (Mask) and `image` outputs, and the String parameters `layer`
   (`bloom.cryptomatte.layer`, at most 256 bytes) and `mattes` (`bloom.cryptomatte.mattes`, the
   matte list in the common Cryptomatte syntax, at most 65536 bytes).
 
-The `1.25` → `1.26` DOM step rewrites only the node-record `schemaVersion` of `bloom.image-source`
-nodes from 1 to 2; the new parameters are optional, so no record is inserted and every edge and
-binding is copied unchanged.
+## Composition Timecode
 
-## Composition Timecode In Document 1.26
-
-A composition gains an optional `timecode` member after `workingColorSpaceId` (#376):
+A composition has an optional `timecode` member after `workingColorSpaceId` (#376):
 
 | Member | Encoding |
 | --- | --- |
@@ -1640,26 +1389,22 @@ change; labels show it at the nearest frame of the composition rate. `dropFrame`
 drop-frame labels and is honored only at 30000/1001 and 60000/1001; at any other rate the labels
 are non-drop and the stored flag is kept. Neither value changes frames, time, evaluation or output
 identity: they are timecode presentation owned by the composition. The member is written only when
-it differs from the default (start 0, non-drop), so a composition without it keeps its 1.25 bytes.
-The decoder reads it only at `1.26` or later, refuses a negative start as a domain violation, and
-preserves unknown trailing members like any composition attachment.
+it differs from the default (start 0, non-drop). The decoder refuses a negative start as a domain
+violation and preserves unknown trailing members like any composition attachment.
 
-## Node Group Colors In Document 1.31
+## Node Group Colors
 
-A node group object may append an optional `color` after `padding`, before retained unknown members:
+A node group object may carry an optional `color` after `padding`, before retained unknown members:
 three integers in `0..255`, the frame's 8-bit sRGB tint, in the same shape as a Layer Output's
-`labelColor`. The writer emits it only when the frame has a color, so an uncolored group keeps its
-1.30 bytes; absent means the neutral frame. The decoder reads it only at `1.31` or later. A group's
-color is layout like the rest of the record: compilation, render caches and snapshot identity never
-read it. The `1.30` → `1.31` DOM step `migrateNodeGroupColorsV1_30` only advances the version.
+`labelColor`. The writer emits it only when the frame has a color; absent means the neutral frame. A
+group's color is layout like the rest of the record: compilation, render caches and snapshot
+identity never read it.
 
-## Easing And Layer Flags In Document 1.30
+## Easing And Layer Flags
 
-Document `1.30` adds Robert Penner's easing equations
+The document carries Robert Penner's easing equations
 ([animation-and-time.md](animation-and-time.md#easing-equations)) and two presentation-only layer
-flags. Every addition is optional or a new value, so the `1.29` → `1.30` DOM step
-`migrateEasingAndLayerFlagsV1_29` only advances the version, and a re-saved older project changes
-only its version unless a layer infers `nameFollowsSource` (below).
+flags.
 
 - Interpolation tokens `sine`, `quad`, `cubic`, `quart`, `quint`, `expo`, `circ`, `back`, `bounce`
   and `elastic` (ids 3-12; `hold`, `linear` and `ease-in-out` keep ids 0-2).
@@ -1671,19 +1416,11 @@ only its version unless a layer infers `nameFollowsSource` (below).
 - A Layer Output may end, after `masks`/`trackMatte` and before retained unknown members, with
   `"shy": true` and then `"nameFollowsSource": true`; each is written only when true.
 
-The decoder accepts the tokens and all three members only at `1.30` or later; a file claiming an
-older minor that carries one is refused, and a newer minor keeps them. Neither flag is an evaluation
-input: `shy` only filters the layer table, and `nameFollowsSource` only decides whether renaming or
-replacing the layer's source renames the layer.
+Neither flag is an evaluation input: `shy` only filters the layer table, and `nameFollowsSource`
+only decides whether renaming or replacing the layer's source renames the layer (see
+[layer-graph-model.md](layer-graph-model.md#layer-timeline-contract)).
 
-A document older than `1.30` has no `nameFollowsSource`. Archive loading decodes older minors
-directly, so the decoded envelope carries `inferLayerNameFollowsSource`, and reconstruction sets the
-flag on exactly the layers whose name already equals their source's current name (an image, video or
-audio source's asset name, or a nested composition's name; see
-[layer-graph-model.md](layer-graph-model.md#layer-timeline-contract)). Following the source therefore
-changes no visible name. The DOM step, which archive loading does not run, leaves the flag absent.
-
-## Sequence Member Stamps In Document 1.35
+## Sequence Member Stamps
 
 Importing an image sequence lists its directory and reads one member: the file chosen, or the first
 frame of an **Only frames** range that leaves it out (issue #473). That member's bytes are probed
@@ -1691,14 +1428,13 @@ for format, size, channels and alpha and hashed as before. Every other member is
 **file stamp** the listing observed, its length and modification time, and its bytes are read and
 digested only when it is first needed (viewer, RAM Preview, export, thumbnails), on a worker.
 
-A sequence `members` element is either `{frame, locator, contentDigest}`, unchanged, or, from 1.35,
-`{frame, locator, stamp}` with `stamp` = `{size, modified}`: `size` an unsigned decimal string (the
-byte length) and `modified` a signed decimal string (nanoseconds since the Unix epoch, as
-`platform::observeFileIdentity` reports it on every platform). In a 1.35 document exactly one of
-the two is present. A document claiming 1.34 or older cannot carry a stamp. A project saved while
-only some members have been read keeps the stamps of the others and reopens to the same asset.
-From 1.36 a save also records a digest the process memo verified beside a member's stamp (see
-"Verified Member Digests In Document 1.36").
+A sequence `members` element carries `{frame, locator, contentDigest}`, `{frame, locator, stamp}`
+or both, with `stamp` = `{size, modified}`: `size` an unsigned decimal string (the byte length) and
+`modified` a signed decimal string (nanoseconds since the Unix epoch, as
+`platform::observeFileIdentity` reports it on every platform). A project saved while only some
+members have been read keeps the stamps of the others and reopens to the same asset. A save also
+records a digest the process memo verified beside a member's stamp (see "Verified Member
+Digests").
 
 A stamped member's identity is provisional: `document::sequenceMemberIdentity` is SHA-256 over
 `BloomSequenceMemberStamp`, NUL, the locator `path`, NUL, the `relinkHint`, NUL, the decimal size,
@@ -1713,8 +1449,8 @@ the file before and after reading it, refuses bytes whose stamp differs ("Frame 
 was imported; reload the footage in Assets"; a missing file reads "Frame 12 is missing"), and
 admits the bytes by their stamp without hashing them, so a later use costs one `stat`. The digest
 is computed afterwards by the background Verify footage pass, which records it in the process memo
-of [ADR 0025](../decisions/0025-identity-verified-media-sources.md) (see "Verified Member Digests
-In Document 1.36"). A revision retained in memory is reused only while the file still carries the
+of [ADR 0025](../decisions/0025-identity-verified-media-sources.md) (see "Verified Member
+Digests"). A revision retained in memory is reused only while the file still carries the
 stamp and the memo still vouches for the retained bytes. Changed content is therefore never served stale. The
 residual risk of ADR 0025 applies with one addition: a stamped member rewritten in place with the
 same length and modification time is not detected, including across sessions, until Reload
@@ -1730,97 +1466,52 @@ is a gap in the manifest, as before. Relink and Reload Footage list the sequence
 keeping its frame range; Relink to a single frame of a sequence still produces a still with the
 digest of the file chosen.
 
-The `1.34` -> `1.35` DOM step `migrateSequenceMemberStampsV1_34` only advances the version: every
-older member has its digest. The schema artifacts add `assetMember-1.35` and `assetManifest-1.35`;
-the schema check restores the 1.34 artifact from them exactly.
-
-## Gradient Colour Pairs In Document 1.39
+## Gradient Colour Pairs
 
 The Linear and Radial Gradient generators and Glow draw their colour ramps from gradient values
 (issue #541):
 
 - `bloom.linear-gradient` and `bloom.radial-gradient` are at node schema 2. Their required,
-  animatable `gradient` role (`bloom.gradient.stops`, default black at 0 and white at 1) replaces
-  schema 1's `startColor` and `endColor`; gradient position 0 is drawn at the `start` point and 1 at the
-  `end` point, and `repeat` repeats or mirrors the whole gradient as before.
+  animatable `gradient` role (`bloom.gradient.stops`, default black at 0 and white at 1) holds the
+  ramp; gradient position 0 is drawn at the `start` point and 1 at the `end` point, and `repeat`
+  repeats or mirrors the whole gradient.
 - `bloom.glow` is at node schema 2. Its optional, animatable `tintGradient` role
-  (`bloom.glow.tint-gradient`, default white at 0 and (1, 0.5, 0.25) at 1) replaces schema 1's
-  `outerTint`. With `gradient` on (and not Streak), octave `j` of `n` takes the gradient's colour at
+  (`bloom.glow.tint-gradient`, default white at 0 and (1, 0.5, 0.25) at 1) holds the octave tints.
+  With `gradient` on (and not Streak), octave `j` of `n` takes the gradient's colour at
   `j / (n - 1)`; `tint` stays the colour of every octave with the gradient off.
 
-These gradients may hold any finite colour (HDR and signed colour stay authorable, as the colours
-they replace could); Colorize's keeps its `+-1e6` domain. A gradient as a whole has no socket (a
-gradient is not a socket kind); from 1.40 each of its stops does (see "Gradient Stop Links In
-Document 1.40").
+These gradients may hold any finite colour (HDR and signed colour stay authorable); Colorize's
+keeps its `+-1e6` domain. A gradient as a whole has no socket (a gradient is not a socket kind);
+each of its stops does (see "Gradient Stop Links"). A schema 1 generator or Glow is an unsupported
+node version.
 
-Opening a document older than 1.39 converts each schema 1 node in the decoded envelope before
-reconstruction (`migrateLegacyGradientColorPairs`, the open path only, before the Glow controls
-migration), so it renders as it did:
-
-- The pair becomes a two-stop gradient: the first colour at 0, the second at 1. A generator's
-  gradient reuses `startColor`'s parameter id and drops the `endColor` record; a Glow keeps `tint`
-  and its gradient reuses `outerTint`'s id, or a newly allocated one when the Glow never had it
-  (with the `(1, 0.5, 0.25)` default as its end). A missing colour converts at its schema 1
-  default.
-- Two constants give a gradient constant whose stops are the two colours exactly. The native and
-  CPU gradient kernels evaluate a two-stop table at 0 and 1 to the same Float32 pixels as schema 1's
-  start/end pair, and Glow's octave tint is the same `tint + (outer - tint) * t`, so no pixel
-  changes.
-- A keyed colour converts to a gradient curve keyed at every time either colour has a key (on a
-  retired colour curve's id), each key's stops the two colours sampled there. A segment whose
-  keyed components all have their own key pair at exactly those times, with one interpolation and
-  easing and default handles, keeps that interpolation and easing; Hold everywhere stays Hold; any
-  other segment is Linear between the two keys' values, so the colours are exact at every key and a
-  Linear pair is exact throughout.
-- A colour driven through its socket by a value node stays driven (#543): its stop opens at the
-  colour's default and takes a stop link with the colour's driver (the first colour's on stop 0, the
-  second's on stop 1), so the document renders as before. A Glow's driven `tint` also keeps its own
-  driver and still tints the glow with the gradient off.
-
-The node's bindings are re-sorted by role and the allocator's parameter, curve and keyframe high
-water advance. A schema 1 node missing its first colour is not converted and fails as an
-unsupported node version, and a document claiming 1.39 that carries a schema 1 generator or Glow is
-refused the same way. The `1.38` -> `1.39` DOM step `migrateGradientColorPairsV1_38` only advances
-the version. The schema artifacts are `document-1.39.schema.json` and `manifest-1.39.schema.json`;
-the schema check restores the 1.38 artifacts from them exactly.
-
-## Compound Paths In Document 1.43
+## Compound Paths
 
 A path constant, Path key or Path data block may hold several contours, a fill rule and keyed groups
 (issue #589, `docs/architecture/path-value.md`). A value a single contour can express keeps the
-original spelling, `{"kind": "path", "anchors": [...], "closed": ...}`, and re-encodes byte for byte
-apart from the document's minor. Any other value is written
+flat spelling, `{"kind": "path", "anchors": [...], "closed": ...}`. Any other value is written
 `{"kind": "path", "contours": [{"anchors": [...], "closed": ...}, ...], "fillRule"?, "groups"?}`:
 `fillRule` is `nonZero` or `evenOdd` and is written only when explicit, and each of `groups` is
 `{"key", "firstContour", "contourCount", "color"?}`, written only when there are some, ascending and
 not overlapping, with unique keys. A data block's path payload follows the same rule with its own
 existing member order (`closed` before `anchors`). One value has one spelling, so a `contours` form
-of a value the flat form can express is refused. A document claiming 1.42 or older that carries
-`contours`, `fillRule` or `groups` on a path is refused.
+of a value the flat form can express is refused. Decoding gives each flat path one contour (an empty
+open one gives none, the empty value). `tests/fixtures/paths` holds a saved project carrying
+one-contour paths on shapes, a mask with keys, a data block, a field remap curve and a Curves node;
+`bloom.runtime.path-value-project` opens it, requires every frame's digest, and saves and reopens
+it. The schema holds the compound value as the `compoundPathValue-1.43` arm of
+`parameterValue-1.4`.
 
-Every older path is one contour, so the `1.42` -> `1.43` DOM step `migrateCompoundPathsV1_42` only
-advances the version, and decoding gives each flat path one contour (an empty open one gives none,
-the empty value). `tests/fixtures/paths` holds a project saved by the 1.42 writer, carrying a path on
-shapes, a mask with keys, a data block, a field remap curve and a Curves node;
-`bloom.runtime.path-value-migration` opens it, requires every frame's digest from the build that
-wrote it, and saves and reopens it. The schema artifacts are `document-1.43.schema.json` (the
-`compoundPathValue-1.43` arm of `parameterValue-1.4`) and `manifest-1.43.schema.json`; the schema check
-restores the 1.42 artifacts from them exactly.
-
-## Matte Sources In Document 1.42
+## Matte Sources
 
 A layer mask may follow its `opacity` with `matte`, an output port reference (`{"node", "port"}`)
 naming the Mask output that shapes it (issue #383); its `path`, `feather` and `expansion` are still
 stored. A track matte may carry `node`, the same reference, in place of `source`, followed by
 `channel` and `inverted`. The referenced node must exist in the same composition, produce a Mask
-and not depend on the layer; a document claiming 1.41 or older that carries either member is
-refused (`UnknownMember` at the member). No older document has one, so the `1.41` -> `1.42` DOM step
-`migrateMatteSourcesV1_41` only advances the version. The schema artifacts are
-`document-1.42.schema.json` (`matte` on `layerMask-1.24`, and `trackMatte-1.24` requiring exactly
-one of `source` or `node`) and `manifest-1.42.schema.json`; the schema check restores the 1.41
-artifacts from them exactly.
+and not depend on the layer. The schema holds `matte` on `layerMask-1.24`, and `trackMatte-1.24`
+requires exactly one of `source` or `node`.
 
-## Gradient Modes In Document 1.41
+## Gradient Modes
 
 A gradient value (a constant, and the value of every key of a gradient curve) may follow its
 `stops` with how it blends between them (issue #546), in this order and each only when it is not
@@ -1831,20 +1522,14 @@ the default:
 - `interpolation`: `"constant"`, `"ease"`, `"cardinal"`, `"b-spline"` or `"exponential"` (default
   Linear).
 
-A default spelled out, an unknown name or a member out of this order is refused, and so is a
-document claiming 1.40 or older that carries one (`UnknownMember` at the member). A mode the blend
+A default spelled out, an unknown name or a member out of this order is refused. A mode the blend
 does not read (the hue direction of an RGB gradient, the interpolation of an HSV or HSL one) is
 still stored, so switching back restores it. The evaluation is evaluation-primitives.md's
-"Gradient Interpolation And Colour Modes".
+"Gradient Interpolation And Colour Modes". The schema holds the three optional properties on
+`gradientValue-1.38` and their `gradientColorMode-1.41`, `gradientHueDirection-1.41` and
+`gradientInterpolation-1.41` vocabularies.
 
-Every older gradient blends linearly in RGB, so the `1.40` -> `1.41` DOM step
-`migrateGradientModesV1_40` only advances the version. The schema artifacts are
-`document-1.41.schema.json` (the three optional properties on `gradientValue-1.38` and their
-`gradientColorMode-1.41`, `gradientHueDirection-1.41` and `gradientInterpolation-1.41`
-vocabularies) and `manifest-1.41.schema.json`; the schema check restores the 1.40 artifacts from
-them exactly.
-
-## Gradient Stop Links In Document 1.40
+## Gradient Stop Links
 
 A value node may drive a gradient stop's colour or position (issue #543), on Linear and Radial
 Gradient's `gradient`, Glow's `tintGradient` and Colorize's `gradient`. Each driven component is its
@@ -1871,13 +1556,9 @@ the stop renders as authored again. An edit that reorders or removes stops moves
 their stops in the same transaction (`commands::RemapGradientStopLinks`); a removed stop's links go
 with it.
 
-The document shape is 1.39's (parameters and bindings are generic). The `1.39` -> `1.40` DOM step
-`migrateGradientStopLinksV1_39` only advances the version; a document claiming 1.39 or older that
-carries a stop link is refused at its `schemaKey` (`UnsupportedParameterSource`). The schema
-artifacts are `document-1.40.schema.json` and `manifest-1.40.schema.json`; the schema check restores
-the 1.39 artifacts from them exactly.
+Stop links need no schema member of their own: parameters and bindings are generic.
 
-## Gradient Values In Document 1.38
+## Gradient Values
 
 A parameter constant may be a gradient (issue #541): `{"kind": "gradient", "stops": [...]}`, its
 stops in stored order, each `{position, red, green, blue, alpha}` -- a position in `[0, 1]` and a
@@ -1895,20 +1576,17 @@ gradient constant. Between two keys with the same stop count each stop's positio
 interpolate by the eased progress; keys with different stop counts, and Hold keys, hold the earlier
 key's gradient until the next (`runtime::sampleGradientCurve`).
 
-In 1.38 the only schema key with a gradient value is `bloom.colorize.gradient`, the Colorize node's
-optional `gradient` role (1.39 adds the generators' and Glow's; see above). Its colour channels are held to the Colorize colour domain; its default is
-black at 0, (0.24, 0.17, 0.10) at 0.18 and white at 1 -- the three-colour ramp Gradient Map used
-before. A new Colorize node binds it; a Colorize node saved before 1.38 has no binding and keeps
-mapping through its Shadows, Midtones, Highlights and Midpoint until the gradient is first edited,
-which binds it seeded with that same ramp, so nothing changes on screen.
+The schema keys with a gradient value are the generators' and Glow's (see "Gradient Colour Pairs")
+and `bloom.colorize.gradient`, the Colorize node's optional `gradient` role. Its colour channels are
+held to the Colorize colour domain; its default is black at 0, (0.24, 0.17, 0.10) at 0.18 and white
+at 1. A new Colorize node binds it; a Colorize node without the binding maps through its Shadows,
+Midtones, Highlights and Midpoint until the gradient is first edited, which binds it seeded with
+that same ramp, so nothing changes on screen.
 
-The `1.37` -> `1.38` DOM step `migrateGradientValuesV1_37` only advances the version. A document
-claiming 1.37 or older that carries a gradient constant or a gradient curve is refused at its `kind`.
-The schema artifacts add `gradientStop-1.38`, `gradientValue-1.38` and `gradientKeyframe-1.38`, put
-the gradient value in `parameterValue-1.4` and the gradient curve in `animationCurve-1.9`; the schema
-check restores the 1.37 artifact from them exactly.
+The schema defines `gradientStop-1.38`, `gradientValue-1.38` and `gradientKeyframe-1.38`, and holds
+the gradient value in `parameterValue-1.4` and the gradient curve in `animationCurve-1.9`.
 
-## Entry Layers In Document 1.37
+## Entry Layers
 
 Every Merge entry is a layer (issue #502; see [the layer and graph model](layer-graph-model.md),
 "Merge"). An entry without a Layer node keeps its layer controls on its own **entry layer**: a
@@ -1918,8 +1596,8 @@ before retained unknown members, in this order:
 - `slotId`: the canonical decimal-string `LayerSlotId` of the Merge slot it belongs to. That slot's
   `layerId` names the record, and the slot is not fed directly by a Layer node.
 - `pivot`: `"frame"`, written only when the layer's scale and rotation pivot about the composition
-  frame's centre plus its anchor. Absence is the `content` pivot every layer had before 1.37 (the
-  centre of its local content bounds). Every entry layer is created with the Frame pivot; a Layer
+  frame's centre plus its anchor. Absence is the `content` pivot (the centre of its local
+  content bounds). Every entry layer is created with the Frame pivot; a Layer
   node that adopted an entry's values carries it too, so it is written on any record. Any other
   value is refused.
 - `parameters`: the entry layer's own parameter bindings, `{role, parameterId}` sorted by UTF-8 role
@@ -1933,34 +1611,27 @@ several entry layers stay canonical. A Merge may own one entry layer per slot; a
 exactly one record. Validation (`document::validateEntryLayers`) refuses an entry layer whose slot is
 missing or does not name it, two for one slot, a missing or repeated role, a parameter of the wrong
 schema, a shared parameter and a driven one. A plain entry with no record behaves as an entry layer
-at its defaults (the identity), so no older document is migrated.
+at its defaults (the identity).
 
 `bloom.adjustment` (schema 1) is the Adjustment node: no inputs, no parameters, one Image output
 `image`, whose value is the stack below the Merge entry its chain lands in. Like every registered
-node type it is admitted by the registry, not by the document minor.
+node type it is admitted by the registry, not by the document version. The schema's
+`layerOutput-1.37` record carries the three members.
 
-The `1.36` -> `1.37` DOM step `migrateEntryLayersV1_36` only advances the version. A document
-claiming 1.36 or older that carries `slotId`, `pivot` or `parameters` on a layer output is refused
-with `UnknownMember` at that member. The schema artifacts add `layerOutput-1.37` (the 1.0 record with
-the three members) and point `graph-1.0`'s `layerOutputs` at it; the schema check restores the 1.36
-artifact from them exactly.
-
-## Verified Member Digests In Document 1.36
+## Verified Member Digests
 
 A first use no longer hashes a still or a sequence member: the file identity check authorises
 preview and export from first use, and the digest is computed in the background (issue #495). A
 sequence `members` element takes one of three forms. `{frame, locator, contentDigest}` is a
-**legacy** member (every member imported before 1.35, and the member import read).
+**read** member (the member import read).
 `{frame, locator, stamp}` is a **pending** member whose bytes no full hash has proved yet.
 `{frame, locator, contentDigest, stamp}`, in that order, is a **verified** member: the digest a full
-hash proved for the bytes that carried that stamp. Validation refuses a member with neither; a
-document claiming 1.35 or older cannot carry both.
+hash proved for the bytes that carried that stamp. Validation refuses a member with neither.
 
 A member's identity does not move when its digest is recorded. `document::sequenceMemberIdentity`
-is the stamp-derived identity of "Sequence Member Stamps In Document 1.35" for every member with a
-stamp, digest or not, and the digest itself for a legacy member, so every 1.35 document keeps
-exactly the cache identity it had. A legacy member that gains a stamp in a saved file is keyed by
-its stamp once that file is reopened; within the session nothing changes.
+is the stamp-derived identity of "Sequence Member Stamps" for every member with a stamp, digest or
+not, and the digest itself for a read member. A read member that gains a stamp in a saved file is
+keyed by its stamp once that file is reopened; within the session nothing changes.
 
 **Save records, never waits.** Every publication of the document (Save, Save As, and the recovery
 writer, which share `host::executeSessionSaveMiddle`) completes the captured snapshot on the save
@@ -1969,7 +1640,7 @@ sequence member lacking one of the two, it resolves the member's file the way th
 locator under the project's folder, else its relink hint) and observes it once
 (`platform::observeSource`: one `stat` and a lookup in the process memo of
 [ADR 0025](../decisions/0025-identity-verified-media-sources.md)). A pending member gains the memo
-digest when the file still carries the member's stamp; a legacy member gains the observed stamp when
+digest when the file still carries the member's stamp; a read member gains the observed stamp when
 the memo digest equals its digest; a different memo digest (the content changed) leaves it as it
 is, as does a verified member, a missing file and any member the memo does not know. Nothing is
 hashed and nothing waits: a member without a digest saves as pending. Only the published bytes
@@ -1991,7 +1662,7 @@ Windows background mode).
 
 The pass hashes every still image (`platform::hashSourceFile`, which records the memo when the
 file's identity holds still across the read), every pending member whose file still carries its
-stamp, every legacy member, and a verified member whose file no longer carries its stamp. It skips
+stamp, every read member, and a verified member whose file no longer carries its stamp. It skips
 a verified member that still carries its stamp, any file the memo already knows for its current
 identity, a missing file, and every video (a video's decode snapshot still hashes at capture) and
 other asset kind. A hash that differs from the recorded digest adds a Warning naming the asset and
@@ -1999,18 +1670,14 @@ frame ("plate frame 12 changed since it was imported", "Relink or reload the foo
 and purges the decoded media and finished-frame caches through the media purge of Edit | Purge, so
 nothing rendered from the changed bytes stays cached; the memo then holds the actual digest, so a
 later decode reports the relink diagnostic. The next save records every digest the pass proved.
-There is no preference and no setting.
+There is no preference and no setting. The schema's `assetMember-1.36` requires at least one of
+`contentDigest` and `stamp` (`anyOf`).
 
-The `1.35` -> `1.36` DOM step `migrateVerifiedMemberDigestsV1_35` only advances the version: every
-older member carries exactly one of the two. The schema artifacts add `assetMember-1.36` (the 1.35
-member with `anyOf` in place of `oneOf`) and `assetManifest-1.36`; the schema check restores the
-1.35 artifact from them exactly.
+## Interpret Footage
 
-## Interpret Footage In Document 1.34
-
-Document `1.34` (issue #381) adds the Interpret Footage members to an asset's `interpretation`
-object, after `alphaAssociation` and in this order. Each is optional and written only when it
-differs from its default, so an asset the artist never interpreted is written exactly as in 1.33:
+An asset's `interpretation` object carries the Interpret Footage members (issue #381), after
+`alphaAssociation` and in this order. Each is optional and written only when it differs from its
+default, so an asset the artist never interpreted carries none of them:
 
 | Member | Value | Default (absent) |
 | --- | --- | --- |
@@ -2026,77 +1693,48 @@ differs from its default, so an asset the artist never interpreted is written ex
 | `missingFrames` | `nothing`: a frame the sequence manifest lacks shows nothing; `skip`: the sequence plays the frames it has back to back, so it is as long as its members | hold the previous frame |
 | `stillDuration` | rational time, more than 0 and at most 24 hours: a still's length, from the Import preference **Still duration**; a layer made from the still ends there and New Composition from it is that long | the composition's length |
 
-A sequence's `manifest` gains an optional trailing `range` (`{first, last}`, signed decimal
+A sequence's `manifest` has an optional trailing `range` (`{first, last}`, signed decimal
 frame numbers, `first <= last`): the numbered frames an import was limited to (the Import option
 **Only frames**). Every member lies within it, and Reload Footage and Relink read only those frames
 again; absent means every numbered file of the sequence.
 
-A video stream gains an optional trailing `pixelAspect` (`{numerator, denominator}`, never 1/1):
+A video stream has an optional trailing `pixelAspect` (`{numerator, denominator}`, never 1/1):
 the coded sample aspect ratio the decoder resamples to square pixels, captured at import (provider
 schema 5); absent means square. A still has no frame rate, start timecode, fields or loop, only
 a sequence has missing frames and a frame range, and only a still has a still duration; validation
-refuses them on other kinds. A member written at its default or an unknown token is refused. A
-document claiming an older minor cannot carry a stream `pixelAspect`; trailing interpretation and
-manifest members there are kept aside as unknown members and not read, so it opens with the
-defaults.
+refuses them on other kinds. A member written at its default or an unknown token is refused.
 
-The `1.33` → `1.34` DOM step `migrateFootageInterpretationV1_33` only advances the version: every
-older asset opens with the defaults, which reproduce 1.33 playback exactly (a sequence keeps one
-member per composition frame). The schema artifacts reference `assetInterpretation-1.34`,
-`assetManifest-1.34` and `videoStream-1.34`; the schema check restores the 1.33 artifact from them
-exactly.
+## Export Formats
 
-## Export Formats In Document 1.33
-
-Document `1.33` adds three export output formats for the bundled web encoders
+Three export output formats serve the bundled web encoders
 ([ADR 0036](../decisions/0036-bundled-codec-libraries.md)): `vp9-webm` (VP9 with Opus audio in
 WebM), `av1-webm` (AV1 with Opus audio in WebM) and `av1-mp4` (AV1 with AAC audio in MP4). Their
-`codecProfile` is empty (the format default, 8-bit) or one of `8bit` and `10bit`; the profile
-vocabulary gains `8bit`. `videoBitrateKbps` is kept but does not apply to them (they encode at
+`codecProfile` is empty (the format default, 8-bit) or one of `8bit` and `10bit`. `videoBitrateKbps` is kept but does not apply to them (they encode at
 constant quality), and a WebM output's audio is mixed at 48 kHz whatever `audioSampleRate` says.
-The decoder accepts the three format tokens only at `1.33` or later: a document claiming an older
-minor that names one is refused like any unknown token. The `1.32` → `1.33` DOM step
-`migrateWebmExportFormatsV1_32` only advances the version; no older document can contain the new
-tokens, so every older queue opens unchanged. The schema artifacts move the format and profile
-vocabularies into `exportFormat-1.33` and `exportCodecProfile-1.33`.
+The schema holds the format and profile vocabularies in `exportFormat-1.33` and
+`exportCodecProfile-1.33`.
 
-The `1.31` → `1.32` step now writes minor `32` (it wrote `31` while `1.32` was the newest minor,
-which the next step's source-version check would have refused).
+## Keyframe Handle Modes
 
-## Keyframe Handle Modes In Document 1.32
-
-Document `1.32` adds the per-key handle mode
-([animation-and-time.md](animation-and-time.md#handle-modes)). A scalar, component or Path key may end,
+A key may carry a handle mode ([animation-and-time.md](animation-and-time.md#handle-modes)). A scalar, component or Path key may end,
 after its handles and `easing`, with `"handleMode": "aligned"` or `"handleMode": "auto"`. `free` is the
 default and is never written, so a key that never had its mode set gains no member; a file that spells
-`"handleMode": "free"` is refused (`InvalidKeyframeHandleMode`), as is any other token. The decoder
-accepts the member only at `1.32` or later.
+`"handleMode": "free"` is refused (`InvalidKeyframeHandleMode`), as is any other token.
 
 The mode is presentation metadata: sampling reads the stored handles, and `evaluationView()` resets
-the mode, so a transaction that changes only modes is render-neutral. The `1.31` → `1.32` DOM step
-`migrateKeyframeHandleModesV1_31` only advances the version; every older key loads Free and samples
-bit-for-bit as before.
+the mode, so a transaction that changes only modes is render-neutral. A key without the member
+is Free.
 
-Document `1.32` is also the first version that every build saved after HLG input began following
-BT.2408 ([color management](color-management.md#hdr-reference-white), issue #407): document `1.31`
-was current on both sides of that change, so no member or version marks it exactly. When the
-opened version (`SessionOpenResult::openedDocumentSchemaVersion()`) is below `1.32` and an asset
-uses the HLG input space (`Rec.2100-HLG (Bloom)` chosen explicitly, or a video in Auto whose stored
-stream transfer is HLG), Open shows a one-time information note, on the same surface as the 1.28
-note, naming how many assets now look about 1.26 times brighter. Saving writes the current version,
-so the note does not return. A project below `1.28` that has both kinds of footage shows one note
-with both changes.
+## Export Queue
 
-## Export Queue In Document 1.29
-
-Document `1.29` persists the export queue ([ADR 0033](../decisions/0033-export-queue.md)): the jobs,
+The document persists the export queue ([ADR 0033](../decisions/0033-export-queue.md)): the jobs,
 their render settings and their outputs are project truth, edited only through undoable commands
 (`commands/export_queue_operations.hpp`) that never affect a rendered pixel. Run state (status,
 progress, ETA, logs, verification, replace confirmations) is runtime state owned by
 `host::ExportQueueService` and is never saved, so a reopened project shows every job Ready.
 
-`project` gains the required last member `exportQueue`: `{"jobs": [...]}` in run order (not sorted
-by id). `idAllocation.highestIssued` gains the required `exportJob` and `exportOutput` members after
+`project` has the required last member `exportQueue`: `{"jobs": [...]}` in run order (not sorted
+by id). `idAllocation.highestIssued` has the required `exportJob` and `exportOutput` members after
 the optional `layerMask`. Ids are allocator-backed decimal strings, project-global per namespace, and
 never reused.
 
@@ -2111,61 +1749,50 @@ never reused.
 
 `loudness` (optional, #570) is present only when the output normalizes its programme loudness:
 `targetLufs` (Float64, `-40..-5`, EBU R128 integrated loudness) and `truePeakDbtp` (Float64,
-`-12..0`, the true-peak ceiling). It joins document `1.43` as an optional member, like
-`useCachedFrames`: a file without it exports the audio as mixed and re-saves unchanged.
+`-12..0`, the true-peak ceiling). Like `useCachedFrames` it is optional: an output without it
+exports the audio as mixed.
 
 `labelColor` uses the layer label representation (three integers `0..255`). `format` is the closed
-1.29 vocabulary `png`, `exr`, `tiff`, `dpx`, `prores-mov`, `dnxhr-mxf`, `h264-mov`, `h264-mp4`,
-`hevc-mov`, `hevc-mp4`, `wav`; `codecProfile` is empty (the format default) or a token the format
+vocabulary `png`, `exr`, `tiff`, `dpx`, `prores-mov`, `dnxhr-mxf`, `h264-mov`, `h264-mp4`,
+`hevc-mov`, `hevc-mp4`, `wav`, `vp9-webm`, `av1-webm`, `av1-mp4`; `codecProfile` is empty (the format default) or a token the format
 accepts (ProRes `proxy|lt|422|hq|4444|4444xq`, DNxHR `lb|sq|hq|hqx|444`, H.264 `high`, HEVC
-`main|main10`, DPX `10bit|16bit`, WAV `s16|s24`; from 1.33 also the WebM and AV1 formats with
-`8bit|10bit`, see "Export Formats In Document 1.33"). The shapes are closed. Bounds: 1,024 jobs, 1 to 16
+`main|main10`, DPX `10bit|16bit`, WAV `s16|s24`, the WebM and AV1 formats `8bit|10bit`; see
+"Export Formats"). The shapes are closed. Bounds: 1,024 jobs, 1 to 16
 outputs per job, 4 KiB per string, frame padding 1 to 12, one `####` or `{frame}` in a naming
 pattern. A job's composition must exist: deleting a composition removes its jobs in the same edit,
 and undo restores both. A project-relative destination is a relative path below the project folder;
 an external destination is an RFC 8089 file URI. Paths and patterns may contain the destination
 tokens `{name}`, `{job}`, `{format}` and `{date}` (expanded by `host::resolveDestination()`).
 
-The `1.28` → `1.29` step `migrateExportQueueV1_28` is self-contained and version-keyed: it appends
-`"exportQueue": {"jobs": []}` to `project` and `"exportJob": "0", "exportOutput": "0"` to
-`highestIssued`; its already-migrated guard refuses a file that already carries any of them. A
-migrated 1.28 project equals the same project saved at 1.29, with an empty queue.
+## Video Color Default
 
-## Video Color Default In Document 1.28
+No member records how Auto shows SDR video ([ADR 0032](../decisions/0032-sdr-video-colour-default.md),
+issue #381): Auto shows ordinary Rec.709/601 and untagged SDR video through the config's sRGB
+texture space instead of its Rec.709 video space (see
+[color management](color-management.md#automatic-asset-rules)). Auto stays Auto and every explicit or
+legacy input color is kept exactly, so no per-asset assumption is stored.
 
-Document `1.28` changes no member ([ADR 0032](../decisions/0032-sdr-video-colour-default.md),
-issue #381). From this version, Auto shows ordinary Rec.709/601 and untagged SDR video through the
-config's sRGB texture space instead of its Rec.709 video space (see
-[color management](color-management.md#automatic-asset-rules)). The `1.27` → `1.28` DOM step only
-advances the version: Auto stays Auto and every explicit or legacy input color is kept exactly, so
-no per-asset assumption is recorded. The opened document's source version is reported by the open
-path (`SessionOpenResult::openedDocumentSchemaVersion()`). When it is below `1.28` and a video asset
-in Auto has stored stream tags that take the new default, Open shows a one-time information note
-naming how many video assets now look less pale. Saving writes `1.28`, so the note does not return.
+## Composition Folders
 
-## Composition Folders In Document 1.27
-
-A composition gains an optional `folder` member after `timecode` (#378):
+A composition has an optional `folder` member after `timecode` (#378):
 
 | Member | Encoding |
 | --- | --- |
 | `folder` | the canonical decimal-string `AssetFolderId` of the Assets folder holding the composition |
 
-Absence means the Assets root, and the writer omits it there, so a root composition keeps its 1.26
-bytes apart from the version. A folder reference is project organization only: it never changes
-evaluation, render identity or caches. Project validation refuses a composition whose folder does
-not exist, exactly as for an asset. Compositions carry no order within a folder; the Assets panel
-sorts them with assets by its columns. The decoder reads the member only at `1.27` or later and
-preserves unknown trailing members like any composition attachment. The `1.26` → `1.27` DOM step
-only advances the version, so every existing composition opens at the root.
+Absence means the Assets root, and the writer omits it there. A folder reference is project
+organization only: it never changes evaluation, render identity or caches. Project validation
+refuses a composition whose folder does not exist, exactly as for an asset. Compositions carry no
+order within a folder; the Assets panel sorts them with assets by its columns. The decoder preserves
+unknown trailing members like any composition attachment.
 
-## Layer Masks In Document 1.24
+## Layer Masks
 
-Document `1.24` persists the masks, track mattes and Path curves of
-[ADR 0028](../decisions/0028-layer-masks-and-track-mattes.md). Every addition is optional and
-written only when present, so a document without masks keeps its 1.23 bytes apart from the version.
+The document persists the masks, track mattes and Path curves of
+[ADR 0028](../decisions/0028-layer-masks-and-track-mattes.md). Every member is optional and written
+only when present, so a document without masks carries none of them.
 
-A Layer Output boundary gains two members after the layer-time members:
+A Layer Output boundary has two members after the layer-time members:
 
 | Member | Encoding |
 | --- | --- |
@@ -2174,80 +1801,54 @@ A Layer Output boundary gains two members after the layer-time members:
 
 A mask is a collection element identified by its id (round-trip kind `LayerMask`), so unknown
 trailing members of a mask object are preserved like those of any other element. Mask parameters
-are ordinary parameter records owned by exactly one mask and never bound by a node.
+are ordinary parameter records owned by exactly one mask and never bound by a node. A mask may take
+its shape from a node's Mask output and a track matte may name a Mask output in place of its source
+layer (see "Matte Sources").
 
-A path anchor gains an optional trailing `mode` member: `"corner"`, `"mirrored"`, `"aligned"`,
+A path anchor has an optional trailing `mode` member: `"corner"`, `"mirrored"`, `"aligned"`,
 `"free"` or `"auto"`, the editing intent of its handles (it never changes a pixel). It is written
 only when it differs from the mode the anchor's geometry implies, and an omitted mode is that
 inferred mode: no handle is Corner, two collinear handles of equal length are Mirrored, two collinear
-handles are Aligned, anything else is Free (relative tolerance 1e-9). Paths written before 1.24,
-and 1.24 paths saved before the member existed, therefore migrate without rewriting, and the
-canonical form round-trips exactly. The decoder accepts `mode` only at `1.24` or later. Data-block
-path payloads carry no mode. Path keys carry the mode on each anchor of their value.
+handles are Aligned, anything else is Free (relative tolerance 1e-9). The canonical form therefore
+round-trips exactly. Data-block path payloads carry no mode. Path keys carry the mode on each anchor
+of their value.
 
 An animation curve may be `{"id", "kind": "path", "keyframes"}`. Each key is `{"id", "time",
 "value", "outgoingInterpolation"}` plus the optional ease handles, where `value` is a constant-value
 object of kind `"path"`. Only a `bloom.mask.path` parameter may own a Path curve.
 
-`idAllocation.highestIssued` gains an optional `layerMask` member, written once a mask id has been
-issued. The decoder accepts these members only at `1.24` or later. The `1.23` → `1.24` DOM step only
-advances the version: every new member is optional, so no record is inserted or rewritten.
+`idAllocation.highestIssued` has an optional `layerMask` member, written once a mask id has been
+issued.
 
-## Video Assets In Document 1.17
-
-The current document and manifest schema artifacts are `document-1.32.schema.json` and
-`manifest-1.32.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
-The 1.16 → 1.17 migration only advances the version; the 1.17 → 1.18 and 1.18 → 1.19 steps
-likewise preserve existing assets and pixels. Opening 1.15 first applies asset-organization
-defaults and the historical video and working-space steps, then the 1.19 → 1.20 input-id step,
-1.20 → 1.21 LUT step, 1.21 → 1.22 locator version step, 1.22 → 1.23 layer-time step,
-1.23 → 1.24 layer-mask version step, 1.24 → 1.25 video-metadata step, 1.25 → 1.26 channel-set step,
-1.26 → 1.27 composition-folder version step, 1.27 → 1.28 video-color-default version step,
-1.28 → 1.29 export-queue step, 1.29 → 1.30 easing and layer-flags version step,
-1.30 → 1.31 node-group-color version step and 1.31 → 1.32 handle-mode version step.
+## Video Assets
 
 `AssetKind::Video` serializes as `"video"`. It retains the shared asset identity, locator,
 interpretation, dimensions and organization envelope, with a closed `video` member before
 organization fields. `video` contains `frames` (canonical unsigned decimal string), exact rational
 `duration`, and a nonempty `streams` array (at most 256). A stream contains, in order: `id`, `kind`
 (1 video, 2 audio, 3 data), `codec`, `profile`, `pixelFormat`, `timecode`, `timebase`, `framePeriod`,
-`duration`, `width`, `height`, `sampleRate`, `primaries`, `transfer`, `matrix`, `range`, and
-`channelLayout`. Rates are stored as exact positive reciprocal frame periods. Color code points
-use canonical signed decimal strings; absent tags remain explicit. Stream IDs follow container
-order. Dimensions, strings, timing, audio layout and frame counts are bounded during decoding and
-domain validation. Only video assets may carry this member.
+`duration`, `width`, `height`, `sampleRate`, `primaries`, `transfer`, `matrix`, `range`,
+`fieldOrder`, `timecodeType`, `channelLayout`, then the optional `pixelAspect` (see "Video Stream
+Metadata" and "Interpret Footage"). Rates are stored as exact positive reciprocal frame periods.
+Color code points use canonical signed decimal strings; absent tags remain explicit. Stream IDs
+follow container order. Dimensions, strings, timing, audio layout and frame counts are bounded
+during decoding and domain validation. Only video assets may carry this member.
 
 The first video stream defines the asset's duration, frame count and dimensions. The first audio
 stream supplies its preview sample rate and channel count. Content digest binds every decode and
 cache lookup. ProRes authorization is not project truth: the current provider's explicit
 non-authorized status is execution evidence and appears in the asset tooltip.
 
-## Asset Input Color Spaces In Document 1.20
+## Asset Input Color Spaces
 
-The `1.19` → `1.20` migration appends `inputColorSpaceId` to each existing asset interpretation
-and adds the `inputColorSpaceId` String parameter to `bloom.image-source` and `bloom.video-source`.
-Both source rows are non-animatable. The source value is empty to inherit the asset; otherwise it is
-the exact config id selected by the artist. The integer `colorSpace` rows remain unchanged: `0`
-inherits the asset's legacy interpretation, while values `1` through `3` retain their historical
-sRGB, Linear, and Raw compatibility behavior.
-
-Migration is deterministic under the selected project's OCIO configuration:
-
-| 1.19 `colorSpace` | 1.20 `inputColorSpaceId` |
-| --- | --- |
-| Auto | empty |
-| Srgb | config sRGB-texture id (`srgb_rec709_display` in Bloom Neutral) |
-| Linear | effective working-space id |
-| Raw | empty; data/no-conversion |
-
-Opening a project (#487) also migrates the source rows: an Image or Video source whose integer
-`colorSpace` is `1` (sRGB) or `2` (Linear) and whose `inputColorSpaceId` is empty opens with the
-config's sRGB texture id (`srgb_rec709_display` in Bloom Neutral, `sRGB - Texture` in the ACES CG
-config) or the composition's effective working-space id, and `colorSpace` `0`. Raw (`3`) stays, as
-the Input color space control's "Raw (no conversion)" choice; an sRGB choice under any other config
-stays as it was. The migration runs on the open path only (`migrateLegacySourceColorSpaces`), never
-in save verification, which must decode exactly what was written; the next save writes the migrated
-values. Properties and the node card show one control, Input color space, for both rows.
+Each asset interpretation carries `inputColorSpaceId`, and `bloom.image-source` and
+`bloom.video-source` carry the matching `inputColorSpaceId` String parameter. Both source rows are
+non-animatable. The source value is empty to inherit the asset; otherwise it is the exact config id
+selected by the artist. The integer `colorSpace` rows remain: `0` inherits the asset's legacy
+interpretation, while values `1` through `3` keep their sRGB, Linear, and Raw behavior. Properties
+and the node card show one control, Input color space, for both rows; it offers Raw as "Raw (no
+conversion)" and shows a stored sRGB or Linear choice without offering it, and committing writes the
+OCIO id and clears the legacy choice.
 
 The canonical writer emits `colorSpace`, `inputColorSpaceId`, then `alphaAssociation` in that
 order. The field is bounded and validated as strict UTF-8. Missing, data, or unavailable ids do
@@ -2261,23 +1862,17 @@ OOTF) whenever the config is resolved, so opening a project that names it never 
 config file. `Rec.2100-PQ (Bloom)` is likewise valid under Bloom Neutral (ST-2084 to linear, 203
 cd/m2 = 1.0). See [`color-management.md`](color-management.md#synthesized-rec2100-hlg-input-space).
 
-## Video Stream Metadata In Document 1.25
+## Video Stream Metadata
 
-Document 1.25 adds two members after `range` in every
-video-asset stream object, written by the canonical writer and required by the decoder:
+Every video-asset stream object has two members after `range`, written by the canonical writer and
+required by the decoder:
 
 | Member | Values |
 | --- | --- |
 | `fieldOrder` | coded field order, FFmpeg numbering: 0 unknown, 1 progressive, 2 top first, 3 bottom first, 4 top coded/bottom displayed first, 5 the reverse |
 | `timecodeType` | 0 none, 1 non-drop, 2 drop-frame (`;` or `.` before the frames field); 0 exactly when `timecode` is empty |
 
-The Video node (`bloom.video-source`, schema 1) gains the optional, non-animatable integer parameter
+The Video node (`bloom.video-source`, schema 1) has the optional, non-animatable integer parameter
 `bloom.video.audio-stream`, the 0-based index among the asset's audio streams that the node plays
 (0 to 255). A node without the binding plays the first audio stream; the Properties Audio Stream
 control creates the binding on first use through `bloom.video.set-audio-stream`.
-
-The 1.24 -> 1.25 migration step `migrateVideoSourceMetadataV1_24` is deterministic: it inserts
-`"fieldOrder":0` (older files never recorded it) and the `timecodeType` derived from the stream's
-timecode text, copies every other byte unchanged and writes version 1.25. The 1.26 channel-set step
-follows it.
-

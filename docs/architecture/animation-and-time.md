@@ -43,13 +43,13 @@ whole-value assumptions are deliberately recorded here before the component-curv
 | Session | `toggleKeyframe*()` and `keyframeDiamondState*()` answer one binary state for a parameter's one curve. `KeyframeSelection` and clipboard data carry only curve/key IDs; effective vector/color readers sample one whole curve. | Add component toggle/state and all/some/none aggregate state; selections carry their component, and effective readers resolve component curves without changing the public effective-value result types. |
 | Timeline lanes | `TimelineKeyframeRow`, grid projection, hit-testing, drag ghosts, and selection dispatch in `src/ui/timeline_ruler.*` and `src/ui/timeline_keyframe_gestures.cpp` project one lane per parameter curve. Property rows read Vec2 as two fields and one diamond. | KEY-2 owns component lanes and component diamonds. KEY-1 changes only the session seam and leaves widget wiring untouched. |
 | Compiler/evaluator | `CompiledVec2Curve`/`CompiledColor4Curve` tables are indexed once per parameter; snapshot lowering and CPU preflight/sample/resolve paths assume one whole-value curve and one segment identity. | Compile component tables and sample each component, composing the same typed value for consumers while keeping curve identity and semantics versions stable. |
-| Persistence | Canonical JSON emits `kind: "vec2"`/`"color4"` records with whole-value keys; decode validates those shapes; schema 1.3 introduced Color4; production migration currently ends at 1.8. | Schema 1.9 writes flat component keys and optional animation defaults. The deterministic 1.8 → 1.9 DOM migration splits each legacy vector/color key at the same exact time and interpolation, preserving sampling and reserving generated key IDs above the old high water. |
+| Persistence | Canonical JSON emits `kind: "vec2"`/`"color4"` records with whole-value keys; decode validates those shapes. | The schema writes flat component keys and optional animation defaults. |
 | Identity goldens | Runtime sampling tests pin the sampling version and vector behavior; output-analysis and process-frame identity tests pin evaluator/sampling versions and derived digests; UI golden images cover the existing whole-property indicators. | Re-run the identity checks on the final commit. Do not change evaluator or sampling versions when migrated-document samples remain bit-identical; document any justified change and re-derive affected goldens only if required. |
 
 The implementation touch points are therefore `src/document/animation.*` and parameter schema
 predicates, `src/commands/animation_operations.*`, `src/runtime/animation_sampling.*`, curve
-compilation, snapshot lowering, and CPU evaluation, project canonical encode/decode plus the
-document migration registry and schemas, and `src/ui/composition_session.*` with its tests. KEY-2 now supplies the component-aware widgets and lanes described below.
+compilation, snapshot lowering, and CPU evaluation, project canonical encode/decode and the
+schemas, and `src/ui/composition_session.*` with its tests. KEY-2 now supplies the component-aware widgets and lanes described below.
 
 ## Finite Value Invariant
 
@@ -319,11 +319,11 @@ whole selection; re-applying it to an already eased side is no change.
 
 ### Handle modes
 
-Document 1.32 stores a `KeyframeHandleMode` per scalar, component and Path key, next to the
+The document stores a `KeyframeHandleMode` per scalar, component and Path key, next to the
 handles it describes: `Free` (0, the default), `Aligned` (1) and `Auto` (2). The mode is
 presentation metadata. Sampling and curve compilation never read it: the STORED handle values are
-the evaluation inputs, and `Aligned`/`Auto` are maintained by rewriting those values. A document
-written before 1.32 loads every key as `Free` and samples bit-for-bit as it did. The writer emits
+the evaluation inputs, and `Aligned`/`Auto` are maintained by rewriting those values. A key without
+a stored mode is `Free`. The writer emits
 `handleMode` only for `Aligned` and `Auto`, after `easing`.
 
 - **Free** -- the two handles are independent.
@@ -1484,7 +1484,7 @@ handle edits that address a scalar axis do not apply to it.
 ## Gradient Curves
 
 #541 adds `GradientAnimationCurve`, the same whole-value shape for a `GradientValue` (a multi-stop
-colour ramp; see project-format.md, "Gradient Values In Document 1.38"): `GradientKeyframe { id,
+colour ramp; see project-format.md, "Gradient Values"): `GradientKeyframe { id,
 time, value: GradientValue, outgoingInterpolation, easing, handles }`. Only Colorize's gradient
 (`bloom.colorize.gradient`) may own one. It samples as a Path curve does: the end keys hold, a
 segment's eased 0 → 1 progress interpolates each stop's position and straight colour between two

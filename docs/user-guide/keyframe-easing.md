@@ -73,8 +73,6 @@ Preview and cached frames are kept. Switching to **Auto** repositions the handle
 ordinary edit and re-renders the affected frames. Every mode change is one undo step. Easy Ease
 sets explicit handles, so it makes the keys it eases Free.
 
-Projects saved before handle modes existed open with every key Free and look exactly as before.
-
 ## Shy layers
 
 Mark a layer **shy** to hide it from the layer table while the table's shy filter is on, like the
@@ -91,9 +89,6 @@ pointing the layer at different footage, renames the layer too.
 Renaming the layer keeps your name from then on. To go back to the source's name, turn **name
 follows source** back on for that layer; Bloom shows the source's current name again. Solid, text
 and shape layers have no source, so they always keep the name you give them.
-
-Projects saved before this change open with every name exactly as it was. A layer whose name was
-still its source's name follows the source from then on; a layer you had renamed keeps its name.
 
 ## Python and agents
 

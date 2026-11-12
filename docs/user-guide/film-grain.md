@@ -27,8 +27,7 @@ Nothing clips: HDR values keep their range, and grain may take a dark value slig
 
 **Mode** picks how the grain is drawn. **Film** is the grain described here and below. **Sensor Noise**
 draws the noise of a small camera sensor instead (see the next section). Switching mode changes which
-rows the card shows, and keeps every value: switch back and nothing is lost. A project saved before the
-mode existed opens in Film and renders as it did.
+rows the card shows, and keeps every value: switch back and nothing is lost.
 
 ## Response to brightness (Film)
 

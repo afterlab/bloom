@@ -5,6 +5,10 @@ minor at integration)
 
 Date: 2026-10-30
 
+Note (2026-11-12): the project schema is now one current version, document `1.0`. The document
+version steps and migrations this record mentions were removed; no older project is converted. See
+[project format](../architecture/project-format.md).
+
 ## Context
 
 Exporting today is one modal flow per window: **File → Export Frame…**, **Export Frame Range…** and

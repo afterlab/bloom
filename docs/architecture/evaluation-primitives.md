@@ -887,7 +887,7 @@ formulas. A zero-length vector chooses the first stop's color. Clamp confines `t
 Repeat uses its fractional part, and Mirror folds over period two. The gradient is sampled at the
 frame (a keyed gradient through `sampleGradientCurve`), each stop a value node drives then takes the
 driven colour or position from the frame's value graph (#543, `CompiledGradientParameter::drivers`,
-project-format.md "Gradient Stop Links In Document 1.40"), and its stops are sorted by position,
+project-format.md "Gradient Stop Links"), and its stops are sorted by position,
 ties kept in stored order. Up to the first stop the first color holds, from the last stop the last color
 holds, and between them the phase finds the last stop at or before it and its successor; two stops
 at one position make a hard edge. Each stop carries the Float32 reciprocal of its span to the next

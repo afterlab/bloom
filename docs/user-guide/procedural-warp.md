@@ -81,8 +81,7 @@ Viewer) and slides the two halves apart by **Split Distance**; the gap between t
 on **Mirror** instead to reflect one side onto the other (a mirror line you can move with the two points).
 Turn on **Asymmetric** to open each half by its own amount: **Split Distance** is then how far the half to
 the left of the line (looking from Line Start to Line End) opens, and **Opposite Distance** how far the
-half to its right opens. Equal distances are the ordinary split, and projects made before Asymmetric
-open with it off, looking exactly as they did.
+half to its right opens. Equal distances are the ordinary split.
 
 ## Turbulent
 

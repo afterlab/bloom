@@ -703,12 +703,9 @@ commands, and the native image-effect harness runs all three recipes against the
 
 `bloom.glow` has one node and three modes (#506), chosen by the constant `mode` dropdown: Classic
 (0, the default and the glow described above), Physical (1) and Streak (2). The modes and the
-shared controls below are optional parameters of the same schema-1 node: a Glow saved before them
-binds none, lowers with their defaults and therefore renders exactly the Classic chain it always
-did (the compiler test proves the plan identical). A new node binds them all. Opening a project
-binds each one an older Glow lacks at its default (#534, see
-[project format](project-format.md#glow-controls)), so every Glow shows the same Properties rows
-and card sockets and still renders bit-identically. Every chain is still a recipe of
+shared controls below are optional parameters: a Glow that binds none lowers with their defaults
+and therefore renders exactly the Classic chain (the compiler test proves the plan identical). A new
+node binds them all (#534; see [project format](project-format.md#node-version-validation)). Every chain is still a recipe of
 primitives with derived values in the value graph, so each value animates or is driven as usual.
 
 **Physical** is a multi-scale, energy-conserving glow with an inverse-power falloff. Its point-spread
@@ -773,9 +770,7 @@ aliases its input. Spacing is bounded to `[0, 1024]` pixels and the decay to `(0
   (default white at 0 and (1, 0.5, 0.25) at 1), edited on the card and in Properties with the
   gradient editor; a constant gradient folds to constant octave tints, and a keyed one samples at
   the frame through a value-graph gradient sample per octave, as does one whose stops a value node
-  drives (#543, project-format.md "Gradient Stop Links In Document 1.40"). Its two-stop default is
-  exactly schema 1's `tint + (outerTint - tint) * j / (n - 1)`, which a schema 1 Glow opens as
-  (project-format.md, "Gradient Colour Pairs In Document 1.39").
+  drives (#543, project-format.md "Gradient Stop Links"; see also project-format.md, "Gradient Colour Pairs").
 - Lens dirt: an optional `dirt` Image input adds the glow times the dirt's Rec. 709 luma coverage
   (Multiply Alpha, Luma), its colour scaled by `dirtAmount` (`[0, 1000]`, default 1), as Unreal
   Engine's bloom dirt mask does.
@@ -974,7 +969,7 @@ Parameters:
 | Midtones | `midtones` | (0.24, 0.17, 0.10), luma 0.18 | Animatable colour, Tritone (and an unbound Gradient Map) |
 | Highlights | `highlights` | White (1, 1, 1) | Animatable colour, Tint and Tritone (and an unbound Gradient Map) |
 | Midpoint | `midpoint` | 0.18 (scene-linear mid grey) | Animatable `[0.01, 0.99]`, Tritone (and an unbound Gradient Map) |
-| Gradient | `gradient` | Black at 0, Midtones' default at 0.18, white at 1 | Optional, animatable gradient (1 to 64 stops; document 1.38), Gradient Map |
+| Gradient | `gradient` | Black at 0, Midtones' default at 0.18, white at 1 | Optional, animatable gradient (1 to 64 stops), Gradient Map |
 | Map from | `source` | Luma | Constant dropdown: Luma (0), Red (1), Green (2), Blue (3), Alpha (4); Gradient Map |
 | Outside the ramp | `cycle` | Clamp | Constant dropdown: Clamp (0), Repeat (1), Mirror (2); Gradient Map |
 | Repetitions | `repetitions` | 1 | Animatable `[0, 100]`, Gradient Map |
@@ -983,10 +978,9 @@ Parameters:
 
 The three choices decide the arithmetic, so they have no socket, and neither has the gradient (a
 whole value no value graph produces); every other value is animatable and drivable with its own
-socket in parameter order. The gradient is optional (#541): a new node binds it, and a node saved
-before document 1.38 has no binding and maps through its three-colour ramp until the gradient is first
-edited, which binds it seeded with that ramp (see project-format.md, "Gradient Values In Document
-1.38"). A colour's RGB is any finite value within `+-1e6`
+socket in parameter order. The gradient is optional (#541): a new node binds it, and a node without
+the binding maps through its three-colour ramp until the gradient is first edited, which binds it
+seeded with that ramp (see project-format.md, "Gradient Values"). A colour's RGB is any finite value within `+-1e6`
 (HDR and signed colours are allowed); its alpha is unused.
 
 Bloom's process image is premultiplied scene-linear RGBA. Colorize works on the straight colour
@@ -1492,8 +1486,8 @@ keyed or driven; `animation`, `seed`, `monochrome` and `mode` are constants:
 | `shadows`, `midtones`, `highlights` | 0.1, 1, 1 | 0 to 10 | The response at luma 0, 0.18 and 1 |
 | `animation` | Every Frame | Every Frame (0), Held (1) | Whether each frame has its own grain. Constant |
 | `seed` | 1 | 0 to 2^31 - 1 | Which grain. Constant |
-| `monochrome` | off | off, on | One grain pattern shared by every channel. Constant and optional: a node saved before it opens with it off ([project format](project-format.md#film-grain-monochrome)) |
-| `mode` | Film | Film (0), Sensor Noise (1) | Which model draws the grain (#565). Constant and optional: a node saved before it opens in Film ([project format](project-format.md#film-grain-sensor-noise)) |
+| `monochrome` | off | off, on | One grain pattern shared by every channel. Constant and optional: absent means off ([project format](project-format.md#node-version-validation)) |
+| `mode` | Film | Film (0), Sensor Noise (1) | Which model draws the grain (#565). Constant and optional: absent means Film ([project format](project-format.md#node-version-validation)) |
 | `shadowWeighting` | 1 | 0 to 10 | Sensor Noise: how strongly the noise favors the shadows. Optional |
 | `chromaBlotches` | 0.5 | 0 to 10 | Sensor Noise: the strength of the low-frequency chroma blotches, relative to the intensity. Optional |
 | `blotchSize` | 24 | 1 to 512 | Sensor Noise: how wide a blotch is, in full-resolution pixels. Optional |
@@ -1617,9 +1611,10 @@ a proxy, a region of interest and a fixed pattern alone) to the CPU oracle
 within 2e-6 on RGB with exact alpha, warm RAM reuse with zero dispatches, the next frame with new grain
 (held: zero dispatches and the same pixels), a changed value re-running with parity, and a toggle of
 `monochrome` re-running with parity while going back finds its own entry with zero dispatches.
-`tests/integration/film_grain_monochrome_migration_tests.cpp` opens a node saved without the option to
-the same plan and bit-identical pixels, and `tests/integration/film_grain_sensor_noise_tests.cpp` does
-the same for a node saved without the mode and its values, and round-trips a Sensor Noise node. `effect.FilmGrainKernel` and `node.bloom.film-grain` prepare through the production builder at
+`tests/integration/film_grain_monochrome_persistence_tests.cpp` saves and reopens Monochrome with its
+id and value and renders the reopened node bit-identically, and
+`tests/integration/film_grain_sensor_noise_tests.cpp` renders a node without the mode and its values
+as Film and round-trips a Sensor Noise node. `effect.FilmGrainKernel` and `node.bloom.film-grain` prepare through the production builder at
 full frame and ROI. [Benchmarks](../development/benchmarks.md#film-grain-486) holds its cost.
 
 ## Codec Degrade
@@ -2942,7 +2937,7 @@ invert flipped), which keeps the halo.
 ### Node mattes on layers
 
 A layer mask may take its shape from a node's Mask output instead of a path (`LayerMask.matte`, an
-output port reference; document 1.42). It keeps its name, mode, Inverted and Opacity; Path, Feather
+output port reference). It keeps its name, mode, Inverted and Opacity; Path, Feather
 and Expansion do not apply. Its coverage is the Mask, inverted on request, times the opacity, in
 the layer's content space at the layer's time (the Mask's pixels as they lie on the canvas, with no
 layer transform applied to it). Masks without a matte lower to the single `LayerMaskKernel` as

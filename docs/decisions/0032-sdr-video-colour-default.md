@@ -4,6 +4,10 @@ Status: accepted (issue #381, step 1)
 
 Date: 2026-10-30
 
+Note (2026-11-12): the project schema is now one current version, document `1.0`. The document
+version steps and migrations this record mentions were removed; no older project is converted. See
+[project format](../architecture/project-format.md).
+
 ## Context
 
 Ordinary Rec.709 and untagged SDR video (phone and camera H.264) looked washed out by default and

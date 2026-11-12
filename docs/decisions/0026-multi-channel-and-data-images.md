@@ -4,6 +4,10 @@ Status: accepted (owner 2026-10-23, issue #363)
 
 Date: 2026-10-23
 
+Note (2026-11-12): the project schema is now one current version, document `1.0`. The document
+version steps and migrations this record mentions were removed; no older project is converted. See
+[project format](../architecture/project-format.md).
+
 ## Context
 
 Bloom's only image transport is the canonical process image: premultiplied Float32 RGBA with the

@@ -109,7 +109,7 @@ Platform/GPU capability -> project semantics
 | `src/core` | IDs, rational time, diagnostics, math, small value types, and the process-wide telemetry counters the Profiler reads ([profiler feed](profiler-feed.md)) |
 | `src/document` | persistent project authoring model and validation |
 | `src/commands` | commands, transactions, undo/redo, dirty state, events |
-| `src/project` | schemas, migrations, atomic `.bloom` read/write |
+| `src/project` | schemas, atomic `.bloom` read/write |
 | `src/runtime` | task scheduling, snapshot compilation, evaluation, cache contracts |
 | `src/render` | image resources, node execution, CPU/GPU backend interfaces |
 | `src/media` | standards-backed image/media discovery, decode, metadata, and proxies |
