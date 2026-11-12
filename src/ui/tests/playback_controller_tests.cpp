@@ -34,6 +34,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSettings>
+#include <QTemporaryDir>
 #include <QTest>
 #include <QTextEdit>
 #include <QToolButton>
@@ -2076,6 +2077,14 @@ void testRealClockProof(Expectations& expectations) {
 int main(int argc, char** argv) try {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    // The time format is kept in the application's settings. They are given a name and a private
+    // folder: Windows stores nothing for an unnamed application, and a test writes nothing into
+    // the user's own settings.
+    const QTemporaryDir settingsFolder;
+    QCoreApplication::setOrganizationName(QStringLiteral("BloomTest"));
+    QCoreApplication::setApplicationName(QStringLiteral("PlaybackController"));
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsFolder.path());
     Expectations expectations;
     if (argc == 2 && std::string_view(argv[1]) == "--real-clock-proof") {
         testRealClockProof(expectations);

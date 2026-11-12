@@ -11,6 +11,7 @@
 
 #include <bloom/color/gpu_shader_compiler.hpp>
 #include <bloom/color/gpu_shader_tool_resolver.hpp>
+#include <bloom/core/executable_suffix.hpp>
 #include <bloom/core/sha256.hpp>
 #include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
@@ -88,8 +89,8 @@ GpuShaderToolPackage syntheticRelocatedPackage() {
     GpuShaderToolPackage package;
     package.toolsDirectory = "bloom-gpu-tools";
     package.inventoryName = "inventory.json";
-    package.glslangValidatorName = "glslangValidator";
-    package.spirvValName = "spirv-val";
+    package.glslangValidatorName = "glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
+    package.spirvValName = "spirv-val" BLOOM_EXECUTABLE_SUFFIX;
     package.relocated = true;
     return package;
 }

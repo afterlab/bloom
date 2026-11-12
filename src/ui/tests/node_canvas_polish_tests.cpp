@@ -171,6 +171,7 @@ void testAddsNeverOverlap() {
 void testEstimateBoundsEveryCard() {
     Fixture f;
     double x = 0.0;
+    int measured = 0;
     for (const auto& definition : document::builtInNodeDefinitions().definitions()) {
         if (document::isRerouteNodeType(definition.key.typeId))
             continue;
@@ -186,6 +187,7 @@ void testEstimateBoundsEveryCard() {
         auto* card = f.card(*id);
         if (card == nullptr)
             continue;
+        ++measured;
         const auto estimate = commands::estimatedNodeCardSize(*f.session.composition(), *id);
         if (card->cardRect().width() > estimate.width ||
             card->cardRect().height() > estimate.height) {
@@ -195,6 +197,9 @@ void testEstimateBoundsEveryCard() {
                       << "x" << estimate.height << '\n';
         }
     }
+    // A run that drew no cards would agree with any estimate.
+    expect(measured >= 50, "the estimate was held against the drawn cards");
+    std::cout << "ESTIMATE cards=" << measured << '\n';
 }
 
 // Item 7 and 13: Arrange from the footer reads like the layer stack and is one undo.

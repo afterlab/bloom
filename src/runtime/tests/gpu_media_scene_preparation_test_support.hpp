@@ -16,6 +16,7 @@
 #include <ImfOutputFile.h>
 #include <ImfStringAttribute.h>
 
+#include <bloom/core/file_uri.hpp>
 #include <bloom/document/asset.hpp>
 #include <bloom/media/image.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
@@ -141,7 +142,8 @@ imageAsset(const std::filesystem::path& path, const std::string& name, const std
     asset.locator.kind = "file";
     asset.locator.portability = "project-relative";
     asset.locator.path = path.filename().string();
-    asset.locator.relinkHint = "file:" + path.string();
+    asset.locator.relinkHint = bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(path))
+                                   .value_or(std::string{});
     asset.contentDigest = probe.value->contentDigest;
     asset.interpretation.colorSpace = document::AssetColorSpace::Auto;
     asset.width = probe.value->width;
@@ -162,7 +164,9 @@ imageAsset(const std::filesystem::path& path, const std::string& name, const std
     member.locator.kind = "file";
     member.locator.portability = "project-relative";
     member.locator.path = path.filename().string();
-    member.locator.relinkHint = "file:" + path.string();
+    member.locator.relinkHint =
+        bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(path))
+            .value_or(std::string{});
     member.contentDigest = probe.value->contentDigest;
     (void)rawId;
     return member;

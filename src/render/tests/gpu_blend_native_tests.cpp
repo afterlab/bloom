@@ -8,6 +8,7 @@
 
 #include "gpu_blend_native_support.hpp"
 
+#include <bloom/core/checked_arithmetic.hpp>
 #include <bloom/render/gpu_blend.hpp>
 
 // The complete GpuImageImpl so local GpuImage values can be constructed/destroyed in this TU.
@@ -516,8 +517,9 @@ void runOriginCase(Expectations& expectations, GpuBlend& blend, GpuImageUpload& 
             const auto destBaseX = destWindow.originX() + static_cast<std::int64_t>(x);
             std::int64_t localX = 0;
             std::int64_t localY = 0;
-            const bool representable = !__builtin_sub_overflow(destBaseX, sourceOriginX, &localX) &&
-                                       !__builtin_sub_overflow(destBaseY, sourceOriginY, &localY);
+            const bool representable =
+                !bloom::core::subOverflows(destBaseX, sourceOriginX, localX) &&
+                !bloom::core::subOverflows(destBaseY, sourceOriginY, localY);
             alignedSource[x] = representable && localX >= 0 && localY >= 0 &&
                                        localX < static_cast<std::int64_t>(width) &&
                                        localY < static_cast<std::int64_t>(height)

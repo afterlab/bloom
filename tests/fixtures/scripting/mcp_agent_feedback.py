@@ -491,8 +491,8 @@ class AgentFeedback(unittest.TestCase):
             return destination
 
         def export(name):
-            # A movie with audio mixes the composition's audio (the MEDIA-4 worker, Linux only).
-            if sys.platform != 'linux':
+            # A movie with audio mixes the composition's audio (not yet run on macOS).
+            if sys.platform == 'darwin':
                 return
             response = server.raw('export', {'composition': 1, 'first': 0, 'last': 1,
                                              'preset': 'ProResMovV1', 'audio': True,

@@ -233,6 +233,36 @@ void testHygiene(int& failures) {
 }
 
 void testArchitecture(int& failures) {
+    {
+        const auto unexplained = architectureFixture(
+            "src/example/CMakeLists.txt", "if(CMAKE_SYSTEM_NAME STREQUAL \"Linux\")\n    "
+                                          "bloom_add_test(NAME a COMMAND a)\nendif()\n");
+        expect(containsMessage(unexplained, "need a comment saying why"),
+               "a test under a platform condition with no reason is rejected", failures);
+        expect(architectureFixture("src/example/CMakeLists.txt",
+                                   "# Reads /proc, which only Linux has.\n"
+                                   "if(CMAKE_SYSTEM_NAME STREQUAL \"Linux\")\n"
+                                   "    bloom_add_test(NAME a COMMAND a)\nendif()\n")
+                   .empty(),
+               "a reason above the platform condition is accepted", failures);
+        expect(architectureFixture("src/example/CMakeLists.txt",
+                                   "if(BUILD_TESTING AND\n   (APPLE OR WIN32))\n"
+                                   "    # No native surface on these systems.\n"
+                                   "    add_test(NAME a COMMAND a)\nendif()\n")
+                   .empty(),
+               "a reason first inside a multi-line platform condition is accepted", failures);
+        expect(architectureFixture("src/example/CMakeLists.txt",
+                                   "if(BUILD_TESTING)\n    bloom_add_test(NAME a COMMAND a)\n"
+                                   "endif()\nif(APPLE)\n    set(value ON)\nendif()\n")
+                   .empty(),
+               "conditions that name no platform, or register no test, need no reason", failures);
+        const auto nested = architectureFixture(
+            "src/example/CMakeLists.txt",
+            "if(WIN32)\n    if(BUILD_TESTING)\n        add_test(NAME a COMMAND a)\n"
+            "    endif()\nendif()\n");
+        expect(containsMessage(nested, "need a comment saying why"),
+               "a test nested inside an unexplained platform condition is rejected", failures);
+    }
     expect(architectureFixture("src/ui/panel.cpp", "#include <QString>\n").empty(),
            "Qt is allowed in UI sources", failures);
 

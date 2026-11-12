@@ -42,7 +42,12 @@ void* countedAllocate(const std::size_t size, const std::size_t alignment) {
     void* block = nullptr;
     if (alignment > kHeader) {
         const auto total = (header + size + alignment - 1) / alignment * alignment;
+#ifdef _MSC_VER
+        // The C runtime has no aligned_alloc; its aligned blocks have their own free.
+        block = _aligned_malloc(total, alignment);
+#else
         block = std::aligned_alloc(alignment, total);
+#endif
     } else {
         block = std::malloc(header + size);
     }
@@ -62,6 +67,12 @@ void countedFree(void* pointer) noexcept {
     const auto size = reinterpret_cast<std::size_t*>(user)[-1];
     const auto header = reinterpret_cast<std::size_t*>(user)[-2];
     gLiveHeapBytes.fetch_sub(static_cast<std::int64_t>(size), std::memory_order_relaxed);
+#ifdef _MSC_VER
+    if (header > kHeader) {
+        _aligned_free(user - header);
+        return;
+    }
+#endif
     std::free(user - header);
 }
 } // namespace

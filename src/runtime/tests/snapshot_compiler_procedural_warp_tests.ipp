@@ -393,8 +393,8 @@ void testProceduralWarpSavedBeforeAsymmetricSplit(Expectations& expectations) {
     if (!earlierResult.plan)
         return;
     const auto current = proceduralWarpPlan(split);
-    constexpr std::uint32_t kW = 240;
-    constexpr std::uint32_t kH = 135;
+    static constexpr std::uint32_t kW = 240;
+    static constexpr std::uint32_t kH = 135;
     const auto expectSame = [&](const std::shared_ptr<const runtime::CompiledCompositionPlan>& a,
                                 const std::shared_ptr<const runtime::CompiledCompositionPlan>& b,
                                 const std::string& what, const std::uint32_t scale = 1) {
@@ -445,8 +445,8 @@ void testProceduralWarpSavedBeforeAsymmetricSplit(Expectations& expectations) {
 void testProceduralWarpPixels(Expectations& expectations) {
     using namespace document;
     namespace reference = bloom::procedural_warp_reference;
-    constexpr std::uint32_t kW = 240;
-    constexpr std::uint32_t kH = 135;
+    static constexpr std::uint32_t kW = 240;
+    static constexpr std::uint32_t kH = 135;
     const auto bare = warpBarePlan();
     using Values = std::unordered_map<std::string, ParameterValue>;
     const auto evaluate = [&](const Values& values, const std::uint32_t w = kW,

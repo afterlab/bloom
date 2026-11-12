@@ -162,7 +162,8 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
 
         document::AssetRecord missing = asset;
         missing.locator.path = "missing.mov";
-        missing.locator.relinkHint = "file:" + (fixtures / "missing.mov").string();
+        missing.locator.relinkHint = bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(fixtures / "missing.mov"))
+        .value_or(std::string{});
         const auto missingPlan =
             videoPlan(format(asset.width, asset.height), missing, centre, idBase + 2);
         const auto missingResult =
@@ -179,7 +180,8 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
         }
         document::AssetRecord corrupt = asset;
         corrupt.locator.path = corruptPath.filename().string();
-        corrupt.locator.relinkHint = "file:" + corruptPath.string();
+        corrupt.locator.relinkHint = bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(corruptPath))
+        .value_or(std::string{});
         const auto corruptPlan =
             videoPlan(format(asset.width, asset.height), corrupt, centre, idBase + 3);
         const auto corruptResult =
@@ -389,7 +391,8 @@ void testMissingAndCorruptMedia(Expectations& expectations, const Fixture& fixtu
     const auto missingPath = fixture.directory / "missing.exr";
     document::AssetRecord missingAsset = fixture.asset;
     missingAsset.locator.path = missingPath.filename().string();
-    missingAsset.locator.relinkHint = "file:" + missingPath.string();
+    missingAsset.locator.relinkHint = bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(missingPath))
+        .value_or(std::string{});
     const auto missingPlan =
         mediaPlan(format(8, 8), missingAsset, LayerValues{.position = {4.3, 3.1}}, 4300);
     const auto missing = builder.build(missingPlan, acesRequest(*missingPlan, kAcesWorking));
@@ -407,7 +410,8 @@ void testMissingAndCorruptMedia(Expectations& expectations, const Fixture& fixtu
     }
     document::AssetRecord corruptAsset = fixture.asset;
     corruptAsset.locator.path = corruptPath.filename().string();
-    corruptAsset.locator.relinkHint = "file:" + corruptPath.string();
+    corruptAsset.locator.relinkHint = bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(corruptPath))
+        .value_or(std::string{});
     const auto corruptPlan =
         mediaPlan(format(8, 8), corruptAsset, LayerValues{.position = {4.3, 3.1}}, 4400);
     const auto corrupt = builder.build(corruptPlan, acesRequest(*corruptPlan, kAcesWorking));

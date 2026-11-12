@@ -64,8 +64,8 @@ makeGpuDisplayTestProvider(ExportFixture& fixture, const std::string_view contex
     }
     runtime::GpuOcioCompileOptions displayCompile;
     displayCompile.glslangValidatorPath =
-        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
-    displayCompile.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
+        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
+    displayCompile.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val" BLOOM_EXECUTABLE_SUFFIX;
     provider->setGpuDisplayCompileOptions(std::move(displayCompile));
     retirement.transferToCaller();
     return provider;
@@ -162,8 +162,8 @@ void testGpuSameGeometryWrongTransformRefused(Expectations& expectations) {
         return;
     }
     runtime::GpuOcioCompileOptions compile;
-    compile.glslangValidatorPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
-    compile.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
+    compile.glslangValidatorPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
+    compile.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val" BLOOM_EXECUTABLE_SUFFIX;
     runtime::GpuOcioProgramPreparer preparer(runtime::GpuOcioPreparerBudgets{});
     runtime::GpuOcioTransformSpec spec;
     spec.kind = runtime::GpuOcioTransformKind::Cst;
@@ -262,8 +262,8 @@ void testGpuStaleDisplayBindingRefused(Expectations& expectations) {
     }
     runtime::GpuOcioCompileOptions displayCompile;
     displayCompile.glslangValidatorPath =
-        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
-    displayCompile.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
+        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
+    displayCompile.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val" BLOOM_EXECUTABLE_SUFFIX;
     provider->setGpuDisplayCompileOptions(std::move(displayCompile));
 
     auto resolution = bloom::color::resolveOcioBuiltIn(
@@ -380,8 +380,8 @@ GpuProofOutcome testGpuCompositedExportParity(Expectations& expectations, const 
     // path remains the fallback when these are unavailable).
     runtime::GpuOcioCompileOptions displayCompile;
     displayCompile.glslangValidatorPath =
-        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
-    displayCompile.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
+        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
+    displayCompile.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val" BLOOM_EXECUTABLE_SUFFIX;
     provider->setGpuDisplayCompileOptions(std::move(displayCompile));
 #endif
 

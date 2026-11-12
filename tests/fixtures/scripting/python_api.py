@@ -492,8 +492,8 @@ class PythonApi(unittest.TestCase):
 
     def test_cli_export_renders_the_saved_queue(self):
         """ADR 0033: bloom-cli export renders a saved queue headlessly and reports the result."""
-        if sys.platform != 'linux':
-            self.skipTest('export runs on Linux in this version')
+        if sys.platform == 'darwin':
+            self.skipTest('not yet run on macOS')
         composition = bloom.context.composition
         self.assertTrue(bloom.ops.layer.add_solid('Red', (1, 0, 0, 1))['succeeded'])
         settings = {'format': 'png', 'codecProfile': '', 'compression': '',

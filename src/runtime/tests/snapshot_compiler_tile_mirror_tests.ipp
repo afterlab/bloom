@@ -244,8 +244,8 @@ void testTileMirrorLowering(Expectations& expectations) {
 
 void testTileMirrorPixels(Expectations& expectations) {
     using namespace document;
-    constexpr std::uint32_t kW = 240;
-    constexpr std::uint32_t kH = 135;
+    static constexpr std::uint32_t kW = 240;
+    static constexpr std::uint32_t kH = 135;
     const auto bare = warpBarePlan();
     const auto input = lensEvaluate(bare, kW, kH);
     require(input.frame() != nullptr, "the bare checker evaluates");
@@ -627,8 +627,8 @@ void testTileMirrorPixels(Expectations& expectations) {
 // copies of the box and a Kaleidoscope fills it with its wedge, whatever the window.
 void testTileMirrorSmallInput(Expectations& expectations) {
     using namespace document;
-    constexpr std::uint32_t kW = 240;
-    constexpr std::uint32_t kH = 135;
+    static constexpr std::uint32_t kW = 240;
+    static constexpr std::uint32_t kH = 135;
     const auto evaluate = [&](const std::unordered_map<std::string, ParameterValue>& values) {
         auto fixture = tileMirrorFixture(values);
         const auto* definition =

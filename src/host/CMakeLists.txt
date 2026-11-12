@@ -202,9 +202,9 @@ if(BUILD_TESTING)
     )
 
     # Gated exactly as bloom.project.staged_save is gated: this exercises a real
-    # platform::StagedArtifactCoordinator over per-test temporary directories, which Linux and
-    # macOS implement (Windows: src/platform/staged_artifact_unsupported.cpp).
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
+    # platform::StagedArtifactCoordinator over per-test temporary directories, which Linux, macOS
+    # and Windows implement (any other system: src/platform/staged_artifact_unsupported.cpp).
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE OR WIN32)
         add_executable(bloom_host_save_publication_test tests/save_publication_tests.cpp)
         target_link_libraries(bloom_host_save_publication_test PRIVATE bloom_host)
         bloom_enable_warnings(bloom_host_save_publication_test)
@@ -417,7 +417,8 @@ if(BUILD_TESTING)
                 list(APPEND BLOOM_HOST_ROUTE_PROOF_LOADER_ENV
                      "BLOOM_TEST_VULKAN_LOADER=$<TARGET_FILE:Vulkan::Loader>")
             endif()
-        elseif(APPLE AND BLOOM_RENDER_ENABLE_VULKAN)
+        elseif((APPLE OR WIN32) AND BLOOM_RENDER_ENABLE_VULKAN)
+            # Windows: the locked loader in the prefix, with the system's own driver.
             # The locked loader in the qualified prefix; the driver manifest that sits with it is
             # found from its path (src/render/vulkan/gpu_packaged_runtime.hpp).
             bloom_prefix_vulkan_loader(bloom_host_prefix_loader)

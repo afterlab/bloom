@@ -1,3 +1,4 @@
+#include <bloom/platform/private_temporary_directory.hpp>
 #include <bloom/ui/project_host.hpp>
 
 #include <bloom/commands/command_stack.hpp>
@@ -45,7 +46,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -83,15 +83,22 @@ class Expectations final {
     int failures_ = 0;
 };
 
+// Whether a file is there, without throwing. A file that is being deleted while a handle to it is
+// still open answers "access denied" on Windows; it is still there until the handle closes.
+[[nodiscard]] bool pathExists(const std::filesystem::path& path) {
+    std::error_code error;
+    const bool exists = std::filesystem::exists(path, error);
+    return exists || static_cast<bool>(error);
+}
+
 class TempDirectory final {
   public:
     TempDirectory() {
-        std::array<char, 64> pattern{};
-        constexpr std::string_view prefix = "/tmp/bloom-project-host-XXXXXX";
-        std::ranges::copy(prefix, pattern.begin());
-        const auto* result = ::mkdtemp(pattern.data());
-        if (result != nullptr) {
-            path_ = result;
+        // Accented, CJK and Cyrillic characters and a space: everything this test saves, opens and
+        // publishes goes through a path outside ASCII on every platform.
+        if (auto created = bloom::platform::createPrivateTemporaryDirectory(
+                "bloom-project-host-caf\u00e9 \u65e5\u672c \u041f\u0440\u0438-")) {
+            path_ = std::move(*created);
         }
     }
 
@@ -249,8 +256,7 @@ void testFullSaveThenOpenCycle(Expectations& expectations) {
     expectations.expect(!host.isDirty(), "save/open cycle: the session is clean after saving");
     expectations.expect(host.displayPath() == std::optional(targetPath),
                         "save/open cycle: the display path is the saved target");
-    expectations.expect(std::filesystem::exists(targetPath),
-                        "save/open cycle: the file exists on disk");
+    expectations.expect(pathExists(targetPath), "save/open cycle: the file exists on disk");
 
     int sessionReplacedCount = 0;
     QObject::connect(&host, &ProjectHost::sessionReplaced, [&] { ++sessionReplacedCount; });
@@ -302,18 +308,17 @@ void testRecoverySnapshotAndStartupOffer(Expectations& expectations) {
     expectations.expect(waitUntil([&] { return host.recoveryOffer().has_value(); }),
                         "recovery: the asynchronous snapshot completes");
     const auto offer = host.recoveryOffer();
-    expectations.expect(offer.has_value() && std::filesystem::exists(offer->recoveryPath),
+    expectations.expect(offer.has_value() && pathExists(offer->recoveryPath),
                         "recovery: a dirty session writes a recovery file worth offering");
     expectations.expect(host.isDirty(),
                         "recovery: writing one accepts no savepoint -- the session stays dirty");
 
     host.beginSaveAs(targetPath);
     expectations.expect(waitUntilIdle(host), "recovery: the real save reaches a terminal state");
-    expectations.expect(!host.isDirty() && std::filesystem::exists(targetPath),
+    expectations.expect(!host.isDirty() && pathExists(targetPath),
                         "recovery: the real save publishes and cleans the session");
-    expectations.expect(offer.has_value() && waitUntil([&] {
-                            return !std::filesystem::exists(offer->recoveryPath);
-                        }),
+    expectations.expect(offer.has_value() &&
+                            waitUntil([&] { return !pathExists(offer->recoveryPath); }),
                         "recovery: a successful save removes the recovery file");
     expectations.expect(!host.recoveryOffer().has_value(),
                         "recovery: and there is nothing left to offer on the next launch");
@@ -355,7 +360,7 @@ void testRecoverySnapshotAndStartupOffer(Expectations& expectations) {
     expectations.expect(host.displayPath() == std::optional(secondOffer->recoveryPath),
                         "recovery: recovering opens the recovery file like any other project");
     host.writeRecoverySnapshot();
-    expectations.expect(std::filesystem::exists(secondOffer->recoveryPath),
+    expectations.expect(pathExists(secondOffer->recoveryPath),
                         "recovery: a clean tick never deletes the opened recovery project");
 }
 
@@ -397,7 +402,7 @@ void testRecoverySurvivesCleanRestartAndPendingDecision(Expectations& expectatio
     expectations.expect(restarted.stateSnapshot().projectSessionId == crashedSessionId,
                         "recovery restart: runtime session IDs restart at the same value");
     restarted.writeRecoverySnapshot();
-    expectations.expect(std::filesystem::exists(crashedPath),
+    expectations.expect(pathExists(crashedPath),
                         "recovery restart: a clean host tick preserves the previous artifact");
 
     restarted.setRecoveryPolicy({.interval = std::chrono::seconds{1}});
@@ -409,14 +414,14 @@ void testRecoverySurvivesCleanRestartAndPendingDecision(Expectations& expectatio
         QEventLoop nestedDecision;
         QTimer::singleShot(1'300, &nestedDecision, &QEventLoop::quit);
         nestedDecision.exec(); // The host's one-second recovery timer runs inside this dialog.
-        expectations.expect(std::filesystem::exists(crashedPath),
+        expectations.expect(pathExists(crashedPath),
                             "recovery restart: the pending decision protects the offered file");
         return false;
     });
     restarted.offerRecoveryOnStartup();
     expectations.expect(waitUntil([&] { return decisions == 1; }),
                         "recovery restart: the asynchronous scan reaches its decision");
-    expectations.expect(decisions == 1 && std::filesystem::exists(crashedPath),
+    expectations.expect(decisions == 1 && pathExists(crashedPath),
                         "recovery restart: declining the offer leaves the prior artifact intact");
 }
 
@@ -471,7 +476,7 @@ void testCrashRecoveryOffByDefault(Expectations& expectations) {
     host.offerRecoveryOnStartup();
     expectations.expect(!waitUntil([&] { return asked > 0; }),
                         "recovery off: no recovery prompt is shown");
-    expectations.expect(std::filesystem::exists(existingPath) && countFiles() == before,
+    expectations.expect(pathExists(existingPath) && countFiles() == before,
                         "recovery off: recovery data already on disk is left untouched");
 
     host.setCrashRecoveryEnabled(true);
@@ -525,7 +530,7 @@ void testConcurrentRecoveryOwnersAndExplicitDiscard(Expectations& expectations) 
     };
 
     second.writeRecoverySnapshot();
-    expectations.expect(std::filesystem::exists(firstPath) && artifactCount() == 1,
+    expectations.expect(pathExists(firstPath) && artifactCount() == 1,
                         "recovery owners: a concurrent clean host cannot remove the first file");
     expectations.expect(executeRename(second, "Second unsaved"),
                         "recovery owners: the second host becomes dirty");
@@ -544,20 +549,19 @@ void testConcurrentRecoveryOwnersAndExplicitDiscard(Expectations& expectations) 
         return;
     }
     const auto secondPath = paths.front() == firstPath ? paths.back() : paths.front();
-    expectations.expect(secondPath != firstPath && std::filesystem::exists(secondPath),
+    expectations.expect(secondPath != firstPath && pathExists(secondPath),
                         "recovery owners: the second artifact is independent");
 
     second.setUnsavedChangeDecisionProvider([] { return UnsavedChangeDecision::Discard; });
     second.newProject();
-    expectations.expect(waitUntil([&] { return !std::filesystem::exists(secondPath); }) &&
-                            std::filesystem::exists(firstPath) && !second.isDirty(),
+    expectations.expect(waitUntil([&] { return !pathExists(secondPath); }) &&
+                            pathExists(firstPath) && !second.isDirty(),
                         "recovery owners: explicit Discard retires only the discarded session's "
                         "artifact");
 
     first.beginSaveAs(directory.path() / "first.bloom");
     expectations.expect(waitUntilIdle(first), "recovery owners: the first real save completes");
-    expectations.expect(waitUntil([&] { return !std::filesystem::exists(firstPath); }) &&
-                            !first.isDirty(),
+    expectations.expect(waitUntil([&] { return !pathExists(firstPath); }) && !first.isDirty(),
                         "recovery owners: saving the remaining host retires its own artifact");
 }
 
@@ -588,10 +592,10 @@ void testDiscardKeepsRecoveryWhenOpenFails(Expectations& expectations) {
     expectations.expect(waitUntil([&] { return opened.count == 1; }),
                         "failed open: the worker reports the missing path");
     expectations.expect(opened.outcome == ProjectHostOperationOutcome::Failed && host.isDirty() &&
-                            std::filesystem::exists(offer->recoveryPath),
+                            pathExists(offer->recoveryPath),
                         "failed open: the dirty session and its recovery file survive Discard");
     host.newProject();
-    expectations.expect(waitUntil([&] { return !std::filesystem::exists(offer->recoveryPath); }),
+    expectations.expect(waitUntil([&] { return !pathExists(offer->recoveryPath); }),
                         "failed open: actual replacement retires the old owned artifact");
 }
 
@@ -739,15 +743,14 @@ void testBusyRefusalWhileInFlight(Expectations& expectations) {
                             saveCapture.outcome == ProjectHostOperationOutcome::Refused,
                         "busy refusal: the second concurrent save is refused with a typed busy "
                         "outcome");
-    expectations.expect(!std::filesystem::exists(secondPath),
+    expectations.expect(!pathExists(secondPath),
                         "busy refusal: the refused second save never wrote a file");
 
     expectations.expect(waitUntilIdle(host), "busy refusal: the first save still completes");
     expectations.expect(saveCapture.count == 2 &&
                             saveCapture.outcome == ProjectHostOperationOutcome::Published,
                         "busy refusal: the first save publishes normally afterward");
-    expectations.expect(std::filesystem::exists(firstPath),
-                        "busy refusal: the first save's file exists");
+    expectations.expect(pathExists(firstPath), "busy refusal: the first save's file exists");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -775,7 +778,7 @@ void testTypedFailureSurfacedOnUnwritablePath(Expectations& expectations) {
                         "typed failure: an unwritable target is never reported as Published");
     expectations.expect(!saveCapture.message.isEmpty(),
                         "typed failure: a display-ready message is provided");
-    expectations.expect(!std::filesystem::exists(badPath),
+    expectations.expect(!pathExists(badPath),
                         "typed failure: no file was written to the unwritable target");
 }
 
@@ -829,7 +832,7 @@ void testUnsavedChangeDecisionSeamForNew(Expectations& expectations) {
     expectations.expect(saveDialogInvoked,
                         "unsaved flow (New): the pathless Save routed through the Save As seam");
     expectations.expect(!host.isDirty(), "unsaved flow (New): the final replaced session is clean");
-    expectations.expect(std::filesystem::exists(targetPath),
+    expectations.expect(pathExists(targetPath),
                         "unsaved flow (New): the Save choice's file was actually written");
 }
 
@@ -854,7 +857,7 @@ void testUnsavedChangeDecisionSeamForOpen(Expectations& expectations) {
         seedHost.beginSaveAs(openTargetPath);
         expectations.expect(waitUntilIdle(seedHost),
                             "unsaved flow (Open): the seed save reaches a terminal state");
-        expectations.expect(std::filesystem::exists(openTargetPath),
+        expectations.expect(pathExists(openTargetPath),
                             "unsaved flow (Open): the seed file was written");
     }
 
@@ -1224,7 +1227,7 @@ void testDefaultSaveAsAddsBloomSuffix(Expectations& expectations) {
     expectations.expect(waitUntilIdle(host), "default Save As: the save completes");
     expectations.expect(dialogSeen, "default Save As: the file dialog is owned by the window");
     expectations.expect(host.displayPath() == std::optional(directory.path() / "shot.bloom") &&
-                            std::filesystem::exists(directory.path() / "shot.bloom"),
+                            pathExists(directory.path() / "shot.bloom"),
                         "default Save As: a name typed without .bloom is saved with it");
 }
 

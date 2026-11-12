@@ -424,7 +424,9 @@ void testAProxiedDropdownOpensATopLevelPopupBelowItself(Expectations& expectatio
                             popup->isWindow(),
                         "a proxied dropdown opens a real top-level popup, not a scene sub-proxy");
     const QRect visual = kit::visualGlobalRect(*dropdown);
-    expectations.expect(std::abs(visual.width() - dropdown->width() / 2) <= 1,
+    // Half the width, as whole pixels that cover it: an odd width leaves half a pixel, and each
+    // edge rounds outward.
+    expectations.expect(std::abs(visual.width() - dropdown->width() / 2.0) <= 2.0,
                         "the anchor's visual rectangle follows the view's zoom");
     const QRect frame = popup->frameRect().translated(popup->pos());
     expectations.expect(frame.top() == visual.bottom() + 1 + kit::px(kit::Spacing::XXS),

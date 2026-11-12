@@ -428,7 +428,7 @@ bloom_enable_warnings(bloom_composition_preview_cpu_stage_test)
 bloom_enable_warnings(bloom_composition_preview_gpu_scene_stage_test)
 # The frozen replay oracle header defines anonymous-namespace helpers this TU does not all use; the
 # other consumer uses them all, so only this translation unit quiets unused-function.
-target_compile_options(bloom_composition_preview_gpu_scene_stage_test PRIVATE -Wno-unused-function)
+bloom_allow_unused_functions(bloom_composition_preview_gpu_scene_stage_test)
 bloom_enable_warnings(bloom_gpu_preview_submitter_test)
 bloom_enable_warnings(bloom_gpu_preview_app_test)
 bloom_enable_warnings(bloom_ui_gpu_present_image_qpainter_oracle_test)
@@ -1082,6 +1082,15 @@ target_include_directories(bloom_node_canvas_polish_test PRIVATE ..)
 target_link_libraries(bloom_node_canvas_polish_test PRIVATE bloom_ui bloom_project Qt6::Test)
 bloom_enable_warnings(bloom_node_canvas_polish_test)
 bloom_add_test(NAME bloom.ui.node-canvas-polish COMMAND bloom_node_canvas_polish_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+if(WIN32)
+    # The estimate is held against the cards the application draws. On Windows the offscreen platform
+    # lays text out with another font engine than the application, whose labels come out a few pixels
+    # wider, so this test runs on the platform the application runs on. It runs alone: in a session
+    # without a desktop its windows cannot be created, and the attempts use up window resources the
+    # session's other test programs need while it runs.
+    set_tests_properties(bloom.ui.node-canvas-polish
+        PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=windows" RUN_SERIAL TRUE)
+endif()
 
 # Issue #359: the Nodes canvas at scale -- per-move work independent of the node count, edits that
 # allocate only the items they touch, and the skipped projection. Counts work, never time.
@@ -1250,9 +1259,9 @@ bloom_add_test(
 add_executable(bloom_ram_preview_service_pipeline_test ram_preview_service_pipeline_tests.cpp)
 target_link_libraries(bloom_ram_preview_service_pipeline_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_ram_preview_service_pipeline_test)
-if(DEFINED BLOOM_DEPENDENCY_PREFIX AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/lib/${BLOOM_VULKAN_LOADER_FILE_NAME}")
+if(DEFINED BLOOM_DEPENDENCY_PREFIX AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/${BLOOM_VULKAN_LOADER_PREFIX_DIR}/${BLOOM_VULKAN_LOADER_FILE_NAME}")
     set(bloom_ram_preview_vulkan_loader_args
-        --loader "${BLOOM_DEPENDENCY_PREFIX}/lib/${BLOOM_VULKAN_LOADER_FILE_NAME}")
+        --loader "${BLOOM_DEPENDENCY_PREFIX}/${BLOOM_VULKAN_LOADER_PREFIX_DIR}/${BLOOM_VULKAN_LOADER_FILE_NAME}")
 else()
     set(bloom_ram_preview_vulkan_loader_args)
 endif()
@@ -1265,11 +1274,16 @@ bloom_add_test(
 )
 
 # The preview route proofs of a platform that prepares the preview on the device and paints it on
-# the host (macOS; gpuPreviewRouteDisplay() in the route proof contract). They need no native
+# the host (macOS and Windows; gpuPreviewRouteDisplay() in the route proof contract). They need no native
 # presentation surface and no Qt Vulkan feature, so they are built outside the Vulkan block. Each is
 # a CTest fixture setup the runtime native acceptance gate requires: nonce setup -> writers -> gate.
-# Other platforms prove the resident route with the harnesses in the Vulkan block below.
-if(APPLE AND BLOOM_RENDER_ENABLE_VULKAN AND TARGET Vulkan::Headers)
+# Linux proves the resident route with the harnesses in the Vulkan block below; those two writers
+# are not registered where the host-painted ones are, because each route has exactly one writer.
+set(bloom_preview_proofs_host_painted OFF)
+if(APPLE OR WIN32)
+    set(bloom_preview_proofs_host_painted ON)
+endif()
+if(bloom_preview_proofs_host_painted AND BLOOM_RENDER_ENABLE_VULKAN AND TARGET Vulkan::Headers)
     add_executable(bloom_ui_gpu_host_painted_preview_route_proof_test
         gpu_host_painted_preview_route_proof_tests.cpp
         gpu_route_proof_harness_support.hpp
@@ -2040,9 +2054,9 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         PRIVATE bloom_ui Vulkan::Headers Qt6::Test)
     bloom_enable_warnings(bloom_ui_viewer_gpu_presenter_native_test)
 
-    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/lib/${BLOOM_VULKAN_LOADER_FILE_NAME}")
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/${BLOOM_VULKAN_LOADER_PREFIX_DIR}/${BLOOM_VULKAN_LOADER_FILE_NAME}")
         set(bloom_ui_vulkan_loader_args
-            --loader "${BLOOM_DEPENDENCY_PREFIX}/lib/${BLOOM_VULKAN_LOADER_FILE_NAME}")
+            --loader "${BLOOM_DEPENDENCY_PREFIX}/${BLOOM_VULKAN_LOADER_PREFIX_DIR}/${BLOOM_VULKAN_LOADER_FILE_NAME}")
     else()
         set(bloom_ui_vulkan_loader_args)
     endif()
@@ -2192,9 +2206,9 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     target_compile_definitions(bloom_ui_viewer_export_background_parity_test
         PRIVATE BLOOM_UI_BACKGROUND_PARITY_GPU=1)
     bloom_package_gpu_shader_tools(bloom_ui_viewer_export_background_parity_test)
-    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/lib/${BLOOM_VULKAN_LOADER_FILE_NAME}")
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/${BLOOM_VULKAN_LOADER_PREFIX_DIR}/${BLOOM_VULKAN_LOADER_FILE_NAME}")
         set(bloom_ui_background_parity_loader_args
-            --loader "${BLOOM_DEPENDENCY_PREFIX}/lib/${BLOOM_VULKAN_LOADER_FILE_NAME}")
+            --loader "${BLOOM_DEPENDENCY_PREFIX}/${BLOOM_VULKAN_LOADER_PREFIX_DIR}/${BLOOM_VULKAN_LOADER_FILE_NAME}")
     else()
         set(bloom_ui_background_parity_loader_args)
     endif()
@@ -2453,9 +2467,9 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
     bloom_enable_warnings(bloom_ui_gpu_viewer_service_chain_test)
     bloom_enable_strict_floating_point(bloom_ui_gpu_viewer_service_chain_test)
-    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/lib/${BLOOM_VULKAN_LOADER_FILE_NAME}")
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/${BLOOM_VULKAN_LOADER_PREFIX_DIR}/${BLOOM_VULKAN_LOADER_FILE_NAME}")
         set(bloom_ui_gpu_viewer_service_chain_loader_args
-            --loader "${BLOOM_DEPENDENCY_PREFIX}/lib/${BLOOM_VULKAN_LOADER_FILE_NAME}")
+            --loader "${BLOOM_DEPENDENCY_PREFIX}/${BLOOM_VULKAN_LOADER_PREFIX_DIR}/${BLOOM_VULKAN_LOADER_FILE_NAME}")
     else()
         set(bloom_ui_gpu_viewer_service_chain_loader_args)
     endif()
@@ -2527,16 +2541,18 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
     bloom_enable_warnings(bloom_ui_gpu_viewer_route_proof_test)
     bloom_enable_strict_floating_point(bloom_ui_gpu_viewer_route_proof_test)
-    bloom_add_test(
-        NAME bloom.ui.gpu_viewer_route_proof
-        COMMAND bloom_ui_gpu_viewer_route_proof_test
-                --proof-dir "${BLOOM_GPU_ROUTE_PROOF_DIR}"
-                ${bloom_ui_gpu_viewer_service_chain_loader_args}
-        LABELS ui gpu viewer route-proof
-        TIMEOUT 300
-    )
-    set_tests_properties(bloom.ui.gpu_viewer_route_proof
-        PROPERTIES FIXTURES_REQUIRED gpu_route_proofs FIXTURES_SETUP gpu_route_proof_viewer)
+    if(NOT bloom_preview_proofs_host_painted)
+        bloom_add_test(
+            NAME bloom.ui.gpu_viewer_route_proof
+            COMMAND bloom_ui_gpu_viewer_route_proof_test
+                    --proof-dir "${BLOOM_GPU_ROUTE_PROOF_DIR}"
+                    ${bloom_ui_gpu_viewer_service_chain_loader_args}
+            LABELS ui gpu viewer route-proof
+            TIMEOUT 300
+        )
+        set_tests_properties(bloom.ui.gpu_viewer_route_proof
+            PROPERTIES FIXTURES_REQUIRED gpu_route_proofs FIXTURES_SETUP gpu_route_proof_viewer)
+    endif()
 
     # #524 and #514: node-specific interactive-viewer evidence. Each scenario drives the production
     # viewer chain over a composition using one new node and checks the resident frame against the
@@ -2631,16 +2647,18 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
     bloom_enable_warnings(bloom_ui_gpu_ram_preview_route_proof_test)
     bloom_enable_strict_floating_point(bloom_ui_gpu_ram_preview_route_proof_test)
-    bloom_add_test(
-        NAME bloom.ui.gpu_ram_preview_route_proof
-        COMMAND bloom_ui_gpu_ram_preview_route_proof_test
-                --proof-dir "${BLOOM_GPU_ROUTE_PROOF_DIR}"
-                ${bloom_ui_gpu_viewer_service_chain_loader_args}
-        LABELS ui gpu ram route-proof
-        TIMEOUT 300
-    )
-    set_tests_properties(bloom.ui.gpu_ram_preview_route_proof
-        PROPERTIES FIXTURES_REQUIRED gpu_route_proofs FIXTURES_SETUP gpu_route_proof_ram)
+    if(NOT bloom_preview_proofs_host_painted)
+        bloom_add_test(
+            NAME bloom.ui.gpu_ram_preview_route_proof
+            COMMAND bloom_ui_gpu_ram_preview_route_proof_test
+                    --proof-dir "${BLOOM_GPU_ROUTE_PROOF_DIR}"
+                    ${bloom_ui_gpu_viewer_service_chain_loader_args}
+            LABELS ui gpu ram route-proof
+            TIMEOUT 300
+        )
+        set_tests_properties(bloom.ui.gpu_ram_preview_route_proof
+            PROPERTIES FIXTURES_REQUIRED gpu_route_proofs FIXTURES_SETUP gpu_route_proof_ram)
+    endif()
     # ADR 0028 animated masks through the same real RAM preview chain: a mask path keyed on 24
     # frames, the scene builder carrying the shared preparer from this target's packaged shader
     # tools, cold GPU frames against the CPU oracle with at most one shader compile, and a warm

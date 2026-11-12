@@ -14,6 +14,7 @@
 #include "footage_interpretation_plan_support.hpp"
 #include "gpu_media_cache_test_support.hpp"
 #include "gpu_media_executor_test_support.hpp"
+#include <bloom/core/executable_suffix.hpp>
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/render/gpu_device.hpp>
@@ -263,8 +264,9 @@ int main(const int argc, char** argv) {
         auto preparer = std::make_shared<GpuOcioProgramPreparer>();
         GpuOcioCompileOptions compileOptions;
         compileOptions.glslangValidatorPath =
-            std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
-        compileOptions.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
+            std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
+        compileOptions.spirvValPath =
+            std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val" BLOOM_EXECUTABLE_SUFFIX;
         GpuSceneOcioContext ocioContext;
         ocioContext.preparer = preparer;
         ocioContext.compileOptions = compileOptions;

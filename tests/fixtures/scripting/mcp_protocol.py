@@ -458,9 +458,6 @@ class Protocol(unittest.TestCase):
                 'composition': 1, 'frame': 12, 'preset': 'TiffRgba16SrgbV1',
                 'destination': str(destination)})])
             result = responses[-1]['result']
-            if sys.platform not in ('linux', 'darwin'):
-                self.assertTrue(result['isError'], result)  # The MEDIA-4 worker fallback.
-                return
             self.assertFalse(result['isError'], result)
             self.assertEqual(result['structuredContent']['files'][0]['digest'],
                              'sha256:' + hashlib.sha256(destination.read_bytes()).hexdigest())
@@ -496,9 +493,6 @@ class Protocol(unittest.TestCase):
                 tool(3, 'export', {'composition': 2, 'first': 0, 'last': 1,
                     'preset': 'ProResMovV1', 'audio': False, 'destination': str(destination)})])
             result = responses[-1]['result']
-            if sys.platform not in ('linux', 'darwin'):
-                self.assertTrue(result['isError'], result)  # The MEDIA-4 worker fallback.
-                return
             self.assertFalse(result['isError'], result)
             content = result['structuredContent']
             self.assertEqual(content['publishedFrames'], 2)
@@ -510,10 +504,8 @@ class Protocol(unittest.TestCase):
                              'sha256:' + hashlib.sha256(destination.read_bytes()).hexdigest())
 
     def test_export_encoder_choice(self):
-        # encoder=software makes the same movie with Bloom's FFmpeg encoder on every platform that
-        # exports, including macOS, where the default is the system's encoder (issue #455).
-        if sys.platform not in ('linux', 'darwin'):
-            return
+        # encoder=software makes the same movie with Bloom's FFmpeg encoder on every platform,
+        # including macOS, where the default is the system's encoder (issue #455).
         with tempfile.TemporaryDirectory(prefix='bloom-mcp-encoder-') as directory:
             destination = pathlib.Path(directory) / 'software.mov'
             responses = exchange([INIT, READY, tool(2, 'transact', {

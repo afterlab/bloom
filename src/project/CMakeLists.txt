@@ -147,7 +147,7 @@ if(BUILD_TESTING)
         bloom_project_data_block_persistence_test
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
     )
-    target_link_libraries(bloom_project_data_block_persistence_test PRIVATE bloom_project)
+    target_link_libraries(bloom_project_data_block_persistence_test PRIVATE bloom_project ZLIB::ZLIB)
     bloom_enable_warnings(bloom_project_data_block_persistence_test)
     bloom_add_test(
         NAME bloom.project.data_block_persistence
@@ -496,9 +496,10 @@ if(BUILD_TESTING)
         LABELS unit project persistence security
     )
 
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
+    # A real staged-artifact coordinator, which Linux, macOS and Windows implement.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE OR WIN32)
         add_executable(bloom_project_staged_save_test tests/staged_save_tests.cpp)
-        target_link_libraries(bloom_project_staged_save_test PRIVATE bloom_project)
+        target_link_libraries(bloom_project_staged_save_test PRIVATE bloom_project bloom_platform_process)
         bloom_enable_warnings(bloom_project_staged_save_test)
         bloom_add_test(
             NAME bloom.project.staged_save
@@ -509,7 +510,7 @@ if(BUILD_TESTING)
         # Gated Linux-only exactly as bloom.project.staged_save is gated: this exercises a real
         # platform::StagedArtifactCoordinator over per-test temporary directories.
         add_executable(bloom_project_staged_copy_test tests/staged_copy_tests.cpp)
-        target_link_libraries(bloom_project_staged_copy_test PRIVATE bloom_project)
+        target_link_libraries(bloom_project_staged_copy_test PRIVATE bloom_project bloom_platform_process)
         bloom_enable_warnings(bloom_project_staged_copy_test)
         bloom_add_test(
             NAME bloom.project.staged_copy

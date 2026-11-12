@@ -17,6 +17,7 @@
 // command identity, or a qualification report.
 
 #include "gpu_preview_display_service_general_support.hpp"
+#include <bloom/core/file_uri.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 

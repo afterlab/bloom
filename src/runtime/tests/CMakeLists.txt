@@ -198,6 +198,11 @@ bloom_add_test(
     LABELS runtime unit
 )
 
+# These two render on the CPU reference path, which the Windows compiler's strict floating point
+# makes several times slower; alone they pass inside the limits above, in a full suite they do not.
+if(WIN32)
+    set_tests_properties(bloom.runtime.snapshot_compiler PROPERTIES TIMEOUT 120)
+endif()
 
 bloom_add_test(
     NAME bloom.runtime.value_graph
@@ -315,6 +320,9 @@ target_link_libraries(bloom_runtime_svg_artwork_layer_test PRIVATE bloom_runtime
 bloom_enable_warnings(bloom_runtime_svg_artwork_layer_test)
 bloom_enable_strict_floating_point(bloom_runtime_svg_artwork_layer_test)
 bloom_add_test(NAME bloom.runtime.svg-artwork-layer COMMAND bloom_runtime_svg_artwork_layer_test LABELS runtime integration persistence TIMEOUT 120)
+if(WIN32)
+    set_tests_properties(bloom.runtime.svg-artwork-layer PROPERTIES TIMEOUT 360)
+endif()
 # #484: a pre-motion-blur Transform 2D opens with its motion blur bound off and renders identically.
 add_executable(bloom_runtime_transform_motion_blur_migration_test ${PROJECT_SOURCE_DIR}/tests/integration/transform_motion_blur_migration_tests.cpp)
 target_link_libraries(bloom_runtime_transform_motion_blur_migration_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
@@ -767,7 +775,7 @@ if(NOT BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE AND CMAKE_CXX_COMPILER_ID MATCHES "
     # unused-function accommodation the media executor test targets use, and no assertion changes.
     # Placed after bloom_enable_warnings so it is not re-enabled by -Wall, and GNU/Clang-only so
     # MSVC never sees the option.
-    target_compile_options(bloom_render_gpu_neutral_display_test PRIVATE -Wno-unused-function)
+    bloom_allow_unused_functions(bloom_render_gpu_neutral_display_test)
 endif()
 bloom_add_test(
     NAME bloom.render.gpu_neutral_display
@@ -1548,9 +1556,12 @@ add_library(bloom_runtime_gpu_coverage_contract_feature_negative_probe OBJECT EX
 target_link_libraries(bloom_runtime_gpu_coverage_contract_feature_negative_probe
     PRIVATE bloom_runtime_compiler)
 bloom_enable_warnings(bloom_runtime_gpu_coverage_contract_feature_negative_probe)
+# The diagnostic that names the missing case, as each compiler spells it.
+set(bloom_gpu_coverage_switch_diagnostic "Wswitch")
 if(MSVC)
     target_compile_options(bloom_runtime_gpu_coverage_contract_feature_negative_probe PRIVATE
         /we4062)
+    set(bloom_gpu_coverage_switch_diagnostic "C4062")
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
     target_compile_options(bloom_runtime_gpu_coverage_contract_feature_negative_probe PRIVATE
         -Werror=switch)
@@ -1569,7 +1580,7 @@ add_test(
             "-DBLOOM_REASON_EFFECT_B=SyntheticUnclassifiedKernel"
             "-DBLOOM_PROBE_NEGATIVE_FEATURE=bloom_runtime_gpu_coverage_contract_feature_negative_probe"
             "-DBLOOM_REASON_FEATURE_A=SyntheticFeatureEnum"
-            "-DBLOOM_REASON_FEATURE_B=Wswitch"
+            "-DBLOOM_REASON_FEATURE_B=${bloom_gpu_coverage_switch_diagnostic}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/gpu_coverage_negative_probe_check.cmake")
 set_tests_properties(bloom.runtime.gpu_coverage_contract_mutation_proof
     PROPERTIES LABELS runtime quality contract TIMEOUT 240)
@@ -1766,7 +1777,7 @@ bloom_enable_warnings(bloom_runtime_gpu_media_executor_test)
 bloom_enable_strict_floating_point(bloom_runtime_gpu_media_executor_test)
 # The media scene fixture/oracle header defines anonymous-namespace helpers that this TU does not
 # all use; the proof compiles this one translation unit with unused-function quieted.
-target_compile_options(bloom_runtime_gpu_media_executor_test PRIVATE -Wno-unused-function)
+bloom_allow_unused_functions(bloom_runtime_gpu_media_executor_test)
 bloom_add_test(
     NAME bloom.runtime.gpu_media_executor
     COMMAND bloom_runtime_gpu_media_executor_test
@@ -1788,7 +1799,7 @@ target_link_libraries(bloom_runtime_gpu_upload_lookahead_test
             bloom_media_cache bloom_color bloom_color_ocio OpenEXR::OpenEXR)
 bloom_enable_warnings(bloom_runtime_gpu_upload_lookahead_test)
 bloom_enable_strict_floating_point(bloom_runtime_gpu_upload_lookahead_test)
-target_compile_options(bloom_runtime_gpu_upload_lookahead_test PRIVATE -Wno-unused-function)
+bloom_allow_unused_functions(bloom_runtime_gpu_upload_lookahead_test)
 bloom_add_test(
     NAME bloom.runtime.gpu_upload_lookahead
     COMMAND bloom_runtime_gpu_upload_lookahead_test
@@ -1826,7 +1837,7 @@ if(bloom_media_color_glslang_validator AND bloom_media_color_spirv_val)
 endif()
 bloom_enable_warnings(bloom_runtime_gpu_media_color_test)
 bloom_enable_strict_floating_point(bloom_runtime_gpu_media_color_test)
-target_compile_options(bloom_runtime_gpu_media_color_test PRIVATE -Wno-unused-function)
+bloom_allow_unused_functions(bloom_runtime_gpu_media_color_test)
 # The real decoded video vectors need the media worker and its generated fixtures. They are
 # registered only where those exist (BLOOM_MEDIA_FIXTURE_TESTS, as apps/bloom-media-worker uses);
 # elsewhere the test prints an explicit NOTE for the video vectors rather than passing them.
@@ -1875,8 +1886,7 @@ if(TARGET bloom_render_gpu_scene_executor_fault)
     bloom_enable_strict_floating_point(bloom_runtime_gpu_media_executor_retirement_test)
     # Same as the media executor target: the shared fixture/oracle header has helpers this TU does
     # not use.
-    target_compile_options(bloom_runtime_gpu_media_executor_retirement_test
-        PRIVATE -Wno-unused-function)
+    bloom_allow_unused_functions(bloom_runtime_gpu_media_executor_retirement_test)
     bloom_add_test(
         NAME bloom.runtime.gpu_media_executor_retirement
         COMMAND bloom_runtime_gpu_media_executor_retirement_test
@@ -2644,7 +2654,7 @@ bloom_add_test(
     TIMEOUT 120
 )
 set_tests_properties(bloom.runtime.gpu_footage_interpretation_native PROPERTIES SKIP_RETURN_CODE 77)
-target_compile_options(bloom_runtime_gpu_roi_media_color_native_test PRIVATE -Wno-unused-function)
+bloom_allow_unused_functions(bloom_runtime_gpu_roi_media_color_native_test)
 bloom_add_test(
     NAME bloom.runtime.gpu_roi_media_color_native
     COMMAND bloom_runtime_gpu_roi_media_color_native_test
@@ -2668,7 +2678,7 @@ target_link_libraries(bloom_runtime_gpu_cryptomatte_native_test
             bloom_media_cache bloom_color OpenEXR::OpenEXR)
 bloom_enable_warnings(bloom_runtime_gpu_cryptomatte_native_test)
 bloom_enable_strict_floating_point(bloom_runtime_gpu_cryptomatte_native_test)
-target_compile_options(bloom_runtime_gpu_cryptomatte_native_test PRIVATE -Wno-unused-function)
+bloom_allow_unused_functions(bloom_runtime_gpu_cryptomatte_native_test)
 bloom_add_test(
     NAME bloom.runtime.gpu_cryptomatte_native
     COMMAND bloom_runtime_gpu_cryptomatte_native_test

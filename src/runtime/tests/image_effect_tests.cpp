@@ -1641,7 +1641,7 @@ void testLookBypass() {
 }
 
 void testFileTransform() {
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
     const auto directory = std::filesystem::current_path() / "color3-effect-fixtures";
     std::filesystem::create_directories(directory);
     struct Cleanup final {

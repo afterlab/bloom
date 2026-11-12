@@ -6,6 +6,7 @@
 
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_gpu_program.hpp>
+#include <bloom/core/executable_suffix.hpp>
 #include <bloom/core/sha256.hpp>
 #include <bloom/render/gpu_shader_artifact.hpp>
 #include <bloom/render/ocio_gpu_program.hpp>
@@ -395,8 +396,10 @@ void testPreparedCommand(Expectations& expectations) {
 #ifdef BLOOM_GPUSHADER_TOOLS_DIR
 [[nodiscard]] GpuOcioCompileOptions compileOptions() {
     GpuOcioCompileOptions options;
-    options.glslangValidatorPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
-    options.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
+    options.glslangValidatorPath =
+        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
+    options.spirvValPath =
+        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val" BLOOM_EXECUTABLE_SUFFIX;
     return options;
 }
 

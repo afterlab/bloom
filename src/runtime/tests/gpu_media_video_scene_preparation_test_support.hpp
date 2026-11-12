@@ -12,6 +12,7 @@
 
 #include "gpu_scene_preparation_test_support.hpp"
 
+#include <bloom/core/file_uri.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/media/provider/contract.hpp>
 #include <bloom/media/video/session.hpp>
@@ -81,7 +82,8 @@ namespace provider = bloom::media::provider;
     asset.locator.kind = "file";
     asset.locator.portability = "project-relative";
     asset.locator.path = path.filename().string();
-    asset.locator.relinkHint = "file:" + path.string();
+    asset.locator.relinkHint = bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(path))
+                                   .value_or(std::string{});
     asset.interpretation.colorSpace = document::AssetColorSpace::Auto;
     asset.name = name;
     return asset;

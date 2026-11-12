@@ -93,7 +93,8 @@ void writeProductionLargeExr(const std::filesystem::path& path, const int width,
     asset.locator.kind = "file";
     asset.locator.portability = "project-relative";
     asset.locator.path = path.filename().string();
-    asset.locator.relinkHint = "file:" + path.string();
+    asset.locator.relinkHint = bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(path))
+        .value_or(std::string{});
     asset.contentDigest = probe.value->contentDigest;
     asset.interpretation.colorSpace = bloom::document::AssetColorSpace::Auto;
     asset.width = probe.value->width;

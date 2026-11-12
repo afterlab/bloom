@@ -7,6 +7,7 @@
 // node evaluates. The file is written once under the scratch directory and probed by its content
 // digest, as an imported asset is.
 
+#include <bloom/core/file_uri.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/asset.hpp>
 #include <bloom/document/image_math_parameters.hpp>
@@ -91,7 +92,9 @@ struct AudioFixture final {
         throw std::logic_error("the audio fixture could not be hashed");
     fixture.asset.id = document::AssetId::fromRaw(947);
     fixture.asset.kind = document::AssetKind::Audio;
-    fixture.asset.locator = {"file", "project-relative", name, "file:" + path.string()};
+    fixture.asset.locator = {"file", "project-relative", name,
+                             bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(path))
+                                 .value_or(std::string{})};
     fixture.asset.contentDigest = hash.digest;
     fixture.asset.rate = kSampleRate;
     fixture.asset.channels = 2;

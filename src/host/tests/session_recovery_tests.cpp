@@ -1,4 +1,5 @@
 #include <bloom/host/session_recovery.hpp>
+#include <bloom/platform/private_temporary_directory.hpp>
 
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -29,7 +30,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <unistd.h>
 #include <utility>
 
 // SAVEFIX-1's recovery half, driven against the same real coordinators and per-test temporary
@@ -80,13 +80,11 @@ class Expectations final {
 class TempDirectory final {
   public:
     TempDirectory() {
-        std::array<char, 64> pattern{};
-        constexpr std::string_view prefix = "/tmp/bloom-session-recovery-XXXXXX";
-        std::ranges::copy(prefix, pattern.begin());
-        const auto* result = ::mkdtemp(pattern.data());
-        if (result != nullptr) {
-            path_ = result;
-        }
+        // Accented, CJK and Cyrillic characters and a space: everything this test saves, opens and
+        // publishes goes through a path outside ASCII on every platform.
+        if (auto created = bloom::platform::createPrivateTemporaryDirectory(
+                "bloom-session-recovery-caf\u00e9 \u65e5\u672c \u041f\u0440\u0438-"))
+            path_ = std::move(*created);
     }
 
     TempDirectory(const TempDirectory&) = delete;

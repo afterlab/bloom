@@ -510,6 +510,94 @@ void appendCmakeArchitectureFindings(const Path& relative, const std::string& te
     }
 }
 
+// A test registered on some platforms only must say why, in a comment directly above the
+// condition or on the first line inside it. Without that rule a test written on one system stays
+// off the others for a reason nobody recorded, and a platform's coverage erodes unseen.
+[[nodiscard]] bool namesPlatform(const std::string_view text) {
+    constexpr auto kPredicates = std::to_array<std::string_view>(
+        {"APPLE", "WIN32", "UNIX", "CMAKE_SYSTEM_NAME", "BLOOM_MEDIA_FIXTURE_TESTS"});
+    const auto isWord = [](const char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+               c == '_';
+    };
+    for (const auto predicate : kPredicates) {
+        for (auto at = text.find(predicate); at != std::string_view::npos;
+             at = text.find(predicate, at + 1)) {
+            const auto end = at + predicate.size();
+            if ((at == 0 || !isWord(text[at - 1])) && (end == text.size() || !isWord(text[end])))
+                return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] std::string_view trimmed(std::string_view line) {
+    while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
+        line.remove_prefix(1);
+    while (!line.empty() && (line.back() == ' ' || line.back() == '\t' || line.back() == '\r'))
+        line.remove_suffix(1);
+    return line;
+}
+
+[[nodiscard]] bool startsCommand(const std::string_view line, const std::string_view command) {
+    if (!line.starts_with(command))
+        return false;
+    const auto rest = trimmed(line.substr(command.size()));
+    return rest.starts_with("(");
+}
+
+void appendPlatformTestReasonFindings(const Path& relative, const std::string& text,
+                                      std::vector<RepositoryFinding>& findings) {
+    std::vector<std::string_view> lines;
+    for (std::size_t start = 0; start <= text.size();) {
+        const auto end = std::min(text.find('\n', start), text.size());
+        lines.push_back(trimmed(std::string_view(text).substr(start, end - start)));
+        start = end + 1;
+    }
+    struct Block {
+        std::size_t line = 0;
+        bool platform = false;
+        bool reason = false;
+        bool registersTest = false;
+    };
+    std::vector<Block> open;
+    for (std::size_t index = 0; index < lines.size(); ++index) {
+        const auto line = lines[index];
+        if (startsCommand(line, "if")) {
+            Block block{index + 1, namesPlatform(line), false, false};
+            // A condition may continue over the following lines.
+            auto last = index;
+            auto depth = std::ranges::count(line, '(') - std::ranges::count(line, ')');
+            while (depth > 0 && last + 1 < lines.size()) {
+                ++last;
+                block.platform = block.platform || namesPlatform(lines[last]);
+                depth +=
+                    std::ranges::count(lines[last], '(') - std::ranges::count(lines[last], ')');
+            }
+            auto above = index;
+            while (above > 0 && lines[above - 1].empty())
+                --above;
+            block.reason = (above > 0 && lines[above - 1].starts_with("#")) ||
+                           (last + 1 < lines.size() && lines[last + 1].starts_with("#"));
+            open.push_back(block);
+        } else if (startsCommand(line, "endif")) {
+            if (open.empty())
+                continue;
+            const auto block = open.back();
+            open.pop_back();
+            if (block.platform && block.registersTest && !block.reason) {
+                findings.push_back({relative, "test coverage",
+                                    "tests registered under a platform condition need a comment "
+                                    "saying why, directly above the condition or first inside it",
+                                    block.line});
+            }
+        } else if (startsCommand(line, "bloom_add_test") || startsCommand(line, "add_test")) {
+            for (auto& block : open)
+                block.registersTest = true;
+        }
+    }
+}
+
 } // namespace
 
 auto RepositoryFinding::render() const -> std::string {
@@ -634,6 +722,7 @@ auto scanArchitectureBoundaries(const Path& root, const std::span<const Path> fi
             std::string text;
             if (readText(root / relative, text)) {
                 appendCmakeArchitectureFindings(relative, text, findings);
+                appendPlatformTestReasonFindings(relative, text, findings);
             }
         }
     }

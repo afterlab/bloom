@@ -27,12 +27,18 @@
 
 include_guard(GLOBAL)
 
+# BLOOM_VULKAN_LOADER_PREFIX_DIR is the prefix folder that holds it: a DLL is installed with the
+# programs, a shared library with the libraries.
 if(WIN32)
     set(BLOOM_VULKAN_LOADER_FILE_NAME "vulkan-1.dll")
+    set(BLOOM_VULKAN_LOADER_PREFIX_DIR "bin")
 elseif(APPLE)
     set(BLOOM_VULKAN_LOADER_FILE_NAME "libvulkan.1.dylib")
 else()
     set(BLOOM_VULKAN_LOADER_FILE_NAME "libvulkan.so.1")
+endif()
+if(NOT WIN32)
+    set(BLOOM_VULKAN_LOADER_PREFIX_DIR "lib")
 endif()
 
 function(bloom_prefix_vulkan_loader output)
@@ -40,7 +46,8 @@ function(bloom_prefix_vulkan_loader output)
     if(NOT DEFINED BLOOM_DEPENDENCY_MODE OR NOT BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
         return()
     endif()
-    set(bloom_loader "${BLOOM_DEPENDENCY_PREFIX}/lib/${BLOOM_VULKAN_LOADER_FILE_NAME}")
+    set(bloom_loader
+        "${BLOOM_DEPENDENCY_PREFIX}/${BLOOM_VULKAN_LOADER_PREFIX_DIR}/${BLOOM_VULKAN_LOADER_FILE_NAME}")
     if(EXISTS "${bloom_loader}")
         set(${output} "${bloom_loader}" PARENT_SCOPE)
     endif()

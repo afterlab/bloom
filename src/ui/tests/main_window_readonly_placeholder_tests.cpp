@@ -1,3 +1,4 @@
+#include <bloom/platform/private_temporary_directory.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/main_window.hpp>
 
@@ -48,7 +49,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -89,12 +89,9 @@ class Expectations final {
 class TempDirectory final {
   public:
     TempDirectory() {
-        std::array<char, 64> pattern{};
-        constexpr std::string_view prefix = "/tmp/bloom-mainwindow-placeholder-XXXXXX";
-        std::ranges::copy(prefix, pattern.begin());
-        const auto* result = ::mkdtemp(pattern.data());
-        if (result != nullptr) {
-            path_ = result;
+        if (auto created =
+                bloom::platform::createPrivateTemporaryDirectory("bloom-mainwindow-placeholder-")) {
+            path_ = std::move(*created);
         }
     }
 

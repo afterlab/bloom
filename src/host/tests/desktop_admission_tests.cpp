@@ -17,6 +17,7 @@
 #include <bloom/document/ids.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/output_analysis_attempt_runner.hpp>
+#include <bloom/platform/private_temporary_directory.hpp>
 #include <bloom/platform/staged_artifact.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
@@ -44,7 +45,6 @@
 #include <string>
 #include <string_view>
 #include <thread>
-#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -79,11 +79,9 @@ class Expectations final {
 class TempDirectory final {
   public:
     TempDirectory() {
-        std::array<char, 64> pattern{};
-        constexpr std::string_view prefix = "/tmp/bloom-desktop-admission-XXXXXX";
-        std::ranges::copy(prefix, pattern.begin());
-        if (const auto* result = ::mkdtemp(pattern.data()); result != nullptr)
-            path_ = result;
+        if (auto created =
+                bloom::platform::createPrivateTemporaryDirectory("bloom-desktop-admission-"))
+            path_ = std::move(*created);
     }
     TempDirectory(const TempDirectory&) = delete;
     TempDirectory& operator=(const TempDirectory&) = delete;

@@ -7,6 +7,7 @@
 #include "compositing_recipe_test_support.hpp"
 #include "gpu_scene_preparation_test_support.hpp"
 #include "grade_curves_test_support.hpp"
+#include <bloom/core/executable_suffix.hpp>
 
 #include <bloom/color/ocio_gpu_program.hpp>
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
@@ -406,7 +407,8 @@ void testFailClosed(Expectations& expectations, const std::string& from, const s
 }
 
 // Used by the file-based LUT cases, which run where the LUT helper process exists.
-#if defined(BLOOM_GPUSHADER_TOOLS_DIR) && (defined(__linux__) || defined(__APPLE__))
+#if defined(BLOOM_GPUSHADER_TOOLS_DIR) &&                                                          \
+    (defined(__linux__) || defined(__APPLE__) || defined(_WIN32))
 [[nodiscard]] std::size_t countOcioCommands(const bloom::runtime::PreparedGpuScene& scene) {
     std::size_t count = 0;
     for (const auto& command : scene.commands()) {
@@ -419,8 +421,10 @@ void testFailClosed(Expectations& expectations, const std::string& from, const s
 #ifdef BLOOM_GPUSHADER_TOOLS_DIR
 [[nodiscard]] GpuSceneOcioContext ocioContext() {
     GpuOcioCompileOptions options;
-    options.glslangValidatorPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
-    options.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
+    options.glslangValidatorPath =
+        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
+    options.spirvValPath =
+        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val" BLOOM_EXECUTABLE_SUFFIX;
     GpuSceneOcioContext context;
     context.preparer = std::make_shared<GpuOcioProgramPreparer>();
     context.compileOptions = options;
@@ -776,7 +780,7 @@ void testRealRecipes(Expectations& expectations) {
     static_cast<void>(onlyMerges);
 }
 
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
 void testRealFileTransform(Expectations& expectations, const std::string& working,
                            const std::string& process) {
     const auto base = std::filesystem::temp_directory_path() / "bloom_gpu_effect_test";
@@ -877,7 +881,7 @@ int main() {
         testRealLumaKey(expectations);
         testRealColorGrades(expectations);
         testRealRecipes(expectations);
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
         testRealFileTransform(expectations, from, to);
 #endif
 #else

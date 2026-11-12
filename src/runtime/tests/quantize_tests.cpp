@@ -121,7 +121,7 @@ void testHardThreshold() {
         QuantizeSettings lumaS;
         lumaS.level = 0.4;
         const auto got = run(lumaS, straight(r, g, b));
-        const double want = stepReference(lumaReference(r, g, b), 0.4, 0.0);
+        const double want = stepReference(static_cast<float>(lumaReference(r, g, b)), 0.4, 0.0);
         // The luma lies within an ulp of the level only by chance; skip those.
         if (std::abs(lumaReference(r, g, b) - 0.4) > 1e-6)
             expect(got[0] == want && got[1] == want && got[2] == want, "luma threshold sweep");
@@ -166,7 +166,9 @@ void testSoftThreshold() {
     luma.level = 0.3;
     luma.softness = 0.5;
     const auto got = run(luma, straight(0.2F, 0.4F, 0.1F));
-    expect(near(got[1], stepReference(lumaReference(0.2, 0.4, 0.1), 0.3, 0.5)), "soft luma threshold");
+    expect(
+        near(got[1], stepReference(static_cast<float>(lumaReference(0.2F, 0.4F, 0.1F)), 0.3, 0.5)),
+        "soft luma threshold");
 }
 
 void testInvertAndAlpha() {
@@ -228,7 +230,8 @@ void testPosterize() {
     expect(beyond[0] == 1.0F && beyond[1] == 0.0F && near(beyond[2], 1.0 / 3.0), "beyond the range is the end levels");
     // Straight color and alpha: the premultiplied pixel is the quantized straight color times alpha.
     const auto partial = run(s, straight(0.4F, 0.4F, 0.4F, 0.5F));
-    expect(near(partial[0], snapReference(0.4, 4.0) * 0.5) && partial[3] == 0.5F, "posterize keeps alpha");
+    expect(near(partial[0], snapReference(0.4F, 4.0) * 0.5) && partial[3] == 0.5F,
+           "posterize keeps alpha");
     // Per-channel levels.
     QuantizeSettings per;
     per.mode = document::kQuantizePosterize;
@@ -238,7 +241,7 @@ void testPosterize() {
     per.blue = 256.0;
     per.levels = 7.0; // unread while unlinked
     const auto got = run(per, straight(0.6F, 0.6F, 0.6F));
-    expect(near(got[0], 1.0) && near(got[1], 0.5) && near(got[2], snapReference(0.6, 256.0)),
+    expect(near(got[0], 1.0) && near(got[1], 0.5) && near(got[2], snapReference(0.6F, 256.0)),
            "unlinked levels read the channels' own");
     // Linked levels read the master for all three.
     QuantizeSettings linked = per;

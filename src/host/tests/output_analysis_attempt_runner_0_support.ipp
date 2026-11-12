@@ -24,13 +24,8 @@ class Expectations final {
 class TempDirectory final {
   public:
     TempDirectory() {
-        std::array<char, 64> pattern{};
-        constexpr std::string_view prefix = "/tmp/bloom-attempt-runner-XXXXXX";
-        std::ranges::copy(prefix, pattern.begin());
-        const auto* result = ::mkdtemp(pattern.data());
-        if (result != nullptr) {
-            path_ = result;
-        }
+        if (auto created = bloom::platform::createPrivateTemporaryDirectory("bloom-attempt-runner-"))
+            path_ = std::move(*created);
     }
     TempDirectory(const TempDirectory&) = delete;
     TempDirectory& operator=(const TempDirectory&) = delete;

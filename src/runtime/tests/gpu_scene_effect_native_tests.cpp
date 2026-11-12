@@ -12,18 +12,19 @@
 // failure. An explicit --loader selects the Vulkan loader. Without the pinned tools the real arms
 // are skipped.
 
-#include "compositing_recipe_test_support.hpp"
-#include "depth_effect_test_support.hpp"
-#include "lens_flare_test_support.hpp"
-#include "codec_degrade_test_support.hpp"
-#include "denoise_test_support.hpp"
-#include "auto_exposure_test_support.hpp"
-#include "film_grain_test_support.hpp"
-#include "dither_test_support.hpp"
-#include "motion_blur_test_support.hpp"
 #include "audio_plot_test_support.hpp"
+#include "auto_exposure_test_support.hpp"
+#include "codec_degrade_test_support.hpp"
+#include "compositing_recipe_test_support.hpp"
+#include "denoise_test_support.hpp"
+#include "depth_effect_test_support.hpp"
+#include "dither_test_support.hpp"
+#include "film_grain_test_support.hpp"
 #include "histogram_test_support.hpp"
+#include "lens_flare_test_support.hpp"
+#include "motion_blur_test_support.hpp"
 #include "statistics_test_support.hpp"
+#include <bloom/core/executable_suffix.hpp>
 
 #include <bloom/runtime/gpu_process_frame.hpp>
 #include <bloom/runtime/image_statistics.hpp>
@@ -286,8 +287,10 @@ std::filesystem::path& loaderPath() {
 
 [[nodiscard]] GpuSceneOcioContext ocioContext() {
     GpuOcioCompileOptions options;
-    options.glslangValidatorPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
-    options.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
+    options.glslangValidatorPath =
+        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
+    options.spirvValPath =
+        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val" BLOOM_EXECUTABLE_SUFFIX;
     GpuSceneOcioContext context;
     context.preparer = std::make_shared<GpuOcioProgramPreparer>();
     context.compileOptions = options;
@@ -689,7 +692,7 @@ void runCanvas(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     }
 }
 
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
 void runFileTransform(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                       const std::string& working, const std::string& process) {
     const auto base = std::filesystem::temp_directory_path() / "bloom_gpu_effect_native";
@@ -4957,7 +4960,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runMotionBlur(expectations, device, cache);
     runFrameRateHold(expectations, device, cache);
     runSharpens(expectations, device, cache);
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
     runFileTransform(expectations, device, cache, from, to);
 #endif
 }

@@ -42,6 +42,7 @@
 #include <QPixmap>
 #include <QPointF>
 #include <QSettings>
+#include <QTemporaryDir>
 #include <QThread>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -1293,6 +1294,14 @@ void testTornDownFontRowNeverPollsItsDeadSession(Expectations& expectations) {
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    // The section state is kept in the application's settings. They are given a name and a
+    // private folder: Windows stores nothing for an unnamed application, and a test writes
+    // nothing into the user's own settings.
+    const QTemporaryDir settingsFolder;
+    QCoreApplication::setOrganizationName(QStringLiteral("BloomTest"));
+    QCoreApplication::setApplicationName(QStringLiteral("PropertiesEditor"));
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsFolder.path());
     Expectations expectations;
     // Must run before any other test in this binary builds a font row (see the comment on its
     // definition): it depends on the process-wide font catalogue scan still being in flight.

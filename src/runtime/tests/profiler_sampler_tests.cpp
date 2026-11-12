@@ -253,6 +253,13 @@ void seqlockReadersSeeWholeWrites() {
         value.words.fill(write);
         value.tail = static_cast<std::uint8_t>(write);
         lock.store(value);
+        // A writer that never pauses can keep every reader retrying for the whole run. Every so
+        // often it lets one read finish, as a real sampler's pace does.
+        if ((write & 1023U) == 0U) {
+            const auto before = reads.load();
+            for (int spin = 0; spin < 100000 && reads.load() == before; ++spin)
+                std::this_thread::yield();
+        }
     }
     stop.store(true);
     for (auto& reader : readers)

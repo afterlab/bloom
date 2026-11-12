@@ -254,7 +254,7 @@ void reopenQualityInStatus() {
         .backend = backend});
 
     const auto render = [&](const std::string& name) {
-        const auto destination = (captures / name).string();
+        const auto destination = (captures / name).generic_string();
         const auto response = server.call("render", R"({"composition":1,"frame":0,)"
                                                     R"("preset":"PngRgba8SrgbV1","destination":")" +
                                                         destination + R"("})");

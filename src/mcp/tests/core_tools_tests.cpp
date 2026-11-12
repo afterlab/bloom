@@ -790,7 +790,7 @@ void retiredTransientJobs() {
         .backend = fake});
 
     fake->push({.outcome = host::testing::FakeExportScript::Outcome::FailRendering});
-    const auto destination = (captures / "failed.png").string();
+    const auto destination = (captures / "failed.png").generic_string();
     const auto failed = server.call("render", R"({"composition":1,"frame":0,)"
                                               R"("preset":"PngRgba8SrgbV1","destination":")" +
                                                   destination + R"("})");
@@ -882,7 +882,7 @@ void retiredTransientJobs() {
     // Issue #570: loudness normalization over MCP. The target reaches the run and the result carries
     // the measured and delivered level; out-of-range, lone-ceiling and still requests are refused.
     {
-        const auto movie = (captures / "loudness.mov").string();
+        const auto movie = (captures / "loudness.mov").generic_string();
         const auto call = [&](const std::string& extra) {
             return server.call("export", R"({"composition":1,"frame":0,"preset":"ProResMovV1",)"
                                          R"("destination":")" +
@@ -906,7 +906,7 @@ void retiredTransientJobs() {
         const auto still =
             server.call("render", R"({"composition":1,"frame":0,"preset":"PngRgba8SrgbV1",)"
                                   R"("destination":")" +
-                                      (captures / "loudness.png").string() +
+                                      (captures / "loudness.png").generic_string() +
                                       R"(","loudnessLufs":-16})");
         expect(contains(still, "-32602"), "a still preset refuses a loudness target: " + still);
     }
@@ -914,7 +914,7 @@ void retiredTransientJobs() {
     // The encoder choice over MCP (issue #455): the three values are accepted for a movie, and
     // anything else, or any value on a still, is refused.
     {
-        const auto movie = (captures / "encoder.mov").string();
+        const auto movie = (captures / "encoder.mov").generic_string();
         const auto call = [&](const std::string& extra) {
             return server.call("export", R"({"composition":1,"frame":0,"preset":"ProResMovV1",)"
                                          R"("overwrite":"replace","destination":")" +
@@ -933,7 +933,7 @@ void retiredTransientJobs() {
         const auto still =
             server.call("render", R"({"composition":1,"frame":0,"preset":"PngRgba8SrgbV1",)"
                                   R"("destination":")" +
-                                      (captures / "encoder.png").string() +
+                                      (captures / "encoder.png").generic_string() +
                                       R"(","encoder":"software"})");
         expect(contains(still, "-32602"), "a still preset refuses an encoder choice: " + still);
     }
@@ -941,7 +941,7 @@ void retiredTransientJobs() {
     // Issue #581: worker limits and the worker memory report over MCP.
     {
         constexpr std::uint64_t mib = std::uint64_t{1} << 20U;
-        const auto movie = (captures / "limits.mov").string();
+        const auto movie = (captures / "limits.mov").generic_string();
         fake->push({.workerPeakBytes = 5 * mib});
         const auto limited =
             server.call("export", R"({"composition":1,"frame":0,"preset":"ProResMovV1",)"
@@ -981,11 +981,10 @@ void retiredTransientJobs() {
         expect(contains(tooMany, "-32602") && contains(tooMany, "workerThreads") &&
                    contains(tooBig, "-32602") && contains(tooBig, "workerMemoryCapBytes"),
                "out-of-range worker options are refused: " + tooMany + tooBig);
-        const auto still =
-            server.call("render", R"({"composition":1,"frame":0,"preset":"PngRgba8SrgbV1",)"
-                                  R"("destination":")" +
-                                      (captures / "limits.png").string() +
-                                      R"(","workerThreads":2})");
+        const auto still = server.call(
+            "render", R"({"composition":1,"frame":0,"preset":"PngRgba8SrgbV1",)"
+                      R"("destination":")" +
+                          (captures / "limits.png").generic_string() + R"(","workerThreads":2})");
         expect(contains(still, "-32602") && contains(still, "worker"),
                "a still render has no worker to limit: " + still);
         const auto badStart = server.call("export.start", R"({"jobs":[1],"workerThreads":65})");
@@ -1839,7 +1838,7 @@ void exportAcceptsEveryListedPreset() {
     const auto exportWith = [&](const Listed& preset, const std::string& stem) {
         return call("export", R"({"composition":1,"frame":0,"preset":")" + preset.id +
                                   R"(","destination":")" +
-                                  (folder / (stem + "." + preset.extension)).string() +
+                                  (folder / (stem + "." + preset.extension)).generic_string() +
                                   R"(","overwrite":"replace"})");
     };
     const auto transact = [&](const std::string& operations) {
@@ -1863,7 +1862,7 @@ void exportAcceptsEveryListedPreset() {
                    contains(exported, R"("publishedFrames":)"),
                "export accepts " + preset.id + ": " + exported);
         // The queue, with only the preset id.
-        const auto destination = (folder / (stem + "-queued." + preset.extension)).string();
+        const auto destination = (folder / (stem + "-queued." + preset.extension)).generic_string();
         const auto added = transact(
             R"({"op":"bloom.export.add-job","args":{"composition":1,"range":"frame","first":0,)"
             R"("outputs":["{\"preset\":\")" +
@@ -1928,7 +1927,7 @@ void exportAcceptsEveryListedPreset() {
         const auto added = transact(
             R"({"op":"bloom.export.add-job","args":{"composition":1,"range":"frame","first":0,)"
             R"("outputs":["{\"preset\":\"builtin:png-sequence\",\"destination\":{\"path\":\")" +
-            (folder / (stem + ".png")).string() + R"(\",\"overwrite\":\"replace\"}}"]}})");
+            (folder / (stem + ".png")).generic_string() + R"(\",\"overwrite\":\"replace\"}}"]}})");
         const auto job = outputId(added, "exportJob");
         expect(job != 0, "the queue accepts the " + stem + " job: " + added);
         return job;
@@ -1971,13 +1970,13 @@ void exportAcceptsEveryListedPreset() {
     const auto unknown =
         call("export", R"({"composition":1,"frame":0,"preset":"builtin:no-such-preset",)"
                        R"("destination":")" +
-                           (folder / "unknown.mp4").string() + R"("})");
+                           (folder / "unknown.mp4").generic_string() + R"("})");
     expect(contains(unknown, "Unknown preset") && contains(unknown, "export.presets"),
            "an id the list does not carry is refused as unknown and points at the list: " +
                unknown);
     const auto stillOnly =
         call("render", R"({"composition":1,"frame":0,"preset":"builtin:h264-mp4","destination":")" +
-                           (folder / "render.mp4").string() + R"("})");
+                           (folder / "render.mp4").generic_string() + R"("})");
     expect(contains(stillOnly, R"("isError":true)") || contains(stillOnly, "-32602"),
            "render still refuses a movie preset: " + stillOnly);
 

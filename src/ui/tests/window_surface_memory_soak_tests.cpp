@@ -226,7 +226,15 @@ struct Sample final {
     const auto platform = qEnvironmentVariable("QT_QPA_PLATFORM");
     if (platform != QStringLiteral("offscreen"))
         return false;
+#if defined(_WIN32)
+    // Qt splits the platform string at every colon, so a path with a drive letter cannot be
+    // passed. The layout is written to the working folder and named without its folder.
+    static_cast<void>(directory);
+    const std::filesystem::path config =
+        "bloom-soak-screens-" + std::to_string(QCoreApplication::applicationPid()) + ".json";
+#else
     const auto config = directory / "screens.json";
+#endif
     std::ofstream out(config);
     out << R"({"synchronousWindowSystemEvents": false, "windowFrameMargins": false, "screens": [)"
         << R"({"name": "BloomSoakA", "x": 0, "y": 0, "width": 1920, "height": 1080,)"
@@ -309,6 +317,15 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         return options.require_device ? 1 : 77;
     }
     QApplication application(argc, argv);
+#if defined(_WIN32)
+    {
+        // The layout was read while the application was made.
+        std::error_code ignored;
+        std::filesystem::remove("bloom-soak-screens-" +
+                                    std::to_string(QCoreApplication::applicationPid()) + ".json",
+                                ignored);
+    }
+#endif
     QTemporaryDir temporary;
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, temporary.path());

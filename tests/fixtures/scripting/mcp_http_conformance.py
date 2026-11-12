@@ -201,8 +201,8 @@ class Conformance(unittest.TestCase):
         client.request('DELETE')
 
     def test_progress_render_streams(self):
-        if not sys.platform.startswith('linux'):
-            self.skipTest('export runs on Linux in this version')
+        if sys.platform == 'darwin':
+            self.skipTest('not yet run on macOS')
         client = Client(self.host)
         client.initialize()
         with tempfile.TemporaryDirectory(prefix='bloom-mcp-render-') as directory:
@@ -228,8 +228,8 @@ class Conformance(unittest.TestCase):
     def test_failed_transient_render_carries_its_log(self):
         # #388: a failed render, export or capture answers with its transient job id and the run's
         # log, because the job is retired as soon as the call returns.
-        if not sys.platform.startswith('linux'):
-            self.skipTest('export runs on Linux in this version')
+        if sys.platform == 'darwin':
+            self.skipTest('not yet run on macOS')
         client = Client(self.host)
         client.initialize()
 

@@ -715,7 +715,8 @@ void columnsAndOrder(TestContext& context) {
                        settings->link()->text().contains("Work area"),
                    "an open job shows its Render Settings line with the range as a link");
     context.expect(module != nullptr && module->moduleLink()->text() == "H.264 MP4" &&
-                       module->destinationLink()->text() == "renders/out.mp4",
+                       module->destinationLink()->text() ==
+                           QDir::toNativeSeparators("renders/out.mp4"),
                    "the Output Module line names the format and Output To where it saves");
     context.expect(settings->link()->variant() == kit::KButton::Variant::Link &&
                        module->moduleLink()->variant() == kit::KButton::Variant::Link &&

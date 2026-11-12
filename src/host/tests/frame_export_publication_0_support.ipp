@@ -40,13 +40,10 @@ template <typename Optional>
 class TempDirectory final {
   public:
     TempDirectory() {
-        std::array<char, 64> pattern{};
-        constexpr std::string_view prefix = "/tmp/bloom-frame-export-XXXXXX";
-        std::ranges::copy(prefix, pattern.begin());
-        const auto* result = ::mkdtemp(pattern.data());
-        if (result != nullptr) {
-            path_ = result;
-        }
+        // Accented, CJK and Cyrillic characters and a space: everything this test saves, opens and
+        // publishes goes through a path outside ASCII on every platform.
+        if (auto created = bloom::platform::createPrivateTemporaryDirectory("bloom-frame-export-caf\u00e9 \u65e5\u672c \u041f\u0440\u0438-"))
+            path_ = std::move(*created);
     }
     TempDirectory(const TempDirectory&) = delete;
     TempDirectory& operator=(const TempDirectory&) = delete;

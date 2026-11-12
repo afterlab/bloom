@@ -1,4 +1,5 @@
 #include <bloom/host/session_async_io.hpp>
+#include <bloom/platform/private_temporary_directory.hpp>
 
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -36,7 +37,6 @@
 #include <string>
 #include <string_view>
 #include <thread>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -130,13 +130,9 @@ class Expectations final {
 class TempDirectory final {
   public:
     TempDirectory() {
-        std::array<char, 64> pattern{};
-        constexpr std::string_view prefix = "/tmp/bloom-session-async-io-XXXXXX";
-        std::ranges::copy(prefix, pattern.begin());
-        const auto* result = ::mkdtemp(pattern.data());
-        if (result != nullptr) {
-            path_ = result;
-        }
+        if (auto created =
+                bloom::platform::createPrivateTemporaryDirectory("bloom-session-async-io-"))
+            path_ = std::move(*created);
     }
 
     TempDirectory(const TempDirectory&) = delete;

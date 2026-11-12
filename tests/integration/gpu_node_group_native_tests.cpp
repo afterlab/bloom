@@ -21,6 +21,7 @@
 
 #include "document_render_parity_support.hpp"
 #include "node_group_document_support.hpp"
+#include <bloom/core/executable_suffix.hpp>
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/document/value_nodes.hpp>
@@ -142,8 +143,10 @@ void keyStops(Fixture& fixture) {
 // The pinned shader tools prepare the image effects' working-space programs.
 [[nodiscard]] runtime::GpuSceneOcioContext ocioContext() {
     runtime::GpuOcioCompileOptions options;
-    options.glslangValidatorPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
-    options.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
+    options.glslangValidatorPath =
+        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
+    options.spirvValPath =
+        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val" BLOOM_EXECUTABLE_SUFFIX;
     runtime::GpuSceneOcioContext context;
     context.preparer = std::make_shared<runtime::GpuOcioProgramPreparer>();
     context.compileOptions = options;

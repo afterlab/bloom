@@ -2,6 +2,7 @@
 #include "output_analysis_attempt_jpeg_fixture.hpp"
 
 #include <bloom/host/output_analysis_attempt_runner.hpp>
+#include <bloom/platform/private_temporary_directory.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/memory_headroom.hpp>
@@ -41,7 +42,6 @@
 #include <string>
 #include <string_view>
 #include <thread>
-#include <unistd.h>
 #include <vector>
 
 // Task F2 (issue #101): drives beginOutputAnalysisAttemptV1() -- the Resolving (BlockingIo) ->

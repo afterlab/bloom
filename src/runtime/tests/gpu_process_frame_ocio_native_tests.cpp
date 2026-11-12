@@ -27,6 +27,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/core/color.hpp>
+#include <bloom/core/file_uri.hpp>
 #include <bloom/core/sha256.hpp>
 #include <bloom/document/asset.hpp>
 #include <bloom/media/image.hpp>
@@ -211,7 +212,8 @@ imageAsset(const std::filesystem::path& path, const std::string& name, const std
     asset.locator.kind = "file";
     asset.locator.portability = "project-relative";
     asset.locator.path = path.filename().string();
-    asset.locator.relinkHint = "file:" + path.string();
+    asset.locator.relinkHint = bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(path))
+                                   .value_or(std::string{});
     asset.contentDigest = probe.value->contentDigest;
     asset.interpretation.colorSpace = document::AssetColorSpace::Auto;
     asset.width = probe.value->width;

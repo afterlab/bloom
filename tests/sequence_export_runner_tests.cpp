@@ -1,4 +1,5 @@
 #include "gpu_route_proof_export_support.hpp"
+#include "process_probe.hpp"
 
 #include <algorithm>
 #include <array>
@@ -46,7 +47,6 @@
 #include <string_view>
 #include <thread>
 #include <tuple>
-#include <unistd.h>
 #include <vector>
 using namespace bloom;
 namespace {
@@ -412,8 +412,7 @@ struct Fixture {
                 if (cancel)
                     runner.cancel();
                 if (crash)
-                    check(::kill(static_cast<pid_t>(pid.load()), SIGKILL) == 0,
-                          "worker killed mid-export");
+                    check(bloom::test_support::killProcess(pid.load()), "worker killed mid-export");
                 injected = true;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -1027,7 +1026,7 @@ void testRejectedRetirementWithLiveEncoder(Fixture& f, const std::filesystem::pa
     while (!retirement->retirementComplete() && std::chrono::steady_clock::now() < cleanupDeadline)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     check(retirement->retirementComplete() && retirement->collect() &&
-              f.ledger.chargedBytes() == 0 && ::kill(static_cast<pid_t>(pid.load()), 0) != 0 &&
+              f.ledger.chargedBytes() == 0 && bloom::test_support::processGone(pid.load()) &&
               !std::filesystem::exists(directory / "rejected-live.mov"),
           "rejected admission retires encoder, reaps worker and releases charge");
     runner.reset();
@@ -1302,7 +1301,7 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     check(f.ledger.chargedBytes() == 0 && !std::filesystem::exists(directory / "abandoned.mov"),
           "abandonment cleans resources without publication");
-    check(abandonedPid.load() > 0 && ::kill(static_cast<pid_t>(abandonedPid.load()), 0) != 0,
+    check(abandonedPid.load() > 0 && bloom::test_support::processGone(abandonedPid.load()),
           "abandoned worker reaped");
     auto oversized = f.request(directory / "oversized.mov", output::OutputPresetV1::ProResMovV1);
     oversized.queueByteLimit = 1;

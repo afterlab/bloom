@@ -17,6 +17,7 @@
 
 #include "channel_source_time.hpp"
 #include "document_render_parity_support.hpp"
+#include <bloom/core/executable_suffix.hpp>
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/asset_operations.hpp>
@@ -298,8 +299,10 @@ template <typename Kind> [[nodiscard]] std::size_t count(const runtime::Compiled
 // The pinned shader tools prepare the Channel Select / Channel Combine programs.
 [[nodiscard]] runtime::GpuSceneOcioContext ocioContext() {
     runtime::GpuOcioCompileOptions options;
-    options.glslangValidatorPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
-    options.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
+    options.glslangValidatorPath =
+        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
+    options.spirvValPath =
+        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val" BLOOM_EXECUTABLE_SUFFIX;
     runtime::GpuSceneOcioContext context;
     context.preparer = std::make_shared<runtime::GpuOcioProgramPreparer>();
     context.compileOptions = options;

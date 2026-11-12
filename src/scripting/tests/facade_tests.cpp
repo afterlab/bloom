@@ -157,6 +157,12 @@ int main() {
     bloom::runtime::SnapshotCompiler compiler(bloom::document::builtInNodeDefinitions());
     const auto outputPath =
         std::filesystem::temp_directory_path() / "bloom-scripting-facade-frame-12.png";
+    {
+        // A run that failed before its own cleanup leaves the file, and the render never replaces
+        // one.
+        std::error_code staleError;
+        std::filesystem::remove(outputPath, staleError);
+    }
     bloom::runtime::GpuProcessFrameEvaluatorOptions renderOptions;
     renderOptions.enabled = false;
     const auto renderProvider = bloom::host::GpuExportProvider::create(renderOptions);

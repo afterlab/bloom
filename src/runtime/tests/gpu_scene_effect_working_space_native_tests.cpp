@@ -16,6 +16,8 @@
 
 #include "gpu_media_cache_test_support.hpp"
 #include "gpu_media_executor_test_support.hpp"
+#include <bloom/core/executable_suffix.hpp>
+#include <bloom/core/file_uri.hpp>
 
 // The shared scene-preparation fixtures are only needed by the tools-present native arm; leaving
 // the header out of the tools-absent build keeps its conditionally-used helpers from being compiled
@@ -183,7 +185,8 @@ imageAsset(const std::filesystem::path& path, const std::string& name, const std
     asset.locator.kind = "file";
     asset.locator.portability = "project-relative";
     asset.locator.path = path.filename().string();
-    asset.locator.relinkHint = "file:" + path.string();
+    asset.locator.relinkHint = bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(path))
+                                   .value_or(std::string{});
     asset.contentDigest = probe.value->contentDigest;
     asset.interpretation.colorSpace = document::AssetColorSpace::Auto;
     asset.width = probe.value->width;
@@ -491,8 +494,9 @@ int main(int argc, char** argv) {
         evaluator.setAssetBaseDirectory(fixture.directory);
         GpuOcioCompileOptions compileOptions;
         compileOptions.glslangValidatorPath =
-            std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
-        compileOptions.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
+            std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
+        compileOptions.spirvValPath =
+            std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val" BLOOM_EXECUTABLE_SUFFIX;
         GpuSceneOcioContext ocioContext;
         ocioContext.preparer = std::make_shared<GpuOcioProgramPreparer>();
         ocioContext.compileOptions = compileOptions;

@@ -6,6 +6,7 @@
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/media/image.hpp>
+#include <bloom/platform/private_temporary_directory.hpp>
 #include <bloom/runtime/composite_frame_cache.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
@@ -25,7 +26,6 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
-#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -280,13 +280,10 @@ void evictionUnderPressure(const std::shared_ptr<const CompiledCompositionPlan>&
 } // namespace
 
 int main() {
-    std::array<char, 64> pattern{};
-    const std::string prefix = "/tmp/bloom-composite-cache-XXXXXX";
-    std::copy(prefix.begin(), prefix.end(), pattern.begin());
-    const auto* made = ::mkdtemp(pattern.data());
-    if (made == nullptr)
+    const auto made = bloom::platform::createPrivateTemporaryDirectory("bloom-composite-cache-");
+    if (!made)
         return EXIT_FAILURE;
-    const std::filesystem::path directory = made;
+    const std::filesystem::path directory = *made;
     int status = EXIT_SUCCESS;
     try {
         halfConversion();

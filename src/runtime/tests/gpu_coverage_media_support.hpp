@@ -19,6 +19,7 @@
 #include <ImfStringAttribute.h>
 
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
+#include <bloom/core/file_uri.hpp>
 #include <bloom/document/asset.hpp>
 #include <bloom/media/image.hpp>
 
@@ -122,7 +123,9 @@ struct ImageFixture final {
         value.asset.locator.kind = "file";
         value.asset.locator.portability = "project-relative";
         value.asset.locator.path = value.path.filename().string();
-        value.asset.locator.relinkHint = "file:" + value.path.string();
+        value.asset.locator.relinkHint =
+            bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(value.path))
+                .value_or(std::string{});
         value.asset.contentDigest = probe.value->contentDigest;
         value.asset.interpretation.colorSpace = bloom::document::AssetColorSpace::Auto;
         value.asset.width = probe.value->width;
@@ -148,7 +151,9 @@ struct ImageFixture final {
     value.asset.locator.kind = "file";
     value.asset.locator.portability = "project-relative";
     value.asset.locator.path = path.filename().string();
-    value.asset.locator.relinkHint = "file:" + path.string();
+    value.asset.locator.relinkHint =
+        bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(path))
+            .value_or(std::string{});
     value.asset.contentDigest = probe.value->contentDigest;
     value.asset.interpretation.colorSpace = bloom::document::AssetColorSpace::Auto;
     value.asset.width = probe.value->width;
@@ -345,7 +350,9 @@ struct LutFixture final {
         value.asset.locator.kind = "file";
         value.asset.locator.portability = "project-relative";
         value.asset.locator.path = value.path.filename().string();
-        value.asset.locator.relinkHint = "file:" + value.path.string();
+        value.asset.locator.relinkHint =
+            bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(value.path))
+                .value_or(std::string{});
         value.asset.contentDigest = resource.digest;
         value.asset.name = "coverage_curve";
         return value;
@@ -430,7 +437,9 @@ imageSourcePlan(const bloom::document::AssetRecord& asset, const LayerValues lay
         value.asset.locator.kind = "file";
         value.asset.locator.portability = "project-relative";
         value.asset.locator.path = value.path.filename().string();
-        value.asset.locator.relinkHint = "file:" + value.path.string();
+        value.asset.locator.relinkHint =
+            bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(value.path))
+                .value_or(std::string{});
         value.asset.contentDigest = probe.value->contentDigest;
         value.asset.interpretation.colorSpace = bloom::document::AssetColorSpace::Auto;
         value.asset.width = probe.value->width;
@@ -544,7 +553,9 @@ channelShufflePlan(const bloom::document::AssetRecord& asset, const LayerValues 
         value.asset.locator.kind = "file";
         value.asset.locator.portability = "project-relative";
         value.asset.locator.path = value.path.filename().string();
-        value.asset.locator.relinkHint = "file:" + value.path.string();
+        value.asset.locator.relinkHint =
+            bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(value.path))
+                .value_or(std::string{});
         value.asset.contentDigest = probe.value->contentDigest;
         value.asset.interpretation.colorSpace = bloom::document::AssetColorSpace::Auto;
         value.asset.width = probe.value->width;

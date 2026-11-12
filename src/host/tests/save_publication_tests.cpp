@@ -1,4 +1,5 @@
 #include <bloom/host/save_publication.hpp>
+#include <bloom/platform/private_temporary_directory.hpp>
 
 #include <bloom/core/rational_time.hpp>
 #include <bloom/core/sha256.hpp>
@@ -33,7 +34,6 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -103,13 +103,11 @@ class Expectations final {
 class TempDirectory final {
   public:
     TempDirectory() {
-        std::array<char, 64> pattern{};
-        constexpr std::string_view prefix = "/tmp/bloom-save-publication-XXXXXX";
-        std::ranges::copy(prefix, pattern.begin());
-        const auto* result = ::mkdtemp(pattern.data());
-        if (result != nullptr) {
-            path_ = result;
-        }
+        // Accented, CJK and Cyrillic characters and a space: everything this test saves, opens and
+        // publishes goes through a path outside ASCII on every platform.
+        if (auto created = bloom::platform::createPrivateTemporaryDirectory(
+                "bloom-save-publication-caf\u00e9 \u65e5\u672c \u041f\u0440\u0438-"))
+            path_ = std::move(*created);
     }
 
     TempDirectory(const TempDirectory&) = delete;

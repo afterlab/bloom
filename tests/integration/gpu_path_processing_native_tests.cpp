@@ -18,6 +18,7 @@
 // after the CPU half passed; --require-device makes that a failure.
 
 #include "document_render_parity_support.hpp"
+#include <bloom/core/executable_suffix.hpp>
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/layer_mask_operations.hpp>
@@ -478,8 +479,10 @@ void montageCapture(runtime::GpuSceneExecutor& executor, const runtime::CpuGpuSc
 // The pinned shader tools prepare Glow's working-space programs.
 [[nodiscard]] runtime::GpuSceneOcioContext ocioContext() {
     runtime::GpuOcioCompileOptions options;
-    options.glslangValidatorPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
-    options.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
+    options.glslangValidatorPath =
+        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator" BLOOM_EXECUTABLE_SUFFIX;
+    options.spirvValPath =
+        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val" BLOOM_EXECUTABLE_SUFFIX;
     runtime::GpuSceneOcioContext context;
     context.preparer = std::make_shared<runtime::GpuOcioProgramPreparer>();
     context.compileOptions = options;

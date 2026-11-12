@@ -8,6 +8,7 @@
 #include <ImfHeader.h>
 #include <ImfOutputFile.h>
 #include <ImfStringAttribute.h>
+#include <bloom/core/file_uri.hpp>
 #include <bloom/document/asset.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/media/image.hpp>
@@ -96,7 +97,8 @@ void writeExrRgba(const std::filesystem::path& path, const int width, const int 
     asset.locator.kind = "file";
     asset.locator.portability = "project-relative";
     asset.locator.path = path.filename().string();
-    asset.locator.relinkHint = "file:" + path.string();
+    asset.locator.relinkHint = bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(path))
+                                   .value_or(std::string{});
     asset.contentDigest = probe.value->contentDigest;
     asset.interpretation.colorSpace = document::AssetColorSpace::Auto;
     asset.width = probe.value->width;

@@ -1,4 +1,6 @@
+#include <bloom/core/executable_suffix.hpp>
 #include <bloom/host/frame_export_publication.hpp>
+#include <bloom/platform/private_temporary_directory.hpp>
 
 #include "gpu_route_proof_export_support.hpp"
 
@@ -45,7 +47,6 @@
 #include <string>
 #include <string_view>
 #include <thread>
-#include <unistd.h>
 #include <vector>
 
 // Task F2 (issue #101): drives approveFrameExportV1()/executeExportPublication() against a real

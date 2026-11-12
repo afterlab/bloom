@@ -25,7 +25,6 @@ Results: <work-dir>/results/<UTC timestamp>[-label].json plus a .md summary tabl
 """
 import argparse
 import datetime
-import fcntl
 import json
 import os
 import platform
@@ -133,6 +132,20 @@ def find_loader(build_dir, explicit):
     raise SystemExit("cannot find the bundled Vulkan loader; pass --loader")
 
 
+def _lock_whole_file(handle, lock):
+    """Takes (waiting for it) or releases an exclusive lock on an open file."""
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        # A byte range can be locked past the end of the file, so an empty lock file works.
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK if lock else msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle, fcntl.LOCK_EX if lock else fcntl.LOCK_UN)
+
+
 class GpuLock:
     """Optional machine GPU lock, held around every Bloom process."""
 
@@ -143,12 +156,12 @@ class GpuLock:
     def __enter__(self):
         if self.path:
             self.handle = open(self.path, "a+")
-            fcntl.flock(self.handle, fcntl.LOCK_EX)
+            _lock_whole_file(self.handle, True)
         return self
 
     def __exit__(self, *exc):
         if self.handle:
-            fcntl.flock(self.handle, fcntl.LOCK_UN)
+            _lock_whole_file(self.handle, False)
             self.handle.close()
 
 # --- sampling -----------------------------------------------------------------------------------
