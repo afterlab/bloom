@@ -76,6 +76,24 @@
   colour conversion, which is a pixel transformation and stays required. Media decode and image
   colour transform are distinct.
 
+## Platform Validation Before Landing
+
+- Linux, macOS and Windows are first-class, so every landing is validated on all three. A change
+  to engine, render, media, color, runtime, host, scripting, MCP, build, dependency or shared
+  contract code lands only after the full test suite passes in qualified builds on Linux
+  (x86-64), macOS (Apple silicon) and Windows (x86-64, MSVC).
+- A change to UI code or documentation only lands after the full Linux suite and a complete
+  build with warnings as errors on macOS and Windows.
+- GPU correctness is validated on the project's own hardware. Hosted CI runners have no usable
+  GPU; their GPU tests report NotRun as skipped and never count as GPU validation.
+- Every platform branch (`#if` on `__linux__`, `__APPLE__`, `_WIN32`) must compile with warnings
+  as errors on its platform. A test registered on fewer than three platforms carries a written
+  reason beside its registration.
+- There is no per-platform tolerance, golden or GPU opt-out. A difference between platforms is a
+  finding fixed at its cause; the CPU reference gives the same result on every platform.
+- A report names each platform that was built and each suite that was run, with its result, and
+  never claims a platform or suite that was not run.
+
 ## Commit Messages
 
 - Every commit must use Conventional Commits: `type(scope): summary` (scope is optional).
