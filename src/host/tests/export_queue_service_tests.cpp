@@ -15,7 +15,6 @@
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
-#include <bloom/media/provider/media_workers.hpp>
 #include <bloom/output/dpx_export_write.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
@@ -1561,7 +1560,14 @@ class EndsPlatformEncoderBackend final : public host::ExportRunBackend {
 // output is rendered again by the bundled encoder and published, and the log and the output's
 // note say so. Linux has no system encoder, so there is nothing to replace there.
 void testPlatformEncoderFailsPartway() {
-    if (media::provider::nativeMediaProviderId().empty())
+    // The platforms that have a system encoder. (Named here: the host layer does not include
+    // the media layer to ask.)
+#if defined(__APPLE__) || defined(_WIN32)
+    constexpr bool hasSystemEncoder = true;
+#else
+    constexpr bool hasSystemEncoder = false;
+#endif
+    if (!hasSystemEncoder)
         return;
     const auto backend = std::make_shared<EndsPlatformEncoderBackend>();
     // An extent the hardware encoders take: on Windows the system's software H.264 encoder is
