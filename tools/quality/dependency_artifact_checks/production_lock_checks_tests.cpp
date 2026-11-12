@@ -445,9 +445,83 @@ void testMinorThreeBuildOnlyLinkage(const Path& repositoryRoot, Expectations& ex
                         "minor 3 rejects an unknown linkage kind");
 
     auto unknownMinor = minimalProductionLock();
-    replace(unknownMinor.at("schemaVersion"), "minor", number(4));
+    replace(unknownMinor.at("schemaVersion"), "minor", number(5));
     fixture.rejectsWith(unknownMinor, "version", expectations,
                         "an unknown schema minor is rejected rather than loosened");
+}
+
+// Minor 4: a profile build may name the official binary archives it takes instead of building the
+// component. Each is an HTTPS URL, a SHA-256 and a size; an earlier minor stays closed to the list.
+void testMinorFourPrebuiltArchives(const Path& repositoryRoot, Expectations& expectations) {
+    const ProductionFixture fixture(repositoryRoot);
+    const auto archive = [](const std::string_view url, const std::string_view digest,
+                            const std::uint64_t size) {
+        return object({{"url", text(url)},
+                       {"archiveSha256", text(digest)},
+                       {"archiveSizeBytes", number(size)}});
+    };
+    const auto digestA = "sha256:" + std::string(64, 'a');
+    const auto withPrebuilt = [](Value archives, const std::uint64_t minor = 4) {
+        auto lock = minimalProductionLock();
+        replace(lock.at("schemaVersion"), "minor", number(minor));
+        auto& build = lock.at("components").asArray().front().at("profileBuilds").asArray().front();
+        replace(build, "linkage", text("shared"));
+        build.asObject().emplace_back("prebuilt", std::move(archives));
+        return lock;
+    };
+
+    const auto accepted =
+        withPrebuilt(array({archive("https://example.invalid/a.7z", digestA, 10),
+                            archive("https://example.invalid/b.7z", digestA, 20)}));
+    fixture.temporary.write("dependencies/dependencies.lock.json",
+                            dependency::encodeCanonical(accepted));
+    expectations.expect(dependency::validateProductionLock(fixture.temporary.root()).present,
+                        "minor 4 accepts a shared build with ordered binary archives");
+
+    fixture.rejectsWith(
+        withPrebuilt(array({archive("https://example.invalid/a.7z", digestA, 10)}), 3), "prebuilt",
+        expectations, "minor 3 stays closed to the prebuilt list");
+    // A checksum that is not a whole SHA-256 is refused where it is recorded; a whole one that is
+    // not the archive's is refused where the archive is fetched (the
+    // bloom.quality.prebuilt_fetch test).
+    fixture.rejectsWith(withPrebuilt(array({archive("https://example.invalid/a.7z",
+                                                    "sha256:" + std::string(63, 'a'), 10)})),
+                        "lexical", expectations, "a prebuilt checksum is a whole SHA-256");
+    fixture.rejectsWith(
+        withPrebuilt(array({archive("https://example.invalid/a.7z", std::string(64, 'a'), 10)})),
+        "lexical", expectations, "a prebuilt checksum names its algorithm");
+    fixture.rejectsWith(withPrebuilt(array({archive("http://example.invalid/a.7z", digestA, 10)})),
+                        "prebuilt", expectations, "a binary archive is fetched over HTTPS only");
+    fixture.rejectsWith(withPrebuilt(array({archive("https://example.invalid/a.7z", digestA, 0)})),
+                        "prebuilt", expectations, "a binary archive has a size");
+    fixture.rejectsWith(withPrebuilt(array({})), "count", expectations,
+                        "a prebuilt list names at least one archive");
+    fixture.rejectsWith(withPrebuilt(array({archive("https://example.invalid/b.7z", digestA, 10),
+                                            archive("https://example.invalid/a.7z", digestA, 10)})),
+                        "order", expectations, "binary archives are ordered by URL");
+    fixture.rejectsWith(withPrebuilt(array({archive("https://example.invalid/a.7z", digestA, 10),
+                                            archive("https://example.invalid/a.7z", digestA, 10)})),
+                        "duplicate-identity", expectations, "a binary archive is named once");
+
+    auto relinked = withPrebuilt(array({archive("https://example.invalid/a.7z", digestA, 10)}));
+    replace(relinked.at("components").asArray().front().at("profileBuilds").asArray().front(),
+            "linkage", text("static"));
+    fixture.rejectsWith(relinked, "prebuilt", expectations,
+                        "official binaries are never recorded as statically linked");
+
+    auto extraMember = withPrebuilt(array({archive("https://example.invalid/a.7z", digestA, 10)}));
+    extraMember.at("components")
+        .asArray()
+        .front()
+        .at("profileBuilds")
+        .asArray()
+        .front()
+        .at("prebuilt")
+        .asArray()
+        .front()
+        .asObject()
+        .emplace_back("mirror", text("https://example.invalid/m.7z"));
+    fixture.rejectsWith(extraMember, "members", expectations, "a prebuilt entry is closed");
 }
 
 // A recipe argument file beside a component's recipe binds its locked configure vector line for
@@ -539,6 +613,7 @@ auto runProductionLockTests(const std::filesystem::path& repositoryRoot) -> int 
     testPatchRules(repositoryRoot, expectations);
     testCrossReferencesAndSets(repositoryRoot, expectations);
     testMinorThreeBuildOnlyLinkage(repositoryRoot, expectations);
+    testMinorFourPrebuiltArchives(repositoryRoot, expectations);
     testRecipeConfigureArguments(repositoryRoot, expectations);
     testSecurityReleaseTracking(repositoryRoot, expectations);
     return expectations.failures();

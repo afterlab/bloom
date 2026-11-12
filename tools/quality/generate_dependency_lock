@@ -56,7 +56,18 @@ def upgrade_schema(lock: OrderedDict[str, object]) -> None:
         for build in component.get("profileBuilds", [])
         if isinstance(build, dict)
     )
-    if current_minor == 3 or has_build_only_linkage:
+    # Minor 4 is required the moment a profile build records the official binary archives it
+    # takes (prebuilt), and is likewise never downgraded.
+    has_prebuilt = any(
+        isinstance(build, dict) and "prebuilt" in build
+        for component in components
+        if isinstance(component, dict)
+        for build in component.get("profileBuilds", [])
+        if isinstance(build, dict)
+    )
+    if current_minor == 4 or has_prebuilt:
+        version["minor"] = 4
+    elif current_minor == 3 or has_build_only_linkage:
         version["minor"] = 3
     elif has_runtime_fetch:
         version["minor"] = 2

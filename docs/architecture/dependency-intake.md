@@ -19,7 +19,7 @@ identity, resource, and qualification rules below are frozen; production compone
 Unicode digests remain pending verified intake and must not be fabricated to populate the shape.
 
 Implementation status: the two exact Draft 2020-12 lock/prefix schema families, including reviewed
-lock schemas 1.2 and 1.3, the offline checker for synthetic contract fixtures, and production lock
+lock schemas 1.2, 1.3 and 1.4, the offline checker for synthetic contract fixtures, and production lock
 validation are implemented — including the reviewed Unicode 15.1 bootstrap tables with two-source
 digest equality, repository-artifact digest binding, and an ASCII-strict v1 string tightening that
 defers NFC machinery. The reviewed production lock contains the static baseline and FFmpeg 8.1.2,
@@ -138,6 +138,22 @@ reviewed license texts and a generated digest inventory rather than claiming bui
 schema bytes are unchanged, and a 1.2 lock remains closed to the new enums. The generator selects
 1.3 the moment a reviewed record carries a header-only or executable linkage and never downgrades
 an existing 1.3.
+
+Lock schema 1.4 adds one optional member to the `profileBuild` contract and changes nothing else:
+`prebuilt`, for a component a profile takes as official upstream binaries instead of building it.
+It is a non-empty array of at most 64 archives, ordered by URL and free of duplicates; each entry
+is a closed object with the archive's HTTPS `url`, its `archiveSha256` and its `archiveSizeBytes`
+(greater than zero). A build that carries the list has `shared` or `executable` linkage: official
+binaries are used as published and never relinked. The component's `source` record stays the
+exact source archive the binaries were built from, so the license, provenance and
+corresponding-source rules apply to it unchanged. The frozen 1.0 to 1.3 schema bytes are
+unchanged and a 1.3 lock remains closed to the list. The generator selects 1.4 the moment a
+profile build carries `prebuilt` and never downgrades an existing 1.4.
+
+Whoever fetches a `prebuilt` archive compares its size and SHA-256 with the lock before
+unpacking it. `dependencies/superbuild/projects/prebuilt-fetch.cmake` does this for the
+superbuild; the `bloom.quality.prebuilt_fetch` test proves that an archive with a wrong checksum,
+a wrong size or missing from an offline cache is refused and nothing is unpacked.
 
 ### Runtime-fetched binary components
 
@@ -427,8 +443,8 @@ be empty only when the reviewed SPDX/license obligations permit it.
 
 `operatingSystem` is `linux`, `macos`, or `windows`; `architecture` is `x86_64` or `aarch64`;
 `buildConfiguration` is `debug` or `release`; `cxxRuntimeLinkage` is `dynamic` or `static`; component
-`linkage` is `static` or `shared` under lock schemas 1.0–1.2, and schema 1.3 additionally admits
-`header-only` and `executable`; `shippingRoles` is a set drawn from `library`, `executable`,
+`linkage` is `static` or `shared` under lock schemas 1.0–1.2, and schemas 1.3 and 1.4 additionally
+admit `header-only` and `executable`; `shippingRoles` is a set drawn from `library`, `executable`,
 `plugin`, `data`, `cmake-package`, `license`, `notice`, and `source`. It must contain at least one
 role for every linkage except `executable`, where the empty array is the honest record of a
 non-shipping build-only tool. `sourceObligation` is `none` or `corresponding-source`.

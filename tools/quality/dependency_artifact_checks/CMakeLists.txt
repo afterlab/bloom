@@ -51,6 +51,16 @@ if(BUILD_TESTING)
         LABELS quality schema dependencies unit
         TIMEOUT 30
     )
+    # The script that puts the lock's official binaries (schema 1.4 `prebuilt`) into the
+    # dependency prefix: it must refuse an archive whose checksum is not the lock's.
+    bloom_add_test(
+        NAME bloom.quality.prebuilt_fetch
+        COMMAND
+            "${CMAKE_COMMAND}" "-DBLOOM_WORK=${CMAKE_CURRENT_BINARY_DIR}/prebuilt-fetch-test" -P
+            "${PROJECT_SOURCE_DIR}/dependencies/superbuild/projects/prebuilt-fetch-test.cmake"
+        LABELS quality dependencies
+        TIMEOUT 60
+    )
 endif()
 
 add_custom_target(

@@ -291,8 +291,40 @@ void validateProductionRuntimeFetch(const Value& runtime, const std::string& loc
     verifyProductionArtifactReference(license.at("text"), location + ".license.text", root);
 }
 
+// The official upstream binaries a profile takes instead of building the component (lock schema
+// 1.4). Each entry is one archive: where it is published, its SHA-256 and its size. Whoever
+// fetches an archive compares both before unpacking it; the checker holds the record to a shape
+// that comparison can rely on.
+void validateProductionPrebuilt(const Value& prebuilt, const std::string& location,
+                                const std::string& linkage) {
+    if (linkage != "shared" && linkage != "executable") {
+        fail("prebuilt", location,
+             "official binaries are taken as shared libraries or programs, never relinked");
+    }
+    const auto& archives = array(prebuilt, location, 64, 1);
+    for (std::size_t index = 0; index < archives.size(); ++index) {
+        const auto itemLocation = location + '[' + std::to_string(index) + ']';
+        object(archives[index], {"url", "archiveSha256", "archiveSizeBytes"}, itemLocation);
+        const auto& url = stringValue(archives[index].at("url"), itemLocation + ".url");
+        constexpr std::string_view scheme = "https://";
+        const bool printable = std::ranges::all_of(
+            url, [](const unsigned char byte) { return byte > 0x20U && byte < 0x7fU; });
+        if (!url.starts_with(scheme) || url.size() == scheme.size() || !printable) {
+            fail("prebuilt", itemLocation + ".url",
+                 "a binary archive is fetched from an HTTPS URL without spaces");
+        }
+        digestValue(archives[index].at("archiveSha256"), itemLocation + ".archiveSha256");
+        if (uintValue(archives[index].at("archiveSizeBytes"), itemLocation + ".archiveSizeBytes",
+                      std::numeric_limits<std::uint64_t>::max()) == 0) {
+            fail("prebuilt", itemLocation + ".archiveSizeBytes", "an archive is never empty");
+        }
+    }
+    requireOrdered(
+        archives, [](const Value& child) { return child.at("url").asString(); }, location);
+}
+
 void validateComponentProduction(const Value& value, const std::string& location, const Path& root,
-                                 const bool buildOnlyLinkage) {
+                                 const bool buildOnlyLinkage, const bool prebuiltArchives) {
     objectWithOptionalMembers(value,
                               {{"name", false},
                                {"version", false},
@@ -422,10 +454,26 @@ void validateComponentProduction(const Value& value, const std::string& location
     for (std::size_t index = 0; index < builds.size(); ++index) {
         const auto buildLocation = location + ".profileBuilds[" + std::to_string(index) + ']';
         const auto& build = builds[index];
-        object(build,
-               {"profileId", "linkage", "cmakeOptions", "featureDecisions", "capabilities",
-                "shippingRoles", "conformanceFixtureSets"},
-               buildLocation);
+        // The prebuilt list exists from minor 4 on; an earlier lock stays closed to it.
+        objectWithOptionalMembers(build,
+                                  {{"profileId", false},
+                                   {"linkage", false},
+                                   {"cmakeOptions", false},
+                                   {"featureDecisions", false},
+                                   {"capabilities", false},
+                                   {"shippingRoles", false},
+                                   {"conformanceFixtureSets", false},
+                                   {"prebuilt", true}},
+                                  buildLocation);
+        if (const auto* prebuilt = build.find("prebuilt"); prebuilt != nullptr) {
+            if (!prebuiltArchives) {
+                fail("prebuilt", buildLocation + ".prebuilt",
+                     "binary archives are recorded from lock schema 1.4 on");
+            }
+            validateProductionPrebuilt(
+                *prebuilt, buildLocation + ".prebuilt",
+                build.at("linkage").isString() ? build.at("linkage").asString() : std::string{});
+        }
         identifier(build.at("profileId"), buildLocation + ".profileId");
         const auto& linkage =
             buildOnlyLinkage
@@ -659,13 +707,17 @@ void validateProductionLockDocument(const Value& value, const Path& root) {
     if (!version.at("major").isNumber() || version.at("major").asNumber().spelling != "1" ||
         !version.at("minor").isNumber() ||
         (version.at("minor").asNumber().spelling != "2" &&
-         version.at("minor").asNumber().spelling != "3")) {
-        fail("version", "$.schemaVersion", "expected exact version 1.2 or 1.3");
+         version.at("minor").asNumber().spelling != "3" &&
+         version.at("minor").asNumber().spelling != "4")) {
+        fail("version", "$.schemaVersion", "expected exact version 1.2, 1.3 or 1.4");
     }
     // Minor 3 admits the honest header-only and executable linkage vocabulary; minor 2 remains
     // frozen to static/shared. The version is read exactly, never inferred, and an unknown minor
     // is rejected above rather than falling back to a looser contract.
-    const bool buildOnlyLinkage = version.at("minor").asNumber().spelling == "3";
+    // Minor 4 keeps that vocabulary and adds the prebuilt list of a profile build.
+    const bool prebuiltArchives = version.at("minor").asNumber().spelling == "4";
+    const bool buildOnlyLinkage =
+        prebuiltArchives || version.at("minor").asNumber().spelling == "3";
 
     validateProductionUnicodeProfile(value.at("unicodeProfile"));
 
@@ -680,7 +732,7 @@ void validateProductionLockDocument(const Value& value, const Path& root) {
     for (std::size_t index = 0; index < components.size(); ++index) {
         validateComponentProduction(components[index],
                                     "$.components[" + std::to_string(index) + ']', root,
-                                    buildOnlyLinkage);
+                                    buildOnlyLinkage, prebuiltArchives);
     }
     requireOrdered(
         components, [](const Value& child) { return child.at("name").asString(); }, "$.components");
