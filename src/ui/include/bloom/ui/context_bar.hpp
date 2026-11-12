@@ -79,6 +79,7 @@ class ContextBar final : public QWidget {
     QWidget* row_ = nullptr;
     QWidget* tools_ = nullptr;
     std::map<ViewerTool, kit::KIconToggle*> toolButtons_;
+    QWidget* cryptomatteGap_ = nullptr;
     // The shared Rectangle/Ellipse/Polygon/Star slot and its flyout.
     kit::KIconToggle* shapeSlot_ = nullptr;
     QMenu* shapeFlyout_ = nullptr;

@@ -18,6 +18,7 @@
 #include <QContextMenuEvent>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
+#include <bloom/document/channel_nodes.hpp>
 #include <QKeyEvent>
 #include <QMenu>
 #include <QSignalBlocker>
@@ -179,6 +180,8 @@ ContextBar::ContextBar(CompositionSession& session, CompositionPreviewController
         refreshTools();
         refreshOptions();
     });
+    connect(&session_, &CompositionSession::selectionChanged, this, &ContextBar::refreshTools);
+    connect(&session_, &CompositionSession::compositionChanged, this, &ContextBar::refreshTools);
     connect(alignment_, &LayerAlignmentActions::notice, this, &ContextBar::notice);
     connect(alignment_, &LayerAlignmentActions::changed, this, &ContextBar::refreshAlignTarget);
     refreshTools();
@@ -252,7 +255,13 @@ void ContextBar::buildTools() {
     addTool(ViewerTool::Line);
     addTool(ViewerTool::Pen);
     addTool(ViewerTool::Text);
-    addGap();
+    // #686: the matte picker looks like a color picker, so it is in the strip only while there is a
+    // Cryptomatte to pick for. The gap before it is a widget so it leaves with the button.
+    cryptomatteGap_ = new QWidget(tools_);
+    cryptomatteGap_->setObjectName(QStringLiteral("contextBarToolCryptomatteGap"));
+    cryptomatteGap_->setFixedSize(
+        kit::px(kit::Spacing::ChromeGroupGap) - kit::px(kit::Spacing::ChromeGap), 1);
+    layout->addWidget(cryptomatteGap_);
     addTool(ViewerTool::Cryptomatte);
     tools_->setFixedWidth(tools_->sizeHint().width());
 }
@@ -443,6 +452,20 @@ void ContextBar::refreshTools() {
     shapeSlot_->setAccessibleName(viewerToolInfo(shape).name);
     for (auto* action : shapeFlyout_->actions())
         action->setChecked(action->objectName() == toolObjectName(tool));
+    // #686: shown for a selected Cryptomatte node, or while its picker is the active tool (so it
+    // can always be switched off again).
+    const auto* selected = session_.selectedNode();
+    const bool cryptomatte =
+        tool == ViewerTool::Cryptomatte ||
+        (selected != nullptr && selected->typeId == document::kCryptomatteNodeType);
+    if (const auto found = toolButtons_.find(ViewerTool::Cryptomatte);
+        found != toolButtons_.end() && cryptomatteGap_ != nullptr &&
+        found->second->isVisibleTo(tools_) != cryptomatte) {
+        found->second->setVisible(cryptomatte);
+        cryptomatteGap_->setVisible(cryptomatte);
+        tools_->layout()->activate();
+        tools_->setFixedWidth(tools_->sizeHint().width());
+    }
 }
 
 void ContextBar::refreshOptions() {
