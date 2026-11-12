@@ -101,7 +101,11 @@ ExternalProject_Add(bloom_dependency_python
         "BZIP2_CFLAGS=-I${BLOOM_PYTHON_SUPPORT_PREFIX}/include"
         "BZIP2_LIBS=${BLOOM_PYTHON_SUPPORT_PREFIX}/lib/libbz2.a"
         "LIBSQLITE3_CFLAGS=-I${BLOOM_PYTHON_SUPPORT_PREFIX}/include"
-        "LIBSQLITE3_LIBS=${BLOOM_PYTHON_SUPPORT_PREFIX}/lib/libsqlite3.a"
+        # By directory and name, not by file: configure also probes `-lsqlite3` on its own,
+        # and without the directory that probe only passes where the system has a SQLite.
+        # The directory holds static libraries only; SQLite's math functions need the C
+        # library's math part, which a static library cannot name itself.
+        "LIBSQLITE3_LIBS=-L${BLOOM_PYTHON_SUPPORT_PREFIX}/lib -lsqlite3 -lm"
         "LIBFFI_CFLAGS=-I${BLOOM_PYTHON_SUPPORT_PREFIX}/include"
         "LIBFFI_LIBS=${BLOOM_PYTHON_SUPPORT_PREFIX}/lib/libffi.a"
         "LIBEXPAT_CFLAGS=-I${BLOOM_CODEC_PREFIX}/include -DXML_STATIC"

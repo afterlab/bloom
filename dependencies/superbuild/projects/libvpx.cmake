@@ -47,6 +47,13 @@ if(APPLE)
         list(APPEND BLOOM_LIBVPX_ENV "PATH=${BLOOM_LIBVPX_XCRUN_DIR}:$ENV{PATH}")
     endif()
 endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # libvpx's configure asks a program called `gcc` which machine it builds for and links its
+    # probes with it, whatever the compiler is. A build machine with only the locked compiler
+    # has none, so the machine is named here and the probes link with the compiler.
+    list(APPEND BLOOM_LIBVPX_ENV
+        "CHOST=${CMAKE_SYSTEM_PROCESSOR}-linux-gnu" "LD=${CMAKE_C_COMPILER}")
+endif()
 set(BLOOM_LIBVPX_SHELL)
 set(BLOOM_LIBVPX_MAKE make)
 set(BLOOM_LIBVPX_PLATFORM_ARGUMENTS)

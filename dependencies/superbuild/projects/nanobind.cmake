@@ -3,22 +3,16 @@ set(BLOOM_NANOBIND_VERSION 3.0.1)
 set(BLOOM_NANOBIND_URL
     "https://files.pythonhosted.org/packages/07/11/69cf231c4f3ac4fa724a0b1933c3650fb65aff6b9d7a4c2573b9e4e40077/nanobind-3.0.1.tar.gz")
 set(BLOOM_NANOBIND_SHA256 f7f0a889c8fb80deaacb95e918d88e05148850a32d2b8eda28446291b2bf7c35)
-# nanobind's CMake build needs the interpreter Bloom embeds, for its headers and version. Linux
-# uses the system one. macOS uses the locked interpreter (python.cmake), so the binding library is
-# compiled against the same Python the application carries.
-if(APPLE)
-    set(BLOOM_NANOBIND_PYTHON "${BLOOM_DEPENDENCY_PREFIX}/python/bin/python3.14")
-    set(BLOOM_NANOBIND_DEPENDS DEPENDS bloom_dependency_python)
-elseif(WIN32)
-    # Windows has no interpreter at a fixed location: the superbuild's own environment resolves
-    # one, the active virtual environment first.
-    find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
-    set(BLOOM_NANOBIND_PYTHON "${Python3_EXECUTABLE}")
-    set(BLOOM_NANOBIND_DEPENDS)
+# nanobind's CMake build needs the interpreter Bloom embeds, for its headers and version: the
+# locked interpreter of the dependency prefix (python.cmake) on every platform, so the binding
+# library is compiled against the same Python the application carries and never against
+# whichever one the build machine has.
+if(WIN32)
+    set(BLOOM_NANOBIND_PYTHON "${BLOOM_DEPENDENCY_PREFIX}/python/python.exe")
 else()
-    set(BLOOM_NANOBIND_PYTHON /usr/bin/python3)
-    set(BLOOM_NANOBIND_DEPENDS)
+    set(BLOOM_NANOBIND_PYTHON "${BLOOM_DEPENDENCY_PREFIX}/python/bin/python3.14")
 endif()
+set(BLOOM_NANOBIND_DEPENDS DEPENDS bloom_dependency_python)
 ExternalProject_Add(bloom_dependency_nanobind
     ${BLOOM_NANOBIND_DEPENDS}
     URL "${BLOOM_NANOBIND_URL}"
