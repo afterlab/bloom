@@ -6,11 +6,14 @@
 #include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
+#include <bloom/commands/node_layout_arrange.hpp>
+#include <bloom/commands/node_layout_placement.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/node_group_nodes.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <set>
 #include <string>
@@ -59,6 +62,49 @@ void testAddCompositionBuildsTopologyAndUndoRedo(TestContext& test) {
     test.expect(stack.redo().changed() &&
                     document.snapshot().project().findComposition(compositionId) != nullptr,
                 "AddComposition redo restores the pinned composition");
+}
+
+// #694: a new composition's starting Merge and Output are laid out by Arrange's own rule (the
+// command-side card estimate), never the compact legacy columns: Arrange leaves them where they
+// are, the cards keep at least the Arrange gap and they share a row.
+void testNewCompositionStartsArranged(TestContext& test) {
+    Document document(document::makeNewProject("Project").project);
+    CommandStack stack(document);
+    Transaction transaction("Add Composition", document.snapshot().revision());
+    transaction.emplace<AddComposition>("Main", CompositionFormat{},
+                                        core::RationalTime::fromInteger(10));
+    const auto result = stack.execute(std::move(transaction));
+    const auto id = result.outputId<document::CompositionId>(kAddCompositionOutput)
+                        .value_or(document::CompositionId{});
+    const auto snapshot = document.snapshot();
+    const auto* composition = snapshot.project().findComposition(id);
+    test.expect(composition != nullptr, "the composition is created");
+    if (composition == nullptr)
+        return;
+    const auto merge = composition->graph().outputMergeId();
+    const auto output = composition->graph().compositionOutput();
+    test.expect(merge.has_value() && output.has_value(), "the composition has its Merge and Output");
+    if (!merge || !output)
+        return;
+    const auto arranged = arrangeNodes(*composition, {});
+    for (const auto& [node, position] : arranged)
+        test.expect(effectiveNodePosition(*composition, node) == position,
+                    "a starting node sits exactly where Arrange All puts it");
+    const auto sizes = nodeCardSizes(*composition, {});
+    const auto mergeAt = effectiveNodePosition(*composition, *merge);
+    const auto outputAt = effectiveNodePosition(*composition, output->nodeId);
+    test.expect(outputAt.x - (mergeAt.x + sizes.at(*merge).width) >= document::kNodeLayoutSpacing,
+                "the Output keeps the Arrange gap right of the Merge");
+    test.expect(outputAt.x - (mergeAt.x + sizes.at(*merge).width) <
+                    document::kNodeLayoutSpacing + document::kNodeLayoutGrid,
+                "the gap is Arrange's gap on the grid, not the legacy column pitch");
+    const auto mergeCenter = mergeAt.y + sizes.at(*merge).height / 2.0;
+    const auto outputCenter = outputAt.y + sizes.at(output->nodeId).height / 2.0;
+    test.expect(std::abs(mergeCenter - outputCenter) <= document::kNodeLayoutGrid,
+                "the Output is centered on the Merge's row, as Arrange centers a node on its band");
+    test.expect(std::fmod(mergeAt.x, document::kNodeLayoutGrid) == 0.0 &&
+                    std::fmod(outputAt.y, document::kNodeLayoutGrid) == 0.0,
+                "starting positions are on the layout grid");
 }
 
 void testDeleteCompositionAllowsLastAndUndoRedo(TestContext& test) {
@@ -790,6 +836,7 @@ int main() {
     bloom::commands::test::TestContext test;
     try {
         bloom::commands::test::testAddCompositionBuildsTopologyAndUndoRedo(test);
+        bloom::commands::test::testNewCompositionStartsArranged(test);
         bloom::commands::test::testDeleteCompositionAllowsLastAndUndoRedo(test);
         bloom::commands::test::testDuplicateCompositionRemapsDeepDocumentState(test);
         bloom::commands::test::testDuplicateCompositionWithManyAnimatedProperties(test);

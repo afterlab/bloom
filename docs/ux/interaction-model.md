@@ -461,6 +461,13 @@ as the Viewer's Custom Safe Areas dialog (0.1–100 %, one decimal).
 | `Alt` + wheel | Zoom the Image Preview background about the pointer (#490) |
 | `Alt` + middle drag | Pan the Image Preview background (#490) |
 
+The canvas frames the graph by itself when a panel first shows it, when it shows another
+composition or project, and on a rebuild or resize while the artist has not moved the view (#694):
+at 100%, centered on the graph, and zoomed out only as far as the whole graph needs to fit. It
+never zooms in past 100% by itself, so a new composition's starting Merge and Output open at actual
+size. After `Ctrl+0` the canvas keeps fitting the graph instead, until the artist zooms or pans. A
+new composition's starting nodes are laid out by Arrange All's rule.
+
 An Image Preview card's context menu toggles **Show as Node Editor Background** (#490): one Image
 Preview at a time is drawn behind the graph, in viewport space, with its own Fit / 100% / zoom /
 pan (the Viewer's `ViewTransform`) and View ▸ Background for Fit, Actual Size, Zoom In/Out, Show and

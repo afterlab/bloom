@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -238,6 +239,93 @@ void testComponentsAndGroups() {
            "the output sits right of its inputs");
 }
 
+// #694: Arrange's spacing. Columns step by the widest card plus the Arrange gap, sibling bands
+// sit the gap apart, and where a run of groupmates meets another band the gap is kept OUTSIDE the
+// frames: no frame covers a card it does not hold or another frame.
+void testEvenSpacingAndFrames() {
+    // A chain of four equal cards: every column steps by the same width plus the gap.
+    Fixture chain;
+    for (std::uint64_t id = 1; id <= 4; ++id)
+        chain.addNode(id, 240.0, 120.0);
+    chain.connect(1, 1, 2);
+    chain.connect(2, 2, 3);
+    chain.connect(3, 3, 4);
+    const auto line = ui::arrangeNodes(chain.graph, chain.layout, chain.sizes);
+    for (std::uint64_t id = 1; id < 4; ++id)
+        expect(line.at(NodeId::fromRaw(id + 1)).x - line.at(NodeId::fromRaw(id)).x ==
+                   240.0 + document::kNodeLayoutSpacing,
+               "chain columns step evenly by the card width plus the Arrange gap");
+
+    // Five sources into one node: two groups of two and one source of its own, in input order
+    // A1 A2 B1 B2 C. Heights differ so the bands are uneven.
+    CanonicalGraph graph{NodeId::fromRaw(99)};
+    const std::vector<std::uint64_t> sources{1, 2, 3, 4, 5};
+    const auto sink = NodeId::fromRaw(10);
+    for (const auto raw : sources)
+        expect(graph.addNode(NodeRecord{NodeId::fromRaw(raw), "test.node", {}, 1}),
+               "spacing source is accepted");
+    expect(graph.addNode(NodeRecord{sink, "test.node", {}, 1}), "spacing sink is accepted");
+    for (const auto raw : sources)
+        expect(graph.addEdge({EdgeId::fromRaw(raw),
+                              {NodeId::fromRaw(raw), "out"},
+                              NodeInputRef{sink, "in" + std::to_string(raw)}}),
+               "spacing edge is accepted");
+    graph.setCompositionOutput({sink, "out"});
+    document::Composition composition{document::CompositionId::fromRaw(1), "Spacing",
+                                      core::RationalTime::fromInteger(10), std::move(graph)};
+    const auto groupA = document::NodeGroupId::fromRaw(1);
+    const auto groupB = document::NodeGroupId::fromRaw(2);
+    composition.nodeGroups()[groupA] = {groupA, "A", {NodeId::fromRaw(1), NodeId::fromRaw(2)}, {}};
+    composition.nodeGroups()[groupB] = {groupB, "B", {NodeId::fromRaw(3), NodeId::fromRaw(4)}, {}};
+    NodeCardSizes sizes{{sink, {240.0, 200.0}}};
+    for (const auto raw : sources)
+        sizes.emplace(NodeId::fromRaw(raw), NodeCardSize{240.0, 80.0 + 20.0 * static_cast<double>(raw)});
+    const auto arranged = ui::arrangeNodes(composition, sizes);
+    struct Rect final {
+        double left;
+        double top;
+        double right;
+        double bottom;
+    };
+    const auto card = [&](const std::uint64_t raw) {
+        const auto id = NodeId::fromRaw(raw);
+        const auto at = arranged.at(id);
+        return Rect{at.x, at.y, at.x + sizes.at(id).width, at.y + sizes.at(id).height};
+    };
+    const auto frame = [&](const document::NodeGroupId group) {
+        std::optional<Rect> box;
+        for (const auto id : composition.nodeGroups().at(group).members) {
+            const auto rect = card(id.value());
+            box = box ? Rect{std::min(box->left, rect.left), std::min(box->top, rect.top),
+                             std::max(box->right, rect.right), std::max(box->bottom, rect.bottom)}
+                      : rect;
+        }
+        const auto padding = composition.nodeGroups().at(group).padding;
+        return Rect{box->left - padding.x, box->top - padding.y - document::kNodeGroupTitleBand,
+                    box->right + padding.x, box->bottom + padding.y};
+    };
+    // The vertical gap between two stacked rectangles.
+    const auto gap = [](const Rect& above, const Rect& below) { return below.top - above.bottom; };
+    const auto even = [](const double value) {
+        return value >= document::kNodeLayoutSpacing &&
+               value < document::kNodeLayoutSpacing + document::kNodeLayoutGrid;
+    };
+    expect(even(gap(card(1), card(2))) && even(gap(card(3), card(4))),
+           "two cards of one frame keep the plain Arrange gap");
+    expect(even(gap(frame(groupA), frame(groupB))),
+           "two neighbouring frames keep the Arrange gap between their borders");
+    expect(even(gap(frame(groupB), card(5))),
+           "a card under a frame keeps the Arrange gap below the frame's border");
+    for (const auto group : {groupA, groupB})
+        for (const auto raw : {5ULL, 10ULL}) {
+            const auto other = card(raw);
+            const auto box = frame(group);
+            expect(other.left >= box.right || other.right <= box.left ||
+                       other.top >= box.bottom || other.bottom <= box.top,
+                   "no frame covers a card it does not hold");
+        }
+}
+
 void testValueDriverChain() {
     CanonicalGraph graph{NodeId::fromRaw(9)};
     const auto source = NodeId::fromRaw(1);
@@ -263,5 +351,6 @@ int main() {
     testSixLayerFanInReducesCrossings();
     testComponentsAndGroups();
     testValueDriverChain();
+    testEvenSpacingAndFrames();
     return failures == 0 ? 0 : 1;
 }

@@ -121,6 +121,35 @@ void NodeGraphicsView::frameGraph() {
     // moves the view themselves.
     viewAdjusted_ = false;
     framedOnce_ = true;
+    followFit_ = true;
+}
+
+void NodeGraphicsView::frameOpening() {
+    const QRectF bounds = graphBounds();
+    const QRectF view = QRectF(viewport()->rect());
+    if (bounds.isEmpty() || view.isEmpty()) {
+        return;
+    }
+    const double fit = std::min(view.width() / bounds.width(), view.height() / bounds.height());
+    if (!applyCenteredScale(bounds, std::min(1.0, fit))) {
+        return;
+    }
+    viewAdjusted_ = false;
+    framedOnce_ = true;
+    followFit_ = false;
+}
+
+void NodeGraphicsView::resetFraming() {
+    viewAdjusted_ = false;
+    framedOnce_ = false;
+    followFit_ = false;
+}
+
+void NodeGraphicsView::reframe() {
+    if (followFit_)
+        frameGraph();
+    else
+        frameOpening();
 }
 
 void NodeGraphicsView::zoomToActualSize() {
@@ -161,7 +190,7 @@ void NodeGraphicsView::frameRect(const QRectF bounds) {
 void NodeGraphicsView::showEvent(QShowEvent* event) {
     QGraphicsView::showEvent(event);
     if (!framedOnce_ && !viewAdjusted_) {
-        frameGraph();
+        reframe();
     }
 }
 
@@ -173,7 +202,7 @@ void NodeGraphicsView::resizeEvent(QResizeEvent* event) {
     // artist has not moved the view, a resize re-frames the graph. Once they have, the view is
     // theirs and a resize leaves it exactly where they put it.
     if (!viewAdjusted_) {
-        frameGraph();
+        reframe();
     }
 }
 

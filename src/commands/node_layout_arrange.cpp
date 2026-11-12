@@ -270,6 +270,27 @@ arrangeSelected(const document::CanonicalGraph& graph, const document::NodeLayou
             grow(id);
         }
 
+    // #694: the clear gap between two neighbouring bands is kept OUTSIDE the group frames around
+    // them. A frame reaches its padding below its last member and its padding plus title band
+    // above its first, so where one run of groupmates ends and another band begins, the gap grows
+    // by what the frames on either side take of it; two cards of one frame keep the plain gap.
+    const auto groupOf = [&](const NodeId id) -> std::optional<document::NodeGroupId> {
+        const auto found = owner.find(id);
+        return found == owner.end() ? std::nullopt : std::optional(found->second);
+    };
+    const auto gapBetween = [&](const NodeId above, const NodeId below) {
+        const auto upper = groupOf(above);
+        const auto lower = groupOf(below);
+        if (upper == lower)
+            return kNodeLayoutGap;
+        double extra = 0.0;
+        if (upper)
+            extra += groups.at(*upper).padding.y;
+        if (lower)
+            extra += groups.at(*lower).padding.y + document::kNodeGroupTitleBand;
+        return kNodeLayoutGap + extra;
+    };
+
     // Bands, bottom-up: each node's band holds its own card and its children's bands one gap
     // apart, the smaller of the two centred on the larger (on the grid).
     std::map<NodeId, double> band;
@@ -279,13 +300,13 @@ arrangeSelected(const document::CanonicalGraph& graph, const document::NodeLayou
         const auto id = *at;
         const auto height = sizeFor(layout, sizes, id).height;
         double extent = 0.0;
-        bool first = true;
+        std::optional<NodeId> previous;
         for (const auto child : children[id]) {
-            if (!first)
-                extent = snapUp(extent + kNodeLayoutGap);
+            if (previous)
+                extent = snapUp(extent + gapBetween(*previous, child));
             childOffset[child] = extent;
             extent += band.at(child);
-            first = false;
+            previous = child;
         }
         double shift = 0.0;
         if (height >= extent) {
@@ -319,9 +340,13 @@ arrangeSelected(const document::CanonicalGraph& graph, const document::NodeLayou
     NodePositions result;
     std::map<NodeId, double> bandTop;
     double nextRoot = 0.0;
+    std::optional<NodeId> previousRoot;
     for (const auto root : roots) {
+        if (previousRoot)
+            nextRoot = snapUp(nextRoot + gapBetween(*previousRoot, root));
         bandTop[root] = nextRoot;
-        nextRoot = snapUp(nextRoot + band.at(root) + kNodeLayoutGap);
+        nextRoot += band.at(root);
+        previousRoot = root;
     }
     for (const auto id : preorder) {
         const auto top = bandTop.at(id);
@@ -358,6 +383,13 @@ NodePositions arrangeNodes(const document::Composition& composition, const NodeC
     return arrangeSelected(composition.graph(), composition.nodeLayout(),
                            nodeCardSizes(composition, sizes), selection, composition.nodeGroups(),
                            &composition.parameters());
+}
+
+void arrangeStartingNodes(document::Composition& composition) {
+    for (const auto& [id, position] : arrangeNodes(composition, {})) {
+        auto& record = composition.nodeLayout()[id];
+        record.position = position;
+    }
 }
 
 OperationResult ArrangeNodes::apply(document::Draft& draft) const {

@@ -1,6 +1,7 @@
 #pragma once
 #include "node_editor_interactions.hpp"
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QLineEdit>
 #include <QListView>
 #include <QMenu>
@@ -34,16 +35,9 @@ struct Fixture final {
         // exposing its private submission path. It uses real commands and public rebind; production
         // integration remains explicitly blocked pending that single ownership exception.
         editor.graphScene()->setSubmit([this](commands::Transaction&& transaction) {
-            const auto selection = session.selectedNodes();
-            const auto primary =
-                session.selectedNode() ? session.selectedNode()->id : document::NodeId{};
-            const auto composition = session.compositionId();
+            // The session follows the stack through its command observer, as it does in the
+            // product; rebind() is a project replacement (#694 resets the canvas framing on it).
             last = stack.execute(std::move(transaction));
-            if (last.changed()) {
-                session.rebind(document, stack, composition);
-                if (!selection.empty())
-                    session.selectNodes(selection, primary);
-            }
             if (!last.succeeded()) {
                 const auto message =
                     last.operationFailures.empty()
@@ -56,6 +50,15 @@ struct Fixture final {
         editor.resize(1200, 800);
         editor.show();
         QCoreApplication::processEvents();
+        // The display color converter is prepared off the UI thread and lands as a
+        // snapshotChanged() with no document change, which re-projects the canvas and so ends a
+        // gesture in flight. Let it land here, before any test gestures; under load it could
+        // otherwise arrive in the middle of one.
+        (void)session.colorConverter();
+        QElapsedTimer converter;
+        converter.start();
+        while (!session.colorConverterReady() && converter.elapsed() < 5'000)
+            QTest::qWait(5);
         editor.graphView()->zoomToActualSize();
         editor.graphView()->setTransform(QTransform::fromTranslate(40, 40));
         editor.graphView()->setFocus();

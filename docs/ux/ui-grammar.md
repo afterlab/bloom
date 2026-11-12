@@ -730,7 +730,11 @@ widest measured card plus `NodeArrangeGap`, bands are `NodeArrangeGap` apart, an
 lands on the `NodeGrid` lattice. Disconnected graphs stack below the output's. Nodes in a group
 stay adjacent among their siblings, and the frame is recomputed from its members after the
 transaction. `Arrange Selection` applies the same rule to the induced selection and preserves its
-grid-aligned bounding-box top-left. Both commands are one undoable `MoveNodes` transaction from the
+grid-aligned bounding-box top-left. The Arrange gap is kept outside group frames: where a run of
+groupmates meets another band, the gap grows by the frame padding (and the frame's
+`NodeGroupTitle` band above its first member), so no frame covers a card it does not hold or
+another frame (#694). A new composition's starting Merge and Output are placed by the same rule
+with the command-side card estimate. Both commands are one undoable `MoveNodes` transaction from the
 View menu, the keys or the footer's Arrange button; Arrange All fits the canvas after publication.
 Scripts and agents run the same command (`bloom.node.arrange`) with the command-side card estimate
 in place of measured sizes.

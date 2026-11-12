@@ -54,6 +54,10 @@ inline constexpr NodeCardSize kConservativeNodeCardSize{240.0, 540.0};
 // in document units exactly as the default card width is: the editor reads it rather than spelling
 // a padding of its own, so a file authored on one build frames its members identically on another.
 inline constexpr double kDefaultNodeGroupPadding = 24.0;
+// The title band a group frame draws above its top padding (Size::NodeGroupTitle), frozen in
+// document units for the same reason: Arrange keeps the clear gap between two cards OUTSIDE the
+// frames around them, so it has to know how far a frame reaches above its first member (#694).
+inline constexpr double kNodeGroupTitleBand = 30.0;
 
 // One node group: a named frame drawn behind a set of member cards. This is LAYOUT, not graph
 // semantics -- a group carries no ports, no encapsulation and no evaluation meaning, and the

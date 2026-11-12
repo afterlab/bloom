@@ -1,6 +1,8 @@
 #include <bloom/host/project_session.hpp>
 
+#include <bloom/commands/node_layout_arrange.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/document/project.hpp>
 #include <bloom/host/bloom_neutral_profile.hpp>
 
 #include <exception>
@@ -46,6 +48,9 @@ ProjectSessionCreateResult ProjectSession::createNew(ProjectSessionIdentitySourc
         auto created = document::makeNewProject(std::move(request.projectName),
                                                 std::move(request.compositionName),
                                                 request.duration, request.format);
+        // #694: the starting nodes use Arrange's spacing, as a composition added later does.
+        if (auto* composition = created.project.findComposition(created.initialCompositionId))
+            commands::arrangeStartingNodes(*composition);
         return installNewProject(identitySource, std::move(created.project));
     } catch (const std::bad_alloc&) {
         return ProjectSessionCreateResult(ProjectSessionCreateStatus::ResourceUnavailable);

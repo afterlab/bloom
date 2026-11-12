@@ -1,4 +1,5 @@
 #include <bloom/commands/operations.hpp>
+#include <bloom/commands/node_layout_arrange.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
 
 #include "node_operation_support.hpp"
@@ -1059,7 +1060,9 @@ OperationResult AddComposition::apply(document::Draft& draft) const {
         return OperationResult::rejected(OperationIssueCode::DuplicateId,
                                          "Composition could not be added");
     }
-    draft.project().findComposition(*compositionId)->setBackgroundColor(background_);
+    auto* created = draft.project().findComposition(*compositionId);
+    created->setBackgroundColor(background_);
+    arrangeStartingNodes(*created);
     return OperationResult::applied({{std::string(kAddCompositionOutput), *compositionId}});
 }
 

@@ -229,9 +229,10 @@ class NodeGraphicsView final : public QGraphicsView {
     [[nodiscard]] double zoomFactor() const noexcept;
 
     // False until the artist zooms or pans; the editor re-frames the graph on a projection rebuild
-    // only while it is false, so a freshly opened panel frames its content and a deliberately
-    // positioned view is never yanked out from under the artist. Fit (Ctrl+0) puts it back to false
-    // -- "keep framing everything" -- while 100% (Ctrl+1), a wheel step, and a pan set it.
+    // only while it is false, so a freshly opened panel frames its content (frameOpening()) and a
+    // deliberately positioned view is never yanked out from under the artist. Fit (Ctrl+0) puts it
+    // back to false -- "keep framing everything" -- while 100% (Ctrl+1), a wheel step, and a pan
+    // set it.
     [[nodiscard]] bool viewAdjusted() const noexcept;
 
     // The scene point under a viewport point, exactly (no integer rounding): the mapping the
@@ -246,6 +247,18 @@ class NodeGraphicsView final : public QGraphicsView {
     void zoomStep(int notches);
     // Ctrl+0: scales and centers so every item fits, clamped into the shared zoom bounds.
     void frameGraph();
+    // #694: how the canvas frames the graph by itself -- on first show, and on a projection
+    // rebuild or a resize while the artist has not moved the view: 100%, centered on the graph,
+    // zoomed out only as far as the whole graph needs to fit. It never zooms in past 100% by
+    // itself, so a new composition's two starting cards open at actual size. An explicit Fit
+    // (frameGraph()) is followed instead until the artist moves the view.
+    void frameOpening();
+    // #694: a different composition (or project) is now shown: the view goes back to the opening
+    // frame, exactly as when the panel first showed a graph. Session state; nothing is saved.
+    void resetFraming();
+    // Re-frames the graph by whichever automatic rule is in force: frameOpening() until an
+    // explicit Fit, frameGraph() after one. The editor calls it while viewAdjusted() is false.
+    void reframe();
     // Ctrl+1: exactly 100%, with the graph's bounding rectangle centered -- the same "actual size,
     // centered" the Viewer's 100% means.
     void zoomToActualSize();
@@ -316,6 +329,7 @@ class NodeGraphicsView final : public QGraphicsView {
     QTransform panBaseTransform_;
     bool viewAdjusted_ = false;
     bool framedOnce_ = false;
+    bool followFit_ = false;
     ImagePreviewController* previews_ = nullptr;
     ViewTransform backgroundTransform_{};
     bool backgroundPanActive_ = false;

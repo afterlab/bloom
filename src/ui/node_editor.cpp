@@ -198,7 +198,11 @@ NodeGraphEditor::NodeGraphEditor(CompositionSession& session, QWidget* parent)
     layout->addWidget(view_);
 
     connect(&session_, &CompositionSession::snapshotChanged, this, &NodeGraphEditor::rebuild);
-    connect(&session_, &CompositionSession::compositionChanged, this, &NodeGraphEditor::rebuild);
+    // #694: another composition (or project) opens at the opening frame, as a fresh panel does.
+    connect(&session_, &CompositionSession::compositionChanged, this, [this] {
+        view_->resetFraming();
+        rebuild();
+    });
     connect(&session_, &CompositionSession::selectionChanged, this,
             &NodeGraphEditor::updateSelection);
     // The playhead is not a document change, so it is deliberately NOT a projection rebuild -- but
@@ -284,7 +288,7 @@ void NodeGraphEditor::rebuild() {
     updateSelection();
     rebuilding_ = false;
     if (!view_->viewAdjusted()) {
-        view_->frameGraph();
+        view_->reframe();
     }
 }
 

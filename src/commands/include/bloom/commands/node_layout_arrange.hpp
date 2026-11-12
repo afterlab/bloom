@@ -44,6 +44,12 @@ using NodePositions = std::map<document::NodeId, document::Vec2d>;
                                          const NodeCardSizes& sizes,
                                          const std::set<document::NodeId>& selection);
 
+// #694: lays a newly created composition's starting nodes (its Merge and its Output) out by the
+// same rule as Arrange All, with the command-side card estimate, so a new composition opens with
+// Arrange's spacing instead of the compact legacy default columns. Writes the layout records in
+// place; it is part of creating the composition, not an undo step of its own.
+void arrangeStartingNodes(document::Composition& composition);
+
 // Arrange All Nodes (no selection) or Arrange Selection in the Node editor, as one MoveNodes step.
 // The editor passes the card sizes its scene measured; a script or an agent has no scene, so
 // absent sizes use the conservative document card size. A selection keeps its bounding box's
