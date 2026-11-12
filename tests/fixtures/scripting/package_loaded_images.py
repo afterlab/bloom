@@ -88,6 +88,10 @@ def linux_images(process):
             # Executable mappings of files: programs and libraries, not data files or fonts.
             if len(fields) == 6 and "x" in fields[1] and fields[5].startswith("/"):
                 path = fields[5].rstrip("\n")
+                # Memory with a name is not a file. The carried libffi maps such a block
+                # ("/memfd:libffi") for its call stubs when the package's path has a space.
+                if path.startswith("/memfd:"):
+                    continue
                 if path.endswith(" (deleted)"):
                     path = path[: -len(" (deleted)")]
                 images.add(path)
