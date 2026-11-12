@@ -8,12 +8,12 @@
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/dialog_prompts.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/file_chooser.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/text_field.hpp>
 #include <bloom/ui/project_host.hpp>
 
 #include <QCoreApplication>
-#include <QFileDialog>
 #include <QHBoxLayout>
 #include <QMetaObject>
 #include <QPointer>
@@ -288,12 +288,18 @@ void showProjectColorSettingsDialog(ProjectHost& host, QWidget& owner) {
         const auto start = projectDirectory.empty()
                                ? QString{}
                                : QString::fromStdString(projectDirectory.generic_string());
-        const auto chosen = QFileDialog::getOpenFileName(
-            alive.data(), QObject::tr("Choose an OCIO configuration"), start,
-            QObject::tr("OCIO configuration (config.ocio *.ocioz)"));
-        if (chosen.isEmpty())
+        if (alive.isNull())
             return;
-        filePath->setText(chosen);
+        const auto chosen = kit::chooseFile(
+            *alive.data(), {.mode = kit::KFileRequest::Mode::Open,
+                            .title = QObject::tr("Choose an OCIO configuration"),
+                            .kind = QStringLiteral("ocio-config"),
+                            .nameFilters = QObject::tr("OCIO configuration (config.ocio *.ocioz)"),
+                            .defaultSuffix = {},
+                            .startPath = start});
+        if (!chosen || chosen->isEmpty())
+            return;
+        filePath->setText(*chosen);
         startRead();
     });
     // Any change to the choice makes the last reading stale.

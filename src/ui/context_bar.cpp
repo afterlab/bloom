@@ -260,7 +260,7 @@ void ContextBar::buildTools() {
     cryptomatteGap_ = new QWidget(tools_);
     cryptomatteGap_->setObjectName(QStringLiteral("contextBarToolCryptomatteGap"));
     cryptomatteGap_->setFixedSize(
-        kit::px(kit::Spacing::ChromeGroupGap) - kit::px(kit::Spacing::ChromeGap), 1);
+        kit::px(kit::Spacing::ChromeGroupGap) - kit::px(kit::Spacing::ChromeGap), 0);
     layout->addWidget(cryptomatteGap_);
     addTool(ViewerTool::Cryptomatte);
     tools_->setFixedWidth(tools_->sizeHint().width());
