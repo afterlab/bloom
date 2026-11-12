@@ -14,6 +14,7 @@
 #include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -580,6 +581,73 @@ auto sha256DigestText(const std::string_view bytes) -> std::string {
 
 void verifyUnicodeBootstrap(const std::filesystem::path& root) { verifyBootstrapTables(root); }
 
+// Security release tracking (docs/architecture/dependency-intake.md, issue #677). The interpreter
+// Bloom carries runs users' scripts against the network and their files, so every component
+// that reaches a package through it must say where its upstream publishes security releases:
+// the component named "python", every component linked against it (the bundled packages), and
+// everything those link or carry. A build edge names a tool that is not shipped and is not
+// followed. The security record states the source on a line of its own:
+//
+//     Advisory source: <https://...>
+void requireAdvisorySources(const Value::Array& components, const Path& root) {
+    constexpr std::string_view kInterpreter = "python";
+    constexpr std::string_view kMarker = "Advisory source: <https://";
+    std::map<std::string, const Value*> byName;
+    for (const auto& component : components) {
+        byName.emplace(component.at("name").asString(), &component);
+    }
+    if (!byName.contains(std::string(kInterpreter))) {
+        return;
+    }
+    const auto shipped = [](const Value& edge) {
+        return edge.at("relationship").asString() != "build";
+    };
+    std::vector<std::string> pending{std::string(kInterpreter)};
+    for (const auto& [name, component] : byName) {
+        const auto& edges = component->at("dependencies").asArray();
+        if (std::ranges::any_of(edges, [&](const Value& edge) {
+                return shipped(edge) && edge.at("name").asString() == kInterpreter;
+            })) {
+            pending.push_back(name);
+        }
+    }
+    std::set<std::string> tracked;
+    while (!pending.empty()) {
+        const auto name = std::move(pending.back());
+        pending.pop_back();
+        if (!tracked.insert(name).second) {
+            continue;
+        }
+        for (const auto& edge : byName.at(name)->at("dependencies").asArray()) {
+            if (shipped(edge)) {
+                pending.push_back(edge.at("name").asString());
+            }
+        }
+    }
+    for (const auto& name : tracked) {
+        const auto& record = byName.at(name)->at("securityReview").at("record");
+        const auto bytes = readBounded(root / Path(record.at("path").asString()),
+                                       limitsFor(ArtifactKind::Lock).maximumBytes);
+        bool named = false;
+        for (std::size_t line = 0; line < bytes.size() && !named;) {
+            const auto end = std::min(bytes.find('\n', line), bytes.size());
+            const auto text = std::string_view(bytes).substr(line, end - line);
+            // The address is closed on the same line and is more than the scheme.
+            if (const auto start = text.find(kMarker); start != std::string_view::npos) {
+                const auto address = start + kMarker.size();
+                const auto close = text.find('>', address);
+                named = close != std::string_view::npos && close > address;
+            }
+            line = end + 1;
+        }
+        if (!named) {
+            fail("security-tracking", "component " + name,
+                 "the security record of a component the carried interpreter ships must name "
+                 "its upstream advisory source (\"Advisory source: <https://...>\")");
+        }
+    }
+}
+
 void validateProductionLockDocument(const Value& value, const Path& root) {
     object(value, {"format", "schemaVersion", "unicodeProfile", "profiles", "components"}, "$");
     if (!value.at("format").isString() ||
@@ -640,6 +708,8 @@ void validateProductionLockDocument(const Value& value, const Path& root) {
             }
         }
     }
+
+    requireAdvisorySources(components, root);
 
     for (const auto& profile : profiles) {
         const auto& profileId = profile.at("id").asString();

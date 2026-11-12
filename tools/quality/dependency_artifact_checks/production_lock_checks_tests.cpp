@@ -481,6 +481,49 @@ void testRecipeConfigureArguments(const Path& repositoryRoot, Expectations& expe
     expectations.expect(accepted.present, "the exact recipe vector is accepted");
 }
 
+// A component named "python" is the carried interpreter: its security record, and that of
+// everything it links, must name an upstream advisory source.
+void testSecurityReleaseTracking(const Path& repositoryRoot, Expectations& expectations) {
+    const ProductionFixture fixture(repositoryRoot);
+    const auto interpreter = [](const std::string_view securityBytes) {
+        auto lock = minimalProductionLock();
+        auto& component = lock.at("components").asArray().front();
+        replace(component, "name", text("python"));
+        replace(component.at("securityReview"), "record",
+                object({{"path", text("dependencies/licenses/component.synthetic/tracked.md")},
+                        {"sha256", text(dependency::sha256DigestText(securityBytes))}}));
+        return lock;
+    };
+    const auto write = [&](const std::string_view securityBytes) {
+        fixture.temporary.write("dependencies/licenses/component.synthetic/tracked.md",
+                                securityBytes);
+    };
+
+    constexpr std::string_view kUntracked = "# Review\n\nNo source is named here.\n";
+    write(kUntracked);
+    fixture.rejectsWith(interpreter(kUntracked), "security-tracking", expectations,
+                        "the interpreter's security record must name an advisory source");
+
+    constexpr std::string_view kEmptyAddress = "# Review\n\n- Advisory source: <https://>\n";
+    write(kEmptyAddress);
+    fixture.rejectsWith(interpreter(kEmptyAddress), "security-tracking", expectations,
+                        "an advisory source without an address is rejected");
+
+    constexpr std::string_view kTracked =
+        "# Review\n\n- Advisory source: <https://example.invalid/security>\n";
+    write(kTracked);
+    fixture.temporary.write("dependencies/dependencies.lock.json",
+                            dependency::encodeCanonical(interpreter(kTracked)));
+    const auto accepted = dependency::validateProductionLock(fixture.temporary.root());
+    expectations.expect(accepted.present, "a named advisory source is accepted");
+
+    // A component the interpreter does not ship is not held to the rule.
+    fixture.temporary.write("dependencies/dependencies.lock.json",
+                            dependency::encodeCanonical(minimalProductionLock()));
+    const auto untracked = dependency::validateProductionLock(fixture.temporary.root());
+    expectations.expect(untracked.present, "other components need no advisory source line");
+}
+
 } // namespace
 
 namespace bloom::quality::dependencies::tests {
@@ -497,6 +540,7 @@ auto runProductionLockTests(const std::filesystem::path& repositoryRoot) -> int 
     testCrossReferencesAndSets(repositoryRoot, expectations);
     testMinorThreeBuildOnlyLinkage(repositoryRoot, expectations);
     testRecipeConfigureArguments(repositoryRoot, expectations);
+    testSecurityReleaseTracking(repositoryRoot, expectations);
     return expectations.failures();
 }
 
