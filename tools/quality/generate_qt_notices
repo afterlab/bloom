@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+"""Generate the notices of the Qt parts Bloom's packages carry.
+
+The Qt Project's official binaries carry a software bill of materials (sbom/*.spdx) that names
+every Qt library and plugin, the third-party code built into each, and the license and copyright
+of each. This program reads the bills of materials of the locked Qt of every operating system
+and the list of Qt parts Bloom uses (dependencies/qt-modules.txt), follows what each listed part
+depends on, and writes:
+
+  <output>/NOTICE.txt       every Qt part and third-party component in the carried libraries
+                            and plugins, with its version, license and copyright text
+  <output>/texts/<id>.txt   the text of every license those components are used under, copied
+                            from the LICENSES directories of the Qt source archive
+
+Nothing is written by hand: when the locked Qt version changes, run this again.
+
+  generate_qt_notices --modules dependencies/qt-modules.txt \\
+      --sbom linux=<qt>/sbom --sbom macos=<qt>/sbom --sbom windows=<qt>/sbom \\
+      --licenses <source>/qtbase/LICENSES --licenses <source>/qtsvg/LICENSES \\
+      [--extra-license "ICU 73.2|ICU|<file>|<note>"] --output dependencies/licenses/qt
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import shutil
+from pathlib import Path
+
+# The kinds of package in Qt's bill of materials that end up inside the carried files.
+CARRIED_KINDS = ("qt-module", "qt-plugin", "qt-3rdparty-sources", "qt-bundled-3rdparty-module")
+# Qt itself is used under the LGPL. Of a third-party component's alternatives Bloom takes the
+# first that is neither the GPL nor a commercial license.
+NOT_CHOSEN = re.compile(r"^(GPL-|LicenseRef-Qt-Commercial)")
+QT_LICENSE = "LGPL-3.0-only"
+
+
+class Package:
+    def __init__(self, block: str) -> None:
+        def field(name: str) -> str:
+            match = re.search(rf"^{name}: (.*)$", block, flags=re.M)
+            return match.group(1).strip() if match else ""
+
+        self.name = field("PackageName")
+        self.identifier = field("SPDXID")
+        self.version = field("PackageVersion")
+        self.license = field("PackageLicenseConcluded")
+        self.location = field("PackageDownloadLocation")
+        copyright_match = re.search(
+            r"^PackageCopyrightText: (?:<text>(.*?)</text>|(.*?))$", block, flags=re.M | re.S
+        )
+        text = ""
+        if copyright_match:
+            text = copyright_match.group(1) or copyright_match.group(2) or ""
+        self.copyright = "\n".join(line.strip() for line in text.strip().splitlines())
+        kind = re.match(r"SPDXRef-Package-qt[a-z0-9]+-((?:qt|system)-[a-z0-9-]+?)-[A-Z]", self.identifier)
+        self.kind = kind.group(1) if kind else ""
+        self.depends = re.findall(
+            rf"^Relationship: {re.escape(self.identifier)} DEPENDS_ON (\S+)$", block, flags=re.M
+        )
+
+
+def read_packages(directory: Path) -> dict[str, Package]:
+    packages: dict[str, Package] = {}
+    documents = sorted(p for p in directory.glob("*.spdx") if not p.name.endswith(".source.spdx"))
+    if not documents:
+        raise ValueError(f"{directory} has no bill of materials (*.spdx)")
+    for document in documents:
+        text = document.read_text(encoding="utf-8").replace("\r", "")
+        for block in re.split(r"\n(?=PackageName: )", text)[1:]:
+            package = Package(block)
+            if package.identifier:
+                packages[package.identifier] = package
+    return packages
+
+
+def read_modules(path: Path) -> dict[str, list[tuple[str, str]]]:
+    """Per operating system: the (kind, name) pairs the packages carry."""
+    systems: dict[str, list[tuple[str, str]]] = {"linux": [], "macos": [], "windows": []}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        kind, name, *where, use = line.split()
+        if use != "package":
+            continue
+        for system in systems:
+            if "all" in where or system in where:
+                systems[system].append((kind, name))
+    return systems
+
+
+def chosen_license(expression: str) -> str:
+    """The alternative Bloom uses of a license expression with top-level ORs."""
+    alternatives = [part.strip() for part in expression.split(" OR ")]
+    if QT_LICENSE in alternatives:
+        return QT_LICENSE
+    for alternative in alternatives:
+        if not NOT_CHOSEN.match(alternative):
+            return alternative
+    raise ValueError(f"no usable alternative in '{expression}'")
+
+
+def license_identifiers(expression: str) -> list[str]:
+    return [
+        token
+        for token in re.split(r"[\s()]+", expression)
+        if token and token not in {"AND", "OR", "WITH"}
+    ]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--modules", type=Path, required=True)
+    parser.add_argument("--sbom", action="append", required=True, help="<system>=<directory>")
+    parser.add_argument("--licenses", type=Path, action="append", required=True)
+    parser.add_argument("--extra-license", action="append", default=[],
+                        help="<component>|<license name>|<license file>|<note>")
+    parser.add_argument("--version", required=True)
+    parser.add_argument("--source", required=True, help="the source archive's URL")
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+
+    modules = read_modules(args.modules)
+    components: dict[tuple[str, str, str, str], set[str]] = {}
+    qt_parts: dict[str, set[str]] = {}
+    for item in args.sbom:
+        system, _, directory = item.partition("=")
+        if system not in modules:
+            raise ValueError(f"unknown operating system '{system}'")
+        packages = read_packages(Path(directory))
+        by_name = {package.name: package for package in packages.values()}
+        pending = []
+        for _, name in modules[system]:
+            if name not in by_name:
+                raise ValueError(f"{system}: the bill of materials has no part {name}")
+            pending.append(by_name[name])
+        seen: set[str] = set()
+        while pending:
+            package = pending.pop()
+            if package.identifier in seen:
+                continue
+            seen.add(package.identifier)
+            if package.kind not in CARRIED_KINDS:
+                continue
+            for identifier in package.depends:
+                if identifier in packages:
+                    pending.append(packages[identifier])
+            if not package.license or package.license == "NOASSERTION":
+                # Header-only build interfaces of Qt itself state no license of their own.
+                continue
+            used = chosen_license(package.license)
+            if package.kind in ("qt-module", "qt-plugin"):
+                if used != QT_LICENSE:
+                    raise ValueError(
+                        f"{system}: Qt {package.name} is offered under '{package.license}' "
+                        f"only, not under {QT_LICENSE}"
+                    )
+                qt_parts.setdefault(package.name, set()).add(system)
+                continue
+            name = re.sub(r"^.*_Attribution_", "", package.name)
+            key = (name, package.version, used, package.copyright)
+            components.setdefault(key, set()).add(system)
+
+    available: dict[str, Path] = {}
+    for directory in args.licenses:
+        for path in sorted(directory.glob("*.txt")):
+            available.setdefault(path.stem, path)
+
+    texts = args.output / "texts"
+    if texts.exists():
+        shutil.rmtree(texts)
+    texts.mkdir(parents=True)
+    needed = {QT_LICENSE, "GPL-3.0-only"}
+    for _, _, used, _ in components:
+        needed.update(license_identifiers(used))
+    for identifier in sorted(needed):
+        if identifier not in available:
+            raise ValueError(f"the Qt source archive has no text of the license {identifier}")
+        (texts / f"{identifier}.txt").write_bytes(available[identifier].read_bytes())
+
+    def where(systems: set[str]) -> str:
+        return "all" if len(systems) == 3 else ", ".join(sorted(systems))
+
+    lines = [
+        f"Qt {args.version}",
+        "",
+        "Bloom uses the Qt libraries and plugins listed below, as the Qt Project's official",
+        "open-source binaries, unmodified and dynamically linked, under the GNU Lesser General",
+        "Public License version 3 (texts/LGPL-3.0-only.txt, which supplements the GNU General",
+        "Public License version 3, texts/GPL-3.0-only.txt). They can be replaced with other",
+        "builds of the same Qt version: they are separate files, loaded when Bloom starts.",
+        "",
+        "Their complete corresponding source code is the Qt source archive",
+        f"{args.source}",
+        "",
+        "Qt is a trademark of The Qt Company Ltd. Copyright (C) The Qt Company Ltd. and other",
+        "contributors.",
+        "",
+        "Qt libraries and plugins carried (operating systems in brackets)",
+        "",
+    ]
+    for name in sorted(qt_parts):
+        lines.append(f"  {name} [{where(qt_parts[name])}]")
+    lines += [
+        "",
+        "Third-party components inside those libraries and plugins",
+        "",
+        "Each entry names the component, its version when Qt records one, the license Bloom",
+        "uses it under and its copyright notice, as the bill of materials of the Qt binaries",
+        "(sbom/*.spdx inside them) states them. The license texts are in the texts directory",
+        "beside this file, named by license.",
+        "",
+    ]
+    for (name, version, used, notice), systems in sorted(
+        components.items(), key=lambda item: (item[0][0].lower(), item[0])
+    ):
+        title = f"{name} {version}".strip()
+        lines.append(f"{title} [{where(systems)}]")
+        lines.append(f"  License: {used}")
+        for line in notice.splitlines() or ["(no copyright text recorded)"]:
+            lines.append(f"  {line}" if line else "")
+        lines.append("")
+    for item in args.extra_license:
+        component, license_name, license_file, note = item.split("|", 3)
+        target = texts / f"{license_name}.txt"
+        target.write_bytes(Path(license_file).read_bytes())
+        lines.append(f"{component} [linux]")
+        lines.append(f"  License: {license_name} (texts/{license_name}.txt)")
+        lines.append(f"  {note}")
+        lines.append("")
+    (args.output / "NOTICE.txt").write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8")
+    print(f"{len(qt_parts)} Qt parts, {len(components)} third-party components, "
+          f"{len(list(texts.iterdir()))} license texts")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

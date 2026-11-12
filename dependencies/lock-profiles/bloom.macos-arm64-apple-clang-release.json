@@ -1094,6 +1094,45 @@
       ],
       "conformanceFixtureSets": []
     },
+    "qt": {
+      "linkage": "shared",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.qt.module-set",
+          "state": "enabled",
+          "reason": "Only the libraries and plugins listed in dependencies/qt-modules.txt are linked or carried; every one is offered under LGPL-3.0-only"
+        },
+        {
+          "id": "bloom.feature.qt.official-binaries",
+          "state": "enabled",
+          "reason": "Not built: the Qt Project's official open-source binaries for macOS (universal x86-64 and arm64 frameworks, deployment target macOS 13), unpacked unmodified and linked dynamically"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.qt.desktop-toolkit"
+      ],
+      "shippingRoles": [
+        "library",
+        "license",
+        "notice",
+        "plugin",
+        "source"
+      ],
+      "conformanceFixtureSets": [],
+      "prebuilt": [
+        {
+          "url": "https://download.qt.io/online/qtsdkrepository/mac_x64/desktop/qt6_6113/qt6_6113/qt.qt6.6113.clang_64/6.11.3-0-202610220312qtbase-MacOS-MacOS_15-Clang-MacOS-MacOS_15-X86_64-ARM64.7z",
+          "archiveSha256": "sha256:fb9e4a68f2d217dcea330208a79b087b3f729cc7118ff2ca40be193cf80c7606",
+          "archiveSizeBytes": 31040190
+        },
+        {
+          "url": "https://download.qt.io/online/qtsdkrepository/mac_x64/desktop/qt6_6113/qt6_6113/qt.qt6.6113.clang_64/6.11.3-0-202610220312qtsvg-MacOS-MacOS_15-Clang-MacOS-MacOS_15-X86_64-ARM64.7z",
+          "archiveSha256": "sha256:ba1e3941d01b00413fa424650191324c42e989719a6ed4f41ce43de7e8fb87a7",
+          "archiveSizeBytes": 415296
+        }
+      ]
+    },
     "robin-map": {
       "linkage": "static",
       "cmakeOptions": [],

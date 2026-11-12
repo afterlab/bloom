@@ -1057,6 +1057,45 @@
       ],
       "conformanceFixtureSets": []
     },
+    "qt": {
+      "linkage": "shared",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.qt.module-set",
+          "state": "enabled",
+          "reason": "Only the libraries and plugins listed in dependencies/qt-modules.txt are linked or carried; every one is offered under LGPL-3.0-only"
+        },
+        {
+          "id": "bloom.feature.qt.official-binaries",
+          "state": "enabled",
+          "reason": "Not built: the Qt Project's official open-source binaries for Windows x86-64 (MSVC 2022), unpacked unmodified and linked dynamically"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.qt.desktop-toolkit"
+      ],
+      "shippingRoles": [
+        "library",
+        "license",
+        "notice",
+        "plugin",
+        "source"
+      ],
+      "conformanceFixtureSets": [],
+      "prebuilt": [
+        {
+          "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6113/qt6_6113_msvc2022_64/qt.qt6.6113.win64_msvc2022_64/6.11.3-0-202610220312qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+          "archiveSha256": "sha256:68be61b613b963daf206834fdcc57dd3b84baff3082e50679e5846ca4a7a8b86",
+          "archiveSizeBytes": 39790318
+        },
+        {
+          "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6113/qt6_6113_msvc2022_64/qt.qt6.6113.win64_msvc2022_64/6.11.3-0-202610220312qtsvg-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+          "archiveSha256": "sha256:e8c789e1a059601dd82114dd9560952891e7c8e94e1cb291166eb61d74800353",
+          "archiveSizeBytes": 683023
+        }
+      ]
+    },
     "robin-map": {
       "linkage": "static",
       "cmakeOptions": [],

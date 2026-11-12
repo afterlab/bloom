@@ -1,0 +1,48 @@
+# The parts of Qt that Bloom uses (docs/architecture/platform-support.md, "Qt").
+#
+# One line per part: its kind, its name, where it is used and what for.
+#
+#   kind      `module` (a Qt library Bloom links) or `plugin` (a Qt plugin a package carries).
+#   name      The part's name in Qt's own software bill of materials, which is also its CMake
+#             target name (Qt6::<name>).
+#   where     `all`, or the operating systems: `linux`, `macos`, `windows`.
+#   use       `package` when Bloom's packages carry it, `build` when only the build and the
+#             tests use it.
+#
+# The cmake/BloomQtModuleCheck.cmake check holds the build to this list: a Qt part the build
+# names that is not listed here is refused, and so is a listed part that the locked Qt's bill of
+# materials does not offer under LGPL-3.0-only. Every other part of Qt is left out of the
+# packages.
+module Core all package
+module Gui all package
+module Widgets all package
+module Network all package
+module Svg all package
+module DBus linux package
+module Test all build
+
+# Libraries the plugins below load.
+module OpenGL linux package
+module XcbQpaPrivate linux package
+module WaylandClient linux package
+
+plugin QXcbIntegrationPlugin linux package
+plugin QXcbGlxIntegrationPlugin linux package
+plugin QXcbEglIntegrationPlugin linux package
+plugin QWaylandIntegrationPlugin linux package
+plugin QWaylandXdgShellIntegrationPlugin linux package
+plugin QWaylandBradientDecorationPlugin linux package
+plugin QWaylandEglClientBufferPlugin linux package
+plugin QComposePlatformInputContextPlugin linux package
+plugin QIbusPlatformInputContextPlugin linux package
+plugin QXdgDesktopPortalThemePlugin linux package
+plugin QTlsBackendOpenSSLPlugin linux package
+plugin QCocoaIntegrationPlugin macos package
+plugin QMacStylePlugin macos package
+plugin QSecureTransportBackendPlugin macos package
+plugin QWindowsIntegrationPlugin windows package
+plugin QModernWindowsStylePlugin windows package
+plugin QSchannelBackendPlugin windows package
+plugin QOffscreenIntegrationPlugin all package
+plugin QSvgPlugin all package
+plugin QSvgIconPlugin all package

@@ -1064,6 +1064,50 @@
       ],
       "conformanceFixtureSets": []
     },
+    "qt": {
+      "linkage": "shared",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.qt.module-set",
+          "state": "enabled",
+          "reason": "Only the libraries and plugins listed in dependencies/qt-modules.txt are linked or carried; every one is offered under LGPL-3.0-only"
+        },
+        {
+          "id": "bloom.feature.qt.official-binaries",
+          "state": "enabled",
+          "reason": "Not built: the Qt Project's official open-source binaries for Linux x86-64 (built with GCC on RHEL 9.6), with the ICU 73.2 libraries the same package publishes for them, unpacked unmodified and linked dynamically"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.qt.desktop-toolkit"
+      ],
+      "shippingRoles": [
+        "library",
+        "license",
+        "notice",
+        "plugin",
+        "source"
+      ],
+      "conformanceFixtureSets": [],
+      "prebuilt": [
+        {
+          "url": "https://download.qt.io/online/qtsdkrepository/linux_x64/desktop/qt6_6113/qt6_6113/qt.qt6.6113.linux_gcc_64/6.11.3-0-202610220312icu-linux-Rhel8.6-x86_64.7z",
+          "archiveSha256": "sha256:16f1e8f409bd9f0b248e36d10deab498d0c1b33d25e0a515a076b1f6b5a1ab28",
+          "archiveSizeBytes": 9660662
+        },
+        {
+          "url": "https://download.qt.io/online/qtsdkrepository/linux_x64/desktop/qt6_6113/qt6_6113/qt.qt6.6113.linux_gcc_64/6.11.3-0-202610220312qtbase-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z",
+          "archiveSha256": "sha256:ce282da4d8a83dc216ed96b715202872d655177189c16205dc5fab09b41a9f09",
+          "archiveSizeBytes": 22883961
+        },
+        {
+          "url": "https://download.qt.io/online/qtsdkrepository/linux_x64/desktop/qt6_6113/qt6_6113/qt.qt6.6113.linux_gcc_64/6.11.3-0-202610220312qtsvg-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z",
+          "archiveSha256": "sha256:7b71eea32674d6ac8e9b5b1d3819f510c6081619ca440b6cac86fd970942cf7a",
+          "archiveSizeBytes": 298621
+        }
+      ]
+    },
     "robin-map": {
       "linkage": "static",
       "cmakeOptions": [],

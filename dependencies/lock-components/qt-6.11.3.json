@@ -1,0 +1,161 @@
+{
+  "name": "qt",
+  "version": "6.11.3",
+  "source": {
+    "url": "https://download.qt.io/official_releases/qt/6.11/6.11.3/single/qt-everywhere-src-6.11.3.tar.xz",
+    "archiveSha256": "sha256:ad0112f2aef1b94b42a7ab653cebda2f7fc9ba88ef509ec456b17be80b0bfdab",
+    "archiveSizeBytes": 1020081224,
+    "retrievedAt": "2026-11-12",
+    "commit": null,
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/qt/provenance.md",
+      "sha256": "sha256:0c0206989c14696835981bd4cd824c72659e1f08ae8122d83302d4d29bfd44be"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "LGPL-3.0-only",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/qt/texts/GPL-3.0-only.txt",
+        "sha256": "sha256:8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/LGPL-3.0-only.txt",
+        "sha256": "sha256:da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [
+      {
+        "path": "dependencies/licenses/qt/NOTICE.txt",
+        "sha256": "sha256:63d9c723738b42660d479b301b16e57d60eada93893f5c9e70972ec8b9dfcc5a"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/AFL-2.1.txt",
+        "sha256": "sha256:93bb4f7417aa775bab9026cc3d0af28aeb64451fc5a8ec651876785edd8eaf9b"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/Apache-2.0.txt",
+        "sha256": "sha256:e3ba223bb1423f0aad8c3dfce0fe3148db48926d41e6fbc3afbbf5ff9e1c89cb"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/BSD-2-Clause.txt",
+        "sha256": "sha256:8fda146749ca071ac9cdce2e24d25444676ea48d1f9dccc2b7c15c054b717db8"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/BSD-3-Clause.txt",
+        "sha256": "sha256:9f0490f18656c6f2435bd14f603ef0c96434d1825615363dce43abb42ed1dcce"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/CC0-1.0.txt",
+        "sha256": "sha256:a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/FTL.txt",
+        "sha256": "sha256:08c135755dd589039470f1fdbb400daaabaaa50d0b366d19cebff4d22986baa1"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/HPND-sell-variant.txt",
+        "sha256": "sha256:3a946598a9f674d44df764279ca0b85b5d6faba08f3bc75d8e0fcf6cd729a9bd"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/HPND.txt",
+        "sha256": "sha256:67ac968431270291f5e9cd3ed76705e1169f57082ee102093b2543b28cef63cf"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/ICU.txt",
+        "sha256": "sha256:f3005e195ff74d8812cc1f182a1c446fab678d70a10e3dada497585befee5416"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/Imlib2.txt",
+        "sha256": "sha256:8846f2baba1a7f4c36f7ca19a923a000d8a21afa37cf0fe006f6ce88a6058a89"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/Libpng.txt",
+        "sha256": "sha256:58fe669792f9b4e0740bf75ecfe90b5326128bb2ce7e27e1c342abd9db4d8ea6"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/LicenseRef-BSD-3-Clause-with-PCRE2-Binary-Like-Packages-Exception.txt",
+        "sha256": "sha256:0526625fcc746a42d3f19a0ab357d3dc8479fdbe3bfd168825498f50215c7a63"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/LicenseRef-ICC-License.txt",
+        "sha256": "sha256:9e34ff47b3a44814e183342e7e198d127a6740e29d20e8381fba7688dafc79dd"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/LicenseRef-Lcs-Telegraphics.txt",
+        "sha256": "sha256:c10225ebbd5191bfdd761b0d7752c785f2453ab665d6c454473fb12d254668aa"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/LicenseRef-SHA1-Public-Domain.txt",
+        "sha256": "sha256:65d86b8ec6b1cd8b8f6e64fd8710274ba00d6a3c520e00dfdcd1c3d2071f3305"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/MIT-open-group.txt",
+        "sha256": "sha256:c55d2ab72d8a4f9e9cd8fbd1379268e575e8cfa16874affa5899b75a6d754514"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/MIT.txt",
+        "sha256": "sha256:d040359701c01996a017d5c515678929cd1b0625e64cb86db44025fbb6cdf1fc"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/MPL-2.0.txt",
+        "sha256": "sha256:3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/Unicode-3.0.txt",
+        "sha256": "sha256:80bb6294022d8764adb36a9d65ebb6bd94efb1865918a71e31e6c247607d7634"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/X11.txt",
+        "sha256": "sha256:e2936c6509784b4f0ec27bac74182393866fad9422b29a70e085ff14aba87193"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/Zlib.txt",
+        "sha256": "sha256:d7e3139972874dc8abdbbfce27ec1e6f942b28279dd7d27453630a8b4610e080"
+      },
+      {
+        "path": "dependencies/licenses/qt/texts/libpng-2.0.txt",
+        "sha256": "sha256:7317e078e2d3b5d7ba5a6159e650945153262b44b76f6700f8e9edb261c5143e"
+      }
+    ],
+    "sourceObligation": "corresponding-source",
+    "correspondingSourceArchiveSha256": "sha256:ad0112f2aef1b94b42a7ab653cebda2f7fc9ba88ef509ec456b17be80b0bfdab",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/qt/review.md",
+      "sha256": "sha256:5f98652d31eaaf3702af08b0bfac34b5e4f9a30131e6db5df5c34e19f54ad274"
+    },
+    "reviewedAt": "2026-11-12"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [],
+  "securityReview": {
+    "reviewedAt": "2026-11-12",
+    "record": {
+      "path": "dependencies/licenses/qt/security.md",
+      "sha256": "sha256:c6036278b93e53185ad04805019070eaedaf9f2a61823be02b9256f8ea468c70"
+    },
+    "vulnerabilities": [
+      {
+        "id": "cve-2026-116337",
+        "disposition": "accepted-risk",
+        "record": {
+          "path": "dependencies/licenses/qt/security.md",
+          "sha256": "sha256:c6036278b93e53185ad04805019070eaedaf9f2a61823be02b9256f8ea468c70"
+        }
+      },
+      {
+        "id": "cve-2026-15037",
+        "disposition": "not-affected",
+        "record": {
+          "path": "dependencies/licenses/qt/security.md",
+          "sha256": "sha256:c6036278b93e53185ad04805019070eaedaf9f2a61823be02b9256f8ea468c70"
+        }
+      }
+    ]
+  }
+}
