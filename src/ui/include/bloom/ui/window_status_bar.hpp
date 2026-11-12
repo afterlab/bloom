@@ -6,6 +6,7 @@
 
 #include <bloom/ui/compile_failure.hpp>
 
+#include <QElapsedTimer>
 #include <QPointer>
 #include <QString>
 
@@ -258,6 +259,13 @@ class WindowStatusBar final : public kit::KSurface {
     kit::KLabel* probe_ = nullptr;
     QTimer* transientTimer_ = nullptr;
     QTimer* cacheRefreshTimer_ = nullptr;
+    // #685: a frame that renders in under kRenderingNoticeDelay never shows "Rendering" or dims the
+    // readouts, so playback does not blink the status bar once per frame.
+    QElapsedTimer renderingSince_;
+    QTimer* renderingNoticeTimer_ = nullptr;
+    bool holdRenderingNotice_ = true;
+    QElapsedTimer behindSince_;
+    [[nodiscard]] bool renderingNoticeHeld() const;
     QTimer* mediaDiskCacheTimer_ = nullptr;
     QString transientMessage_;
     QString persistentMessage_;

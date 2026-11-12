@@ -27,6 +27,13 @@ namespace bloom::ui::statusbar {
                                     .arg(value / kMebibyte, 0, 'f', 1);
 }
 
+// #685: QWidget::setToolTip posts a change event even for an identical tip; the cells refresh on
+// every presented frame, so a tip that did not change is left alone.
+inline void setToolTipIfChanged(QWidget* widget, const QString& text) {
+    if (widget->toolTip() != text)
+        widget->setToolTip(text);
+}
+
 // A value in the monospaced face. `widthSample` is the widest text the cell shows; its width is
 // the cell's minimum, so neighbouring segments stay put while the number changes.
 class ValueLabel : public kit::KLabel {
@@ -91,13 +98,20 @@ class Segment final : public QWidget {
     // style-sheet parent, and QStyleSheetStyle's walk up the parents never ends: its list of
     // style sheets doubles until the process runs out of memory (#418).
     void setSegmentToolTip(const QString& text) {
-        setToolTip(text);
+        // #685: a tool tip set to what it already is still posts a change event, and the cells
+        // refresh on every presented frame. A child that took the segment's tip and was later
+        // given a tip of its own keeps it: taking it back each refresh made the two fight, two
+        // tool-tip changes per child per frame.
+        if (toolTip() != text)
+            setToolTip(text);
         for (auto* child : findChildren<QWidget*>()) {
             if (child->window() != window())
                 continue;
             if (child->toolTip().isEmpty() || child->property("segmentToolTip").toBool()) {
-                child->setToolTip(text);
-                child->setProperty("segmentToolTip", true);
+                if (child->toolTip() != text)
+                    child->setToolTip(text);
+                if (!child->property("segmentToolTip").toBool())
+                    child->setProperty("segmentToolTip", true);
             }
         }
     }

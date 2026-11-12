@@ -33,6 +33,10 @@ class PropertiesAnchorGrid final : public kit::KAnchorGrid {
     std::optional<document::LayerId> layer_;
     std::optional<runtime::ContentBounds> bounds_;
     QString identity_;
+    QString structuralIdentity_;
+    // #685: only the playhead moved, so the last resolved bounds still draw while new ones resolve.
+    bool refining_ = false;
+    int shownPoint_ = -1;
     std::uint64_t generation_ = 0;
     std::uint64_t activeGeneration_ = 0;
     std::shared_ptr<runtime::TaskScheduler> scheduler_;

@@ -48,21 +48,33 @@ void PropertiesAnchorGrid::refresh() {
     layer_ = direct ? std::optional(*direct) : session_.selection().contextualLayer;
     const auto time = session_.currentTime();
     const auto* anchor = session_.parameterForSelection(document::kAnchorParameterRole);
-    const auto identity = QString("%1/%2/%3/%4/%5/%6")
-                              .arg(session_.compositionId().value())
-                              .arg(session_.snapshot().revision().value())
-                              .arg(layer_ ? layer_->value() : 0)
-                              .arg(time.numerator())
-                              .arg(time.denominator())
-                              .arg(anchor ? anchor->id.value() : 0);
-    update();
+    const auto structural = QString("%1/%2/%3/%4")
+                                .arg(session_.compositionId().value())
+                                .arg(session_.snapshot().revision().value())
+                                .arg(layer_ ? layer_->value() : 0)
+                                .arg(anchor ? anchor->id.value() : 0);
+    const auto identity = QString("%1/%2/%3").arg(structural).arg(time.numerator()).arg(time.denominator());
+    // #685: repaint only when the highlighted point changed, not on every presented frame.
+    if (const int point = selectedPoint(); point != shownPoint_) {
+        shownPoint_ = point;
+        update();
+    }
     if (identity == identity_)
         return;
+    // Only the playhead moved: keep the resolved bounds and the enabled look while the new ones
+    // resolve, so playback does not flash the grid disabled and enabled again every frame.
+    const bool timeOnly = structural == structuralIdentity_ && bounds_.has_value();
     identity_ = identity;
+    structuralIdentity_ = structural;
     ++generation_;
-    bounds_.reset();
-    setEnabled(false);
-    setToolTip(layer_ ? tr("Resolving local bounds…") : tr("Select a layer to set its anchor"));
+    refining_ = timeOnly;
+    if (!timeOnly) {
+        bounds_.reset();
+        setEnabled(false);
+        setToolTip(layer_ ? tr("Resolving local bounds…") : tr("Select a layer to set its anchor"));
+        shownPoint_ = -1;
+        update();
+    }
     if (active_)
         task_.cancel();
     else
@@ -147,6 +159,9 @@ void PropertiesAnchorGrid::poll() {
         }
         timer_->stop();
         QString diagnostic;
+        const auto previousBounds = bounds_;
+        refining_ = false;
+        bounds_.reset();
         if (result->value()) {
             bounds_ = (**result->value()).bounds;
             diagnostic = (**result->value()).diagnostic;
@@ -159,11 +174,17 @@ void PropertiesAnchorGrid::poll() {
         setToolTip(bounds_                ? tr("Set anchor to a point of the layer's local bounds")
                    : diagnostic.isEmpty() ? tr("Local bounds are unavailable for this layer")
                                           : diagnostic);
-        update();
+        const bool same =
+            previousBounds.has_value() == bounds_.has_value() &&
+            (!bounds_ || (previousBounds->left == bounds_->left && previousBounds->right == bounds_->right &&
+                          previousBounds->top == bounds_->top && previousBounds->bottom == bounds_->bottom));
+        shownPoint_ = selectedPoint();
+        if (!same)
+            update();
     }
 }
 void PropertiesAnchorGrid::choosePoint(const int index) {
-    if (!isEnabled() || !bounds_ || index < 0 || index > 8)
+    if (!isEnabled() || refining_ || !bounds_ || index < 0 || index > 8)
         return;
     const double x = (index % 3 - 1) * (bounds_->right - bounds_->left) / 2.0;
     const int row = index / 3;

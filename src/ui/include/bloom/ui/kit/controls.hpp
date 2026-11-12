@@ -127,6 +127,7 @@ class KLabel : public QLabel {
     QString fullText_;
     bool elides_ = false;
     Color tone_ = Color::Foreground;
+    bool toneApplied_ = false;
 };
 // A read-only value in the one text-entry box (kit::fieldColors): the Field well in the control body,
 // Border at rest, BorderHover under the pointer -- for a composite field that lays its own labels out

@@ -44,6 +44,9 @@ constexpr int kTransientMessageMs = 5'000;
 
 using statusbar::formatBytes;
 
+// #685: how long a frame may render before the status bar says so.
+constexpr int kRenderingNoticeDelayMs = 300;
+
 } // namespace
 
 WindowStatusBar::WindowStatusBar(CompositionSession& session,
@@ -421,7 +424,7 @@ void WindowStatusBar::refreshMemoryToolTip() {
     }
     memoryToolTip_ = tooltip;
     memorySegment_->setSegmentToolTip(tooltip);
-    memory_->setToolTip(tooltip);
+    statusbar::setToolTipIfChanged(memory_, tooltip);
 }
 
 QString WindowStatusBar::cacheToolTipForTest() const { return memoryToolTip_; }
@@ -486,9 +489,13 @@ void WindowStatusBar::refreshVideoCell() {
     auto value = text;
     value.remove(0, std::min<qsizetype>(value.size(), tr("Video: ").size()));
     video_->setText(value);
-    video_->setToolTip(lines.join(QLatin1Char('\n')));
+    statusbar::setToolTipIfChanged(video_, lines.join(QLatin1Char('\n')));
     video_->setTone(note.isEmpty() ? kit::Color::Muted : kit::Color::Warn);
     videoGroup_->setVisible(!text.isEmpty());
+}
+
+bool WindowStatusBar::renderingNoticeHeld() const {
+    return holdRenderingNotice_ && renderingSince_.isValid() && renderingSince_.elapsed() < kRenderingNoticeDelayMs;
 }
 
 void WindowStatusBar::setPreviewNotice(const CompositionPreviewState& preview) {
@@ -496,8 +503,28 @@ void WindowStatusBar::setPreviewNotice(const CompositionPreviewState& preview) {
     previewNotice_.clear();
     previewNoticeTone_ = kit::Color::Muted;
     const bool stale = preview.freshness == FrameFreshness::Stale;
+    if (preview.activity == PreviewActivity::Rendering) {
+        if (!renderingSince_.isValid())
+            renderingSince_.start();
+    } else {
+        renderingSince_.invalidate();
+        if (renderingNoticeTimer_ != nullptr)
+            renderingNoticeTimer_->stop();
+    }
     switch (preview.activity) {
     case PreviewActivity::Rendering:
+        if (renderingNoticeHeld()) {
+            // Come back when the delay has passed, if the frame is still rendering.
+            if (renderingNoticeTimer_ == nullptr) {
+                renderingNoticeTimer_ = new QTimer(this);
+                renderingNoticeTimer_->setSingleShot(true);
+                connect(renderingNoticeTimer_, &QTimer::timeout, this,
+                        &WindowStatusBar::refreshPreviewCells);
+            }
+            renderingNoticeTimer_->start(kRenderingNoticeDelayMs -
+                                         static_cast<int>(renderingSince_.elapsed()));
+            break;
+        }
         previewNotice_ = stale ? tr("Rendering frame · previous frame shown") : tr("Rendering frame");
         previewNoticeTone_ = kit::Color::Accent;
         break;
@@ -523,19 +550,39 @@ void WindowStatusBar::setViewerCells(const PreviewColorState& state,
     renderPath_->setText(state.pathLabel.isEmpty() ? tr("—") : state.pathLabel);
     renderPath_->setTone(state.colorToken);
     renderPath_->setAccessibleName(state.text);
-    renderPath_->setToolTip(tr("Render: how the shown frame was produced. %1.").arg(state.text));
+    statusbar::setToolTipIfChanged(renderPath_, tr("Render: how the shown frame was produced. %1.").arg(state.text));
     const bool shown = preview != nullptr && preview->viewerReadout.valid;
-    const auto dim = shown && preview->viewerReadout.current ? kit::Color::Foreground
-                                                             : kit::Color::Muted;
+    // #685: the readouts dim when the shown display is behind the request, but only once it has
+    // stayed behind for the delay; during playback every frame is briefly behind.
+    const bool behind = shown && !preview->viewerReadout.current;
+    if (!behind) {
+        behindSince_.invalidate();
+    } else if (!behindSince_.isValid()) {
+        behindSince_.start();
+    }
+    const bool dimHeld = behind && holdRenderingNotice_ && behindSince_.elapsed() < kRenderingNoticeDelayMs;
+    if (dimHeld) {
+        if (renderingNoticeTimer_ == nullptr) {
+            renderingNoticeTimer_ = new QTimer(this);
+            renderingNoticeTimer_->setSingleShot(true);
+            connect(renderingNoticeTimer_, &QTimer::timeout, this,
+                    &WindowStatusBar::refreshPreviewCells);
+        }
+        if (!renderingNoticeTimer_->isActive())
+            renderingNoticeTimer_->start(kRenderingNoticeDelayMs -
+                                         static_cast<int>(behindSince_.elapsed()));
+    }
+    const auto dim = shown && (preview->viewerReadout.current || dimHeld) ? kit::Color::Foreground
+                                                                          : kit::Color::Muted;
     exposure_->setText(shown ? QString::number(preview->viewerReadout.exposure, 'f', 2) : tr("—"));
     exposure_->setTone(dim);
-    exposure_->setToolTip(
+    statusbar::setToolTipIfChanged(exposure_, 
         shown ? tr("Exposure: the view adjustment the Viewer shows, in stops. %1")
                     .arg(previewStateText_)
               : tr("Exposure: the view adjustment the Viewer shows, in stops. No frame is shown."));
     channel_->setText(shown ? preview->viewerReadout.channel : tr("—"));
     channel_->setTone(dim);
-    channel_->setToolTip(tr("Channel: which channels of the frame the Viewer shows."));
+    statusbar::setToolTipIfChanged(channel_, tr("Channel: which channels of the frame the Viewer shows."));
 }
 
 void WindowStatusBar::refreshActivity() {
@@ -627,7 +674,7 @@ void WindowStatusBar::refreshPreviewCells() {
         droppedFrames_->setTone(counting && previewController_->droppedFrameCount() != 0
                                     ? kit::Color::Warn
                                     : kit::Color::Muted);
-        droppedFrames_->setToolTip(
+        statusbar::setToolTipIfChanged(droppedFrames_, 
             tr("Dropped: frames playback skipped to keep up. A dash means no playback is being "
                "measured."));
     };
@@ -689,7 +736,10 @@ void WindowStatusBar::openCompileFailure() {
 }
 
 void WindowStatusBar::applyPreviewStateForTest(const CompositionPreviewState& preview) {
+    // A test names the state it wants shown; the delay is for a live render.
+    holdRenderingNotice_ = false;
     setPreviewNotice(preview);
+    holdRenderingNotice_ = true;
     refreshActivity();
     applyCompileFailure(compileFailureFromPreview(preview));
 }
@@ -750,7 +800,7 @@ void WindowStatusBar::refreshMediaDiskCacheCell() {
     diskSegment_->setSegmentToolTip(tr("The on-disk cache of decoded frames: how often a lookup "
                                        "found its frame, and how much it stores.\n%1")
                                         .arg(detail));
-    mediaDiskCacheCell_->setToolTip(diskSegment_->toolTip());
+    statusbar::setToolTipIfChanged(mediaDiskCacheCell_, diskSegment_->toolTip());
 }
 
 void WindowStatusBar::showTransientMessage(const QString& message) {
@@ -874,7 +924,7 @@ void WindowStatusBar::refreshProbeCell(const ProbeReadout& readout) {
                           .arg(working, display);
     probe_->setElidedText(text);
     probe_->setAccessibleName(text);
-    probe_->setToolTip(tr("Working space: %1\nDisplay: %2\nCtrl-click to show %3 values")
+    statusbar::setToolTipIfChanged(probe_, tr("Working space: %1\nDisplay: %2\nCtrl-click to show %3 values")
                            .arg(QString::fromUtf8(host::workingColorSpaceLabel(
                                     readout.workingColorSpaceId.toStdString())),
                                 readout.displayName,
@@ -955,13 +1005,13 @@ void WindowStatusBar::refreshMcpIndicator() {
         const auto port = snapshot->endpoint ? snapshot->endpoint->port : snapshot->preferences.port;
         mcpIndicator_->setText(tr(":%1").arg(port));
         mcpIndicator_->setTone(kit::Color::Muted);
-        mcpIndicator_->setToolTip(tr("MCP: the server is running; click to open the MCP Server "
+        statusbar::setToolTipIfChanged(mcpIndicator_, tr("MCP: the server is running; click to open the MCP Server "
                                      "panel.\n%1")
                                       .arg(mcppanel::statusText(*snapshot)));
     } else if (failed) {
         mcpIndicator_->setText(tr("failed"));
         mcpIndicator_->setTone(kit::Color::Error);
-        mcpIndicator_->setToolTip(tr("MCP: the server stopped; click to open the MCP Server "
+        statusbar::setToolTipIfChanged(mcpIndicator_, tr("MCP: the server stopped; click to open the MCP Server "
                                      "panel.\n%1")
                                       .arg(mcppanel::statusText(*snapshot)));
     }

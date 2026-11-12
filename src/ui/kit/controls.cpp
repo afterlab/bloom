@@ -358,6 +358,11 @@ KLabel::KLabel(const QString& text, QWidget* parent, TypeRole role) : QLabel(tex
 }
 void KLabel::setTypeRole(TypeRole role) { setFont(kit::font(role)); }
 void KLabel::setElidedText(const QString& text) {
+    // #685: the status bar sets its message on every presented frame; the same text at the same
+    // width needs no relayout and no repaint (QLabel::setWordWrap repaints unconditionally).
+    if (elides_ && fullText_ == text &&
+        this->text() == fontMetrics().elidedText(fullText_, Qt::ElideRight, width()))
+        return;
     fullText_ = text;
     elides_ = true;
     QLabel::setWordWrap(false);
@@ -377,6 +382,11 @@ void KLabel::setTone(const Color tone) {
     colors.setColor(QPalette::Active, QPalette::WindowText, color(tone));
     colors.setColor(QPalette::Inactive, QPalette::WindowText, color(tone));
     colors.setColor(QPalette::Disabled, QPalette::WindowText, disabledInk(color(tone)));
+    // #685: setPalette repaints the label (and its children) even when nothing changed, and the
+    // status bar re-applies its tones on every presented frame. An unchanged palette is left alone.
+    if (toneApplied_ && colors == palette())
+        return;
+    toneApplied_ = true;
     setPalette(colors);
 }
 void KLabel::applyHeightRule() {
