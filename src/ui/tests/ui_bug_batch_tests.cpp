@@ -16,6 +16,7 @@
 #include <QImage>
 #include <QKeyEvent>
 #include <QStandardPaths>
+#include <QStringList>
 #include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/ui/context_bar.hpp>
@@ -222,6 +223,59 @@ void testBackspaceAndDeleteKeys() {
     expect(remove != nullptr && remove->shortcuts().contains(QKeySequence(Qt::Key_Backspace)) &&
                remove->shortcuts().contains(QKeySequence(Qt::Key_Delete)),
            "the Node menu's Delete is bound to Delete and Backspace");
+}
+
+// A node that must stay never makes Delete a silent no-op: the status bar says why, and the rest
+// of the selection still goes. A Merge the user added deletes like any other node.
+void testRefusedDeleteSaysWhy() {
+    test::Fixture f;
+    QStringList notices;
+    // Only Delete's own explanations are counted: the fixture's submit adapter restores the old
+    // selection after every edit and reports that the deleted nodes cannot be selected again.
+    QObject::connect(&f.session, &ui::CompositionSession::commandRejected, &f.session,
+                     [&](const QString& message) {
+                         if (message.contains(QStringLiteral("cannot be deleted")))
+                             notices << message;
+                     });
+    const auto& graph = f.session.composition()->graph();
+    const auto output = graph.compositionOutput();
+    const auto stack = graph.outputMergeId();
+    expect(output.has_value() && stack.has_value(), "the fixture has an Output and its Merge");
+    if (!output || !stack)
+        return;
+    const auto outputId = output->nodeId;
+    const auto stackId = *stack;
+    f.session.selectNode(outputId);
+    settle();
+    f.key(Qt::Key_Delete);
+    settle();
+    expect(f.session.composition()->graph().findNode(outputId) != nullptr && notices.size() == 1 &&
+               notices.back().contains(QStringLiteral("Output")),
+           "Delete on the Output leaves it and says why in the status bar");
+    const auto solid = f.add(document::kSolidSourceNodeType, {0, 600});
+    f.session.selectNodes({stackId, solid}, solid);
+    settle();
+    {
+        std::unique_ptr<QMenu> menu(f.editor.contextMenuForTest(true));
+        auto* action = menuAction(menu.get(), "nodeDeleteAction");
+        expect(action != nullptr, "Delete is offered for a selection holding the layer-stack Merge");
+        if (action != nullptr)
+            action->trigger();
+    }
+    settle();
+    expect(!f.session.composition()->graph().findNode(solid) &&
+               f.session.composition()->graph().findNode(stackId) != nullptr && notices.size() == 2 &&
+               notices.back().contains(QStringLiteral("Merge")),
+           "the rest of the selection goes; the layer-stack Merge stays and the status bar says why");
+    const auto merge = f.add(document::kLayerStackNodeType, {280, 600});
+    f.session.selectNode(merge);
+    settle();
+    const auto history = f.stack.size();
+    f.key(Qt::Key_Backspace);
+    settle();
+    expect(!f.session.composition()->graph().findNode(merge) && f.stack.size() == history + 1 &&
+               notices.size() == 2,
+           "a Merge the user added deletes in one undo step with no refusal");
 }
 
 // Delete and Dissolve on a node that drives a parameter and on a pass-through node.
@@ -663,6 +717,7 @@ int main(int argc, char** argv) {
     testRightClickKeepsSelection();
     testBackspaceAndDeleteKeys();
     testDeleteAndDissolveEveryKind();
+    testRefusedDeleteSaysWhy();
     testCryptomattePickerOnlyInContext();
     testExposureFieldReadsInFull();
     testNodeEditorPinch();

@@ -399,6 +399,7 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider, publi
     // in the menu without owning a key -- which is what mute, collapse and dissolve now are.
     [[nodiscard]] std::set<document::NodeId> commandTargets();
     void removeSelectedNodes();
+    [[nodiscard]] std::set<document::NodeId> removableTargets(const std::set<document::NodeId>& nodes);
     void duplicateSelectedNodes();
     void dissolveSelectedNode();
     // `muted` selects which layout flag is toggled: true for mute, false for collapse.

@@ -84,6 +84,26 @@ std::optional<DissolvePath> dissolvePath(const document::Composition& compositio
 
 // #704: Delete removes any node that is not the composition's Output (or the Merge feeding it) or
 // locked; a surviving parameter this node drove goes back to its registered default.
+NodeRemovalRefusal nodeRemovalRefusal(const document::Composition& composition,
+                                      const document::NodeId nodeId) {
+    const auto& graph = composition.graph();
+    const auto* node = graph.findNode(nodeId);
+    if (node == nullptr)
+        return NodeRemovalRefusal::Missing;
+    if (node->typeId == document::kCompositionOutputNodeType)
+        return NodeRemovalRefusal::CompositionOutput;
+    // The Merge feeding the Output, or a Merge that is itself the composition's output.
+    if (graph.outputMergeId() == nodeId ||
+        (graph.compositionOutput() && graph.compositionOutput()->nodeId == nodeId &&
+         graph.merge(nodeId) != nullptr))
+        return NodeRemovalRefusal::LayerStackMerge;
+    if (graph.compositionOutput() && graph.compositionOutput()->nodeId == nodeId)
+        return NodeRemovalRefusal::CompositionOutput;
+    if (composition.nodeLocked(nodeId))
+        return NodeRemovalRefusal::Locked;
+    return NodeRemovalRefusal::None;
+}
+
 bool canRemoveNodes(const document::Composition& composition,
                     const std::set<document::NodeId>& nodes) {
     if (nodes.empty())

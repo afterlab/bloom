@@ -165,6 +165,30 @@ QString addActionName(const std::string_view type) {
 // single "..." overflow button holding the same menus as submenus -- "never wrap": the header
 // row's height is fixed (Size::HeaderRow), so there is nowhere for a second row to go.
 
+// #704: why a node stays when Delete or Dissolve is asked of it, in the status bar's words.
+QString removalRefusalText(const commands::NodeRemovalRefusal refusal) {
+    using Refusal = commands::NodeRemovalRefusal;
+    switch (refusal) {
+    case Refusal::CompositionOutput:
+        return QCoreApplication::translate(
+            "NodeGraphEditor",
+            "The Output belongs to the composition and cannot be deleted");
+    case Refusal::LayerStackMerge:
+        return QCoreApplication::translate(
+            "NodeGraphEditor",
+            "The Merge connected to the Output holds the composition's layers and cannot be "
+            "deleted; connect another Merge to the Output first");
+    case Refusal::Locked:
+        return QCoreApplication::translate(
+            "NodeGraphEditor", "The node belongs to a locked layer; unlock the layer to delete it");
+    case Refusal::Missing:
+        return QCoreApplication::translate("NodeGraphEditor", "The node no longer exists");
+    case Refusal::None:
+        break;
+    }
+    return {};
+}
+
 } // namespace
 
 void NodeGraphEditor::showStatus(const QString& message) {
@@ -234,8 +258,28 @@ std::set<document::NodeId> NodeGraphEditor::commandTargets() {
     return nodes;
 }
 
+std::set<document::NodeId> NodeGraphEditor::removableTargets(const std::set<document::NodeId>& nodes) {
+    // #704: Delete and Dissolve take every selected node they can and say why any other stays;
+    // a refusal is never silent.
+    std::set<document::NodeId> removable;
+    QString reason;
+    for (const auto id : nodes) {
+        const auto refusal = commands::nodeRemovalRefusal(*session_.composition(), id);
+        if (refusal == commands::NodeRemovalRefusal::None)
+            removable.insert(id);
+        else if (reason.isEmpty())
+            reason = removalRefusalText(refusal);
+    }
+    if (!reason.isEmpty())
+        showStatus(removable.empty() ? reason
+                                     : tr("%n selected node(s) stay: %1", "",
+                                          static_cast<int>(nodes.size() - removable.size()))
+                                           .arg(reason));
+    return removable;
+}
+
 void NodeGraphEditor::removeSelectedNodes() {
-    const auto nodes = commandTargets();
+    const auto nodes = removableTargets(commandTargets());
     if (nodes.empty())
         return;
     commands::Transaction transaction("Edit Nodes", session_.snapshot().revision());
@@ -267,7 +311,7 @@ void NodeGraphEditor::duplicateSelectedNodes() {
 }
 
 void NodeGraphEditor::dissolveSelectedNode() {
-    const auto nodes = commandTargets();
+    const auto nodes = removableTargets(commandTargets());
     if (nodes.empty())
         return;
     // #704, #705: every selected node, one undo step. Each reconnects through where its types
@@ -709,11 +753,10 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
                            writer = new NodePathWriter(session_, this);
                        writer->request(id);
                    });
-        if (std::ranges::all_of(nodes, [&](const auto id) {
-                return commands::canDissolveNode(graphComposition, id);
-            }))
-            action(tr("Dissolve"), QStringLiteral("nodeDissolveAction"),
-                   [this] { dissolveSelectedNode(); });
+        // #704: Dissolve and Delete are always offered for a selection; a node that must stay
+        // says why in the status bar when they are used.
+        action(tr("Dissolve"), QStringLiteral("nodeDissolveAction"),
+               [this] { dissolveSelectedNode(); });
         const bool allMuted = std::ranges::all_of(
             nodes, [&](const auto id) { return layoutFor(*session_.composition(), id).muted; });
         const bool allCollapsed = std::ranges::all_of(
@@ -767,9 +810,8 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
                 background->setChecked(previews->backgroundNode() == id);
             }
         }
-        if (commands::canRemoveNodes(graphComposition, nodes))
-            action(tr("Delete"), QStringLiteral("nodeDeleteAction"),
-                   [this] { removeSelectedNodes(); });
+        action(tr("Delete"), QStringLiteral("nodeDeleteAction"),
+               [this] { removeSelectedNodes(); });
         return menu;
     }
     // Task FIX1, item D: "Add Node" is a CASCADING SUBMENU grouped by the registry's own
@@ -1293,8 +1335,8 @@ void NodeGraphEditor::refreshNodeMenuState() {
         return;
     }
     const auto& graphComposition = *session_.composition();
-    dissolveAction_->setEnabled(std::ranges::all_of(
-        nodes, [&](const auto id) { return commands::canDissolveNode(graphComposition, id); }));
+    // #704: enabled for any selection; a node that must stay says why when it is used.
+    dissolveAction_->setEnabled(true);
     const bool allMuted = std::ranges::all_of(
         nodes, [&](const auto id) { return layoutFor(*session_.composition(), id).muted; });
     const bool allCollapsed = std::ranges::all_of(
@@ -1322,7 +1364,7 @@ void NodeGraphEditor::refreshNodeMenuState() {
     ungroupAction_->setEnabled(std::ranges::any_of(nodes, [&](const auto id) {
         return document::findNodeGroupOf(session_.composition()->nodeGroups(), id) != nullptr;
     }));
-    deleteAction_->setEnabled(commands::canRemoveNodes(graphComposition, nodes));
+    deleteAction_->setEnabled(true);
 }
 
 void NodeGraphEditor::applyLinkStyle(const LinkStyle style) {

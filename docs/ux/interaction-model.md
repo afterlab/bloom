@@ -469,8 +469,16 @@ undoable; a newly chosen background starts fitted.
 
 Dissolve takes every selected node out (#704): it reconnects each consumer of the node's output to
 what feeds its input where the types allow, and otherwise deletes the node and breaks its links, as
-Delete does. Both are one undo step for the whole selection. Only the composition Output, the Merge
-feeding it and locked nodes stay.
+Delete does. Both are one undo step for the whole selection, and both are offered for every
+selection. Every node the user added can be deleted and dissolved, Merge nodes included. Only these
+stay, and the status bar says why whenever Delete or Dissolve leaves one in place (the rest of the
+selection still goes):
+
+| Node that stays | Why |
+| --- | --- |
+| The composition Output | The composition owns it and cannot exist without it. |
+| The Merge connected to the Output | It is the composition's layer stack, where its layers are composited; connect another Merge to the Output first. |
+| A node of a locked layer | The layer's lock protects it; unlock the layer to delete it. |
 
 The node context menu's **Add Node** submenu lists nodes by name only; stroking the selected
 layer's letters or masks (#509) is an action beside it, **Stroke Selected Text** and **Stroke

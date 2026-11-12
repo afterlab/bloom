@@ -137,6 +137,38 @@ void testBase(TestContext& test) {
     test.expect(!canRemoveNodes(checker.comp, {NodeId::fromRaw(9999)}), "missing node refused");
 }
 
+// #704: every Merge the user adds deletes and dissolves; only the composition's Output and the
+// Merge feeding it (its layer stack) refuse, each with its own reason.
+void testRemovalRefusals(TestContext& test) {
+    Fixture fixture;
+    const auto merge = addNode(fixture, kLayerStackNodeType);
+    const auto& comp =
+        *fixture.document.snapshot().project().findComposition(kCompositionId);
+    // This fixture's composition output is the layer stack itself; the UI tests cover an Output node.
+    test.expect(nodeRemovalRefusal(comp, kLayerStackNodeId) == NodeRemovalRefusal::LayerStackMerge,
+                "#704: the Merge feeding the Output stays as the composition's layer stack");
+    test.expect(nodeRemovalRefusal(comp, NodeId::fromRaw(9999)) == NodeRemovalRefusal::Missing,
+                "#704: a stale id is reported as missing");
+    test.expect(nodeRemovalRefusal(comp, merge) == NodeRemovalRefusal::None &&
+                    canRemoveNodes(comp, {merge}) && canDissolveNode(comp, merge),
+                "#704: a Merge the user added can be deleted and dissolved");
+    test.expect(apply<RemoveNodes>(fixture, std::set<NodeId>{merge}).succeeded() &&
+                    !fixture.document.snapshot()
+                         .project()
+                         .findComposition(kCompositionId)
+                         ->graph()
+                         .findNode(merge),
+                "#704: Delete removes a Merge the user added");
+    test.expect(fixture.stack.undo().succeeded(), "#704: the Merge's delete undoes");
+    test.expect(apply<DissolveNode>(fixture, merge).succeeded() &&
+                    !fixture.document.snapshot()
+                         .project()
+                         .findComposition(kCompositionId)
+                         ->graph()
+                         .findNode(merge),
+                "#704: Dissolve removes a Merge the user added");
+}
+
 void testLinkedGraph(TestContext& test) {
     Fixture fixture;
     const auto source = addNode(fixture, kSolidSourceNodeType);
@@ -195,6 +227,9 @@ void testLocked(TestContext& test) {
     test.expect(!canRemoveNodes(checker.comp, {kFirstLayerNodeId}), "locked boundary is protected");
     test.expect(!canDissolveNode(checker.comp, source), "locked upstream node cannot dissolve");
     test.expect(canRemoveNodes(checker.comp, {kSecondLayerNodeId}), "unlocked layer still removes");
+    test.expect(nodeRemovalRefusal(checker.comp, source) == NodeRemovalRefusal::Locked &&
+                    nodeRemovalRefusal(checker.comp, kSecondLayerNodeId) == NodeRemovalRefusal::None,
+                "#704: a node of a locked layer stays with the lock as its reason");
     test.expect(canRenameLayer(checker.comp, kFirstLayerId, "Locked rename"),
                 "rename of a locked layer matches command acceptance");
     // #470: what feeds a locked layer is locked with it.
@@ -374,6 +409,7 @@ int main() {
     bloom::commands::test::TestContext test;
     try {
         bloom::commands::test::testBase(test);
+        bloom::commands::test::testRemovalRefusals(test);
         bloom::commands::test::testLinkedGraph(test);
         bloom::commands::test::testDrivenParameter(test);
         bloom::commands::test::testLocked(test);

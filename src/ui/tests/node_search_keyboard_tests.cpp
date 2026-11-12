@@ -217,8 +217,8 @@ void testSearchKeyboardAndMenus() {
     expect(f.stack.size() == history && refused.size() == refusalCount + 1,
            "the protected remove keyboard path reports refusal without mutation");
     menu = f.editor.contextMenuForTest(true);
-    expect(!named(menu, "nodeDeleteAction") && !named(menu, "nodeDissolveAction"),
-           "protected node menu omits removal and dissolve");
+    expect(named(menu, "nodeDeleteAction") && named(menu, "nodeDissolveAction"),
+           "the layer-stack Merge's menu offers Delete and Dissolve, which say why it stays (#704)");
     delete menu;
     expect(f.edit<commands::ConnectPorts>(document::OutputPortRef{a, "image"},
                                           document::NodeInputRef{b, "image"})
