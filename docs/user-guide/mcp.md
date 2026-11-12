@@ -363,6 +363,11 @@ window's thread, and stop when the request is cancelled (`bloom.scripting.cancel
   ID without a manifest. A point outside the layer or over no object answers "No object under the
   point". To choose mattes by name, set the node's `mattes` text with
   `bloom.node.set-parameter-value`.
+- `bloom.node.delete-unused` (`composition`) is the Node editor's Delete Unused button: it deletes
+  every node with no path to the composition's Output (links, Merge slots, a layer's parent and
+  matte sources, and drivers all count as a path) in one undo step, with Delete's rules: the Output,
+  the Merge connected to it and the nodes of locked layers stay, and nothing unused is a no-change.
+  In Python it is `bloom.ops.node.delete_unused()`.
 - Any node's Mask output (a Cryptomatte, a Mask Combine, an Image to Mask) can shape a layer:
   `bloom.layer.add-matte-mask` (`composition`, `layer`, `node`, optional `port` (default `mask`),
   `mode` and `name`) adds a mask shaped by it, `bloom.layer.set-mask-matte` (`composition`, `layer`,

@@ -7,6 +7,7 @@
 #include <bloom/commands/node_editor_operations.hpp>
 #include <bloom/commands/node_layout_arrange.hpp>
 #include <bloom/commands/node_link_insertion.hpp>
+#include <bloom/commands/node_unused_operations.hpp>
 
 #include "operation_registry_parity.hpp"
 
@@ -166,6 +167,19 @@ const std::string kArrange =
     R"(no-change. )"
     R"(Undo: one step. )"
     R"(MCP example: {"op":"bloom.node.arrange","args":{}}.)";
+
+const std::string kDeleteUnused =
+    R"(Deletes every node that has no path to the composition's Output, as the Node editor's )"
+    R"(Delete Unused Nodes button does. A node is used when it feeds the Output through links, )"
+    R"(a Merge's slots, a layer's parent or matte, or a driver binding (a value node driving a )"
+    R"(used node's parameter is used). The removal is Delete's: links break, parameters a )"
+    R"(deleted node drove return to their defaults, and node group frames lose the deleted )"
+    R"(members (an emptied frame goes). The Output, the Merge on it and nodes of locked layers )"
+    R"(stay. A Node Group node on the path stays with its inside untouched. )"
+    R"(Outputs: none. )"
+    R"(Errors: a stale composition id. Nothing unused is a no-change. )"
+    R"(Undo: one step. )"
+    R"(MCP example: {"op":"bloom.node.delete-unused","args":{}}.)";
 
 // A destination input by node + port, or by Merge stack role + slot.
 [[nodiscard]] std::optional<document::InputPortRef> input(Reader& read, const std::string& node,
@@ -439,6 +453,15 @@ void addLayerAndNodeOperations(std::vector<OperationDescriptor>& descriptors) {
             return made(std::make_unique<commands::InsertNodeOnLink>(
                 compositionId, *type, *std::move(destination),
                 position.value_or(document::Vec2d{})));
+        });
+
+    add(descriptors, "bloom.node.delete-unused", kDeleteUnused, {composition()},
+        [](const std::string& op, const Arguments& args) {
+            Reader read(op, args);
+            const auto compositionId = read.id<CompositionId>("composition");
+            if (read.failed())
+                return read.error();
+            return made(std::make_unique<commands::DeleteUnusedNodes>(compositionId));
         });
 
     add(descriptors, "bloom.node.insert-reroute", kInsertReroute,

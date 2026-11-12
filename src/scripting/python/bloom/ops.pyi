@@ -8138,6 +8138,54 @@ class NodeOps:
         Related: bloom.node.disconnect-input, query:nodes, query:node-types, transact
         """
         ...
+    def delete_unused(self, *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.node.delete-unused  (operation, node)
+        Deletes every node that has no path to the composition's Output, as the Node editor's Delete
+        Unused Nodes button does. A node is used when it feeds the Output through links, a Merge's
+        slots, a layer's parent or matte, or a driver binding (a value node driving a used node's
+        parameter is used). The removal is Delete's: links break, parameters a deleted node drove return
+        to their defaults, and node group frames lose the deleted members (an emptied frame goes). The
+        Output, the Merge on it and nodes of locked layers stay. A Node Group node on the path stays
+        with its inside untouched. Outputs: none. Errors: a stale composition id. Nothing unused is a
+        no-change. Undo: one step. MCP example: {"op":"bloom.node.delete-unused","args":{}}.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.node.delete-unused","args":{}}]}}
+          Python:
+            bloom.ops.node.delete_unused()
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.node.delete-unused","args":{}}]
+
+        Related: transact
+        """
+        ...
     def disconnect_input(self, node: int | Proxy, port: str = ..., role: str = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.node.disconnect-input  (operation, node)
         Clears one input port, or one Merge stack slot when `role` is given.

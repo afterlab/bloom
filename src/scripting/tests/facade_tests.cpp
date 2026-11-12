@@ -17,11 +17,13 @@
 
 int main() {
     auto registry = bloom::scripting::OperationRegistry::builtIn();
-    // #637 adds bloom.node.write-to-path; #703 adds bloom.node.insert-on-link.
-    if (registry.descriptors().size() != 153U ||
+    // #637 adds bloom.node.write-to-path; #703 bloom.node.insert-on-link; #701
+    // bloom.node.delete-unused.
+    if (registry.descriptors().size() != 154U ||
         registry.find("bloom.layer.set-timing") == nullptr ||
         registry.find("bloom.node.write-to-path") == nullptr ||
         registry.find("bloom.node.insert-on-link") == nullptr ||
+        registry.find("bloom.node.delete-unused") == nullptr ||
         registry.find("bloom.layer.add-solid") == nullptr ||
         registry.find("bloom.project.set-name") == nullptr) {
         std::cerr << "operation registry inventory failed\n";

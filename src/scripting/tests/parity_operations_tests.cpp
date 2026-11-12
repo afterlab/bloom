@@ -401,6 +401,47 @@ void removeAndDissolveOperations() {
     expect(fixture.session->undo().succeeded() && exists(scalar), "in one undo step");
 }
 
+// #701: MCP and Python delete the nodes with no path to the output through the same command as
+// the Node editor's button: a layer's chain stays, a dead-end branch and a loose node go, one undo
+// step restores them, and with nothing unused the call changes nothing.
+void deleteUnusedOperation() {
+    Fixture fixture;
+    const auto comp = Value(StableId{fixture.main.value()});
+    auto solid = fixture.run("bloom.layer.add-solid", {{"composition", comp},
+                                                       {"name", Value("Red")},
+                                                       {"color", Value(core::Color4d{1, 0, 0, 1})}});
+    expect(solid.succeeded(), "a solid layer is added");
+    const auto exists = [&](const document::NodeId id) {
+        fixture.refresh();
+        return fixture.composition(fixture.main).graph().findNode(id) != nullptr;
+    };
+    const auto sources = Fixture::outputs<document::NodeId>(solid, "solidNode");
+    expect(sources.size() == 1, "the layer has a source node");
+    if (sources.empty())
+        return;
+    auto cleanBefore = fixture.run("bloom.node.delete-unused", {{"composition", comp}});
+    expect(cleanBefore.succeeded() && cleanBefore.command && !cleanBefore.command->changed() && exists(sources.front()),
+           "a graph with nothing unused is a no-change");
+    auto dead = fixture.run("bloom.node.add-fed-by", {{"composition", comp},
+                                                      {"nodeType", Value("bloom.gaussian-blur")},
+                                                      {"node", Value(StableId{sources.front().value()})},
+                                                      {"port", Value("image")}});
+    const auto deadNodes = Fixture::outputs<document::NodeId>(dead, "editorNode");
+    auto loose = fixture.run("bloom.node.add", {{"composition", comp}, {"nodeType", Value("bloom.solid-source")}});
+    const auto looseNodes = Fixture::outputs<document::NodeId>(loose, "node");
+    expect(deadNodes.size() == 1 && looseNodes.size() == 1, "an unused branch is added");
+    if (deadNodes.empty() || looseNodes.empty())
+        return;
+    auto removed = fixture.run("bloom.node.delete-unused", {{"composition", comp}});
+    expect(removed.succeeded() && removed.command->changed() && !exists(deadNodes.front()) &&
+               !exists(looseNodes.front()) && exists(sources.front()),
+           "Delete Unused removes the nodes off the output path and keeps the layer's source");
+    expect(fixture.session->undo().succeeded() && exists(deadNodes.front()) && exists(looseNodes.front()),
+           "one undo restores every removed node");
+    expect(!fixture.run("bloom.node.delete-unused", {{"composition", Value(StableId{999999})}}).succeeded(),
+           "an unknown composition is refused");
+}
+
 void parameterOperations() {
     Fixture fixture;
     auto solid = fixture.run("bloom.layer.add-solid",
@@ -785,7 +826,7 @@ void descriptions() {
          {"bloom.layer.delete", "bloom.layer.duplicate", "bloom.layer.add-from-assets",
           "bloom.node.add-asset-source", "bloom.node.add-composition-source",
           "bloom.node.add-feeding", "bloom.node.add-fed-by", "bloom.node.insert-reroute",
-          "bloom.node.insert-on-link",
+          "bloom.node.insert-on-link", "bloom.node.delete-unused",
           "bloom.node.arrange", "bloom.asset.delete-items", "bloom.composition.add-from-assets",
           "bloom.parameter.reset", "bloom.node.set-parameter-value",
           "bloom.node.set-video-audio-stream", "bloom.merge.ensure-entry-layer",
@@ -1329,6 +1370,7 @@ int main() {
     addFromAssets();
     nodeOperations();
     removeAndDissolveOperations();
+    deleteUnusedOperation();
     parameterOperations();
     pathValues();
     addFeedingInserts();
