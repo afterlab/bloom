@@ -2,7 +2,7 @@
 
 ## Data block readers
 
-Schema 1.18 adds four readers. Each selects a block through the `bloom.data.block` inline selector;
+There are four readers. Each selects a block through the `bloom.data.block` inline selector;
 the selected block is frozen into the compiled value graph, so reading it performs no project or
 filesystem I/O at evaluation time.
 
