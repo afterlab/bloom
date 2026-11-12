@@ -61,6 +61,9 @@ struct PrivateMediaFile {
     // `inherited` >= 0 is the host's staged artifact (ADR 0033 section 16): the container is
     // written straight into it, and the reopen check reads it back, so no spool copy exists.
     explicit PrivateMediaFile(std::uint64_t cap, const int inherited = -1) : limit(cap) {
+#if !(defined(__unix__) || defined(__APPLE__))
+        static_cast<void>(inherited); // Streamed staged output is POSIX-only (ADR 0033 section 16).
+#endif
 #if defined(__unix__) || defined(__APPLE__)
         if (inherited >= 0) {
             require(::ftruncate(inherited, 0) == 0, "Cannot reset the staged artifact", Error::Io);
@@ -166,14 +169,14 @@ int videoProfile(const EncodeSettingsV1& s) {
     if (s.videoCodec == "prores_ks") {
         constexpr std::array<std::string_view, 6> names{"proxy", "lt",   "422",
                                                         "hq",    "4444", "4444xq"};
-        const auto* found = std::ranges::find(names, s.profile);
+        const auto found = std::ranges::find(names, s.profile);
         require(found != names.end(), "ProRes profile unavailable", Error::Unavailable);
         return static_cast<int>(found - names.begin());
     }
     if (s.videoCodec == "dnxhd") {
         constexpr std::array<std::string_view, 6> names{"dnxhd",    "dnxhr_lb",  "dnxhr_sq",
                                                         "dnxhr_hq", "dnxhr_hqx", "dnxhr_444"};
-        const auto* found = std::ranges::find(names, s.profile);
+        const auto found = std::ranges::find(names, s.profile);
         require(found != names.end(), "DNx profile unavailable", Error::Unavailable);
         return static_cast<int>(found - names.begin());
     }
@@ -506,7 +509,16 @@ struct Encoder::State {
             // level 2 up to 8K UHD, level 1 above it (av1EncodeAddressSpaceBytes).
             const bool beyond8k =
                 static_cast<std::uint64_t>(settings.width) * settings.height > 7680ULL * 4320ULL;
+#if defined(_WIN32)
+            // The Windows build of SVT-AV1 writes wrong pixels from its AVX2 code when the frame
+            // is not a whole number of 8x8 blocks (1918x1078 reopened far outside the tolerance;
+            // the same code path is correct on Linux). Its SSE4.2 code is correct, so the encoder
+            // is held to that here.
+            av_dict_set(&options, "svtav1-params", beyond8k ? "lp=1:asm=sse4_2" : "lp=2:asm=sse4_2",
+                        0);
+#else
             av_dict_set(&options, "svtav1-params", beyond8k ? "lp=1" : "lp=2", 0);
+#endif
         }
         if (video && name == "libvpx-vp9") {
             // libvpx's good-quality deadline at speed 4, row multithreading over the session's

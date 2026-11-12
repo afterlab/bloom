@@ -173,7 +173,11 @@ Windows superbuild runs from a Visual Studio developer environment (`cl`, `link`
 `MSYS2_ROOT` naming an MSYS2 installation that provides `make`, `patch`, `pkgconf` and `perl`, and
 with Python (Meson, Ninja) on `PATH`. NASM builds with its own NMAKE file, so it needs no MSYS2
 shell. FFmpeg's MSVC install leaves the import libraries in `bin/`; a post-install step moves them
-to `lib/`. A
+to `lib/`. The Windows build of SVT-AV1 is used with its SSE4.2 code only (the worker passes
+`asm=sse4_2`): its AVX2 code as built by this recipe wrote wrong pixels at 1918x1078 (the
+reopened export differed from the source by up to 40501 of 65535), while its C and SSE4.2 code
+on Windows and the AVX2 code on Linux are correct. The recipe is unchanged; the cause inside the
+library is not found. A
 patent grant shipped with a library (the AOM Patent License 1.0 with SVT-AV1, Google's VP8/VP9
 grant with libvpx) is a notice file of its lock component and is reproduced in
 `THIRD_PARTY_NOTICES.md`. `codec-static-install.cmake` appends each archive's runtime libraries to
