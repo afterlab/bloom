@@ -1,3 +1,4 @@
+#include "process_probe.hpp"
 #include "support.hpp"
 #include <algorithm>
 #include <array>
@@ -13,10 +14,12 @@
 #include <fstream>
 #include <numeric>
 #include <string>
-#include <sys/wait.h>
 #include <thread>
-#include <unistd.h>
 #include <vector>
+#if !defined(_WIN32)
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 #if defined(__APPLE__)
 #include <libproc.h>
 #include <sys/proc_info.h>
@@ -90,7 +93,42 @@ struct Fixture {
 };
 // Whether process `pid` holds `path` open: the test kills the worker once it has opened its input.
 [[nodiscard]] bool processHasOpen(const std::int64_t pid, const std::filesystem::path& path) {
-#if defined(__APPLE__)
+#if defined(_WIN32)
+    // The file system lists the ids of the processes that hold a file open. Asking takes a handle
+    // with no read or write access, which never conflicts with the worker's own open.
+    struct Holders {
+        ULONG count;
+        ULONG_PTR ids[256];
+    };
+    struct Status {
+        union {
+            LONG status;
+            void* pointer;
+        };
+        ULONG_PTR information;
+    };
+    using Query = LONG(__stdcall*)(HANDLE, Status*, void*, ULONG, int);
+    constexpr int kProcessIdsUsingFile = 47;
+    const HMODULE system = GetModuleHandleW(L"ntdll.dll");
+    const auto query = system == nullptr ? nullptr
+                                         : reinterpret_cast<Query>(reinterpret_cast<void*>(
+                                               GetProcAddress(system, "NtQueryInformationFile")));
+    if (query == nullptr)
+        return false;
+    const HANDLE file = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                    OPEN_EXISTING, 0, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return false;
+    Holders holders{};
+    Status status{};
+    bool held = false;
+    if (query(file, &status, &holders, sizeof(holders), kProcessIdsUsingFile) >= 0)
+        for (ULONG index = 0; index < holders.count && index < 256; ++index)
+            held = held || holders.ids[index] == static_cast<ULONG_PTR>(pid);
+    CloseHandle(file);
+    return held;
+#elif defined(__APPLE__)
     // The kernel reports each open file by its resolved path.
     std::error_code error;
     const auto resolved = std::filesystem::canonical(path, error);
@@ -269,7 +307,7 @@ void run(const std::filesystem::path& directory) {
                     if (luma > 190)
                         mask |= 1U << bit;
                 }
-                const auto* digit = std::ranges::find(digitMasks, mask);
+                const auto digit = std::ranges::find(digitMasks, mask);
                 test::check(digit != digitMasks.end(), "burned-in digit is legible");
                 number = number * 10 + static_cast<unsigned>(digit - digitMasks.begin());
             }
@@ -328,7 +366,7 @@ void run(const std::filesystem::path& directory) {
         while (!stop.stop_requested()) {
             const auto pid = fixture.pid.load();
             if (pid > 0 && processHasOpen(pid, crashPath)) {
-                killed.store(::kill(static_cast<pid_t>(pid), SIGKILL) == 0);
+                killed.store(bloom::test_support::killProcess(pid));
                 return;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -509,16 +547,20 @@ void sequentialAudioIsLinear(const std::filesystem::path& directory) {
     // defunct), the next call that needed it fails once naming the cause, and the one after that
     // starts a fresh worker.
     const auto killed = lastPid.load();
-    test::check(killed > 0 && ::kill(static_cast<pid_t>(killed), SIGKILL) == 0,
+    test::check(killed > 0 && bloom::test_support::killProcess(killed),
                 "kill the idle retained worker");
     bool reapedByPool = false;
     for (const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(5);
          std::chrono::steady_clock::now() < limit && !reapedByPool;) {
+#if defined(_WIN32)
+        reapedByPool = bloom::test_support::processCollected(killed);
+#else
         siginfo_t info{};
         // WNOWAIT only looks: this test never reaps the child itself.
         reapedByPool = ::waitid(P_PID, static_cast<id_t>(killed), &info,
                                 WEXITED | WNOHANG | WNOWAIT) < 0 &&
                        errno == ECHILD;
+#endif
         if (!reapedByPool)
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
@@ -528,7 +570,8 @@ void sequentialAudioIsLinear(const std::filesystem::path& directory) {
         snapshot, {}, true);
     const auto* lostError = std::get_if<Unavailable>(&lostCall);
     test::check(lostError && lostError->reason == Error::Crashed &&
-                    lostError->detail.find("signal 9") != std::string::npos,
+                    lostError->detail.find(bloom::test_support::killedDescription()) !=
+                        std::string::npos,
                 "the job that needed the dead worker fails naming the cause");
     const auto launchesBefore = launches.load();
     test::check(std::holds_alternative<AudioBlock>(pool.call(

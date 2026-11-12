@@ -110,5 +110,5 @@ the composition) and `stillDuration`; an agent then makes a composition with
 ## Platforms
 
 The dialog and every setting behave the same on Linux, macOS and Windows. Bloom's GPU path for the
-alpha and deinterlace settings is verified on Linux and on macOS; Windows uses the same CPU
-reference where the GPU path is not available.
+alpha and deinterlace settings is verified on Linux, macOS and Windows; the same CPU reference
+is used where no GPU is available.

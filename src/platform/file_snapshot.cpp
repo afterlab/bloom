@@ -10,6 +10,17 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <random>
+#include <string>
+#include <windows.h>
+#endif
 
 namespace bloom::platform {
 std::uint64_t FileSnapshotQuota::residentBytes() const {
@@ -35,6 +46,10 @@ void FileSnapshotQuota::release(const std::uint64_t bytes) {
 }
 struct ReadOnlyFileSnapshot::State {
     int fd = -1;
+#if defined(_WIN32)
+    // The read-only handle to the private copy. The copy is removed when its last handle closes.
+    HANDLE handle = nullptr;
+#endif
     std::uint64_t bytes = 0;
     core::Sha256Digest digest;
     FileSnapshotStatistics statistics;
@@ -44,6 +59,10 @@ struct ReadOnlyFileSnapshot::State {
 #if defined(__linux__) || defined(__APPLE__)
         if (fd >= 0)
             ::close(fd);
+#endif
+#if defined(_WIN32)
+        if (handle != nullptr)
+            CloseHandle(handle);
 #endif
         if (quota)
             quota->release(bytes);
@@ -61,6 +80,59 @@ const std::optional<FileIdentity>& ReadOnlyFileSnapshot::sourceIdentity() const 
     return state_->sourceIdentity;
 }
 int ReadOnlyFileSnapshot::descriptor() const { return state_->fd; }
+void* ReadOnlyFileSnapshot::nativeHandle() const {
+#if defined(_WIN32)
+    return state_->handle;
+#else
+    return nullptr;
+#endif
+}
+#if defined(_WIN32)
+namespace {
+constexpr wchar_t kSnapshotVariable[] = L"BLOOM_PROCESS_SNAPSHOT";
+using Clock = std::chrono::steady_clock;
+void elapsed(std::uint64_t& total, const Clock::time_point begin) {
+    const auto value =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - begin).count();
+    if (value > 0) {
+        const auto amount = static_cast<std::uint64_t>(value);
+        total = amount > std::numeric_limits<std::uint64_t>::max() - total
+                    ? std::numeric_limits<std::uint64_t>::max()
+                    : total + amount;
+    }
+}
+class FileHandle final {
+  public:
+    explicit FileHandle(HANDLE value = INVALID_HANDLE_VALUE) : value_(value) {}
+    ~FileHandle() {
+        if (valid())
+            CloseHandle(value_);
+    }
+    FileHandle(const FileHandle&) = delete;
+    FileHandle& operator=(const FileHandle&) = delete;
+    [[nodiscard]] HANDLE get() const { return value_; }
+    [[nodiscard]] bool valid() const { return value_ != INVALID_HANDLE_VALUE && value_ != nullptr; }
+    void reset(const HANDLE value) {
+        if (valid())
+            CloseHandle(value_);
+        value_ = value;
+    }
+
+  private:
+    HANDLE value_;
+};
+// A regular file's size, or nothing for anything else.
+std::optional<std::uint64_t> regularFileSize(const HANDLE file) {
+    FILE_STANDARD_INFO standard{};
+    if (GetFileType(file) != FILE_TYPE_DISK ||
+        !GetFileInformationByHandleEx(file, FileStandardInfo, &standard, sizeof(standard)) ||
+        standard.Directory || standard.EndOfFile.QuadPart < 0)
+        return std::nullopt;
+    return static_cast<std::uint64_t>(standard.EndOfFile.QuadPart);
+}
+int lastError() { return static_cast<int>(GetLastError()); }
+} // namespace
+#endif
 #if defined(__linux__) || defined(__APPLE__)
 namespace {
 class Descriptor final {
@@ -243,6 +315,171 @@ ProcessResult<std::unique_ptr<ReadOnlyFileSnapshot>> ReadOnlyFileSnapshot::captu
     if (state->fd < 0)
         return ProcessFailure{ProcessError::Io, errno};
     return std::unique_ptr<ReadOnlyFileSnapshot>(new ReadOnlyFileSnapshot(std::move(state)));
+#elif defined(_WIN32)
+    // The same capture as above with Windows' means. The private copy is a file in the spool
+    // directory whose name is removed as soon as it is made, so nothing else can open it; the
+    // system removes it when its last handle closes, and the worker receives a read-only handle.
+    if (cancel && cancel())
+        return ProcessFailure{ProcessError::Cancelled, 0};
+    // Observed before the open so a replacement during the copy cannot be recorded as verified.
+    const auto observedBefore = observeFileIdentity(source);
+    const FileHandle input(CreateFileW(source.c_str(), GENERIC_READ,
+                                       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                       nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
+    if (!input.valid())
+        return ProcessFailure{ProcessError::Io, lastError()};
+    const auto sourceSize = regularFileSize(input.get());
+    if (!sourceSize)
+        return ProcessFailure{ProcessError::Io, ERROR_INVALID_DATA};
+    if (*sourceSize == 0 || *sourceSize > sourceLimit || !quota)
+        return ProcessFailure{ProcessError::ResourceLimit, 0};
+    const auto size = *sourceSize;
+    constexpr std::size_t overhead = sizeof(State) + sizeof(ReadOnlyFileSnapshot) + 512;
+    const auto pathBytes = spoolDirectory.native().size();
+    if (pathBytes > (std::numeric_limits<std::size_t>::max() - overhead) / 6)
+        return ProcessFailure{ProcessError::ResourceLimit, 0};
+    const auto metadata = overhead + pathBytes * 6;
+    if (hostByteBudget <= metadata)
+        return ProcessFailure{ProcessError::ResourceLimit, 0};
+    const auto chunkBytes = std::min<std::size_t>(65536, hostByteBudget - metadata);
+    auto state = std::make_unique<State>();
+    if (!quota->reserve(size))
+        return ProcessFailure{ProcessError::ResourceLimit, 0};
+    state->quota = quota;
+    state->bytes = size;
+    std::error_code error;
+    if (!spoolDirectory.is_absolute())
+        return ProcessFailure{ProcessError::Io, ERROR_INVALID_PARAMETER};
+    std::filesystem::create_directories(spoolDirectory, error);
+    if (error)
+        return ProcessFailure{ProcessError::Io, error.value()};
+    FileHandle output;
+    // A second, read-only open of the copy, made while it still has a name. It is what leaves
+    // here when the name could be taken away.
+    FileHandle reader;
+    {
+        std::random_device device;
+        constexpr std::wstring_view digits = L"0123456789abcdef";
+        constexpr DWORD everyone = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+        for (int attempt = 0; attempt < 64 && !output.valid(); ++attempt) {
+            std::uint64_t value = (static_cast<std::uint64_t>(device()) << 32U) | device();
+            std::wstring name = L"capture-";
+            for (int nibble = 0; nibble < 16; ++nibble, value >>= 4U)
+                name.push_back(digits[value & 0xFU]);
+            const auto path = spoolDirectory / name;
+            const HANDLE created = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE | DELETE,
+                                               FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
+                                               CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+            if (created == INVALID_HANDLE_VALUE) {
+                if (GetLastError() != ERROR_FILE_EXISTS)
+                    return ProcessFailure{ProcessError::Io, lastError()};
+                continue;
+            }
+            output.reset(created);
+            // Take the name away at once, so the copy has no pathname while it is written and
+            // used: a handle that exists only to remove the name does it, and the name goes when
+            // that handle closes. The writer and the reader stay open on a file nothing can find.
+            const HANDLE read = ReOpenFile(created, FILE_GENERIC_READ, everyone, 0);
+            bool unnamed = false;
+            if (read != INVALID_HANDLE_VALUE) {
+                const HANDLE unlinker = ReOpenFile(created, DELETE, everyone, 0);
+                if (unlinker != INVALID_HANDLE_VALUE) {
+                    FILE_DISPOSITION_INFO_EX unlink{};
+                    unlink.Flags =
+                        FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS;
+                    unnamed = SetFileInformationByHandle(unlinker, FileDispositionInfoEx, &unlink,
+                                                         sizeof(unlink)) != 0;
+                    CloseHandle(unlinker);
+                }
+            }
+            if (unnamed) {
+                reader.reset(read);
+                break;
+            }
+            if (read != INVALID_HANDLE_VALUE)
+                CloseHandle(read);
+            // This file system cannot take a name away from an open file. Start again with a
+            // file that nothing else can open (no sharing) and that the system removes when its
+            // last handle closes.
+            FILE_DISPOSITION_INFO discard{};
+            discard.DeleteFile = TRUE;
+            static_cast<void>(SetFileInformationByHandle(created, FileDispositionInfo, &discard,
+                                                         sizeof(discard)));
+            output.reset(INVALID_HANDLE_VALUE);
+            const HANDLE exclusive = CreateFileW(
+                path.c_str(), GENERIC_READ | GENERIC_WRITE | DELETE, 0, nullptr, CREATE_NEW,
+                FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+            if (exclusive == INVALID_HANDLE_VALUE)
+                return ProcessFailure{ProcessError::Io, lastError()};
+            output.reset(exclusive);
+        }
+    }
+    if (!output.valid())
+        return ProcessFailure{ProcessError::Io, ERROR_FILE_EXISTS};
+    core::Sha256Hasher hasher;
+    std::vector<std::byte> buffer(chunkBytes);
+    std::uint64_t total = 0;
+    while (total < size) {
+        if (cancel && cancel())
+            return ProcessFailure{ProcessError::Cancelled, 0};
+        const auto count = static_cast<DWORD>(std::min<std::uint64_t>(buffer.size(), size - total));
+        auto begin = Clock::now();
+        DWORD read = 0;
+        const BOOL readOk = ReadFile(input.get(), buffer.data(), count, &read, nullptr);
+        elapsed(state->statistics.ioNanoseconds, begin);
+        if (!readOk || read == 0)
+            return ProcessFailure{ProcessError::Io, readOk ? ERROR_HANDLE_EOF : lastError()};
+        const auto amount = static_cast<std::size_t>(read);
+        begin = Clock::now();
+        if (!hasher.update(std::span(buffer).first(amount)))
+            return ProcessFailure{ProcessError::ResourceLimit, 0};
+        elapsed(state->statistics.hashNanoseconds, begin);
+        begin = Clock::now();
+        std::size_t written = 0;
+        while (written < amount) {
+            DWORD result = 0;
+            if (!WriteFile(output.get(), buffer.data() + written,
+                           static_cast<DWORD>(amount - written), &result, nullptr) ||
+                result == 0)
+                return ProcessFailure{ProcessError::Io, lastError()};
+            written += result;
+        }
+        elapsed(state->statistics.ioNanoseconds, begin);
+        total += amount;
+        state->statistics.bytesRead = total;
+        state->statistics.bytesHashed = total;
+        if (progress)
+            progress(total, size);
+    }
+    std::byte extra{};
+    DWORD more = 0;
+    if (!ReadFile(input.get(), &extra, 1, &more, nullptr))
+        return ProcessFailure{ProcessError::Io, lastError()};
+    if (more != 0)
+        return ProcessFailure{ProcessError::Io, ERROR_FILE_TOO_LARGE};
+    recordFullSourceRead(total);
+    state->digest = hasher.finalize();
+    if (const auto observedAfter = observeFileIdentity(source); observedBefore && observedAfter &&
+                                                                *observedBefore == *observedAfter &&
+                                                                observedAfter->size == size) {
+        state->sourceIdentity = observedAfter;
+        verifiedSourceDigests().record(source, *observedAfter, state->digest);
+    }
+    if (expected && state->digest != *expected)
+        return ProcessFailure{ProcessError::Io, ERROR_FILE_INVALID};
+    if (cancel && cancel())
+        return ProcessFailure{ProcessError::Cancelled, 0};
+    if (regularFileSize(output.get()) != size)
+        return ProcessFailure{ProcessError::Io, ERROR_FILE_INVALID};
+    // The only handle that leaves here can read and nothing else, so the copy lives exactly as
+    // long as this snapshot and the workers given it: the reader made above, or, where the name
+    // could not be taken away, a read-only handle to the same open file.
+    HANDLE readonly = nullptr;
+    if (!DuplicateHandle(GetCurrentProcess(), reader.valid() ? reader.get() : output.get(),
+                         GetCurrentProcess(), &readonly, FILE_GENERIC_READ, FALSE, 0))
+        return ProcessFailure{ProcessError::Io, lastError()};
+    state->handle = readonly;
+    return std::unique_ptr<ReadOnlyFileSnapshot>(new ReadOnlyFileSnapshot(std::move(state)));
 #else
     (void)source;
     (void)spoolDirectory;
@@ -274,6 +511,32 @@ WorkerSnapshotInput::open(const std::uint64_t size) {
         std::unique_ptr<WorkerSnapshotInput>(new WorkerSnapshotInput(size, descriptor.get()));
     (void)descriptor.take();
     return input;
+#elif defined(_WIN32)
+    // The supervisor names the inherited handle in the environment; it is read once and kept as
+    // the process-wide authority across retained calls.
+    static const HANDLE inherited = [] {
+        wchar_t value[32] = {};
+        const DWORD length = GetEnvironmentVariableW(kSnapshotVariable, value, 32);
+        std::uintptr_t raw = 0;
+        for (DWORD i = 0; i < length && length < 32; ++i) {
+            if (value[i] < L'0' || value[i] > L'9')
+                return static_cast<HANDLE>(nullptr);
+            raw = raw * 10U + static_cast<std::uintptr_t>(value[i] - L'0');
+        }
+        SetEnvironmentVariableW(kSnapshotVariable, nullptr);
+        return reinterpret_cast<HANDLE>(raw);
+    }();
+    // Read-only: a write of nothing is refused for a handle that cannot write.
+    DWORD written = 0;
+    const bool writable = inherited != nullptr && WriteFile(inherited, "", 0, &written, nullptr);
+    if (size == 0 || size > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
+        inherited == nullptr || writable || regularFileSize(inherited) != size)
+        return ProcessFailure{ProcessError::Io, ERROR_INVALID_PARAMETER};
+    HANDLE own = nullptr;
+    if (!DuplicateHandle(GetCurrentProcess(), inherited, GetCurrentProcess(), &own, 0, FALSE,
+                         DUPLICATE_SAME_ACCESS))
+        return ProcessFailure{ProcessError::Io, lastError()};
+    return std::unique_ptr<WorkerSnapshotInput>(new WorkerSnapshotInput(size, own));
 #else
     (void)size;
     return ProcessFailure{ProcessError::Unavailable, 0};
@@ -283,6 +546,10 @@ WorkerSnapshotInput::~WorkerSnapshotInput() {
 #if defined(__linux__) || defined(__APPLE__)
     if (descriptor_ >= 0)
         ::close(descriptor_);
+#endif
+#if defined(_WIN32)
+    if (handle_ != nullptr)
+        CloseHandle(static_cast<HANDLE>(handle_));
 #endif
 }
 ProcessResult<std::size_t> WorkerSnapshotInput::read(const std::uint64_t offset,
@@ -301,6 +568,23 @@ ProcessResult<std::size_t> WorkerSnapshotInput::read(const std::uint64_t offset,
     if (result < 0)
         return ProcessFailure{ProcessError::Io, errno};
     return static_cast<std::size_t>(result);
+#elif defined(_WIN32)
+    if (offset > size_)
+        return ProcessFailure{ProcessError::Io, ERROR_INVALID_PARAMETER};
+    const auto count = static_cast<DWORD>(std::min<std::uint64_t>(
+        std::min<std::uint64_t>(bytes.size(), size_ - offset), std::uint64_t{1} << 30U));
+    if (count == 0)
+        return std::size_t{0};
+    // A read at a stated offset: the handle's own position is not used, so inputs that share
+    // the open file do not disturb each other.
+    OVERLAPPED position{};
+    position.Offset = static_cast<DWORD>(offset & 0xffffffffULL);
+    position.OffsetHigh = static_cast<DWORD>(offset >> 32U);
+    DWORD read = 0;
+    if (!ReadFile(static_cast<HANDLE>(handle_), bytes.data(), count, &read, &position) &&
+        GetLastError() != ERROR_HANDLE_EOF)
+        return ProcessFailure{ProcessError::Io, lastError()};
+    return static_cast<std::size_t>(read);
 #else
     (void)offset;
     (void)bytes;

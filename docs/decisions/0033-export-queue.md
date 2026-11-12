@@ -506,7 +506,7 @@ saved on any platform opens on every other.
 | Capability | Linux | macOS | Windows |
 | --- | --- | --- | --- |
 | Queue, panel, persistence, presets, scripting edits | yes | yes | yes |
-| Start, Start All, Retry, `bloom-cli export`, `render` | yes | yes (ADR 0035) | yes (ADR 0035); file publication needs the Windows staged-artifact provider |
+| Start, Start All, Retry, `bloom-cli export`, `render` | yes | yes (ADR 0035) | yes (ADR 0035); publishes through the Windows staged-artifact provider (copy path) |
 | Media provider chain (ADR 0035) | FFmpeg VA-API → FFmpeg software | VideoToolbox → FFmpeg | Media Foundation (slot, no provider yet) → FFmpeg |
 | H.264 | VA-API or NVENC, then bundled OpenH264 | VideoToolbox | — (needs Media Foundation or a bundled encoder) |
 | HEVC | VA-API or NVENC, then bundled Kvazaar | — | — |
@@ -514,8 +514,8 @@ saved on any platform opens on every other.
 
 Superseded by ADR 0035: no preset is refused for its operating system. Each platform's media
 provider chain ends in the bundled FFmpeg worker, and a platform-framework refusal falls back to it
-silently with the fallback recorded as provenance. The Windows staged-publication provider and a
-Media Foundation provider remain open under #370; macOS export qualification under #371.
+silently with the fallback recorded as provenance. The Windows staged-publication provider
+(`staged_artifact_windows.cpp`) exists; a Media Foundation provider remains open under #370; macOS export qualification under #371.
 
 ### 16. Issue #369 inside this release (Linux)
 

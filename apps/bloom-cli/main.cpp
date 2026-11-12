@@ -2,6 +2,7 @@
 #include "runtime.hpp"
 #endif
 
+#include <bloom/core/standard_streams.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/gpu_export_tool_package.hpp>
@@ -509,6 +510,8 @@ frameRange(std::string_view value) {
 } // namespace
 
 int main(int argc, char** argv) {
+    // The same bytes on every platform: no "\r\n" from the C runtime's text mode on Windows.
+    bloom::core::useBinaryStandardStreams();
     // A render that needs a Google font waits for the download (docs/architecture/fonts.md).
     runtime::fonts::installHeadlessFontTransport();
 #if defined(BLOOM_BUILD_PYTHON)

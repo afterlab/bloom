@@ -1,14 +1,18 @@
 #include "fake_provider.hpp"
+#include "process_probe.hpp"
 #include "worker_io.hpp"
+#include <bloom/core/standard_streams.hpp>
 #include <bloom/platform/process_supervisor.hpp>
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <memory>
-#include <poll.h>
+#include <thread>
+#if !defined(_WIN32)
 #include <sys/resource.h>
-#include <unistd.h>
+#endif
 #include <vector>
 
 namespace {
@@ -23,6 +27,8 @@ int main(int argc, char** argv) {
         using namespace bloom::media;
         if (!bloom::platform::processWorkerBootstrap() || argc < 2)
             return 2;
+        // The protocol is binary, as in the real worker.
+        bloom::core::useBinaryStandardStreams();
         const std::string mode = argv[1];
         auto incoming = worker::read();
         const auto* hello = std::get_if<provider::Message>(&incoming);
@@ -49,11 +55,10 @@ int main(int argc, char** argv) {
         if (mode == "hang" || mode == "kill") {
             std::signal(SIGTERM, SIG_IGN);
             for (;;)
-                ::poll(nullptr, 0, 1000);
+                std::this_thread::sleep_for(std::chrono::seconds(1));
         }
         if (mode == "crash") {
-            ::raise(SIGKILL);
-            return 5;
+            bloom::test_support::endAbruptly();
         }
         if (mode == "cancel") {
             auto stop = worker::read();
@@ -68,11 +73,12 @@ int main(int argc, char** argv) {
         }
         if (mode == "term") {
             for (;;)
-                ::poll(nullptr, 0, 1000);
+                std::this_thread::sleep_for(std::chrono::seconds(1));
         }
         if (mode == "limits") {
             if (std::getenv("HOME") || std::getenv("LD_LIBRARY_PATH") || std::getenv("LD_PRELOAD"))
                 return 11;
+#if !defined(_WIN32)
             rlimit address{}, files{}, core{};
             if (::getrlimit(RLIMIT_AS, &address) != 0 || ::getrlimit(RLIMIT_NOFILE, &files) != 0 ||
                 ::getrlimit(RLIMIT_CORE, &core) != 0 || files.rlim_cur != 64 || core.rlim_cur != 0)
@@ -81,6 +87,17 @@ int main(int argc, char** argv) {
             // macOS cannot set an address-space limit; the supervisor bounds the footprint
             // instead, which the "memory" mode proves.
             if (address.rlim_cur != 2ULL * 1024 * 1024 * 1024)
+                return 7;
+#endif
+#else
+            // Windows bounds the worker through its job: one process, a committed-memory limit.
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION job{};
+            if (QueryInformationJobObject(nullptr, JobObjectExtendedLimitInformation, &job,
+                                          sizeof(job), nullptr) == 0 ||
+                (job.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY) == 0 ||
+                (job.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS) == 0 ||
+                job.BasicLimitInformation.ActiveProcessLimit != 1 ||
+                job.ProcessMemoryLimit != 2ULL * 1024 * 1024 * 1024)
                 return 7;
 #endif
         }
@@ -94,7 +111,7 @@ int main(int argc, char** argv) {
             for (std::size_t touched = 0; touched < ceiling; touched += chunk) {
                 held.push_back(std::make_unique<char[]>(chunk));
                 std::memset(held.back().get(), 1, chunk);
-                ::poll(nullptr, 0, 1);
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
             return 12;
         }

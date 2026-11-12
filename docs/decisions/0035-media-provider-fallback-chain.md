@@ -100,8 +100,11 @@ download.)
 - **Media Foundation provider.** The Windows chain has its slot (`media-foundation`), which reports
   `NotInstalled`; FFmpeg serves every Windows operation. Without it Windows has no H.264 or HEVC
   encoder until a bundled software encoder lands in the FFmpeg recipe.
-- **Windows staged publication.** `StagedArtifactCoordinator` has no Windows provider
-  (`staged_artifact_unsupported.cpp`), so a Windows export cannot publish its file yet.
+- **Windows streamed staged output.** `StagedArtifactCoordinator` has a Windows provider
+  (`staged_artifact_windows.cpp`: Win32 handles, volume/file-index identities, `MoveFileExW`
+  publication), so creating the coordinator no longer fails at startup and a Windows export publishes
+  through the copy path. The inheritable-writer streaming of ADR 0033 section 16 stays POSIX-only
+  there.
 - **Mid-stream encode fallback.** A platform encoder that fails after frames were sent fails that
   attempt; the chain covers refusals at `begin()`.
 - **macOS HEVC encode.** The VideoToolbox provider declares HEVC decode only.
@@ -111,6 +114,18 @@ download.)
 The chain, the encode/decode wiring and the host availability changes are built and tested on
 Linux. The Windows supervisor, the Windows/macOS branches of the worker, its CMake layout and the
 macOS/Windows superbuild branches have not been compiled or run on those systems.
+
+### 2026-11-12: Windows built and run
+
+The Windows supervisor, the worker's Windows branch, its layout and the MSVC superbuild were
+built and run on Windows 11 (x86-64, MSVC), and the worker and encode tests are registered and
+pass there. Three statements above changed with that. The source snapshot is no longer
+POSIX-only: Windows makes the same verified private copy, removes its name as soon as the file
+exists, and hands it to the worker as a read-only inherited handle. The worker receives the host's
+temporary folder in its environment, which otherwise starts empty. H.264 and HEVC encode on
+Windows through the bundled OpenH264 and Kvazaar (ADR 0036). The Media Foundation slot still
+reports `NotInstalled` (#370), so FFmpeg serves every Windows operation, and streamed staged output
+stays POSIX-only.
 
 ## Consequences
 

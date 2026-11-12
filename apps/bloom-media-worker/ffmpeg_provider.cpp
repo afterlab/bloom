@@ -1284,8 +1284,9 @@ bool hardwareEncodeAvailable() {
         if (!entry.path().filename().string().starts_with("renderD"))
             continue;
         AVBufferRef* device = nullptr;
-        const auto status = av_hwdevice_ctx_create(&device, AV_HWDEVICE_TYPE_VAAPI,
-                                                   entry.path().c_str(), nullptr, 0);
+        const auto node = entry.path().string();
+        const auto status =
+            av_hwdevice_ctx_create(&device, AV_HWDEVICE_TYPE_VAAPI, node.c_str(), nullptr, 0);
         av_buffer_unref(&device);
         if (status >= 0)
             return true;

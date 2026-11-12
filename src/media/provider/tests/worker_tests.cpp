@@ -1,3 +1,4 @@
+#include "process_probe.hpp"
 #include "support.hpp"
 #include <atomic>
 #include <bloom/media/provider/worker_pool.hpp>
@@ -6,9 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
-#include <sys/wait.h>
 #include <thread>
-#include <unistd.h>
 
 using namespace bloom::media::provider;
 namespace {
@@ -85,10 +84,7 @@ void expectError(WorkerTicket& ticket, Error expected) {
 }
 void reaped(std::int64_t pid) {
     test::check(pid > 0, "launched PID");
-    int status = 0;
-    errno = 0;
-    test::check(::waitpid(static_cast<pid_t>(pid), &status, WNOHANG) == -1 && errno == ECHILD,
-                "child reaped");
+    test::check(bloom::test_support::processCollected(pid), "child reaped");
 }
 void waitMarker(const std::filesystem::path& marker) {
     const auto deadline = Clock::now() + std::chrono::seconds(3);
@@ -252,8 +248,9 @@ void run() {
     expectError(greedyCall, Error::Oversized);
     reaped(pid.load());
 #endif
-    const auto marker = std::filesystem::temp_directory_path() /
-                        ("bloom-media-worker-test-" + std::to_string(::getpid()));
+    const auto marker =
+        std::filesystem::temp_directory_path() /
+        ("bloom-media-worker-test-" + std::to_string(bloom::test_support::currentProcessId()));
     struct Cleanup {
         std::filesystem::path path;
         ~Cleanup() {
@@ -280,7 +277,7 @@ void run() {
                         std::get<Unavailable>(*excess.result()).reason == Error::Busy,
                     "bounded pool admission");
         if (mode == "kill") {
-            test::check(::kill(static_cast<pid_t>(pid.load()), SIGKILL) == 0, "kill -9 mid-call");
+            test::check(bloom::test_support::killProcess(pid.load()), "kill -9 mid-call");
             expectError(ticket, Error::Crashed);
         } else {
             if (mode == "shutdown")

@@ -110,6 +110,25 @@ void captureLimits(const std::filesystem::path& source, const std::filesystem::p
 void capturePathReplacement(const std::filesystem::path& source,
                             const std::filesystem::path& spool) {
     const auto size = std::filesystem::file_size(source);
+#if defined(_WIN32)
+    // On Windows the copy has no pathname from the moment it is made, so there is nothing to
+    // replace, link to or keep a second name for: the folder is empty when the copy is complete.
+    auto unnamedQuota = std::make_shared<Quota>(size, 1);
+    bool observed = false;
+    const auto unnamed =
+        Snapshot::capture(source, spool, unnamedQuota, provider::Limits::sourceBytes, {},
+                          [&](const auto bytes, const auto total) {
+                              if (bytes != total)
+                                  return;
+                              check(std::filesystem::is_empty(spool),
+                                    "the capture has no pathname at completion progress");
+                              observed = true;
+                          });
+    check(observed && std::holds_alternative<std::unique_ptr<Snapshot>>(unnamed),
+          "a capture with no pathname publishes");
+    if (observed)
+        return;
+#endif
     const auto alias = spool.parent_path() / "capture-alias";
     auto quota = std::make_shared<Quota>(size, 1);
     for (int mode = 0; mode < 3; ++mode) {

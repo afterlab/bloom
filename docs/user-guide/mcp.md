@@ -724,8 +724,7 @@ output, and a name with any other `{...}` token is refused instead of written. A
 whose first and last frames are the same, writes one file named as given; a longer range of a still
 preset needs one `####` or `{frame}`. ProRes made by Bloom's FFmpeg
 encoder retains its non-authorized preview status; on macOS the system's encoder makes ProRes
-unless `encoder` is `software`. Worker exports run on Linux and macOS; Windows returns the host
-provider's unavailable diagnostic. See [Exporting video](exporting-video.md)
+unless `encoder` is `software`. Worker exports run on Linux, macOS and Windows. See [Exporting video](exporting-video.md)
 for profiles and preservation limits. The destination directory must exist.
 
 Send `notifications/cancelled` with `params.requestId` matching the active tool request to cancel

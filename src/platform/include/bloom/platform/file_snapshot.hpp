@@ -27,7 +27,8 @@ class FileSnapshotQuota final {
     std::uint64_t ceiling_ = 0, resident_ = 0;
     std::size_t files_ = 0, count_ = 0;
 };
-// A host-owned anonymous regular file. There is no public native-handle/path constructor: only
+// A host-owned anonymous regular file (on Windows: a private file nothing else can open, removed
+// with its last handle). There is no public native-handle/path constructor: only
 // capture() can establish the digest/length authority accepted by ProcessSupervisor. Capture and
 // final release are blocking filesystem work; a UI host supplies its existing retirement owner.
 class ReadOnlyFileSnapshot final {
@@ -54,6 +55,8 @@ class ReadOnlyFileSnapshot final {
     struct State;
     explicit ReadOnlyFileSnapshot(std::unique_ptr<State> state);
     [[nodiscard]] int descriptor() const;
+    // Windows: the read-only HANDLE to the private copy. Null elsewhere.
+    [[nodiscard]] void* nativeHandle() const;
     std::unique_ptr<State> state_;
 };
 // Child-only typed view of the descriptor installed by launch(), never a serialized pathname.
@@ -72,7 +75,10 @@ class WorkerSnapshotInput final {
   private:
     WorkerSnapshotInput(std::uint64_t size, int descriptor)
         : size_(size), descriptor_(descriptor) {}
+    // Windows: an owned HANDLE in place of a descriptor.
+    WorkerSnapshotInput(std::uint64_t size, void* handle) : size_(size), handle_(handle) {}
     std::uint64_t size_ = 0;
     int descriptor_ = -1;
+    [[maybe_unused]] void* handle_ = nullptr;
 };
 } // namespace bloom::platform

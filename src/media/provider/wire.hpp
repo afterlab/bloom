@@ -18,10 +18,11 @@ class Writer {
     Bytes bytes;
     template <typename T> void number(T value) {
         using U = std::make_unsigned_t<T>;
-        auto bits = static_cast<U>(value);
+        const auto bits = static_cast<U>(value);
         for (std::size_t i = 0; i < sizeof(T); ++i) {
-            bytes.push_back(static_cast<std::byte>(bits & 255U));
-            bits = static_cast<U>(bits >> 8U);
+            // Shifting by the byte index keeps a one-byte T from shifting by its whole width.
+            bytes.push_back(
+                static_cast<std::byte>((static_cast<std::uint64_t>(bits) >> (8U * i)) & 255U));
         }
     }
     template <typename T> void enumeration(T value, std::uint8_t low, std::uint8_t high) {

@@ -1,5 +1,6 @@
 // The stdio MCP server's composition root (ADR 0034): open the headless session, construct the
 // headless export queue over it and the shared server core from src/mcp, then serve stdio.
+#include <bloom/core/standard_streams.hpp>
 #include <bloom/host/export_presets.hpp>
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
@@ -292,6 +293,8 @@ int serve(scripting::Session& session) {
 } // namespace
 
 int main(int argc, char** argv) {
+    // The same bytes on every platform: no "\r\n" from the C runtime's text mode on Windows.
+    bloom::core::useBinaryStandardStreams();
     // An export that needs a Google font waits for the download (docs/architecture/fonts.md).
     bloom::runtime::fonts::installHeadlessFontTransport();
     try {

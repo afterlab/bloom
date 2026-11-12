@@ -2,6 +2,7 @@
 #include <array>
 #include <atomic>
 #include <bit>
+#include <bloom/core/environment.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/telemetry_counters.hpp>
 #include <bloom/media/video/audio.hpp>
@@ -199,7 +200,7 @@ unsigned frameLuma(const Frame& frame) {
 void retainedRouting(const std::filesystem::path& directory) {
     using namespace bloom::media;
     // Exercise the hardware route wherever a render node exists, whatever the core count.
-    ::setenv("BLOOM_VIDEO_HARDWARE_DECODE", "1", 1);
+    static_cast<void>(bloom::core::setEnvironmentVariable("BLOOM_VIDEO_HARDWARE_DECODE", "1"));
     const video::SourceRevisionAccess preview{video::SourceRevisionPolicy::Retained, true};
     video::VideoDecodeSession session(directory / "numbered-h264.mp4");
     const auto probe = std::get<provider::ProbeResult>(session.probe());
@@ -277,7 +278,7 @@ void retainedRouting(const std::filesystem::path& directory) {
     // reference byte for byte, frame after frame.
     // Both Linux routes where the host has them: the host's own (NVDEC on NVIDIA) and VA-API.
     for (const char* mode : {"1", "vaapi"}) {
-        ::setenv("BLOOM_VIDEO_HARDWARE_DECODE", mode, 1);
+        static_cast<void>(bloom::core::setEnvironmentVariable("BLOOM_VIDEO_HARDWARE_DECODE", mode));
         const bool hasRoute = video::VideoDecodeSession::hardwareDecodePossible();
         video::VideoDecodeSession finalSession(directory / "numbered-h264.mp4");
         video::VideoDecodeSession softwareSession(directory / "numbered-h264.mp4");
@@ -307,7 +308,7 @@ void retainedRouting(const std::filesystem::path& directory) {
                       "explicit typed fallback");
         }
     }
-    ::setenv("BLOOM_VIDEO_HARDWARE_DECODE", "1", 1);
+    static_cast<void>(bloom::core::setEnvironmentVariable("BLOOM_VIDEO_HARDWARE_DECODE", "1"));
     // The revalidated software request is a one-shot worker whose frame crosses the pipe; the
     // retained reference crossed the arena. The bytes are the same.
     const auto piped =
@@ -369,7 +370,7 @@ bloom::media::provider::FrameProduct yuv420(std::array<unsigned, 2> cb, std::arr
 // where the frame ahead does not exist), every request returns its own exact frame.
 void decodeAhead(const std::filesystem::path& directory) {
     using namespace bloom::media;
-    ::setenv("BLOOM_VIDEO_HARDWARE_DECODE", "0", 1);
+    static_cast<void>(bloom::core::setEnvironmentVariable("BLOOM_VIDEO_HARDWARE_DECODE", "0"));
     const video::SourceRevisionAccess preview{video::SourceRevisionPolicy::Retained, true};
     video::VideoDecodeSession session(directory / "numbered-h264.mp4");
     const auto probe = std::get<provider::ProbeResult>(session.probe());
@@ -382,7 +383,7 @@ void decodeAhead(const std::filesystem::path& directory) {
         check(frameLuma(std::get<Frame>(result)) == 16 + n * 3,
               "a request after decode-ahead returns its own exact frame");
     }
-    ::unsetenv("BLOOM_VIDEO_HARDWARE_DECODE");
+    static_cast<void>(bloom::core::unsetEnvironmentVariable("BLOOM_VIDEO_HARDWARE_DECODE"));
 }
 
 void colourInterpretation(const std::filesystem::path& directory) {

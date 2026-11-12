@@ -13,6 +13,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+
+#include <winioctl.h>
 #else
 #include <sys/stat.h>
 #endif
@@ -108,14 +110,39 @@ std::optional<FileIdentity> observeFileIdentity(const std::filesystem::path& pat
     identity.size = static_cast<std::uint64_t>(standard.EndOfFile.QuadPart);
     identity.modifiedNanoseconds = unixNanoseconds(basic.LastWriteTime.QuadPart);
     identity.changedNanoseconds = basic.ChangeTime.QuadPart;
+    // The change time is read from the system clock, which can stand still for several
+    // milliseconds: a file rewritten in place inside one tick, with its size and written time put
+    // back, keeps its change time too. A volume's change journal numbers every change to a file,
+    // so that number is folded in where the volume keeps a journal.
+    {
+        alignas(USN_RECORD_V2) std::array<std::byte, 1024> record{};
+        DWORD returned = 0;
+        if (::DeviceIoControl(handle, FSCTL_READ_FILE_USN_DATA, nullptr, 0, record.data(),
+                              static_cast<DWORD>(record.size()), &returned, nullptr) &&
+            returned >= sizeof(USN_RECORD_COMMON_HEADER)) {
+            const auto* header = reinterpret_cast<const USN_RECORD_COMMON_HEADER*>(record.data());
+            std::uint64_t number = 0;
+            if (header->MajorVersion == 2 && returned >= sizeof(USN_RECORD_V2))
+                number = static_cast<std::uint64_t>(
+                    reinterpret_cast<const USN_RECORD_V2*>(record.data())->Usn);
+            else if (header->MajorVersion == 3 && returned >= sizeof(USN_RECORD_V3))
+                number = static_cast<std::uint64_t>(
+                    reinterpret_cast<const USN_RECORD_V3*>(record.data())->Usn);
+            identity.changedNanoseconds =
+                static_cast<std::int64_t>(static_cast<std::uint64_t>(identity.changedNanoseconds) ^
+                                          (number * 0x9E3779B97F4A7C15ULL));
+        }
+    }
     FILE_ID_INFO id{};
     if (::GetFileInformationByHandleEx(handle, FileIdInfo, &id, sizeof(id))) {
         identity.volume = static_cast<std::uint64_t>(id.VolumeSerialNumber);
         std::array<std::uint8_t, 16> bytes{};
         std::copy(std::begin(id.FileId.Identifier), std::end(id.FileId.Identifier), bytes.begin());
-        for (std::size_t i = 0; i < 8; ++i) {
-            identity.fileIdHigh = (identity.fileIdHigh << 8U) | bytes[i];
-            identity.fileIdLow = (identity.fileIdLow << 8U) | bytes[i + 8];
+        // The identifier is a little-endian 128-bit number; a volume with 64-bit file numbers
+        // fills only its low half.
+        for (std::size_t i = 8; i-- > 0;) {
+            identity.fileIdLow = (identity.fileIdLow << 8U) | bytes[i];
+            identity.fileIdHigh = (identity.fileIdHigh << 8U) | bytes[i + 8];
         }
     } else {
         BY_HANDLE_FILE_INFORMATION legacy{};

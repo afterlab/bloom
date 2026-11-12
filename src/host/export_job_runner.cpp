@@ -26,9 +26,10 @@ std::string ocioConfigIntentLocation(const document::OcioConfigReference& refere
     }
     if (const auto* relative = std::get_if<document::ProjectRelativeOciozLocator>(&locator)) {
         location.kind = color::OcioConfigLocatorKind::ProjectRelativeArchive;
-        location.value = projectDirectory.empty()
-                             ? relative->path
-                             : (projectDirectory / relative->path).lexically_normal().string();
+        location.value =
+            projectDirectory.empty()
+                ? relative->path
+                : (projectDirectory / relative->path).lexically_normal().generic_string();
     } else if (const auto* archive = std::get_if<document::ExternalOciozLocator>(&locator)) {
         location.kind = color::OcioConfigLocatorKind::ExternalArchive;
         location.value = archive->uri;

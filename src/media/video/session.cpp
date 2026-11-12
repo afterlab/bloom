@@ -311,7 +311,7 @@ struct VideoDecodeSession::State {
         options.capacity = 1;
         options.timeout = std::chrono::seconds(30);
         options.launched = std::move(launched);
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
         options.retainedVideo = true;
 #endif
         return options;
@@ -623,7 +623,7 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
     return result;
 }
 Result<ProbeResult> VideoDecodeSession::probe(const Cancel& cancel) {
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
     const auto captured = sourceRevision({}, cancel, {});
     if (const auto* error = std::get_if<Unavailable>(&captured))
         return *error;
@@ -645,7 +645,7 @@ std::optional<Unavailable> VideoDecodeSession::verifySource(const Digest& expect
             return sourceChanged();
         return {};
     }
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
     // A cold source is verified by the same capture a later decode reuses.
     const auto identity = sourceRevision(expected, cancel, {SourceRevisionPolicy::Revalidate});
     if (const auto* error = std::get_if<Unavailable>(&identity))
@@ -682,7 +682,7 @@ Result<std::shared_ptr<const FrameProduct>> VideoDecodeSession::frame(
     if (revisionAccess.retained)
         *revisionAccess.retained = false;
     std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot;
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
     auto captured = sourceRevision(source.sourceDigest, cancel, revisionAccess);
     if (const auto* error = std::get_if<Unavailable>(&captured))
         return *error;
@@ -910,7 +910,7 @@ nextAdmittedFrameWaiter(const std::span<const FrameWaiter> waiters,
 Result<AudioBlock> VideoDecodeSession::audio(const ProbeResult& source, std::uint32_t stream,
                                              std::uint64_t sample, std::uint32_t count,
                                              const Cancel& cancel) {
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
     const auto captured = sourceRevision(source.sourceDigest, cancel, {});
     if (const auto* error = std::get_if<Unavailable>(&captured))
         return *error;
@@ -925,7 +925,7 @@ Result<AudioBlock> VideoDecodeSession::audio(const ProbeResult& source, std::uin
 }
 Result<DemuxIndex> VideoDecodeSession::index(const ProbeResult& source, const Cancel& cancel,
                                              const SourceRevisionAccess& access) {
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
     const auto captured = sourceRevision(source.sourceDigest, cancel, access);
     if (const auto* error = std::get_if<Unavailable>(&captured))
         return *error;

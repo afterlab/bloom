@@ -214,7 +214,7 @@ void fixture(const std::filesystem::path& path, bool prores, bool alpha = false,
              const Patches* patches = nullptr) {
     Output out;
     require(out.frame && out.packet, "Fixture allocation");
-    require(avformat_alloc_output_context2(&out.format, nullptr, "mov", path.c_str()) >= 0,
+    require(avformat_alloc_output_context2(&out.format, nullptr, "mov", path.string().c_str()) >= 0,
             "Fixture mux allocation");
     auto* videoStream = avformat_new_stream(out.format, nullptr);
     require(videoStream, "Fixture video stream");
@@ -277,7 +277,7 @@ void fixture(const std::filesystem::path& path, bool prores, bool alpha = false,
         ap.block_align = 2;
         av_channel_layout_default(&ap.ch_layout, 1);
     }
-    require(avio_open(&out.format->pb, path.c_str(), AVIO_FLAG_WRITE) >= 0, "Fixture file open");
+    require(avio_open(&out.format->pb, path.string().c_str(), AVIO_FLAG_WRITE) >= 0, "Fixture file open");
     AVDictionary* muxOptions = nullptr;
     if (!prores)
         av_dict_set(&muxOptions, "brand", "isom", 0);
@@ -351,7 +351,7 @@ void special(const std::filesystem::path& path, const Special kind) {
     const unsigned height = eightK ? 4320U : hd ? 720U : 48U;
     Output out;
     require(out.frame && out.packet, "Fixture allocation");
-    require(avformat_alloc_output_context2(&out.format, nullptr, "mov", path.c_str()) >= 0,
+    require(avformat_alloc_output_context2(&out.format, nullptr, "mov", path.string().c_str()) >= 0,
             "Fixture mux allocation");
     auto* stream = avformat_new_stream(out.format, nullptr);
     require(stream, "Fixture video stream");
@@ -426,7 +426,7 @@ void special(const std::filesystem::path& path, const Special kind) {
             av_display_rotation_set(reinterpret_cast<std::int32_t*>(side->data), -90.0);
         }
     }
-    require(avio_open(&out.format->pb, path.c_str(), AVIO_FLAG_WRITE) >= 0, "Fixture file open");
+    require(avio_open(&out.format->pb, path.string().c_str(), AVIO_FLAG_WRITE) >= 0, "Fixture file open");
     AVDictionary* muxOptions = nullptr;
     if (!encoded)
         av_dict_set(&muxOptions, "brand", "isom", 0);
@@ -512,7 +512,7 @@ void special(const std::filesystem::path& path, const Special kind) {
 // cannot be muxed here: Matroska inserts the vp9_superframe filter, which the build omits.)
 void undecodableWebm(const std::filesystem::path& path) {
     Output out;
-    require(avformat_alloc_output_context2(&out.format, nullptr, "matroska", path.c_str()) >= 0,
+    require(avformat_alloc_output_context2(&out.format, nullptr, "matroska", path.string().c_str()) >= 0,
             "Fixture mux allocation");
     auto* stream = avformat_new_stream(out.format, nullptr);
     require(stream, "Fixture video stream");
@@ -524,7 +524,7 @@ void undecodableWebm(const std::filesystem::path& path) {
     vp.width = 64;
     vp.height = 48;
     vp.format = AV_PIX_FMT_YUV420P;
-    require(avio_open(&out.format->pb, path.c_str(), AVIO_FLAG_WRITE) >= 0, "Fixture file open");
+    require(avio_open(&out.format->pb, path.string().c_str(), AVIO_FLAG_WRITE) >= 0, "Fixture file open");
     require(avformat_write_header(out.format, nullptr) >= 0, "Fixture mux header");
     for (int n = 0; n < 2; ++n) {
         require(av_new_packet(out.packet, 16) >= 0, "Fixture packet allocation");
@@ -544,7 +544,7 @@ void undecodableWebm(const std::filesystem::path& path) {
 void playerReference(const std::filesystem::path& clip, const std::filesystem::path& output,
                      const int matrix) {
     AVFormatContext* format = nullptr;
-    require(avformat_open_input(&format, clip.c_str(), nullptr, nullptr) >= 0, "Reference open");
+    require(avformat_open_input(&format, clip.string().c_str(), nullptr, nullptr) >= 0, "Reference open");
     const std::unique_ptr<AVFormatContext*, void (*)(AVFormatContext**)> formatOwner(
         &format, avformat_close_input);
     require(avformat_find_stream_info(format, nullptr) >= 0, "Reference stream info");

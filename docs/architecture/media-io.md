@@ -317,9 +317,9 @@ developer build without an FFmpeg package builds no FFmpeg worker; Linux and qua
 require it.
 
 Not done: a Media Foundation provider (Windows encodes H.264 and HEVC with NVENC or the bundled
-OpenH264 and Kvazaar), the Windows staged-artifact publication provider, mid-stream encode
-fallback, and VideoToolbox HEVC encode. The Windows and macOS branches are not compiled or run in
-Linux validation.
+OpenH264 and Kvazaar), mid-stream encode fallback, and VideoToolbox HEVC encode. The Windows and
+macOS branches are not compiled or run in Linux validation; each is built and tested on its own
+system.
 
 ## FFmpeg dependency intake (2026-09-17)
 
@@ -1117,9 +1117,8 @@ volume queues nothing (`Statistics::localSkipped` counts them), so on local stor
 their own sources and nothing competes with them; Remote and Unknown volumes keep the behavior
 above, which was measured to help on shares. A user-space file system reads Unknown, so it keeps
 read-ahead. The rule is by volume type, not by measured throughput: a slow local disk is treated
-as local. The effect on the cold frame rate is not measured here. The Linux classification is
-tested; the macOS and Windows readings are written to the same contract and have not been built or
-run.
+as local. The effect on the cold frame rate is not measured here. The classification test runs
+on Linux and on Windows (2026-11-12, a local NTFS volume; a share was not tried there).
 Decode ahead (#386): when the frame that queues the captures is a GPU colour leaf (its upload
 carries native samples: PNG, JPEG and all-half OpenEXR), the worker that captured a member also
 decodes its native samples, with the raw interpretation and resolved colour layer the frame's own
@@ -1260,9 +1259,8 @@ remains alive. Bootstrap/library verification and session construction hold no U
 refresh generations reject construction that finishes after invalidation. Unbound headless sessions
 release on their calling worker.
 Linux and macOS capture the source snapshot and hand it to the worker as an inherited descriptor;
-the Linux tests of that path run on both. Windows runs the FFmpeg worker through the Windows
-supervisor on the path and verifies through the same identity memo; it is not described as
-qualified by the Linux and macOS implementation.
+Windows captures it the same way and hands over an inherited read-only handle. The same tests of
+that path run on all three.
 
 **Controls.** `media/disk-cache-enabled` (default on), `media/disk-cache-budget-bytes`, and
 `media/disk-cache-directory` in QSettings; **Edit → Purge… → Purge media cache** clears every entry
@@ -1431,8 +1429,11 @@ than an address space, so the same number is no stricter than on Linux. Windows
 a gate pipe whose inherited handle the child reads from `BLOOM_PROCESS_GATE`, an explicit inherited
 handle list (its pipe ends, the gate and `NUL` for stderr), and a job object with the
 committed-memory limit, one active process and kill-on-close; stop is message, grace, closed stdin,
-grace, `TerminateJobObject`. Windows refuses the descriptor-based source snapshot and streamed
-staged output, so the host takes its path and chunk-copy routes there.
+grace, `TerminateJobObject`. The source snapshot is a private copy whose name is removed as soon
+as it is made (a file system that cannot do that keeps a file nothing else can open until its last
+handle closes); the worker inherits a read-only handle to it, named in `BLOOM_PROCESS_SNAPSHOT`.
+The worker's environment names the host's temporary folder, where it spools an encode. Windows
+refuses streamed staged output, so the host takes its chunk-copy route there.
 
 The fake build identity hashes the boundary/provider source generation and compiler configuration;
 its dependency identity separately hashes the reviewed lock bytes at configure time.
@@ -2002,7 +2003,8 @@ Linux uses FFmpeg 8.1.2 exclusively inside `bloom-media-worker`. Only
 `apps/bloom-media-worker/ffmpeg_provider.cpp` includes FFmpeg headers. The desktop links the
 provider-neutral protocol and client; it loads no libav library. The worker installs under
 `libexec/bloom/media/ffmpeg-v1`, with its shared closure in `lib/` and relative loader paths.
-macOS and Windows currently return typed `Unavailable`; their native providers remain pending.
+macOS and Windows read video through the same worker behind their provider chains (ADR 0035):
+the Apple frameworks come first on macOS, and the Windows Media Foundation slot has no provider.
 
 Protocol 1, schema 2 adds bounded stream metadata, keyframe indices and planar float audio blocks.
 Probe retains codec/profile identifiers, exact rational timebase and rate, dimensions, original
@@ -2633,7 +2635,8 @@ compare the supplied display-referred samples and do not select the color transf
 2× gain LUT fixture decodes the first review frame through the worker and independently converts
 its tagged Rec.709 YUV to display RGB. Maximum/mean errors are 252/133 in 16-bit units, within
 22938/1967. The same fixture's look-bypassed AP0 handoff has zero error against direct OCIO output.
-Worker and external-LUT unavailability on macOS/Windows remain explicit supported fallbacks.
+A host without a usable media worker or a confinable LUT helper reports that as a typed
+unavailability on every platform; neither is replaced by in-process work.
 
 ## Export Queue Media (#369)
 

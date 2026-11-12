@@ -1,3 +1,4 @@
+#include "process_probe.hpp"
 #include "program_audio.hpp"
 #include "support.hpp"
 #include <algorithm>
@@ -13,9 +14,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
-#include <sys/wait.h>
 #include <tuple>
-#include <unistd.h>
 #include <utility>
 using namespace bloom::media::provider;
 namespace {
@@ -107,8 +106,10 @@ AudioBlock sound(const EncodeSettingsV1& settings, std::uint64_t offset, std::ui
 }
 // A provider ahead of FFmpeg in the platform's chain that does not declare the codec is passed
 // over (ADR 0035); that is not a refusal. These two read provenance past such entries.
+// So is one that is not on this computer at all, such as a platform framework's empty slot.
 bool passedOver(const MediaProviderFallbackV1& fallback) {
-    return fallback.cause == MediaFallbackCauseV1::NotDeclared;
+    return fallback.cause == MediaFallbackCauseV1::NotDeclared ||
+           fallback.cause == MediaFallbackCauseV1::NotInstalled;
 }
 // The FFmpeg worker served it and nothing was tried before it.
 bool servedByFfmpegAlone(const MediaProviderProvenanceV1& served) {
@@ -632,7 +633,7 @@ void tests(const std::filesystem::path& directory) {
     EncodeSessionV1 crashed(options);
     ok(crashed.begin(settings));
     ok(crashed.video(image(settings, 0)));
-    test::check(::kill(static_cast<pid_t>(pid), SIGKILL) == 0, "kill encode worker");
+    test::check(bloom::test_support::killProcess(pid), "kill encode worker");
     // Acknowledgements are collected lazily: the crash is reported by the frame write if the pipe
     // is already closed, otherwise by the next call that collects acknowledgements.
     auto failure = crashed.video(image(settings, 1));
@@ -642,14 +643,10 @@ void tests(const std::filesystem::path& directory) {
             failure = *error;
     }
     test::check(failure && failure->reason == Error::Crashed, "typed encode crash");
-    test::check(failure && failure->detail.find("signal 9") != std::string::npos,
+    test::check(failure && failure->detail.find(bloom::test_support::killedDescription()) !=
+                               std::string::npos,
                 "the encode crash names how the worker ended");
-    {
-        int status = 0;
-        errno = 0;
-        test::check(::waitpid(static_cast<pid_t>(pid), &status, WNOHANG) == -1 && errno == ECHILD,
-                    "the crashed encode worker is reaped");
-    }
+    test::check(bloom::test_support::processCollected(pid), "the crashed encode worker is reaped");
     EncodeSessionV1 retry({});
     ok(retry.begin(settings));
     ok(retry.video(image(settings, 0)));
