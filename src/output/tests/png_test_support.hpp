@@ -18,6 +18,7 @@
 #include <bloom/output/output_analysis.hpp>
 #include <bloom/output/output_analysis_analyzer.hpp>
 #include <bloom/output/process_frame_semantic_identity.hpp>
+#include <bloom/platform/private_temporary_directory.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -47,7 +48,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -352,8 +352,8 @@ struct PreparedSource final {
 // RAII scratch directory under the platform temp root, isolating this test binary's staged
 // artifacts from other CONCURRENT processes (parallel ctest, two worktrees building the same
 // binary at once). A per-process counter starting at 0 in each process, combined with a plain
-// hash of the label, could still collide between two such processes -- mkdtemp's own six-character
-// suffix is what actually makes the path unique, the same precedent
+// hash of the label, could still collide between two such processes -- the private directory's
+// unpredictable suffix is what actually makes the path unique, the same precedent
 // frame_export_publication_tests.cpp's TempDirectory already uses. The label stays in the
 // template's PREFIX purely so the directory name stays legible; it plays no role in the
 // uniqueness guarantee, so two instances constructed with the same label in the same process still
@@ -361,19 +361,14 @@ struct PreparedSource final {
 class ScratchDirectory final {
   public:
     explicit ScratchDirectory(const std::string& label) {
-        std::error_code errorCode;
-        const auto root = std::filesystem::temp_directory_path(errorCode);
-        if (errorCode) {
+        // Accented, CJK and Cyrillic characters and a space: every artifact these tests stage and
+        // publish goes through a path outside ASCII on every platform.
+        auto created = bloom::platform::createPrivateTemporaryDirectory(
+            "bloom-output-png-test-" + label + "-caf\u00e9 \u65e5\u672c \u041f\u0440\u0438-");
+        if (!created) {
             std::abort();
         }
-        auto templatePath = (root / ("bloom-output-png-test-" + label + "-XXXXXX")).string();
-        std::vector<char> buffer(templatePath.begin(), templatePath.end());
-        buffer.push_back('\0');
-        const auto* result = ::mkdtemp(buffer.data());
-        if (result == nullptr) {
-            std::abort();
-        }
-        path_ = result;
+        path_ = std::move(*created);
     }
     ScratchDirectory(const ScratchDirectory&) = delete;
     ScratchDirectory& operator=(const ScratchDirectory&) = delete;

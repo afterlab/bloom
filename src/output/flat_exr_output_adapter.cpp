@@ -75,6 +75,20 @@ namespace runtime = bloom::runtime;
     return output::FlatExrWriteResultV1::failed(error, removed);
 }
 
+// The destination can only be removed once nothing holds it open, which on Windows includes the
+// writer's own stream: a removal tried while the file was still open is tried again here, after
+// the write has returned and closed it.
+[[nodiscard]] output::FlatExrWriteResultV1
+afterClose(const output::FlatExrWriteResultV1& result,
+           const std::filesystem::path& destination) noexcept {
+    if (result.status() == output::FlatExrWriteStatusV1::Written || result.destinationRemoved())
+        return result;
+    const bool removed = removeDestinationBestEffort(destination);
+    return result.status() == output::FlatExrWriteStatusV1::Cancelled
+               ? output::FlatExrWriteResultV1::cancelled(removed)
+               : output::FlatExrWriteResultV1::failed(result.error(), removed);
+}
+
 struct PreparedGeometry final {
     Imath::Box2i dataWindow;
     Imath::Box2i displayWindow;
@@ -180,195 +194,209 @@ FlatExrWriteResultV1 FlatExrRgba32fLinRec709SceneWriterV1::write(
     const runtime::CancellationToken& cancellation, const FlatExrWriteProgressCallbackV1& progress,
     const PreparedFlatExrOutputV1* output,
     const render::ChannelSetImage* channelLayers) const noexcept {
-    if (output && !output->matches(frame.identity().colorIntent))
-        return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination, false);
-    const auto outputId = output
-                              ? std::string_view(output->options().outputColorSpaceId)
-                              : std::string_view(frame.identity().colorIntent.workingColorSpaceId);
-    const auto compression = output ? output->options().compression : FlatExrCompressionV1::Zip;
-    const auto& image = frame.processImage();
-    if (!image.isValid()) {
-        return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination, false);
-    }
-    const auto* descriptor = image.descriptor();
-    if (descriptor == nullptr) {
-        return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination, false);
-    }
-    const auto geometry = ::prepareGeometry(*descriptor);
-    if (!geometry) {
-        // prepareGeometry only reports WindowOutOfRange or InvalidPixelAspectRatio; distinguish
-        // by re-checking the window fit alone (cheap, deterministic).
-        const bool windowsFit =
-            ::windowsFitWriterDomain(descriptor->dataWindow(), descriptor->displayWindow());
-        return ::fail(windowsFit ? FlatExrWriteErrorCodeV1::InvalidPixelAspectRatio
-                                 : FlatExrWriteErrorCodeV1::WindowOutOfRange,
-                      destination, false);
-    }
-    if (cancellation.isCancellationRequested()) {
-        return FlatExrWriteResultV1::cancelled(true);
-    }
-
-    if (channelLayers != nullptr && channelLayers->dataWindow() != descriptor->dataWindow())
-        return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination, false);
-    const auto pixels = image.pixels();
-    const auto rowStrideBytes = descriptor->layout().rowStrideBytes;
-    const auto height = descriptor->dataWindow().extent().height();
-    if (height == 0 || pixels.empty()) {
-        return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination, false);
-    }
-
-    bool destinationCreated = false;
-    try {
-        Imf::Header header(
-            geometry->displayWindow, geometry->dataWindow, geometry->pixelAspectRatio,
-            Imath::V2f(0.0F, 0.0F), 1.0F, Imf::INCREASING_Y,
-            static_cast<Imf::Compression>(detail::flatExrLibraryCompressionV1(compression)));
-        header.channels().insert("R", Imf::Channel(Imf::FLOAT));
-        header.channels().insert("G", Imf::Channel(Imf::FLOAT));
-        header.channels().insert("B", Imf::Channel(Imf::FLOAT));
-        header.channels().insert("A", Imf::Channel(Imf::FLOAT));
-        const auto layerType = [](const render::ChannelSampleKind kind) {
-            return kind == render::ChannelSampleKind::Half    ? Imf::HALF
-                   : kind == render::ChannelSampleKind::Uint ? Imf::UINT
-                                                             : Imf::FLOAT;
-        };
-        if (channelLayers != nullptr)
-            for (const auto& channel : channelLayers->channels())
-                header.channels().insert(channel.name, Imf::Channel(layerType(channel.sampleKind)));
-        // The layer planes are Float32 lanes over the whole data window. OpenEXR does not convert
-        // pixel types on write, so half layers are rounded into a half copy once; float and uint
-        // lanes (the latter carrying their 32-bit pattern) are written in place.
-        std::vector<std::vector<Imath::half>> halfLayers;
-        if (channelLayers != nullptr) {
-            halfLayers.resize(channelLayers->channels().size());
-            for (std::size_t index = 0; index < halfLayers.size(); ++index) {
-                if (channelLayers->channels()[index].sampleKind != render::ChannelSampleKind::Half)
-                    continue;
-                const auto plane = channelLayers->plane(index);
-                halfLayers[index].reserve(plane.size());
-                for (const auto value : plane)
-                    halfLayers[index].emplace_back(value);
-            }
+    const auto result = [&]() noexcept -> FlatExrWriteResultV1 {
+        if (output && !output->matches(frame.identity().colorIntent))
+            return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination, false);
+        const auto outputId =
+            output ? std::string_view(output->options().outputColorSpaceId)
+                   : std::string_view(frame.identity().colorIntent.workingColorSpaceId);
+        const auto compression = output ? output->options().compression : FlatExrCompressionV1::Zip;
+        const auto& image = frame.processImage();
+        if (!image.isValid()) {
+            return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination, false);
         }
-        const auto insertLayers = [&](Imf::FrameBuffer& target) {
-            if (channelLayers == nullptr)
-                return;
-            const auto width = static_cast<std::size_t>(descriptor->dataWindow().extent().width());
-            for (std::size_t index = 0; index < channelLayers->channels().size(); ++index) {
-                const auto& channel = channelLayers->channels()[index];
-                if (channel.sampleKind == render::ChannelSampleKind::Half) {
-                    target.insert(channel.name,
-                                  Imf::Slice::Make(Imf::HALF,
-                                                   reinterpret_cast<const char*>(
-                                                       halfLayers[index].data()),
-                                                   geometry->dataWindow, sizeof(Imath::half),
-                                                   width * sizeof(Imath::half)));
-                    continue;
-                }
-                const auto kind = channel.sampleKind == render::ChannelSampleKind::Uint
-                                      ? Imf::UINT
-                                      : Imf::FLOAT;
-                target.insert(channel.name,
-                              Imf::Slice::Make(kind,
-                                               reinterpret_cast<const char*>(
-                                                   channelLayers->plane(index).data()),
-                                               geometry->dataWindow, sizeof(float),
-                                               width * sizeof(float)));
-            }
-        };
+        const auto* descriptor = image.descriptor();
+        if (descriptor == nullptr) {
+            return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination, false);
+        }
+        const auto geometry = ::prepareGeometry(*descriptor);
+        if (!geometry) {
+            // prepareGeometry only reports WindowOutOfRange or InvalidPixelAspectRatio; distinguish
+            // by re-checking the window fit alone (cheap, deterministic).
+            const bool windowsFit =
+                ::windowsFitWriterDomain(descriptor->dataWindow(), descriptor->displayWindow());
+            return ::fail(windowsFit ? FlatExrWriteErrorCodeV1::InvalidPixelAspectRatio
+                                     : FlatExrWriteErrorCodeV1::WindowOutOfRange,
+                          destination, false);
+        }
+        if (cancellation.isCancellationRequested()) {
+            return FlatExrWriteResultV1::cancelled(true);
+        }
 
-        const auto chromaticities = detail::flatExrChromaticityBitsForWorkingColorSpaceV1(outputId);
-        if (!chromaticities.has_value()) {
+        if (channelLayers != nullptr && channelLayers->dataWindow() != descriptor->dataWindow())
+            return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination, false);
+        const auto pixels = image.pixels();
+        const auto rowStrideBytes = descriptor->layout().rowStrideBytes;
+        const auto height = descriptor->dataWindow().extent().height();
+        if (height == 0 || pixels.empty()) {
+            return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination, false);
+        }
+
+        bool destinationCreated = false;
+        try {
+            Imf::Header header(
+                geometry->displayWindow, geometry->dataWindow, geometry->pixelAspectRatio,
+                Imath::V2f(0.0F, 0.0F), 1.0F, Imf::INCREASING_Y,
+                static_cast<Imf::Compression>(detail::flatExrLibraryCompressionV1(compression)));
+            header.channels().insert("R", Imf::Channel(Imf::FLOAT));
+            header.channels().insert("G", Imf::Channel(Imf::FLOAT));
+            header.channels().insert("B", Imf::Channel(Imf::FLOAT));
+            header.channels().insert("A", Imf::Channel(Imf::FLOAT));
+            const auto layerType = [](const render::ChannelSampleKind kind) {
+                return kind == render::ChannelSampleKind::Half   ? Imf::HALF
+                       : kind == render::ChannelSampleKind::Uint ? Imf::UINT
+                                                                 : Imf::FLOAT;
+            };
+            if (channelLayers != nullptr)
+                for (const auto& channel : channelLayers->channels())
+                    header.channels().insert(channel.name,
+                                             Imf::Channel(layerType(channel.sampleKind)));
+            // The layer planes are Float32 lanes over the whole data window. OpenEXR does not
+            // convert pixel types on write, so half layers are rounded into a half copy once; float
+            // and uint lanes (the latter carrying their 32-bit pattern) are written in place.
+            std::vector<std::vector<Imath::half>> halfLayers;
+            if (channelLayers != nullptr) {
+                halfLayers.resize(channelLayers->channels().size());
+                for (std::size_t index = 0; index < halfLayers.size(); ++index) {
+                    if (channelLayers->channels()[index].sampleKind !=
+                        render::ChannelSampleKind::Half)
+                        continue;
+                    const auto plane = channelLayers->plane(index);
+                    halfLayers[index].reserve(plane.size());
+                    for (const auto value : plane)
+                        halfLayers[index].emplace_back(value);
+                }
+            }
+            const auto insertLayers = [&](Imf::FrameBuffer& target) {
+                if (channelLayers == nullptr)
+                    return;
+                const auto width =
+                    static_cast<std::size_t>(descriptor->dataWindow().extent().width());
+                for (std::size_t index = 0; index < channelLayers->channels().size(); ++index) {
+                    const auto& channel = channelLayers->channels()[index];
+                    if (channel.sampleKind == render::ChannelSampleKind::Half) {
+                        target.insert(channel.name,
+                                      Imf::Slice::Make(
+                                          Imf::HALF,
+                                          reinterpret_cast<const char*>(halfLayers[index].data()),
+                                          geometry->dataWindow, sizeof(Imath::half),
+                                          width * sizeof(Imath::half)));
+                        continue;
+                    }
+                    const auto kind = channel.sampleKind == render::ChannelSampleKind::Uint
+                                          ? Imf::UINT
+                                          : Imf::FLOAT;
+                    target.insert(
+                        channel.name,
+                        Imf::Slice::Make(
+                            kind, reinterpret_cast<const char*>(channelLayers->plane(index).data()),
+                            geometry->dataWindow, sizeof(float), width * sizeof(float)));
+                }
+            };
+
+            const auto chromaticities =
+                detail::flatExrChromaticityBitsForWorkingColorSpaceV1(outputId);
+            if (!chromaticities.has_value()) {
+                return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination,
+                              destinationCreated);
+            }
+            std::array<Imath::V2f, 4> chromaBits{};
+            for (std::size_t index = 0; index < 4; ++index) {
+                chromaBits[index] =
+                    Imath::V2f(std::bit_cast<float>((*chromaticities)[index * 2]),
+                               std::bit_cast<float>((*chromaticities)[index * 2 + 1]));
+            }
+            Imf::addChromaticities(header, Imf::Chromaticities(chromaBits[0], chromaBits[1],
+                                                               chromaBits[2], chromaBits[3]));
+            header.insert("colorInteropID", Imf::StringAttribute(std::string(outputId)));
+
+            destinationCreated = true;
+            Imf::OutputFile outputFile(destination.string().c_str(), header, 1);
+
+            std::vector<std::array<float, 4>> transformed;
+            if (output && output->processor())
+                transformed.resize(descriptor->dataWindow().extent().width());
+            const auto* base = reinterpret_cast<const char*>(pixels.data());
+            constexpr std::size_t xStride = sizeof(render::Rgba32f);
+            Imf::FrameBuffer frameBuffer;
+            frameBuffer.insert("R",
+                               Imf::Slice::Make(Imf::FLOAT, base + 0 * sizeof(float),
+                                                geometry->dataWindow, xStride, rowStrideBytes));
+            frameBuffer.insert("G",
+                               Imf::Slice::Make(Imf::FLOAT, base + 1 * sizeof(float),
+                                                geometry->dataWindow, xStride, rowStrideBytes));
+            frameBuffer.insert("B",
+                               Imf::Slice::Make(Imf::FLOAT, base + 2 * sizeof(float),
+                                                geometry->dataWindow, xStride, rowStrideBytes));
+            frameBuffer.insert("A",
+                               Imf::Slice::Make(Imf::FLOAT, base + 3 * sizeof(float),
+                                                geometry->dataWindow, xStride, rowStrideBytes));
+            insertLayers(frameBuffer);
+            outputFile.setFrameBuffer(frameBuffer);
+
+            const auto rowsPerChunk = static_cast<std::uint32_t>(
+                std::max<std::size_t>(1, kOutputAdapterMaximumStreamingChunkBytesV1 /
+                                             std::max<std::size_t>(rowStrideBytes, 1)));
+            std::uint32_t remaining = height;
+            std::uint32_t completed = 0;
+            ::reportProgress(progress, {completed, height});
+            while (remaining > 0) {
+                if (cancellation.isCancellationRequested()) {
+                    return FlatExrWriteResultV1::cancelled(
+                        ::removeDestinationBestEffort(destination));
+                }
+                const auto chunk = std::min(rowsPerChunk, remaining);
+                if (transformed.empty()) {
+                    outputFile.writePixels(static_cast<int>(chunk));
+                } else {
+                    const auto width = transformed.size();
+                    for (std::uint32_t row = 0; row < chunk; ++row) {
+                        if (cancellation.isCancellationRequested())
+                            return FlatExrWriteResultV1::cancelled(
+                                ::removeDestinationBestEffort(destination));
+                        if (!output->apply(
+                                pixels.subspan(static_cast<std::size_t>(completed + row) * width,
+                                               width),
+                                transformed))
+                            return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination,
+                                          destinationCreated);
+                        const auto rowY =
+                            geometry->dataWindow.min.y + static_cast<int>(completed + row);
+                        const Imath::Box2i rowBox({geometry->dataWindow.min.x, rowY},
+                                                  {geometry->dataWindow.max.x, rowY});
+                        Imf::FrameBuffer converted;
+                        constexpr std::array names{"R", "G", "B", "A"};
+                        for (std::size_t c = 0; c < names.size(); ++c)
+                            converted.insert(
+                                names[c],
+                                Imf::Slice::Make(Imf::FLOAT,
+                                                 reinterpret_cast<const char*>(transformed.data()) +
+                                                     c * sizeof(float),
+                                                 rowBox, xStride, rowStrideBytes));
+                        insertLayers(converted);
+                        outputFile.setFrameBuffer(converted);
+                        outputFile.writePixels(1);
+                    }
+                }
+                remaining -= chunk;
+                completed += chunk;
+                ::reportProgress(progress, {completed, height});
+            }
+        } catch (const std::bad_alloc&) {
+            return ::fail(FlatExrWriteErrorCodeV1::AllocationFailure, destination,
+                          destinationCreated);
+        } catch (const std::exception&) {
+            return ::fail(destinationCreated ? FlatExrWriteErrorCodeV1::IoFailure
+                                             : FlatExrWriteErrorCodeV1::DestinationUnavailable,
+                          destination, destinationCreated);
+        } catch (...) {
             return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination,
                           destinationCreated);
         }
-        std::array<Imath::V2f, 4> chromaBits{};
-        for (std::size_t index = 0; index < 4; ++index) {
-            chromaBits[index] = Imath::V2f(std::bit_cast<float>((*chromaticities)[index * 2]),
-                                           std::bit_cast<float>((*chromaticities)[index * 2 + 1]));
-        }
-        Imf::addChromaticities(header, Imf::Chromaticities(chromaBits[0], chromaBits[1],
-                                                           chromaBits[2], chromaBits[3]));
-        header.insert("colorInteropID", Imf::StringAttribute(std::string(outputId)));
 
-        destinationCreated = true;
-        Imf::OutputFile outputFile(destination.string().c_str(), header, 1);
-
-        std::vector<std::array<float, 4>> transformed;
-        if (output && output->processor())
-            transformed.resize(descriptor->dataWindow().extent().width());
-        const auto* base = reinterpret_cast<const char*>(pixels.data());
-        constexpr std::size_t xStride = sizeof(render::Rgba32f);
-        Imf::FrameBuffer frameBuffer;
-        frameBuffer.insert("R", Imf::Slice::Make(Imf::FLOAT, base + 0 * sizeof(float),
-                                                 geometry->dataWindow, xStride, rowStrideBytes));
-        frameBuffer.insert("G", Imf::Slice::Make(Imf::FLOAT, base + 1 * sizeof(float),
-                                                 geometry->dataWindow, xStride, rowStrideBytes));
-        frameBuffer.insert("B", Imf::Slice::Make(Imf::FLOAT, base + 2 * sizeof(float),
-                                                 geometry->dataWindow, xStride, rowStrideBytes));
-        frameBuffer.insert("A", Imf::Slice::Make(Imf::FLOAT, base + 3 * sizeof(float),
-                                                 geometry->dataWindow, xStride, rowStrideBytes));
-        insertLayers(frameBuffer);
-        outputFile.setFrameBuffer(frameBuffer);
-
-        const auto rowsPerChunk = static_cast<std::uint32_t>(
-            std::max<std::size_t>(1, kOutputAdapterMaximumStreamingChunkBytesV1 /
-                                         std::max<std::size_t>(rowStrideBytes, 1)));
-        std::uint32_t remaining = height;
-        std::uint32_t completed = 0;
-        ::reportProgress(progress, {completed, height});
-        while (remaining > 0) {
-            if (cancellation.isCancellationRequested()) {
-                return FlatExrWriteResultV1::cancelled(::removeDestinationBestEffort(destination));
-            }
-            const auto chunk = std::min(rowsPerChunk, remaining);
-            if (transformed.empty()) {
-                outputFile.writePixels(static_cast<int>(chunk));
-            } else {
-                const auto width = transformed.size();
-                for (std::uint32_t row = 0; row < chunk; ++row) {
-                    if (cancellation.isCancellationRequested())
-                        return FlatExrWriteResultV1::cancelled(
-                            ::removeDestinationBestEffort(destination));
-                    if (!output->apply(
-                            pixels.subspan(static_cast<std::size_t>(completed + row) * width,
-                                           width),
-                            transformed))
-                        return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination,
-                                      destinationCreated);
-                    const auto rowY =
-                        geometry->dataWindow.min.y + static_cast<int>(completed + row);
-                    const Imath::Box2i rowBox({geometry->dataWindow.min.x, rowY},
-                                              {geometry->dataWindow.max.x, rowY});
-                    Imf::FrameBuffer converted;
-                    constexpr std::array names{"R", "G", "B", "A"};
-                    for (std::size_t c = 0; c < names.size(); ++c)
-                        converted.insert(
-                            names[c],
-                            Imf::Slice::Make(Imf::FLOAT,
-                                             reinterpret_cast<const char*>(transformed.data()) +
-                                                 c * sizeof(float),
-                                             rowBox, xStride, rowStrideBytes));
-                    insertLayers(converted);
-                    outputFile.setFrameBuffer(converted);
-                    outputFile.writePixels(1);
-                }
-            }
-            remaining -= chunk;
-            completed += chunk;
-            ::reportProgress(progress, {completed, height});
-        }
-    } catch (const std::bad_alloc&) {
-        return ::fail(FlatExrWriteErrorCodeV1::AllocationFailure, destination, destinationCreated);
-    } catch (const std::exception&) {
-        return ::fail(destinationCreated ? FlatExrWriteErrorCodeV1::IoFailure
-                                         : FlatExrWriteErrorCodeV1::DestinationUnavailable,
-                      destination, destinationCreated);
-    } catch (...) {
-        return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination, destinationCreated);
-    }
-
-    return FlatExrWriteResultV1::written();
+        return FlatExrWriteResultV1::written();
+    }();
+    return ::afterClose(result, destination);
 }
 
 } // namespace bloom::output

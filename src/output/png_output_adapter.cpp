@@ -47,6 +47,20 @@ static_assert(output::detail::kPngDeflateStrategyV1 == Z_DEFAULT_STRATEGY,
     return output::PngWriteResultV1::failed(error, removed);
 }
 
+// The destination can only be removed once nothing holds it open, which on Windows includes the
+// writer's own stream: a removal tried while the file was still open is tried again here, after
+// the write has returned and closed it.
+[[nodiscard]] output::PngWriteResultV1
+afterClose(const output::PngWriteResultV1& result,
+           const std::filesystem::path& destination) noexcept {
+    if (result.status() == output::PngWriteStatusV1::Written || result.destinationRemoved())
+        return result;
+    const bool removed = removeDestinationBestEffort(destination);
+    return result.status() == output::PngWriteStatusV1::Cancelled
+               ? output::PngWriteResultV1::cancelled(removed)
+               : output::PngWriteResultV1::failed(result.error(), removed);
+}
+
 [[nodiscard]] constexpr std::optional<std::uint64_t>
 multiplyChecked(const std::uint64_t left, const std::uint64_t right) noexcept {
     if (right != 0 && left > std::numeric_limits<std::uint64_t>::max() / right) {
@@ -186,186 +200,191 @@ PngRgba8SrgbWriterV1::write(const PngRgba8SrgbPreparedStreamV1& prepared,
                             const std::filesystem::path& destination,
                             const runtime::CancellationToken& cancellation,
                             const PngWriteProgressCallbackV1& progress) const noexcept {
-    const auto geometry = ::validateGeometry(prepared);
-    if (!geometry) {
-        const auto width = prepared.dimensions.width();
-        const auto height = prepared.dimensions.height();
-        const auto formatOutOfRange =
-            width > detail::kOutputAnalysisPngMaximumDimensionV1 ||
-            height > detail::kOutputAnalysisPngMaximumDimensionV1;
-        const auto error = formatOutOfRange ? PngWriteErrorCodeV1::ResourceLimitExceeded
-                           : (width == 0 || height == 0 ||
-                              prepared.pixels.size() != static_cast<std::uint64_t>(width) * height)
-                               ? PngWriteErrorCodeV1::InvalidPreparedStream
-                               : PngWriteErrorCodeV1::ResourceLimitExceeded;
-        return ::fail(error, destination, false);
-    }
-    if (cancellation.isCancellationRequested()) {
-        return PngWriteResultV1::cancelled(true);
-    }
-
-    bool destinationCreated = false;
-    try {
-        std::ofstream file(destination, std::ios::binary | std::ios::trunc);
-        if (!file) {
-            return ::fail(PngWriteErrorCodeV1::DestinationUnavailable, destination, false);
+    const auto result = [&]() noexcept -> PngWriteResultV1 {
+        const auto geometry = ::validateGeometry(prepared);
+        if (!geometry) {
+            const auto width = prepared.dimensions.width();
+            const auto height = prepared.dimensions.height();
+            const auto formatOutOfRange = width > detail::kOutputAnalysisPngMaximumDimensionV1 ||
+                                          height > detail::kOutputAnalysisPngMaximumDimensionV1;
+            const auto error =
+                formatOutOfRange ? PngWriteErrorCodeV1::ResourceLimitExceeded
+                : (width == 0 || height == 0 ||
+                   prepared.pixels.size() != static_cast<std::uint64_t>(width) * height)
+                    ? PngWriteErrorCodeV1::InvalidPreparedStream
+                    : PngWriteErrorCodeV1::ResourceLimitExceeded;
+            return ::fail(error, destination, false);
         }
-        destinationCreated = true;
-
-        file.write(reinterpret_cast<const char*>(detail::kPngSignatureV1.data()),
-                   static_cast<std::streamsize>(detail::kPngSignatureV1.size()));
-
-        std::vector<std::byte> ihdrData;
-        ihdrData.reserve(detail::kPngIhdrDataBytesV1);
-        ::putBigEndianU32(ihdrData, geometry->width);
-        ::putBigEndianU32(ihdrData, geometry->height);
-        ihdrData.push_back(static_cast<std::byte>(detail::kPngBitDepthV1));
-        ihdrData.push_back(static_cast<std::byte>(detail::kPngColorTypeRgbaV1));
-        ihdrData.push_back(static_cast<std::byte>(detail::kPngCompressionMethodV1));
-        ihdrData.push_back(static_cast<std::byte>(detail::kPngFilterMethodV1));
-        ihdrData.push_back(static_cast<std::byte>(detail::kPngInterlaceMethodV1));
-        if (!::writeChunk(file, detail::kPngChunkTypeIhdrV1, ihdrData)) {
-            return ::fail(PngWriteErrorCodeV1::IoFailure, destination, destinationCreated);
-        }
-
-        const std::array<std::byte, 1> srgbData{
-            static_cast<std::byte>(detail::kPngSrgbRenderingIntentV1)};
-        if (!::writeChunk(file, detail::kPngChunkTypeSrgbV1, srgbData)) {
-            return ::fail(PngWriteErrorCodeV1::IoFailure, destination, destinationCreated);
-        }
-
         if (cancellation.isCancellationRequested()) {
-            return PngWriteResultV1::cancelled(::removeDestinationBestEffort(destination));
+            return PngWriteResultV1::cancelled(true);
         }
 
-        z_stream stream{};
-        if (deflateInit2(&stream, detail::kPngDeflateLevelV1, Z_DEFLATED,
-                         detail::kPngDeflateWindowBitsV1, detail::kPngDeflateMemLevelV1,
-                         detail::kPngDeflateStrategyV1) != Z_OK) {
-            return ::fail(PngWriteErrorCodeV1::CompressorFailure, destination, destinationCreated);
-        }
-        ::DeflateStreamGuard guard{&stream};
-
-        // IDAT boundaries depend only on the compressed byte stream, not on deflate's drain
-        // cadence. Keep at most one chunk instead of retaining the complete encoded image.
-        std::vector<std::byte> compressedChunk;
-        compressedChunk.reserve(kOutputAdapterMaximumStreamingChunkBytesV1);
-
-        static_assert(kOutputAdapterMaximumStreamingChunkBytesV1 <=
-                      std::numeric_limits<uInt>::max());
-        constexpr std::size_t kDrainBufferBytes = 1U << 16U;
-        std::array<std::byte, kDrainBufferBytes> drainBuffer{};
-
-        bool compressorFailed = false;
-        bool writeFailed = false;
-        const auto deflateInput = [&](const std::span<const std::byte> input,
-                                      const int flush) {
-            stream.next_in = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(input.data()));
-            stream.avail_in = static_cast<uInt>(input.size());
-            for (;;) {
-                stream.next_out = reinterpret_cast<Bytef*>(drainBuffer.data());
-                stream.avail_out = static_cast<uInt>(drainBuffer.size());
-                const auto beforeIn = stream.avail_in;
-                const auto result = deflate(&stream, flush);
-                if (result != Z_OK && result != Z_STREAM_END) {
-                    compressorFailed = true;
-                    return false;
-                }
-                const auto produced = drainBuffer.size() - stream.avail_out;
-                std::size_t consumed = 0;
-                while (consumed < produced) {
-                    const auto remaining = kOutputAdapterMaximumStreamingChunkBytesV1 -
-                                           compressedChunk.size();
-                    const auto count = std::min(remaining, produced - consumed);
-                    compressedChunk.insert(compressedChunk.end(), drainBuffer.begin() +
-                                              static_cast<std::ptrdiff_t>(consumed),
-                                           drainBuffer.begin() +
-                                              static_cast<std::ptrdiff_t>(consumed + count));
-                    consumed += count;
-                    if (compressedChunk.size() == kOutputAdapterMaximumStreamingChunkBytesV1) {
-                        if (!::writeChunk(file, detail::kPngChunkTypeIdatV1, compressedChunk)) {
-                            writeFailed = true;
-                            return false;
-                        }
-                        compressedChunk.clear();
-                    }
-                }
-                if (flush == Z_FINISH && result == Z_STREAM_END)
-                    return true;
-                if (flush == Z_NO_FLUSH && stream.avail_in == 0 && stream.avail_out != 0)
-                    return true;
-                if (beforeIn == stream.avail_in && produced == 0) {
-                    compressorFailed = true;
-                    return false;
-                }
+        bool destinationCreated = false;
+        try {
+            std::ofstream file(destination, std::ios::binary | std::ios::trunc);
+            if (!file) {
+                return ::fail(PngWriteErrorCodeV1::DestinationUnavailable, destination, false);
             }
-        };
+            destinationCreated = true;
 
-        // Feed the filter byte and pixel bytes separately. A row may exceed 16 MiB; no complete
-        // row is materialized or narrowed to zlib's uInt input length.
-        const auto sourceBytes = std::as_bytes(prepared.pixels);
-        ::reportProgress(progress, {0, geometry->height});
-        for (std::uint64_t row = 0; row < geometry->height; ++row) {
+            file.write(reinterpret_cast<const char*>(detail::kPngSignatureV1.data()),
+                       static_cast<std::streamsize>(detail::kPngSignatureV1.size()));
+
+            std::vector<std::byte> ihdrData;
+            ihdrData.reserve(detail::kPngIhdrDataBytesV1);
+            ::putBigEndianU32(ihdrData, geometry->width);
+            ::putBigEndianU32(ihdrData, geometry->height);
+            ihdrData.push_back(static_cast<std::byte>(detail::kPngBitDepthV1));
+            ihdrData.push_back(static_cast<std::byte>(detail::kPngColorTypeRgbaV1));
+            ihdrData.push_back(static_cast<std::byte>(detail::kPngCompressionMethodV1));
+            ihdrData.push_back(static_cast<std::byte>(detail::kPngFilterMethodV1));
+            ihdrData.push_back(static_cast<std::byte>(detail::kPngInterlaceMethodV1));
+            if (!::writeChunk(file, detail::kPngChunkTypeIhdrV1, ihdrData)) {
+                return ::fail(PngWriteErrorCodeV1::IoFailure, destination, destinationCreated);
+            }
+
+            const std::array<std::byte, 1> srgbData{
+                static_cast<std::byte>(detail::kPngSrgbRenderingIntentV1)};
+            if (!::writeChunk(file, detail::kPngChunkTypeSrgbV1, srgbData)) {
+                return ::fail(PngWriteErrorCodeV1::IoFailure, destination, destinationCreated);
+            }
+
             if (cancellation.isCancellationRequested()) {
                 return PngWriteResultV1::cancelled(::removeDestinationBestEffort(destination));
             }
-            const std::array<std::byte, 1> filter{
-                static_cast<std::byte>(detail::kPngFilterTypeNoneV1)};
-            if (!deflateInput(filter, Z_NO_FLUSH))
-                break;
-            auto rowBytes = sourceBytes.subspan(
-                static_cast<std::size_t>(row * geometry->rowRgbaBytes),
-                static_cast<std::size_t>(geometry->rowRgbaBytes));
-            while (!rowBytes.empty()) {
+
+            z_stream stream{};
+            if (deflateInit2(&stream, detail::kPngDeflateLevelV1, Z_DEFLATED,
+                             detail::kPngDeflateWindowBitsV1, detail::kPngDeflateMemLevelV1,
+                             detail::kPngDeflateStrategyV1) != Z_OK) {
+                return ::fail(PngWriteErrorCodeV1::CompressorFailure, destination,
+                              destinationCreated);
+            }
+            ::DeflateStreamGuard guard{&stream};
+
+            // IDAT boundaries depend only on the compressed byte stream, not on deflate's drain
+            // cadence. Keep at most one chunk instead of retaining the complete encoded image.
+            std::vector<std::byte> compressedChunk;
+            compressedChunk.reserve(kOutputAdapterMaximumStreamingChunkBytesV1);
+
+            static_assert(kOutputAdapterMaximumStreamingChunkBytesV1 <=
+                          std::numeric_limits<uInt>::max());
+            constexpr std::size_t kDrainBufferBytes = 1U << 16U;
+            std::array<std::byte, kDrainBufferBytes> drainBuffer{};
+
+            bool compressorFailed = false;
+            bool writeFailed = false;
+            const auto deflateInput = [&](const std::span<const std::byte> input, const int flush) {
+                stream.next_in = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(input.data()));
+                stream.avail_in = static_cast<uInt>(input.size());
+                for (;;) {
+                    stream.next_out = reinterpret_cast<Bytef*>(drainBuffer.data());
+                    stream.avail_out = static_cast<uInt>(drainBuffer.size());
+                    const auto beforeIn = stream.avail_in;
+                    const auto result = deflate(&stream, flush);
+                    if (result != Z_OK && result != Z_STREAM_END) {
+                        compressorFailed = true;
+                        return false;
+                    }
+                    const auto produced = drainBuffer.size() - stream.avail_out;
+                    std::size_t consumed = 0;
+                    while (consumed < produced) {
+                        const auto remaining =
+                            kOutputAdapterMaximumStreamingChunkBytesV1 - compressedChunk.size();
+                        const auto count = std::min(remaining, produced - consumed);
+                        compressedChunk.insert(
+                            compressedChunk.end(),
+                            drainBuffer.begin() + static_cast<std::ptrdiff_t>(consumed),
+                            drainBuffer.begin() + static_cast<std::ptrdiff_t>(consumed + count));
+                        consumed += count;
+                        if (compressedChunk.size() == kOutputAdapterMaximumStreamingChunkBytesV1) {
+                            if (!::writeChunk(file, detail::kPngChunkTypeIdatV1, compressedChunk)) {
+                                writeFailed = true;
+                                return false;
+                            }
+                            compressedChunk.clear();
+                        }
+                    }
+                    if (flush == Z_FINISH && result == Z_STREAM_END)
+                        return true;
+                    if (flush == Z_NO_FLUSH && stream.avail_in == 0 && stream.avail_out != 0)
+                        return true;
+                    if (beforeIn == stream.avail_in && produced == 0) {
+                        compressorFailed = true;
+                        return false;
+                    }
+                }
+            };
+
+            // Feed the filter byte and pixel bytes separately. A row may exceed 16 MiB; no complete
+            // row is materialized or narrowed to zlib's uInt input length.
+            const auto sourceBytes = std::as_bytes(prepared.pixels);
+            ::reportProgress(progress, {0, geometry->height});
+            for (std::uint64_t row = 0; row < geometry->height; ++row) {
                 if (cancellation.isCancellationRequested()) {
                     return PngWriteResultV1::cancelled(::removeDestinationBestEffort(destination));
                 }
-                const auto fragment = rowBytes.first(
-                    std::min(rowBytes.size(), kOutputAdapterMaximumStreamingChunkBytesV1));
-                if (!deflateInput(fragment, Z_NO_FLUSH))
+                const std::array<std::byte, 1> filter{
+                    static_cast<std::byte>(detail::kPngFilterTypeNoneV1)};
+                if (!deflateInput(filter, Z_NO_FLUSH))
                     break;
-                rowBytes = rowBytes.subspan(fragment.size());
+                auto rowBytes =
+                    sourceBytes.subspan(static_cast<std::size_t>(row * geometry->rowRgbaBytes),
+                                        static_cast<std::size_t>(geometry->rowRgbaBytes));
+                while (!rowBytes.empty()) {
+                    if (cancellation.isCancellationRequested()) {
+                        return PngWriteResultV1::cancelled(
+                            ::removeDestinationBestEffort(destination));
+                    }
+                    const auto fragment = rowBytes.first(
+                        std::min(rowBytes.size(), kOutputAdapterMaximumStreamingChunkBytesV1));
+                    if (!deflateInput(fragment, Z_NO_FLUSH))
+                        break;
+                    rowBytes = rowBytes.subspan(fragment.size());
+                }
+                if (compressorFailed || writeFailed)
+                    break;
+                ::reportProgress(progress, {row + 1, geometry->height});
             }
-            if (compressorFailed || writeFailed)
-                break;
-            ::reportProgress(progress, {row + 1, geometry->height});
-        }
-        if (!compressorFailed && !writeFailed)
-            (void)deflateInput({}, Z_FINISH);
-        if (compressorFailed) {
-            return ::fail(PngWriteErrorCodeV1::CompressorFailure, destination, destinationCreated);
-        }
-        if (writeFailed) {
-            return ::fail(PngWriteErrorCodeV1::IoFailure, destination, destinationCreated);
+            if (!compressorFailed && !writeFailed)
+                (void)deflateInput({}, Z_FINISH);
+            if (compressorFailed) {
+                return ::fail(PngWriteErrorCodeV1::CompressorFailure, destination,
+                              destinationCreated);
+            }
+            if (writeFailed) {
+                return ::fail(PngWriteErrorCodeV1::IoFailure, destination, destinationCreated);
+            }
+
+            if (cancellation.isCancellationRequested()) {
+                return PngWriteResultV1::cancelled(::removeDestinationBestEffort(destination));
+            }
+            if (!compressedChunk.empty() &&
+                !::writeChunk(file, detail::kPngChunkTypeIdatV1, compressedChunk)) {
+                return ::fail(PngWriteErrorCodeV1::IoFailure, destination, destinationCreated);
+            }
+
+            if (!::writeChunk(file, detail::kPngChunkTypeIendV1, {})) {
+                return ::fail(PngWriteErrorCodeV1::IoFailure, destination, destinationCreated);
+            }
+
+            file.flush();
+            if (!file) {
+                return ::fail(PngWriteErrorCodeV1::IoFailure, destination, destinationCreated);
+            }
+        } catch (const std::bad_alloc&) {
+            return ::fail(PngWriteErrorCodeV1::AllocationFailure, destination, destinationCreated);
+        } catch (const std::exception&) {
+            return ::fail(destinationCreated ? PngWriteErrorCodeV1::IoFailure
+                                             : PngWriteErrorCodeV1::DestinationUnavailable,
+                          destination, destinationCreated);
+        } catch (...) {
+            return ::fail(PngWriteErrorCodeV1::InternalInvariant, destination, destinationCreated);
         }
 
-        if (cancellation.isCancellationRequested()) {
-            return PngWriteResultV1::cancelled(::removeDestinationBestEffort(destination));
-        }
-        if (!compressedChunk.empty() &&
-            !::writeChunk(file, detail::kPngChunkTypeIdatV1, compressedChunk)) {
-            return ::fail(PngWriteErrorCodeV1::IoFailure, destination, destinationCreated);
-        }
-
-        if (!::writeChunk(file, detail::kPngChunkTypeIendV1, {})) {
-            return ::fail(PngWriteErrorCodeV1::IoFailure, destination, destinationCreated);
-        }
-
-        file.flush();
-        if (!file) {
-            return ::fail(PngWriteErrorCodeV1::IoFailure, destination, destinationCreated);
-        }
-    } catch (const std::bad_alloc&) {
-        return ::fail(PngWriteErrorCodeV1::AllocationFailure, destination, destinationCreated);
-    } catch (const std::exception&) {
-        return ::fail(destinationCreated ? PngWriteErrorCodeV1::IoFailure
-                                         : PngWriteErrorCodeV1::DestinationUnavailable,
-                      destination, destinationCreated);
-    } catch (...) {
-        return ::fail(PngWriteErrorCodeV1::InternalInvariant, destination, destinationCreated);
-    }
-
-    return PngWriteResultV1::written();
+        return PngWriteResultV1::written();
+    }();
+    return ::afterClose(result, destination);
 }
 
 } // namespace bloom::output

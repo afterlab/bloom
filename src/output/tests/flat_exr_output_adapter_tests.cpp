@@ -342,13 +342,23 @@ void testScratchDirectoryIsolation(support::Expectations& expectations) {
     const support::ScratchDirectory second("same-label");
     expectations.expect(first.path() != second.path(),
                         "two instances with the same label never share a path");
-    const std::string prefix = "bloom-output-exr-test-same-label-";
+    // The label, then the characters outside ASCII that every scratch folder carries.
+    const std::string prefix =
+        "bloom-output-exr-test-same-label-caf\u00e9 \u65e5\u672c \u041f\u0440\u0438-";
     const auto suffixLength = [&](const std::filesystem::path& path) {
-        const auto name = path.filename().string();
+        const auto bytes = path.filename().u8string();
+        const std::string name(reinterpret_cast<const char*>(bytes.data()), bytes.size());
         return name.starts_with(prefix) ? name.size() - prefix.size() : std::string::npos;
     };
-    expectations.expect(suffixLength(first.path()) == 6 && suffixLength(second.path()) == 6,
-                        "the path carries mkdtemp's six-character suffix after the label");
+    // mkdtemp's six characters, or the sixteen hexadecimal digits Windows is given.
+#if defined(_WIN32)
+    constexpr std::size_t kSuffix = 16;
+#else
+    constexpr std::size_t kSuffix = 6;
+#endif
+    expectations.expect(suffixLength(first.path()) == kSuffix &&
+                            suffixLength(second.path()) == kSuffix,
+                        "the path carries the unpredictable suffix after the label");
 }
 
 } // namespace
