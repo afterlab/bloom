@@ -528,9 +528,20 @@ QString KValueField::exactToolTip() const {
 }
 
 int KValueField::labelColumnWidth() const {
-    // Measured in the role it is painted in; a longer label elides inside the capped column.
+    // Measured in the role it is painted in; a longer label elides inside the capped column. The
+    // advance is rounded up: an integer advance rounded down makes the column a fraction of a pixel
+    // narrower than the text, and the label then elides to an ellipsis at any width (#690).
+    const QFontMetricsF metrics(kit::font(TypeRole::UiSmall));
     return std::min(px(Size::ValueFieldLabelColumn),
-                    QFontMetrics(kit::font(TypeRole::UiSmall)).horizontalAdvance(label_));
+                    static_cast<int>(std::ceil(metrics.horizontalAdvance(label_))));
+}
+
+QString KValueField::paintedLabel() const {
+    if (label_.isEmpty())
+        return {};
+    return QFontMetrics(kit::font(TypeRole::UiSmall))
+        .elidedText(label_, Qt::ElideRight,
+                    static_cast<int>(std::floor(labelRect().width())));
 }
 
 QRectF KValueField::labelRect() const {
@@ -648,10 +659,7 @@ void KValueField::paintEvent(QPaintEvent* event) {
         painter.setFont(kit::font(TypeRole::UiSmall));
         painter.setPen(inkForState(Color::Muted, state));
         const QRectF labelBounds = labelRect();
-        painter.drawText(labelBounds, Qt::AlignVCenter | Qt::AlignLeft,
-                         QFontMetrics(painter.font())
-                             .elidedText(label_, Qt::ElideRight,
-                                         static_cast<int>(std::floor(labelBounds.width()))));
+        painter.drawText(labelBounds, Qt::AlignVCenter | Qt::AlignLeft, paintedLabel());
     }
     if (stepper_) {
         const int extent = px(Size::PropertiesStepperWidth);

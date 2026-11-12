@@ -169,6 +169,8 @@ class KValueField final : public QWidget {
     // finally to an ellipsis -- digits are never clipped. The exact value stays in the editor and
     // in the tooltip, and a rounded display is underlined (isDisplayRounded()).
     [[nodiscard]] QString paintedText() const;
+    // The label as painted: whole unless its column is too narrow for it.
+    [[nodiscard]] QString paintedLabel() const;
     [[nodiscard]] bool isDisplayRounded() const;
     // The exact number as the editor is seeded with it: the shortest text that reads back to the
     // same double (or the exact integer).
