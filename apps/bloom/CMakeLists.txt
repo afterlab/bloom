@@ -46,6 +46,15 @@ install(
 )
 bloom_package_search_path(bloom "${BLOOM_PACKAGE_PROGRAM_DIR}")
 
+# Linux: the desktop entry and icon, where a desktop looks for them under an installation
+# prefix. An AppImage shows the same two at its top (cmake/package/make_archives.cmake). The
+# icon is the 256-pixel image of the macOS icon file.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    install(FILES linux/org.kinetik.bloom.desktop DESTINATION share/applications)
+    install(FILES linux/org.kinetik.bloom.png
+            DESTINATION share/icons/hicolor/256x256/apps)
+endif()
+
 # Stage the qualified GPU shader tools into the executable-relative private directory (inside the
 # .app bundle on macOS) so desktop colour compilation works out of the box; an unqualified or
 # CPU-stub build gets a typed unavailable definition and the CPU reference path.

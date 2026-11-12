@@ -5,7 +5,8 @@
 # workers through the targets' own install rules, and then, through the shared scripts in
 # cmake/package, the locked Qt (stage_qt.cmake), the carried interpreter (stage_python.cmake) and
 # the license texts, notices and dependency lock (stage_records.cmake). The scripts are the same
-# for every operating system; where each part goes is cmake/BloomPackageLayout.cmake's.
+# for every operating system; where each part goes is cmake/BloomPackageLayout.cmake's. A Linux
+# package also carries a few distribution libraries Qt loads (stage_linux_runtime.cmake).
 #
 # Only a qualified build with the locked interpreter and the desktop application can be
 # packaged: a developer build links the host's Qt and Python, which a package cannot carry. Such
@@ -13,6 +14,8 @@
 #
 #   bloom-package         installs the package into <build>/package/<name> and checks it
 #                         (cmake/package/check_package.cmake, with a run of the packaged programs)
+#   bloom-package-archives   (Linux) that tree as a tar and as an AppImage
+#                         (cmake/package/make_archives.cmake)
 #   bloom.package.check   the same check as a test, with the cases it must reject
 #                         (cmake/package/check_package_test.cmake)
 #
@@ -31,6 +34,9 @@ function(bloom_add_package_rules)
         set(reason "it does not embed the locked interpreter")
     elseif(NOT EXISTS "${BLOOM_DEPENDENCY_PREFIX}/qt/bloom-prebuilt.txt")
         set(reason "the dependency prefix has no locked Qt")
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux"
+           AND NOT EXISTS "${BLOOM_DEPENDENCY_PREFIX}/linux-runtime/bloom-linux-runtime.txt")
+        set(reason "the dependency prefix has no Linux runtime libraries")
     endif()
     if(reason)
         message(STATUS "Bloom package: this build cannot be packaged (${reason})")
@@ -46,6 +52,12 @@ function(bloom_add_package_rules)
     set(BLOOM_PACKAGE_NAME
         "Bloom-${PROJECT_VERSION}-${BLOOM_PACKAGE_OPERATING_SYSTEM}-${processor}"
         CACHE STRING "The name of the package directory and archives")
+    # Linux: the oldest system a published package is for, as the newest symbol versions of
+    # the C and C++ libraries a file may need (cmake/package/check_package.cmake, FLOOR). Empty
+    # on a developer's machine, whose own libraries are newer; the build of a published
+    # package sets it (tools/ci/linux-package/build.sh).
+    set(BLOOM_PACKAGE_FLOOR "" CACHE STRING
+        "Symbol version floors the package check enforces, as <family>=<version>;...")
     set(scripts "${PROJECT_SOURCE_DIR}/cmake/package")
 
     if(NOT APPLE)
@@ -80,6 +92,18 @@ function(bloom_add_package_rules)
                     -P \"${scripts}/stage_records.cmake\"
                 COMMAND_ERROR_IS_FATAL ANY)
         ")
+        if(BLOOM_PACKAGE_OPERATING_SYSTEM STREQUAL "linux")
+            install(CODE "
+                execute_process(
+                    COMMAND \"${CMAKE_COMMAND}\" \"-DROOT=\${bloom_package_root}\"
+                        \"-DRUNTIME=${BLOOM_DEPENDENCY_PREFIX}/linux-runtime\"
+                        \"-DINVENTORY=${PROJECT_SOURCE_DIR}/dependencies/linux-runtime/packages.json\"
+                        \"-DQT_DIR=${BLOOM_PACKAGE_QT_DIR}\"
+                        \"-DRECORD_DIR=${BLOOM_PACKAGE_RECORD_DIR}\"
+                        -P \"${scripts}/stage_linux_runtime.cmake\"
+                    COMMAND_ERROR_IS_FATAL ANY)
+            ")
+        endif()
 
         set(programs bloom bloom-cli bloom-mcp bloom-color-worker)
         if(TARGET bloom-media-worker)
@@ -91,12 +115,28 @@ function(bloom_add_package_rules)
             COMMAND ${CMAKE_COMMAND} -E rm -rf "${package}"
             COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}" --prefix "${package}"
             COMMAND ${CMAKE_COMMAND} "-DPACKAGE=${package}" -DCOMPLETE=ON -DRUN=ON
-                "-DWORK=${CMAKE_BINARY_DIR}/package/check"
+                "-DWORK=${CMAKE_BINARY_DIR}/package/check" "-DFLOOR=${BLOOM_PACKAGE_FLOOR}"
                 -P "${scripts}/check_package.cmake"
             DEPENDS ${programs}
             COMMENT "Installing ${BLOOM_PACKAGE_NAME} and checking it is self-contained"
             VERBATIM
         )
+        if(BLOOM_PACKAGE_OPERATING_SYSTEM STREQUAL "linux")
+            # The two published forms of that tree. Not part of bloom-package's own work, so
+            # the check never waits for the compression.
+            add_custom_target(
+                bloom-package-archives
+                COMMAND ${CMAKE_COMMAND} "-DTREE=${package}"
+                    "-DOUTPUT=${CMAKE_BINARY_DIR}/package"
+                    "-DWORK=${CMAKE_BINARY_DIR}/package/archive-work"
+                    "-DSOURCE=${PROJECT_SOURCE_DIR}"
+                    "-DRUNTIME=${BLOOM_DEPENDENCY_PREFIX}/appimage-runtime"
+                    -P "${scripts}/make_archives.cmake"
+                DEPENDS bloom-package
+                COMMENT "Making ${BLOOM_PACKAGE_NAME}.tar.xz and ${BLOOM_PACKAGE_NAME}.AppImage"
+                VERBATIM
+            )
+        endif()
     endif()
 
     if(BUILD_TESTING)

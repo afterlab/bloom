@@ -5,6 +5,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -34,6 +35,9 @@ int main(int argc, char** argv) {
     expect(QCoreApplication::organizationName() == QStringLiteral("Kinetik") &&
                QCoreApplication::applicationName() == QStringLiteral("Bloom"),
            "the names reach QCoreApplication");
+    // The desktop entry a Linux package installs is named after this.
+    expect(QGuiApplication::desktopFileName() == QStringLiteral("org.kinetik.bloom"),
+           "the window's application is named after Bloom's desktop entry");
 
     expect(identity.refusal.isEmpty(), "nothing is refused without the check's variable");
 

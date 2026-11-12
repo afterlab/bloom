@@ -75,6 +75,20 @@ libglib-2.0.so.0
 libgthread-2.0.so.0
 libz.so.1
 
+# What Qt's network library loads for compressed responses and for sign-on, and what its core
+# reads compressed resources with. Every distribution's base installation has them (its
+# package manager and its libcurl use the same ones), and the sign-on library has to be the
+# one the system's own configuration was written for.
+libzstd.so.1
+libbrotlidec.so.1
+libbrotlicommon.so.1
+libgssapi_krb5.so.2
+
+# Hardware video decoding: the vendor-neutral VA-API libraries, which load the GPU's own driver
+# the way the OpenGL ones do. The media worker asks for them by name.
+libva.so.2
+libva-drm.so.2
+
 # The system's libcurl, when it has one: bloom-cli and bloom-mcp download fonts through it and
 # do without that when it is absent (src/runtime/headless_font_transport_curl.cpp).
 libcurl.so.4

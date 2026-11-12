@@ -3,6 +3,7 @@
 #   cmake -DPACKAGE=<package root; on macOS the path of Bloom.app>
 #         [-DCOMPLETE=ON] [-DRUN=ON -DWORK=<empty work directory>]
 #         [-DBASE_LIBRARIES=<linux-base-libraries.txt>] [-DONLY=<rule>...]
+#         [-DFLOOR=<family>=<version>...]
 #         -P check_package.cmake
 #
 # One script for the three operating systems; the rules are the same and each has one part per
@@ -43,6 +44,11 @@
 #               removes it when the run is over.
 #               On Linux no GPU driver is offered to it, so that what it loads does not depend on
 #               the machine's driver.
+#
+#               With FLOOR (Linux), also fails on a file that needs a newer version of a C or
+#               C++ library symbol than the oldest system the package is for has, for example
+#               -DFLOOR=GLIBC=2.35;GLIBCXX=3.4.30;CXXABI=1.3.13 for Ubuntu 22.04. A package
+#               built on a developer's newer system is checked without it.
 #
 # ONLY limits the check to the named rules (the check's own test uses it).
 #
@@ -214,6 +220,22 @@ function(bloom_base_file path variable)
             return()
         endif()
     endforeach()
+    # A distribution may keep a library under another file name and give it the name programs
+    # ask for as a link (libgcc_s.so.1 -> libgcc_s-<version>.so.1): the file is the declared
+    # library when that link, beside it, leads to it.
+    get_filename_component(directory "${path}" DIRECTORY)
+    if(EXISTS "${path}")
+        file(REAL_PATH "${path}" real)
+        foreach(name IN LISTS base_names)
+            if(IS_SYMLINK "${directory}/${name}")
+                file(REAL_PATH "${directory}/${name}" target)
+                if(target STREQUAL real)
+                    set(${variable} TRUE PARENT_SCOPE)
+                    return()
+                endif()
+            endif()
+        endforeach()
+    endif()
     foreach(prefix IN LISTS base_prefixes)
         if(prefix MATCHES "/")
             # A directory the C library loads modules from (gconv/).
@@ -386,7 +408,43 @@ if(COMPLETE AND "contents" IN_LIST ONLY)
     endif()
 endif()
 
+# The distribution libraries a Linux package carries, as its own inventory lists them.
+if(COMPLETE AND "contents" IN_LIST ONLY AND system STREQUAL "linux")
+    set(inventory_file "${records}/linux-runtime-packages.json")
+    if(NOT EXISTS "${inventory_file}")
+        list(APPEND failures "the package has no inventory of its distribution libraries")
+    else()
+        file(READ "${inventory_file}" inventory)
+        string(JSON inventory_count LENGTH "${inventory}" packages)
+        math(EXPR inventory_last "${inventory_count} - 1")
+        foreach(index RANGE 0 ${inventory_last})
+            string(JSON name GET "${inventory}" packages ${index} package)
+            string(JSON library GET "${inventory}" packages ${index} library name)
+            string(JSON digest GET "${inventory}" packages ${index} copyright sha256)
+            if(NOT EXISTS "${package}/lib/qt/lib/${library}")
+                list(APPEND failures "no ${library} (${name}) beside Qt")
+            endif()
+            set(carried "${records}/licenses/${name}/copyright")
+            if(NOT EXISTS "${carried}")
+                list(APPEND failures "no license file licenses/${name}/copyright for ${name}")
+            else()
+                file(SHA256 "${carried}" actual)
+                if(NOT actual STREQUAL digest)
+                    bloom_fail("licenses/${name}/copyright is not the file the package's "
+                               "inventory records")
+                endif()
+            endif()
+        endforeach()
+    endif()
+endif()
+
 # --- resolution --------------------------------------------------------------------------------
+set(floors ${FLOOR})
+foreach(floor IN LISTS floors)
+    if(NOT floor MATCHES "^[A-Z]+=[0-9][0-9.]*$")
+        message(FATAL_ERROR "check_package.cmake: FLOOR entry '${floor}' is not <family>=<version>")
+    endif()
+endforeach()
 set(count 0)
 set(carried_names "")
 if("resolution" IN_LIST ONLY OR "run" IN_LIST ONLY)
@@ -419,6 +477,26 @@ if(system STREQUAL "linux" AND ("resolution" IN_LIST ONLY OR "run" IN_LIST ONLY)
             bloom_shown("${file}" shown)
             get_filename_component(directory "${file}" DIRECTORY)
             bloom_elf_needs("${file}" needed search)
+            # The oldest system the package is for: no file may need a newer version of a
+            # symbol of the C or C++ library than that system's has.
+            if(floors)
+                execute_process(COMMAND readelf -V -W "${file}"
+                                OUTPUT_VARIABLE versions ERROR_QUIET)
+                foreach(floor IN LISTS floors)
+                    string(REGEX MATCH "^([A-Z]+)=(.+)$" matched "${floor}")
+                    set(family "${CMAKE_MATCH_1}")
+                    set(limit "${CMAKE_MATCH_2}")
+                    string(REGEX MATCHALL "Name: ${family}_[0-9][0-9.]*" found "${versions}")
+                    list(REMOVE_DUPLICATES found)
+                    foreach(entry IN LISTS found)
+                        string(REGEX REPLACE "^Name: ${family}_" "" version "${entry}")
+                        if(version VERSION_GREATER limit)
+                            bloom_fail("${shown}: needs ${family}_${version}; the oldest "
+                                       "system the package is for has ${family}_${limit}")
+                        endif()
+                    endforeach()
+                endforeach()
+            endif()
             set(directories "")
             foreach(entry IN LISTS search)
                 if(entry STREQUAL "")
@@ -466,7 +544,11 @@ if(system STREQUAL "linux" AND ("resolution" IN_LIST ONLY OR "run" IN_LIST ONLY)
         endforeach()
     endif()
 elseif(system STREQUAL "windows" AND ("resolution" IN_LIST ONLY OR "run" IN_LIST ONLY))
-    find_program(BLOOM_DUMPBIN dumpbin REQUIRED)
+    # Only the resolution rule reads the files; a run on a computer without the build tools
+    # needs none of them.
+    if("resolution" IN_LIST ONLY)
+        find_program(BLOOM_DUMPBIN dumpbin REQUIRED)
+    endif()
     file(TO_CMAKE_PATH "$ENV{SystemRoot}/System32" system_directory)
     set(binaries "")
     foreach(file IN LISTS files)
@@ -700,6 +782,9 @@ if(RUN AND "run" IN_LIST ONLY AND NOT failures)
         message(FATAL_ERROR "check_package.cmake: RUN needs WORK, a directory for the run's own "
                             "settings, data and cache")
     endif()
+    # Absolute: the packaged programs run in a directory of their own, and the application
+    # takes only an absolute directory as the check's profile.
+    get_filename_component(WORK "${WORK}" ABSOLUTE)
     file(REMOVE_RECURSE "${WORK}")
     file(MAKE_DIRECTORY "${WORK}/home" "${WORK}/profile" "${WORK}/no-drivers" "${WORK}/run")
     set(report "${WORK}/images.txt")
@@ -717,6 +802,12 @@ if(RUN AND "run" IN_LIST ONLY AND NOT failures)
     endforeach()
     set(ENV{BLOOM_PACKAGE_CHECK_OUTPUT} "${report}")
     set(ENV{BLOOM_PACKAGE_CHECK_APPLICATION} "${programs}/Bloom${suffix}")
+    # The application takes the check's profile only as an absolute directory. Checked here
+    # too, so that nothing is started when it is not.
+    if(NOT IS_ABSOLUTE "${WORK}/profile" OR NOT IS_DIRECTORY "${WORK}/profile")
+        message(FATAL_ERROR "check_package.cmake: the profile directory '${WORK}/profile' is "
+                            "not an absolute directory; nothing was started")
+    endif()
     set(ENV{BLOOM_PACKAGE_CHECK_PROFILE} "${WORK}/profile")
     # Qt names two per-user folders after the organization name and asks the operating system
     # where they are, which on macOS and Windows no variable changes. The application runs

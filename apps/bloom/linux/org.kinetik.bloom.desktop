@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Bloom
+GenericName=Motion Graphics and Visual Effects
+Comment=Artist-focused motion graphics and visual effects software
+Exec=Bloom
+Icon=org.kinetik.bloom
+Terminal=false
+Categories=AudioVideo;Video;Graphics;
+Keywords=compositing;motion;graphics;effects;animation;
+StartupNotify=true

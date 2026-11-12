@@ -7,6 +7,8 @@
 #   * the locked Qt's notice (dependencies/licenses/qt/NOTICE.txt) with the text of every license
 #     it names (dependencies/licenses/qt/texts) -- see
 #     docs/decisions/0014-apache-license-and-qt-distribution.md
+#   * on Linux, the copyright file of every distribution package a Bloom package carries a
+#     library from (dependencies/linux-runtime)
 #
 # Technique: mirrors src/color/ocio_builtin_payload.inc.in's file(READ ... HEX) -> "0x..," byte
 # array embed, generalized from one frozen asset to N discovered files, because license text has
@@ -66,6 +68,35 @@ foreach(_bloom_qt_license_text IN LISTS _bloom_qt_license_texts)
 endforeach()
 list(APPEND _bloom_license_component_names "Qt 6")
 list(APPEND _bloom_license_component_files "${_bloom_qt_notice_path}")
+
+# A Linux package carries a few distribution libraries beside Qt
+# (dependencies/linux-runtime/packages.json): each one's own copyright file, under the name of
+# the package it came from.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(_bloom_linux_runtime_root "${CMAKE_CURRENT_SOURCE_DIR}/../../dependencies/linux-runtime")
+    file(READ "${_bloom_linux_runtime_root}/packages.json" _bloom_linux_runtime_inventory)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${_bloom_linux_runtime_root}/packages.json")
+    string(JSON _bloom_linux_runtime_count LENGTH "${_bloom_linux_runtime_inventory}" packages)
+    math(EXPR _bloom_linux_runtime_last "${_bloom_linux_runtime_count} - 1")
+    foreach(_bloom_i RANGE 0 ${_bloom_linux_runtime_last})
+        string(JSON _bloom_linux_runtime_package GET "${_bloom_linux_runtime_inventory}"
+               packages ${_bloom_i} package)
+        string(JSON _bloom_linux_runtime_copyright GET "${_bloom_linux_runtime_inventory}"
+               packages ${_bloom_i} copyright path)
+        set(_bloom_linux_runtime_file
+            "${CMAKE_CURRENT_SOURCE_DIR}/../../${_bloom_linux_runtime_copyright}")
+        if(NOT EXISTS "${_bloom_linux_runtime_file}")
+            message(FATAL_ERROR
+                "${_bloom_linux_runtime_copyright} does not exist -- the Open Source Licenses "
+                "window would ship without the license of ${_bloom_linux_runtime_package}.")
+        endif()
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${_bloom_linux_runtime_file}")
+        list(APPEND _bloom_license_component_names "${_bloom_linux_runtime_package}")
+        list(APPEND _bloom_license_component_files "${_bloom_linux_runtime_file}")
+    endforeach()
+endif()
 
 list(LENGTH _bloom_license_component_names _bloom_license_component_count)
 if(_bloom_license_component_count EQUAL 0)

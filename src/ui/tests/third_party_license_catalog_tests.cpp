@@ -86,6 +86,23 @@ void testCatalogCoversEveryLicensedComponentDirectory(Expectations& expectations
     }
     expectations.expect(catalogComponents.contains("Qt 6"),
                         "the catalog also carries the Qt/ADR-0014 notice");
+#if defined(__linux__)
+    // A Linux package carries a few distribution libraries beside Qt; each one's copyright file
+    // is in the catalog under its package's name.
+    const auto runtimeLicenses = repositoryRoot / "dependencies" / "linux-runtime" / "licenses";
+    std::size_t runtimePackages = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(runtimeLicenses)) {
+        if (!entry.is_directory()) {
+            continue;
+        }
+        ++runtimePackages;
+        expectations.expect(catalogComponents.contains(entry.path().filename().string()),
+                            "the catalog lists the carried distribution package: " +
+                                entry.path().filename().string());
+    }
+    expectations.expect(runtimePackages != 0U,
+                        "the Linux runtime license root really has packages to require");
+#endif
     // The Qt entry is the locked Qt's own notice with its license texts: the exact source
     // archive, the LGPL and the GPL it supplements, and the third-party notices.
     for (const auto& entry : thirdPartyLicenseCatalog()) {

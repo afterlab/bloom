@@ -1,0 +1,96 @@
+# Puts the AppImage runtime (dependencies/appimage-runtime/runtime.json) into the dependency
+# prefix, by checksum.
+#
+#   cmake -DBLOOM_RECORD=<dependencies/appimage-runtime/runtime.json>
+#         -DBLOOM_DESTINATION=<prefix>/appimage-runtime -DBLOOM_DOWNLOAD_DIR=<archive cache>
+#         -DBLOOM_ALLOW_DOWNLOADS=<ON|OFF> [-DBLOOM_CHECK_ONLY=ON]
+#         -P appimage-runtime-fetch.cmake
+#
+# The runtime is taken from the cache or, when downloads are allowed, from the record's URL;
+# its size and SHA-256 are compared with the record first, and a file that differs stops the
+# build. It is copied as published: <destination>/runtime-<architecture>, with
+# <destination>/bloom-appimage-runtime.txt naming the release and checksum. A destination whose
+# record already says the same is left untouched.
+cmake_minimum_required(VERSION 3.25)
+
+foreach(required IN ITEMS BLOOM_RECORD BLOOM_DESTINATION BLOOM_DOWNLOAD_DIR)
+    if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
+        message(FATAL_ERROR "appimage-runtime-fetch.cmake needs ${required}")
+    endif()
+endforeach()
+file(READ "${BLOOM_RECORD}" record)
+string(JSON format GET "${record}" format)
+string(JSON version GET "${record}" version)
+if(NOT format STREQUAL "bloom.appimage-runtime" OR NOT version EQUAL 1)
+    message(FATAL_ERROR "${BLOOM_RECORD} is not a version 1 AppImage runtime record")
+endif()
+foreach(field IN ITEMS release architecture url sha256 sizeBytes)
+    string(JSON ${field} GET "${record}" ${field})
+endforeach()
+if(NOT url MATCHES "^https://[^ \t\r\n;]+$" OR NOT sha256 MATCHES "^[0-9a-f]+$")
+    message(FATAL_ERROR "${BLOOM_RECORD}: the URL or the checksum is malformed")
+endif()
+string(LENGTH "${sha256}" length)
+if(NOT length EQUAL 64)
+    message(FATAL_ERROR "${BLOOM_RECORD}: the checksum is not a SHA-256")
+endif()
+set(name "runtime-${architecture}")
+set(text "${release} ${sha256} ${sizeBytes} ${name}\n")
+set(note "${BLOOM_DESTINATION}/bloom-appimage-runtime.txt")
+if(NOT BLOOM_CHECK_ONLY AND EXISTS "${note}" AND EXISTS "${BLOOM_DESTINATION}/${name}")
+    file(READ "${note}" present)
+    file(SHA256 "${BLOOM_DESTINATION}/${name}" present_digest)
+    if(present STREQUAL text AND present_digest STREQUAL sha256)
+        message(STATUS "Bloom AppImage runtime: ${BLOOM_DESTINATION} already holds release "
+                       "${release}")
+        return()
+    endif()
+endif()
+
+function(bloom_runtime_problem output file)
+    set(${output} "" PARENT_SCOPE)
+    file(SIZE "${file}" actual_size)
+    if(NOT actual_size EQUAL sizeBytes)
+        set(${output} "is ${actual_size} bytes; the record says ${sizeBytes}" PARENT_SCOPE)
+        return()
+    endif()
+    file(SHA256 "${file}" actual_digest)
+    if(NOT actual_digest STREQUAL sha256)
+        set(${output} "does not match its SHA-256 in the record (${actual_digest})"
+            PARENT_SCOPE)
+    endif()
+endfunction()
+
+file(MAKE_DIRECTORY "${BLOOM_DOWNLOAD_DIR}")
+set(cached "${BLOOM_DOWNLOAD_DIR}/appimage-${name}-${release}")
+set(problem "is not in the archive cache")
+if(EXISTS "${cached}")
+    bloom_runtime_problem(problem "${cached}")
+endif()
+if(problem AND BLOOM_ALLOW_DOWNLOADS)
+    message(STATUS "Bloom AppImage runtime: downloading release ${release}")
+    file(DOWNLOAD "${url}" "${cached}.part" STATUS status TLS_VERIFY ON INACTIVITY_TIMEOUT 120)
+    list(GET status 0 code)
+    if(NOT code EQUAL 0)
+        file(REMOVE "${cached}.part")
+        message(FATAL_ERROR "${url} could not be downloaded: ${status}")
+    endif()
+    bloom_runtime_problem(problem "${cached}.part")
+    if(problem)
+        file(REMOVE "${cached}.part")
+        message(FATAL_ERROR "${url} ${problem}. Nothing was installed.")
+    endif()
+    file(RENAME "${cached}.part" "${cached}")
+endif()
+if(problem)
+    message(FATAL_ERROR "${cached} ${problem}. (Downloads: BLOOM_DEPENDENCY_ALLOW_DOWNLOADS.)")
+endif()
+if(BLOOM_CHECK_ONLY)
+    message(STATUS "Bloom AppImage runtime: the archive cache holds release ${release}")
+    return()
+endif()
+file(REMOVE_RECURSE "${BLOOM_DESTINATION}")
+file(MAKE_DIRECTORY "${BLOOM_DESTINATION}")
+file(COPY_FILE "${cached}" "${BLOOM_DESTINATION}/${name}")
+file(WRITE "${note}" "${text}")
+message(STATUS "Bloom AppImage runtime: release ${release} in ${BLOOM_DESTINATION}")

@@ -311,6 +311,29 @@ LGPL-3.0-only: a module published under the GPL or a commercial license only can
 build by being added to the list. `bloom.quality.qt_modules_self_test` proves both refusals on a
 deliberately added GPL-only module.
 
+### Linux Distribution Libraries And The AppImage Runtime
+
+Two things in a Linux package are neither built by the superbuild nor lock components. Each
+has an inventory that is the only place it is written, and each is taken by checksum.
+
+- `dependencies/linux-runtime/packages.json`: six X11 helper libraries Qt loads, each from one
+  Ubuntu 22.04 binary package named with its version, download places, SHA-256 and size, the
+  library file with its own SHA-256, and the package's `copyright` file, which is checked in
+  and compared with the one in the package. `linux-runtime-fetch.cmake` puts them into the
+  prefix's `linux-runtime` directory; a package whose bytes differ stops the build, and a
+  download place that serves other bytes is an error, not a reason to try the next.
+- `dependencies/appimage-runtime/runtime.json`: the AppImage project's type 2 runtime, one
+  release by SHA-256 and size, with its detached signature and signing key, the source commit
+  it was built from, and everything linked into it with the license files checked in. It
+  statically links libfuse under LGPL-2.1-only with one patch; the record names the exact
+  libfuse source archive, and the patch is checked in. `appimage-runtime-fetch.cmake` puts it
+  into the prefix's `appimage-runtime` directory. Only the AppImage form of a package contains
+  it.
+
+With downloads off, both must already be in the archive cache when the superbuild is
+configured, like every other archive. Changing either is an intake: a new version, checksum
+and license review, in the same change as the inventory.
+
 ### Closed Resource Limits
 
 Limits are checked on encoded bytes before allocation and during parsing with checked arithmetic.

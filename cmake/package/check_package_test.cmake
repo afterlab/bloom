@@ -17,6 +17,8 @@
 #                                    package ("loads ...")
 #   an outside search path           a program given a search path outside the package
 #                                    (Linux and macOS; a Windows program has none)
+#   a carried distribution library   (Linux) one of the libraries carried beside Qt removed
+#   removed                          ("no libxcb-cursor.so.0 ... beside Qt")
 cmake_minimum_required(VERSION 3.25)
 
 if(NOT WORK OR (NOT BUILD AND NOT BUNDLE))
@@ -152,6 +154,18 @@ else()
     bloom_expect_refusal("an outside search path"
                          "bloom-check-probe: library search path outside the package: /opt/outside")
     file(REMOVE "${probe}")
+endif()
+
+# 6. Linux: one of the distribution libraries the package carries beside Qt removed.
+if(NOT CMAKE_HOST_APPLE AND NOT CMAKE_HOST_WIN32)
+    set(carried "${package}/lib/qt/lib/libxcb-cursor.so.0")
+    if(NOT EXISTS "${carried}")
+        message(FATAL_ERROR "the package has no ${carried}")
+    endif()
+    file(RENAME "${carried}" "${WORK}/library-set-aside")
+    bloom_expect_refusal("a carried distribution library removed"
+                         "no libxcb-cursor.so.0 \\(libxcb-cursor0\\) beside Qt")
+    file(RENAME "${WORK}/library-set-aside" "${carried}")
 endif()
 
 # The mended package passes again: nothing above was left behind.

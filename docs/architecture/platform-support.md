@@ -272,8 +272,9 @@ packaged; a developer build links the host's Qt and Python, which a package cann
 - On Linux and Windows `cmake --install <build> --prefix <folder>` writes the whole package:
   the programs through their own install rules, then Qt, the interpreter and the records
   through the shared scripts in `cmake/package` (`stage_qt.cmake`, `stage_python.cmake`,
-  `stage_records.cmake`). The `bloom-package` target installs into the build tree and checks
-  the result.
+  `stage_records.cmake`, and on Linux `stage_linux_runtime.cmake`). The `bloom-package` target
+  installs into the build tree and checks the result; on Linux `bloom-package-archives` then
+  makes the two published files.
 - On macOS the build fills `Bloom.app` in the build tree with the same scripts every time it
   builds, so that the bundle can be signed once it is complete; `bloom-deploy-macos` signs and
   checks it.
@@ -310,13 +311,73 @@ The run never reads or changes the settings of the person whose computer it is. 
 gives the application a settings file, data and cache directories of its own, and the
 application then runs under an organization name of its own as well
 (`src/ui/include/bloom/ui/application_identity.hpp`), so the per-user folders Qt names after
-the organization are the check's; the check removes them afterwards. On Linux the run is
-offered no GPU driver, so that what it loads does not depend on the machine's.
+the organization are the check's; the check removes them afterwards. The application gives up
+its own names as soon as the check's variable is set, and when the value is not an absolute
+directory it refuses to start rather than run as Bloom. On Linux the run is offered no GPU
+driver, so that what it loads does not depend on the machine's.
 
 The `bloom.package.check` test runs the check on the package of the build and then on a copy
 broken in each way that matters: the interpreter removed, a license file removed or changed, a
-program made to load a library from outside, and a program given a search path outside the
-package.
+program made to load a library from outside, a program given a search path outside the
+package, and on Linux one of the carried distribution libraries removed.
+
+### Linux Package
+
+The Linux package is one tree published in two forms: `Bloom-<version>-linux-x86_64.tar.xz`,
+which unpacks to a folder that runs from wherever it is put, and
+`Bloom-<version>-linux-x86_64.AppImage`, the same tree as one file. There is no other form.
+
+**The oldest system.** The package is built on Ubuntu 22.04 against its C library, glibc 2.35,
+and its own C++ library, so it runs on that system and on newer ones and carries no C++
+runtime of its own. The build environment is the official `ubuntu:22.04` image by digest with
+the locked Clang 22 (`tools/ci/linux-package`: `provision.sh`, `Dockerfile`, `build.sh`), and
+the dependency lock's Linux profile records that floor. The check enforces it: with
+`FLOOR=GLIBC=2.35;GLIBCXX=3.4.30;CXXABI=1.3.13` it fails on any file in the package that needs
+a newer version of a C or C++ library symbol.
+
+**What the system must have.** Everything a package loads from outside itself is named in
+`cmake/package/linux-base-libraries.txt`: the C and C++ libraries; OpenGL, EGL, GBM and DRM
+(which load the GPU's own driver); Xlib and the X protocol library; Wayland; fontconfig,
+FreeType and xkbcommon; D-Bus; the audio servers' client libraries; GLib; zlib, zstd and
+Brotli; the Kerberos sign-on library; and VA-API. A desktop installation has them. On a
+minimal system they are these packages:
+
+| System | Packages |
+| --- | --- |
+| Debian, Ubuntu | `libgl1 libegl1 libopengl0 libgbm1 libdrm2 libx11-6 libx11-xcb1 libxcb1 libxcb-glx0 libxcb-randr0 libxcb-render0 libxcb-shape0 libxcb-shm0 libxcb-sync1 libxcb-xfixes0 libxcb-xkb1 libxcb-xinput0 libwayland-client0 libwayland-cursor0 libwayland-egl1 libfontconfig1 libfreetype6 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libasound2 libpulse0 libglib2.0-0 zlib1g libzstd1 libbrotli1 libgssapi-krb5-2 libva2 libva-drm2` (on Ubuntu 24.04 `libasound2t64` and `libglib2.0-0t64`) |
+| Fedora | `libglvnd-glx libglvnd-egl libglvnd-opengl mesa-libgbm libdrm libX11 libX11-xcb libxcb libwayland-client libwayland-cursor libwayland-egl fontconfig freetype libxkbcommon libxkbcommon-x11 dbus-libs alsa-lib pulseaudio-libs glib2 zlib-ng-compat libzstd libbrotli krb5-libs libva` |
+
+No Python, Qt or compiler is needed: the interpreter, numpy and Qt are in the package.
+
+**What it carries from a distribution.** Six small X11 helper libraries that Qt's X11 platform
+plugin loads and a desktop does not always have are carried beside Qt, each taken from a
+pinned Ubuntu 22.04 package by checksum with its copyright file
+(`dependencies/linux-runtime`). They are listed in the Open Source Licenses window.
+
+**The AppImage.** The tree as a zstd-compressed SquashFS image behind the AppImage project's
+type 2 runtime, which is pinned by checksum and recorded with the licenses of what is linked
+into it (`dependencies/appimage-runtime`); those license files are inside the AppImage. It is
+made without an AppImage tool (`cmake/package/make_archives.cmake`). Running it needs FUSE
+(`fusermount3` or `fusermount`); `--appimage-extract` unpacks it where there is none, and the
+tar is the form for such a system. The AppImage starts the application; `bloom-cli` and
+`bloom-mcp` are in the tar and in the unpacked AppImage, under `bin`.
+
+**Where it was started.** `tools/ci/linux-package/start.sh` unpacks a package on a clean
+system, runs the package check's contents and run rules there, and refuses a system that has
+Python, Qt's tools or a compiler. Both forms of the 0.1.0 package passed it on:
+
+| System | C library | How |
+| --- | --- | --- |
+| Ubuntu 22.04 | glibc 2.35 | Official image by digest, with only the packages above |
+| Ubuntu 24.04 | glibc 2.39 | Official image by digest, with only the packages above |
+| Debian 12 | glibc 2.36 | Official image by digest, with only the packages above |
+| Fedora 44 | glibc 2.43 | Official image by digest, with only the packages above |
+| Arch Linux (a workstation with a GPU) | newer | The tar unpacked, and the AppImage mounted through FUSE and checked as the read-only tree it is; the packaged `bloom-cli` rendered a frame on the GPU through the carried Vulkan loader |
+
+The images were entered without a container runtime, so in them the AppImage was unpacked by
+its own runtime and not mounted; the FUSE mount was exercised on the workstation. The run in
+the images has no display and no GPU. A window on each of those systems' own desktops was not
+part of this.
 
 ## Capability Reporting And Graceful Degradation
 

@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QGuiApplication>
 #include <QSettings>
 
 namespace bloom::ui {
@@ -29,6 +30,9 @@ ApplicationIdentity installApplicationIdentity() {
     QCoreApplication::setApplicationName(identity.application);
     QCoreApplication::setApplicationVersion(QStringLiteral("0.1.0"));
     QCoreApplication::setOrganizationName(identity.organization);
+    // The name of Bloom's desktop entry on Linux (apps/bloom/linux), which is how a Wayland
+    // desktop finds the icon and name of the window's application.
+    QGuiApplication::setDesktopFileName(QStringLiteral("org.kinetik.bloom"));
     return identity;
 }
 

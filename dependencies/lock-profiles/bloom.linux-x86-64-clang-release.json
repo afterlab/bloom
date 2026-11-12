@@ -13,12 +13,12 @@
       "compilerFamily": "clang",
       "compilerAbi": "clang-22-itanium",
       "standardLibrary": "libstdc++",
-      "standardLibraryAbi": "libstdcxx-glibcxx-ubuntu24.04-floor",
+      "standardLibraryAbi": "libstdcxx-glibcxx-ubuntu22.04-floor",
       "cxxRuntime": "libgcc",
-      "cxxRuntimeAbi": "libgcc-ubuntu24.04-floor",
+      "cxxRuntimeAbi": "libgcc-ubuntu22.04-floor",
       "cxxRuntimeLinkage": "dynamic",
       "platformRuntime": "glibc",
-      "platformRuntimeAbi": "glibc-2.39-floor",
+      "platformRuntimeAbi": "glibc-2.35-floor",
       "exceptions": true,
       "rtti": true,
       "libstdcxxCxx11Abi": 1,
@@ -34,18 +34,18 @@
     "toolchain": {
       "cmake": {
         "name": "cmake",
-        "version": "4.4.2",
-        "identity": "reviewed-superbuild-2026-08-26"
+        "version": "4.4.5",
+        "identity": "apt.kitware.com-jammy"
       },
       "generator": {
         "name": "Ninja",
-        "version": "1.13.2",
+        "version": "1.10.1",
         "identity": "cmake-generator-ninja"
       },
       "buildTool": {
         "name": "ninja",
-        "version": "1.13.2",
-        "identity": "reviewed-superbuild-2026-08-26"
+        "version": "1.10.1",
+        "identity": "ubuntu-22.04-ninja-build"
       },
       "compiler": {
         "name": "clang",
@@ -54,18 +54,18 @@
       },
       "linker": {
         "name": "gnu-ld",
-        "version": "2.47",
-        "identity": "reviewed-superbuild-2026-08-26"
+        "version": "2.38",
+        "identity": "ubuntu-22.04-binutils"
       },
       "standardLibrary": {
         "name": "libstdc++",
-        "version": "ubuntu24.04-floor",
-        "identity": "gcc-libstdcxx-cxx11abi-1"
+        "version": "ubuntu22.04-floor",
+        "identity": "gcc-12-libstdcxx-cxx11abi-1"
       },
       "sdk": {
         "name": "linux-sysroot",
-        "version": "glibc-2.39-floor",
-        "identity": "ubuntu-24.04-runner-floor"
+        "version": "glibc-2.35-floor",
+        "identity": "ubuntu-22.04-image-by-digest"
       }
     },
     "environment": {
