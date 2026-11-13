@@ -301,6 +301,10 @@ struct CompositionOutputStreamV1::State {
         const bool ramped = endMix && endMix->clips.size() == mix.clips.size();
         std::vector<media::audio::playback::AudioClip> clips;
         clips.reserve(mix.clips.size());
+        // The sources this block reads as they are decoded, to ask each afterwards whether its
+        // decode failed.
+        std::vector<std::pair<document::AssetId, std::shared_ptr<const media::audio::AudioBuffer>>>
+            streamed;
         for (std::size_t index = 0; index < mix.clips.size(); ++index) {
             const auto& description = mix.clips[index];
             auto found = audioBuffers.find({description.assetId, description.audioStream});
@@ -308,6 +312,8 @@ struct CompositionOutputStreamV1::State {
                 found = loadSource(context, description, cancel);
             require(found->second.buffer != nullptr, "Audio source buffer unavailable",
                     Error::Unavailable);
+            if (found->second.buffer->stream)
+                streamed.emplace_back(description.assetId, found->second.buffer);
             clips.push_back({.buffer = found->second.buffer,
                              .startTime = description.startTime,
                              .level = static_cast<float>(description.level),
@@ -340,6 +346,16 @@ struct CompositionOutputStreamV1::State {
         run.mixer->replaceClips(std::move(clips));
         run.sink->clearCaptured();
         require(!run.mixer->renderForTesting(count), "Offline mix failed");
+        // The mixer plays silence for a source it cannot read, which is right for a device and
+        // wrong for a file: a movie whose audio stops decoding must not publish as silence.
+        for (const auto& [asset, buffer] : streamed)
+            if (buffer->stream->diagnostic()) {
+                audioSourceFailed = true;
+                throw Unavailable{Error::Unavailable,
+                                  "Audio asset " + std::to_string(asset.value()) +
+                                      " couldn't be decoded for the export (its audio stream "
+                                      "stopped decoding)."};
+            }
         const auto captured = run.sink->captured();
         require(captured.size() == static_cast<std::size_t>(count) * 2U,
                 "Offline mix sample count differs");
