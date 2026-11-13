@@ -918,6 +918,124 @@ void testCompileFailureNamesItsSubject() {
         expect(!std::filesystem::exists(f.folder / file), file + ": nothing is published");
     }
 }
+// An independent BS.1770 reading of a 48 kHz 24-bit WAV (K-weighting, ungated mean square: the
+// tone is steady, so the gate changes nothing) and its sample peak, so a loudness report is
+// checked against arithmetic that does not share its library.
+struct LoudnessReading {
+    std::size_t frames = 0;
+    double lufs = 0.0;
+    double samplePeakDb = 0.0;
+};
+LoudnessReading measureFile(const std::filesystem::path& path) {
+    const auto [channels, samples] = wavSamples(path);
+    expect(channels == 2, "the file is stereo");
+    if (channels != 2 || samples.empty())
+        return {};
+    const auto biquad = [](const std::array<double, 3>& b, const std::array<double, 3>& a,
+                           std::vector<double> x) {
+        double x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+        for (auto& value : x) {
+            const double in = value;
+            const double y = b[0] * in + b[1] * x1 + b[2] * x2 - a[1] * y1 - a[2] * y2;
+            x2 = x1, x1 = in, y2 = y1, y1 = y;
+            value = y;
+        }
+        return x;
+    };
+    double sum = 0.0, peak = 0.0;
+    const auto frames = samples.size() / 2;
+    for (std::size_t channel = 0; channel < 2; ++channel) {
+        std::vector<double> x(frames);
+        for (std::size_t i = 0; i < frames; ++i) {
+            x[i] = samples[i * 2 + channel];
+            peak = std::max(peak, std::abs(x[i]));
+        }
+        x = biquad({1.53512485958697, -2.69169618940638, 1.19839281085285},
+                   {1.0, -1.69065929318241, 0.73248077421585}, std::move(x));
+        x = biquad({1.0, -2.0, 1.0}, {1.0, -1.99004745483398, 0.99007225036621}, std::move(x));
+        double square = 0.0;
+        for (const auto value : x)
+            square += value * value;
+        sum += square / static_cast<double>(frames);
+    }
+    return {frames, -0.691 + 10.0 * std::log10(sum), 20.0 * std::log10(peak)};
+}
+
+std::optional<host::ExportLoudnessReport>
+loudnessReportOf(const std::optional<host::ExportJobView>& view) {
+    if (!published(view) || view->outputs.empty() || !view->outputs.front().verification)
+        return std::nullopt;
+    return view->outputs.front().verification->loudness;
+}
+
+// #570: a loudness target on a movie. Each container's audio is normalized like a WAV's: the
+// report states the measured and delivered level, and the audio inside the published movie,
+// read back through an export of that movie to WAV, measures what the report says. The read-back
+// is also the windowed movie audio stream's test (#329): the whole second arrives, from PCM in
+// MOV, AAC in MP4 and Opus in WebM, whose millisecond timestamps round every packet.
+void testLoudnessThroughVideoContainers() {
+    struct Container {
+        ExportFormat format;
+        std::string profile, extension;
+        double tolerance; // of the read-back level; the lossy codecs are not sample exact
+    };
+    const std::vector<Container> containers{{ExportFormat::ProResMov, "hq", "mov", 0.05},
+                                            {ExportFormat::H264Mp4, "high", "mp4", 0.15},
+                                            {ExportFormat::Vp9Webm, "8bit", "webm", 0.15}};
+    Fixture f("loudness-movies", WavEncoding::Float32);
+    for (const auto& container : containers) {
+        const auto name = "loudness in " + container.extension;
+        document::ExportOutputSettings settings;
+        settings.format = container.format;
+        settings.codecProfile = container.profile;
+        settings.includeAudio = true;
+        settings.loudness = document::ExportLoudness{-23.0, -1.0};
+        const auto file = "Exports/normalized." + container.extension;
+        const auto finished = f.run(f.addJob(settings, file), name);
+        if (finished && finished->failure)
+            std::cerr << "  " << name << ": " << finished->failure->reason << '\n';
+        const auto report = loudnessReportOf(finished);
+        expect(report.has_value(), name + ": the movie publishes with a loudness report");
+        if (!report)
+            continue;
+        expect(report->measured && std::abs(report->measuredLufs - -12.4) < 0.6,
+               name + ": the tone measures near -12.4 LUFS (got " +
+                   std::to_string(report->measuredLufs) + ")");
+        expect(report->finalMeasured && std::abs(report->finalLufs - -23.0) < 0.2,
+               name + ": the delivered loudness is the target (got " +
+                   std::to_string(report->finalLufs) + ")");
+        expect(std::abs(report->gainDb - (-23.0 - report->measuredLufs)) < 1e-6,
+               name + ": the gain is target minus measured");
+        // The movie's own audio, decoded by the import path and written out unchanged.
+        Fixture back("loudness-back-" + container.extension, WavEncoding::Float32, true,
+                     f.folder / file);
+        document::ExportOutputSettings plain;
+        plain.format = ExportFormat::Wav;
+        plain.codecProfile = "s24";
+        plain.includeAudio = true;
+        const auto read = back.run(back.addJob(plain, "Exports/back.wav"), name + " read back");
+        expect(published(read), name + ": the movie's audio exports to WAV");
+        if (!published(read))
+            continue;
+        const auto measured = measureFile(back.folder / "Exports/back.wav");
+        // #329: the sound of the movie's last video frame is its own, not one held sample.
+        const auto [backChannels, back48] = wavSamples(back.folder / "Exports/back.wav");
+        double low = 1.0, high = -1.0;
+        for (std::size_t index = back48.size() >= 4000 ? back48.size() - 4000 : 0;
+             index < back48.size(); index += 2) {
+            low = std::min(low, back48[index]);
+            high = std::max(high, back48[index]);
+        }
+        expect(backChannels == 2 && back48.size() == 2 * 48000 && high - low > 0.1,
+               name + ": the last frame's sound plays to the end (" +
+                   std::to_string(back48.size() / 2) + " frames, swing " +
+                   std::to_string(high - low) + ")");
+        expect(std::abs(measured.lufs - report->finalLufs) < container.tolerance,
+               name + ": the audio in the movie measures what the report says (movie " +
+                   std::to_string(measured.lufs) + ", report " +
+                   std::to_string(report->finalLufs) + ")");
+    }
+}
 
 // #570: a WAV export normalized to a loudness target. The tone source measures about -12.4 LUFS
 // (a 0.25-amplitude sine in both channels); the export brings it to the target, the report states
@@ -926,46 +1044,6 @@ void testCompileFailureNamesItsSubject() {
 // in the file. The file keeps the programme's length.
 void testLoudnessNormalization() {
     Fixture f("loudness", WavEncoding::Float32);
-    // An independent BS.1770 reading of a 48 kHz file (K-weighting, ungated mean square: the tone
-    // is steady, so the gate changes nothing) and its sample peak, so the report is checked against
-    // arithmetic that does not share its library.
-    struct Reading {
-        std::size_t frames = 0;
-        double lufs = 0.0;
-        double samplePeakDb = 0.0;
-    };
-    const auto measureFile = [&](const std::filesystem::path& path) {
-        const auto [channels, samples] = wavSamples(path);
-        expect(channels == 2, "the file is stereo");
-        const auto biquad = [](const std::array<double, 3>& b, const std::array<double, 3>& a,
-                               std::vector<double> x) {
-            double x1 = 0, x2 = 0, y1 = 0, y2 = 0;
-            for (auto& value : x) {
-                const double in = value;
-                const double y = b[0] * in + b[1] * x1 + b[2] * x2 - a[1] * y1 - a[2] * y2;
-                x2 = x1, x1 = in, y2 = y1, y1 = y;
-                value = y;
-            }
-            return x;
-        };
-        double sum = 0.0, peak = 0.0;
-        const auto frames = samples.size() / 2;
-        for (std::size_t channel = 0; channel < 2; ++channel) {
-            std::vector<double> x(frames);
-            for (std::size_t i = 0; i < frames; ++i) {
-                x[i] = samples[i * 2 + channel];
-                peak = std::max(peak, std::abs(x[i]));
-            }
-            x = biquad({1.53512485958697, -2.69169618940638, 1.19839281085285},
-                       {1.0, -1.69065929318241, 0.73248077421585}, std::move(x));
-            x = biquad({1.0, -2.0, 1.0}, {1.0, -1.99004745483398, 0.99007225036621}, std::move(x));
-            double square = 0.0;
-            for (const auto value : x)
-                square += value * value;
-            sum += square / static_cast<double>(frames);
-        }
-        return Reading{frames, -0.691 + 10.0 * std::log10(sum), 20.0 * std::log10(peak)};
-    };
     const auto run = [&](const double target, const double ceiling, const std::string& file) {
         document::ExportOutputSettings settings;
         settings.format = ExportFormat::Wav;
@@ -974,12 +1052,7 @@ void testLoudnessNormalization() {
         settings.loudness = document::ExportLoudness{target, ceiling};
         return f.run(f.addJob(settings, "Exports/" + file), file);
     };
-    const auto reportOf = [](const std::optional<host::ExportJobView>& view)
-        -> std::optional<host::ExportLoudnessReport> {
-        if (!published(view) || view->outputs.empty() || !view->outputs.front().verification)
-            return std::nullopt;
-        return view->outputs.front().verification->loudness;
-    };
+    const auto reportOf = loudnessReportOf;
 
     // Plain normalization to -23 LUFS.
     {
@@ -1085,6 +1158,7 @@ int main() {
         testFailedRunKeepsFrameProvenance();
         testCompileFailureNamesItsSubject();
         testLoudnessNormalization();
+        testLoudnessThroughVideoContainers();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;
