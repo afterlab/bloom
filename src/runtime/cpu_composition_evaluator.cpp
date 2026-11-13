@@ -1648,14 +1648,27 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
             curve != nullptr && curve->value() < scalarCurveReferences.size())
             scalarCurveReferences[curve->value()] = 1;
     };
-    for (const auto& source : plan->audioMix().sources)
-        referenceAudioCurve(source.level);
-    for (const auto& layer : plan->audioMix().layers)
-        if (layer.time && layer.time->timeRemap)
-            referenceAudioCurve(*layer.time->timeRemap);
-    for (const auto& layer : plan->audioMix().nestedLayers)
-        if (layer.time && layer.time->timeRemap)
-            referenceAudioCurve(*layer.time->timeRemap);
+    const auto referenceAudioMix = [&](const CompositionAudioMix& mix) {
+        for (const auto& source : mix.sources)
+            referenceAudioCurve(source.level);
+        for (const auto& layer : mix.layers) {
+            if (layer.time && layer.time->timeRemap)
+                referenceAudioCurve(*layer.time->timeRemap);
+            for (const auto& effect : layer.effects)
+                for (const auto& parameter : effect.parameters)
+                    referenceAudioCurve(parameter);
+        }
+        for (const auto& layer : mix.nestedLayers) {
+            if (layer.time && layer.time->timeRemap)
+                referenceAudioCurve(*layer.time->timeRemap);
+            referenceAudioCurve(layer.source.timeMapping.offset);
+            referenceAudioCurve(layer.source.timeMapping.scale);
+        }
+    };
+    referenceAudioMix(plan->audioMix());
+    // #630: the sound an analysis node reads is lowered like the mix and reads curves the same way.
+    for (const auto& mix : plan->analysisAudioMixes())
+        referenceAudioMix(mix);
     // The VALUE graph references curves too (task FIX1, item G): a literal Scalar, Vector 2 or
     // Colour node whose authored value is on a curve lowers to a curve index, and its curve is as
     // referenced as any layer parameter's. Counted here, before the unreferenced-curve rule below
@@ -2116,29 +2129,30 @@ namespace {
 
 std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
     const std::shared_ptr<const CompiledCompositionPlan>& plan, const core::RationalTime time,
-    const CancellationToken& cancellation) const {
+    const CancellationToken& cancellation, const CompositionAudioMix* const selected) const {
     if (!plan || cancellation.isCancellationRequested())
         return std::nullopt;
+    const auto& audio = selected != nullptr ? *selected : plan->audioMix();
 
     std::optional<ValueGraphEvaluation> valueGraph;
     const auto needsValueGraph =
-        std::ranges::any_of(plan->audioMix().sources,
+        std::ranges::any_of(audio.sources,
                             [](const auto& source) {
                                 return std::holds_alternative<ValueOutputIndex>(
                                     source.level.source);
                             }) ||
-        std::ranges::any_of(plan->audioMix().nestedLayers,
+        std::ranges::any_of(audio.nestedLayers,
                             [](const auto& layer) {
                                 return std::holds_alternative<ValueOutputIndex>(
                                            layer.source.timeMapping.offset.source) ||
                                        std::holds_alternative<ValueOutputIndex>(
                                            layer.source.timeMapping.scale.source);
                             }) ||
-        std::ranges::any_of(plan->audioMix().layers, [](const auto& layer) {
+        std::ranges::any_of(audio.layers, [](const auto& layer) {
             return layer.time && layer.time->timeRemap &&
                    std::holds_alternative<ValueOutputIndex>(layer.time->timeRemap->source);
         }) ||
-        std::ranges::any_of(plan->audioMix().layers, [](const auto& layer) {
+        std::ranges::any_of(audio.layers, [](const auto& layer) {
             return std::ranges::any_of(layer.effects, [](const auto& effect) {
                 return std::ranges::any_of(effect.parameters, [](const auto& parameter) {
                     return std::holds_alternative<ValueOutputIndex>(parameter.source);
@@ -2172,13 +2186,13 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
         const auto* value = std::get_if<double>(&valueGraph->outputs[index]);
         return value ? std::optional{*value} : std::nullopt;
     };
-    AudioMixDescription description{.outputNodeId = plan->audioMix().outputNodeId, .clips = {}};
-    description.clips.reserve(plan->audioMix().layers.size());
-    for (const auto& layer : plan->audioMix().layers) {
+    AudioMixDescription description{.outputNodeId = audio.outputNodeId, .clips = {}};
+    description.clips.reserve(audio.layers.size());
+    for (const auto& layer : audio.layers) {
         if (cancellation.isCancellationRequested() ||
-            layer.sourceIndex >= plan->audioMix().sources.size())
+            layer.sourceIndex >= audio.sources.size())
             return std::nullopt;
-        const auto& source = plan->audioMix().sources[layer.sourceIndex];
+        const auto& source = audio.sources[layer.sourceIndex];
         const auto start = audioStartTime(source.startFrame, plan->format().frameRate());
         if (!start)
             return std::nullopt;
@@ -2269,15 +2283,15 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
         }
     }
     const bool anySolo =
-        std::ranges::any_of(plan->audioMix().layers,
+        std::ranges::any_of(audio.layers,
                             [](const auto& layer) { return layer.solo && layer.enabled; }) ||
-        std::ranges::any_of(plan->audioMix().nestedLayers,
+        std::ranges::any_of(audio.nestedLayers,
                             [](const auto& layer) { return layer.solo && layer.enabled; });
     for (auto& clip : description.clips) {
         clip.muted = clip.muted || (anySolo && !clip.solo);
         clip.solo = false;
     }
-    for (const auto& layer : plan->audioMix().nestedLayers) {
+    for (const auto& layer : audio.nestedLayers) {
         const auto& source = layer.source;
         if (cancellation.isCancellationRequested() ||
             source.nestedPlanIndex >= plan->nestedPlans().size())
@@ -2303,7 +2317,7 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
                 : std::nullopt;
         if (!mapped)
             return std::nullopt;
-        auto mix = evaluateAudioMix(nested, *mapped, cancellation);
+        auto mix = evaluateAudioMix(nested, *mapped, cancellation, nullptr);
         if (!mix)
             return std::nullopt;
         for (auto& clip : mix->clips) {
@@ -2513,7 +2527,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                       rate.numerator(), rate.denominator()));
     }
     // #347: an Audio Amplitude in the value graph prepares its analysis on this worker.
-    const AudioAnalysisPreparation audioPreparation(mediaBase, cancellation);
+    const AudioAnalysisPreparation audioPreparation(plan, mediaBase, cancellation);
     // #349: an Image Statistics in the value graph runs its picture's plan for this frame, on this
     // worker, through the CPU reference, before the value is sampled.
     const ImageStatisticsPreparation statisticsPreparation(
@@ -3679,6 +3693,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     key.add(plot->source->audioStream);
                                     key.add(plot->source->startFrame);
                                     key.add(plot->source->loopMode);
+                                    // #630: a rendered sound is named by its digest, which the
+                                    // preparation above computed.
+                                    if (!plot->source->bare && plot->source->sound &&
+                                        plot->source->sound->identity)
+                                        key.add("sound:" +
+                                                plot->source->sound->identity->digest());
                                 }
                             }
                             if (isColorGradeKernel(step.kernel)) {

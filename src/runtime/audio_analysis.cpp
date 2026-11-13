@@ -7,7 +7,10 @@
 #include <bloom/media/video/session.hpp>
 #include <bloom/platform/source_identity.hpp>
 #include <bloom/runtime/composition_time.hpp>
+#include <bloom/runtime/audio_sound.hpp>
 #include <bloom/runtime/footage_time.hpp>
+
+#include "audio_source_open.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -19,10 +22,66 @@
 
 namespace bloom::runtime {
 namespace {
+constexpr std::uint64_t kMaximumChannels = 64;
+} // namespace
+
+namespace detail {
+OpenedAssetAudio openAssetAudio(const document::AssetRecord& asset, const std::uint32_t audioStream,
+                                const std::filesystem::path& base,
+                                const std::function<bool()>& cancelled) {
+    const auto path = media::resolveImagePath(asset.locator.path, asset.locator.relinkHint, base);
+    OpenedAssetAudio opened;
+    if (asset.kind == document::AssetKind::Audio) {
+        switch (platform::verifySourceDigest(path, asset.contentDigest, cancelled)) {
+        case platform::SourceCheck::Matches:
+            break;
+        case platform::SourceCheck::Cancelled:
+            return {{}, {}, {}, true};
+        case platform::SourceCheck::Changed:
+            return {{}, {}, "The audio file changed since it was imported", false};
+        case platform::SourceCheck::Missing:
+            return {{}, {}, "The audio file is missing", false};
+        }
+        media::audio::AudioDecodeLimits limits;
+        limits.sampleBudget = std::uint64_t{media::audio::AudioStream::kWindowFrames} * kMaximumChannels;
+        auto decoded = media::audio::openWindowedAudio(path, limits,
+                                                       media::audio::AudioStream::kWindowFrames, cancelled);
+        if (!decoded)
+            return decoded.error()->code == media::audio::AudioErrorCode::Cancelled
+                       ? OpenedAssetAudio{{}, {}, {}, true}
+                       : OpenedAssetAudio{{}, {}, media::audio::describeAudioError(*decoded.error()), false};
+        opened.buffer = std::make_shared<const media::audio::AudioBuffer>(std::move(*decoded.value()));
+    } else if (asset.kind == document::AssetKind::Video) {
+        auto session = std::make_shared<media::video::VideoDecodeSession>(path);
+        auto probed = session->probe(cancelled);
+        auto* probe = std::get_if<media::provider::ProbeResult>(&probed);
+        if (probe == nullptr)
+            return cancelled()
+                       ? OpenedAssetAudio{{}, {}, {}, true}
+                       : OpenedAssetAudio{{}, {}, std::get<media::provider::Unavailable>(probed).detail, false};
+        if (probe->sourceDigest != asset.contentDigest)
+            return {{}, {}, "The video file changed since it was imported", false};
+        if (media::video::audioStreamAt(*probe, audioStream) == nullptr)
+            return {{}, {}, "The video has no such audio stream", false};
+        auto decoded = media::video::openWindowedVideoAudio(session, *probe, audioStream);
+        auto* audio = std::get_if<media::audio::AudioBuffer>(&decoded);
+        if (audio == nullptr)
+            return cancelled()
+                       ? OpenedAssetAudio{{}, {}, {}, true}
+                       : OpenedAssetAudio{{}, {}, std::get<media::provider::Unavailable>(decoded).detail, false};
+        opened.buffer = std::make_shared<const media::audio::AudioBuffer>(std::move(*audio));
+        opened.session = std::move(session);
+    } else {
+        return {{}, {}, "The source has no audio", false};
+    }
+    return opened;
+}
+} // namespace detail
+
+namespace {
 
 namespace an = media::audio::analysis;
 
-constexpr std::uint64_t kMaximumChannels = 64;
 
 struct Entry final {
     std::shared_ptr<const AudioAnalysisResult> result;
@@ -100,53 +159,14 @@ OpenResult openSource(const AudioAnalysisSource& source, const std::filesystem::
             return {found->second.buffer, {}, false};
         }
     }
-    const auto& asset = source.asset;
-    const auto path = media::resolveImagePath(asset.locator.path, asset.locator.relinkHint, base);
-    const auto cancelled = [&] { return cancellation.isCancellationRequested(); };
+    const auto loaded = detail::openAssetAudio(
+        source.asset, source.audioStream, base,
+        [&] { return cancellation.isCancellationRequested(); });
+    if (!loaded.buffer)
+        return {{}, loaded.error, loaded.cancelled};
     Opened opened;
-    if (asset.kind == document::AssetKind::Audio) {
-        switch (platform::verifySourceDigest(path, asset.contentDigest, cancelled)) {
-        case platform::SourceCheck::Matches:
-            break;
-        case platform::SourceCheck::Cancelled:
-            return {{}, {}, true};
-        case platform::SourceCheck::Changed:
-            return {{}, "The audio file changed since it was imported", false};
-        case platform::SourceCheck::Missing:
-            return {{}, "The audio file is missing", false};
-        }
-        media::audio::AudioDecodeLimits limits;
-        limits.sampleBudget = std::uint64_t{media::audio::AudioStream::kWindowFrames} * kMaximumChannels;
-        auto decoded = media::audio::openWindowedAudio(path, limits,
-                                                       media::audio::AudioStream::kWindowFrames, cancelled);
-        if (!decoded)
-            return decoded.error()->code == media::audio::AudioErrorCode::Cancelled
-                       ? OpenResult{{}, {}, true}
-                       : OpenResult{{}, media::audio::describeAudioError(*decoded.error()), false};
-        opened.buffer = std::make_shared<const media::audio::AudioBuffer>(std::move(*decoded.value()));
-    } else if (asset.kind == document::AssetKind::Video) {
-        auto session = std::make_shared<media::video::VideoDecodeSession>(path);
-        auto probed = session->probe(cancelled);
-        auto* probe = std::get_if<media::provider::ProbeResult>(&probed);
-        if (probe == nullptr)
-            return cancellation.isCancellationRequested()
-                       ? OpenResult{{}, {}, true}
-                       : OpenResult{{}, std::get<media::provider::Unavailable>(probed).detail, false};
-        if (probe->sourceDigest != asset.contentDigest)
-            return {{}, "The video file changed since it was imported", false};
-        if (media::video::audioStreamAt(*probe, source.audioStream) == nullptr)
-            return {{}, "The video has no such audio stream", false};
-        auto decoded = media::video::openWindowedVideoAudio(session, *probe, source.audioStream);
-        auto* audio = std::get_if<media::audio::AudioBuffer>(&decoded);
-        if (audio == nullptr)
-            return cancellation.isCancellationRequested()
-                       ? OpenResult{{}, {}, true}
-                       : OpenResult{{}, std::get<media::provider::Unavailable>(decoded).detail, false};
-        opened.buffer = std::make_shared<const media::audio::AudioBuffer>(std::move(*audio));
-        opened.session = std::move(session);
-    } else {
-        return {{}, "The source has no audio", false};
-    }
+    opened.buffer = loaded.buffer;
+    opened.session = loaded.session;
     std::scoped_lock lock(s.mutex);
     opened.used = ++s.tick;
     ++s.statistics.opened;
@@ -213,12 +233,8 @@ std::optional<AudioAnalysisQuery> audioAmplitudeQuery(const CompiledValueAudioAm
     return query;
 }
 
-std::string audioAnalysisKey(const AudioAnalysisQuery& query) {
-    if (!query.source)
-        return {};
-    const auto& source = *query.source;
-    std::string key = "audio-analysis/1|k" + std::to_string(static_cast<int>(query.kind)) + "|" +
-                      sourceKey(source);
+namespace {
+void appendSourceTiming(std::string& key, const AudioAnalysisSource& source) {
     key += "|start" + std::to_string(source.startFrame) + "@" +
            std::to_string(source.compositionRate.numerator()) + "/" +
            std::to_string(source.compositionRate.denominator());
@@ -231,7 +247,9 @@ std::string audioAnalysisKey(const AudioAnalysisQuery& query) {
         key += "|foot" + time(source.footage->pass) + "x" + std::to_string(source.footage->loops) +
                "*" + std::to_string(source.footage->numerator) + "/" +
                std::to_string(source.footage->denominator);
-    key += "|t" + time(query.time);
+}
+
+void appendQueryParameters(std::string& key, const AudioAnalysisQuery& query) {
     switch (query.kind) {
     case AudioAnalysisKind::Amplitude:
         key += "|w" + number(query.windowSeconds) + "|m" + std::to_string(static_cast<int>(query.measure));
@@ -247,6 +265,29 @@ std::string audioAnalysisKey(const AudioAnalysisQuery& query) {
                "," + number(query.spectrum.ceilingDb);
         break;
     }
+}
+} // namespace
+
+std::string audioAnalysisKey(const AudioAnalysisQuery& query) {
+    if (!query.source)
+        return {};
+    const auto& source = *query.source;
+    std::string key = "audio-analysis/1|k" + std::to_string(static_cast<int>(query.kind)) + "|";
+    if (!source.bare) {
+        // #630: a rendered sound is named by its digest, which a worker computes; until then the
+        // analysis has no identity and is not prepared.
+        const auto digest = source.sound && source.sound->identity
+                                ? source.sound->identity->digest()
+                                : std::string{};
+        if (digest.empty())
+            return {};
+        key += "sound:" + digest;
+    } else {
+        key += sourceKey(source);
+        appendSourceTiming(key, source);
+    }
+    key += "|t" + time(query.time);
+    appendQueryParameters(key, query);
     return key;
 }
 
@@ -266,8 +307,26 @@ std::shared_ptr<const AudioAnalysisResult> findAudioAnalysis(const AudioAnalysis
 
 AudioAnalysisStatus prepareAudioAnalysis(const AudioAnalysisQuery& query,
                                          const std::filesystem::path& assetBase,
-                                         const CancellationToken& cancellation) {
+                                         const CancellationToken& cancellation,
+                                         const std::shared_ptr<const CompiledCompositionPlan>& plan) {
     auto& s = state();
+    if (!query.source)
+        return {AudioAnalysisOutcome::Unavailable, "No audio is connected"};
+    // #630: more than a bare source is read as it is rendered. The render is the sound store's
+    // job; this waits for it and then reads the window from the rendered samples.
+    std::shared_ptr<const PreparedAudioSound> rendered;
+    if (!query.source->bare) {
+        // A caller that holds no plan of its own (a plot pass) reads the plan of the evaluation
+        // it runs inside.
+        const auto& owner = plan ? plan : AudioAnalysisPreparation::planHere();
+        auto prepared = prepareAudioSound(owner, query.source->sound, assetBase, cancellation);
+        if (prepared.outcome == AudioSoundOutcome::Cancelled)
+            return {AudioAnalysisOutcome::Cancelled, {}};
+        if (prepared.outcome != AudioSoundOutcome::Ready || !prepared.sound)
+            return {AudioAnalysisOutcome::Unavailable,
+                    prepared.detail.empty() ? "The audio could not be rendered" : prepared.detail};
+        rendered = std::move(prepared.sound);
+    }
     const auto key = audioAnalysisKey(query);
     if (key.empty())
         return {AudioAnalysisOutcome::Unavailable, "No audio is connected"};
@@ -294,13 +353,24 @@ AudioAnalysisStatus prepareAudioAnalysis(const AudioAnalysisQuery& query,
     };
     if (!(query.windowSeconds > 0.0) || query.windowSeconds > 60.0)
         return fail("The analysis window is outside 0 to 60 seconds");
-    const auto opened = openSource(*query.source, assetBase, cancellation);
-    if (opened.cancelled)
-        return cancel();
-    if (!opened.buffer)
-        return fail(opened.error.empty() ? "The audio could not be opened" : opened.error);
-    const auto& buffer = *opened.buffer;
-    const auto seconds = audioAnalysisSourceSeconds(*query.source, query.time);
+    std::shared_ptr<const media::audio::AudioBuffer> held;
+    std::optional<double> seconds;
+    if (rendered) {
+        // The rendered sound runs on the composition's clock from its start.
+        held = rendered->buffer;
+        const double at = query.time.toSeconds();
+        if (at >= 0.0 && at * held->rate < static_cast<double>(held->frames))
+            seconds = at;
+    } else {
+        const auto opened = openSource(*query.source, assetBase, cancellation);
+        if (opened.cancelled)
+            return cancel();
+        if (!opened.buffer)
+            return fail(opened.error.empty() ? "The audio could not be opened" : opened.error);
+        held = opened.buffer;
+        seconds = audioAnalysisSourceSeconds(*query.source, query.time);
+    }
+    const auto& buffer = *held;
     const auto center = seconds ? static_cast<std::int64_t>(std::llround(*seconds * buffer.rate)) : 0;
     const auto frames = static_cast<std::uint64_t>(
         std::max<long long>(1, std::llround(query.windowSeconds * buffer.rate)));
@@ -394,19 +464,26 @@ namespace {
 thread_local const AudioAnalysisPreparation* currentPreparation = nullptr;
 } // namespace
 
-AudioAnalysisPreparation::AudioAnalysisPreparation(std::filesystem::path assetBase,
-                                                   CancellationToken cancellation)
-    : assetBase_(std::move(assetBase)), cancellation_(std::move(cancellation)),
-      previous_(currentPreparation) {
+AudioAnalysisPreparation::AudioAnalysisPreparation(
+    std::shared_ptr<const CompiledCompositionPlan> plan, std::filesystem::path assetBase,
+    CancellationToken cancellation)
+    : plan_(std::move(plan)), assetBase_(std::move(assetBase)),
+      cancellation_(std::move(cancellation)), previous_(currentPreparation) {
     currentPreparation = this;
 }
 
 AudioAnalysisPreparation::~AudioAnalysisPreparation() { currentPreparation = previous_; }
 
+const std::shared_ptr<const CompiledCompositionPlan>& AudioAnalysisPreparation::planHere() noexcept {
+    static const std::shared_ptr<const CompiledCompositionPlan> none;
+    return currentPreparation == nullptr ? none : currentPreparation->plan_;
+}
+
 std::optional<AudioAnalysisStatus> AudioAnalysisPreparation::prepareHere(const AudioAnalysisQuery& query) {
     if (currentPreparation == nullptr)
         return std::nullopt;
-    return prepareAudioAnalysis(query, currentPreparation->assetBase_, currentPreparation->cancellation_);
+    return prepareAudioAnalysis(query, currentPreparation->assetBase_,
+                                currentPreparation->cancellation_, currentPreparation->plan_);
 }
 
 AudioAnalysisStatistics audioAnalysisStatistics() {

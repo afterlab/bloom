@@ -46,7 +46,9 @@ CompiledCompositionPlan::CompiledCompositionPlan(CompiledCompositionPlanDefiniti
       valueOutputCount_(definition.valueOutputCount),
       planSemanticsVersion_(definition.planSemanticsVersion),
       animationSamplingSemanticsVersion_(definition.animationSamplingSemanticsVersion),
-      audioMix_(std::move(definition.audioMix)), nestedPlans_(std::move(definition.nestedPlans)),
+      audioMix_(std::move(definition.audioMix)),
+      analysisAudioMixes_(std::move(definition.analysisAudioMixes)),
+      nestedPlans_(std::move(definition.nestedPlans)),
       duration_(definition.duration), clocks_(std::move(definition.clocks)),
       operationClocks_(std::move(definition.operationClocks)),
       placementClocks_(std::move(definition.placementClocks)) {
@@ -70,7 +72,8 @@ bool operator==(const CompiledCompositionPlan& lhs, const CompiledCompositionPla
            lhs.valueOutputCount_ == rhs.valueOutputCount_ &&
            lhs.planSemanticsVersion_ == rhs.planSemanticsVersion_ &&
            lhs.animationSamplingSemanticsVersion_ == rhs.animationSamplingSemanticsVersion_ &&
-           lhs.audioMix_ == rhs.audioMix_ && lhs.duration_ == rhs.duration_ &&
+           lhs.audioMix_ == rhs.audioMix_ &&
+           lhs.analysisAudioMixes_ == rhs.analysisAudioMixes_ && lhs.duration_ == rhs.duration_ &&
            lhs.clocks_ == rhs.clocks_ && lhs.operationClocks_ == rhs.operationClocks_ &&
            lhs.placementClocks_ == rhs.placementClocks_ &&
            std::ranges::equal(lhs.nestedPlans_, rhs.nestedPlans_,
@@ -100,12 +103,28 @@ CompiledCompositionPlanDefinition CompiledCompositionPlan::copyDefinition() cons
             .duration = duration_,
             .clocks = clocks_,
             .operationClocks = operationClocks_,
-            .placementClocks = placementClocks_};
+            .placementClocks = placementClocks_,
+            .analysisAudioMixes = analysisAudioMixes_};
 }
 
 } // namespace bloom::runtime
 
 namespace bloom::runtime {
+
+bool operator==(const AudioAnalysisSound& left, const AudioAnalysisSound& right) {
+    return left.mix == right.mix && left.duration == right.duration && left.rate == right.rate &&
+           (left.assets == right.assets ||
+            (left.assets != nullptr && right.assets != nullptr && *left.assets == *right.assets));
+}
+
+bool operator==(const AudioAnalysisSource& left, const AudioAnalysisSource& right) {
+    return left.asset == right.asset && left.audioStream == right.audioStream &&
+           left.startFrame == right.startFrame && left.compositionRate == right.compositionRate &&
+           left.loopMode == right.loopMode && left.loopExtent == right.loopExtent &&
+           left.footage == right.footage && left.bare == right.bare &&
+           (left.sound == right.sound ||
+            (left.sound != nullptr && right.sound != nullptr && *left.sound == *right.sound));
+}
 
 bool sameAudioAnalysisSource(const std::shared_ptr<const AudioAnalysisSource>& left,
                              const std::shared_ptr<const AudioAnalysisSource>& right) noexcept {

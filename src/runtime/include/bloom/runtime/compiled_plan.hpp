@@ -1851,6 +1851,10 @@ struct CompiledCompositionPlanDefinition final {
     std::vector<CompiledTimeClock> clocks{};
     std::vector<std::uint32_t> operationClocks{};
     std::vector<std::uint32_t> placementClocks{};
+    // #630: the sound each analysis node reads, lowered like `audioMix` (the kernels hold the same
+    // mixes; these are here so the plan's own checks can walk them). Last, so the positional
+    // initializers that predate it are unchanged.
+    std::vector<CompositionAudioMix> analysisAudioMixes{};
 
     friend bool operator==(const CompiledCompositionPlanDefinition&,
                            const CompiledCompositionPlanDefinition&) = default;
@@ -1934,6 +1938,10 @@ class CompiledCompositionPlan final {
     [[nodiscard]] std::size_t valueOutputCount() const noexcept { return valueOutputCount_; }
     [[nodiscard]] const CompositionAudioMix& audioMix() const& noexcept { return audioMix_; }
     [[nodiscard]] const CompositionAudioMix& audioMix() const&& = delete;
+    [[nodiscard]] std::span<const CompositionAudioMix> analysisAudioMixes() const& noexcept {
+        return analysisAudioMixes_;
+    }
+    [[nodiscard]] std::span<const CompositionAudioMix> analysisAudioMixes() const&& = delete;
     [[nodiscard]] std::uint32_t planSemanticsVersion() const noexcept {
         return planSemanticsVersion_;
     }
@@ -1970,6 +1978,7 @@ class CompiledCompositionPlan final {
     std::uint32_t planSemanticsVersion_ = kCompiledCompositionPlanSemanticsVersion;
     std::uint32_t animationSamplingSemanticsVersion_ = kAnimationSamplingSemanticsVersion;
     CompositionAudioMix audioMix_{};
+    std::vector<CompositionAudioMix> analysisAudioMixes_;
     std::vector<std::shared_ptr<const CompiledCompositionPlan>> nestedPlans_;
     core::RationalTime duration_{};
     std::vector<CompiledTimeClock> clocks_;

@@ -259,11 +259,19 @@ void entryDependencies(const document::NodeId merge, const document::LayerStackE
     // picture. An audio-only Layer Output is an empty image, so the loop above skips it; its remap
     // is compiled here for the mix. An audible layer's source is reachable and unmuted, so the loop
     // above already compiled its level.
-    for (const auto layerNodeId : audibleLayers_) {
+    const auto addTimeRemap = [&](const document::NodeId layerNodeId) {
         const auto* node = findNode(layerNodeId);
         if (const auto* binding =
                 node ? findParameterBinding(*node, document::kTimeRemapParameterRole) : nullptr)
             addParameterCurve(binding->parameterId);
+    };
+    for (const auto layerNodeId : audibleLayers_)
+        addTimeRemap(layerNodeId);
+    // #630: and of every layer an analysis node hears.
+    for (const auto& [analysis, layers] : analysisAudibleLayers_) {
+        static_cast<void>(analysis);
+        for (const auto layerNodeId : layers)
+            addTimeRemap(layerNodeId);
     }
     // Path curves are compiled inline into the mask kernel that samples them (ADR 0028), and
     // Gradient curves into the Colorize kernel that samples them (#541).
@@ -1077,6 +1085,7 @@ lower(const std::vector<document::NodeId>& order) {
         *audioMix,
         std::move(nestedPlans_),
         composition_->duration()};
+    definition.analysisAudioMixes = std::move(analysisAudioMixes_);
     // ADR 0024: place every operation on its layer time clock.
     if (const auto failure = runtime::detail::scopeLayerTime(definition)) {
         addFailure(runtime::CompileDiagnosticCode::TimeScopeLimit, subject({}, "layerTime"),
@@ -1235,66 +1244,75 @@ struct AudioChain final {
     return chain;
 }
 
-// #347: the audio an analysis node (Audio Amplitude, Waveform, Spectrum) reads: the Audio or Video
-// source its `audio` input ends in, through any audio effects (an analysis reads the source's own
-// sound, so the effects are not applied). `source` is null for an input that is unwired, muted or
-// ends in an unwired effect: silence. `ok` is false after a lowering failure.
+// #347, #630: the sound an analysis node reads: whatever its `audio` input is wired to. A source
+// wired straight in at a constant level of 1 is read from its own file (`bare`); anything else --
+// a source at another level or through audio effects, a Layer, a Merge's mix, a nested
+// composition -- is the mix that output carries, lowered by the code that lowers the
+// composition's own mix. `source` is null for an input that is unwired or carries nothing
+// (silence). `ok` is false after a lowering failure.
 struct AudioAnalysisLowering final {
     bool ok = true;
     std::shared_ptr<const runtime::AudioAnalysisSource> source;
 };
 
 [[nodiscard]] AudioAnalysisLowering lowerAudioAnalysisSource(const document::NodeRecord& node) {
+    if (const auto found = analysisSources_.find(node.id); found != analysisSources_.end())
+        return {true, found->second};
     const auto* edge = audioInputEdge(node.id, document::kAudioAnalysisInputPort);
     if (edge == nullptr)
         return {};
-    const auto end = audioChainEnd(edge->source.nodeId);
-    if (!end)
-        return {};
-    const auto* audioSource = findNode(*end);
-    if (audioSource == nullptr)
-        return {};
-    if (audioSource->typeId != document::kAudioSourceNodeType &&
-        audioSource->typeId != "bloom.video-source") {
-        addTopologyFailure(node.id, "Audio analysis needs an Audio or Video source.");
+    const auto feed = edge->source.nodeId;
+    const auto audible = analysisAudibleLayers_.find(node.id);
+    runtime::CompositionAudioMix base;
+    base.outputNodeId = node.id;
+    auto mix = lowerAudioMixFrom(feed,
+                                 audible != analysisAudibleLayers_.end() ? audible->second
+                                                                         : audibleLayersFrom(feed),
+                                 std::move(base));
+    if (!mix)
         return {false, nullptr};
-    }
-    if (isMuted(audioSource->id))
+    if (mix->layers.empty() && mix->nestedLayers.empty())
         return {};
-    const auto* assetText = parameterConstant<std::string>(findParameterBinding(*audioSource, "asset"));
-    const auto* startFrame =
-        parameterConstant<std::int64_t>(findParameterBinding(*audioSource, "startFrame"));
-    std::uint64_t assetRaw = 0;
-    if (assetText == nullptr || startFrame == nullptr || assetText->empty() ||
-        std::from_chars(assetText->data(), assetText->data() + assetText->size(), assetRaw).ec !=
-            std::errc{} ||
-        !document::AssetId::fromRaw(assetRaw).isValid()) {
-        addTopologyFailure(node.id, "The audio source of an analysis could not be lowered.");
-        return {false, nullptr};
-    }
-    const auto* asset = request_.snapshot.project().findAsset(document::AssetId::fromRaw(assetRaw));
-    if (asset == nullptr) {
-        addTopologyFailure(node.id, "The audio source of an analysis names a missing asset.");
-        return {false, nullptr};
-    }
     auto source = std::make_shared<runtime::AudioAnalysisSource>();
-    source->asset = *asset;
-    source->startFrame = *startFrame;
     source->compositionRate = composition_->format().frameRate();
-    if (audioSource->typeId == "bloom.video-source") {
-        if (const auto* selected = parameterConstant<std::int64_t>(findParameterBinding(
-                *audioSource, std::string(document::kVideoAudioStreamParameterRole)));
-            selected != nullptr && *selected >= 0 && *selected < 256)
-            source->audioStream = static_cast<std::uint32_t>(*selected);
-        const auto* loop =
-            parameterConstant<std::int64_t>(findParameterBinding(*audioSource, "loopMode"));
-        if (loop != nullptr && (*loop == 1 || *loop == 2)) {
-            source->loopExtent = runtime::resolveVideoStreamExtent(*asset);
-            if (source->loopExtent)
-                source->loopMode = *loop;
+    // A bare source: the feed is the source node itself, with no effect and a level that is the
+    // constant 1.
+    const auto* feedNode = findNode(feed);
+    const bool isSource = feedNode != nullptr && (feedNode->typeId == document::kAudioSourceNodeType ||
+                                                  feedNode->typeId == "bloom.video-source");
+    if (isSource && mix->layers.size() == 1 && mix->nestedLayers.empty() &&
+        mix->layers.front().effects.empty() && mix->sources.size() == 1) {
+        const auto& compiled = mix->sources.front();
+        const auto* level = std::get_if<double>(&compiled.level.source);
+        const auto* asset = request_.snapshot.project().findAsset(compiled.assetId);
+        if (level != nullptr && *level == 1.0 && asset != nullptr) {
+            source->asset = *asset;
+            source->startFrame = compiled.startFrame;
+            source->audioStream = compiled.audioStream;
+            source->loopMode = compiled.loopMode;
+            source->loopExtent = compiled.loopExtent;
+            source->footage = compiled.footage;
+        } else {
+            source->bare = false;
         }
-        source->footage = runtime::footageAudioTiming(*asset);
+    } else {
+        source->bare = false;
     }
+    if (!soundAssets_) {
+        auto assets = std::make_shared<std::vector<document::AssetRecord>>();
+        for (const auto& asset : request_.snapshot.project().assets())
+            if (asset.kind == document::AssetKind::Audio || asset.kind == document::AssetKind::Video)
+                assets->push_back(asset);
+        soundAssets_ = std::move(assets);
+    }
+    auto sound = std::make_shared<runtime::AudioAnalysisSound>();
+    sound->mix = std::move(*mix);
+    sound->duration = composition_->duration();
+    sound->rate = composition_->format().frameRate();
+    sound->assets = soundAssets_;
+    analysisAudioMixes_.push_back(sound->mix);
+    source->sound = std::move(sound);
+    analysisSources_.emplace(node.id, source);
     return {true, std::move(source)};
 }
 
@@ -1307,7 +1325,16 @@ struct AudioAnalysisLowering final {
 // adds the Time Remap of an audible layer that has no picture.
 void collectAudibleLayers() {
     audibleLayers_.clear();
+    analysisAudibleLayers_.clear();
     const auto& graph = composition_->graph();
+    // #630: the layers each reachable analysis node hears, so their Time Remap curves are compiled
+    // with the mix's.
+    for (const auto* node : reachableNodes_) {
+        const auto* edge = audioInputEdge(node->id, document::kAudioAnalysisInputPort);
+        if (edge != nullptr && document::isAudioAnalysisNodeType(node->typeId) &&
+            reachableEdge(*edge))
+            analysisAudibleLayers_.emplace(node->id, audibleLayersFrom(edge->source.nodeId));
+    }
     const auto& endpoint = graph.compositionOutput();
     if (!endpoint.has_value())
         return;
@@ -1315,6 +1342,15 @@ void collectAudibleLayers() {
         audioInputEdge(endpoint->nodeId, document::kCompositionOutputAudioInputPort);
     if (outputEdge == nullptr || !reachableEdge(*outputEdge))
         return;
+    audibleLayers_ = audibleLayersFrom(outputEdge->source.nodeId);
+}
+
+// The Layer Outputs that sound in the mix `feedNodeId` carries: a Merge's audible entries, or the
+// one Layer wired in.
+[[nodiscard]] std::unordered_set<document::NodeId>
+audibleLayersFrom(const document::NodeId feedNodeId) const {
+    std::unordered_set<document::NodeId> audible;
+    const auto& graph = composition_->graph();
     const auto consider = [&](const document::NodeId layerNodeId) {
         const auto boundary = layerOutputs_.find(layerNodeId);
         if (boundary == layerOutputs_.end() || !boundary->second->enabled)
@@ -1325,15 +1361,14 @@ void collectAudibleLayers() {
         if (audio != nullptr && reachableEdge(*audio)) {
             const auto end = audioChainEnd(audio->source.nodeId);
             if (end && !isMuted(*end))
-                audibleLayers_.insert(layerNodeId);
+                audible.insert(layerNodeId);
         }
     };
-    const auto feedNodeId = outputEdge->source.nodeId;
     const auto* stack = graph.merge(feedNodeId);
     const auto* stackNode = findNode(feedNodeId);
     if (stack == nullptr || stackNode == nullptr) {
         consider(feedNodeId);
-        return;
+        return audible;
     }
     for (const auto& entry : stack->entries()) {
         const auto edge = std::ranges::find_if(graph.edges(), [&](const auto& candidate) {
@@ -1345,6 +1380,7 @@ void collectAudibleLayers() {
         if (edge != graph.edges().end() && consumesEdge(*stackNode, *edge, false))
             consider(edge->source.nodeId);
     }
+    return audible;
 }
 
 [[nodiscard]] std::optional<runtime::CompositionAudioMix> lowerAudioMix() {
@@ -1364,6 +1400,18 @@ void collectAudibleLayers() {
     // #436: a muted Composition Output consumes no audio.
     if (!reachableEdge(*outputEdge))
         return mix;
+    return lowerAudioMixFrom(outputEdge->source.nodeId, audibleLayers_, std::move(mix));
+}
+
+// The mix the audio output of `feedNodeId` carries: a Merge's audible layers, one Layer, a nested
+// composition, or a source through its effects. `audible` is audibleLayersFrom(feedNodeId). The
+// composition's own mix and the sound an analysis node reads (#630) are both lowered here, so an
+// analysis hears exactly what the output would.
+[[nodiscard]] std::optional<runtime::CompositionAudioMix>
+lowerAudioMixFrom(const document::NodeId feedNodeId,
+                  const std::unordered_set<document::NodeId>& audible,
+                  runtime::CompositionAudioMix mix) {
+    const auto& graph = composition_->graph();
     // Lowers one audio source node into `mix.sources`, returning its index.
     const auto appendSource =
         [&](const document::NodeRecord& audioSource) -> std::optional<std::size_t> {
@@ -1427,7 +1475,7 @@ void collectAudibleLayers() {
         // #431, #436: a layer that is not audible (collectAudibleLayers()) contributes nothing to
         // the mix. A disabled, muted or solo-excluded layer may be outside the reachable set, so
         // its Time Remap and level curves are not compiled and its timing must not be lowered.
-        if (!audibleLayers_.contains(layerNodeId))
+        if (!audible.contains(layerNodeId))
             return true;
         const auto layerAudioEdgeIterator =
             std::ranges::find_if(graph.edges(), [&](const auto& edge) {
@@ -1479,7 +1527,6 @@ void collectAudibleLayers() {
         return true;
     };
 
-    const auto feedNodeId = outputEdge->source.nodeId;
     if (const auto* stack = graph.merge(feedNodeId); stack != nullptr) {
         // The usual shape: the Merge sums the audio of every slot that carries an audio edge.
         for (const auto& entry : stack->entries()) {

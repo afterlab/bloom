@@ -1387,6 +1387,15 @@ class CompilePass final {
     std::unordered_set<document::NodeId> emptyImages_;
     // #436: the Layer Outputs whose audio the mix lowers (collectAudibleLayers()).
     std::unordered_set<document::NodeId> audibleLayers_;
+    // #630: the same for the sound each reachable analysis node reads, by analysis node.
+    std::unordered_map<document::NodeId, std::unordered_set<document::NodeId>>
+        analysisAudibleLayers_;
+    // #630: each analysis node's lowered sound (a node may be lowered more than once), the mixes
+    // for the plan, and the project's audio and video assets, shared by every sound.
+    std::unordered_map<document::NodeId, std::shared_ptr<const runtime::AudioAnalysisSource>>
+        analysisSources_;
+    std::vector<runtime::CompositionAudioMix> analysisAudioMixes_;
+    std::shared_ptr<const std::vector<document::AssetRecord>> soundAssets_;
     // Set Alpha / Multiply Alpha nodes whose optional matte is unconnected, mapped to the empty
     // transparent operation that stands in for it.
     std::unordered_map<document::NodeId, runtime::OperationIndex> unconnectedMattes_;

@@ -8,6 +8,7 @@
 #include <bloom/media/video/audio.hpp>
 #include <bloom/output/composition_output_stream.hpp>
 #include <bloom/render/processing_host_storage.hpp>
+#include <bloom/runtime/audio_mix_render.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <cmath>
 #include <limits>
@@ -41,37 +42,6 @@ Rational fraction(std::uint64_t numerator, std::uint64_t denominator) {
     const auto gcd = std::gcd(numerator, denominator);
     return {static_cast<std::int64_t>(numerator / gcd),
             static_cast<std::int64_t>(denominator / gcd)};
-}
-
-static_assert(static_cast<int>(runtime::AudioEffectKind::Equalizer) ==
-                  static_cast<int>(media::audio::effects::EffectKind::Equalizer) &&
-              static_cast<int>(runtime::AudioEffectKind::Compressor) ==
-                  static_cast<int>(media::audio::effects::EffectKind::Compressor) &&
-              static_cast<int>(runtime::AudioEffectKind::AutoLevel) ==
-                  static_cast<int>(media::audio::effects::EffectKind::AutoLevel) &&
-              static_cast<int>(runtime::AudioEffectKind::Mono) ==
-                  static_cast<int>(media::audio::effects::EffectKind::Mono) &&
-              static_cast<int>(runtime::AudioEffectKind::Hiss) ==
-                  static_cast<int>(media::audio::effects::EffectKind::Hiss));
-
-// #569: a clip's effect chain for the mixer, with the parameters at the block's end when they differ.
-[[nodiscard]] std::vector<media::audio::effects::EffectSettings>
-effectSettings(const runtime::AudioClipDescription& start, const runtime::AudioClipDescription* end,
-               bool& moves) {
-    std::vector<media::audio::effects::EffectSettings> settings;
-    settings.reserve(start.effects.size());
-    for (std::size_t index = 0; index < start.effects.size(); ++index) {
-        const auto& effect = start.effects[index];
-        const bool paired = end != nullptr && index < end->effects.size() &&
-                            end->effects[index].kind == effect.kind &&
-                            end->effects[index].values.size() == effect.values.size();
-        settings.push_back(media::audio::effects::makeEffectSettings(
-            static_cast<media::audio::effects::EffectKind>(effect.kind), effect.values,
-            paired ? std::span<const double>(end->effects[index].values)
-                   : std::span<const double>(effect.values)));
-        moves = moves || (paired && end->effects[index].values != effect.values);
-    }
-    return settings;
 }
 
 struct AudioBackingBytes final {
@@ -298,51 +268,24 @@ struct CompositionOutputStreamV1::State {
         if (endTime)
             endMix = runtime::CpuCompositionEvaluator{}.evaluateAudioMix(source.plan, *endTime,
                                                                          context.cancellation());
-        const bool ramped = endMix && endMix->clips.size() == mix.clips.size();
-        std::vector<media::audio::playback::AudioClip> clips;
-        clips.reserve(mix.clips.size());
         // The sources this block reads as they are decoded, to ask each afterwards whether its
         // decode failed.
         std::vector<std::pair<document::AssetId, std::shared_ptr<const media::audio::AudioBuffer>>>
             streamed;
-        for (std::size_t index = 0; index < mix.clips.size(); ++index) {
-            const auto& description = mix.clips[index];
-            auto found = audioBuffers.find({description.assetId, description.audioStream});
-            if (found == audioBuffers.end())
-                found = loadSource(context, description, cancel);
-            require(found->second.buffer != nullptr, "Audio source buffer unavailable",
-                    Error::Unavailable);
-            if (found->second.buffer->stream)
-                streamed.emplace_back(description.assetId, found->second.buffer);
-            clips.push_back({.buffer = found->second.buffer,
-                             .startTime = description.startTime,
-                             .level = static_cast<float>(description.level),
-                             .muted = description.muted,
-                             .solo = description.solo,
-                             .endTime = description.endTime,
-                             .mapTime = {}});
-            if (!description.timeMappings.empty())
-                clips.back().mapTime = [description](core::RationalTime at) {
-                    return runtime::mapAudioClipTime(description, at);
-                };
-            if (!description.effects.empty()) {
-                bool moves = false;
-                clips.back().effectKey = description.sourceNodeId.value() * 1'000'003ULL + index;
-                clips.back().effects = effectSettings(
-                    description, ramped ? &endMix->clips[index] : nullptr, moves);
-                if (moves)
-                    clips.back().effectRamp =
-                        media::audio::playback::AudioEffectRamp{time, *endTime};
-            }
-            if (ramped) {
-                const auto& end = endMix->clips[index];
-                if (end.sourceNodeId == description.sourceNodeId &&
-                    end.assetId == description.assetId &&
-                    end.audioStream == description.audioStream && end.level != description.level)
-                    clips.back().levelRamp = media::audio::playback::AudioLevelRamp{
-                        time, *endTime, static_cast<float>(end.level)};
-            }
-        }
+        // The clips are built where the audio analysis builds its own (#630), so an analysis reads
+        // the samples this export writes.
+        auto clips = runtime::audioMixClips(
+            mix, endMix ? &*endMix : nullptr, time, endTime,
+            [&](const runtime::AudioClipDescription& description) {
+                auto found = audioBuffers.find({description.assetId, description.audioStream});
+                if (found == audioBuffers.end())
+                    found = loadSource(context, description, cancel);
+                require(found->second.buffer != nullptr, "Audio source buffer unavailable",
+                        Error::Unavailable);
+                if (found->second.buffer->stream)
+                    streamed.emplace_back(description.assetId, found->second.buffer);
+                return found->second.buffer;
+            });
         run.mixer->replaceClips(std::move(clips));
         run.sink->clearCaptured();
         require(!run.mixer->renderForTesting(count), "Offline mix failed");

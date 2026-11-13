@@ -68,9 +68,13 @@ struct AudioAnalysisStatus final {
 // Reads, reduces and caches the analysis; a no-op when it is cached. Heavy: call it on a worker.
 // `assetBase` resolves the asset's relative locator. A source whose file is missing, changed since
 // import (its digest differs), or has no such audio stream is Unavailable.
-[[nodiscard]] AudioAnalysisStatus prepareAudioAnalysis(const AudioAnalysisQuery& query,
-                                                       const std::filesystem::path& assetBase,
-                                                       const CancellationToken& cancellation);
+// #630: a source that is not bare (effects, a layer, a mix) is read from its rendered sound
+// (audio_sound.hpp), which is rendered here when it is not there; that needs `plan`, the plan the
+// source was compiled into, and the query's time is then the composition's.
+[[nodiscard]] AudioAnalysisStatus
+prepareAudioAnalysis(const AudioAnalysisQuery& query, const std::filesystem::path& assetBase,
+                     const CancellationToken& cancellation,
+                     const std::shared_ptr<const CompiledCompositionPlan>& plan = nullptr);
 
 // The cached analysis, or null when it is not prepared. Never blocks on I/O.
 [[nodiscard]] std::shared_ptr<const AudioAnalysisResult>
@@ -81,14 +85,19 @@ findAudioAnalysis(const AudioAnalysisQuery& query);
 // a thread without one only read what is already prepared.
 class AudioAnalysisPreparation final {
   public:
-    AudioAnalysisPreparation(std::filesystem::path assetBase, CancellationToken cancellation);
+    // `plan` is the plan being evaluated: a rendered sound (#630) is evaluated against it.
+    AudioAnalysisPreparation(std::shared_ptr<const CompiledCompositionPlan> plan,
+                             std::filesystem::path assetBase, CancellationToken cancellation);
     ~AudioAnalysisPreparation();
     AudioAnalysisPreparation(const AudioAnalysisPreparation&) = delete;
     AudioAnalysisPreparation& operator=(const AudioAnalysisPreparation&) = delete;
     // Prepares `query` under this thread's innermost preparation, or none when there is none.
     [[nodiscard]] static std::optional<AudioAnalysisStatus> prepareHere(const AudioAnalysisQuery& query);
+    // The plan of this thread's innermost preparation, or null when there is none.
+    [[nodiscard]] static const std::shared_ptr<const CompiledCompositionPlan>& planHere() noexcept;
 
   private:
+    std::shared_ptr<const CompiledCompositionPlan> plan_;
     std::filesystem::path assetBase_;
     CancellationToken cancellation_;
     const AudioAnalysisPreparation* previous_ = nullptr;

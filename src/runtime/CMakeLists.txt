@@ -231,6 +231,8 @@ target_sources(
         histogram_image_effect.cpp
         statistics_image_effect.cpp
         audio_analysis.cpp
+        audio_mix_render.cpp
+        audio_sound.cpp
         image_statistics.cpp
         audio_plot_image_effect.cpp
         motion_blur_image_effect.cpp
@@ -337,6 +339,8 @@ target_sources(
             include/bloom/runtime/grade_curve.hpp
             include/bloom/runtime/keyframe_easing.hpp
             include/bloom/runtime/audio_analysis.hpp
+            include/bloom/runtime/audio_mix_render.hpp
+            include/bloom/runtime/audio_sound.hpp
             include/bloom/runtime/image_statistics.hpp
             include/bloom/runtime/audio_stream_key.hpp
             include/bloom/runtime/video_source_report.hpp

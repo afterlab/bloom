@@ -1024,9 +1024,38 @@ headless path and scripting. Loudness is an optional member of the 1.43 output s
 
 Three nodes under Tracking & Analysis read the sound of one source at one exact time:
 `bloom.audio-amplitude` (a Scalar), `bloom.audio-waveform` and `bloom.audio-spectrum` (Images). Each
-takes an Audio or Video source on its `audio` input. It is not a general audio graph: audio effects
-between the source and the analysis are not applied (an analysis reads the source's own sound), and
-nothing is mixed, so the result does not depend on other layers, levels or the transport.
+takes any audio output on its `audio` input (#630): an Audio or Video source, an audio effect, a
+Layer Output, a Layer Stack or a Composition Source. The result never depends on the transport.
+
+**The sound that is read (#630).** The compiler lowers what the `audio` input ends in with the code
+that lowers the composition's own mix, into an `AudioAnalysisSound` in the plan: the sources, layers
+and effects that reach the input, with their levels, switches and time mappings. A source wired
+straight in at a constant level of 1 is *bare* and is read from its own file, as before. Anything
+else is read as it sounds: an equalizer before the node changes the result, a Layer Output gives
+the layer's sound, and a Layer Stack gives the mix of its audible layers.
+
+A sound that is not bare is rendered once, whole, by the sound store (`audio_sound.hpp`): offline,
+at 48 kHz stereo, in 512-frame blocks, with the mix evaluated at both ends of every block. The clips
+of a block are built by `runtime::audioMixClips`, which the export's offline mix also calls, and
+mixed by the same `AudioEngine`, so an analysis reads the samples an export writes. The samples go
+to a scratch file under the per-user cache folder (`audio-analysis`); only a window of it is in
+memory. On Linux and macOS the file has no name once it is open; on Windows it is removed with the
+sound, and files a process left behind are removed when the store first renders.
+
+The store keeps a rendered sound under its identity: a SHA-256 over every source's content digest
+and the mix as evaluated at each block boundary (levels, switches, effect kinds and parameters,
+timing, and the content time each time mapping gives). An effect or a level that changes is
+another identity; the same sound compiled again is found without rendering. Four sounds are kept
+and the least recently used retires with its file.
+
+The render is a job the store owns, on its one worker thread. A frame that needs the sound waits
+for the job with the frame's own cancellation; a cancelled frame does not cancel the job, so the
+next frame finds it further along or done. A job nobody is waiting for is dropped when another
+sound is asked for. A job that fails (a missing or changed file, a source that stops decoding, a
+cache volume that cannot be written) reports its reason in words, the analysis reads as silence,
+and nothing is kept, so the next frame tries again. `audioSoundActivity()` gives the running job's
+phase and progress and the last failure. A wire that would make a sound depend on its own
+analysis closes a cycle in the graph and is refused when it is made.
 
 **Time.** The snapshot compiler carries an `AudioAnalysisSource` (the asset record, the audio stream,
 the node's start frame, the composition rate and a video's loop and conform) in the plan. The source
@@ -1056,13 +1085,15 @@ preparation), so the heavy read happens inside the frame's cancellable worker ta
 (`findAudioAnalysis`) never does I/O. Cancellation is checked between 16384-frame chunks and a
 cancelled analysis is not cached.
 
-**Identity and budget.** The cache key is the source digest (the revision), the stream, the exact
-rational time on the source clock, the kind and every parameter that changes the numbers (window,
+**Identity and budget.** The cache key is the source digest (the revision) and the stream, or the
+digest of a rendered sound, the exact rational time on the source clock (the composition's clock for
+a rendered sound), the kind and every parameter that changes the numbers (window,
 measure, columns, lanes, transform size, range and axis). A changed file, time or setting is another
 entry. The result cache holds at most `kAudioAnalysisCacheBytes` (32 MiB) and retires least recently
 used entries; at most `kAudioAnalysisOpenSources` (4) decoders are held open. "Purge media cache"
-calls `clearAudioAnalysis`. The operation cache key adds the source digest, stream, start frame and
-loop mode, so a frame cannot be served from another source's picture.
+calls `clearAudioAnalysis` and `clearAudioSounds`. The operation cache key adds the source digest, stream, start frame and
+loop mode, and the digest of a rendered sound, so a frame cannot be served from another sound's
+picture.
 
 **Pixels.** Waveform and Spectrum lower to a transparent Solid canvas of the plot size followed by one
 `AudioPlotKernel` image effect, which is a `ColorGradeKind::AudioPlot` pass: the prepared analysis is

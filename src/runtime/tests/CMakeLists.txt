@@ -2860,6 +2860,14 @@ target_link_libraries(bloom_runtime_number_list_test PRIVATE bloom_runtime_compi
 bloom_enable_warnings(bloom_runtime_number_list_test)
 bloom_add_test(NAME bloom.runtime.number-list COMMAND bloom_runtime_number_list_test LABELS unit runtime TIMEOUT 120)
 
+# #630 Audio analysis of any audio output: a document, the real compiler, the CPU evaluator and
+# the sound store that renders through the export's mixer code, over a real file.
+add_executable(bloom_runtime_audio_sound_test ${PROJECT_SOURCE_DIR}/tests/integration/audio_sound_tests.cpp)
+target_include_directories(bloom_runtime_audio_sound_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(bloom_runtime_audio_sound_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_media_audio bloom_platform)
+bloom_enable_warnings(bloom_runtime_audio_sound_test)
+bloom_add_test(NAME bloom.runtime.audio-sound COMMAND bloom_runtime_audio_sound_test LABELS unit runtime TIMEOUT 120)
+
 # #598 Warp Path and Transform Path skew through the real compiler and CPU evaluator.
 add_executable(bloom_runtime_warp_path_test ${PROJECT_SOURCE_DIR}/tests/integration/warp_path_tests.cpp)
 target_include_directories(bloom_runtime_warp_path_test PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")

@@ -157,9 +157,12 @@ class CpuCompositionEvaluator final {
     // Resolves the compiled audio graph at `time` without touching pixels, a device, or the
     // filesystem. Curve-backed and value-graph-backed levels use the same exact evaluators as the
     // image path. A malformed audio operand returns nullopt instead of silently changing the mix.
+    // `mix` is the plan's own mix when null, or one of the plan's analysis sounds (#630), which
+    // read the same curves and value graph.
     [[nodiscard]] std::optional<AudioMixDescription>
     evaluateAudioMix(const std::shared_ptr<const CompiledCompositionPlan>& plan,
-                     core::RationalTime time, const CancellationToken& cancellation = {}) const;
+                     core::RationalTime time, const CancellationToken& cancellation = {},
+                     const CompositionAudioMix* mix = nullptr) const;
 
   private:
     struct AssetContext {

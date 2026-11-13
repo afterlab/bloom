@@ -302,6 +302,12 @@ inline constexpr std::array kAudioSpectrumParameters{
 
 } // namespace image_pixel_parameters
 
+// The nodes that read a sound on their `audio` input (#347, #630).
+[[nodiscard]] constexpr bool isAudioAnalysisNodeType(const std::string_view typeId) noexcept {
+    return typeId == kAudioAmplitudeNodeType || typeId == kAudioWaveformNodeType ||
+           typeId == kAudioSpectrumNodeType;
+}
+
 [[nodiscard]] constexpr bool isImagePixelNodeType(const std::string_view typeId) noexcept {
     return typeId == kImageMathNodeType || typeId == kImageMapRangeNodeType ||
            typeId == kImageClampNodeType || typeId == kImageCompareNodeType ||
