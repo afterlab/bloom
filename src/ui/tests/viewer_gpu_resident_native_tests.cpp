@@ -53,6 +53,7 @@
 #include <vector>
 
 namespace {
+using bloom::test_support::awaitQtCondition;
 
 using namespace bloom;
 
@@ -107,14 +108,6 @@ void pumpQt(const int milliseconds) {
     QEventLoop loop;
     QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
     loop.exec();
-}
-
-// Unnamed wait for viewer_resident_outline_proof.ipp, which is not converted yet; the waits in this
-// file call awaitQtCondition with a name.
-template <typename Predicate>
-[[nodiscard]] bool waitUntil(Predicate predicate, const int timeoutMilliseconds) {
-    return bloom::test_support::awaitQtCondition("test condition", predicate,
-                                                 std::chrono::milliseconds{timeoutMilliseconds});
 }
 
 enum class Cmd { None, ProduceLease, SetGate, Barrier, ExpireLeases };

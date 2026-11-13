@@ -110,14 +110,6 @@ struct Options final {
 
 using bloom::test_support::awaitQtCondition;
 
-// gpu_preview_app_budget_recovery_tests.ipp (textually included below, outside this conversion's
-// file list) still calls waitUntil(predicate): this forwarding shim keeps it building until it is
-// converted.
-template <typename Predicate> bool waitUntil(Predicate&& predicate) {
-    return awaitQtCondition("condition awaited by gpu_preview_app_budget_recovery_tests.ipp",
-                            std::forward<Predicate>(predicate));
-}
-
 [[nodiscard]] runtime::TaskSchedulerConfig serviceSchedulerConfig() {
     runtime::TaskSchedulerConfig config;
     config.cpuWorkerCount = 2;

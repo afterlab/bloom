@@ -136,22 +136,32 @@ awaitProof(const std::string_view name, Predicate&& predicate,
         timeout);
 }
 
-// A probe: true when `predicate` held within `timeout`, false (silently) when it did not. For a
-// question whose "not yet" answer is expected and acted on, never for a condition the test needs:
-// that is awaitProof, which names what it awaits and fails the test when it never holds. Call
-// sites in files that have not been converted yet still use this form.
+// Non-counting probe: true when `predicate` held within `window`, false when it did not, without
+// printing or counting a failure. For a question whose "not yet" answer is expected and acted on
+// (for example "did the fill already finish, or should the viewer be exercised again"); a
+// condition the test needs is awaitProof, which fails the test when it never holds.
 template <typename Predicate>
-[[nodiscard]] inline bool waitUntil(Predicate predicate, const std::chrono::milliseconds timeout) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
+[[nodiscard]] inline bool heldWithin(Predicate&& predicate,
+                                     const std::chrono::milliseconds window) {
+    const auto deadline = std::chrono::steady_clock::now() + window;
+    do {
+        if (predicate())
+            return true;
+        QGuiApplication::processEvents();
+        std::this_thread::sleep_for(std::chrono::microseconds(500));
+    } while (std::chrono::steady_clock::now() < deadline);
+    return predicate();
+}
+
+// Delivers events for `window` with no condition: a fixed pause that exists because the thing
+// being given time to land (a resize request issued while the widget took its size) has no
+// observable state to await.
+inline void pumpEventsFor(const std::chrono::milliseconds window) {
+    const auto deadline = std::chrono::steady_clock::now() + window;
     while (std::chrono::steady_clock::now() < deadline) {
         QGuiApplication::processEvents();
-        if (predicate()) {
-            return true;
-        }
         std::this_thread::sleep_for(std::chrono::microseconds(500));
     }
-    QGuiApplication::processEvents();
-    return predicate();
 }
 
 template <typename Value>

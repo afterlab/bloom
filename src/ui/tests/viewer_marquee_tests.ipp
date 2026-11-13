@@ -45,7 +45,10 @@ void testViewerMarqueeSelection(Expectations& expectations) {
     // The Viewer answers a press once it has painted the current selection's overlay.
     const auto ready = [&] {
         toolReady(fixture, expectations);
-        (void)waitUntil([&] { return fixture.viewer.mappingForTest().has_value(); });
+        expectations.expect(
+            awaitQtCondition("the viewer has painted the selection overlay mapping",
+                             [&] { return fixture.viewer.mappingForTest().has_value(); }),
+            "the selection overlay mapping is painted before the press");
     };
     // A marquee in composition coordinates. Every drag starts well clear of the selection's box
     // and handles, on empty space.

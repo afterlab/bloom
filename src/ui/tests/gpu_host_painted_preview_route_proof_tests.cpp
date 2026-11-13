@@ -297,7 +297,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     GpuPreviewDisplayService service(
         scheduler, fixture.productionGpuStage(), fixture.productionCpuStage(),
         fixture.productionCpuFallback(displayPreparer), serviceSettings);
-    const bool terminal = waitUntil(
+    const bool terminal = awaitProof(
+        "the GPU preview service leaves Initializing",
         [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; }, 90s);
     if (!terminal || service.status().state != GpuPreviewDisplayServiceState::Ready) {
         std::cout << "SKIP: the GPU preview service is unavailable: "
@@ -357,7 +358,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         };
         const auto recording = QObject::connect(
             &controller, &ui::CompositionPreviewController::stateChanged, &controller, record);
-        checks.expect(waitUntil(
+        checks.expect(awaitProof(
+                          "the first frame is published before the Viewer is created",
                           [&] {
                               return controller.state().frame != nullptr &&
                                      controller.state().activity != ui::PreviewActivity::Rendering;
@@ -384,11 +386,15 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                    frame->provenance().provider ==
                        runtime::PreviewDisplayProvider::GpuPreparedPacked;
         };
-        bool displayed = waitUntil(settled, 60s);
+        bool displayed = awaitProof("the host-painted viewer shows the settled GPU-prepared frame",
+                                    settled, 60s);
         // A request made as the widget took its size may still be on its way; give it the chance
         // to land, then require the settled state again.
-        (void)waitUntil([] { return false; }, 500ms);
-        displayed = displayed && waitUntil(settled, 60s);
+        pumpEventsFor(500ms);
+        displayed =
+            displayed && awaitProof("the host-painted viewer shows the settled GPU-prepared frame "
+                                    "again after the late resize request",
+                                    settled, 60s);
         if (displayed) {
             settledFrame = controller.state().frame;
             published.clear();
@@ -396,7 +402,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             for (std::int64_t index = 1; index < kRamFrameCount && displayed; ++index) {
                 checks.expect(session.setCurrentTime(frameTime(index)),
                               "the playhead steps to the next frame");
-                displayed = waitUntil(
+                displayed = awaitProof(
+                    "the host-painted viewer shows the frame at the stepped playhead time",
                     [&] {
                         const auto shown = viewer->displayedFrameForTest();
                         return settled() && shown->desiredIdentity().time == frameTime(index);
@@ -434,13 +441,15 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         ui::RamPreviewController ram(session, controller, scheduler, bridge, pipeline, nullptr,
                                      submitter);
         checks.expect(
-            waitUntil([&] { return controller.state().activity != ui::PreviewActivity::Rendering; },
-                      60s),
+            awaitProof(
+                "the foreground frame settled before the RAM run",
+                [&] { return controller.state().activity != ui::PreviewActivity::Rendering; }, 60s),
             "the foreground frame settled before the RAM run");
         // The foreground frame's work is not part of the RAM fill the proof describes; the fill
         // counts from here. Its frame is already cached, so the fill prepares the other frames.
         ram.start();
-        const bool complete = waitUntil([&] { return !ram.isCaching(); }, 120s);
+        const bool complete =
+            awaitProof("the RAM fill terminates", [&] { return !ram.isCaching(); }, 120s);
         checks.expect(complete &&
                           ram.totalFrameCount() == static_cast<std::uint64_t>(kRamFrameCount),
                       "the requested RAM range terminates");
@@ -517,10 +526,16 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     frames.clear();
     controller.beginShutdown();
     bridge.beginShutdown();
-    (void)waitUntil([&] { return scheduler.isQuiescent(); }, 10s);
+    checks.expect(awaitProof("the preview scheduler is quiescent at shutdown",
+                             [&] { return scheduler.isQuiescent(); }),
+                  "the scheduler drains at shutdown");
     service.beginShutdown();
-    (void)waitUntil(
-        [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; }, 30s);
+    checks.expect(awaitProof("the GPU preview service reaches Stopped",
+                             [&] {
+                                 return service.status().state ==
+                                        GpuPreviewDisplayServiceState::Stopped;
+                             }),
+                  "the GPU preview service stops at shutdown");
 
     if (checks.failures() != 0) {
         std::cerr << "host-painted route proof: " << checks.failures()

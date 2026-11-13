@@ -45,12 +45,11 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
         return held;
     };
     auto firstGate = startupGate(490);
-    expectations.expect(waitUntil(
-                            [&] {
-                                std::lock_guard lock(firstGate->mutex);
-                                return firstGate->started;
-                            },
-                            10'000),
+    expectations.expect(awaitQtCondition("startup CPU worker is held",
+                                         [&] {
+                                             std::lock_guard lock(firstGate->mutex);
+                                             return firstGate->started;
+                                         }),
                         "startup CPU worker is held");
     expectations.expect(controller.present(frame, outline(20.0, 390)),
                         "startup active complete pair captured");
@@ -64,14 +63,14 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
     }
     firstGate->cv.notify_all();
     expectations.expect(
-        waitUntil(
+        awaitQtCondition(
+            "startup reveals a coherent intermediate pair despite newer pending geometry",
             [&] {
                 controller.poll();
                 std::lock_guard lock(laterGate->mutex);
                 return laterGate->started && controller.appliedDestination().x() == 20.0 &&
                        !controller.cpuCoverVisibleForTest();
-            },
-            20'000),
+            }),
         "startup reveals a coherent intermediate pair despite newer pending geometry");
     expectations.expect(!controller.publicationCurrent(),
                         "startup intermediate publication remains explicitly stale");
@@ -80,23 +79,21 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
         laterGate->release = true;
     }
     laterGate->cv.notify_all();
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller.poll();
-                                return controller.presentationAcknowledged();
-                            },
-                            20'000),
+    expectations.expect(awaitQtCondition("startup converges to latest complete pair",
+                                         [&] {
+                                             controller.poll();
+                                             return controller.presentationAcknowledged();
+                                         }),
                         "startup converges to latest complete pair");
     expectations.expect(controller.present(frame, outline(30.0, 401)),
                         "the first native outline request is admitted");
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller.poll();
-                                return controller.overlayRasterCount() >= 1 &&
-                                       controller.publicationCurrent() &&
-                                       controller.presentationAcknowledged();
-                            },
-                            20'000),
+    expectations.expect(awaitQtCondition("the complete first image/outline pair is acknowledged",
+                                         [&] {
+                                             controller.poll();
+                                             return controller.overlayRasterCount() >= 1 &&
+                                                    controller.publicationCurrent() &&
+                                                    controller.presentationAcknowledged();
+                                         }),
                         "the complete first image/outline pair is acknowledged");
     for (int tick = 0; tick < 40; ++tick) {
         controller.poll();
@@ -119,12 +116,11 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
                                                      : runtime::TaskResult<void>::succeeded();
         });
     expectations.expect(blocker.accepted(), "the worker delay task is admitted");
-    expectations.expect(waitUntil(
-                            [&] {
-                                std::lock_guard lock(gate->mutex);
-                                return gate->started;
-                            },
-                            10'000),
+    expectations.expect(awaitQtCondition("the sole CPU raster worker is deterministically held",
+                                         [&] {
+                                             std::lock_guard lock(gate->mutex);
+                                             return gate->started;
+                                         }),
                         "the sole CPU raster worker is deterministically held");
     const auto before = controller.nativeLastEnqueuedSequence();
     expectations.expect(controller.present(frame, outline(90.0, 402)),
@@ -145,14 +141,14 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
         gate->release = true;
     }
     gate->cv.notify_all();
-    expectations.expect(waitUntil(
+    expectations.expect(awaitQtCondition(
+                            "the completed replacement image/outline pair is acknowledged",
                             [&] {
                                 controller.poll();
                                 return controller.nativeLastEnqueuedSequence() > before &&
                                        controller.publicationCurrent() &&
                                        controller.presentationAcknowledged();
-                            },
-                            20'000),
+                            }),
                         "the completed replacement image/outline pair is acknowledged");
     std::cout << "PHASE_OUTLINE_REPLACED\n" << std::flush;
     pumpQt(2500);
@@ -160,48 +156,45 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
     removed.destination = QRectF(90.0, 40.0, 180.0, 140.0);
     expectations.expect(controller.present(frame, removed),
                         "deliberate outline removal is admitted");
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller.poll();
-                                return controller.presentationAcknowledged();
-                            },
-                            20'000),
-                        "deliberate removal is acknowledged without stale outline reuse");
+    expectations.expect(
+        awaitQtCondition("deliberate removal is acknowledged without stale outline reuse",
+                         [&] {
+                             controller.poll();
+                             return controller.presentationAcknowledged();
+                         }),
+        "deliberate removal is acknowledged without stale outline reuse");
     std::cout << "PHASE_OUTLINE_REMOVED\n" << std::flush;
     pumpQt(2500);
     // Exact commands, not request metadata or the caller's hash, govern semantic reuse.
     const auto equivalentFrame = makeResidentFrame(proofLease, 501, 7, 2);
     expectations.expect(controller.present(frame, outline(90.0, 1000)),
                         "semantic base is admitted");
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller.poll();
-                                return controller.presentationAcknowledged();
-                            },
-                            20'000),
+    expectations.expect(awaitQtCondition("semantic base settles",
+                                         [&] {
+                                             controller.poll();
+                                             return controller.presentationAcknowledged();
+                                         }),
                         "semantic base settles");
     const auto rasterBeforeReuse = controller.overlayRasterCount();
     expectations.expect(equivalentFrame &&
                             controller.present(*equivalentFrame, outline(90.0, 2000)),
                         "equivalent commands across generation/revision/time are admitted");
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller.poll();
-                                return controller.presentationAcknowledged();
-                            },
-                            20'000),
+    expectations.expect(awaitQtCondition("equivalent publication settles",
+                                         [&] {
+                                             controller.poll();
+                                             return controller.presentationAcknowledged();
+                                         }),
                         "equivalent publication settles");
     expectations.expect(
         controller.overlayRasterCount() == rasterBeforeReuse,
         "equivalent commands reuse raster despite changed request metadata/signature");
     expectations.expect(controller.present(frame, outline(100.0, 2000)),
                         "different commands with colliding signature are admitted");
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller.poll();
-                                return controller.presentationAcknowledged();
-                            },
-                            20'000),
+    expectations.expect(awaitQtCondition("changed colliding-signature commands settle",
+                                         [&] {
+                                             controller.poll();
+                                             return controller.presentationAcknowledged();
+                                         }),
                         "changed colliding-signature commands settle");
     expectations.expect(controller.overlayRasterCount() > rasterBeforeReuse,
                         "a matching signature never authorizes different commands");
@@ -233,8 +226,9 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
         return held->started;
     };
     auto floodGate = startGate(510);
-    expectations.expect(waitUntil([&] { return gateStarted(floodGate); }, 10'000),
-                        "flood gate starts");
+    expectations.expect(
+        awaitQtCondition("flood gate starts", [&] { return gateStarted(floodGate); }),
+        "flood gate starts");
     expectations.expect(controller.present(frame, outline(110.0, 2100)),
                         "active changed geometry captured");
     for (int step = 0; step < 12; ++step)
@@ -244,32 +238,32 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
     // older coherent pair makes progress while the newer producer continues and is still pending.
     auto newestGate = startGate(511);
     releaseGate(floodGate);
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller.poll();
-                                return gateStarted(newestGate) &&
-                                       controller.appliedDestination().x() == 110.0;
-                            },
-                            20'000),
+    expectations.expect(awaitQtCondition("continuous geometry publishes a coherent intermediate "
+                                         "pair before the newest raster completes",
+                                         [&] {
+                                             controller.poll();
+                                             return gateStarted(newestGate) &&
+                                                    controller.appliedDestination().x() == 110.0;
+                                         }),
                         "continuous geometry publishes a coherent intermediate pair before the "
                         "newest raster completes");
     expectations.expect(!controller.publicationCurrent(), "intermediate pair is explicitly stale");
     expectations.expect(controller.present(frame, outline(140.0, 2300)),
                         "producer continues after intermediate progress");
     releaseGate(newestGate);
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller.poll();
-                                return controller.presentationAcknowledged();
-                            },
-                            20'000),
+    expectations.expect(awaitQtCondition("continuous geometry converges to newest complete pair",
+                                         [&] {
+                                             controller.poll();
+                                             return controller.presentationAcknowledged();
+                                         }),
                         "continuous geometry converges to newest complete pair");
     expectations.expect(controller.appliedDestination().x() == 140.0,
                         "newest geometry is applied exactly");
 
     auto removalGate = startGate(520);
-    expectations.expect(waitUntil([&] { return gateStarted(removalGate); }, 10'000),
-                        "removal gate starts");
+    expectations.expect(
+        awaitQtCondition("removal gate starts", [&] { return gateStarted(removalGate); }),
+        "removal gate starts");
     expectations.expect(controller.present(frame, outline(150.0, 2400)),
                         "old selected outline captured");
     expectations.expect(controller.present(frame, removed),
@@ -278,12 +272,11 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
                         "new valid outline is authored in the same caller domain zero");
     auto afterRemovalGate = startGate(521);
     releaseGate(removalGate);
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller.poll();
-                                return gateStarted(afterRemovalGate);
-                            },
-                            20'000),
+    expectations.expect(awaitQtCondition("old raster completes before new valid raster",
+                                         [&] {
+                                             controller.poll();
+                                             return gateStarted(afterRemovalGate);
+                                         }),
                         "old raster completes before new valid raster");
     for (int tick = 0; tick < 40; ++tick) {
         controller.poll();
@@ -292,12 +285,11 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
     expectations.expect(controller.appliedDestination().x() != 150.0,
                         "removed old outline never resurrects before the new valid raster");
     releaseGate(afterRemovalGate);
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller.poll();
-                                return controller.presentationAcknowledged();
-                            },
-                            20'000),
+    expectations.expect(awaitQtCondition("new valid outline settles after removal",
+                                         [&] {
+                                             controller.poll();
+                                             return controller.presentationAcknowledged();
+                                         }),
                         "new valid outline settles after removal");
 
     auto malformed = outline(170.0, 2600);
@@ -305,13 +297,12 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
     const auto lastCompleteSequence = controller.nativeLastEnqueuedSequence();
     expectations.expect(controller.present(frame, malformed),
                         "failed raster intent is accepted asynchronously");
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller.poll();
-                                return controller.diagnostic().find("overlay failed") !=
-                                       std::string::npos;
-                            },
-                            20'000),
+    expectations.expect(awaitQtCondition("raster failure reports retained stale complete frame",
+                                         [&] {
+                                             controller.poll();
+                                             return controller.diagnostic().find(
+                                                        "overlay failed") != std::string::npos;
+                                         }),
                         "raster failure reports retained stale complete frame");
     expectations.expect(
         controller.nativeLastEnqueuedSequence() == lastCompleteSequence &&
@@ -330,13 +321,13 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
     expectations.expect(controller.acceptedPresentCount() == admittedBefore + 1,
                         "one in-flight admission bounds exact frame correlation under owner delay");
     gateOwner(false);
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller.poll();
-                                return controller.presentationAcknowledged();
-                            },
-                            20'000),
-                        "gated owner flood converges without losing frame identity");
+    expectations.expect(
+        awaitQtCondition("gated owner flood converges without losing frame identity",
+                         [&] {
+                             controller.poll();
+                             return controller.presentationAcknowledged();
+                         }),
+        "gated owner flood converges without losing frame identity");
     expectations.expect(controller.appliedFrame() &&
                             controller.appliedFrame()->desiredIdentity().requestGeneration == 609,
                         "owner-applied metadata names the newest actual admitted frame");
@@ -355,12 +346,11 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
             return runtime::TaskResult<void>::succeeded();
         });
     expectations.expect(expiryBlocker.accepted(), "the expiry worker gate is admitted");
-    expectations.expect(waitUntil(
-                            [&] {
-                                std::lock_guard lock(expiryGate->mutex);
-                                return expiryGate->started;
-                            },
-                            10'000),
+    expectations.expect(awaitQtCondition("the expiry raster worker is held",
+                                         [&] {
+                                             std::lock_guard lock(expiryGate->mutex);
+                                             return expiryGate->started;
+                                         }),
                         "the expiry raster worker is held");
     const auto beforeExpiry = controller.nativeLastEnqueuedSequence();
     expectations.expect(controller.present(frame, outline(100.0, 403)),
@@ -371,13 +361,13 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
         expiryGate->release = true;
     }
     expiryGate->cv.notify_all();
-    expectations.expect(waitUntil(
+    expectations.expect(awaitQtCondition(
+                            "a lease expired during raster is safely rejected at publication",
                             [&] {
                                 controller.poll();
                                 return controller.diagnostic().find("no longer live") !=
                                        std::string::npos;
-                            },
-                            20'000),
+                            }),
                         "a lease expired during raster is safely rejected at publication");
     expectations.expect(controller.nativeLastEnqueuedSequence() == beforeExpiry,
                         "late lease expiry never submits an invalid publication");
@@ -390,27 +380,27 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
     const auto appliedBeforeRefusal = controller.nativeAppliedSequence();
     expireLeases();
     gateOwner(false);
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller.poll();
-                                return controller.diagnostic().find(
-                                           "resident lease was rejected") != std::string::npos;
-                            },
-                            20'000),
-                        "owner rejection carries its concrete diagnostic and releases admission");
+    expectations.expect(
+        awaitQtCondition("owner rejection carries its concrete diagnostic and releases admission",
+                         [&] {
+                             controller.poll();
+                             return controller.diagnostic().find("resident lease was rejected") !=
+                                    std::string::npos;
+                         }),
+        "owner rejection carries its concrete diagnostic and releases admission");
     expectations.expect(controller.nativeAppliedSequence() == appliedBeforeRefusal &&
                             !controller.publicationCurrent(),
                         "owner refusal never fabricates applied progress or current intent");
     auto recovery = makeResidentFrame(produceLease(), 701);
     expectations.expect(recovery && controller.present(*recovery, removed),
                         "fresh recovery is admitted after owner refusal");
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller.poll();
-                                return controller.presentationAcknowledged();
-                            },
-                            20'000),
-                        "refused admission never wedges later coherent publication");
+    expectations.expect(
+        awaitQtCondition("refused admission never wedges later coherent publication",
+                         [&] {
+                             controller.poll();
+                             return controller.presentationAcknowledged();
+                         }),
+        "refused admission never wedges later coherent publication");
 
     // Safe refusal retains the exact owner-applied descriptor even after all its admission leases
     // expire. Unsafe early refusals must compare the latest requested safety domain, not the last
@@ -426,13 +416,13 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
                         "same-domain refusal candidate is admitted before genuine lease expiry");
     expireLeases();
     gateOwner(false);
-    expectations.expect(waitUntil(
+    expectations.expect(awaitQtCondition(
+                            "same-domain owner refusal is reported concretely",
                             [&] {
                                 controller.poll();
                                 return controller.diagnostic().find(
                                            "resident lease was rejected") != std::string::npos;
-                            },
-                            20'000),
+                            }),
                         "same-domain owner refusal is reported concretely");
     expectations.expect(
         known && controller.appliedDisplay() &&
@@ -458,17 +448,17 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
         rejected && !controller.present(*rejected, unsafe) &&
             !controller.canRetainAppliedDisplay() && controller.cpuCoverVisibleForTest(),
         "early expired admission with changed selection domain covers old-domain pixels");
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller.poll();
-                                return controller.cpuCoverPaintCountForTest() > paintsBeforeCover;
-                            },
-                            5000) &&
-                            persistentCover && persistentCover->isVisible() &&
-                            controller.cpuCoverPersistentWindowForTest() == persistentCover &&
-                            controller.nativeAppliedSequence() == appliedBeforeCover,
-                        "the persistent child repaints an opaque cover after transparent idle "
-                        "without another successful GPU parent present");
+    expectations.expect(
+        awaitQtCondition("the persistent child repaints an opaque cover after transparent idle ",
+                         [&] {
+                             controller.poll();
+                             return controller.cpuCoverPaintCountForTest() > paintsBeforeCover;
+                         }) &&
+            persistentCover && persistentCover->isVisible() &&
+            controller.cpuCoverPersistentWindowForTest() == persistentCover &&
+            controller.nativeAppliedSequence() == appliedBeforeCover,
+        "the persistent child repaints an opaque cover after transparent idle "
+        "without another successful GPU parent present");
     std::cout << "PHASE_TRUTH_COVER\n" << std::flush;
     pumpQt(2500);
     const auto coverPaints = controller.cpuCoverPaintCountForTest();
@@ -485,12 +475,11 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
         const auto next = makeResidentFrame(produceLease(), generation);
         expectations.expect(next && controller.present(*next, request),
                             "a real recovery candidate is admitted");
-        expectations.expect(waitUntil(
-                                [&] {
-                                    controller.poll();
-                                    return controller.presentationAcknowledged();
-                                },
-                                20'000),
+        expectations.expect(awaitQtCondition("recovery applies its own complete descriptor",
+                                             [&] {
+                                                 controller.poll();
+                                                 return controller.presentationAcknowledged();
+                                             }),
                             "recovery applies its own complete descriptor");
         return next;
     };
@@ -524,7 +513,9 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
                         "late-ack resize candidate is admitted");
     const auto delayedSequence = controller.nativeLastEnqueuedSequence();
     expectations.expect(
-        waitUntil([&] { return controller.nativeAppliedSequence() >= delayedSequence; }, 20'000),
+        awaitQtCondition(
+            "real owner applies the candidate before controller observes its acknowledgement",
+            [&] { return controller.nativeAppliedSequence() >= delayedSequence; }),
         "real owner applies the candidate before controller observes its acknowledgement");
     gateOwner(true);
     expectations.expect(
@@ -538,13 +529,12 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
             controller.cpuCoverVisibleForTest() && !controller.publicationCurrent(),
         "late actual old-extent acknowledgement cannot unlock a resized cover");
     gateOwner(false);
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller.poll();
-                                return controller.presenterState() ==
-                                       ui::ViewerGpuPresenter::State::Active;
-                            },
-                            20'000),
+    expectations.expect(awaitQtCondition("the real resized native target becomes active",
+                                         [&] {
+                                             controller.poll();
+                                             return controller.presenterState() ==
+                                                    ui::ViewerGpuPresenter::State::Active;
+                                         }),
                         "the real resized native target becomes active");
     expectations.expect(
         controller.cpuCoverVisibleForTest() && !controller.publicationCurrent(),

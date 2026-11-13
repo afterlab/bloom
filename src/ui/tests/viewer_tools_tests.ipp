@@ -30,14 +30,16 @@ void toolDrag(ViewerFixture& fixture, QPointF start, QPointF end,
     toolMouse(fixture, QEvent::MouseButtonRelease, end, modifiers);
 }
 void toolReady(ViewerFixture& fixture, Expectations& expectations) {
-    expectations.expect(waitUntil([&] {
-                            const auto& frame = fixture.controller.state().frame;
-                            return frame &&
-                                   frame->desiredIdentity().sourceRevision ==
-                                       fixture.session.snapshot().revision() &&
-                                   frame->desiredIdentity().time == fixture.session.currentTime() &&
-                                   isReady(fixture.controller);
-                        }),
+    expectations.expect(awaitQtCondition("creation preview reaches current revision and time",
+                                         [&] {
+                                             const auto& frame = fixture.controller.state().frame;
+                                             return frame &&
+                                                    frame->desiredIdentity().sourceRevision ==
+                                                        fixture.session.snapshot().revision() &&
+                                                    frame->desiredIdentity().time ==
+                                                        fixture.session.currentTime() &&
+                                                    isReady(fixture.controller);
+                                         }),
                         "creation preview reaches current revision and time");
 }
 bloom::document::ParameterValue toolParameter(ViewerFixture& fixture, std::string_view role) {
@@ -70,7 +72,8 @@ bloom::document::NewProject toolProject() {
 void toolShutdown(ViewerFixture& fixture, Expectations& expectations) {
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+    expectations.expect(awaitQtCondition("creation worker shuts down",
+                                         [&] { return fixture.scheduler.isQuiescent(); }),
                         "creation worker shuts down");
 }
 void testCreationTools(Expectations& expectations) {
@@ -365,7 +368,8 @@ void testTextTool(Expectations& expectations) {
                         "Text tool commits layer and click position together");
     auto* field = properties.findChild<QLineEdit*>("textContentEditor");
     expectations.expect(
-        waitUntil([&] { return fixture.viewer.textEditing() && fixture.viewer.hasFocus(); }),
+        awaitQtCondition("Text tool enters canvas edit mode",
+                         [&] { return fixture.viewer.textEditing() && fixture.viewer.hasFocus(); }),
         "Text tool enters canvas edit mode");
     expectations.expect(field && field->isVisible(), "Text field is visible after focus");
     expectations.expect(selectToolActive(fixture), "placing text returns the Viewer to Select");
@@ -394,7 +398,8 @@ void testTextTool(Expectations& expectations) {
         const auto undoLabel = fixture.session.undoLabel();
         toolKey(fixture, Qt::Key_T);
         toolMouse(fixture, QEvent::MouseButtonPress, {60, 200});
-        expectations.expect(waitUntil([&] { return fixture.viewer.textEditing(); }),
+        expectations.expect(awaitQtCondition("a second text placement enters edit mode",
+                                             [&] { return fixture.viewer.textEditing(); }),
                             "a second text placement enters edit mode");
         toolKey(fixture, Qt::Key_Backspace);
         toolKey(fixture, Qt::Key_Escape);
@@ -504,9 +509,11 @@ void testViewerProbe(Expectations& expectations) {
     expectations.expect(!fixture.controller.state().frame->hasProcessFrame(),
                         "returning to the cached frame drops its process image");
     toolMouse(fixture, QEvent::MouseMove, {1.5, 1.5});
-    expectations.expect(waitUntil([&] { return latest.reference.has_value(); }) &&
-                            fixture.pipeline.probeCalls > 0 && fixture.pipeline.probeOffUi,
-                        "display-only cache probe evaluates a 1x1 ROI off the UI thread");
+    expectations.expect(
+        awaitQtCondition("display-only cache probe evaluates a 1x1 ROI off the UI thread",
+                         [&] { return latest.reference.has_value(); }) &&
+            fixture.pipeline.probeCalls > 0 && fixture.pipeline.probeOffUi,
+        "display-only cache probe evaluates a 1x1 ROI off the UI thread");
     expectations.expect(latest.reference && std::abs(latest.reference->red - 0.125) < 1e-6,
                         "1x1 reevaluation retains exact reference values");
     const auto calls = fixture.pipeline.probeCalls.load();
@@ -515,14 +522,19 @@ void testViewerProbe(Expectations& expectations) {
                         "repeated frame and pixel probe uses its cached reference value");
     auto* exposure = fixture.viewer.findChild<ui::kit::KValueField*>("viewerExposure");
     exposure->stepBy(10);
-    expectations.expect(waitUntil([&] { return latest.display.red == 137; }) && latest.reference &&
-                            std::abs(latest.reference->red - 0.125) < 1e-6,
-                        "exposure changes the display probe without changing its reference value");
+    expectations.expect(
+        awaitQtCondition("exposure changes the display probe without changing its reference value",
+                         [&] { return latest.display.red == 137; }) &&
+            latest.reference && std::abs(latest.reference->red - 0.125) < 1e-6,
+        "exposure changes the display probe without changing its reference value");
     exposure->stepBy(-10);
     toolMouse(fixture, QEvent::MouseMove, {2.5, 1.5});
     QCoreApplication::sendEvent(&fixture.viewer, &leave);
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }) && !latest.valid,
-                        "late probe completion cannot repopulate a cleared cursor readout");
+    expectations.expect(
+        awaitQtCondition("late probe completion cannot repopulate a cleared cursor readout",
+                         [&] { return fixture.scheduler.isQuiescent(); }) &&
+            !latest.valid,
+        "late probe completion cannot repopulate a cleared cursor readout");
     toolShutdown(fixture, expectations);
     QSettings().remove("viewer/analysis/default");
 }
@@ -646,10 +658,11 @@ void testMaskTools(Expectations& expectations) {
         expectations.expect(alphaAt({}) == 1.0F && alphaAt(overrides) == 0.0F,
                             "the live preview shows the dragged outline while the document keeps "
                             "the original");
-        expectations.expect(waitUntil([&] {
-                                return fixture.controller.state().frame &&
-                                       isReady(fixture.controller);
-                            }),
+        expectations.expect(awaitQtCondition("the Viewer preview settles during the drag",
+                                             [&] {
+                                                 return fixture.controller.state().frame &&
+                                                        isReady(fixture.controller);
+                                             }),
                             "the Viewer preview settles during the drag");
     }
     toolMouse(fixture, QEvent::MouseButtonRelease, {70, 80});

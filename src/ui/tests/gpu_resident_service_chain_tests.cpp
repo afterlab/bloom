@@ -146,7 +146,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         scheduler, fixture.productionGpuStage(), fixture.productionCpuStage(),
         fixture.productionCpuFallback(displayPreparer), serviceOptions(options.loader_path));
 
-    const bool terminal = waitUntil(
+    const bool terminal = awaitProof(
+        "the GPU preview service leaves Initializing",
         [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; }, 90s);
     const auto status = service.status();
     const bool residentReady =
@@ -197,12 +198,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     phase("window", "title=" + windowTitle + " extent=320x240");
     surface.width = 320U;
     surface.height = 240U;
-    checks.expect(waitUntil(
-                      [&] {
-                          surface.surface = QVulkanInstance::surfaceForWindow(surface.window);
-                          return surface.surface != VK_NULL_HANDLE;
-                      },
-                      10s),
+    checks.expect(awaitProof("the UI QWindow produced a Wayland VkSurfaceKHR",
+                             [&] {
+                                 surface.surface =
+                                     QVulkanInstance::surfaceForWindow(surface.window);
+                                 return surface.surface != VK_NULL_HANDLE;
+                             }),
                   "the UI QWindow produced a Wayland VkSurfaceKHR");
     if (surface.surface == VK_NULL_HANDLE) {
         return 1;
@@ -213,12 +214,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const auto attached = client->attach(borrowed, 320U, 240U);
     checks.expect(attached.code == GpuPresentationPortCode::Accepted,
                   "the service client admitted the attach");
-    checks.expect(waitUntil(
-                      [&] {
-                          return client->status(attached.target).state ==
-                                 GpuPresentationTargetState::Active;
-                      },
-                      15s),
+    checks.expect(awaitProof("the service owner created and activated the swapchain",
+                             [&] {
+                                 return client->status(attached.target).state ==
+                                        GpuPresentationTargetState::Active;
+                             }),
                   "the service owner created and activated the swapchain");
     phase("surface-attached", "target-active=1");
 
@@ -300,9 +300,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     checks.expect(
         client->update(attached.target, 1U, makeUpdate(*supportedLease, 320U, 240U)).accepted(),
         "the resident present update is admitted");
-    checks.expect(
-        waitUntil([&] { return client->status(attached.target).appliedSequence >= 1U; }, 15s),
-        "the resident present was applied on the owner thread");
+    checks.expect(awaitProof("the resident present was applied on the owner thread",
+                             [&] { return client->status(attached.target).appliedSequence >= 1U; }),
+                  "the resident present was applied on the owner thread");
     checks.expect(client->status(attached.target).presentCount == 1U,
                   "exactly one resident present completed");
     phase("present-ack", "presentCount=1");
@@ -368,11 +368,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     checks.expect(stalledRequest.status == TaskSubmissionStatus::Accepted,
                   "the stalled resident request was admitted");
     checks.expect(
-        waitUntil(
-            [&] {
-                return runtime::detail::GpuPreviewDisplayServiceTestAccess::residentRetiring(*core);
-            },
-            30s),
+        awaitProof("the stalled submission entered the explicit Retiring phase",
+                   [&] {
+                       return runtime::detail::GpuPreviewDisplayServiceTestAccess::residentRetiring(
+                           *core);
+                   }),
         "the stalled submission entered the explicit Retiring phase");
     checks.expect(!stalledRequest.handle.tryTakeResult().has_value(),
                   "the parent completion is retained while the fence is unretired");
@@ -397,17 +397,20 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                   "the presented lease is still valid before retirement");
     static_cast<void>(client->retire(attached.target, 5U));
     checks.expect(
-        waitUntil([&] { return client->status(attached.target).surfaceSafeToDestroy; }, 30s),
+        awaitProof("the resident target proved retirement and its surface is safe to destroy",
+                   [&] { return client->status(attached.target).surfaceSafeToDestroy; }),
         "the resident target proved retirement and its surface is safe to destroy");
     surface.window->hide();
     delete surface.window;
     surface.window = nullptr;
 
     service.beginShutdown();
-    checks.expect(
-        waitUntil([&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; },
-                  30s),
-        "the resident service owner drained and stopped");
+    checks.expect(awaitProof("the resident service owner drained and stopped",
+                             [&] {
+                                 return service.status().state ==
+                                        GpuPreviewDisplayServiceState::Stopped;
+                             }),
+                  "the resident service owner drained and stopped");
     const auto finalStatus = service.status();
     checks.expect(finalStatus.presentationClient == nullptr,
                   "the stopped resident service publishes no live presentation client");

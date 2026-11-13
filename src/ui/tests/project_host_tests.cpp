@@ -58,7 +58,7 @@
 // dialog seams standing in for real QMessageBox/QFileDialog prompts, exactly as an offscreen test
 // must. Follows src/host/tests/session_async_io_tests.cpp's fixture idiom (TempDirectory,
 // Expectations) and src/ui/tests/composition_preview_controller_tests.cpp's pumped-event-loop
-// waitUntil() idiom.
+// awaitQtCondition() idiom.
 
 namespace {
 using bloom::test_support::awaitQtCondition;

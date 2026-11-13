@@ -7,7 +7,8 @@ void exercisePackedPlaying(Expectations& checks, ui::ViewerEditor& viewer, ui::E
     playback.installWindowShortcut(host);
     const auto start = session.currentTime();
     playback.play();
-    checks.expect(waitUntil([&] { return session.currentTime() != start; }, 3s),
+    checks.expect(awaitProof("real production transport advances while ordinary Viewer paints",
+                             [&] { return session.currentTime() != start; }),
                   "real production transport advances while ordinary Viewer paints");
     host.resize(1100, 700);
     splitter.setSizes({120, 720, 260});
@@ -25,11 +26,12 @@ void exercisePackedPlaying(Expectations& checks, ui::ViewerEditor& viewer, ui::E
     QApplication::processEvents();
     observe("PLAY_MOVE", viewer, splitter, host, service, controller);
     playback.pause();
-    checks.expect(
-        waitUntil(
-            [&] { return viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current; },
-            30s),
-        "paused newest time becomes truly painted Current");
+    checks.expect(awaitProof("paused newest time becomes truly painted Current",
+                             [&] {
+                                 return viewer.displayedPreviewState().freshness ==
+                                        ui::FrameFreshness::Current;
+                             }),
+                  "paused newest time becomes truly painted Current");
     host.resize(1000, 640);
     splitter.setSizes({120, 620, 260});
     QApplication::processEvents();
@@ -64,14 +66,14 @@ void exercisePackedPlaying(Expectations& checks, ui::ViewerEditor& viewer, ui::E
     checks.expect(exposure != nullptr, "real exposure control exists");
     if (exposure) {
         exposure->stepBy(10);
-        checks.expect(waitUntil(
+        checks.expect(awaitProof(
+                          "Viewer exposure is genuinely GPU-prepared before widget paint",
                           [&] {
                               const auto state = viewer.displayedPreviewState();
                               return state.freshness == ui::FrameFreshness::Current &&
                                      state.frame &&
                                      state.frame->desiredIdentity().viewAdjust.exposure == 1.0;
-                          },
-                          30s),
+                          }),
                       "Viewer exposure is genuinely GPU-prepared before widget paint");
         checks.expect(viewer.displayedFrameForTest() &&
                           viewer.displayedFrameForTest()->provenance().provider ==

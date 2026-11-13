@@ -65,6 +65,7 @@
 #include <vector>
 
 namespace {
+using bloom::test_support::awaitQtCondition;
 
 using namespace std::chrono_literals;
 using namespace bloom;
@@ -85,12 +86,6 @@ class Expectations final {
   private:
     int failures_ = 0;
 };
-
-// Unnamed wait for ram_preview_retention_truth_tests.ipp, which is not converted yet; the waits in
-// this file call awaitQtCondition with a name.
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    return bloom::test_support::awaitQtCondition("test condition", predicate);
-}
 
 [[nodiscard]] runtime::TaskSchedulerConfig testSchedulerConfig(const std::size_t cpuWorkers = 1) {
     return {.cpuWorkerCount = cpuWorkers,

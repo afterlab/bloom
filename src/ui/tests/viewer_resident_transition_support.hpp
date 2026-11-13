@@ -97,8 +97,10 @@ exerciseResolutionTransitions(bloom::ui::verticalproof::Expectations& checks,
             session.setSelectedSolidColor(core::Color4d{0.10 + index * 0.10, 0.2, 0.3, 1.0});
         checks.expect(authored, "transition source edit uses the production command surface");
         controller.requestRefresh();
-        const bool nativeStarted = ui::verticalproof::waitUntil(
-            [&] { return gate->submitted.load(std::memory_order_acquire); }, 20s);
+        const bool nativeStarted =
+            ui::verticalproof::awaitProof("the native submission starts", [&] {
+                return gate->submitted.load(std::memory_order_acquire);
+            });
         checks.expect(nativeStarted, "resolution supersession follows a genuine native submission");
         if (!nativeStarted) {
             gate->armed.store(false, std::memory_order_release);
@@ -110,16 +112,15 @@ exerciseResolutionTransitions(bloom::ui::verticalproof::Expectations& checks,
         checks.expect(desired && desired->resolutionPolicy ==
                                      static_cast<runtime::PreviewResolutionPolicy>(index),
                       "actual footer control changes the requested resolution policy");
-        const bool recovered = ui::verticalproof::waitUntil(
-            [&] {
+        const bool recovered = ui::verticalproof::awaitProof(
+            "the resident frame recovers with the exact native identity", [&] {
                 const auto& state = controller.state();
                 const auto& ack = trace->lastNativeAcknowledgement();
                 return state.desiredIdentity && state.frame && isResidentFrame(state.frame) &&
                        state.frame->desiredIdentity() == *state.desiredIdentity && ack &&
                        ack->identity == ui::PreviewFrameTrace::identity(*state.desiredIdentity) &&
                        state.activity == ui::PreviewActivity::Ready;
-            },
-            30s);
+            });
         checks.expect(recovered,
                       "cancelled resolution request recovers exact desired native identity");
         if (!recovered)
@@ -152,8 +153,8 @@ exerciseResolutionTransitions(bloom::ui::verticalproof::Expectations& checks,
 waitForTransitionIdentity(bloom::ui::CompositionPreviewController& controller,
                           const std::shared_ptr<bloom::ui::PreviewFrameTrace>& trace) {
     using namespace std::chrono_literals;
-    return bloom::ui::verticalproof::waitUntil(
-        [&] {
+    return bloom::ui::verticalproof::awaitProof(
+        "the resident frame carries the exact native identity", [&] {
             const auto& state = controller.state();
             const auto& ack = trace->lastNativeAcknowledgement();
             return state.desiredIdentity && isResidentFrame(state.frame) &&
@@ -161,8 +162,7 @@ waitForTransitionIdentity(bloom::ui::CompositionPreviewController& controller,
                    ack->identity ==
                        bloom::ui::PreviewFrameTrace::identity(*state.desiredIdentity) &&
                    state.activity == bloom::ui::PreviewActivity::Ready;
-        },
-        30s);
+        });
 }
 
 [[nodiscard]] bool exerciseConcurrentCancellationFailure(
@@ -179,8 +179,9 @@ waitForTransitionIdentity(bloom::ui::CompositionPreviewController& controller,
     checks.expect(session.setSelectedSolidColor(core::Color4d{0.8, 0.2, 0.4, 1.0}),
                   "fault fixture authors an uncached source through commands");
     controller.requestRefresh();
-    const bool submitted = ui::verticalproof::waitUntil(
-        [&] { return gate->submitted.load(std::memory_order_acquire); }, 20s);
+    const bool submitted = ui::verticalproof::awaitProof("the native submission starts", [&] {
+        return gate->submitted.load(std::memory_order_acquire);
+    });
     auto* dropdown = area.findChild<ui::kit::KDropdown*>("viewerResolutionDropdown");
     if (!submitted || dropdown == nullptr) {
         gate->armed.store(false, std::memory_order_release);
@@ -188,8 +189,9 @@ waitForTransitionIdentity(bloom::ui::CompositionPreviewController& controller,
     }
     gate->failNextPoll.store(true, std::memory_order_release);
     dropdown->setCurrentIndex(1);
-    checks.expect(ui::verticalproof::waitUntil(
-                      [&] { return !gate->failNextPoll.load(std::memory_order_acquire); }, 2s),
+    checks.expect(ui::verticalproof::awaitProof(
+                      "typed poll failure is observed on the cancelling owner stage",
+                      [&] { return !gate->failNextPoll.load(std::memory_order_acquire); }),
                   "typed poll failure is observed on the cancelling owner stage");
     gate->armed.store(false, std::memory_order_release);
     const bool recovered = waitForTransitionIdentity(controller, trace);
@@ -221,17 +223,18 @@ waitForTransitionIdentity(bloom::ui::CompositionPreviewController& controller,
     checks.expect(session.setSelectedSolidColor(core::Color4d{0.6, 0.1, 0.8, 1.0}),
                   "replacement fixture authors an uncached source through commands");
     controller.requestRefresh();
-    const bool submitted = ui::verticalproof::waitUntil(
-        [&] { return gate->submitted.load(std::memory_order_acquire); }, 20s);
+    const bool submitted = ui::verticalproof::awaitProof("the native submission starts", [&] {
+        return gate->submitted.load(std::memory_order_acquire);
+    });
     if (!submitted) {
         gate->armed.store(false, std::memory_order_release);
         return false;
     }
     const bool accepted = area.setEditorId("bloom.properties");
     gate->armed.store(false, std::memory_order_release);
-    const bool replaced = ui::verticalproof::waitUntil(
-        [&] { return !area.isEditorChangePending() && area.editorId() == "bloom.properties"; },
-        20s);
+    const bool replaced = ui::verticalproof::awaitProof("the editor replacement completes", [&] {
+        return !area.isEditorChangePending() && area.editorId() == "bloom.properties";
+    });
     checks.expect(accepted && replaced && area.lastNativeSurfaceDiagnostic().empty(),
                   "production EditorArea replacement waits for proven WSI retirement");
     // Do not retain a pointer to an outgoing editor that the production gate may have destroyed.
@@ -257,8 +260,9 @@ waitForTransitionIdentity(bloom::ui::CompositionPreviewController& controller,
     checks.expect(session.transformInteractionActive(),
                   "resolution change begins during real native direct manipulation");
     controller.requestRefresh();
-    const bool submitted = ui::verticalproof::waitUntil(
-        [&] { return gate->submitted.load(std::memory_order_acquire); }, 20s);
+    const bool submitted = ui::verticalproof::awaitProof("the native submission starts", [&] {
+        return gate->submitted.load(std::memory_order_acquire);
+    });
     auto* dropdown = area.findChild<ui::kit::KDropdown*>("viewerResolutionDropdown");
     if (submitted && dropdown != nullptr)
         dropdown->setCurrentIndex(3);
@@ -306,8 +310,9 @@ generalDisplayPrograms() {
     checks.expect(session.setSelectedSolidColor(core::Color4d{0.25, 0.65, 0.35, 1.0}),
                   "display fault fixture submits uncached real document content");
     controller.requestRefresh();
-    const bool retained = ui::verticalproof::waitUntil(
-        [&] { return gate->displayRetiring.load(std::memory_order_acquire); }, 20s);
+    const bool retained = ui::verticalproof::awaitProof("the failed display retires", [&] {
+        return gate->displayRetiring.load(std::memory_order_acquire);
+    });
     checks.expect(retained && gate->completionRetained.load(std::memory_order_acquire),
                   "failed submitted display retains active stage and valid completion admission");
     auto* dropdown = area.findChild<ui::kit::KDropdown*>("viewerResolutionDropdown");
@@ -341,8 +346,10 @@ generalDisplayPrograms() {
                                         bloom::core::Color4d{0.15, 0.7, 0.2, 1.0}),
                   "shutdown fixture authors real uncached native work");
     controller.requestRefresh();
-    const bool submitted = bloom::ui::verticalproof::waitUntil(
-        [&] { return gate->submitted.load(std::memory_order_acquire); }, 20s);
+    const bool submitted =
+        bloom::ui::verticalproof::awaitProof("the native submission starts", [&] {
+            return gate->submitted.load(std::memory_order_acquire);
+        });
     checks.expect(submitted, "controller shutdown begins with a genuine submitted job");
     return submitted;
 }

@@ -56,22 +56,15 @@ class Expectations final {
         std::cerr << location.file_name() << ':' << location.line() << ": " << message << '\n';
     }
 
-    [[nodiscard]] int failures() const noexcept { return failures_; }
+    // Includes the waits that timed out (awaitFailureCount), so every exit code built from this
+    // counter fails when an awaited condition never held.
+    [[nodiscard]] int failures() const noexcept {
+        return failures_ + bloom::test_support::awaitFailureCount();
+    }
 
   private:
     int failures_ = 0;
 };
-
-// Awaits `predicate` through the shared helper; `name` says what is awaited.
-template <typename Predicate>
-[[nodiscard]] inline bool waitUntil(const std::string_view name, Predicate&& predicate) {
-    return bloom::test_support::awaitQtCondition(name, std::forward<Predicate>(predicate));
-}
-
-// Unnamed form kept for callers outside this cleanup's file list.
-template <typename Predicate> inline bool waitUntil(Predicate&& predicate) {
-    return waitUntil("test condition", std::forward<Predicate>(predicate));
-}
 
 [[nodiscard]] inline runtime::TaskSchedulerConfig twoWorkerConfig() {
     runtime::TaskSchedulerConfig config;
@@ -278,9 +271,10 @@ struct SessionFixture final {
 
 inline void finishFixture(SessionFixture& fixture, Expectations& expectations) {
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil("the RAM pipeline fixture scheduler quiescent",
-                                  [&] { return fixture.scheduler.isQuiescent(); }),
-                        "the RAM pipeline fixture reaches asynchronous scheduler quiescence");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("the RAM pipeline fixture scheduler quiescent",
+                                              [&] { return fixture.scheduler.isQuiescent(); }),
+        "the RAM pipeline fixture reaches asynchronous scheduler quiescence");
 }
 
 [[nodiscard]] inline bool isReady(const CompositionPreviewController& controller) {

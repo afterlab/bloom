@@ -14,6 +14,7 @@
 #include <thread>
 
 namespace {
+using bloom::test_support::awaitQtCondition;
 using namespace bloom;
 using namespace bloom::ui::ram_pipeline_test;
 constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
@@ -177,7 +178,7 @@ void run(Expectations& checks) {
                controller.state().freshness == ui::FrameFreshness::Current &&
                controller.state().frame->desiredIdentity().time == time;
     };
-    checks.expect(waitUntil("preview reaches Failed", failed) && heavy.load() == 0 &&
+    checks.expect(awaitQtCondition("preview reaches Failed", failed) && heavy.load() == 0 &&
                       submissions.load() == 1 && !controller.state().diagnostics.empty() &&
                       controller.state().diagnostics.front().admissionRetry,
                   "cold capacity refuses before actual CPU callback");
@@ -185,15 +186,16 @@ void run(Expectations& checks) {
         return;
     checks.expect(session.setCurrentTime(timeAt(2)) && session.setCurrentTime(timeAt(3)),
                   "newest cold intent selected");
-    checks.expect(waitUntil("preview reaches Failed", failed) && heavy.load() == 0,
+    checks.expect(awaitQtCondition("preview reaches Failed", failed) && heavy.load() == 0,
                   "cold newest intent remains bounded and no evaluation starts");
     auto sample = capacity(1);
     policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
     // Represents the existing sampleApplied notification after the root updates its policy.
     controller.notifyProcessingCapacityChanged();
-    checks.expect(waitUntil("preview ready at timeAt(3)", [&] { return readyAt(timeAt(3)); }) &&
-                      heavy.load() == 1,
-                  "sample-ready retries only the newest live intent through the real submitter");
+    checks.expect(
+        awaitQtCondition("preview ready at timeAt(3)", [&] { return readyAt(timeAt(3)); }) &&
+            heavy.load() == 1,
+        "sample-ready retries only the newest live intent through the real submitter");
     if (checks.failures() != 0)
         return;
     const auto oldFrame = controller.state().frame;
@@ -224,11 +226,11 @@ void run(Expectations& checks) {
             lease.reset(); // Last release precedes the existing terminal completion wake.
             return runtime::TaskResult<int>::succeeded(1);
         });
-    checks.expect(competitor.accepted() &&
-                      waitUntil("competing phase task entered", [&] { return entered.load(); }),
+    checks.expect(competitor.accepted() && awaitQtCondition("competing phase task entered",
+                                                            [&] { return entered.load(); }),
                   "real task holds phase");
     checks.expect(session.setCurrentTime(timeAt(4)), "pressure intent requested");
-    checks.expect(waitUntil("preview reaches Failed", failed) &&
+    checks.expect(awaitQtCondition("preview reaches Failed", failed) &&
                       controller.state().frame == oldFrame && heavy.load() == 1,
                   "contention preserves last good pixels without entering evaluation");
     bridge.stop();
@@ -242,19 +244,20 @@ void run(Expectations& checks) {
     heartbeat.start(10);
     QElapsedTimer span;
     span.start();
-    checks.expect(waitUntil("held span crosses 150 ms with 4 GUI pulses",
-                            [&] { return span.elapsed() >= 150 && pulses >= 4; }) &&
+    checks.expect(awaitQtCondition("held span crosses 150 ms with 4 GUI pulses",
+                                   [&] { return span.elapsed() >= 150 && pulses >= 4; }) &&
                       submissions.load() == before && !bridge.isRunning(),
                   "held span crosses Jobs interval with GUI pulses and no retry spin");
     heartbeat.stop();
     release->store(true);
-    checks.expect(waitUntil("preview ready at timeAt(4)", [&] { return readyAt(timeAt(4)); }) &&
-                      heavy.load() == 2,
-                  "completion-driven external release retries CPU route despite native zero");
+    checks.expect(
+        awaitQtCondition("preview ready at timeAt(4)", [&] { return readyAt(timeAt(4)); }) &&
+            heavy.load() == 2,
+        "completion-driven external release retries CPU route despite native zero");
     sample = capacity(2, 0);
     policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
     controller.requestRefresh();
-    checks.expect(waitUntil("preview reaches Failed", failed),
+    checks.expect(awaitQtCondition("preview reaches Failed", failed),
                   "known host zero gives terminal refusal");
     const auto zeroSubmissions = submissions.load();
     for (int i = 0; i < 20; ++i)
@@ -266,9 +269,10 @@ void run(Expectations& checks) {
     sample = capacity(3);
     policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
     controller.notifyProcessingCapacityChanged();
-    checks.expect(waitUntil("preview ready at timeAt(4)", [&] { return readyAt(timeAt(4)); }) &&
-                      heavy.load() == 3,
-                  "fresh usable capacity recovers the latest refused intent");
+    checks.expect(
+        awaitQtCondition("preview ready at timeAt(4)", [&] { return readyAt(timeAt(4)); }) &&
+            heavy.load() == 3,
+        "fresh usable capacity recovers the latest refused intent");
     const auto warmHeavy = heavy.load();
     sample = capacity(4, 9 * gib);
     policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
@@ -294,14 +298,14 @@ void run(Expectations& checks) {
     checks.expect(!session.beginTransformInteraction({}, mapping), "selected solid gesture begins");
     session.updateTransformInteraction(QPointF(10, 0));
     session.updateTransformInteraction(QPointF(30, 0));
-    checks.expect(waitUntil("preview reaches Failed", failed),
+    checks.expect(awaitQtCondition("preview reaches Failed", failed),
                   "newest live transform reaches real capacity refusal");
     const auto newestOverrides = session.transformInteractionOverrides();
     const auto gestureInsertions = cache->statistics().insertions;
     gestureHeld.lease.reset();
     controller.notifyProcessingCapacityChanged();
     checks.expect(
-        waitUntil("preview ready at timeAt(3)", [&] { return readyAt(timeAt(3)); }) &&
+        awaitQtCondition("preview ready at timeAt(3)", [&] { return readyAt(timeAt(3)); }) &&
             !newestOverrides.empty() && submittedOverrides == newestOverrides &&
             heavy.load() == warmHeavy + 1 && cache->statistics().insertions == gestureInsertions,
         "release retries newest live transform through actual stage without committed caching");
@@ -314,7 +318,7 @@ void run(Expectations& checks) {
                   "shutdown cannot rearm a deferred request");
     service.beginShutdown();
     bridge.beginShutdown();
-    checks.expect(waitUntil("scheduler quiescent", [&] { return scheduler.isQuiescent(); }),
+    checks.expect(awaitQtCondition("scheduler quiescent", [&] { return scheduler.isQuiescent(); }),
                   "all owned tasks quiesce");
     std::cout << "retry proof: submissions=" << submissions.load()
               << " actualPreparations=" << heavy.load() << " heldGuiPulses=" << pulses << "\n";
@@ -379,10 +383,11 @@ void deliveredDefaultRetry(Expectations& checks) {
                controller.state().frame && controller.state().frame->desiredIdentity().time == time;
     };
     const auto failed = [&] { return controller.state().activity == ui::PreviewActivity::Failed; };
-    checks.expect(
-        waitUntil("preview reaches Failed", failed) && submissions == 0 && preparations == 0 &&
-            controller.state().message == QStringLiteral("Awaiting a fresh preview memory sample"),
-        "omitted cold default reports missing delivery before any pixel work");
+    checks.expect(awaitQtCondition("preview reaches Failed", failed) && submissions == 0 &&
+                      preparations == 0 &&
+                      controller.state().message ==
+                          QStringLiteral("Awaiting a fresh preview memory sample"),
+                  "omitted cold default reports missing delivery before any pixel work");
     for (int index = 0; index < 20; ++index)
         controller.notifyProcessingCapacityChanged();
     checks.expect(submissions == 0, "unknown default pulses cannot spin");
@@ -398,12 +403,14 @@ void deliveredDefaultRetry(Expectations& checks) {
         controller.notifyProcessingCapacityChanged();
     };
     deliver(1);
-    checks.expect(waitUntil("preview ready at timeAt(0)", [&] { return readyAt(timeAt(0)); }) &&
-                      preparations == 1,
-                  "first actual delivered default retries initial intent exactly once");
+    checks.expect(
+        awaitQtCondition("preview ready at timeAt(0)", [&] { return readyAt(timeAt(0)); }) &&
+            preparations == 1,
+        "first actual delivered default retries initial intent exactly once");
     const auto lastGood = controller.state().frame;
     expireAtAdmission = true;
-    checks.expect(session.setCurrentTime(timeAt(1)) && waitUntil("preview reaches Failed", failed),
+    checks.expect(session.setCurrentTime(timeAt(1)) &&
+                      awaitQtCondition("preview reaches Failed", failed),
                   "selected numeric request can expire before service admission");
     checks.expect(preparations == 1 && submissions == 2 && controller.state().frame == lastGood &&
                       !controller.state().diagnostics.empty() &&
@@ -414,14 +421,15 @@ void deliveredDefaultRetry(Expectations& checks) {
     checks.expect(submissions == 2 && preparations == 1,
                   "same stale serial synchronous refusal never self-retries");
     checks.expect(session.setCurrentTime(timeAt(2)) &&
-                      waitUntil("preview reaches Failed", failed) && submissions == 2 &&
+                      awaitQtCondition("preview reaches Failed", failed) && submissions == 2 &&
                       controller.state().message ==
                           QStringLiteral("Awaiting a fresh preview memory sample"),
                   "stalled sample reports readiness loss while retaining newest intent");
     deliver(3);
-    checks.expect(waitUntil("preview ready at timeAt(2)", [&] { return readyAt(timeAt(2)); }) &&
-                      submissions == 3 && preparations == 2,
-                  "one newer fresh serial recovers newest intent through actual CPU pipeline");
+    checks.expect(
+        awaitQtCondition("preview ready at timeAt(2)", [&] { return readyAt(timeAt(2)); }) &&
+            submissions == 3 && preparations == 2,
+        "one newer fresh serial recovers newest intent through actual CPU pipeline");
     auto stale = *view->load();
     stale.sampleSerial = 4;
     stale.sampledAt -= std::chrono::seconds(11);
@@ -433,12 +441,14 @@ void deliveredDefaultRetry(Expectations& checks) {
     deliver(5, 0);
     checks.expect(
         view->load() && view->load()->fresh() && view->load()->previewRequestBytes == 0 &&
-            session.setCurrentTime(timeAt(3)) && waitUntil("preview reaches Failed", failed) &&
+            session.setCurrentTime(timeAt(3)) &&
+            awaitQtCondition("preview reaches Failed", failed) &&
             controller.state().message ==
                 QStringLiteral("Insufficient current memory capacity for preview rendering") &&
             controller.state().frame == cachedFrame && submissions == 3 && preparations == 2,
         "fresh measured zero reports insufficient current capacity and keeps good pixels");
-    checks.expect(session.setCurrentTime(timeAt(4)) && waitUntil("preview reaches Failed", failed),
+    checks.expect(session.setCurrentTime(timeAt(4)) &&
+                      awaitQtCondition("preview reaches Failed", failed),
                   "fresh zero keeps the newest uncached intent");
     for (int index = 0; index < 20; ++index)
         controller.notifyProcessingCapacityChanged();
@@ -446,13 +456,14 @@ void deliveredDefaultRetry(Expectations& checks) {
     checks.expect(submissions == 3 && preparations == 2,
                   "repeated fresh-zero capacity notifications do not spin");
     deliver(6);
-    checks.expect(waitUntil("preview ready at timeAt(4)", [&] { return readyAt(timeAt(4)); }) &&
-                      submissions == 4 && preparations == 3,
-                  "fresh positive sample automatically retries newest zero-refused intent once");
+    checks.expect(
+        awaitQtCondition("preview ready at timeAt(4)", [&] { return readyAt(timeAt(4)); }) &&
+            submissions == 4 && preparations == 3,
+        "fresh positive sample automatically retries newest zero-refused intent once");
     controller.beginShutdown();
     service.beginShutdown();
     bridge.beginShutdown();
-    checks.expect(waitUntil("scheduler quiescent", [&] { return scheduler.isQuiescent(); }),
+    checks.expect(awaitQtCondition("scheduler quiescent", [&] { return scheduler.isQuiescent(); }),
                   "default retry tasks retire");
     const auto final = policy->snapshot().reservations;
     checks.expect(final.admittedPhases == 0 && final.totalHostClaimBytes == 0 &&
@@ -594,7 +605,7 @@ void packedProvisionalRetry(Expectations& checks) {
                controller.state().freshness == ui::FrameFreshness::Current &&
                controller.state().frame;
     };
-    checks.expect(waitUntil("preview reaches the awaited ready frame", ready) &&
+    checks.expect(awaitQtCondition("preview reaches the awaited ready frame", ready) &&
                       actualPreparations == 1,
                   "real CPU last-good frame reached");
     if (checks.failures())
@@ -605,28 +616,29 @@ void packedProvisionalRetry(Expectations& checks) {
         return;
     faultNext = true;
     controller.requestRefresh();
-    checks.expect(
-        waitUntil("preview reaches Failed",
-                  [&] { return controller.state().activity == ui::PreviewActivity::Failed; }) &&
-            failuresAfterAllocation == 1 && arithmeticValid && controller.state().frame == oldFrame,
-        "typed refusal after allocated storage preserves last good frame and exact R+1");
+    checks.expect(awaitQtCondition(
+                      "preview reaches Failed",
+                      [&] { return controller.state().activity == ui::PreviewActivity::Failed; }) &&
+                      failuresAfterAllocation == 1 && arithmeticValid &&
+                      controller.state().frame == oldFrame,
+                  "typed refusal after allocated storage preserves last good frame and exact R+1");
     const auto failedSubmissions = submissions.load();
     QElapsedTimer held;
     held.start();
     int pulses = 0;
-    checks.expect(waitUntil("held span crosses 150 ms with GUI pulses",
-                            [&] {
-                                controller.notifyProcessingCapacityChanged();
-                                ++pulses;
-                                return held.elapsed() >= 150;
-                            }) &&
+    checks.expect(awaitQtCondition("held span crosses 150 ms with GUI pulses",
+                                   [&] {
+                                       controller.notifyProcessingCapacityChanged();
+                                       ++pulses;
+                                       return held.elapsed() >= 150;
+                                   }) &&
                       submissions == failedSubmissions && actualPreparations == 1,
                   "own provisional cleanup cannot spin controller across held GUI pulses");
     external->reset();
     checks.expect(actualExternalFree(), "actual published free precedes existing capacity pulse");
     controller.notifyProcessingCapacityChanged();
     checks.expect(
-        waitUntil("preview reaches the awaited ready frame", ready) &&
+        awaitQtCondition("preview reaches the awaited ready frame", ready) &&
             submissions == failedSubmissions + 1 && actualPreparations == 2,
         "external host actual release plus existing pulse recovers CPU once despite device zero");
     checks.expect(prepareExternal(), "second independent published host owner prepared");
@@ -640,7 +652,7 @@ void packedProvisionalRetry(Expectations& checks) {
                       [&] { return failuresAfterAllocation == 2 && scheduler.isQuiescent(); }) &&
                       arithmeticValid,
                   "real failed task and interleaved release complete before UI delivery");
-    checks.expect(waitUntil("preview reaches the awaited ready frame", ready) &&
+    checks.expect(awaitQtCondition("preview reaches the awaited ready frame", ready) &&
                       submissions == failedSubmissions + 3 && actualPreparations == 3,
                   "external release before refusal delivery remains visible for one newest retry");
     const auto final = policy->snapshot().reservations;
@@ -649,7 +661,7 @@ void packedProvisionalRetry(Expectations& checks) {
                   "controller proof leaves no phase or packed allocation claims");
     controller.beginShutdown();
     bridge.beginShutdown();
-    checks.expect(waitUntil("scheduler quiescent", [&] { return scheduler.isQuiescent(); }),
+    checks.expect(awaitQtCondition("scheduler quiescent", [&] { return scheduler.isQuiescent(); }),
                   "packed retry tasks quiesce");
     std::cout << "packed provisional controller: submissions=" << submissions
               << " failuresAfterAllocation=" << failuresAfterAllocation
@@ -668,7 +680,7 @@ int main(int argc, char** argv) {
             deliveredDefaultRetry(checks);
         if (!checks.failures())
             packedProvisionalRetry(checks);
-        return checks.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
+        return checks.failures() == 0 ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

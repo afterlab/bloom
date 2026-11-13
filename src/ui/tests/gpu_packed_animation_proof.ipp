@@ -49,22 +49,22 @@ void exercisePackedAnimation(Expectations& checks, Fixture& fixture,
                state.frame->provenance().provider ==
                    runtime::PreviewDisplayProvider::GpuPreparedPacked;
     };
-    checks.expect(waitUntil(current, 30s), "animated start is genuinely GPU-prepared and painted");
+    checks.expect(awaitProof("animated start is genuinely GPU-prepared and painted", current),
+                  "animated start is genuinely GPU-prepared and painted");
     const auto startPosition = session.effectiveVec2Value(document::kPositionParameterRole);
     packedAnimationOracle(checks, fixture, scheduler, session, viewer);
     observe("ANIM_START", viewer, splitter, host, service, controller);
     auto& playback = controller.playbackController();
     playback.play();
     bool visibleProgress = false;
-    checks.expect(waitUntil(
-                      [&] {
-                          const auto shown = viewer.displayedFrameForTest();
-                          if (shown &&
-                              shown->desiredIdentity().time > core::RationalTime::fromInteger(0))
-                              visibleProgress = true;
-                          return session.currentTime() >= core::RationalTime::fromInteger(1);
-                      },
-                      5s),
+    checks.expect(awaitProof("real default transport advances the animated scene",
+                             [&] {
+                                 const auto shown = viewer.displayedFrameForTest();
+                                 if (shown && shown->desiredIdentity().time >
+                                                  core::RationalTime::fromInteger(0))
+                                     visibleProgress = true;
+                                 return session.currentTime() >= core::RationalTime::fromInteger(1);
+                             }),
                   "real default transport advances the animated scene");
     std::cout << "PACKED_ANIMATION_PLAYBACK visibleProgress=" << visibleProgress << " shownTime="
               << (viewer.displayedFrameForTest()
@@ -77,13 +77,16 @@ void exercisePackedAnimation(Expectations& checks, Fixture& fixture,
     // moving frame stays externally sampleable while newest desired time continues to advance.
     hold->store(true);
     checks.expect(
-        waitUntil([&] { return service.status().counters.packedRetainedStagingBytes > 0; }, 3s),
+        awaitProof(
+            "short real final transfer hold makes changed playing output externally sampleable",
+            [&] { return service.status().counters.packedRetainedStagingBytes > 0; }),
         "short real final transfer hold makes changed playing output externally sampleable");
     packedAnimationOracle(checks, fixture, scheduler, session, viewer);
     observe("ANIM_PLAYING", viewer, splitter, host, service, controller);
     hold->store(false);
     playback.pause();
-    const auto settled = waitUntil(current, 10s);
+    const auto settled =
+        awaitProof("the paused animation settles on the current GPU-packed paint", current);
     if (!settled) {
         std::cout << "PACKED_ANIMATION_FAILURE requestedTime=" << session.currentTime().toSeconds()
                   << " message=" << controller.state().message.toStdString() << '\n';
@@ -106,7 +109,8 @@ void exercisePackedAnimation(Expectations& checks, Fixture& fixture,
     if (!text)
         return;
     session.selectLayer(*text);
-    checks.expect(waitUntil([&] { return current() && viewer.mappingForTest().has_value(); }, 30s),
+    checks.expect(awaitProof("text selection mapping is coupled to actual GPU-packed publication",
+                             [&] { return current() && viewer.mappingForTest().has_value(); }),
                   "text selection mapping is coupled to actual GPU-packed publication");
     const auto mapping = viewer.mappingForTest();
     const auto frame = viewer.displayedFrameForTest();
@@ -142,12 +146,14 @@ void exercisePackedAnimation(Expectations& checks, Fixture& fixture,
     send(QEvent::MouseButtonPress, point);
     checks.expect(session.transformInteractionActive(), "real text body press starts manipulation");
     send(QEvent::MouseMove, point + delta * 0.5);
-    checks.expect(waitUntil([&] { return current() && session.transformInteractionActive(); }, 30s),
+    checks.expect(awaitProof("held text move paints current coherent GPU image and matching bounds",
+                             [&] { return current() && session.transformInteractionActive(); }),
                   "held text move paints current coherent GPU image and matching bounds");
     packedAnimationOracle(checks, fixture, scheduler, session, viewer);
     observe("TEXT_MID", viewer, splitter, host, service, controller);
     send(QEvent::MouseMove, point + delta);
-    checks.expect(waitUntil([&] { return current() && session.transformInteractionActive(); }, 30s),
+    checks.expect(awaitProof("second held move paints genuine newest GPU output",
+                             [&] { return current() && session.transformInteractionActive(); }),
                   "second held move paints genuine newest GPU output");
     send(QEvent::MouseButtonRelease, point + delta);
     const auto before = mapping->toComposition(point);
@@ -159,13 +165,14 @@ void exercisePackedAnimation(Expectations& checks, Fixture& fixture,
                       std::abs(actual->x - expected.x) < 1e-8 &&
                       std::abs(actual->y - expected.y) < 1e-8,
                   "real text release commits one transaction with frozen-mapping position");
-    checks.expect(waitUntil(current, 30s),
+    checks.expect(awaitProof("committed text reaches genuine current packed publication", current),
                   "committed text reaches genuine current packed publication");
     packedAnimationOracle(checks, fixture, scheduler, session, viewer);
     observe("TEXT_COMMIT", viewer, splitter, host, service, controller);
     checks.expect(session.undo() && session.constantVec2Value(parameter) == base,
                   "one undo restores exact authored pre-drag text position");
-    checks.expect(waitUntil(current, 30s), "undone image and bounds genuinely paint Current");
+    checks.expect(awaitProof("undone image and bounds genuinely paint Current", current),
+                  "undone image and bounds genuinely paint Current");
     packedAnimationOracle(checks, fixture, scheduler, session, viewer);
     observe("TEXT_UNDO", viewer, splitter, host, service, controller);
     checks.expect(service.status().counters.cpuFallbacks == 0,

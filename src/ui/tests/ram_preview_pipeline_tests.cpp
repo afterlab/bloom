@@ -24,6 +24,7 @@
 #include <algorithm>
 
 namespace {
+using bloom::test_support::awaitQtCondition;
 
 using namespace bloom;
 using namespace bloom::ui::ram_pipeline_test;
@@ -76,18 +77,21 @@ void testPipelineHelperBoundAndCancellation(Expectations& expectations) {
     // held frame must be collected afterwards. Since both slot identities are distinct, an
     // out-of-order completion cannot cancel or hide its sibling.
     auto first = std::vector<ui::RamPreviewPipeline::Ready>{};
-    expectations.expect(waitUntil([&] {
-                            first = pipeline.takeReady();
-                            return !first.empty();
-                        }) &&
-                            first.size() == 1 && first.front().frameIndex == 1,
-                        "the unblocked frame is collectible while its sibling is held");
+    expectations.expect(
+        awaitQtCondition("the unblocked frame is collectible while its sibling is held",
+                         [&] {
+                             first = pipeline.takeReady();
+                             return !first.empty();
+                         }) &&
+            first.size() == 1 && first.front().frameIndex == 1,
+        "the unblocked frame is collectible while its sibling is held");
     gate->store(true, std::memory_order_release);
     auto second = std::vector<ui::RamPreviewPipeline::Ready>{};
-    expectations.expect(waitUntil([&] {
-                            second = pipeline.takeReady();
-                            return !second.empty();
-                        }) &&
+    expectations.expect(awaitQtCondition("the held frame is collected last, in submission order",
+                                         [&] {
+                                             second = pipeline.takeReady();
+                                             return !second.empty();
+                                         }) &&
                             second.size() == 1 && second.front().frameIndex == 0,
                         "the held frame is collected last, in submission order");
     expectations.expect(pipeline.empty(), "collecting every frame empties the helper");
@@ -112,7 +116,8 @@ void testPipelineHelperBoundAndCancellation(Expectations& expectations) {
                             }())),
                         "cancel-if detaches only the stale frame");
     pipeline.cancelAllAndDetach();
-    expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
+    expectations.expect(awaitQtCondition("the helper fixture quiesces after cancellation",
+                                         [&] { return scheduler.isQuiescent(); }),
                         "the helper fixture quiesces after cancellation");
 }
 
@@ -120,7 +125,8 @@ void testPipelineHelperBoundAndCancellation(Expectations& expectations) {
 // inside its preparation, and the bound holds at two.
 void testControllerOverlapsTwoPreparations(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Overlap", timeAt(3, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the foreground frame settles",
+                                         [&] { return isReady(fixture.controller); }),
                         "the foreground frame settles");
     fixture.frameCache->clear();
 
@@ -131,7 +137,8 @@ void testControllerOverlapsTwoPreparations(Expectations& expectations) {
                                  fixture.bridge,
                                  fixture.pipelineFixture.preparation(fixture.coordinator));
     ram.start();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
+    expectations.expect(awaitQtCondition("the overlapping run caches the whole range",
+                                         [&] { return !ram.isCaching(); }) &&
                             ram.cachedFrameCount() == 3 && ram.totalFrameCount() == 3,
                         "the overlapping run caches the whole range");
     expectations.expect(fixture.coordinator.peak() >= 2,
@@ -150,7 +157,8 @@ void testControllerOverlapsTwoPreparations(Expectations& expectations) {
 // order, so the early frame 2 cannot advance progress past an unfinished frame 1.
 void testControllerCachesOutOfOrderResults(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Out Of Order", timeAt(3, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the foreground frame settles",
+                                         [&] { return isReady(fixture.controller); }),
                         "the foreground frame settles");
     fixture.frameCache->clear();
 
@@ -163,9 +171,11 @@ void testControllerCachesOutOfOrderResults(Expectations& expectations) {
                                  fixture.bridge,
                                  fixture.pipelineFixture.preparation(fixture.coordinator));
     ram.start();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
-                            ram.cachedFrameCount() == 3 && ram.totalFrameCount() == 3,
-                        "the out-of-order run still caches the whole range exactly once");
+    expectations.expect(
+        awaitQtCondition("the out-of-order run still caches the whole range exactly once",
+                         [&] { return !ram.isCaching(); }) &&
+            ram.cachedFrameCount() == 3 && ram.totalFrameCount() == 3,
+        "the out-of-order run still caches the whole range exactly once");
     for (std::int64_t frame = 0; frame < 3; ++frame) {
         const auto key = fixture.controller.cacheKeyForTime(timeAt(frame, 25));
         expectations.expect(key && fixture.frameCache->contains(*key),
@@ -179,7 +189,8 @@ void testControllerCachesOutOfOrderResults(Expectations& expectations) {
 // cancel() and beginShutdown() both detach BOTH in-flight frames rather than only the newest.
 void testControllerCancelAndShutdownDetachBoth(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Cancel Both", timeAt(4, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the foreground frame settles",
+                                         [&] { return isReady(fixture.controller); }),
                         "the foreground frame settles");
     fixture.frameCache->clear();
 
@@ -190,14 +201,16 @@ void testControllerCancelAndShutdownDetachBoth(Expectations& expectations) {
                                  fixture.bridge,
                                  fixture.pipelineFixture.preparation(fixture.coordinator));
     ram.start();
-    expectations.expect(waitUntil([&] { return fixture.coordinator.heldArrived(2); }) &&
+    expectations.expect(awaitQtCondition("both frames are preparing before cancellation",
+                                         [&] { return fixture.coordinator.heldArrived(2); }) &&
                             ram.peakInFlightFrames() == 2,
                         "both frames are preparing before cancellation");
     const int callsBeforeCancel = fixture.coordinator.calls();
     ram.cancel();
     expectations.expect(!ram.isCaching(), "cancel ends the run immediately");
     fixture.coordinator.releaseHeld();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+    expectations.expect(awaitQtCondition("both cancelled frames reach terminal",
+                                         [&] { return fixture.scheduler.isQuiescent(); }),
                         "both cancelled frames reach terminal");
     expectations.expect(fixture.coordinator.calls() == callsBeforeCancel,
                         "cancel did not start a replacement frame");
@@ -211,13 +224,15 @@ void testControllerCancelAndShutdownDetachBoth(Expectations& expectations) {
                                          fixture.bridge,
                                          fixture.pipelineFixture.preparation(fixture.coordinator));
     shutdownRam.start();
-    expectations.expect(waitUntil([&] { return fixture.coordinator.heldArrived(2); }),
+    expectations.expect(awaitQtCondition("both frames are preparing before shutdown",
+                                         [&] { return fixture.coordinator.heldArrived(2); }),
                         "both frames are preparing before shutdown");
     shutdownRam.beginShutdown();
     expectations.expect(!shutdownRam.isCaching() && shutdownRam.isShuttingDown(),
                         "beginShutdown detaches both frames and ends the run");
     fixture.coordinator.releaseHeld();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+    expectations.expect(awaitQtCondition("both shutdown-detached frames reach terminal",
+                                         [&] { return fixture.scheduler.isQuiescent(); }),
                         "both shutdown-detached frames reach terminal");
     finishFixture(fixture, expectations);
 }
@@ -226,7 +241,8 @@ void testControllerCancelAndShutdownDetachBoth(Expectations& expectations) {
 // refused and uncounted, and only the new range is filled.
 void testControllerShrinkAdaptsBothInflight(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Shrink Both", timeAt(7, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the foreground frame settles",
+                                         [&] { return isReady(fixture.controller); }),
                         "the foreground frame settles");
     fixture.frameCache->clear();
 
@@ -237,7 +253,8 @@ void testControllerShrinkAdaptsBothInflight(Expectations& expectations) {
                                  fixture.bridge,
                                  fixture.pipelineFixture.preparation(fixture.coordinator));
     ram.start();
-    expectations.expect(waitUntil([&] { return fixture.coordinator.heldArrived(2); }),
+    expectations.expect(awaitQtCondition("both frames of the wide range are preparing",
+                                         [&] { return fixture.coordinator.heldArrived(2); }),
                         "both frames of the wide range are preparing");
 
     commands::Transaction range("Work area", fixture.session.snapshot().revision());
@@ -246,7 +263,8 @@ void testControllerShrinkAdaptsBothInflight(Expectations& expectations) {
     expectations.expect(fixture.session.executeTransaction(std::move(range)).changed(),
                         "the work area shrinks while both frames are in flight");
     fixture.coordinator.releaseHeld();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
+    expectations.expect(awaitQtCondition("the run adapts to the shrunken two-frame range",
+                                         [&] { return !ram.isCaching(); }) &&
                             ram.cachedFrameCount() == 2 && ram.totalFrameCount() == 2,
                         "the run adapts to the shrunken two-frame range");
     for (std::int64_t frame = 0; frame < 7; ++frame) {
@@ -263,7 +281,8 @@ void testControllerShrinkAdaptsBothInflight(Expectations& expectations) {
 // A work-area expansion while both frames are preparing fills only the newly entered frames.
 void testControllerExpandAdaptsBothInflight(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Expand Both", timeAt(6, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the foreground frame settles",
+                                         [&] { return isReady(fixture.controller); }),
                         "the foreground frame settles");
 
     commands::Transaction narrow("Work area", fixture.session.snapshot().revision());
@@ -280,7 +299,8 @@ void testControllerExpandAdaptsBothInflight(Expectations& expectations) {
                                  fixture.bridge,
                                  fixture.pipelineFixture.preparation(fixture.coordinator));
     ram.start();
-    expectations.expect(waitUntil([&] { return fixture.coordinator.heldArrived(2); }),
+    expectations.expect(awaitQtCondition("both frames of the narrow range are preparing",
+                                         [&] { return fixture.coordinator.heldArrived(2); }),
                         "both frames of the narrow range are preparing");
 
     commands::Transaction widen("Work area", fixture.session.snapshot().revision());
@@ -288,7 +308,8 @@ void testControllerExpandAdaptsBothInflight(Expectations& expectations) {
     expectations.expect(fixture.session.executeTransaction(std::move(widen)).changed(),
                         "the work area expands while both frames are in flight");
     fixture.coordinator.releaseHeld();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
+    expectations.expect(awaitQtCondition("the run adapts to the expanded six-frame range",
+                                         [&] { return !ram.isCaching(); }) &&
                             ram.cachedFrameCount() == 6 && ram.totalFrameCount() == 6,
                         "the run adapts to the expanded six-frame range");
     for (std::int64_t frame = 0; frame < 6; ++frame) {
@@ -305,7 +326,8 @@ void testControllerFiniteEditKeepsRetainedHalf(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Finite Edit Both", timeAt(7, 25)));
     expectations.expect(animateSolidLayer(fixture.session),
                         "the finite-edit fixture is animated across its range");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the foreground frame settles",
+                                         [&] { return isReady(fixture.controller); }),
                         "the foreground frame settles");
     const auto layerId = fixture.session.composition()->graph().layerOutputs().front().layerId;
     fixture.frameCache->clear();
@@ -319,8 +341,10 @@ void testControllerFiniteEditKeepsRetainedHalf(Expectations& expectations) {
                                  fixture.bridge,
                                  fixture.pipelineFixture.preparation(fixture.coordinator));
     ram.start();
-    expectations.expect(waitUntil([&] { return fixture.coordinator.heldArrived(2); }),
-                        "frames two and three are preparing under the old provenance");
+    expectations.expect(
+        awaitQtCondition("frames two and three are preparing under the old provenance",
+                         [&] { return fixture.coordinator.heldArrived(2); }),
+        "frames two and three are preparing under the old provenance");
     const int callsBeforeTrim = fixture.coordinator.calls();
 
     commands::Transaction trim("Trim", fixture.session.snapshot().revision());
@@ -329,7 +353,8 @@ void testControllerFiniteEditKeepsRetainedHalf(Expectations& expectations) {
     expectations.expect(fixture.session.executeTransaction(std::move(trim)).changed(),
                         "the finite clip-range edit publishes");
     fixture.coordinator.releaseHeld();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
+    expectations.expect(awaitQtCondition("the finite edit rescan completes the whole range",
+                                         [&] { return !ram.isCaching(); }) &&
                             ram.cachedFrameCount() == 7 && ram.totalFrameCount() == 7,
                         "the finite edit rescan completes the whole range");
     expectations.expect(fixture.coordinator.calls() == callsBeforeTrim + 4,
@@ -347,7 +372,8 @@ void testControllerFiniteEditKeepsRetainedHalf(Expectations& expectations) {
 // PartialBudget, and the pipeline never oversubscribes.
 void testControllerBudgetStopsBounded(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Budget Both", timeAt(24, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the foreground frame settles",
+                                         [&] { return isReady(fixture.controller); }),
                         "the foreground frame settles");
     const auto frame = fixture.controller.state().frame;
     expectations.expect(frame != nullptr, "the budget fixture has a frame to measure");
@@ -368,7 +394,8 @@ void testControllerBudgetStopsBounded(Expectations& expectations) {
                              outcome == ui::RamPreviewController::Completion::PartialBudget;
                      });
     ram.start();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }),
+    expectations.expect(awaitQtCondition("the budget-limited run ends on its own",
+                                         [&] { return !ram.isCaching(); }),
                         "the budget-limited run ends on its own");
     expectations.expect(
         ram.cachedFrameCount() == 3 && ram.totalFrameCount() == 24,

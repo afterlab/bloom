@@ -296,7 +296,8 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
             }
         });
     checks.expect(
-        waitUntil([&] { return processingPolicy->snapshot().reservations.hostReady; }, 30s),
+        awaitProof("production off-UI sampler delivers genuine first shared-root readiness",
+                   [&] { return processingPolicy->snapshot().reservations.hostReady; }),
         "production off-UI sampler delivers genuine first shared-root readiness");
     stage = [base = std::move(stage), &preparations](
                 const document::Snapshot& snapshot, const runtime::PreviewRequestIdentity& identity,
@@ -341,7 +342,8 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
         scheduler, stage, fixture.productionCpuStage(),
         fixture.productionCpuFallback(displayPreparer), configured);
     auto& service = *serviceOwner;
-    checks.expect(waitUntil(
+    checks.expect(awaitProof(
+                      "genuine offscreen GPU service initializes",
                       [&] {
                           return service.status().state !=
                                  runtime::GpuPreviewDisplayServiceState::Initializing;
@@ -446,11 +448,12 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
     ui::ViewerEditor viewer(session, controller);
     viewer.resize(600, 420);
     viewer.show();
-    checks.expect(
-        waitUntil(
-            [&] { return viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current; },
-            30s),
-        "foreground paints genuine GPU-packed sequence before RAM fill");
+    checks.expect(awaitProof("foreground paints genuine GPU-packed sequence before RAM fill",
+                             [&] {
+                                 return viewer.displayedPreviewState().freshness ==
+                                        ui::FrameFreshness::Current;
+                             }),
+                  "foreground paints genuine GPU-packed sequence before RAM fill");
     if (explicitExecutorBudget) {
         const auto status = service.status();
         const auto frame = viewer.displayedFrameForTest();
@@ -479,13 +482,12 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
         ram.beginShutdown();
         controller.beginShutdown();
         service.beginShutdown();
-        checks.expect(waitUntil(
-                          [&] {
-                              return scheduler.isQuiescent() &&
-                                     service.status().state ==
-                                         runtime::GpuPreviewDisplayServiceState::Stopped;
-                          },
-                          30s),
+        checks.expect(awaitProof("explicit refusal retires native owner and tasks",
+                                 [&] {
+                                     return scheduler.isQuiescent() &&
+                                            service.status().state ==
+                                                runtime::GpuPreviewDisplayServiceState::Stopped;
+                                 }),
                       "explicit refusal retires native owner and tasks");
         viewer.releasePackedFramesForShutdown();
         controller.releasePublishedFramesForShutdown();
@@ -517,15 +519,16 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
         auto recoveryService = std::make_unique<runtime::GpuPreviewDisplayService>(
             scheduler, stage, fixture.productionCpuStage(),
             fixture.productionCpuFallback(displayPreparer), recoveryOptions);
-        checks.expect(waitUntil(
-                          [&] {
-                              return recoveryService->status().state !=
-                                     runtime::GpuPreviewDisplayServiceState::Initializing;
-                          },
-                          90s) &&
-                          recoveryService->status().state ==
-                              runtime::GpuPreviewDisplayServiceState::Ready,
-                      "same-root default service recovers after explicit refusal owner retirement");
+        checks.expect(
+            awaitProof(
+                "same-root default service recovers after explicit refusal owner retirement",
+                [&] {
+                    return recoveryService->status().state !=
+                           runtime::GpuPreviewDisplayServiceState::Initializing;
+                },
+                90s) &&
+                recoveryService->status().state == runtime::GpuPreviewDisplayServiceState::Ready,
+            "same-root default service recovers after explicit refusal owner retirement");
         auto recovery = recoveryService->submit(
             runtime::TaskRequest("Default producer recovery",
                                  {.kind = runtime::TaskOwnerKind::PanelRequest,
@@ -542,19 +545,19 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                       "same-root omitted producer default performs genuine GPU packed recovery");
         recovered.reset();
         recoveryService->beginShutdown();
-        checks.expect(waitUntil(
-                          [&] {
-                              return scheduler.isQuiescent() &&
-                                     recoveryService->status().state ==
-                                         runtime::GpuPreviewDisplayServiceState::Stopped;
-                          },
-                          30s),
+        checks.expect(awaitProof("same-root default recovery tasks/native owner retire",
+                                 [&] {
+                                     return scheduler.isQuiescent() &&
+                                            recoveryService->status().state ==
+                                                runtime::GpuPreviewDisplayServiceState::Stopped;
+                                 }),
                       "same-root default recovery tasks/native owner retire");
         recoveryService.reset();
         memoryController.beginShutdown();
         bridge.beginShutdown();
         retirementOwner->beginShutdown();
-        checks.expect(waitUntil([&] { return retirementOwner->exitAcknowledged(); }, 30s),
+        checks.expect(awaitProof("same-root default recovery published backing actually retires",
+                                 [&] { return retirementOwner->exitAcknowledged(); }),
                       "same-root default recovery published backing actually retires");
         const auto afterRecovery = processingPolicy->snapshot();
         const auto& residual = afterRecovery.reservations;
@@ -606,7 +609,9 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
     // Process CPU time across the fill; divided by the wall time it is the number of busy cores.
     const auto fillCpuStarted = std::clock();
     ram.start();
-    checks.expect(waitUntil([&] { return !ram.isCaching(); }, 110s), "the frame range terminates");
+    checks.expect(awaitProof(
+                      "the frame range terminates", [&] { return !ram.isCaching(); }, 110s),
+                  "the frame range terminates");
     {
         const auto wallSeconds =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - fillStarted).count();
@@ -727,13 +732,13 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
         // stamp.
         checks.expect(session.currentTime() == *time || session.setCurrentTime(*time),
                       "retained exact time seeks");
-        checks.expect(waitUntil(
-                          [&] {
-                              const auto actual = viewer.displayedPreviewState();
-                              return actual.freshness == ui::FrameFreshness::Current &&
-                                     actual.frame && actual.frame->desiredIdentity().time == *time;
-                          },
-                          5s),
+        checks.expect(awaitProof("each retained exact time really paints in normal Viewer",
+                                 [&] {
+                                     const auto actual = viewer.displayedPreviewState();
+                                     return actual.freshness == ui::FrameFreshness::Current &&
+                                            actual.frame &&
+                                            actual.frame->desiredIdentity().time == *time;
+                                 }),
                       "each retained exact time really paints in normal Viewer");
         const auto frame = viewer.displayedFrameForTest();
         if (!frame ||
@@ -865,13 +870,11 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
             const auto time = retainedTimes[direction ? retainedTimes.size() - 1 - step : step];
             checks.expect(session.currentTime() == time || session.setCurrentTime(time),
                           "warm transport seeks cached time");
-            if (waitUntil(
-                    [&] {
-                        const auto actual = viewer.displayedPreviewState();
-                        return actual.freshness == ui::FrameFreshness::Current && actual.frame &&
-                               actual.frame->desiredIdentity().time == time;
-                    },
-                    5s))
+            if (awaitProof("the viewer paints the cached frame at the warm transport time", [&] {
+                    const auto actual = viewer.displayedPreviewState();
+                    return actual.freshness == ui::FrameFreshness::Current && actual.frame &&
+                           actual.frame->desiredIdentity().time == time;
+                }))
                 ++replayed;
         }
     }
@@ -966,19 +969,19 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
     memoryController.beginShutdown();
     bridge.beginShutdown();
     service.beginShutdown();
-    checks.expect(waitUntil(
-                      [&] {
-                          return scheduler.isQuiescent() &&
-                                 service.status().state ==
-                                     runtime::GpuPreviewDisplayServiceState::Stopped;
-                      },
-                      30s),
+    checks.expect(awaitProof("RAM/Viewer/service retire asynchronously",
+                             [&] {
+                                 return scheduler.isQuiescent() &&
+                                        service.status().state ==
+                                            runtime::GpuPreviewDisplayServiceState::Stopped;
+                             }),
                   "RAM/Viewer/service retire asynchronously");
     viewer.releasePackedFramesForShutdown();
     controller.releasePublishedFramesForShutdown();
     cache->clear();
     retirementOwner->beginShutdown();
-    checks.expect(waitUntil([&] { return retirementOwner->exitAcknowledged(); }, 30s),
+    checks.expect(awaitProof("all retained host backings actually free before retirement exit",
+                             [&] { return retirementOwner->exitAcknowledged(); }),
                   "all retained host backings actually free before retirement exit");
     const auto finalClaims = processingPolicy->snapshot().reservations;
     checks.expect(

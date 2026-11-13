@@ -79,13 +79,6 @@ class Expectations final {
 
 using bloom::test_support::awaitQtCondition;
 
-// background_preview_playback.ipp (textually included below, outside this conversion's file list)
-// still calls waitUntil(predicate): this forwarding shim keeps it building until it is converted.
-template <typename Predicate> bool waitUntil(Predicate&& predicate) {
-    return awaitQtCondition("condition awaited by background_preview_playback.ipp",
-                            std::forward<Predicate>(predicate));
-}
-
 [[nodiscard]] runtime::TaskSchedulerConfig testSchedulerConfig() {
     return {.cpuWorkerCount = 1,
             .blockingIoWorkerCount = 1,

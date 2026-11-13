@@ -3,12 +3,15 @@
 // admission; completion dispatches the newest cold request without a Jobs snapshot poll.
 void testHalfCachedPlaybackAdmitsIdleMissesAndBackpressures(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Half cached playback", time(8, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "initial ready");
+    expectations.expect(
+        awaitQtCondition("initial ready", [&] { return isReady(fixture.controller); }),
+        "initial ready");
     // Cache the even frames 0,2,4,6; the odd frames stay cold.
     for (const auto index : {2, 4, 6, 0}) {
         (void)fixture.session.setCurrentTime(time(index, 25));
-        expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                            "seed cached frame");
+        expectations.expect(
+            awaitQtCondition("seed cached frame", [&] { return isReady(fixture.controller); }),
+            "seed cached frame");
     }
     // The stale slow estimate the accepted policy no longer uses to refuse an idle admission.
     fixture.controller.recordPreparationDuration(
@@ -33,7 +36,8 @@ void testHalfCachedPlaybackAdmitsIdleMissesAndBackpressures(Expectations& expect
     expectations.expect(fixture.controller.state().frame != nullptr &&
                             fixture.controller.state().frame->desiredIdentity().time == time(0, 25),
                         "the previous picture remains until the admitted frame is ready");
-    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }),
+    expectations.expect(awaitQtCondition("the admitted evaluation is held in flight",
+                                         [&] { return fixture.gate.entered(); }),
                         "the admitted evaluation is held in flight");
     expectations.expect(fixture.preparationCount.load() == before + 1,
                         "exactly one evaluation is in flight for the admitted idle miss");
@@ -78,10 +82,12 @@ void testHalfCachedPlaybackAdmitsIdleMissesAndBackpressures(Expectations& expect
                      });
     fixture.gate.release();
     expectations.expect(
-        waitUntil([&] {
-            return fixture.controller.backgroundWorkAllowed() && isReady(fixture.controller) &&
-                   fixture.controller.state().frame->desiredIdentity().time == time(3, 25);
-        }),
+        awaitQtCondition(
+            "completion refills newest frame three after cancelled admission reaches terminal",
+            [&] {
+                return fixture.controller.backgroundWorkAllowed() && isReady(fixture.controller) &&
+                       fixture.controller.state().frame->desiredIdentity().time == time(3, 25);
+            }),
         "completion refills newest frame three after cancelled admission reaches terminal");
     const auto oldKey = fixture.controller.cacheKeyForTime(time(1, 25));
     const auto heldSnapshot = heldTask ? fixture.scheduler.snapshot(*heldTask) : std::nullopt;
@@ -108,9 +114,12 @@ void testHalfCachedPlaybackAdmitsIdleMissesAndBackpressures(Expectations& expect
     playback.tick();
     expectations.expect(fixture.controller.state().activity == ui::PreviewActivity::Rendering,
                         "a cold miss after backpressure clears submits again");
-    expectations.expect(waitUntil([&] { return fixture.preparationCount.load() == before + 3; }),
-                        "exactly one evaluation starts for the progressed cold frame");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(
+        awaitQtCondition("exactly one evaluation starts for the progressed cold frame",
+                         [&] { return fixture.preparationCount.load() == before + 3; }),
+        "exactly one evaluation starts for the progressed cold frame");
+    expectations.expect(awaitQtCondition("the progressed cold frame is displayed",
+                                         [&] { return isReady(fixture.controller); }),
                         "the progressed cold frame is displayed");
     expectations.expect(fixture.controller.state().frame != nullptr &&
                             fixture.controller.state().frame->desiredIdentity().time ==

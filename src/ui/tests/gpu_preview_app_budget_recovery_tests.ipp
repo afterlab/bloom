@@ -25,9 +25,13 @@ void testControllerLivenessAfterBudgetRefusal(Expectations& expectations, const 
     AppProcessingRoot processing(scheduler, bridge, expectations);
     runtime::GpuPreviewDisplayService service(scheduler, fixture.stage(), fixture.fallback(),
                                               gpuOptions(options.loader, processing.policy));
-    static_cast<void>(waitUntil([&] {
-        return service.status().state != runtime::GpuPreviewDisplayServiceState::Initializing;
-    }));
+    expectations.expect(
+        awaitQtCondition("the GPU preview service leaves Initializing",
+                         [&] {
+                             return service.status().state !=
+                                    runtime::GpuPreviewDisplayServiceState::Initializing;
+                         }),
+        "the GPU preview service leaves Initializing");
 
     auto injected = std::make_shared<std::atomic<bool>>(false);
     ui::PreviewPreparationSubmitter submitter =
@@ -63,19 +67,22 @@ void testControllerLivenessAfterBudgetRefusal(Expectations& expectations, const 
          .pixelStorageByteLimit = kBudget},
         frameCache, nullptr, std::move(submitter), nullptr, processing.policy);
 
-    expectations.expect(waitUntil([&] {
-                            const auto activity = controller.state().activity;
-                            return activity == ui::PreviewActivity::Failed ||
-                                   activity == ui::PreviewActivity::Unsupported ||
-                                   activity == ui::PreviewActivity::Ready;
-                        }),
-                        "liveness: the injected budget refusal reaches a terminal state");
+    expectations.expect(
+        awaitQtCondition("liveness: the injected budget refusal reaches a terminal state",
+                         [&] {
+                             const auto activity = controller.state().activity;
+                             return activity == ui::PreviewActivity::Failed ||
+                                    activity == ui::PreviewActivity::Unsupported ||
+                                    activity == ui::PreviewActivity::Ready;
+                         }),
+        "liveness: the injected budget refusal reaches a terminal state");
     expectations.expect(controller.state().activity != ui::PreviewActivity::Rendering,
                         "liveness: the controller is not stranded in Rendering");
 
     // A later request on the SAME controller/service must render through the real service.
     controller.requestRefresh();
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(awaitQtCondition("liveness: a later request on the same controller renders",
+                                         [&] { return isReady(controller); }),
                         "liveness: a later request on the same controller renders");
 
     controller.beginShutdown();
@@ -107,9 +114,13 @@ void testGenuineBuilderBudgetRefusalRecovery(Expectations& expectations, const O
     AppProcessingRoot processing(scheduler, bridge, expectations);
     runtime::GpuPreviewDisplayService service(scheduler, fixture.stage(), fixture.fallback(),
                                               gpuOptions(options.loader, processing.policy));
-    static_cast<void>(waitUntil([&] {
-        return service.status().state != runtime::GpuPreviewDisplayServiceState::Initializing;
-    }));
+    expectations.expect(
+        awaitQtCondition("the GPU preview service leaves Initializing",
+                         [&] {
+                             return service.status().state !=
+                                    runtime::GpuPreviewDisplayServiceState::Initializing;
+                         }),
+        "the GPU preview service leaves Initializing");
 
     auto calls = std::make_shared<std::atomic<int>>(0);
     auto frameCache = std::make_shared<ui::PreviewFrameCache>();
@@ -126,20 +137,23 @@ void testGenuineBuilderBudgetRefusalRecovery(Expectations& expectations, const O
          .pixelStorageByteLimit = std::size_t{16} * 1024U * 1024U},
         frameCache, nullptr, serviceSubmitter(service, calls), nullptr, processing.policy);
 
-    expectations.expect(waitUntil([&] {
-                            const auto activity = controller.state().activity;
-                            return activity == ui::PreviewActivity::Failed ||
-                                   activity == ui::PreviewActivity::Unsupported ||
-                                   activity == ui::PreviewActivity::Ready;
-                        }),
-                        "genuine: the builder budget refusal reaches a terminal state");
+    expectations.expect(
+        awaitQtCondition("genuine: the builder budget refusal reaches a terminal state",
+                         [&] {
+                             const auto activity = controller.state().activity;
+                             return activity == ui::PreviewActivity::Failed ||
+                                    activity == ui::PreviewActivity::Unsupported ||
+                                    activity == ui::PreviewActivity::Ready;
+                         }),
+        "genuine: the builder budget refusal reaches a terminal state");
     expectations.expect(controller.state().activity != ui::PreviewActivity::Rendering,
                         "genuine: the controller is not stranded in Rendering");
 
     // The same controller must render the unscaled composition through the real service.
     expectations.expect(session.setSelectedScale(1.0, 1.0), "genuine: the solid scale is reset");
     controller.requestRefresh();
-    if (!waitUntil([&] { return isReady(controller); })) {
+    if (!awaitQtCondition("the controller is ready after the genuine recovery",
+                          [&] { return isReady(controller); })) {
         std::cerr << "genuine recovery state=" << static_cast<int>(controller.state().activity)
                   << " message=" << controller.state().message.toStdString() << '\n';
     }

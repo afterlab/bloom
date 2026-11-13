@@ -1,6 +1,17 @@
 # Every UI test may use the shared wait helpers (tests/support/await_qt.hpp).
 include_directories("${PROJECT_SOURCE_DIR}/tests/support")
 
+# The packaged Vulkan loader for tests that open a device themselves (empty without one).
+if(DEFINED BLOOM_DEPENDENCY_PREFIX AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/${BLOOM_VULKAN_LOADER_PREFIX_DIR}/${BLOOM_VULKAN_LOADER_FILE_NAME}")
+    set(bloom_ui_test_loader_args
+        --loader "${BLOOM_DEPENDENCY_PREFIX}/${BLOOM_VULKAN_LOADER_PREFIX_DIR}/${BLOOM_VULKAN_LOADER_FILE_NAME}")
+else()
+    set(bloom_ui_test_loader_args)
+endif()
+# Tests below marked COMPOSITOR need a real Wayland session: under the offscreen platform they
+# print a skip and exit successfully, so they are registered only with
+# BLOOM_ENABLE_COMPOSITOR_TESTS, to be run inside a private compositor.
+
 add_executable(bloom_editor_area_chrome_test
     editor_area_chrome_tests.cpp
 )
@@ -783,10 +794,11 @@ bloom_add_test(
 if(TARGET bloom_ui_gpu_presentation_target_test)
     bloom_add_test(
         NAME bloom.ui.gpu_presentation_target
-        COMMAND bloom_ui_gpu_presentation_target_test
+        COMMAND bloom_ui_gpu_presentation_target_test ${bloom_ui_test_loader_args}
         LABELS ui integration gpu
         TIMEOUT 120
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT "QT_QPA_PLATFORM=wayland"
+        COMPOSITOR
     )
 endif()
 
@@ -2493,10 +2505,11 @@ target_link_libraries(bloom_ui_viewer_gpu_resident_native_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_ui_viewer_gpu_resident_native_test)
 bloom_add_test(
     NAME bloom.ui.viewer_gpu_resident_native
-    COMMAND bloom_ui_viewer_gpu_resident_native_test
+    COMMAND bloom_ui_viewer_gpu_resident_native_test ${bloom_ui_test_loader_args}
     LABELS ui integration gpu presentation
     TIMEOUT 300
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    ENVIRONMENT "QT_QPA_PLATFORM=wayland"
+    COMPOSITOR
 )
 
 # The typed app-activation bootstrap helper: budget/cap alignment, additive cache limits, capability
@@ -2546,10 +2559,11 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     bloom_enable_strict_floating_point(bloom_ui_gpu_resident_service_chain_test)
     bloom_add_test(
         NAME bloom.ui.gpu_resident_service_chain
-        COMMAND bloom_ui_gpu_resident_service_chain_test
+        COMMAND bloom_ui_gpu_resident_service_chain_test ${bloom_ui_test_loader_args}
         LABELS ui gpu resident media
         TIMEOUT 300
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT "QT_QPA_PLATFORM=wayland"
+        COMPOSITOR
     )
 
     add_executable(bloom_ui_gpu_processing_phase_native_test gpu_processing_phase_native_tests.cpp)
@@ -2680,7 +2694,8 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                 ${bloom_ui_gpu_viewer_service_chain_loader_args}
         LABELS ui gpu viewer resident
         TIMEOUT 300
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT "QT_QPA_PLATFORM=wayland"
+        COMPOSITOR
     )
 
     # Genuine GPU route-proof writers. These are the real production viewer and RAM-preview
@@ -2705,6 +2720,8 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     bloom_enable_warnings(bloom_ui_gpu_viewer_route_proof_test)
     bloom_enable_strict_floating_point(bloom_ui_gpu_viewer_route_proof_test)
     if(bloom_preview_proofs_resident)
+        # Stays registered without a compositor (where it prints a skip and passes): it is a
+        # fixture of bloom.runtime.gpu_coverage_native_acceptance, which runs it inside one.
         bloom_add_test(
             NAME bloom.ui.gpu_viewer_route_proof
             COMMAND bloom_ui_gpu_viewer_route_proof_test
@@ -2713,8 +2730,10 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             LABELS ui gpu viewer route-proof
             TIMEOUT 300
         )
-        set_tests_properties(bloom.ui.gpu_viewer_route_proof
-            PROPERTIES FIXTURES_REQUIRED gpu_route_proofs FIXTURES_SETUP gpu_route_proof_viewer)
+        if(TEST bloom.ui.gpu_viewer_route_proof)
+            set_tests_properties(bloom.ui.gpu_viewer_route_proof
+                PROPERTIES FIXTURES_REQUIRED gpu_route_proofs FIXTURES_SETUP gpu_route_proof_viewer)
+        endif()
     endif()
 
     # #524 and #514: node-specific interactive-viewer evidence. Each scenario drives the production
@@ -2759,6 +2778,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                     ${bloom_ui_gpu_viewer_service_chain_loader_args}
             LABELS ui gpu viewer node-evidence
             TIMEOUT 300
+            COMPOSITOR
         )
     endforeach()
     # #511, #528, #519, #527 and #510: a cold then a warm RAM preview over four keyed frames through the real RAM
@@ -2781,6 +2801,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                     ${bloom_ui_gpu_viewer_service_chain_loader_args}
             LABELS ui gpu viewer node-evidence
             TIMEOUT 300
+            COMPOSITOR
         )
     endforeach()
     # #524: the node's frame as the process's first, through the application's lazily resolving
@@ -2795,6 +2816,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                     ${bloom_ui_gpu_viewer_service_chain_loader_args}
             LABELS ui gpu viewer node-evidence
             TIMEOUT 300
+            COMPOSITOR
         )
     endforeach()
 
@@ -2811,6 +2833,8 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     bloom_enable_warnings(bloom_ui_gpu_ram_preview_route_proof_test)
     bloom_enable_strict_floating_point(bloom_ui_gpu_ram_preview_route_proof_test)
     if(bloom_preview_proofs_resident)
+        # Stays registered without a compositor (where it prints a skip and passes): it is a
+        # fixture of bloom.runtime.gpu_coverage_native_acceptance, which runs it inside one.
         bloom_add_test(
             NAME bloom.ui.gpu_ram_preview_route_proof
             COMMAND bloom_ui_gpu_ram_preview_route_proof_test
@@ -2819,8 +2843,10 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             LABELS ui gpu ram route-proof
             TIMEOUT 300
         )
-        set_tests_properties(bloom.ui.gpu_ram_preview_route_proof
-            PROPERTIES FIXTURES_REQUIRED gpu_route_proofs FIXTURES_SETUP gpu_route_proof_ram)
+        if(TEST bloom.ui.gpu_ram_preview_route_proof)
+            set_tests_properties(bloom.ui.gpu_ram_preview_route_proof
+                PROPERTIES FIXTURES_REQUIRED gpu_route_proofs FIXTURES_SETUP gpu_route_proof_ram)
+        endif()
     endif()
     # ADR 0028 animated masks through the same real RAM preview chain: a mask path keyed on 24
     # frames, the scene builder carrying the shared preparer from this target's packaged shader
@@ -2835,6 +2861,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                 ${bloom_ui_gpu_viewer_service_chain_loader_args}
         LABELS ui gpu ram
         TIMEOUT 300
+        COMPOSITOR
     )
     # #344 #530 #509: the path nodes (a keyed Trim Path, Boolean Paths, a dashed Path Stroke and its
     # core through Glow) in the interactive viewer and RAM preview on the real service: GPU-resident
@@ -2845,6 +2872,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                 ${bloom_ui_gpu_viewer_service_chain_loader_args}
         LABELS ui gpu ram
         TIMEOUT 300
+        COMPOSITOR
     )
     # #349: Image Statistics (driving Levels) and Denoise with Auto strength in the interactive
     # viewer and RAM preview on the real service, each frame's statistics measured once on the
@@ -2856,6 +2884,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                 ${bloom_ui_gpu_viewer_service_chain_loader_args}
         LABELS ui gpu ram
         TIMEOUT 300
+        COMPOSITOR
     )
 
     # Independent native acceptance for direct manipulation ON the genuine GPU-resident viewer

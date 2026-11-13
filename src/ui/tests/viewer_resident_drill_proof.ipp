@@ -98,8 +98,8 @@ bool exerciseResidentDrill(Expectations& checks, ui::CompositionSession& session
 
     const auto residentAt = [&](const std::vector<document::LayerId>& level,
                                 const std::string& label) {
-        const bool ok = waitUntil(
-            [&] {
+        const bool ok =
+            awaitProof("the viewer presents the resident frame for the drill level", [&] {
                 const auto frame = controller.state().frame;
                 const auto actual = viewer.actualDisplayDescriptor();
                 return isResidentFrame(frame) && viewer.residentPresentationActiveForTest() &&
@@ -108,8 +108,7 @@ bool exerciseResidentDrill(Expectations& checks, ui::CompositionSession& session
                        actual->frame && actual->frame->desiredIdentity() == frame->desiredIdentity() &&
                        viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current &&
                        viewer.mappingForTest().has_value();
-            },
-            30s);
+            });
         checks.expect(ok, label + ": a GPU-resident frame for this level is presented");
         return ok;
     };
@@ -117,13 +116,12 @@ bool exerciseResidentDrill(Expectations& checks, ui::CompositionSession& session
         return false;
 
     QWidget* container = nullptr;
-    checks.expect(waitUntil(
-                      [&] {
-                          container = nativeContainer(viewer);
-                          return container != nullptr && container->isVisible() &&
-                                 !container->geometry().isEmpty();
-                      },
-                      15s),
+    checks.expect(awaitProof("the resident Vulkan container is visible",
+                             [&] {
+                                 container = nativeContainer(viewer);
+                                 return container != nullptr && container->isVisible() &&
+                                        !container->geometry().isEmpty();
+                             }),
                   "the resident Vulkan container is visible");
     QWindow* window = container ? nativeVulkanWindow(container, &host) : nullptr;
     checks.expect(window != nullptr, "the presenter owns its Vulkan window");
@@ -133,11 +131,15 @@ bool exerciseResidentDrill(Expectations& checks, ui::CompositionSession& session
     // A press needs the painted mapping of the current selection overlay, as an artist's click
     // lands after the frame that shows the last change.
     const auto screenOf = [&](const document::Vec2d point) {
-        static_cast<void>(waitUntil([&] { return viewer.mappingForTest().has_value(); }, 10s));
+        checks.expect(awaitProof("the viewer has painted the selection overlay mapping",
+                                 [&] { return viewer.mappingForTest().has_value(); }),
+                      "the selection overlay mapping is painted before the press");
         return viewer.mappingForTest()->toScreen(point);
     };
     const auto waitPick = [&] {
-        static_cast<void>(waitUntil([&] { return !viewer.drillPickPendingForTest(); }, 10s));
+        checks.expect(awaitProof("the drill pick is no longer pending",
+                                 [&] { return !viewer.drillPickPendingForTest(); }),
+                      "the drill pick resolves");
         QApplication::processEvents();
     };
     const auto doubleClick = [&](const document::Vec2d point) {

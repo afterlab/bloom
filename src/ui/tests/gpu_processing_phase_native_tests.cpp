@@ -125,14 +125,16 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                 return actualCpuStage(snapshot, identity, limit, overrides, context);
             },
             fixture.productionCpuFallback(referenceDisplay), legacyOptions);
-        checks.expect(waitUntil(
-                          [&] {
-                              return legacyService.status().state !=
-                                     GpuPreviewDisplayServiceState::Initializing;
-                          },
-                          90s) &&
-                          legacyService.status().state == GpuPreviewDisplayServiceState::Ready,
-                      "legacy native owner reports capacity independently before CPU preparation");
+        checks.expect(
+            awaitProof(
+                "legacy native owner reports capacity independently before CPU preparation",
+                [&] {
+                    return legacyService.status().state !=
+                           GpuPreviewDisplayServiceState::Initializing;
+                },
+                90s) &&
+                legacyService.status().state == GpuPreviewDisplayServiceState::Ready,
+            "legacy native owner reports capacity independently before CPU preparation");
         sample.process.sampledAt = runtime::GpuProcessingPhasePolicy::Clock::now();
         sample.sampleSerial += 1;
         policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
@@ -159,7 +161,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                       "released phase admits real1080 CPU-prepared pixels with genuine Neutral "
                       "native display");
         checks.expect(
-            waitUntil([&] { return policy->snapshot().reservations.admittedPhases == 0; }, 15s) &&
+            awaitProof("legacy fence-proven phase releases after stage storage disposal",
+                       [&] { return policy->snapshot().reservations.admittedPhases == 0; }) &&
                 policy->snapshot().reservations.unprovenPhases == 0,
             "legacy fence-proven phase releases after stage storage disposal");
         const auto legacyCore =
@@ -172,8 +175,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                 faultSubmission.accepted() ? awaitResult(faultSubmission.handle) : std::nullopt;
             checks.expect(
                 faultResult && faultResult->state() == TaskState::Failed &&
-                    waitUntil([&] { return policy->snapshot().reservations.admittedPhases == 0; },
-                              15s),
+                    awaitProof(
+                        "pre-begin/post-Ready exceptions terminally fail without stranded phase",
+                        [&] { return policy->snapshot().reservations.admittedPhases == 0; }),
                 "pre-begin/post-Ready exceptions terminally fail without stranded phase");
             auto healthySubmission =
                 legacyService.submit(TaskRequest("legacy exception recovery", cpuOwner),
@@ -197,12 +201,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                 policy->snapshot().reservations.unprovenPhases == 1,
             "post-submit exception terminates stage but retains exact unknown generation quota");
         legacyService.beginShutdown();
-        checks.expect(waitUntil(
-                          [&] {
-                              return legacyService.status().state ==
-                                     GpuPreviewDisplayServiceState::Stopped;
-                          },
-                          15s),
+        checks.expect(awaitProof("legacy native service retires before resident fixture",
+                                 [&] {
+                                     return legacyService.status().state ==
+                                            GpuPreviewDisplayServiceState::Stopped;
+                                 }),
                       "legacy native service retires before resident fixture");
     }
     checks.expect(policy->snapshot().reservations.admittedPhases == 0,
@@ -219,7 +222,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                                      fixture.productionCpuStage(),
                                      fixture.productionCpuFallback(referenceDisplay), options);
     checks.expect(
-        waitUntil(
+        awaitProof(
+            "cold owner reports capacity and reaches genuine native readiness",
             [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; },
             90s) &&
             service.status().state == GpuPreviewDisplayServiceState::Ready,
@@ -267,10 +271,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     checks.expect(policy->snapshot().reservations.admittedPhases == 0,
                   "successful publication releases both phase quotas before terminal delivery");
     service.beginShutdown();
-    checks.expect(
-        waitUntil([&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; },
-                  15s),
-        "the native phase service retires without an unproven phase");
+    checks.expect(awaitProof("the native phase service retires without an unproven phase",
+                             [&] {
+                                 return service.status().state ==
+                                        GpuPreviewDisplayServiceState::Stopped;
+                             }),
+                  "the native phase service retires without an unproven phase");
     if (checks.failures() != 0)
         return 1;
     std::cout << "PASS: 1080p solid/text native phase registry refusal and recovery\n";

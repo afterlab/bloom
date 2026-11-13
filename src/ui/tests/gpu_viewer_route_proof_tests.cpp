@@ -148,7 +148,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         scheduler, fixture.productionGpuStage(), fixture.productionCpuStage(),
         fixture.productionCpuFallback(displayPreparer), serviceOptions(options.loader));
 
-    const bool terminal = waitUntil(
+    const bool terminal = awaitProof(
+        "the GPU preview service leaves Initializing",
         [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; }, 90s);
     const auto status = service.status();
     const bool residentReady =
@@ -200,14 +201,13 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     viewer->setGpuPresentationDependencies(client, &scheduler, options.loader.string(), 1.0);
     controller.requestRefresh();
 
-    const bool presented = waitUntil(
-        [&] {
+    const bool presented =
+        awaitProof("the viewer presents the GPU-resident frame", [&] {
             const auto frame = controller.state().frame;
             return frame != nullptr &&
                    frame->provenance().provider == runtime::PreviewDisplayProvider::GpuResident &&
                    viewer->residentPresentationActiveForTest();
-        },
-        30s);
+        });
     const auto displayed = controller.state().frame;
     checks.expect(presented && displayed != nullptr, "the controller produced a resident frame");
     checks.expect(displayed != nullptr && displayed->provenance().provider ==
@@ -271,12 +271,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const auto beforeWarm = service.status().counters;
     const auto presentBefore = viewer->gpuPresentAcceptedCountForTest();
     controller.requestRefresh();
-    const bool warmPresented = waitUntil(
-        [&] {
+    const bool warmPresented =
+        awaitProof("the warm viewer refresh is accepted for presentation", [&] {
             return viewer->gpuPresentAcceptedCountForTest() > presentBefore &&
                    viewer->residentPresentationActiveForTest();
-        },
-        20s);
+        });
     const auto afterWarm = service.status().counters;
     checks.expect(warmPresented, "the warm viewer refresh re-presented");
     checks.expect(afterWarm.nativeDispatches == beforeWarm.nativeDispatches,
@@ -296,7 +295,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             checks.expect(generation == 91, "the viewer mutation generation is echoed");
             viewerRetired = result.safeToMutate;
         }));
-    checks.expect(waitUntil([&] { return viewerRetired; }, 20s),
+    checks.expect(awaitProof("the ViewerEditor native surface retired before teardown",
+                             [&] { return viewerRetired; }),
                   "the ViewerEditor native surface retired before teardown");
     viewer->setGpuPresentationDependencies(nullptr, nullptr, std::string{}, 1.0);
     viewer.reset();
@@ -304,10 +304,16 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
 
     controller.beginShutdown();
     bridge.beginShutdown();
-    (void)waitUntil([&] { return scheduler.isQuiescent(); }, 10s);
+    checks.expect(awaitProof("the preview scheduler is quiescent at shutdown",
+                             [&] { return scheduler.isQuiescent(); }),
+                  "the scheduler drains at shutdown");
     service.beginShutdown();
-    (void)waitUntil(
-        [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; }, 30s);
+    checks.expect(awaitProof("the GPU preview service reaches Stopped",
+                             [&] {
+                                 return service.status().state ==
+                                        GpuPreviewDisplayServiceState::Stopped;
+                             }),
+                  "the GPU preview service stops at shutdown");
     checks.expect(service.status().counters.fullFrameReadbacks == 0U,
                   "the whole viewer run performed no full-frame readback");
     std::error_code ignored;

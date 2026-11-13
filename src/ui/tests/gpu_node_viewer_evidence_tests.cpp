@@ -569,7 +569,10 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         const auto path = std::filesystem::absolute(options.project);
         projectHost.setOpenPathProvider([&] { return std::optional(path); });
         projectHost.requestOpen();
-        if (!waitUntil([&] { return replaced || outcome.has_value(); }, 120s) || !replaced) {
+        if (!awaitProof(
+                "the project open finishes", [&] { return replaced || outcome.has_value(); },
+                120s) ||
+            !replaced) {
             std::cerr << "could not open the project: " << message.toStdString() << '\n';
             return 1;
         }
@@ -617,7 +620,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                       "the baseline layer is created");
     }
 
-    const bool terminal = waitUntil(
+    const bool terminal = awaitProof(
+        "the GPU preview service leaves Initializing",
         [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; }, 90s);
     const auto status = service.status();
     const bool residentReady =
@@ -677,7 +681,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         const auto before = service.status().counters;
         const auto previous = controller.state().frame;
         controller.requestRefresh();
-        const bool presented = waitUntil(
+        const bool presented = awaitProof(
+            "the viewer presents a new GPU-resident frame",
             [&] {
                 const auto frame = controller.state().frame;
                 return frame != nullptr && frame != previous &&
@@ -798,8 +803,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const auto beforeWarm = service.status().counters;
     const auto presentBefore = viewer->gpuPresentAcceptedCountForTest();
     controller.requestRefresh();
-    const bool warm = waitUntil(
-        [&] { return viewer->gpuPresentAcceptedCountForTest() > presentBefore; }, 20s);
+    const bool warm = awaitProof("the warm viewer refresh is accepted for presentation", [&] {
+        return viewer->gpuPresentAcceptedCountForTest() > presentBefore;
+    });
     const auto afterWarm = service.status().counters;
     checks.expect(warm, "the warm viewer refresh re-presented");
     checks.expect(afterWarm.nativeDispatches == beforeWarm.nativeDispatches,
@@ -827,8 +833,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         93, [&](const std::uint64_t, const ui::EditorNativeSurface::PrepareResult& result) {
             retired = result.safeToMutate;
         }));
-    checks.expect(waitUntil([&] { return retired; }, 20s),
-                  "the viewer native surface retired before teardown");
+    checks.expect(
+        awaitProof("the viewer native surface retired before teardown", [&] { return retired; }),
+        "the viewer native surface retired before teardown");
     viewer->setGpuPresentationDependencies(nullptr, nullptr, std::string{}, 1.0);
     viewer.reset();
     host.reset();
@@ -844,7 +851,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         frameCache->clear();
         const auto beforeCold = service.status().counters;
         ram.start();
-        const bool coldComplete = waitUntil(
+        const bool coldComplete = awaitProof(
+            "the cold RAM fill terminates",
             [&] {
                 static auto last = std::chrono::steady_clock::now();
                 if (std::chrono::steady_clock::now() - last > 5s) {
@@ -931,8 +939,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         checks.expect(verified == ramFrameCount, "every RAM frame was held to the CPU oracle");
         const auto ramBeforeWarm = service.status().counters;
         ram.start();
-        const bool warmComplete = waitUntil(
-            [&] { return !ram.isCaching() && ram.cachedFrameCount() == ramFrameCount; }, 30s);
+        const bool warmComplete = awaitProof("the warm RAM replay completes from the cache", [&] {
+            return !ram.isCaching() && ram.cachedFrameCount() == ramFrameCount;
+        });
         const auto ramAfterWarm = service.status().counters;
         ramWarmDispatches = ramAfterWarm.nativeDispatches - ramBeforeWarm.nativeDispatches;
         checks.expect(warmComplete, "the warm RAM replay completed from the cache");
@@ -953,10 +962,16 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                   << " ramWarmDispatches=" << ramWarmDispatches << '\n';
     controller.beginShutdown();
     bridge.beginShutdown();
-    (void)waitUntil([&] { return scheduler.isQuiescent(); }, 10s);
+    checks.expect(awaitProof("the preview scheduler is quiescent at shutdown",
+                             [&] { return scheduler.isQuiescent(); }),
+                  "the scheduler drains at shutdown");
     service.beginShutdown();
-    (void)waitUntil(
-        [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; }, 30s);
+    checks.expect(awaitProof("the GPU preview service reaches Stopped",
+                             [&] {
+                                 return service.status().state ==
+                                        GpuPreviewDisplayServiceState::Stopped;
+                             }),
+                  "the GPU preview service stops at shutdown");
     std::error_code ignored;
     std::filesystem::remove_all(mediaDirectory, ignored);
     std::filesystem::remove_all(settingsRoot, ignored);

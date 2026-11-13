@@ -4,7 +4,9 @@ using PackedStressClock = std::chrono::steady_clock;
 
 template <typename Value>
 Value packedStressWorkerResult(std::future<Value>& future, const std::chrono::seconds timeout) {
-    if (!waitUntil([&] { return future.wait_for(0s) == std::future_status::ready; }, timeout)) {
+    if (!awaitProof(
+            "the sustained worker future is ready",
+            [&] { return future.wait_for(0s) == std::future_status::ready; }, timeout)) {
         // A fixture failure must neither join a live worker on the UI nor let its borrowed
         // references outlive the fixture. Terminate this isolated test process on that failure.
         std::cerr << "FAIL: sustained worker exceeded its deadline\n" << std::flush;
@@ -26,8 +28,9 @@ void packedStressLatency(Expectations& checks, const char* operation,
                          const PackedStressClock::time_point started, ui::ViewerEditor& viewer,
                          ui::CompositionPreviewController& controller,
                          ui::CompositionSession& session) {
-    const bool current =
-        waitUntil([&] { return packedStressCurrent(viewer, controller, session); }, 15s);
+    const bool current = awaitProof("the viewer reaches the exact genuine GPU-packed paint", [&] {
+        return packedStressCurrent(viewer, controller, session);
+    });
     const auto elapsed =
         std::chrono::duration<double, std::milli>(PackedStressClock::now() - started);
     checks.expect(current, "loaded interaction reaches the exact genuine GPU-packed paint");
@@ -80,7 +83,8 @@ void packedStressInput(Expectations& checks, Fixture& fixture, runtime::TaskSche
     checks.expect(!session.transformInteractionActive() && !ram.isCaching(),
                   "committed edit cancels old RAM range instead of mixing revisions");
     checks.expect(session.undo(), "loaded drag is one undoable transaction");
-    checks.expect(waitUntil([&] { return packedStressCurrent(viewer, controller, session); }, 15s),
+    checks.expect(awaitProof("loaded undo restores coherent pixels and outline",
+                             [&] { return packedStressCurrent(viewer, controller, session); }),
                   "loaded undo restores coherent pixels and outline");
 }
 
@@ -109,7 +113,8 @@ void exercisePackedStress(Expectations& checks, Fixture& fixture, const TestOpti
     const auto purge = [&] {
         controller.setCachePurgeGate(true);
         controller.purgePreviewCache();
-        checks.expect(waitUntil([&] { return scheduler.isQuiescent(); }, 30s),
+        checks.expect(awaitProof("purge gates producers and awaits real task retirement",
+                                 [&] { return scheduler.isQuiescent(); }),
                       "purge gates producers and awaits real task retirement");
         auto cleared = std::async(std::launch::async, [&] {
             fixture.evaluator.operationCache()->clearOperations();
@@ -121,21 +126,23 @@ void exercisePackedStress(Expectations& checks, Fixture& fixture, const TestOpti
                       "media/native purge and large frees run off the UI thread");
         const auto purgedAt = PackedStressClock::now();
         checks.expect(
-            waitUntil([&] { return service.status().allocatorMemorySampledAt >= purgedAt; }, 3s),
+            awaitProof("settled allocator/driver report is actually sampled after purge",
+                       [&] { return service.status().allocatorMemorySampledAt >= purgedAt; }),
             "settled allocator/driver report is actually sampled after purge");
-        checks.expect(waitUntil(
+        checks.expect(awaitProof(
+                          "purge settles actual retirement while preserving one displayed picture",
                           [&] {
                               const auto claims = policy->snapshot().reservations;
                               return claims.admittedPhases == 0 && claims.unprovenPhases == 0 &&
                                      claims.ownedPackedHostAllocations <= 1 &&
                                      service.status().counters.packedRetainedStagingBytes == 0;
-                          },
-                          30s),
+                          }),
                       "purge settles actual retirement while preserving one displayed picture");
     };
     purge();
     controller.setCachePurgeGate(false);
-    checks.expect(waitUntil([&] { return packedStressCurrent(viewer, controller, session); }, 15s),
+    checks.expect(awaitProof("fresh foreground recovers after explicit source refresh",
+                             [&] { return packedStressCurrent(viewer, controller, session); }),
                   "fresh foreground recovers after explicit source refresh");
 
     // A real final-render owner and actual EXR writer compete with preview, with one final readback
@@ -208,12 +215,11 @@ void exercisePackedStress(Expectations& checks, Fixture& fixture, const TestOpti
         evaluator->beginShutdown();
         return result;
     });
-    checks.expect(waitUntil(
-                      [&] {
-                          return exportBusy.load() ||
-                                 exporting.wait_for(0s) == std::future_status::ready;
-                      },
-                      30s) &&
+    checks.expect(awaitProof("real final-render/export competition starts",
+                             [&] {
+                                 return exportBusy.load() ||
+                                        exporting.wait_for(0s) == std::future_status::ready;
+                             }) &&
                       exportBusy.load(),
                   "real final-render/export competition starts");
     ram.start();
@@ -221,7 +227,8 @@ void exercisePackedStress(Expectations& checks, Fixture& fixture, const TestOpti
     viewer.resize(880, 560);
     QApplication::processEvents();
     viewer.resize(480, 360);
-    checks.expect(waitUntil([&] { return packedStressCurrent(viewer, controller, session); }, 15s),
+    checks.expect(awaitProof("loaded resize preserves exact painted identity",
+                             [&] { return packedStressCurrent(viewer, controller, session); }),
                   "loaded resize preserves exact painted identity");
     stopExport.store(true);
     const auto exportResult = packedStressWorkerResult(exporting, 40s);
@@ -266,15 +273,16 @@ void exercisePackedStress(Expectations& checks, Fixture& fixture, const TestOpti
                           settled.ownedNativeBufferBytes <= settledBaseline->ownedNativeBufferBytes,
                       "equivalent settled purge claims never grow across ten cycles");
         controller.setCachePurgeGate(false);
-        checks.expect(
-            waitUntil([&] { return packedStressCurrent(viewer, controller, session); }, 20s),
-            "cycle foreground reaches genuine Current before fill");
+        checks.expect(awaitProof("cycle foreground reaches genuine Current before fill",
+                                 [&] { return packedStressCurrent(viewer, controller, session); }),
+                      "cycle foreground reaches genuine Current before fill");
         const auto before = service.status().counters;
         const auto started = PackedStressClock::now();
         std::uint64_t peakHostClaims = 0, peakDeviceClaims = 0;
         std::size_t peakPhases = 0;
         ram.start();
-        checks.expect(waitUntil(
+        checks.expect(awaitProof(
+                          "equivalent fresh cycle fills the whole retained range",
                           [&] {
                               const auto active = policy->snapshot().reservations;
                               peakHostClaims = std::max(peakHostClaims, active.totalHostClaimBytes);
@@ -287,16 +295,17 @@ void exercisePackedStress(Expectations& checks, Fixture& fixture, const TestOpti
                           ram.canAutoPlay(),
                       "equivalent fresh cycle fills the whole retained range");
         const auto filledAt = PackedStressClock::now();
-        checks.expect(waitUntil(
+        checks.expect(awaitProof(
+                          "diagnostic transfer sample resolves without gating painted pixels",
                           [&] {
                               const auto timing = service.status().packedTransferQueueTiming.status;
                               return timing != render::GpuQueueTimingStatus::Pending &&
                                      timing != render::GpuQueueTimingStatus::Active;
-                          },
-                          1s),
+                          }),
                       "diagnostic transfer sample resolves without gating painted pixels");
         checks.expect(
-            waitUntil([&] { return service.status().allocatorMemorySampledAt >= filledAt; }, 3s),
+            awaitProof("post-fill allocator/driver report follows completed native work",
+                       [&] { return service.status().allocatorMemorySampledAt >= filledAt; }),
             "post-fill allocator/driver report follows completed native work");
         const auto afterStatus = service.status();
         const auto after = afterStatus.counters;
@@ -369,7 +378,8 @@ void exercisePackedStress(Expectations& checks, Fixture& fixture, const TestOpti
     observedPaintGapsMs.reserve(60ULL * rate);
     std::optional<core::RationalTime> previous;
     checks.expect(
-        waitUntil(
+        awaitProof(
+            "real retained transport remains active for sixty seconds",
             [&] {
                 const auto shown = viewer.displayedFrameForTest();
                 if (shown && (!previous || *previous != shown->desiredIdentity().time)) {
@@ -395,7 +405,8 @@ void exercisePackedStress(Expectations& checks, Fixture& fixture, const TestOpti
             65s),
         "real retained transport remains active for sixty seconds");
     playback.pause();
-    checks.expect(waitUntil([&] { return packedStressCurrent(viewer, controller, session); }, 5s),
+    checks.expect(awaitProof("sustained playback settles at exact requested paint",
+                             [&] { return packedStressCurrent(viewer, controller, session); }),
                   "sustained playback settles at exact requested paint");
     const auto afterPlayback = service.status().counters;
     const auto afterClaims = policy->snapshot().reservations;
@@ -445,7 +456,9 @@ void exercisePackedStress(Expectations& checks, Fixture& fixture, const TestOpti
     packedStressLatency(checks, "projectReplacementDuringFill", replacementStarted, viewer,
                         controller, session);
     session.rebind(originalDocument, originalCommands, originalComposition);
-    checks.expect(waitUntil([&] { return packedStressCurrent(viewer, controller, session); }, 20s),
-                  "restored project rejects late replacement products and paints its own image");
+    checks.expect(
+        awaitProof("restored project rejects late replacement products and paints its own image",
+                   [&] { return packedStressCurrent(viewer, controller, session); }),
+        "restored project rejects late replacement products and paints its own image");
 }
 } // namespace

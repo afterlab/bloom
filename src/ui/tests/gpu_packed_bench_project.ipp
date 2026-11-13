@@ -969,7 +969,9 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
             }
         }
         for (const auto& target : probeTargets) {
-            if (waitUntil([&] { return !ram.isCaching(); }, 1500ms))
+            // A probe, not a requirement: "still filling after 1.5 s" is the answer that makes the
+            // loop scrub the viewer once more; the fill's completion is awaited below.
+            if (heldWithin([&] { return !ram.isCaching(); }, 1500ms))
                 break;
             const auto shown = benchScrubPass(session, viewer, {target});
             viewerProbeSeconds.insert(viewerProbeSeconds.end(), shown.begin(), shown.end());

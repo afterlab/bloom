@@ -35,6 +35,7 @@
 #include <string>
 
 namespace {
+using bloom::test_support::awaitQtCondition;
 
 using namespace bloom;
 using namespace bloom::ui::ram_pipeline_test;
@@ -51,28 +52,32 @@ std::shared_ptr<runtime::GpuProcessingPhasePolicy> sampledServiceRoot() {
         policy->applyHostSample(state, ledger.physicalByteBudget(), at);
         return policy;
     });
-    if (!waitUntil(
-            [&] { return sampled.wait_for(std::chrono::seconds(0)) == std::future_status::ready; }))
+    if (!awaitQtCondition("the off-UI processing sample finishes", [&] {
+            return sampled.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+        }))
         throw std::runtime_error("Real off-UI processing sample did not finish.");
     return sampled.get();
 }
 void phaseConservation(Expectations& expectations,
                        const std::shared_ptr<runtime::GpuProcessingPhasePolicy>& policy) {
-    expectations.expect(waitUntil([&] {
-                            const auto root = policy->snapshot().reservations;
-                            return root.admittedPhases == 0 && root.unprovenPhases == 0 &&
-                                   root.hostReservedBytes == 0 && root.deviceReservedBytes == 0 &&
-                                   root.ownedPackedHostBytes == 0 &&
-                                   root.ownedPackedHostAllocations == 0 &&
-                                   root.totalHostClaimBytes == 0;
-                        }) &&
-                            policy->snapshot().reservations.peakHostReservedBytes > 0,
-                        "shared real root admitted actual work and releases all phase claims");
+    expectations.expect(
+        awaitQtCondition("shared real root admitted actual work and releases all phase claims",
+                         [&] {
+                             const auto root = policy->snapshot().reservations;
+                             return root.admittedPhases == 0 && root.unprovenPhases == 0 &&
+                                    root.hostReservedBytes == 0 && root.deviceReservedBytes == 0 &&
+                                    root.ownedPackedHostBytes == 0 &&
+                                    root.ownedPackedHostAllocations == 0 &&
+                                    root.totalHostClaimBytes == 0;
+                         }) &&
+            policy->snapshot().reservations.peakHostReservedBytes > 0,
+        "shared real root admitted actual work and releases all phase claims");
 }
 
 void testGpuServiceSeamAdmitsBoth(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Service Seam", timeAt(3, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the foreground frame settles",
+                                         [&] { return isReady(fixture.controller); }),
                         "the foreground frame settles");
     const auto foregroundFrame = fixture.controller.state().frame;
     if (!foregroundFrame) {
@@ -106,9 +111,11 @@ void testGpuServiceSeamAdmitsBoth(Expectations& expectations) {
         },
         std::move(fallback), options);
     expectations.expect(
-        waitUntil([&] {
-            return service.status().state != runtime::GpuPreviewDisplayServiceState::Initializing;
-        }) &&
+        awaitQtCondition("a missing native loader honestly reports the service Unavailable",
+                         [&] {
+                             return service.status().state !=
+                                    runtime::GpuPreviewDisplayServiceState::Initializing;
+                         }) &&
             service.status().state == runtime::GpuPreviewDisplayServiceState::Unavailable,
         "a missing native loader honestly reports the service Unavailable");
     expectations.expect(service.status().diagnostic.code ==
@@ -126,9 +133,11 @@ void testGpuServiceSeamAdmitsBoth(Expectations& expectations) {
             return service.submit(std::move(request), snapshot, identity, limit, overrides);
         });
     ram.start();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
-                            ram.cachedFrameCount() == 3 && ram.totalFrameCount() == 3,
-                        "the real service seam caches the whole range on the CPU path");
+    expectations.expect(
+        awaitQtCondition("the real service seam caches the whole range on the CPU path",
+                         [&] { return !ram.isCaching(); }) &&
+            ram.cachedFrameCount() == 3 && ram.totalFrameCount() == 3,
+        "the real service seam caches the whole range on the CPU path");
     expectations.expect(calls->load() >= 1 && ram.peakInFlightFrames() == 1,
                         "the production service default prepares one frame at a time");
     expectations.expect(preparations->load() == 3,
@@ -159,7 +168,8 @@ void testGpuServiceSeamAdmitsBoth(Expectations& expectations) {
 void testGpuServiceEnabledOverlapsStages(Expectations& expectations,
                                          const std::filesystem::path& loader) {
     SessionFixture fixture(makeTestProject("RAM Service Enabled", timeAt(6, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the foreground frame settles",
+                                         [&] { return isReady(fixture.controller); }),
                         "the foreground frame settles");
     const auto foregroundFrame = fixture.controller.state().frame;
     if (!foregroundFrame) {
@@ -214,7 +224,7 @@ void testGpuServiceEnabledOverlapsStages(Expectations& expectations,
     runtime::GpuPreviewDisplayService service(fixture.scheduler, std::move(countingStage),
                                               std::move(fallback), options);
 
-    const bool terminal = waitUntil([&] {
+    const bool terminal = awaitQtCondition("the GPU preview service leaves Initializing", [&] {
         return service.status().state != runtime::GpuPreviewDisplayServiceState::Initializing;
     });
     const bool ready =
@@ -244,9 +254,11 @@ void testGpuServiceEnabledOverlapsStages(Expectations& expectations,
             ui::RamPreviewPipeline::kMaxInFlight);
         ram.start();
         // The barrier is a hard rendezvous: a passing completion is itself the overlap proof.
-        expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
-                                ram.cachedFrameCount() == ram.totalFrameCount(),
-                            "the enabled service caches the whole range through the submit seam");
+        expectations.expect(
+            awaitQtCondition("the enabled service caches the whole range through the submit seam",
+                             [&] { return !ram.isCaching(); }) &&
+                ram.cachedFrameCount() == ram.totalFrameCount(),
+            "the enabled service caches the whole range through the submit seam");
         expectations.expect(stageBarrier->peak() >= 2,
                             "the enabled service ran two CPU stages at the same time, not two "
                             "serially-queued items");

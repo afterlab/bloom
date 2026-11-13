@@ -37,6 +37,7 @@
 // of its first and last frames.
 
 #include "await.hpp"
+#include "fixed_memory_budget.hpp"
 #include "gpu_preview_test_phase.hpp"
 #include "gpu_route_proof_harness_support.hpp"
 
@@ -594,6 +595,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const auto statisticsLog = std::make_shared<StatisticsLog>();
     if (options.imageStatistics) {
         runtime::GpuProcessFrameEvaluatorOptions evaluatorOptions;
+        evaluatorOptions.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
         evaluatorOptions.enabled = true;
         evaluatorOptions.loaderPath = options.loader;
         evaluatorOptions.processingPhasePolicy = processingPolicy;

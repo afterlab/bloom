@@ -103,6 +103,7 @@
 #include <utility>
 
 namespace {
+using bloom::test_support::awaitQtCondition;
 
 using namespace std::chrono_literals;
 
@@ -301,12 +302,6 @@ bloom::runtime::TaskSchedulerConfig testSchedulerConfig() {
             .terminalHistoryCapacity = 32,
             .diagnosticsPerTask = 8,
             .groupRegistryCapacity = 8};
-}
-
-// Unnamed wait for the shared test fragments included below that are not converted yet; the
-// converted waits in this file call awaitQtCondition with a name.
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    return bloom::test_support::awaitQtCondition("test condition", predicate);
 }
 
 bool isReady(const bloom::ui::CompositionPreviewController& controller) {

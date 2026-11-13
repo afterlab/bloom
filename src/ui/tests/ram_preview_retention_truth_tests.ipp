@@ -2,15 +2,18 @@
 void testRamRetentionAdmissionAndCompletion(Expectations& expectations) {
     for (const int capacity : {0, 1}) {
         SessionFixture fixture(makeTestProject("RAM admission", time(4, 25)));
-        expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                            "admission ready");
+        expectations.expect(
+            awaitQtCondition("admission ready", [&] { return isReady(fixture.controller); }),
+            "admission ready");
         const auto cost = ui::PreviewFrameCache::frameByteCost(*fixture.controller.state().frame);
         fixture.frameCache->clear();
         fixture.frameCache->setByteBudget(cost * static_cast<std::size_t>(capacity));
         ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
                                      fixture.bridge, fixture.countingPipeline());
         ram.start();
-        expectations.expect(waitUntil([&] { return !ram.isCaching(); }), "bounded admission ends");
+        expectations.expect(
+            awaitQtCondition("bounded admission ends", [&] { return !ram.isCaching(); }),
+            "bounded admission ends");
         expectations.expect(
             ram.lastCompletion() == ui::RamPreviewController::Completion::PartialBudget &&
                 ram.cachedFrameCount() == static_cast<std::uint64_t>(capacity) &&
@@ -19,7 +22,9 @@ void testRamRetentionAdmissionAndCompletion(Expectations& expectations) {
         finishFixture(fixture, expectations);
     }
     SessionFixture fixture(makeTestProject("RAM allocation", time(4, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "allocation ready");
+    expectations.expect(
+        awaitQtCondition("allocation ready", [&] { return isReady(fixture.controller); }),
+        "allocation ready");
     fixture.frameCache->failNextInsertAllocationForTesting(
         ui::PreviewFrameCache::InsertAllocation::Product);
     ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
@@ -31,7 +36,9 @@ void testRamRetentionAdmissionAndCompletion(Expectations& expectations) {
     // coverage is the preexisting frame plus the frames retained after the failure, while the
     // preparation count includes the frame that could not be retained.
     expectations.expect(
-        waitUntil([&] { return !ram.isCaching(); }) &&
+        awaitQtCondition(
+            "failed retention leaves preexisting coverage but reports preparation separately",
+            [&] { return !ram.isCaching(); }) &&
             ram.lastCompletion() == ui::RamPreviewController::Completion::PartialBudget &&
             ram.cachedFrameCount() == 3 && ram.preparedFrameCount() == 3 && ram.canPlayPartial(),
         "failed retention leaves preexisting coverage but reports preparation separately");
@@ -41,16 +48,19 @@ void testRamRetentionAdmissionAndCompletion(Expectations& expectations) {
 void testRamForeignEvictionAndLiveHoles(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM foreign policy", time(2, 25)));
     fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Full);
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "Full frame zero ready");
+    expectations.expect(
+        awaitQtCondition("Full frame zero ready", [&] { return isReady(fixture.controller); }),
+        "Full frame zero ready");
     const auto first = fixture.controller.state().frame;
     expectations.expect(fixture.session.setCurrentTime(time(1, 25)), "advance foreign frame");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "Full frame one ready");
+    expectations.expect(
+        awaitQtCondition("Full frame one ready", [&] { return isReady(fixture.controller); }),
+        "Full frame one ready");
     const auto second = fixture.controller.state().frame;
     fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Auto);
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "Auto policy ready");
+    expectations.expect(
+        awaitQtCondition("Auto policy ready", [&] { return isReady(fixture.controller); }),
+        "Auto policy ready");
     fixture.frameCache->clear();
     fixture.frameCache->setByteBudget(ui::PreviewFrameCache::frameByteCost(*first) * 2);
     fixture.frameCache->insert(first);
@@ -59,24 +69,30 @@ void testRamForeignEvictionAndLiveHoles(Expectations& expectations) {
                                  fixture.bridge, fixture.countingPipeline());
     ram.start();
     expectations.expect(
-        waitUntil([&] { return !ram.isCaching(); }) && ram.canAutoPlay() &&
-            ram.preparedFrameCount() == 2 && ram.cachedFrameCount() == 2,
+        awaitQtCondition(
+            "evicting unrelated policy entries does not prematurely stop a fitting range",
+            [&] { return !ram.isCaching(); }) &&
+            ram.canAutoPlay() && ram.preparedFrameCount() == 2 && ram.cachedFrameCount() == 2,
         "evicting unrelated policy entries does not prematurely stop a fitting range");
     const auto prepared = ram.preparedFrameCount();
     fixture.frameCache->clear();
-    expectations.expect(waitUntil([&] { return ram.cachedFrameCount() == 0; }) &&
-                            !ram.playableSpan() && !ram.canAutoPlay() &&
-                            ram.preparedFrameCount() == prepared &&
-                            ram.lastCompletion() == ui::RamPreviewController::Completion::Complete,
-                        "later purge changes live coverage, not historical preparation/completion");
+    expectations.expect(
+        awaitQtCondition("later purge changes live coverage, not historical preparation/completion",
+                         [&] { return ram.cachedFrameCount() == 0; }) &&
+            !ram.playableSpan() && !ram.canAutoPlay() && ram.preparedFrameCount() == prepared &&
+            ram.lastCompletion() == ui::RamPreviewController::Completion::Complete,
+        "later purge changes live coverage, not historical preparation/completion");
     finishFixture(fixture, expectations);
 
     SessionFixture holes(makeTestProject("RAM holes", time(4, 25)));
-    expectations.expect(waitUntil([&] { return isReady(holes.controller); }), "holes ready");
+    expectations.expect(awaitQtCondition("holes ready", [&] { return isReady(holes.controller); }),
+                        "holes ready");
     ui::RamPreviewController sparse(holes.session, holes.controller, holes.scheduler, holes.bridge,
                                     holes.countingPipeline());
     sparse.start();
-    expectations.expect(waitUntil([&] { return !sparse.isCaching(); }), "holes fill complete");
+    expectations.expect(
+        awaitQtCondition("holes fill complete", [&] { return !sparse.isCaching(); }),
+        "holes fill complete");
     const auto probe = holes.controller.cacheKeyForTime(time(0));
     expectations.expect(probe.has_value(), "the holes fixture has a valid coverage key");
     if (!probe.has_value()) {
@@ -87,7 +103,8 @@ void testRamForeignEvictionAndLiveHoles(Expectations& expectations) {
         {{probe->projectId, probe->compositionId, probe->sourceRevision, time(1, 25), time(2, 25)},
          {probe->projectId, probe->compositionId, probe->sourceRevision, time(3, 25),
           time(4, 25)}});
-    const bool retained = waitUntil([&] { return sparse.cachedFrameCount() == 2; });
+    const bool retained = awaitQtCondition("the sparse RAM fill retains two frames",
+                                           [&] { return sparse.cachedFrameCount() == 2; });
     const auto span = sparse.playableSpan();
     expectations.expect(retained && span.has_value() &&
                             sparse.retainedFrameIndices() == std::vector<std::uint64_t>{1, 3} &&
@@ -99,20 +116,26 @@ void testRamForeignEvictionAndLiveHoles(Expectations& expectations) {
 
 void testRamOffGridAndReentrantFinish(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM off-grid", time(2, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "off-grid ready");
+    expectations.expect(
+        awaitQtCondition("off-grid ready", [&] { return isReady(fixture.controller); }),
+        "off-grid ready");
     fixture.frameCache->clear();
     expectations.expect(fixture.session.setCurrentTime(time(1, 1000)), "seek exact subframe");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "subframe prepared");
+    expectations.expect(
+        awaitQtCondition("subframe prepared", [&] { return isReady(fixture.controller); }),
+        "subframe prepared");
     fixture.gateAtCall = fixture.preparationCount.load();
     ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
                                  fixture.bridge, fixture.countingPipeline());
     ram.start();
-    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }) &&
+    expectations.expect(awaitQtCondition("a retained subframe certifies no exact grid sample",
+                                         [&] { return fixture.gate.entered(); }) &&
                             ram.cachedFrameCount() == 0,
                         "a retained subframe certifies no exact grid sample");
     fixture.gate.release();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 2,
+    expectations.expect(awaitQtCondition("the exact grid is prepared separately",
+                                         [&] { return !ram.isCaching(); }) &&
+                            ram.cachedFrameCount() == 2,
                         "the exact grid is prepared separately");
     bool restarted = false;
     int completions = 0;
