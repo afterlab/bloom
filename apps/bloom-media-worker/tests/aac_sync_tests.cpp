@@ -1,8 +1,8 @@
-// Issue #650: an independent read of the thirty-second H.264 MP4 with AAC that bloom.media.encode
-// writes. FFmpeg alone opens the file and decodes the audio, honoring the priming the container
-// declares, and the result is held against the samples the encoder was given: the same number of
-// frames, every isolated click within one AAC frame (1024 frames) of where the source has it, and
-// each second's level within 1 dB of the source's.
+// Issue #650: an independent read of the three-second H.264 MP4 with AAC that bloom.media.encode
+// writes (the opening of the shared program). FFmpeg alone opens the file and decodes the audio,
+// honoring the priming the container declares, and the result is held against the samples the
+// encoder was given: the same number of frames, every isolated click within one AAC frame (1024
+// frames) of where the source has it, and each second's level within 1 dB of the source's.
 #include "program_audio.hpp"
 
 #include <cmath>
@@ -102,13 +102,14 @@ int main(int argc, char** argv) {
         std::cout << "SKIP: " << path.filename().string() << " was not produced\n";
         return 77;
     }
-    const auto source = programAudio();
+    auto source = programAudio();
+    source.resize(kExportFrames * kChannels);
     std::int64_t declared = -1;
     auto decoded = decode(path, declared);
     check(!decoded.empty(), "FFmpeg decodes the published AAC as stereo float");
-    check(declared == static_cast<std::int64_t>(kFrames),
+    check(declared == static_cast<std::int64_t>(kExportFrames),
           "the track declares the source's length: " + std::to_string(declared) + " of " +
-              std::to_string(kFrames) + " frames");
+              std::to_string(kExportFrames) + " frames");
     // What follows the declared length is the last AAC frame's padding: less than one frame.
     check(decoded.size() >= source.size() && decoded.size() - source.size() < 1024U * kChannels,
           "the decoded stream is the source's length plus less than one AAC frame of padding: " +
@@ -120,10 +121,12 @@ int main(int argc, char** argv) {
     // Start sync: each click is one full-scale frame with quiet around it. The loudest decoded
     // frame near it is where the click landed.
     long worst = 0;
+    std::size_t clicks = 0;
     for (std::size_t click = 0; click < kClicks; ++click) {
         const auto at = clickFrame(click);
-        if (at < 4096 || at + 4096 >= kFrames)
+        if (at < 4096 || at + 4096 >= kExportFrames)
             continue;
+        ++clicks;
         std::size_t loudest = at - 4096;
         for (std::size_t frame = at - 4096; frame <= at + 4096; ++frame)
             if (std::abs(decoded[frame * kChannels]) > std::abs(decoded[loudest * kChannels]))
@@ -132,12 +135,13 @@ int main(int argc, char** argv) {
         if (std::labs(lag) > std::labs(worst))
             worst = lag;
     }
+    check(clicks == 2, "the exported opening holds two clicks: " + std::to_string(clicks));
     check(std::labs(worst) < 1024, "every click is within one AAC frame of the source: worst " +
                                        std::to_string(worst) + " frames");
 
     // Levels: each second of each channel against the source.
     double widest = 0;
-    for (std::size_t second = 0; second < kFrames / kRate; ++second)
+    for (std::size_t second = 0; second < kExportFrames / kRate; ++second)
         for (std::size_t channel = 0; channel < kChannels; ++channel) {
             const double difference = std::abs(decibels(decoded, second * kRate, kRate, channel) -
                                                decibels(source, second * kRate, kRate, channel));

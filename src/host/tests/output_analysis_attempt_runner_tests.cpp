@@ -1,3 +1,4 @@
+#include "fixed_memory_budget.hpp"
 #include "gpu_export_provider_test_access.hpp"
 #include "output_analysis_attempt_jpeg_fixture.hpp"
 

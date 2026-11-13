@@ -19,6 +19,8 @@ void testProviderPoolsShareTheProcessBudget(Expectations& expectations) {
     for (int index = 0; index < 4; ++index) {
         runtime::GpuProcessFrameEvaluatorOptions options;
         options.enabled = false;
+        // The provider samples for itself; the test gives it the fixed reading, not the machine's.
+        options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
         auto provider = host::GpuExportProvider::create(std::move(options));
         provider->refreshProcessingCapacity();
         const auto context = host::detail::GpuExportProviderTestAccess::mediaContext(*provider);
@@ -59,13 +61,15 @@ void testHeadlessRootBoundsTheProcessPools(Expectations& expectations) {
         ledger.registerCache(&owner, ceiling, [] { return std::size_t{0}; }, [](std::size_t) {});
     runtime::GpuProcessFrameEvaluatorOptions options;
     options.enabled = false;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     auto provider = host::GpuExportProvider::create(std::move(options));
     provider->refreshProcessingCapacity();
     const auto state = ledger.state();
     expectations.expect(ledger.ramHeadroom() ==
                             static_cast<std::size_t>(runtime::defaultRamHeadroomBytes()),
                         "headless-bound: the process ledger takes the default RAM headroom");
-    expectations.expect(state.machine.availableBytes.has_value(),
+    expectations.expect(state.machine.availableBytes ==
+                            std::optional<std::size_t>{bloom::test_support::kFixedAvailableMemoryBytes},
                         "headless-bound: the provider's sample reaches the process ledger");
     std::size_t total = 0;
     for (const auto& owner : owners)

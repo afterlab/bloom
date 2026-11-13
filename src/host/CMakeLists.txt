@@ -301,7 +301,8 @@ if(BUILD_TESTING)
                        tests/output_analysis_attempt_runner_tests.cpp)
         target_link_libraries(bloom_host_output_analysis_attempt_runner_test PRIVATE bloom_host)
         target_include_directories(bloom_host_output_analysis_attempt_runner_test
-                                   PRIVATE ${PROJECT_SOURCE_DIR}/src/host)
+                                   PRIVATE ${PROJECT_SOURCE_DIR}/src/host
+                                           "${PROJECT_SOURCE_DIR}/tests/support")
         # The provider factory test qualifies the REAL packaged GPU shader tools through the same
         # GpuOcioContextResolver seam the desktop/CLI/MCP roots use; there is no manual compiler-path
         # injection. A build without qualified tools runs only the typed CPU-fallback vectors.

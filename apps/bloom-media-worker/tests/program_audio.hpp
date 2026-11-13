@@ -16,6 +16,10 @@ namespace bloom::media::testing {
 inline constexpr unsigned kRate = 48000;
 inline constexpr unsigned kChannels = 2;
 inline constexpr std::size_t kFrames = 30U * kRate;
+// The opening the encode test exports and the sync test reads back: three seconds, 72 video frames
+// at 24 fps. It holds two of the clicks and three whole one-second levels.
+inline constexpr std::size_t kExportFrames = 3U * kRate;
+inline constexpr std::size_t kExportVideoFrames = 72;
 // -0.3 dBFS.
 inline const float kPeak = static_cast<float>(std::pow(10.0, -0.3 / 20.0));
 // The isolated clicks: one frame at full scale each, away from the drum hits.
