@@ -3296,6 +3296,13 @@ foreach(scale IN ITEMS 1 1.5)
         LABELS "ui;grammar" TIMEOUT 120)
 endforeach()
 
+# #724 Scopes: offscreen pictures of the panel and of the Viewer's scope region overlay, for review.
+# Built, not registered: bloom_ui_scopes_capture <directory> <dpr label> (QT_SCALE_FACTOR sets the
+# device pixel ratio).
+add_executable(bloom_ui_scopes_capture scopes_capture.cpp)
+target_link_libraries(bloom_ui_scopes_capture PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_scopes_capture)
+
 # #536: secondary workspace windows, tear-off, pinned Viewers and Fit without padding.
 add_executable(bloom_workspace_window_test workspace_window_tests.cpp)
 target_include_directories(bloom_workspace_window_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)

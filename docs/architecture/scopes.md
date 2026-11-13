@@ -208,5 +208,10 @@ other stages' are. The measure holds no state between frames.
 | `bloom.scripting.scope-read` | The headless read: tables equal the CPU reference cell for cell for both signals, counters, luma and primaries, sums, sparse equal to dense, the summary, pictures, a range with progress and a deterministic cancel, the warm-sidecar port, region, transparency, resolution, display and view, and every refusal with its remedy |
 | `bloom.mcp.scope-query` | `query` kind `scopes` on the shared core: the tables equal the read's, sparse, summary, image and range answers, and the refusals |
 | `bloom.scripting.python-scopes` | `bloom.scopes.read` and `image` from Python: a flat color's tables, sparse equal to dense, summary, range and time, written and replaced files, argument errors |
+| `bloom.ui.scopes-mcp-warm` | The MCP read against a real preview and cache: a sidecar under the read's own settings is answered from the cache with no measure; every setting, region, isolation, look or composition that differs is measured |
+| `bloom.scripting.scope-read-native` | The headless read on a real device: route Gpu, Working tables equal the CPU reference, CIE and Display tables within one cell; a disabled provider reads with the CPU reference and says why |
+| `bloom.color.scope-colorimetry-external` | The XYZ transform of an external config through the helper process equals the built-in's; spaces with no XYZ interchange are refused with their reason |
+| `bloom.ui.scopes-region` | Includes a project saved with a scope region equal, byte for byte, to one saved without |
+| `bloom.ui.viewer_resident_scopes_region_native` | The scope region and its handles are drawn over the device-presented Viewer picture (needs a window system and a device) |
 
 The device tests skip without a device and fail under `--require-device`.
