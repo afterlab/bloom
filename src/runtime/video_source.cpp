@@ -209,8 +209,10 @@ VideoSourceContext::handOutLocked(const std::list<SessionEntry>::iterator entry,
 std::shared_ptr<media::video::VideoDecodeSession>
 VideoSourceContext::session(const std::string& key, const std::filesystem::path& path,
                             const bool allowInsertion, const std::size_t workerBytes,
-                            const VideoSessionUse use) {
+                            const VideoSessionUse use,
+                            const platform::LocalCopyOverride localCopies) {
     std::shared_ptr<render::detail::PackedHostRetirementState> retirement;
+    std::shared_ptr<platform::SourceStore> sourceStore;
     std::uint64_t generation = 0;
     {
         std::lock_guard lock(mutex_);
@@ -219,11 +221,14 @@ VideoSourceContext::session(const std::string& key, const std::filesystem::path&
         if (const auto found = chooseLocked(key, &path, use); found != sessions_.end())
             return handOutLocked(found, use);
         retirement = retirement_;
+        sourceStore = sourceStore_;
         generation = generation_;
     }
     // Worker bootstrap, library verification and scheduler creation hold no mutex needed by UI
     // source close. A refresh racing construction prevents insertion into the new generation.
     auto session = makeSession(path, quota_, retirement);
+    if (session)
+        session->setSourceStore(std::move(sourceStore), localCopies);
     std::list<SessionEntry> detached;
     if (session && allowInsertion) {
         std::lock_guard lock(mutex_);
@@ -252,6 +257,10 @@ VideoSourceContext::session(const std::string& key, const std::filesystem::path&
             return handOutLocked(sessions_.begin(), use);
     }
     return session;
+}
+void VideoSourceContext::setSourceStore(std::shared_ptr<platform::SourceStore> store) {
+    std::lock_guard lock(mutex_);
+    sourceStore_ = std::move(store);
 }
 std::shared_ptr<media::video::VideoDecodeSession>
 VideoSourceContext::retainedSession(const std::string& key, const VideoSessionUse use) {
@@ -418,7 +427,12 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
             media::resolveImagePath(asset.locator.path, asset.locator.relinkHint, base);
         session = context.session(
             revisionKey, path, allowInsertion,
-            media::video::estimatedDecodeWorkerBytes(asset.width, asset.height), use);
+            media::video::estimatedDecodeWorkerBytes(asset.width, asset.height), use,
+            asset.interpretation.localCopies == document::AssetLocalCopies::Always
+                ? platform::LocalCopyOverride::Always
+                : asset.interpretation.localCopies == document::AssetLocalCopies::Never
+                      ? platform::LocalCopyOverride::Never
+                      : platform::LocalCopyOverride::Inherit);
     }
     if (!session) {
         selection.warning = "Video source owner is closing";
@@ -562,6 +576,8 @@ std::shared_ptr<detail::VideoSourceContext> CpuCompositionEvaluator::videoContex
     if (!assetContext_->video)
         assetContext_->video = std::make_shared<detail::VideoSourceContext>();
     assetContext_->video->bindRetirement(cache_->sourceRetirementState());
+    // #718: video sessions follow the evaluator's source store, whenever it was set.
+    assetContext_->video->setSourceStore(cache_->sourceStore());
     cache_->bindVideoSources(assetContext_->video);
     // Decoded frames follow the same playback working set as the decoded-media entries.
     assetContext_->video->cache.bindSourceWindow(cache_->sourceWindow());

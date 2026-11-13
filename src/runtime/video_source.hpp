@@ -72,7 +72,11 @@ class VideoSourceContext final {
     // starts only while its worker bytes fit the session budget beside the others.
     [[nodiscard]] std::shared_ptr<media::video::VideoDecodeSession>
     session(const std::string& key, const std::filesystem::path& path, bool allowInsertion,
-            std::size_t workerBytes = 0, VideoSessionUse use = {});
+            std::size_t workerBytes = 0, VideoSessionUse use = {},
+            platform::LocalCopyOverride localCopies = platform::LocalCopyOverride::Inherit);
+    // #718: the host's local mirror of source media. Sessions made from now on open a source
+    // the mirror keeps without copying it first (`localCopies` is the asset's own choice).
+    void setSourceStore(std::shared_ptr<platform::SourceStore> store);
     // A retained session of `key` chosen as above, or null when there is none (or the use should
     // start another).
     [[nodiscard]] std::shared_ptr<media::video::VideoDecodeSession>
@@ -105,6 +109,7 @@ class VideoSourceContext final {
 
   private:
     std::mutex mutex_;
+    std::shared_ptr<platform::SourceStore> sourceStore_; // under mutex_
     mutable std::mutex reportMutex_;
     std::vector<VideoSourceReport> reports_;
     std::uint64_t reportSequence_ = 0;

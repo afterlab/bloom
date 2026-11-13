@@ -194,6 +194,14 @@ struct VideoDecodeSession::State {
     }
     std::mutex revisionMutex;
     std::shared_ptr<const platform::ReadOnlyFileSnapshot> revision;
+    // #718 (under revisionMutex): the local mirror and the asset's choice; a source whose
+    // range-filled bytes did not hash to its recorded digest is captured whole from then on.
+    std::shared_ptr<platform::SourceStore> sourceStore;
+    platform::LocalCopyOverride localCopies = platform::LocalCopyOverride::Inherit;
+    bool progressiveRefused = false;
+    // The platform media framework reads the snapshot's handle itself, without asking for
+    // ranges. A session that started on a source that was not whole stays with FFmpeg.
+    std::atomic_bool nativeDeferred{false};
     std::shared_ptr<platform::FileSnapshotQuota> quota;
     bool privateQuota = false; // the session created `quota` itself (no caller capacity)
     std::filesystem::path spoolDirectory;
@@ -343,6 +351,12 @@ VideoDecodeSession::VideoDecodeSession(
                                      std::move(spoolDirectory), std::move(retirement),
                                      std::move(launched))) {}
 VideoDecodeSession::~VideoDecodeSession() = default;
+void VideoDecodeSession::setSourceStore(std::shared_ptr<platform::SourceStore> store,
+                                        const platform::LocalCopyOverride asset) {
+    const std::lock_guard lock(state_->revisionMutex);
+    state_->sourceStore = std::move(store);
+    state_->localCopies = asset;
+}
 std::vector<std::string> VideoDecodeSession::routingNotes() const {
     const std::lock_guard lock(state_->hardwareMutex);
     return state_->routingNotes;
@@ -369,9 +383,29 @@ VideoDecodeSession::call(Role role, const ProbeResult* source, std::uint32_t str
         return std::ranges::find_if(hello.declarations,
                                     [&](const auto& d) { return d.capability.role == role; });
     };
+    // #718: the platform media framework reads the snapshot's handle directly, so it is given
+    // whole sources only. A source that is still arriving is served by FFmpeg, which asks for
+    // its ranges, and the session then stays with FFmpeg; when FFmpeg does not declare the
+    // stream, the whole source is brought in first.
+    bool native = !hardware && state_->nativePool && !state_->nativeRetired.load();
+    if (native && snapshot && snapshot->progressive()) {
+        if (state_->nativeDeferred.load())
+            native = false;
+        else if (snapshot->localBytes() != snapshot->size()) {
+            if (declared(state_->hello) != state_->hello.declarations.end()) {
+                state_->nativeDeferred.store(true);
+                native = false;
+            } else if (const auto whole = snapshot->ensureRange(0, snapshot->size(), cancel);
+                       std::holds_alternative<platform::ProcessFailure>(whole)) {
+                return Unavailable{cancel && cancel() ? Error::Cancelled : Error::Io,
+                                   "Video source could not be read; check the drive or relink "
+                                   "the asset in Assets"};
+            }
+        }
+    }
     // Platform media framework first (ADR 0035); a failure retires it for this session and the
     // same request is answered by FFmpeg. Cancellation and a changed source end the request.
-    if (!hardware && state_->nativePool && !state_->nativeRetired.load()) {
+    if (native) {
         const auto& hello = state_->nativeHello;
         if (const auto found = declared(hello); found != hello.declarations.end()) {
             auto reply = callWorker(*state_->nativePool, *found, source, stream, position, count,
@@ -565,6 +599,35 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
     if (cancel && cancel())
         return Unavailable{Error::Cancelled, "Video source capture cancelled"};
     const std::lock_guard lock(state_->revisionMutex);
+    // #718: a range-filled revision whose bytes did not hash to the digest it was opened under
+    // is not the recorded source. It is dropped, and the source is captured whole from now on
+    // (which reports the change at once).
+    if (state_->revision &&
+        state_->revision->verification() == platform::SnapshotVerification::Failed) {
+        state_->releaseRetainedWorkers();
+        state_->revision.reset();
+        state_->progressiveRefused = true;
+        return sourceChanged();
+    }
+    // A final or revalidating request needs bytes that were hashed: a revision that is still
+    // arriving is brought in whole and proved first. Its identity is then on record, so this
+    // happens once per version of a file.
+    const auto proved =
+        [&](const platform::ReadOnlyFileSnapshot& revision) -> std::optional<Unavailable> {
+        if (revision.verification() == platform::SnapshotVerification::Verified)
+            return std::nullopt;
+        const auto waited = revision.waitVerified(cancel, access.progress);
+        if (const auto* state = std::get_if<platform::SnapshotVerification>(&waited);
+            state != nullptr && *state == platform::SnapshotVerification::Verified)
+            return std::nullopt;
+        if (const auto* refused = std::get_if<platform::ProcessFailure>(&waited))
+            return Unavailable{refused->code == platform::ProcessError::Cancelled
+                                   ? Error::Cancelled
+                                   : Error::Io,
+                               "Video source could not be read; check the drive or relink the "
+                               "asset in Assets"};
+        return sourceChanged();
+    };
     if (access.policy == SourceRevisionPolicy::Retained && state_->revision &&
         (!expected || state_->revision->digest() == *expected)) {
         if (access.retained)
@@ -587,6 +650,14 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
                             ? state_->revision
                             : findShared(*verified, state_->retirement);
         if (reusable) {
+            if (const auto refused = proved(*reusable)) {
+                if (refused->reason == Error::SourceChanged && reusable == state_->revision) {
+                    state_->releaseRetainedWorkers();
+                    state_->revision.reset();
+                    state_->progressiveRefused = true;
+                }
+                return *refused;
+            }
             if (access.allowRetention)
                 state_->revision = reusable;
             if (access.retained)
@@ -601,15 +672,44 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
         state_->revision.reset();
     if (access.hostByteBudget <= sizeof(SnapshotRetirement))
         return Unavailable{Error::Oversized, "Video source capture exceeds host working allowance"};
-    auto captured = platform::ReadOnlyFileSnapshot::capture(
-        state_->path, state_->spoolDirectory, state_->quota, Limits::sourceBytes, cancel,
-        access.progress, {}, access.hostByteBudget - sizeof(SnapshotRetirement));
+    // #718: a source the local mirror keeps (slow storage, or the asset's or a folder's choice)
+    // is not copied before its first frame. It opens under its recorded digest and fills by
+    // byte range; the capture below remains for fast local media, for a source with no recorded
+    // digest yet (import: the first read) and after a failed proof.
+    const bool progressive =
+        expected && state_->sourceStore && !state_->progressiveRefused &&
+        state_->sourceStore->keeps(state_->path, *observed.identity, state_->localCopies);
+    const auto capture = [&] {
+        if (!progressive)
+            return platform::ReadOnlyFileSnapshot::capture(
+                state_->path, state_->spoolDirectory, state_->quota, Limits::sourceBytes, cancel,
+                access.progress, {}, access.hostByteBudget - sizeof(SnapshotRetirement));
+        platform::ProgressiveSnapshotRequest request;
+        request.source = state_->path;
+        request.spoolDirectory = state_->spoolDirectory;
+        request.quota = state_->quota;
+        request.sourceLimit = Limits::sourceBytes;
+        request.claimed = *expected;
+        request.chunks = state_->sourceStore->chunks(state_->path, *observed.identity);
+        return platform::ReadOnlyFileSnapshot::captureProgressive(request);
+    };
+    // Every decoder lane of one source shares one range-filled snapshot: the file is read once.
+    if (progressive)
+        if (auto shared = findShared(*expected, state_->retirement)) {
+            if (access.policy == SourceRevisionPolicy::Revalidate && !verified)
+                if (const auto refused = proved(*shared))
+                    return *refused;
+            if (access.allowRetention)
+                state_->revision = shared;
+            if (access.retained)
+                *access.retained = true;
+            return shared;
+        }
+    auto captured = capture();
     if (const auto* refused = std::get_if<platform::ProcessFailure>(&captured);
         refused && refused->code == platform::ProcessError::ResourceLimit &&
         releaseRetainedForCapture())
-        captured = platform::ReadOnlyFileSnapshot::capture(
-            state_->path, state_->spoolDirectory, state_->quota, Limits::sourceBytes, cancel,
-            access.progress, {}, access.hostByteBudget - sizeof(SnapshotRetirement));
+        captured = capture();
     auto* snapshot = std::get_if<std::unique_ptr<platform::ReadOnlyFileSnapshot>>(&captured);
     if (!snapshot) {
         const auto& error = std::get<platform::ProcessFailure>(captured);
@@ -623,6 +723,14 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
         *access.work = (*snapshot)->statistics();
     if (expected && (*snapshot)->digest() != *expected)
         return sourceChanged();
+    // A revalidating request takes a range-filled source only once it is proved, unless the
+    // source's identity is already on record for this digest.
+    if (progressive && access.policy == SourceRevisionPolicy::Revalidate && !verified) {
+        if (const auto refused = proved(**snapshot)) {
+            state_->progressiveRefused = refused->reason == Error::SourceChanged;
+            return *refused;
+        }
+    }
     auto owner = std::make_unique<SnapshotRetirement>();
     owner->snapshot = std::move(*snapshot);
     owner->retirement = state_->retirement;

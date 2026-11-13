@@ -1,5 +1,6 @@
 #pragma once
 #include <bloom/core/sha256.hpp>
+#include <bloom/platform/file_snapshot.hpp>
 #include <bloom/platform/source_identity.hpp>
 
 #include <cstddef>
@@ -37,6 +38,15 @@ class SourceStore {
     [[nodiscard]] virtual bool keeps(const std::filesystem::path& source,
                                      const FileIdentity& identity,
                                      LocalCopyOverride asset) const = 0;
+    // #718: the byte-range store for one large source the store keeps (a video container), for
+    // a progressive snapshot to read local ranges from and keep new ones in. Null when the store
+    // keeps no ranges (the caller then reads every range from the source).
+    [[nodiscard]] virtual std::shared_ptr<SourceChunkStore>
+    chunks(const std::filesystem::path& source, const FileIdentity& identity) {
+        static_cast<void>(source);
+        static_cast<void>(identity);
+        return nullptr;
+    }
     // The stored bytes of `source` when the store holds them for exactly this identity (size,
     // modification time and file id); nullopt otherwise. Never reads the source.
     [[nodiscard]] virtual std::optional<StoredSourceBytes>

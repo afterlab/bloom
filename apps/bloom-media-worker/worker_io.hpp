@@ -123,10 +123,10 @@ class SourceRanges final {
             return true;
         if (!inCall_)
             return false;
-        // Ask for a little more than the read: demuxers read forward in small steps.
-        constexpr std::uint64_t kAskBytes = 4ULL * 1024 * 1024;
+        // The host answers with the whole chunks that hold the range and whatever is local
+        // around them, so reading forward in small steps asks once per chunk.
         if (!write({provider::MessageKind::NeedRange, session_, sequence_,
-                    provider::SourceRangeV1{offset, std::max(length, kAskBytes), false}}))
+                    provider::SourceRangeV1{offset, length, false}}))
             return false;
         auto incoming = read();
         const auto* message = std::get_if<provider::Message>(&incoming);

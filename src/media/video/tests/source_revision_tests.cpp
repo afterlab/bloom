@@ -3,17 +3,23 @@
 #include <atomic>
 #include <bloom/media/video/audio.hpp>
 #include <bloom/media/video/session.hpp>
+#include <bloom/platform/source_identity.hpp>
+#include <bloom/platform/source_store.hpp>
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <numeric>
+#include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -632,6 +638,150 @@ void retirement(const std::filesystem::path& source, const std::filesystem::path
           "actual worker release returns disk charge");
 }
 } // namespace
+// #718: a source the local mirror keeps is not copied before its first frame. The session opens
+// it under its recorded digest, the decoder's reads bring in byte ranges, a revalidating request
+// (export) waits for the whole file and its hash, and bytes that do not hash to the recorded
+// digest report the relink diagnostic.
+class RangeStore final : public bloom::platform::SourceStore {
+  public:
+    class Chunks final : public bloom::platform::SourceChunkStore {
+      public:
+        explicit Chunks(RangeStore& owner) : owner_(owner) {}
+        bool read(std::uint64_t, std::span<std::byte>) override { return false; }
+        void keep(std::uint64_t, std::span<const std::byte> bytes) override {
+            owner_.keptBytes += bytes.size();
+        }
+        [[nodiscard]] bool underPressure() const override { return owner_.pressure.load(); }
+
+      private:
+        RangeStore& owner_;
+    };
+    [[nodiscard]] bool keeps(const std::filesystem::path&, const bloom::platform::FileIdentity&,
+                             bloom::platform::LocalCopyOverride asset) const override {
+        return keepsSources && asset != bloom::platform::LocalCopyOverride::Never;
+    }
+    [[nodiscard]] std::optional<bloom::platform::StoredSourceBytes>
+    find(const std::filesystem::path&, const bloom::platform::FileIdentity&,
+         const std::function<bool()>&) override {
+        return std::nullopt;
+    }
+    void keep(const std::filesystem::path&, const bloom::platform::FileIdentity&,
+              std::shared_ptr<const void>, std::span<const std::byte>) override {}
+    [[nodiscard]] bool underPressure() const override { return pressure.load(); }
+    [[nodiscard]] std::shared_ptr<bloom::platform::SourceChunkStore>
+    chunks(const std::filesystem::path&, const bloom::platform::FileIdentity&) override {
+        ++opened;
+        return std::make_shared<Chunks>(*this);
+    }
+    bool keepsSources = true;
+    std::atomic<std::uint64_t> keptBytes{0};
+    std::atomic<int> opened{0};
+    // Held high so the background fill waits and only the decoder's own ranges arrive.
+    std::atomic_bool pressure{true};
+};
+void progressiveSource(const std::filesystem::path& fixtures,
+                       const std::filesystem::path& scratch) {
+    const auto source = fixtures / "long-h264.mp4";
+    const auto size = std::filesystem::file_size(source);
+    check(size > 3 * Snapshot::kProgressiveChunkBytes, "the long fixture spans several chunks");
+    // The recorded probe and a reference frame, from an ordinary whole capture.
+    provider::ProbeResult probe;
+    std::shared_ptr<const provider::FrameProduct> reference;
+    {
+        video::VideoDecodeSession whole(source, video::VideoDecodeSession::defaultWorker(), {},
+                                        scratch / "progressive-reference-spool");
+        probe = product(whole.probe());
+        reference = product(whole.frame(probe, 0, 0, 0, nullptr));
+    }
+    video::releaseRetainedSourceSnapshots();
+    const auto copy = scratch / "slow.mp4";
+    std::filesystem::copy_file(source, copy, std::filesystem::copy_options::overwrite_existing);
+    const auto store = std::make_shared<RangeStore>();
+    bloom::platform::FileSnapshotStatistics work;
+    bool retained = false;
+    const video::SourceRevisionAccess interactive{
+        video::SourceRevisionPolicy::Retained, true, &work, &retained, {}};
+    const video::SourceRevisionAccess revalidate{
+        video::SourceRevisionPolicy::Revalidate, true, &work, &retained, {}};
+    const auto reads = [] { return bloom::platform::sourceReadWork().fullReads; };
+    {
+        video::VideoDecodeSession session(copy, video::VideoDecodeSession::defaultWorker(), {},
+                                          scratch / "progressive-spool");
+        session.setSourceStore(store);
+        const auto before = reads();
+        const auto first =
+            product(session.frame(probe, 0, 0, 0, nullptr, {}, {}, {}, {}, interactive));
+        check(equal(*first, *reference), "the first frame of a range-filled source is exact");
+        check(store->opened.load() == 1 && store->keptBytes.load() > 0 &&
+                  store->keptBytes.load() < size && work.bytesHashed == 0 && reads() == before,
+              "the first frame arrives before the file is whole, with no whole read or hash");
+        check(!bloom::platform::observeSource(copy).digest,
+              "a source that is still arriving is not on record as verified");
+        const auto afterFirst = store->keptBytes.load();
+        // A second decoder lane of the same source shares the snapshot: nothing is read again.
+        video::VideoDecodeSession lane(copy, video::VideoDecodeSession::defaultWorker(), {},
+                                       scratch / "progressive-spool-lane");
+        lane.setSourceStore(store);
+        const auto same = product(lane.frame(probe, 0, 0, 0, nullptr, {}, {}, {}, {}, interactive));
+        check(equal(*same, *reference) && store->opened.load() == 1 &&
+                  store->keptBytes.load() == afterFirst,
+              "another lane of the source shares the range-filled snapshot");
+        // A final (revalidating) request needs proved bytes: the rest arrives and is hashed.
+        const auto last = product(
+            session.frame(probe, 0, probe.streams[0].frameCount - 1, 0, nullptr, {}, {}, {}, {},
+                          revalidate));
+        check(last != nullptr && store->keptBytes.load() == size,
+              "a revalidating request brings the whole file in");
+        const auto observed = bloom::platform::observeSource(copy);
+        check(observed.digest && *observed.digest == probe.sourceDigest,
+              "the proved file's identity is on record for its digest");
+        (void)product(session.frame(probe, 0, 3, 0, nullptr, {}, {}, {}, {}, revalidate));
+        check(store->keptBytes.load() == size, "a proved source is not read again");
+    }
+    video::releaseRetainedSourceSnapshots();
+    {
+        // The same length and identity route, different bytes: frames may show while it
+        // arrives, a revalidating request reports the change, and so does every request after.
+        const auto changed = scratch / "slow-changed.mp4";
+        std::filesystem::copy_file(source, changed,
+                                   std::filesystem::copy_options::overwrite_existing);
+        {
+            std::fstream file(changed, std::ios::in | std::ios::out | std::ios::binary);
+            file.seekp(static_cast<std::streamoff>(size - 7));
+            file.put('x');
+        }
+        const auto other = std::make_shared<RangeStore>();
+        video::VideoDecodeSession session(changed, video::VideoDecodeSession::defaultWorker(), {},
+                                          scratch / "progressive-changed-spool");
+        session.setSourceStore(other);
+        const auto refused = session.frame(probe, 0, 0, 0, nullptr, {}, {}, {}, {}, revalidate);
+        const auto* failure = std::get_if<provider::Unavailable>(&refused);
+        check(failure != nullptr && failure->reason == provider::Error::SourceChanged &&
+                  failure->detail.find("relink") != std::string::npos,
+              "bytes that do not hash to the recorded digest report the relink diagnostic");
+        const auto again = session.frame(probe, 0, 0, 0, nullptr, {}, {}, {}, {}, interactive);
+        failure = std::get_if<provider::Unavailable>(&again);
+        check(failure != nullptr && failure->reason == provider::Error::SourceChanged,
+              "the changed source stays refused");
+    }
+    video::releaseRetainedSourceSnapshots();
+    {
+        // A source the store does not keep (fast local media, or the asset says never) is
+        // captured whole, as before.
+        const auto local = scratch / "fast.mp4";
+        std::filesystem::copy_file(source, local,
+                                   std::filesystem::copy_options::overwrite_existing);
+        const auto none = std::make_shared<RangeStore>();
+        video::VideoDecodeSession session(local, video::VideoDecodeSession::defaultWorker(), {},
+                                          scratch / "progressive-local-spool");
+        session.setSourceStore(none, bloom::platform::LocalCopyOverride::Never);
+        const auto first =
+            product(session.frame(probe, 0, 0, 0, nullptr, {}, {}, {}, {}, interactive));
+        check(equal(*first, *reference) && none->opened.load() == 0 && work.bytesHashed == size,
+              "a source the store does not keep is captured whole");
+    }
+    video::releaseRetainedSourceSnapshots();
+}
 int main(int argc, char** argv) {
     try {
         check(argc == 2, "fixture directory");
@@ -649,6 +799,7 @@ int main(int argc, char** argv) {
         freshSessionAdoptsRetainedSnapshot(source, scratch.path);
         audioOnePass(fixtures, scratch.path);
 #endif
+        progressiveSource(fixtures, scratch.path);
         retirement(source, scratch.path / "retirement-spool");
         std::cout << "PASS: immutable disk-backed video source revisions\n";
     } catch (const std::exception& error) {

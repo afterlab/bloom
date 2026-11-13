@@ -1,6 +1,7 @@
 #pragma once
 #include <bloom/media/provider/worker_pool.hpp>
 #include <bloom/platform/file_snapshot.hpp>
+#include <bloom/platform/source_store.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/source_working_set.hpp>
@@ -161,6 +162,13 @@ class VideoDecodeSession final {
         std::shared_ptr<render::detail::PackedHostRetirementState> retirement = {},
         std::function<void(std::int64_t)> launched = {});
     ~VideoDecodeSession();
+    // #718: the host's local mirror of source media and what this asset says about local
+    // copies. A source the store keeps (slow storage, or an override) is opened without being
+    // copied first: its bytes arrive by range as frames need them and the rest fills behind.
+    // Null (the default) captures the whole source before the first frame, as fast local media
+    // does. Call before the first request.
+    void setSourceStore(std::shared_ptr<platform::SourceStore> store,
+                        platform::LocalCopyOverride asset = platform::LocalCopyOverride::Inherit);
     VideoDecodeSession(const VideoDecodeSession&) = delete;
     VideoDecodeSession& operator=(const VideoDecodeSession&) = delete;
     [[nodiscard]] std::optional<provider::Unavailable>
