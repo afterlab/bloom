@@ -210,13 +210,6 @@ awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds tim
     return std::nullopt;
 }
 
-// Isolated-fixture total-process CPU. The caller measures this across a quiet window in which the
-// UI thread only sleeps, so a busy owner service thread would show up as roughly one full core.
-[[nodiscard]] double processCpuSeconds() {
-    const auto nanoseconds = bloom::runtime::readProfilerProcessCpuNs();
-    return nanoseconds ? static_cast<double>(*nanoseconds) * 1e-9 : 0.0;
-}
-
 [[nodiscard]] bloom::document::Snapshot makeSnapshot(const std::uint64_t id, std::string name) {
     bloom::document::Project project(bloom::document::ProjectId::fromRaw(id), std::move(name));
     const auto format = bloom::document::CompositionFormat::create(16, 8);
@@ -504,23 +497,40 @@ int runTests(int argc, char** argv) {
     }
 
     // Idle acceptance: frames presented, target Active, no pending request. The owner must wait on
-    // its wake hook rather than poll at full rate. The UI thread only sleeps here, so the isolated
-    // fixture's total process CPU over the quiet window is a direct busy-spin probe.
-    const double cpuBeforeIdle = processCpuSeconds();
-    const auto idleStart = std::chrono::steady_clock::now();
-    std::this_thread::sleep_for(2500ms);
-    const auto idleEnd = std::chrono::steady_clock::now();
-    const double idleCpuSeconds = processCpuSeconds() - cpuBeforeIdle;
-    const double idleWallSeconds = std::chrono::duration<double>(idleEnd - idleStart).count();
-    const double idleCoreFraction = idleCpuSeconds / idleWallSeconds;
-    expectations.expect(idleCoreFraction < 0.05,
-                        "the idle Active target owner used <5% of one core (" +
-                            std::to_string(idleCoreFraction * 100.0) + "% over " +
-                            std::to_string(idleWallSeconds) + "s)");
+    // its wake hook rather than poll at full rate. Asserted on what the owner does, not on CPU
+    // time: once it has settled, it enters four more waits, each of the idle interval, and nothing
+    // wakes it or presents in between. A polling owner would choose the short interval or be woken.
+    using IdleAccess = bloom::runtime::detail::GpuPreviewDisplayServiceTestAccess;
+    const auto idlePresents = client->status(attached.target).presentCount;
+    IdleAccess::OwnerIdleProbe settled;
+    const bool ownerSettled = waitUntil(
+        [&] {
+            const auto first = IdleAccess::ownerIdleProbe(service);
+            if (first.lastWaitInterval != IdleAccess::kOwnerIdleWaitInterval)
+                return false;
+            settled = first;
+            return true;
+        },
+        30s);
+    expectations.expect(ownerSettled, "the owner of an idle Active target reaches its idle wait");
+    constexpr std::uint64_t kIdleWaits = 4;
+    bool everShort = false;
+    const bool waitedOn = waitUntil(
+        [&] {
+            const auto probe = IdleAccess::ownerIdleProbe(service);
+            everShort = everShort || probe.lastWaitInterval != IdleAccess::kOwnerIdleWaitInterval;
+            return probe.waits >= settled.waits + kIdleWaits;
+        },
+        30s);
+    const auto idled = IdleAccess::ownerIdleProbe(service);
+    expectations.expect(waitedOn && !everShort,
+                        "the idle owner keeps waiting for its idle interval, never the short poll");
+    expectations.expect(idled.wakeGeneration == settled.wakeGeneration,
+                        "nothing woke the idle owner across four waits");
+    expectations.expect(client->status(attached.target).presentCount == idlePresents,
+                        "the idle owner presented nothing");
     expectations.expect(client->status(attached.target).state == GpuPresentationTargetState::Active,
                         "the idle target stayed Active across the quiet window");
-    std::cout << "idle owner CPU: " << idleCoreFraction * 100.0 << "% of one core over "
-              << idleWallSeconds << "s\n";
 
     // Prompt progress after idle: a new frame is woken and applied within a generous timeout, so a
     // missing wake surfaces as a hang rather than a tight latency race.

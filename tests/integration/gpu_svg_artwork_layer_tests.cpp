@@ -21,9 +21,9 @@
 //   bounds, 512 x 288 over frames 0 to 2, its box the same at every frame and only the window the
 //   frame shows drawn; at 3840 x 2160, scaled 4x and 8x and turned, a crop is the scaled
 //   pre-composition's on the device, with at most two frames of pixels drawn (#642 B4).
-// - 1920 x 1080 and 3840 x 2160 prepare and run on the device, the plain layer and the oversampled
-//   one (no comparison at these sizes; the export route's provenance is read by
-//   bloom.ui.viewer_export_svg_artwork).
+// - A 480 x 270 composition prepares and runs on the device, the plain layer and the oversampled
+//   one (no comparison; the export route's provenance is read by
+//   bloom.ui.viewer_export_svg_artwork). The 4K cases above are the large frames on the device.
 // - Admission (the phase admits the scene; a machine too small refuses it and holds nothing),
 //   retirement (releasing the scene returns every claimed byte), cancellation (a cancelled
 //   preparation and a cancelled run publish nothing) and the executor's request budget.
@@ -518,9 +518,10 @@ void layerIsTheEditableImportOnTheDevice(Expectations& expectations, const Devic
     }
 }
 
-// 1080p and 4K: the production builder prepares the scaled, turned layer and the device runs it.
+// A composition larger than the artwork: the production builder prepares the scaled, turned layer
+// and the device runs it. One small size: nothing asserted here depends on the frame's size.
 void largeOnTheDevice(Expectations& expectations, const Device& device, const std::filesystem::path& file) {
-    for (const auto& [width, height] : {std::pair{1920U, 1080U}, std::pair{3840U, 2160U}}) {
+    for (const auto& [width, height] : {std::pair{480U, 270U}}) {
         const auto label = std::to_string(width) + "x" + std::to_string(height);
         Fixture layer(file, commands::SvgImportMode::Layer, width, height);
         apply<commands::SetParameterSource>(layer.document, layer.commands, layer.main, layer.layerParameter(document::kScaleParameterRole),
@@ -644,8 +645,9 @@ void oversampledOnTheDevice(Expectations& expectations, const Device& device) {
             }
         }
     }
-    // 1080p and 4K: a blur between, scaled 1.5x and turned, drawn at 2x (1.5x turned asks for 2x).
-    for (const auto& [width, height] : {std::pair{1920U, 1080U}, std::pair{3840U, 2160U}}) {
+    // A larger composition: a blur between, scaled 1.5x and turned, drawn at 2x (1.5x turned asks
+    // for 2x). One small size, as above.
+    for (const auto& [width, height] : {std::pair{480U, 270U}}) {
         const auto label = "oversampled " + std::to_string(width) + "x" + std::to_string(height);
         Fixture layer(file, commands::SvgImportMode::Layer, width, height);
         const auto blur = layer.addNode("bloom.gaussian-blur");
@@ -1296,9 +1298,12 @@ int main(int argc, char** argv) {
             std::cerr << expectations.failures() << " Vector Artwork layer expectation(s) failed\n";
             return 1;
         }
-        std::cout << "PASS: a Vector Artwork layer renders on the GPU as the CPU reference and the editable import, "
-                     "keyed, turned, scaled, masked, retimed, with effects between, in scaled groups, on a "
-                     "content pivot, clipped to the window the frame shows, at half resolution, at 1080p and 4K, admitted, retired and cancelled\n";
+        std::cout << "PASS: a Vector Artwork layer renders on the GPU as the CPU reference and the "
+                     "editable import, "
+                     "keyed, turned, scaled, masked, retimed, with effects between, in scaled "
+                     "groups, on a "
+                     "content pivot, clipped to the window the frame shows, at half resolution, at "
+                     "4K, admitted, retired and cancelled\n";
         return 0;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';

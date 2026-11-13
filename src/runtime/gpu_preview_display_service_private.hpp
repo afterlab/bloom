@@ -325,6 +325,10 @@ struct PreviewDisplayServiceCore final {
     std::atomic<std::uint64_t> counterOwnerResidentNanoseconds{0};
     std::atomic<std::uint64_t> counterOwnerServiceNanoseconds{0};
     std::atomic<std::uint64_t> counterOwnerWaitNanoseconds{0};
+    // Condition waits the owner has entered, and the interval it chose for the latest one: how an
+    // idle owner is told from one that polls (GpuPreviewDisplayServiceTestAccess::ownerIdleProbe).
+    std::atomic<std::uint64_t> ownerConditionWaits{0};
+    std::atomic<std::int64_t> ownerLastWaitMicros{0};
     std::atomic<std::uint64_t> counterResidentCompletions{0};
     std::atomic<std::uint64_t> counterPackedTransfers{0};
     std::atomic<std::uint64_t> counterPackedTransferredBytes{0};
@@ -744,6 +748,19 @@ struct GpuPreviewDisplayServiceTestAccess final {
     // Test-only: run one actual owner-thread scheduler GPU task that produces a real resident image
     // and publishes an opaque lease into the service registry (`foreign == false`) or into a second
     // owner-thread registry on the same device (`foreign == true`, for foreign-lease rejection).
+    // Test-only: what the owner loop is doing when it has nothing to do. `waits` counts the
+    // condition waits it has entered, `lastWaitInterval` is the interval it chose for the latest
+    // one, and `wakeGeneration` changes each time something wakes it. An idle owner keeps entering
+    // waits of the idle interval with an unchanged wake generation.
+    struct OwnerIdleProbe final {
+        std::uint64_t waits = 0;
+        std::uint64_t wakeGeneration = 0;
+        std::chrono::microseconds lastWaitInterval{0};
+    };
+    [[nodiscard]] static OwnerIdleProbe ownerIdleProbe(const GpuPreviewDisplayService& service);
+    // The interval an owner with nothing to drive waits for before it looks again.
+    static constexpr std::chrono::milliseconds kOwnerIdleWaitInterval{50};
+
     [[nodiscard]] static bool requestPresentationTestLease(GpuPreviewDisplayService& service,
                                                            PresentationTestLeaseResult& out,
                                                            std::chrono::milliseconds timeout,

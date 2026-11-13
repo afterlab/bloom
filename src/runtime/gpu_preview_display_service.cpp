@@ -43,7 +43,7 @@ serviceWaitInterval(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
     }
     // Bounded idle wait: notifications still interrupt it immediately, so this only caps how long
     // an otherwise idle owner sleeps before re-checking.
-    return std::chrono::milliseconds(50);
+    return detail::GpuPreviewDisplayServiceTestAccess::kOwnerIdleWaitInterval;
 }
 
 // What one owner iteration can advance on the native side: the resident executor's steps, the
@@ -86,6 +86,8 @@ nativeProgress(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core) n
 void waitForWake(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core,
                  const std::uint64_t observedGeneration, const bool wakeOnStopping) {
     const auto interval = serviceWaitInterval(core);
+    core->ownerLastWaitMicros.store(interval.count(), std::memory_order_relaxed);
+    core->ownerConditionWaits.fetch_add(1, std::memory_order_relaxed);
     std::unique_lock lock(core->wakeMutex);
     core->wakeCondition.wait_for(lock, interval, [&] {
         return (wakeOnStopping && core->stopping.load(std::memory_order_acquire)) ||
@@ -487,6 +489,21 @@ struct GpuPreviewDisplayService::Impl final {
 std::shared_ptr<detail::PreviewDisplayServiceCore>
 detail::GpuPreviewDisplayServiceTestAccess::coreOf(const GpuPreviewDisplayService& service) {
     return service.impl_ == nullptr ? nullptr : service.impl_->core;
+}
+
+detail::GpuPreviewDisplayServiceTestAccess::OwnerIdleProbe
+detail::GpuPreviewDisplayServiceTestAccess::ownerIdleProbe(
+    const GpuPreviewDisplayService& service) {
+    const auto core = coreOf(service);
+    if (core == nullptr)
+        return {};
+    OwnerIdleProbe probe;
+    probe.waits = core->ownerConditionWaits.load(std::memory_order_relaxed);
+    probe.lastWaitInterval =
+        std::chrono::microseconds(core->ownerLastWaitMicros.load(std::memory_order_relaxed));
+    const std::lock_guard lock(core->wakeMutex);
+    probe.wakeGeneration = core->wakeGeneration;
+    return probe;
 }
 
 bool detail::GpuPreviewDisplayServiceTestAccess::requestPresentationTestLease(

@@ -411,13 +411,15 @@ void tests(const std::filesystem::path& directory) {
         mp4.audioCodec = "aac";
         (void)run(mp4, directory / "export-h264.mp4");
         {
-            // #650: two seconds of music-like audio with drum transients and full-scale clicks
+            // #650: thirty seconds of music-like audio with drum transients and full-scale clicks
             // peaking at -0.3 dBFS, the kind of program profile v1 refused, exports to H.264
             // MP4 with AAC and verifies. bloom.media.aac-sync reads the published file back
             // through FFmpeg alone and checks its levels and its start against the same samples.
             auto program = mp4;
-            program.frames = 48;
-            program.audioSamples = program.frames * 2000U;
+            // The whole program, not a few frames: bloom.media.aac-sync checks its twenty clicks
+            // and thirty one-second levels against the source.
+            program.frames = 720;
+            program.audioSamples = bloom::media::testing::kFrames;
             const auto samples = bloom::media::testing::programAudio();
             EncodeSessionV1 session({});
             ok(session.begin(program));
@@ -440,7 +442,7 @@ void tests(const std::filesystem::path& directory) {
             }
             const auto qc = get(session.finish());
             test::check(qc.frames == program.frames && qc.audioSamples == program.audioSamples,
-                        "two seconds of program audio verifies in H.264 MP4 with AAC");
+                        "thirty seconds of program audio verifies in H.264 MP4 with AAC");
             std::ofstream file(directory / "export-h264-program.mp4", std::ios::binary);
             for (std::uint64_t offset = 0; offset < qc.bytes;) {
                 const auto chunk = get(session.read(offset));

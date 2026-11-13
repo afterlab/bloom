@@ -2557,7 +2557,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     bloom_enable_warnings(bloom_ui_gpu_processing_phase_native_test)
     bloom_add_test(NAME bloom.ui.gpu_processing_phase_native
         COMMAND bloom_ui_gpu_processing_phase_native_test LABELS ui gpu memory
-        TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=wayland"
         SKIP_RETURN_CODE 77 COMPOSITOR)
 
     add_executable(bloom_ui_gpu_packed_viewer_test gpu_packed_viewer_tests.cpp)
@@ -2647,13 +2647,18 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             # Presentation cases need a private compositor session.
             set(packed_kind COMPOSITOR)
         endif()
+        if(packed_kind STREQUAL "COMPOSITOR")
+            set(packed_platform wayland)
+        else()
+            set(packed_platform offscreen)
+        endif()
         bloom_add_test(
             NAME bloom.ui.gpu_packed_viewer_${packed_case}
             COMMAND bloom_ui_gpu_packed_viewer_test
                     ${bloom_ui_gpu_viewer_service_chain_loader_args} ${packed_args}
             LABELS ui gpu viewer packed native
             TIMEOUT 150
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            ENVIRONMENT "QT_QPA_PLATFORM=${packed_platform}"
             SKIP_RETURN_CODE 77 ${packed_kind})
     endforeach()
 
@@ -2876,7 +2881,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                 ${bloom_ui_gpu_viewer_service_chain_loader_args}
         LABELS ui gpu viewer resident interaction native
         TIMEOUT 300
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT "QT_QPA_PLATFORM=wayland"
         SKIP_RETURN_CODE 77 COMPOSITOR
     )
 
@@ -2893,7 +2898,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                     ${bloom_ui_gpu_viewer_service_chain_loader_args} ${resident_transition_args}
             LABELS ui gpu viewer resident interaction native
             TIMEOUT 150
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            ENVIRONMENT "QT_QPA_PLATFORM=wayland"
             SKIP_RETURN_CODE 77 COMPOSITOR)
     endforeach()
     # #645: native double-clicks drill three groups deep into imported SVG shapes on the resident
@@ -2904,7 +2909,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                 ${bloom_ui_gpu_viewer_service_chain_loader_args} --drill
         LABELS ui gpu viewer resident interaction native
         TIMEOUT 150
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT "QT_QPA_PLATFORM=wayland"
         SKIP_RETURN_CODE 77 COMPOSITOR)
     bloom_add_test(
         NAME bloom.ui.viewer_resident_shutdown_inflight
@@ -2912,7 +2917,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                 ${bloom_ui_gpu_viewer_service_chain_loader_args} --shutdown-in-flight
         LABELS ui gpu viewer resident native
         TIMEOUT 150
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT "QT_QPA_PLATFORM=wayland"
         SKIP_RETURN_CODE 77 COMPOSITOR)
 
     # Bounded native acceptance for the resident viewer surface across a DOCUMENT REPLACEMENT
@@ -2936,7 +2941,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                 ${bloom_ui_gpu_viewer_service_chain_loader_args}
         LABELS ui gpu viewer resident native
         TIMEOUT 300
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT "QT_QPA_PLATFORM=wayland"
         SKIP_RETURN_CODE 77 COMPOSITOR
     )
 
