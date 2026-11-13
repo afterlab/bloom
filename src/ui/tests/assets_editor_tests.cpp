@@ -222,8 +222,10 @@ void sortingAndColumns(TestContext& context) {
         auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
         if (menu == nullptr)
             return;
+        // The columns; the menu ends with a separator and Reset Column Widths (#692).
         for (auto* action : menu->actions())
-            actions.push_back(action->objectName());
+            if (action->objectName().startsWith(QStringLiteral("assetsColumnAction")))
+                actions.push_back(action->objectName());
         for (auto* action : menu->actions())
             if (action->objectName() ==
                 QStringLiteral("assetsColumnAction%1").arg(assets::TagsColumn))
@@ -236,17 +238,20 @@ void sortingAndColumns(TestContext& context) {
                        !actions.contains(QStringLiteral("assetsColumnAction0")),
                    "the column chooser lists every column but Name");
     context.expect(!header->isSectionHidden(assets::TagsColumn), "choosing Tags shows the column");
-    tree->setColumnWidth(assets::TypeColumn, 140);
     editor.reset();
     ui::AssetsEditor restored(session);
     auto* restoredTree = restored.findChild<QTreeWidget*>("assetsTree");
     context.expect(restoredTree && !restoredTree->header()->isSectionHidden(assets::TagsColumn) &&
                        restoredTree->header()->isSectionHidden(assets::LocationColumn) &&
-                       restoredTree->columnWidth(assets::TypeColumn) == 140 &&
                        restoredTree->sortColumn() == assets::DimensionsColumn,
-                   "column visibility, width and sort persist per user");
+                   "column visibility and sort persist per user (widths travel with the panel's "
+                   "workspace state, #692)");
     auto* columns = restored.findChild<QMenu*>("assetsColumnMenu");
-    context.expect(columns != nullptr && columns->actions().size() == assets::ColumnCount - 1,
+    int columnChoices = 0;
+    for (auto* action : columns != nullptr ? columns->actions() : QList<QAction*>{})
+        if (action->objectName().startsWith(QStringLiteral("assetsColumnAction")))
+            ++columnChoices;
+    context.expect(columnChoices == assets::ColumnCount - 1,
                    "View > Columns offers the same chooser");
     QSettings().remove(QString::fromLatin1(assets::kHeaderStateKey));
 }

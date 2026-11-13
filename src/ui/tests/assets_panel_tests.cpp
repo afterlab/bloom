@@ -7,6 +7,9 @@
 #include <QElapsedTimer>
 #include <QHeaderView>
 #include <QImage>
+#include <QMenu>
+#include <QMouseEvent>
+#include <QJsonObject>
 #include <QLineEdit>
 #include <QSettings>
 #include <QStandardPaths>
@@ -32,7 +35,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <map>
 #include <memory>
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace {
 using namespace bloom;
@@ -153,8 +160,8 @@ void tableFillsThePanel() {
     if (tree == nullptr)
         return;
     auto* header = tree->header();
-    expect(header->sectionResizeMode(assets::NameColumn) == QHeaderView::Stretch,
-           "Name is the stretch column");
+    expect(header->sectionResizeMode(assets::NameColumn) == QHeaderView::Interactive,
+           "#692: Name is resized by its header edge like every other column");
     expect(tree->headerItem()->text(assets::DimensionsColumn) == "Dimensions",
            "the W × H column is Dimensions");
     auto* bg = named(*tree, "BG_0101");
@@ -166,7 +173,10 @@ void tableFillsThePanel() {
             if (!header->isSectionHidden(column))
                 sections += header->sectionSize(column);
         expect(sections == tree->viewport()->width(),
-               "the shown columns span the viewport exactly: Name takes the remainder");
+               ("the shown columns span the viewport exactly: Name takes the remainder (" +
+                std::to_string(sections) + " of " + std::to_string(tree->viewport()->width()) +
+                " at " + std::to_string(width) + ")")
+                   .c_str());
         expect(header->sectionSize(assets::NameColumn) >
                    header->sectionSize(assets::TypeColumn),
                "Name keeps the widest column");
@@ -225,9 +235,166 @@ void columnsAndPersistence() {
     ui::AssetsEditor restored(*fixture.session);
     auto* header = restored.findChild<QTreeWidget*>("assetsTree")->header();
     expect(!header->isSectionHidden(assets::DurationColumn) &&
-               header->sectionResizeMode(assets::NameColumn) == QHeaderView::Stretch,
-           "column visibility persists per user and Name still stretches");
+               header->sectionResizeMode(assets::NameColumn) == QHeaderView::Interactive,
+           "column visibility persists per user and Name is still resizable");
     QSettings().remove(QString::fromLatin1(assets::kHeaderStateKey));
+}
+
+// #692: every column is resized by dragging its header edge, and the widths are the panel's own
+// state, which the workspace layout keeps: a panel reopened with that state has them again.
+void columnsResizeAndStayWithThePanel() {
+    Fixture fixture;
+    QSettings().remove(QString::fromLatin1(assets::kHeaderStateKey));
+    QJsonObject state;
+    std::map<int, int> dragged;
+    std::map<int, int> fitted;
+    {
+        ui::AssetsEditor editor(*fixture.session);
+        editor.resize(700, 500);
+        editor.show();
+        settle();
+        auto* tree = editor.findChild<QTreeWidget*>("assetsTree");
+        expect(tree != nullptr, "assets tree");
+        if (tree == nullptr)
+            return;
+        auto* header = tree->header();
+        const auto drag = [&](const int column, const int delta) {
+            const int edge = header->sectionViewportPosition(column) + header->sectionSize(column);
+            const QPoint press(edge - 1, header->height() / 2);
+            QTest::mousePress(header->viewport(), Qt::LeftButton, Qt::NoModifier, press);
+            QTest::mouseMove(header->viewport(), press + QPoint(delta / 2, 0));
+            QTest::mouseMove(header->viewport(), press + QPoint(delta, 0));
+            QTest::mouseRelease(header->viewport(), Qt::LeftButton, Qt::NoModifier,
+                                press + QPoint(delta, 0));
+            settle();
+        };
+        for (int column = 0; column < assets::ColumnCount; ++column)
+            if (!header->isSectionHidden(column))
+                fitted[column] = header->sectionSize(column);
+        expect(fitted.size() == 3, "Name, Type and Dimensions are shown");
+        for (const auto& [column, before] : fitted) {
+            const int delta = column == assets::NameColumn ? -60 : 40;
+            drag(column, delta);
+            const int after = header->sectionSize(column);
+            expect(std::abs(after - (before + delta)) <= 2,
+                   ("#692: dragging the header edge resizes " +
+                    tree->headerItem()->text(column).toStdString() + " (" + std::to_string(before) +
+                    " to " + std::to_string(after) + ")")
+                       .c_str());
+            dragged[column] = after;
+        }
+        for (const auto& [column, width] : dragged)
+            expect(header->sectionSize(column) == width,
+                   "#692: a dragged width stays while another column is dragged");
+        editor.resize(900, 500);
+        settle();
+        for (const auto& [column, width] : dragged)
+            expect(header->sectionSize(column) == width,
+                   "#692: a dragged width stays when the panel is resized");
+        state = editor.saveEditorSessionState();
+        expect(state.value("columnWidths").toObject().size() == 3,
+               "#692: the panel's state carries the three dragged widths");
+    }
+    // The panel reopened: fitted without its state, the dragged widths with it.
+    ui::AssetsEditor reopened(*fixture.session);
+    reopened.resize(700, 500);
+    reopened.show();
+    settle();
+    auto* header = reopened.findChild<QTreeWidget*>("assetsTree")->header();
+    for (const auto& [column, width] : fitted)
+        expect(header->sectionSize(column) == width,
+               "a panel opened without a state has fitted columns");
+    reopened.restoreEditorSessionState(state);
+    settle();
+    for (const auto& [column, width] : dragged)
+        expect(header->sectionSize(column) == width,
+               ("#692: the reopened panel has the dragged width of column " + std::to_string(column) +
+                " (" + std::to_string(header->sectionSize(column)) + ", expected " +
+                std::to_string(width) + ")")
+                   .c_str());
+    expect(reopened.saveEditorSessionState() == state, "#692: and saves the same state again");
+    // Reset Column Widths goes back to fitted columns.
+    auto* columns = reopened.findChild<QMenu*>("assetsColumnMenu");
+    if (columns != nullptr)
+        emit columns->aboutToShow();
+    auto* reset = columns != nullptr
+                      ? columns->findChild<QAction*>("assetsColumnResetWidthsAction")
+                      : nullptr;
+    expect(reset != nullptr && reset->isEnabled(), "Reset Column Widths is offered");
+    if (reset != nullptr)
+        reset->trigger();
+    settle();
+    for (const auto& [column, width] : fitted)
+        expect(header->sectionSize(column) == width, "Reset Column Widths fits the columns again");
+    QSettings().remove(QString::fromLatin1(assets::kHeaderStateKey));
+}
+
+// #689: a double-click on the empty space below the rows opens Import, into the top level; a
+// double-click on a row keeps its meaning and the header's is its own.
+void doubleClickOnEmptySpaceImports() {
+    Fixture fixture;
+    QSettings().remove(QString::fromLatin1(assets::kHeaderStateKey));
+    ui::AssetsEditor editor(*fixture.session);
+    editor.resize(700, 600);
+    editor.show();
+    settle();
+    auto* tree = editor.findChild<QTreeWidget*>("assetsTree");
+    expect(tree != nullptr, "assets tree");
+    if (tree == nullptr)
+        return;
+    std::vector<std::optional<document::AssetFolderId>> imports;
+    editor.setImportRequestForTest(
+        [&](const std::optional<document::AssetFolderId> folder) { imports.push_back(folder); });
+    // The last row's bottom edge, then well below it.
+    int bottom = 0;
+    for (QTreeWidgetItemIterator it(tree); *it; ++it)
+        if (!(*it)->isHidden())
+            bottom = std::max(bottom, tree->visualItemRect(*it).bottom());
+    const QPoint empty(tree->viewport()->width() / 2, bottom + (tree->viewport()->height() - bottom) / 2);
+    expect(bottom > 0 && empty.y() < tree->viewport()->height() && tree->itemAt(empty) == nullptr,
+           "the panel has empty space below its rows");
+    // With a folder's row selected, the empty space is still the top level.
+    if (auto* folder = named(*tree, "test"))
+        tree->setCurrentItem(folder);
+    QTest::mouseDClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier, empty);
+    settle();
+    expect(imports.size() == 1 && !imports.front().has_value(),
+           "#689: a double-click on empty space opens Import into the top level");
+    // A row's double-click is still the row's: the tree reports it and no import opens.
+    int rowDoubleClicks = 0;
+    const auto rowConnection = QObject::connect(tree, &QTreeWidget::itemDoubleClicked,
+                                                [&rowDoubleClicks] { ++rowDoubleClicks; });
+    int rows = 0;
+    for (const char* name : {"BG_0101", "test", "Main"}) {
+        auto* row = named(*tree, name);
+        expect(row != nullptr, "a fixture row");
+        if (row == nullptr)
+            continue;
+        ++rows;
+        // The four events of a double-click, as the window system delivers them to the view.
+        const QPointF at = tree->visualItemRect(row).center();
+        const QPointF global = tree->viewport()->mapToGlobal(at);
+        const auto send = [&](const QEvent::Type type, const Qt::MouseButtons buttons) {
+            QMouseEvent event(type, at, global, Qt::LeftButton, buttons, Qt::NoModifier);
+            QCoreApplication::sendEvent(tree->viewport(), &event);
+        };
+        send(QEvent::MouseButtonPress, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, Qt::NoButton);
+        send(QEvent::MouseButtonDblClick, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, Qt::NoButton);
+        settle();
+    }
+    QObject::disconnect(rowConnection);
+    expect(imports.size() == 1 && rowDoubleClicks == rows && rows == 3,
+           ("#689: a double-click on a footage, folder or composition row keeps its own meaning "
+            "and opens no Import (" +
+            std::to_string(rowDoubleClicks) + " of " + std::to_string(rows) + ")")
+               .c_str());
+    QTest::mouseDClick(tree->header()->viewport(), Qt::LeftButton, Qt::NoModifier,
+                       QPoint(tree->header()->sectionViewportPosition(assets::TypeColumn) + 8,
+                              tree->header()->height() / 2));
+    settle();
+    expect(imports.size() == 1, "#689: a double-click on the header does not open Import");
 }
 
 void monochromeGlyphsAndNesting() {
@@ -466,6 +633,8 @@ int main(int argc, char** argv) {
     kit::installAfterlabTheme(application);
     tableFillsThePanel();
     columnsAndPersistence();
+    columnsResizeAndStayWithThePanel();
+    doubleClickOnEmptySpaceImports();
     monochromeGlyphsAndNesting();
     summaryStrip();
     collapsibleSearch();

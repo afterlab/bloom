@@ -321,7 +321,7 @@ search or inline rename field.
 | Escape in the search field, search Close | Escape clears the text; Escape on an empty field, or Close, closes the row and returns focus to the tree |
 | Typing with the tree focused | Type-ahead to the next item whose name starts with the typed text (never search) |
 | Click a column header | Sorts by that column, again to reverse; folders stay first |
-| Drag a header divider / header | Resizes / reorders a column |
+| Drag a header divider / header | Resizes / reorders a column. Every column resizes, Name included (#692); a dragged width stays and is kept with the panel in the workspace layout, so each workspace has its own. Until it is dragged, Name takes what the others leave and every other column fits its content; Reset Column Widths (the header's menu, View > Columns) goes back to that |
 | Right-click the header, View > Columns | Chooses the visible columns (Name, Type and Dimensions by default); the choice is a per-user setting |
 | View > Show Info | Shows or hides the summary strip; a per-user setting |
 | View > Expand All / Collapse All | Expands or collapses every folder |
@@ -333,6 +333,7 @@ search or inline rename field.
 | F2 or Return | Renames the current row in place (asset, composition or folder); Return, Escape and clicking away commit |
 | Delete or Backspace, footer Delete | Deletes the selection; a used item, or a folder that holds items, asks first (see below) |
 | Double-click a composition | Switches the shared `CompositionSession` to that composition, as in a layer-based compositor; it opens no dialog. Double-clicking a folder expands it |
+| Double-click the empty space below the rows | Opens Import (File > Import's dialog); the files land at the top level of the panel, where a drop on empty space lands (#689). The header's double-click is its own |
 | Click a Tags cell | Opens the search row filtering by the asset's first tag |
 | Drag rows onto a folder, onto a row, or onto empty space | Moves the dragged assets, compositions and folders into that folder, the row's folder, or the root, as one undoable step; a folder never moves into itself or a subfolder |
 | Drag rows to Timeline or Viewer | Makes a layer of every dragged footage item and composition, in the order they were selected (see "Layer drops" under Timeline) |

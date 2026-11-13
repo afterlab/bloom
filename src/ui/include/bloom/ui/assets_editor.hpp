@@ -3,9 +3,11 @@
 #include <bloom/document/ids.hpp>
 #include <bloom/ui/editor_area.hpp>
 
+#include <QJsonObject>
 #include <QSet>
 #include <QWidget>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -31,7 +33,9 @@ class ExportQueueAdapter;
 // The project's assets, compositions and folders as one sortable tree with columns, modelled on
 // a compositor's project panel (#378): a compact summary strip of the selection above it, and a
 // search row that opens from the header's Search toggle or Ctrl+F.
-class AssetsEditor final : public QWidget, public EditorChromeProvider {
+class AssetsEditor final : public QWidget,
+                           public EditorChromeProvider,
+                           public EditorSessionStateProvider {
     Q_OBJECT
 
   public:
@@ -43,6 +47,14 @@ class AssetsEditor final : public QWidget, public EditorChromeProvider {
     // default) offers it disabled with the reason. Borrowed; must outlive the editor.
     void setExportQueue(ExportQueueAdapter* adapter) noexcept { exportQueue_ = adapter; }
     ~AssetsEditor() override;
+    // #692: the column widths the user dragged travel with the panel in the workspace layout.
+    [[nodiscard]] QJsonObject saveEditorSessionState() const override;
+    void restoreEditorSessionState(const QJsonObject& state) override;
+    // Test seam (#689): takes the place of the Import dialog; called with the folder the import
+    // would land in.
+    void setImportRequestForTest(std::function<void(std::optional<document::AssetFolderId>)> handler) {
+        importRequestForTest_ = std::move(handler);
+    }
 
   private:
     EditorChromeSpec chrome_;
@@ -80,11 +92,14 @@ class AssetsEditor final : public QWidget, public EditorChromeProvider {
     void removeSelected();
     void revealInFileManager(document::AssetId id);
     void requestImport();
+    // File > Import's dialog, for an import that lands in `folder` (empty: the top level).
+    void requestImportInto(std::optional<document::AssetFolderId> folder);
     // The folder new folders, compositions and imports land in for the current selection.
     [[nodiscard]] std::optional<document::AssetFolderId> selectedFolder() const;
     [[nodiscard]] std::vector<document::AssetId> selectedAssets() const;
 
     CompositionSession& session_;
+    std::function<void(std::optional<document::AssetFolderId>)> importRequestForTest_;
     ExportQueueAdapter* exportQueue_ = nullptr;
     QLineEdit* search_ = nullptr;
     QTreeWidget* tree_ = nullptr;

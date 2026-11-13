@@ -8,6 +8,7 @@
 #include <QHeaderView>
 #include <QKeyEvent>
 #include <QMimeData>
+#include <QMouseEvent>
 #include <QTreeWidgetItemIterator>
 #include <QUrl>
 #include <QUuid>
@@ -164,6 +165,18 @@ bool AssetTree::event(QEvent* event) {
     }
     return QTreeWidget::event(event);
 }
+// #689: a double-click on empty space asks for an import; on a row it keeps its meaning (a
+// composition opens, a folder expands). The header is not the viewport, so it never arrives here.
+void AssetTree::mouseDoubleClickEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton && itemAt(event->position().toPoint()) == nullptr &&
+        emptySpaceDoubleClicked) {
+        event->accept();
+        emptySpaceDoubleClicked();
+        return;
+    }
+    QTreeWidget::mouseDoubleClickEvent(event);
+}
+
 void AssetTree::keyPressEvent(QKeyEvent* event) {
     const int key = event->key();
     const bool plain =

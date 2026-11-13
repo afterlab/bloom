@@ -1,9 +1,12 @@
-// The Assets column controller: which columns show, their widths and the sort, kept as a per-user
-// setting (never project data). Name stretches, so the rows always span the panel; every other
-// shown column fits its content until the user drags it, and a dragged width is remembered.
+// The Assets column controller: which columns show, their order and the sort, kept as a per-user
+// setting (never project data), and their widths, kept with the panel's own state in the workspace
+// layout (#692). Every column is resized by dragging its header edge. Until the user drags one,
+// Name takes what the other columns leave and every other shown column fits its content.
 #include "assets_editor_internal.hpp"
 #include <QAction>
+#include <QEvent>
 #include <QHeaderView>
+#include <QJsonObject>
 #include <QMenu>
 #include <QSettings>
 #include <QTreeWidgetItemIterator>
@@ -48,9 +51,9 @@ ColumnController::ColumnController(QTreeWidget& tree) : QObject(&tree), tree_(tr
     header->setFirstSectionMovable(false);
     header->setStretchLastSection(false);
     header->setHighlightSections(false);
+    // #692: every column is dragged by its header edge, Name included. Name is given what the
+    // other columns leave (fitName) until the user sizes it.
     header->setSectionResizeMode(QHeaderView::Interactive);
-    // Name takes whatever the other columns leave, at every panel width.
-    header->setSectionResizeMode(NameColumn, QHeaderView::Stretch);
     header->setContextMenuPolicy(Qt::CustomContextMenu);
     header->setToolTip(
         QObject::tr("Click to sort, drag to resize or reorder; right-click to choose columns"));
@@ -58,34 +61,48 @@ ColumnController::ColumnController(QTreeWidget& tree) : QObject(&tree), tree_(tr
         header->setSectionHidden(column, !defaultColumnVisible(column));
     tree_.sortByColumn(NameColumn, Qt::AscendingOrder);
     connect(header, &QHeaderView::sectionResized, this, [this](const int column, int, int) {
-        // A width the user dragged stays; Name's is never the user's (it stretches).
-        if (!fitting_ && !restoring_ && column != NameColumn &&
-            !tree_.header()->isSectionHidden(column))
-            sized_.insert(column);
+        // A width the user dragged stays (#692: Name's too). Only a resize made with the mouse
+        // on the header is the user's; the view's own (a column shown or hidden) is not.
+        if (fitting_ || restoring_ || !dragging_ || tree_.header()->isSectionHidden(column))
+            return;
+        sized_.insert(column);
+        if (column != NameColumn)
+            fitName();
     });
+    header->viewport()->installEventFilter(this);
+    // Name follows the panel's width until the user sizes it.
+    tree_.viewport()->installEventFilter(this);
     connect(header, &QHeaderView::sortIndicatorChanged, this, [this] { save(); });
     connect(header, &QHeaderView::sectionMoved, this, [this] { save(); });
 }
 
+bool ColumnController::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == tree_.viewport() && event->type() == QEvent::Resize)
+        fitName();
+    if (watched == tree_.header()->viewport()) {
+        if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick)
+            dragging_ = true;
+        else if (event->type() == QEvent::MouseButtonRelease)
+            dragging_ = false;
+    }
+    return QObject::eventFilter(watched, event);
+}
+
 void ColumnController::restore() {
     QSettings settings;
+    // #692: the widths belong to the panel's workspace state (restoreWidths), not to this
+    // setting; every column starts fitted.
     sized_.clear();
-    // A comma-separated list: a one-item QVariantList would read back from an INI file as a bare
-    // string.
-    for (const auto& value :
-         settings.value(QString::fromLatin1(kSizedColumnsKey)).toString().split(QLatin1Char(','),
-                                                                               Qt::SkipEmptyParts))
-        if (const int column = value.toInt(); column > NameColumn && column < ColumnCount)
-            sized_.insert(column);
     const auto state = settings.value(QString::fromLatin1(kHeaderStateKey)).toByteArray();
     auto* header = tree_.header();
     // Restoring re-emits the sort and resize signals; none of them is the user's, so nothing is
     // saved or marked as dragged while it runs.
     restoring_ = true;
     if (!state.isEmpty() && header->restoreState(state)) {
-        // Name is never hidden and always stretches, whatever a saved state says.
+        // Name is never hidden and every column is dragged, whatever a saved state says.
         header->setSectionHidden(NameColumn, false);
-        header->setSectionResizeMode(NameColumn, QHeaderView::Stretch);
+        header->setSectionResizeMode(QHeaderView::Interactive);
+        header->setStretchLastSection(false);
         tree_.setSortingEnabled(true);
     }
     restoring_ = false;
@@ -96,12 +113,54 @@ void ColumnController::save() const {
         return;
     QSettings settings;
     settings.setValue(QString::fromLatin1(kHeaderStateKey), tree_.header()->saveState());
-    QList<int> columns(sized_.begin(), sized_.end());
-    std::ranges::sort(columns);
-    QStringList sized;
-    for (const int column : columns)
-        sized.push_back(QString::number(column));
-    settings.setValue(QString::fromLatin1(kSizedColumnsKey), sized.join(QLatin1Char(',')));
+}
+
+// #692: the widths the user dragged, by column, for the panel's state in the workspace layout.
+// A column that is not named fits its content (Name: what the others leave).
+QJsonObject ColumnController::saveWidths() const {
+    QJsonObject widths;
+    for (const int column : sized_)
+        widths.insert(QString::number(column), tree_.header()->sectionSize(column));
+    return widths;
+}
+
+void ColumnController::restoreWidths(const QJsonObject& widths) {
+    sized_.clear();
+    restoring_ = true;
+    for (auto entry = widths.begin(); entry != widths.end(); ++entry) {
+        bool ok = false;
+        const int column = entry.key().toInt(&ok);
+        const int width = entry.value().toInt();
+        if (!ok || column < NameColumn || column >= ColumnCount ||
+            width < tree_.header()->minimumSectionSize())
+            continue;
+        tree_.header()->resizeSection(column, width);
+        sized_.insert(column);
+    }
+    restoring_ = false;
+    fit();
+}
+
+void ColumnController::resetWidths() {
+    sized_.clear();
+    fit();
+}
+
+// Name takes what the other shown columns leave of the panel until the user sizes it.
+void ColumnController::fitName() {
+    if (sized_.contains(NameColumn) || fitting_ || restoring_)
+        return;
+    int others = 0;
+    for (int column = TypeColumn; column < ColumnCount; ++column)
+        if (!tree_.header()->isSectionHidden(column))
+            others += tree_.header()->sectionSize(column);
+    const int width =
+        std::max(tree_.viewport()->width() - others, tree_.header()->minimumSectionSize());
+    if (tree_.header()->sectionSize(NameColumn) == width)
+        return;
+    fitting_ = true;
+    tree_.header()->resizeSection(NameColumn, width);
+    fitting_ = false;
 }
 
 void ColumnController::setVisible(const int column, const bool visible) {
@@ -110,6 +169,7 @@ void ColumnController::setVisible(const int column, const bool visible) {
     tree_.header()->setSectionHidden(column, !visible);
     if (visible && !sized_.contains(column))
         fitColumn(column);
+    fitName();
     save();
 }
 
@@ -123,6 +183,12 @@ void ColumnController::fill(QMenu& menu) {
         connect(action, &QAction::toggled, this,
                 [this, index](const bool visible) { setVisible(index, visible); });
     }
+    // #692: back to fitted widths.
+    menu.addSeparator();
+    auto* reset = menu.addAction(QObject::tr("Reset Column Widths"));
+    reset->setObjectName(QStringLiteral("assetsColumnResetWidthsAction"));
+    reset->setEnabled(!sized_.isEmpty());
+    connect(reset, &QAction::triggered, this, [this] { resetWidths(); });
 }
 
 void ColumnController::fitColumn(const int column) {
@@ -148,6 +214,7 @@ void ColumnController::fit() {
     for (int column = TypeColumn; column < ColumnCount; ++column)
         if (!sized_.contains(column))
             fitColumn(column);
+    fitName();
 }
 
 } // namespace bloom::ui::assets

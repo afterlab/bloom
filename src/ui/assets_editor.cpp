@@ -104,6 +104,9 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     connect(tree_->itemDelegate(), &QAbstractItemDelegate::closeEditor, this,
             [this] { QTimer::singleShot(0, this, &AssetsEditor::rebuild); });
     tree->deleteRequested = [this] { removeSelected(); };
+    // #689: empty space is the top level of the panel, where a drop on it lands too, so the
+    // import goes there whatever is selected.
+    tree->emptySpaceDoubleClicked = [this] { requestImportInto(std::nullopt); };
     const auto expanded = [this](QTreeWidgetItem* item) {
         // A folder's glyph and the strip's folder glyph follow its open state.
         refreshSelectionHeader();
@@ -145,6 +148,18 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
 AssetsEditor::~AssetsEditor() {
     if (columns_ != nullptr)
         columns_->save();
+}
+
+QJsonObject AssetsEditor::saveEditorSessionState() const {
+    QJsonObject state;
+    if (columns_ != nullptr)
+        state.insert(QStringLiteral("columnWidths"), columns_->saveWidths());
+    return state;
+}
+
+void AssetsEditor::restoreEditorSessionState(const QJsonObject& state) {
+    if (columns_ != nullptr && state.contains(QStringLiteral("columnWidths")))
+        columns_->restoreWidths(state.value(QStringLiteral("columnWidths")).toObject());
 }
 
 void AssetsEditor::refreshSelectionHeader() {
@@ -352,9 +367,15 @@ void AssetsEditor::showNewCompositionDialog() {
         openComposition(*id);
 }
 
-void AssetsEditor::requestImport() {
+void AssetsEditor::requestImport() { requestImportInto(selectedFolder()); }
+
+void AssetsEditor::requestImportInto(const std::optional<document::AssetFolderId> folder) {
+    if (importRequestForTest_) {
+        importRequestForTest_(folder);
+        return;
+    }
     if (auto* controller = session_.assetController()) {
-        controller->setImportFolder(selectedFolder());
+        controller->setImportFolder(folder);
         controller->requestImport(this);
     }
 }

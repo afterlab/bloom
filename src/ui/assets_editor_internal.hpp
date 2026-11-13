@@ -1,4 +1,5 @@
 #pragma once
+#include <QJsonObject>
 #include <QPersistentModelIndex>
 #include <QPoint>
 #include <QSet>
@@ -198,6 +199,8 @@ class AssetTree final : public QTreeWidget {
     dropFolder(QPoint position) const;
     // Delete or Backspace on the focused tree.
     std::function<void()> deleteRequested;
+    // #689: a double-click on the empty space below the rows (not on a row, not on the header).
+    std::function<void()> emptySpaceDoubleClicked;
     // Test seam: the payload a drag of the current selection carries, as startDrag builds it.
     [[nodiscard]] QMimeData* selectionMimeDataForTest() const { return mimeData(selectedItems()); }
 
@@ -212,6 +215,7 @@ class AssetTree final : public QTreeWidget {
     QMimeData* mimeData(const QList<QTreeWidgetItem*>& items) const override;
     void startDrag(Qt::DropActions actions) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dragMoveEvent(QDragMoveEvent* event) override;
     void dropEvent(QDropEvent* event) override;
@@ -306,13 +310,23 @@ class ColumnController final : public QObject {
     void fill(QMenu& menu);
     // Fits every shown column the user has not sized to its content (after a row rebuild).
     void fit();
+    // #692: the widths the user dragged, kept with the panel's state in the workspace layout.
+    [[nodiscard]] QJsonObject saveWidths() const;
+    void restoreWidths(const QJsonObject& widths);
+    void resetWidths();
+
+  protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:
     void fitColumn(int column);
+    void fitName();
     QTreeWidget& tree_;
     QSet<int> sized_;
     bool fitting_ = false;
     bool restoring_ = false;
+    // A mouse button is down on the header: a resize now is the user's.
+    bool dragging_ = false;
 };
 } // namespace assets
 } // namespace bloom::ui

@@ -1279,11 +1279,13 @@ panel footer keeps New Composition, New Folder, Import and Delete as fast icon b
 
 **Columns.** Name, Type, Dimensions, Duration, Frame Rate, File Size, Tags and File Location. Name,
 Type and Dimensions show by default; the others are chosen from the header's context menu or
-View > Columns (Name always shows). Name is the header's one `QHeaderView::Stretch` section, so the
-shown columns always span the viewport exactly at any panel width and no dead band is left to the
-right; every other shown column fits its content (never below `ValueCellMin`) until the user drags
-it. Visibility, dragged widths, order and sort are a per-user setting (`assets/header-state-v2`,
-`assets/sized-columns`), never project data. Type names the kind; Dimensions is `W × H` (Size was
+View > Columns (Name always shows). Every column is resized by dragging its header edge, Name
+included (#692). Until the user drags one, Name takes what the other shown columns leave, so the
+columns span the viewport exactly at any panel width and no dead band is left to the right, and
+every other shown column fits its content (never below `ValueCellMin`). A dragged width stays;
+Reset Column Widths in the same menu fits the columns again. Visibility, order and sort are a
+per-user setting (`assets/header-state-v2`); the dragged widths are the panel's own state in the
+workspace layout (`columnWidths`), so each workspace keeps its own. Neither is project data. Type names the kind; Dimensions is `W × H` (Size was
 renamed: size reads as bytes on disk). Duration shows the compositor timecode `H:MM:SS:FF` at
 the item's rate; its tooltip carries the frame count and rate in the one duration format (#380),
 `0:00:02:00 (48 frames) at 24 fps` (`(1 frame)` in the singular). A sequence plays one member per
