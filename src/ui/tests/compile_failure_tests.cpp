@@ -1,6 +1,8 @@
 // The compile-failure details (docs/ux/ui-grammar.md, "Compile failure details"): the status bar's
 // Details disclosure, the popup's words, Select, Copy details, and the absence of raw codes in
 // anything visible. Set BLOOM_COMPILE_FAILURE_CAPTURE_DIR to also write PNGs of the bar and popup.
+#include "await_qt.hpp"
+
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/document/document.hpp>
@@ -137,7 +139,7 @@ void testStatusBarPopup() {
     layout->addWidget(&bar);
     host.resize(900, 240);
     host.show();
-    QTest::qWait(20);
+    expect(QTest::qWaitForWindowExposed(&host), "the status bar host window is exposed");
 
     expect(!bar.compileDetailsVisibleForTest(), "no failure: no disclosure");
     bar.applyPreviewStateForTest(f.failedState());
@@ -156,8 +158,10 @@ void testStatusBarPopup() {
     expect(popup != nullptr && popup->isVisible(), "clicking Details opens the popup");
     if (popup == nullptr)
         return;
-    QTest::qWait(20);
-    expect(popup->anchorRect().isValid(), "the popup is anchored to the bar");
+    expect(bloom::test_support::awaitQtCondition("popup is anchored to the bar",
+                                                 [&] { return popup->anchorRect().isValid(); }) &&
+               popup->anchorRect().isValid(),
+           "the popup is anchored to the bar");
     const auto texts = [&] {
         QStringList out;
         for (auto* label : popup->findChildren<QLabel*>())
@@ -180,8 +184,10 @@ void testStatusBarPopup() {
     expect(copied.contains(QStringLiteral("bloom.runtime.compile.topology-invariant")) &&
                copied.contains(QStringLiteral("node=%1").arg(f.nodeId.value())),
            "Copy details copies the raw diagnostic");
-    QTest::qWait(20);
-    expect(bar.compileFailurePopupForTest() == nullptr, "Copy details closes the popup");
+    expect(bloom::test_support::awaitQtCondition(
+               "Copy details closes the popup",
+               [&] { return bar.compileFailurePopupForTest() == nullptr; }),
+           "Copy details closes the popup");
 
     // Select picks the failing layer through the session's selection.
     f.session.clearSelection();
@@ -191,8 +197,10 @@ void testStatusBarPopup() {
     if (popup != nullptr) {
         popup->findChild<ui::kit::KButton*>(QStringLiteral("compileFailureSelect"))->click();
         expect(f.session.selection().contextualLayer == f.layerId, "Select picks the failing layer");
-        QTest::qWait(20);
-        expect(bar.compileFailurePopupForTest() == nullptr, "Select closes the popup");
+        expect(bloom::test_support::awaitQtCondition(
+                   "Select closes the popup",
+                   [&] { return bar.compileFailurePopupForTest() == nullptr; }),
+               "Select closes the popup");
     }
 
     // A recovered preview removes the disclosure.
@@ -242,5 +250,5 @@ int main(int argc, char** argv) {
     testCachePollFollowsVisibility();
     if (gFailures != 0)
         std::cerr << gFailures << " failure(s)\n";
-    return gFailures == 0 ? 0 : 1;
+    return gFailures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

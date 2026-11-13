@@ -1,3 +1,5 @@
+#include "case_timer.hpp"
+#include "await_qt.hpp"
 #include <QAction>
 #include <QApplication>
 #include <QDir>
@@ -20,8 +22,9 @@
 #include <QThread>
 #include <QTreeWidget>
 #include <QVBoxLayout>
-#include <array>
 #include <algorithm>
+#include <array>
+#include <bloom/runtime/font_resolver.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -48,9 +51,9 @@
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/curve_graph.hpp>
+#include <bloom/ui/dither_widget.hpp>
 #include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
-#include <bloom/ui/node_controls_widget.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/controls.hpp>
@@ -67,7 +70,6 @@
 #include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/test_card_widget.hpp>
 #include <functional>
-#include <bloom/ui/dither_widget.hpp>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -592,12 +594,10 @@ void upstreamRows() {
     QCoreApplication::processEvents();
     auto* drivenRow = row(*panel, "a");
     auto* value = drivenRow ? drivenRow->findChild<QLabel*>("propertiesDrivenValue") : nullptr;
-    QElapsedTimer wait;
-    wait.start();
-    while (value && value->text() == "Resolving…" && wait.elapsed() < 5000) {
-        QCoreApplication::processEvents();
-        QThread::msleep(5);
-    }
+    expect(bloom::test_support::awaitQtCondition(
+               "detached driven graph value resolves",
+               [&] { return value && value->text() != "Resolving…"; }),
+           "the driven value leaves the placeholder");
     expect(value && value->text() == "0",
            "detached driven graph resolves through background evaluator");
     // The link button over the value text: the whole stack lies inside the row, so the text is
@@ -657,11 +657,10 @@ void upstreamRows() {
     connectNodes(session, fourth, vector, "a");
     session.selectNode(vector);
     value = panel->findChild<QLabel*>("propertiesDrivenValue");
-    wait.restart();
-    while (value && value->text() == "Resolving…" && wait.elapsed() < 5000) {
-        QCoreApplication::processEvents();
-        QThread::msleep(5);
-    }
+    expect(
+        bloom::test_support::awaitQtCondition(
+            "vector driver value resolves", [&] { return value && value->text() != "Resolving…"; }),
+        "the vector driver value leaves the placeholder");
     expect(value && value->text() == "0, 0", "driver display applies scalar-to-vector promotion");
     const auto string = addNode(session, document::kStringValueNodeType);
     const auto stringSwitch = addNode(session, document::kStringSwitchNodeType);
@@ -675,11 +674,10 @@ void upstreamRows() {
     connectNodes(session, stringSwitch, stringConsumer, "ifFalse");
     session.selectNode(stringConsumer);
     value = panel->findChild<QLabel*>("propertiesDrivenValue");
-    wait.restart();
-    while (value && value->text() == "Resolving…" && wait.elapsed() < 5000) {
-        QCoreApplication::processEvents();
-        QThread::msleep(5);
-    }
+    expect(
+        bloom::test_support::awaitQtCondition(
+            "string driver value resolves", [&] { return value && value->text() != "Resolving…"; }),
+        "the string driver value leaves the placeholder");
     if (value && value->text() != "Exact string")
         std::cerr << "STRING RESULT " << value->text().toStdString() << "\n";
     expect(value && value->text() == "Exact string",
@@ -734,12 +732,10 @@ void drivenTextContent() {
            "a driven String shows no text editor, because there is no authored string to edit");
     expect(link != nullptr && link->isVisible() && !link->text().isEmpty(),
            "and names the node its words come from");
-    QElapsedTimer wait;
-    wait.start();
-    while (value && value->text() == "Resolving…" && wait.elapsed() < 5000) {
-        QCoreApplication::processEvents();
-        QThread::msleep(5);
-    }
+    expect(
+        bloom::test_support::awaitQtCondition(
+            "driven text value resolves", [&] { return value && value->text() != "Resolving…"; }),
+        "the driven text value leaves the placeholder");
     expect(value != nullptr && value->text() == "Driven words",
            "and shows the resolved text itself, read-only");
     expect(value != nullptr && value->text() == session.drivenValueText(contentId),
@@ -1200,36 +1196,27 @@ void fontCatalogueRefreshIsNotAnEdit() {
     ui::PropertiesEditor panel(session);
     panel.resize(420, 900);
     panel.show();
-    ui::kit::KDropdown* font = nullptr;
-    int populated = 0;
-    QElapsedTimer clock;
-    clock.start();
-    // The row polls the catalogue every 50 ms and rebuilds itself when the system faces land
-    // after the embedded ones; wait for that rebuild (the list grows), then a little longer.
-    int first = -1;
-    qint64 grewAt = -1;
-    while (clock.elapsed() < 10'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
-        font = panel.findChild<ui::kit::KDropdown*>("propertiesTextFont");
-        if (font == nullptr)
-            continue;
-        if (first < 0)
-            first = font->count();
-        populated = std::max(populated, font->count());
-        if (grewAt < 0 && populated > first)
-            grewAt = clock.elapsed();
-        if (grewAt >= 0 && clock.elapsed() > grewAt + 500)
-            break;
-    }
-    expect(font != nullptr && populated > 0, "the text layer shows a populated font selector");
-    expect(stack.size() == history, "building and refreshing the font list adds no undo entry");
+    // The field asks the resolver for its face and refreshes until the answer has settled (the
+    // system catalogue arrives on another thread). That refresh is what must not edit.
+    const auto settled = bloom::test_support::awaitQtCondition("the text layer's face resolves", [&] {
+        using State = runtime::fonts::FontStatus::State;
+        const auto state =
+            runtime::fonts::processFontResolver().status(document::defaultFontId(), false).state;
+        return panel.findChild<ui::kit::KDropdown*>("propertiesTextFont") != nullptr &&
+               state != State::Checking && state != State::Downloading;
+    });
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
+    auto* font = panel.findChild<ui::kit::KDropdown*>("propertiesTextFont");
+    expect(settled && font != nullptr && font->count() > 0 && !font->itemText(0).isEmpty(),
+           "the text layer shows its face in the font selector");
+    expect(stack.size() == history, "building and refreshing the font row adds no undo entry");
     expect(session.snapshot().revision() == revision,
            "and no transaction reaches the document");
-    if (font != nullptr && font->count() > 1) {
-        font->chooseIndex(font->currentIndex() == 0 ? 1 : 0);
-        QCoreApplication::processEvents();
-        expect(stack.size() > history, "choosing a face is one undoable edit");
-    }
+    // That a choice is one undoable edit is bloom.ui.font-picker's (through the picker, which is
+    // how a face is chosen). This case used to choose from the selector's list when it held more
+    // than one face; the selector has held only the current face since the picker, so that half
+    // never ran.
 }
 // #339: Drop Shadow, Glow and Light Wrap present every control from the registry, and a switch
 // edits through command history.
@@ -2824,19 +2811,17 @@ void cameraShakeRows() {
                top(motionBlur) < top(shutter) && top(shutter) < top(shutterOpens),
            "the shutter angle is a dial after Motion blur, before Shutter opens");
     // The outputs' values: readable text, no placeholder once resolved.
-    QElapsedTimer wait;
-    wait.start();
     QLabel* offset = nullptr;
     QLabel* rollOutput = nullptr;
-    while (wait.elapsed() < 8000) {
-        QCoreApplication::processEvents();
-        QThread::msleep(5);
-        offset = properties.findChild<QLabel*>("propertiesValueOutput.offset");
-        rollOutput = properties.findChild<QLabel*>("propertiesValueOutput.roll");
-        if (offset && rollOutput && offset->text() != "Resolving…" &&
-            rollOutput->text() != "Resolving…")
-            break;
-    }
+    expect(bloom::test_support::awaitQtCondition(
+               "offset and roll outputs resolve",
+               [&] {
+                   offset = properties.findChild<QLabel*>("propertiesValueOutput.offset");
+                   rollOutput = properties.findChild<QLabel*>("propertiesValueOutput.roll");
+                   return offset && rollOutput && offset->text() != "Resolving…" &&
+                          rollOutput->text() != "Resolving…";
+               }),
+           "the offset and roll outputs resolve");
     expect(offset != nullptr && rollOutput != nullptr && offset->text() != "Resolving…" &&
                rollOutput->text() != "Resolving…" && !offset->text().isEmpty() &&
                !rollOutput->text().isEmpty(),
@@ -2872,20 +2857,18 @@ std::map<QString, QString> readoutTexts(QWidget& panel) {
 }
 
 // Waits (bounded) until the node's rows exist and none is still on the placeholder.
-std::map<QString, QString> resolvedReadouts(QWidget& panel, const int timeoutMs = 15000) {
-    QElapsedTimer wait;
-    wait.start();
+std::map<QString, QString> resolvedReadouts(QWidget& panel) {
     std::map<QString, QString> texts;
-    while (wait.elapsed() < timeoutMs) {
-        QCoreApplication::processEvents();
-        QThread::msleep(5);
-        texts = readoutTexts(panel);
-        if (!texts.empty() &&
-            std::ranges::none_of(texts, [](const auto& entry) {
-                return entry.second == QStringLiteral("Resolving…") || entry.second.isEmpty();
-            }))
-            break;
-    }
+    expect(bloom::test_support::awaitQtCondition(
+               "every readout of the panel resolves",
+               [&] {
+                   texts = readoutTexts(panel);
+                   return !texts.empty() && std::ranges::none_of(texts, [](const auto& entry) {
+                       return entry.second == QStringLiteral("Resolving…") ||
+                              entry.second.isEmpty();
+                   });
+               }),
+           "every readout of the panel resolves");
     return texts;
 }
 
@@ -2970,18 +2953,17 @@ void pathReadoutsResolve() {
             saveReadoutCapture(fixture.properties, "properties-trim-path");
             // A new input updates the readout.
             setNodeValue(fixture.session, node, "path", squarePath(200.0));
-            QElapsedTimer wait;
-            wait.start();
             QString length;
-            while (wait.elapsed() < 15000) {
-                QCoreApplication::processEvents();
-                QThread::msleep(5);
-                const auto again = readoutTexts(fixture.properties);
-                length = again.contains(QStringLiteral("length")) ? again.at(QStringLiteral("length"))
-                                                                  : QString();
-                if (length.startsWith(QStringLiteral("800")) || length.startsWith(QStringLiteral("799.99")))
-                    break;
-            }
+            const bool lengthArrived =
+                bloom::test_support::awaitQtCondition("Trim Path length follows its path", [&] {
+                    const auto again = readoutTexts(fixture.properties);
+                    length = again.contains(QStringLiteral("length"))
+                                 ? again.at(QStringLiteral("length"))
+                                 : QString();
+                    return length.startsWith(QStringLiteral("800")) ||
+                           length.startsWith(QStringLiteral("799.99"));
+                });
+            expect(lengthArrived, "the Trim Path length readout updates");
             expect(length.startsWith(QStringLiteral("800")) || length.startsWith(QStringLiteral("799.99")),
                    ("Trim Path length follows its path: " + length.toStdString()).c_str());
         }
@@ -3123,13 +3105,8 @@ void pathStampAndSourceRows() {
             return chip->isHidden() || chip->isEnabled();
         });
     };
-    QElapsedTimer conversion;
-    conversion.start();
-    while (!chipReady() && conversion.elapsed() < 5000) {
-        QCoreApplication::processEvents();
-        QThread::msleep(5);
-    }
-    expect(chipReady(), "Alpha Contour's colour chip shows its colour");
+    expect(bloom::test_support::awaitQtCondition("Alpha Contour colour chip is enabled", chipReady),
+           "Alpha Contour's colour chip shows its colour");
     labelsWhole("Alpha Contour");
     saveReadoutCapture(properties, "properties-alpha-contour");
 }
@@ -3152,18 +3129,13 @@ void imageStatisticsReadoutsResolve() {
     setNodeValue(fixture.session, solid, "height", static_cast<double>(format.height()));
     const auto expectedCount = static_cast<double>(format.width()) * format.height();
     const auto waitFor = [&](const char* what, const std::function<bool(const std::map<QString, QString>&)>& done) {
-        QElapsedTimer wait;
-        wait.start();
         std::map<QString, QString> current;
-        while (wait.elapsed() < 20000) {
-            QCoreApplication::processEvents();
-            QThread::msleep(5);
+        const bool arrived = bloom::test_support::awaitQtCondition(what, [&] {
             current = readoutTexts(fixture.properties);
-            if (current.size() == 5 && done(current))
-                break;
-        }
-        expect(current.size() == 5 && done(current), what);
-        if (!(current.size() == 5 && done(current)))
+            return current.size() == 5 && done(current);
+        });
+        expect(arrived, what);
+        if (!arrived)
             for (const auto& [port, text] : current)
                 std::cerr << "  " << port.toStdString() << " = " << text.toStdString() << '\n';
         return current;
@@ -3195,17 +3167,15 @@ void timeUpdatesReadout() {
     expect(texts.size() == 1 && texts.begin()->second == QStringLiteral("0"),
            "Frame Number reads 0 at the start");
     (void)fixture.session.setCurrentTime(core::RationalTime::fromInteger(3));
-    QElapsedTimer wait;
-    wait.start();
     QString text;
-    while (wait.elapsed() < 15000) {
-        QCoreApplication::processEvents();
-        QThread::msleep(5);
-        texts = readoutTexts(fixture.properties);
-        text = texts.empty() ? QString() : texts.begin()->second;
-        if (text == QStringLiteral("72"))
-            break;
-    }
+    expect(bloom::test_support::awaitQtCondition("Frame Number readout follows the playhead",
+                                                 [&] {
+                                                     texts = readoutTexts(fixture.properties);
+                                                     text = texts.empty() ? QString()
+                                                                          : texts.begin()->second;
+                                                     return text == QStringLiteral("72");
+                                                 }),
+           "the Frame Number readout updates");
     expect(text == QStringLiteral("72"), ("Frame Number follows the playhead: " + text.toStdString()).c_str());
 }
 
@@ -3218,18 +3188,17 @@ void integerAndBooleanReadouts() {
         const auto node = addNode(fixture.session, type);
         fixture.session.selectNode(node);
         prepare(fixture, node);
-        QElapsedTimer wait;
-        wait.start();
         QString text;
-        while (wait.elapsed() < 15000) {
-            QCoreApplication::processEvents();
-            QThread::msleep(5);
-            const auto texts = readoutTexts(fixture.properties);
-            text = texts.contains(QString::fromLatin1(port)) ? texts.at(QString::fromLatin1(port))
-                                                             : QString();
-            if (text == expected)
-                break;
-        }
+        expect(bloom::test_support::awaitQtCondition(
+                   "readout reaches its expected text",
+                   [&] {
+                       const auto texts = readoutTexts(fixture.properties);
+                       text = texts.contains(QString::fromLatin1(port))
+                                  ? texts.at(QString::fromLatin1(port))
+                                  : QString();
+                       return text == expected;
+                   }),
+               "the readout updates");
         expect(text == expected, (std::string(what) + ": expected " + expected.toStdString() +
                                   ", read " + text.toStdString())
                                      .c_str());
@@ -3391,14 +3360,16 @@ void testCardRows() {
                        QStringLiteral("Set")),
            "the Test Card becomes a Patch");
     auto* readout = properties->findChild<ui::TestCardCardWidget*>();
-    QElapsedTimer wait;
-    wait.start();
-    while ((readout == nullptr || readout->expectedText().startsWith(QStringLiteral("Expected display value: w")) ||
-            readout->expectedText().isEmpty()) &&
-           wait.elapsed() < 5'000) {
-        QApplication::processEvents(QEventLoop::AllEvents, 20);
-        readout = properties->findChild<ui::TestCardCardWidget*>();
-    }
+    expect(bloom::test_support::awaitQtCondition(
+               "Test Card patch readout shows its expected value",
+               [&] {
+                   readout = properties->findChild<ui::TestCardCardWidget*>();
+                   return readout != nullptr &&
+                          !readout->expectedText().startsWith(
+                              QStringLiteral("Expected display value: w")) &&
+                          !readout->expectedText().isEmpty();
+               }),
+           "the Patch readout shows its expected display value");
     QApplication::processEvents();
     expect(readout != nullptr && shown("patchValue") && !shown("gridSpacing"),
            "a Patch shows its own rows");
@@ -3492,72 +3463,72 @@ int main(int argc, char** argv) try {
     QCoreApplication::setOrganizationName("BloomPropertiesRegistryTest");
     QSettings().clear();
     if (argc > 1 && std::string_view(argv[1]) == "--readouts") {
-        pathReadoutsResolve();
-        pathStampAndSourceRows();
-        imageStatisticsReadoutsResolve();
-        timeUpdatesReadout();
-        integerAndBooleanReadouts();
+        BLOOM_TIMED_CASE(pathReadoutsResolve());
+        BLOOM_TIMED_CASE(pathStampAndSourceRows());
+        BLOOM_TIMED_CASE(imageStatisticsReadoutsResolve());
+        BLOOM_TIMED_CASE(timeUpdatesReadout());
+        BLOOM_TIMED_CASE(integerAndBooleanReadouts());
         QSettings().clear();
-        return failures ? 1 : 0;
+        return failures + bloom::test_support::awaitFailureCount() != 0 ? 1 : 0;
     }
     if (argc > 1 && std::string_view(argv[1]) == "--capture-readouts") {
-        captureResolvedProperties();
+        BLOOM_TIMED_CASE(captureResolvedProperties());
         QSettings().clear();
-        return failures ? 1 : 0;
+        return failures + bloom::test_support::awaitFailureCount() != 0 ? 1 : 0;
     }
     // `--label-audit` runs only the #582 label audit, which is what the second device pixel ratio
     // registers: the same audit over every built-in node at the same widths and assertions.
     if (argc > 1 && std::string_view(argv[1]) == "--label-audit") {
-        everyBuiltInLabelIsShownWhole();
+        BLOOM_TIMED_CASE(everyBuiltInLabelIsShownWhole());
         QSettings().clear();
-        return failures ? 1 : 0;
+        return failures + bloom::test_support::awaitFailureCount() != 0 ? 1 : 0;
     }
     // First: it must be the first font row in the process, so the system catalogue arrives (and
     // the selector is rebuilt) while it watches.
-    fontCatalogueRefreshIsNotAnEdit();
-    genericKinds();
-    scaledProjectionGestureKeepsItsUnit();
-    registryRows();
-    upstreamRows();
-    drivenTextContent();
-    colourEffectRows();
-    discreteImageRows();
-    transform2DRows();
-    frameRateHoldRows();
-    autoExposureRows();
-    colorCleanupRows();
-    renamedColorNodeRows();
-    edgeExtendRows();
-    lineEndRows();
-    extensionPropertiesRows();
-    warpRows();
-    tileMirrorRows();
-    proceduralWarpRows();
-    quantizeRows();
-    ditherRows();
-    innerRows();
-    audioEffectRows();
-    groupAndPlotRows();
-    resamplePathRowOrder();
-    warpPathRowOrder();
-    cameraShakeRows();
-    matteBlurRows();
-    matteKeyRows();
-    recipeRows();
-    colorGradeRows();
-    imageChannelRows();
-    widthRule();
-    everyBuiltInLabelIsShownWhole();
-    videoRows();
-    testCardRows();
-    pathReadoutsResolve();
-    pathStampAndSourceRows();
-    imageStatisticsReadoutsResolve();
-    timeUpdatesReadout();
-    integerAndBooleanReadouts();
-    everyValueOutputResolves();
+    BLOOM_TIMED_CASE(fontCatalogueRefreshIsNotAnEdit());
+    BLOOM_TIMED_CASE(genericKinds());
+    BLOOM_TIMED_CASE(scaledProjectionGestureKeepsItsUnit());
+    BLOOM_TIMED_CASE(registryRows());
+    BLOOM_TIMED_CASE(upstreamRows());
+    BLOOM_TIMED_CASE(drivenTextContent());
+    BLOOM_TIMED_CASE(colourEffectRows());
+    BLOOM_TIMED_CASE(discreteImageRows());
+    BLOOM_TIMED_CASE(transform2DRows());
+    BLOOM_TIMED_CASE(frameRateHoldRows());
+    BLOOM_TIMED_CASE(autoExposureRows());
+    BLOOM_TIMED_CASE(colorCleanupRows());
+    BLOOM_TIMED_CASE(renamedColorNodeRows());
+    BLOOM_TIMED_CASE(edgeExtendRows());
+    BLOOM_TIMED_CASE(lineEndRows());
+    BLOOM_TIMED_CASE(extensionPropertiesRows());
+    BLOOM_TIMED_CASE(warpRows());
+    BLOOM_TIMED_CASE(tileMirrorRows());
+    BLOOM_TIMED_CASE(proceduralWarpRows());
+    BLOOM_TIMED_CASE(quantizeRows());
+    BLOOM_TIMED_CASE(ditherRows());
+    BLOOM_TIMED_CASE(innerRows());
+    BLOOM_TIMED_CASE(audioEffectRows());
+    BLOOM_TIMED_CASE(groupAndPlotRows());
+    BLOOM_TIMED_CASE(resamplePathRowOrder());
+    BLOOM_TIMED_CASE(warpPathRowOrder());
+    BLOOM_TIMED_CASE(cameraShakeRows());
+    BLOOM_TIMED_CASE(matteBlurRows());
+    BLOOM_TIMED_CASE(matteKeyRows());
+    BLOOM_TIMED_CASE(recipeRows());
+    BLOOM_TIMED_CASE(colorGradeRows());
+    BLOOM_TIMED_CASE(imageChannelRows());
+    BLOOM_TIMED_CASE(widthRule());
+    BLOOM_TIMED_CASE(everyBuiltInLabelIsShownWhole());
+    BLOOM_TIMED_CASE(videoRows());
+    BLOOM_TIMED_CASE(testCardRows());
+    BLOOM_TIMED_CASE(pathReadoutsResolve());
+    BLOOM_TIMED_CASE(pathStampAndSourceRows());
+    BLOOM_TIMED_CASE(imageStatisticsReadoutsResolve());
+    BLOOM_TIMED_CASE(timeUpdatesReadout());
+    BLOOM_TIMED_CASE(integerAndBooleanReadouts());
+    BLOOM_TIMED_CASE(everyValueOutputResolves());
     QSettings().clear();
-    return failures ? 1 : 0;
+    return failures + bloom::test_support::awaitFailureCount() != 0 ? 1 : 0;
 }
 
 catch (const std::exception& error) {

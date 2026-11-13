@@ -58,8 +58,7 @@ void retryNativeChecks(Expectations& checks, Fixture& fixture, ui::CompositionSe
                 return actualCpu(snapshot, identity, limit, overrides, context);
             },
             fixture.productionCpuFallback(referenceDisplay), options);
-        checks.expect(waitUntil(
-                          [&] {
+        checks.expect(awaitProof("count-one fallback owns a real ready native service", [&] {
                               return service.status().state !=
                                      GpuPreviewDisplayServiceState::Initializing;
                           },
@@ -84,9 +83,7 @@ void retryNativeChecks(Expectations& checks, Fixture& fixture, ui::CompositionSe
                       "CPU fallback");
         service.beginShutdown();
         checks.expect(
-            waitUntil(
-                [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; },
-                15s),
+            awaitProof("count-one fallback service stops safely", [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; }),
             "count-one fallback service stops safely");
     }
     if (checks.failures() != 0)
@@ -122,8 +119,7 @@ void retryNativeChecks(Expectations& checks, Fixture& fixture, ui::CompositionSe
         },
         actualCpu, fixture.productionCpuFallback(referenceDisplay), options);
     checks.expect(
-        waitUntil(
-            [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; },
+        awaitProof("native retry owns a genuinely ready production service", [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; },
             90s) &&
             service.status().state == GpuPreviewDisplayServiceState::Ready,
         "native retry owns a genuinely ready production service");
@@ -183,7 +179,7 @@ void retryNativeChecks(Expectations& checks, Fixture& fixture, ui::CompositionSe
         return controller.state().activity == ui::PreviewActivity::Ready &&
                controller.state().frame && isResident(controller.state().frame);
     };
-    checks.expect(waitUntil(failed, 15s) && preparations.load() == 1 && submissions == 1 &&
+    checks.expect(awaitProof("real native retain refusal emits exact own-disposal watermark without dispatch", failed) && preparations.load() == 1 && submissions == 1 &&
                       !controller.state().diagnostics.empty() &&
                       controller.state().diagnostics.front().admissionRetry &&
                       controller.state().diagnostics.front().admissionRetry->revision ==
@@ -200,7 +196,7 @@ void retryNativeChecks(Expectations& checks, Fixture& fixture, ui::CompositionSe
     ownerControl(held, false);
     held.reset();
     controller.notifyProcessingCapacityChanged();
-    checks.expect(waitUntil(ready, 15s) && preparations.load() == 2 && submissions == 2 &&
+    checks.expect(awaitProof("external slot release admits genuine native recovery", ready) && preparations.load() == 2 && submissions == 2 &&
                       service.status().counters.residentGraphJobs == 1,
                   "external slot release admits genuine native recovery");
     if (checks.failures() != 0)
@@ -211,14 +207,14 @@ void retryNativeChecks(Expectations& checks, Fixture& fixture, ui::CompositionSe
     controller.requestRefresh();
     // Hold Qt delivery while the real owner finishes the refusal; inspect terminal metadata only.
     std::optional<runtime::TaskSnapshot> terminal;
-    const auto deadline = std::chrono::steady_clock::now() + 15s;
-    while (std::chrono::steady_clock::now() < deadline) {
-        terminal = scheduler.snapshot(latestTask);
-        if (terminal && terminal->state == TaskState::Failed)
-            break;
-        std::this_thread::yield();
-    }
-    checks.expect(terminal && terminal->state == TaskState::Failed &&
+    // No event pump: the wait only reads the scheduler's own task metadata.
+    checks.expect(bloom::test_support::awaitCondition(
+                      "the failed task reaches its terminal state",
+                      [&] {
+                          terminal = scheduler.snapshot(latestTask);
+                          return terminal && terminal->state == TaskState::Failed;
+                      }) &&
+                      terminal && terminal->state == TaskState::Failed &&
                       !terminal->diagnostics.empty() &&
                       terminal->diagnostics.front().admissionRetry,
                   "real native failure is terminal before UI delivery");
@@ -233,10 +229,10 @@ void retryNativeChecks(Expectations& checks, Fixture& fixture, ui::CompositionSe
     checks.expect(policy->snapshot().reservations.admissionRevision > watermark &&
                       controller.state().frame == goodFrame,
                   "external release before delivery is distinct and preserves last good image");
-    checks.expect(waitUntil(ready, 15s) && preparations.load() == 4 && submissions == 4,
+    checks.expect(awaitProof("delivering refusal retains earlier external release and retries exactly once", ready) && preparations.load() == 4 && submissions == 4,
                   "delivering refusal retains earlier external release and retries exactly once");
     checks.expect(session.setCurrentTime(core::RationalTime::fromInteger(1)) &&
-                      waitUntil(ready, 15s),
+                      awaitProof("second native time is prepared and cached", ready),
                   "second native time is prepared and cached");
     const auto warmPreparations = preparations.load();
     const auto warmJobs = service.status().counters.residentGraphJobs;
@@ -251,7 +247,7 @@ void retryNativeChecks(Expectations& checks, Fixture& fixture, ui::CompositionSe
     invalidMode.store(true);
     controller.requestRefresh();
     checks.expect(
-        waitUntil(failed, 15s) && !controller.state().diagnostics.empty() &&
+        awaitProof("the invalid GPU envelope reaches a Failed preview", failed) && !controller.state().diagnostics.empty() &&
             controller.state().diagnostics.front().code ==
                 "bloom.preview.gpu-scene.invalid-request" &&
             !controller.state().diagnostics.front().admissionRetry,
@@ -268,8 +264,7 @@ void retryNativeChecks(Expectations& checks, Fixture& fixture, ui::CompositionSe
     service.beginShutdown();
     bridge.stop(); // This helper borrows the scheduler used by the following native fixture.
     checks.expect(
-        waitUntil([&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; },
-                  15s),
+        awaitProof("retry native service stops without unproven reservation", [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; }),
         "retry native service stops without unproven reservation");
     std::cout << "retry native proof: submissions=" << submissions
               << " preparations=" << preparations.load() << " warmGraphJobs=" << warmJobs << '\n';
@@ -355,8 +350,7 @@ void nativeImageCacheRetryChecks(Expectations& checks, Fixture& fixture, TaskSch
         },
         fixture.productionCpuFallback(referenceDisplay), options);
     checks.expect(
-        waitUntil(
-            [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; },
+        awaitProof("native image retry service is genuinely ready", [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; },
             90s) &&
             service.status().state == GpuPreviewDisplayServiceState::Ready,
         "native image retry service is genuinely ready");
@@ -384,7 +378,7 @@ void nativeImageCacheRetryChecks(Expectations& checks, Fixture& fixture, TaskSch
         return controller.state().activity == ui::PreviewActivity::Ready &&
                isResident(controller.state().frame);
     };
-    checks.expect(waitUntil(ready, 15s), "native image retry has real last-good output");
+    checks.expect(awaitProof("native image retry has real last-good output", ready), "native image retry has real last-good output");
     if (checks.failures())
         return;
     auto good = controller.state().frame;
@@ -403,7 +397,7 @@ void nativeImageCacheRetryChecks(Expectations& checks, Fixture& fixture, TaskSch
                   "gated graph authoring submits no intermediate pixel work");
     controller.setCachePurgeGate(false);
     checks.expect(
-        waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Failed; }, 15s),
+        awaitProof("retained native graph reaches a terminal refusal", [&] { return controller.state().activity == ui::PreviewActivity::Failed; }),
         "retained native graph reaches a terminal refusal");
     const auto refused = policy->snapshot().reservations;
     auto state = controller.state();
@@ -464,7 +458,7 @@ void nativeImageCacheRetryChecks(Expectations& checks, Fixture& fixture, TaskSch
                   "actual native cache release is independently observable");
     fresh();
     controller.notifyProcessingCapacityChanged();
-    checks.expect(waitUntil(ready, 15s) && submissions == failedSubmissions + 1 &&
+    checks.expect(awaitProof("one independent native release recovers newest authored intent on GPU", ready) && submissions == failedSubmissions + 1 &&
                       cpu.load() == 0 && controller.state().desiredIdentity &&
                       controller.state().frame->desiredIdentity() ==
                           *controller.state().desiredIdentity,
@@ -472,7 +466,7 @@ void nativeImageCacheRetryChecks(Expectations& checks, Fixture& fixture, TaskSch
     if (checks.failures())
         return;
     checks.expect(session.setCurrentTime(core::RationalTime::fromInteger(1)) &&
-                      waitUntil(ready, 15s),
+                      awaitProof("second actual native time prepares a retained output", ready),
                   "second actual native time prepares a retained output");
     const auto warm = service.status().counters;
     const auto warmClaims = policy->snapshot().reservations;
@@ -497,8 +491,7 @@ void nativeImageCacheRetryChecks(Expectations& checks, Fixture& fixture, TaskSch
     service.beginShutdown();
     bridge.stop();
     checks.expect(
-        waitUntil([&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; },
-                  15s) &&
+        awaitProof("production native cache/controller service fully retires actual backing", [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; }) &&
             policy->snapshot().reservations.ownedNativeImageBytes == 0 &&
             policy->snapshot().reservations.totalDeviceClaimBytes == 0,
         "production native cache/controller service fully retires actual backing");

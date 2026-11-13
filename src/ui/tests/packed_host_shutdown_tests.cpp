@@ -1,3 +1,4 @@
+#include "await_qt.hpp"
 #include "deferred_editor_teardown.hpp"
 #include "packed_host_process_teardown.hpp"
 #include <bloom/render/packed_rgba8_storage.hpp>
@@ -63,17 +64,6 @@ struct Gate final {
         condition.notify_all();
     }
 };
-template <typename Predicate> bool until(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 2000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-        if (predicate())
-            return true;
-        std::this_thread::yield();
-    }
-    return predicate();
-}
 } // namespace
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
@@ -169,28 +159,41 @@ int main(int argc, char** argv) {
         [&] { return hostExit; });
     QObject::connect(&shutdown, &ui::ApplicationShutdownCoordinator::shutdownQuiescent, &shutdown,
                      [&] { quiescent = true; });
-    expect(until([&] { return producer.hasEntered(); }), "real preview producer reached");
+    expect(bloom::test_support::awaitQtCondition("real preview producer reached",
+                                                 [&] { return producer.hasEntered(); }),
+           "real preview producer reached");
     shutdown.beginShutdown();
     nativeComplete = true;
     std::size_t beats = 0;
     QTimer heartbeat;
     QObject::connect(&heartbeat, &QTimer::timeout, &shutdown, [&] { ++beats; });
     heartbeat.start(1);
-    expect(until([&] { return beats >= 5; }) && preHostCalls == 0 && !quiescent,
+    expect(bloom::test_support::awaitQtCondition(
+               "active UI stays responsive and does not close host while producer is held",
+               [&] { return beats >= 5; }) &&
+               preHostCalls == 0 && !quiescent,
            "active UI stays responsive and does not close host while producer is held");
     producer.release();
-    expect(until([&] { return preHostCalls == 1; }) && !quiescent &&
-               !shutdown.packedHostRetirementSatisfied(),
+    expect(bloom::test_support::awaitQtCondition(
+               "pre-host close happens once after producer termination, not before actual exit",
+               [&] { return preHostCalls == 1; }) &&
+               !quiescent && !shutdown.packedHostRetirementSatisfied(),
            "pre-host close happens once after producer termination, not before actual exit");
     shutdown.beginShutdown();
     const auto previousBeats = beats;
-    expect(until([&] { return beats >= previousBeats + 5; }) && preHostCalls == 1 && !quiescent,
+    expect(bloom::test_support::awaitQtCondition(
+               "duplicate close and pending exit do not block or publish false quiescence",
+               [&] { return beats >= previousBeats + 5; }) &&
+               preHostCalls == 1 && !quiescent,
            "duplicate close and pending exit do not block or publish false quiescence");
     hostExit = true;
-    expect(until([&] { return quiescent; }) && shutdown.packedHostRetirementSatisfied() &&
-               preHostCalls == 1,
+    expect(bloom::test_support::awaitQtCondition(
+               "real exit acknowledgement releases final quiescence exactly once",
+               [&] { return quiescent; }) &&
+               shutdown.packedHostRetirementSatisfied() && preHostCalls == 1,
            "real exit acknowledgement releases final quiescence exactly once");
     heartbeat.stop();
+    failures += bloom::test_support::awaitFailureCount();
     std::cout << (failures ? "FAIL" : "PASS") << ": packed host shutdown prerequisites\n";
     return failures ? 1 : 0;
 }

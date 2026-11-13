@@ -25,7 +25,12 @@ int capture(ScriptedMcpPort& port, ui::McpServerAdapter& adapter, const QString&
     ui::McpServerEditor panel(&adapter);
     panel.resize(size);
     panel.show();
-    QTest::qWait(60);
+    if (!QTest::qWaitForWindowExposed(&panel)) {
+        std::cerr << "the panel was not exposed\n";
+        return 1;
+    }
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     const QImage image = panel.grab().toImage();
     const QString path = directory + QStringLiteral("/%1-dpr%2.png").arg(name, scale);
     if (!image.save(path)) {

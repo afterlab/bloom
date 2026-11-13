@@ -14,6 +14,7 @@
 // provider when --loader names a Vulkan loader and a qualified device exists; otherwise it prints
 // NotRun explicitly, and --require-device turns that into a failure.
 
+#include "await_qt.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -30,10 +31,10 @@
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/scripting/render.hpp>
 #include <bloom/scripting/session.hpp>
+#include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_cpu_stage.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
-#include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/viewer_editor.hpp>
@@ -93,21 +94,6 @@ constexpr std::uint32_t kWidth = 64;
 constexpr std::uint32_t kHeight = 32;
 // k/255 values, so the 8-bit quantization of the authored background is exact.
 constexpr core::Color4d kBackground{204.0 / 255.0, 51.0 / 255.0, 26.0 / 255.0, 1.0};
-
-template <typename Predicate>
-bool waitUntil(Predicate predicate, const std::chrono::milliseconds limit = 30s) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < limit.count()) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (predicate()) {
-            return true;
-        }
-        std::this_thread::sleep_for(1ms);
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return predicate();
-}
 
 struct Pixels final {
     bool ok = false;
@@ -292,11 +278,15 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
             rig.scheduler, gpuStage,
             ui::makeCompositionPreviewCpuStage(*rig.compiler, rig.evaluator, rig.qualified),
             ui::makeCompositionPreviewCpuDisplayFallback(rig.displayPreparer), options);
-        waitUntil([&] {
-            return service->status().state !=
-                   runtime::GpuPreviewDisplayServiceState::Initializing;
-        }, 90s);
-        if (service->status().state != runtime::GpuPreviewDisplayServiceState::Ready) {
+        const bool initialized = bloom::test_support::awaitQtCondition(
+            "the GPU preview service leaves Initializing",
+            [&] {
+                return service->status().state !=
+                       runtime::GpuPreviewDisplayServiceState::Initializing;
+            },
+            90s);
+        if (!initialized ||
+            service->status().state != runtime::GpuPreviewDisplayServiceState::Ready) {
             std::cout << "NotRun: " << route.name << " preview: no qualified device ("
                       << service->status().residentDetail << ")\n";
             checks.expect(!gRequireDevice, prefix + "--require-device needs a GPU device");
@@ -322,12 +312,13 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     viewer.resize(480, 320);
     viewer.show();
     controller.requestRefresh();
-    const bool ready = waitUntil([&] {
-        const auto frame = viewer.displayedFrameForTest();
-        return controller.state().activity == ui::PreviewActivity::Ready && frame != nullptr &&
-               frame->provenance().provider == expectedProvider &&
-               viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
-    });
+    const bool ready = bloom::test_support::awaitQtCondition(
+        "Viewer displays a current frame from the expected route", [&] {
+            const auto frame = viewer.displayedFrameForTest();
+            return controller.state().activity == ui::PreviewActivity::Ready && frame != nullptr &&
+                   frame->provenance().provider == expectedProvider &&
+                   viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
+        });
     checks.expect(ready, prefix + "the Viewer displays a current frame from the expected route");
     const auto displayed = viewer.displayedFrameForTest();
     const Pixels processFrame = pixelsOf(displayed);
@@ -420,13 +411,20 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
 
     controller.beginShutdown();
     rig.bridge->beginShutdown();
-    (void)waitUntil([&] { return rig.scheduler.isQuiescent(); }, 10s);
+    checks.expect(
+        bloom::test_support::awaitQtCondition("the rig scheduler reaches quiescence",
+                                              [&] { return rig.scheduler.isQuiescent(); }),
+        "the rig scheduler reaches quiescence");
 #if defined(BLOOM_UI_BACKGROUND_PARITY_GPU)
     if (service != nullptr) {
         service->beginShutdown();
-        (void)waitUntil([&] {
-            return service->status().state == runtime::GpuPreviewDisplayServiceState::Stopped;
-        });
+        checks.expect(bloom::test_support::awaitQtCondition(
+                          "the GPU preview service stops",
+                          [&] {
+                              return service->status().state ==
+                                     runtime::GpuPreviewDisplayServiceState::Stopped;
+                          }),
+                      "the GPU preview service stops");
     }
 #endif
 }
@@ -471,7 +469,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     checks.expect(!gRequireDevice, "--require-device needs a Vulkan build");
 #endif
 
-    if (checks.failures() != 0) {
+    if (checks.failures() + bloom::test_support::awaitFailureCount() != 0) {
         std::cerr << "viewer/export background parity: " << checks.failures() << " failure(s)\n";
         return 1;
     }

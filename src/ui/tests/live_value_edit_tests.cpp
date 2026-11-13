@@ -1,3 +1,4 @@
+#include "await_qt.hpp"
 #include "timeline_property_rows.hpp"
 #include <QDir>
 #include <QLineEdit>
@@ -41,14 +42,11 @@ void require(const bool value, const char* message) {
         std::abort();
     }
 }
-// Waits for the work's own state. A hang is bounded by the test's CTest timeout rather than by a
-// wall-clock guess that a loaded machine can exceed; sleeping briefly lets the worker threads run
-// instead of competing with them.
-template <typename Predicate> void waitFor(Predicate predicate) {
-    while (!predicate()) {
-        QCoreApplication::processEvents();
-        std::this_thread::sleep_for(std::chrono::milliseconds{1});
-    }
+// Waits for the work's own state through the shared await helper; a wait that never holds is a
+// failure that names what was awaited.
+template <typename Predicate> void awaitState(const std::string_view what, Predicate&& predicate) {
+    require(bloom::test_support::awaitQtCondition(what, std::forward<Predicate>(predicate)),
+            std::string(what).c_str());
 }
 template <typename Value> Value checked(std::optional<Value> value) {
     if (!value)
@@ -203,7 +201,8 @@ void fieldsShareLiveValues() {
     require(chip != nullptr, "Solid chip exists");
     // The chip enables once the converter arrives and the panel has refreshed; openPicker() is a
     // no-op on a disabled chip, so wait for both rather than assuming they have happened.
-    waitFor([&] { return static_cast<bool>(session.colorConverter()) && chip->isEnabled(); });
+    awaitState("the colour converter arrives and the Solid chip enables",
+               [&] { return static_cast<bool>(session.colorConverter()) && chip->isEnabled(); });
     fixture.history.clear();
     chip->openPicker();
     auto* picker = chip->picker();
@@ -252,12 +251,12 @@ void interactiveBeforeCommit() {
             return pipeline(snapshot, identity, limit, overrides, context);
         });
     const auto ready = [&] { return controller.state().activity == ui::PreviewActivity::Ready; };
-    waitFor(ready);
+    awaitState("the opening preview is ready", ready);
     const auto revision = fixture.session.snapshot().revision();
     require(fixture.session.beginValueEdit(fixture.position()), "begin preview edit");
     require(fixture.session.updateValueEdit(document::Vec2d{8, 9}), "update preview edit");
     require(controller.state().taskId.has_value(), "first value preview submits immediately");
-    waitFor(ready);
+    awaitState("the live value preview frame is ready", ready);
     {
         const std::lock_guard lock(mutex);
         require(observed.size() == 1 && observed[0].parameterId == fixture.position() &&
@@ -273,7 +272,7 @@ void interactiveBeforeCommit() {
             "rendered live frame precedes every transaction");
     require(fixture.session.commitValueEdit() && fixture.history.size() == 1,
             "rendered edit commits once");
-    waitFor(ready);
+    awaitState("the committed edit's frame is ready", ready);
     const auto previousFrame = controller.state().frame;
     const auto historySize = fixture.history.size();
     slowFrames.store(true);
@@ -285,16 +284,18 @@ void interactiveBeforeCommit() {
                 "continuous update remains session-only");
     });
     updates.start(2);
-    waitFor([&] { return controller.state().frame != previousFrame; });
+    awaitState("a completed live frame is presented during continuous input",
+               [&] { return controller.state().frame != previousFrame; });
     require(updates.isActive() && fixture.history.size() == historySize,
             "completed live frames present during continuous newer input without a transaction");
     updates.stop();
     slowFrames.store(false);
     fixture.session.cancelValueEdit();
-    waitFor(ready);
+    awaitState("the preview is ready after the edit is cancelled", ready);
     controller.beginShutdown();
     bridge.beginShutdown();
-    waitFor([&] { return scheduler.isQuiescent(); });
+    awaitState("the scheduler is quiescent after shutdown",
+               [&] { return scheduler.isQuiescent(); });
 }
 
 // GitHub #197: the timeline's expanded RGBA numeric rows obey the same display/reference boundary
@@ -303,7 +304,8 @@ void interactiveBeforeCommit() {
 void timelineColorBoundary() {
     Fixture fixture;
     auto& session = fixture.session;
-    waitFor([&] { return static_cast<bool>(session.colorConverter()); });
+    awaitState("the colour converter arrives",
+               [&] { return static_cast<bool>(session.colorConverter()); });
     const auto* parameter = session.parameterForSelection(document::kSolidColorParameterRole);
     require(parameter != nullptr, "the solid layer exposes its color parameter");
     const auto parameterId = parameter->id;
@@ -495,5 +497,5 @@ int main(int argc, char** argv) {
         std::cerr << error.what() << '\n';
         return 1;
     }
-    return 0;
+    return bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

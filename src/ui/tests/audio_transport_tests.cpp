@@ -2,6 +2,7 @@
 // playback engine through the same wiring apps/bloom/main.cpp uses (asset decode -> compiled
 // audio mix -> AudioPlaybackSession -> PlaybackController -> AudioEngine) and produce non-silent
 // samples when the transport plays.
+#include "await_qt.hpp"
 #include "window_fixture.hpp"
 #include <QDir>
 #include <QFile>
@@ -82,10 +83,9 @@ int run(int argc, char** argv) {
                                                             core::RationalTime::fromInteger(2));
             require(target.session.executeTransaction(std::move(setup)).succeeded(), "setup");
             target.assets->importFiles({directory.filePath("Tone.wav")});
-            QElapsedTimer timer;
-            timer.start();
-            while (target.assets->busy() && timer.elapsed() < 15000)
-                QTest::qWait(10);
+            require(bloom::test_support::awaitQtCondition("WAV import finishes",
+                                                          [&] { return !target.assets->busy(); }),
+                    "WAV import finishes");
             require(target.session.snapshot().project().assets().size() == 1, "WAV import");
             const auto asset = target.session.snapshot().project().assets().front();
             commands::Transaction add("Place audio", target.session.snapshot().revision());
@@ -94,10 +94,10 @@ int run(int argc, char** argv) {
         },
         128);
     const auto assetId = fixture.session.snapshot().project().assets().front().id;
-    QElapsedTimer wait;
-    wait.start();
-    while (fixture.assets->audioBuffer(assetId) == nullptr && wait.elapsed() < 15000)
-        QTest::qWait(10);
+    require(bloom::test_support::awaitQtCondition(
+                "decoded audio buffer is delivered",
+                [&] { return fixture.assets->audioBuffer(assetId) != nullptr; }),
+            "stage 1: decoded audio buffer");
     require(fixture.assets->audioBuffer(assetId) != nullptr, "stage 1: decoded audio buffer");
     require(fixture.assets->decodedAudioBytes() == 0,
             "oversized-for-cache buffer stays in playback delivery, not retention cache");
@@ -122,13 +122,12 @@ int run(int argc, char** argv) {
         std::make_shared<ui::CompiledPlanCache>(), fixture.evaluator);
     audioPlaybackSession.setAudioBufferSource(*fixture.assets);
     const auto awaitMix = [&] {
-        QElapsedTimer timer;
-        timer.start();
-        while ((!audioPlaybackSession.mix() ||
-                audioPlaybackSession.revision() != fixture.session.snapshot().revision()) &&
-               timer.elapsed() < 15000)
-            QTest::qWait(10);
-        return audioPlaybackSession.mix().has_value();
+        const bool published = bloom::test_support::awaitQtCondition(
+            "audio session publishes a mix for the live revision", [&] {
+                return audioPlaybackSession.mix() &&
+                       audioPlaybackSession.revision() == fixture.session.snapshot().revision();
+            });
+        return published && audioPlaybackSession.mix().has_value();
     };
     std::size_t appliedClips = 0;
     const auto applyAudioMix = [&] {
@@ -160,10 +159,9 @@ int run(int argc, char** argv) {
     (void)fixture.session.setCurrentTime(core::RationalTime::fromInteger(0));
     playback.play();
     require(playback.state() == ui::PlaybackState::Playing, "stage 5: transport playing");
-    QElapsedTimer playWait;
-    playWait.start();
-    while (!playback.audioClockActive() && playWait.elapsed() < 5000)
-        QTest::qWait(10);
+    require(bloom::test_support::awaitQtCondition("audio clock becomes active",
+                                                  [&] { return playback.audioClockActive(); }),
+            "stage 5: audio clock active");
     require(engine->isPlaying() && playback.audioClockActive(),
             "stage 5: worker-started engine playing");
     require(!engine->renderForTesting(4096).has_value(), "stage 6: render");
@@ -360,8 +358,6 @@ int run(int argc, char** argv) {
                 "stage 11: the level is keyed");
         const auto mixAt = [&](const core::RationalTime time, const bool ramped) {
             (void)fixture.session.setCurrentTime(time);
-            QElapsedTimer timer;
-            timer.start();
             const auto ready = [&] {
                 const auto& current = audioPlaybackSession.mix();
                 if (!current || current->clips.size() != 1 ||
@@ -371,9 +367,8 @@ int run(int argc, char** argv) {
                 return ramped ? clip.levelRamp && clip.levelRamp->start == time
                               : !clip.levelRamp && clip.level == 1.0;
             };
-            while (!ready() && timer.elapsed() < 15000)
-                QTest::qWait(10);
-            require(ready(), "stage 11: the mix follows the playhead");
+            require(bloom::test_support::awaitQtCondition("mix follows the playhead", ready),
+                    "stage 11: the mix follows the playhead");
         };
         const auto start = *core::RationalTime::create(1, 5);
         mixAt(start, true);
@@ -405,16 +400,15 @@ int run(int argc, char** argv) {
     audioPlaybackSession.beginShutdown();
     playback.pause();
     audioDeviceControl.beginShutdown();
-    QElapsedTimer shutdownWait;
-    shutdownWait.start();
-    while (!audioDeviceControl.retirementComplete() && shutdownWait.elapsed() < 5000)
-        QTest::qWait(10);
-    require(audioDeviceControl.retirementComplete(), "audio device retired before bridge close");
+    require(bloom::test_support::awaitQtCondition(
+                "audio device retirement completes",
+                [&] { return audioDeviceControl.retirementComplete(); }),
+            "audio device retired before bridge close");
     audioDeviceControl.drainAfterEventLoop();
     require(audioPlaybackSession.audioBuffer(assetId) == nullptr && delivered.expired(),
             "stopping the session and device releases the playback audio lease");
     std::cout << "audio transport ok\n";
-    return 0;
+    return bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }
 } // namespace
 

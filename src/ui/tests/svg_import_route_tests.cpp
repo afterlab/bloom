@@ -3,6 +3,7 @@
 // file holds that cannot be carried over are listed by name on the job (the Jobs panel's
 // diagnostics) and on the controller's diagnostics, and a finished import is one undo step.
 
+#include "await_qt.hpp"
 #include "import_progress_test_support.hpp"
 
 #include <QApplication>
@@ -31,13 +32,6 @@ using namespace bloom;
 void require(const bool ok, const char* message) {
     if (!ok)
         throw std::runtime_error(message);
-}
-template <typename Predicate> bool waitUntil(Predicate predicate, const int timeoutMs = 20000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < timeoutMs)
-        QTest::qWait(5);
-    return predicate();
 }
 
 constexpr auto kSvg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100">
@@ -72,7 +66,9 @@ struct Harness final {
     }
     ~Harness() {
         controller.setImportProgressHookForTesting({});
-        waitUntil([this] { return !controller.busy(); });
+        // A destructor cannot return the result; a timeout is counted by awaitFailureCount().
+        (void)bloom::test_support::awaitQtCondition("asset controller idle",
+                                                    [this] { return !controller.busy(); });
     }
     [[nodiscard]] std::size_t layerCount() const {
         const auto& project = session.snapshot().project();
@@ -105,11 +101,15 @@ int main(int argc, char** argv) {
             harness.controller.setImportProgressHookForTesting(
                 [gate](const commands::ImportProgress& state) { (*gate)(state); });
             harness.controller.importFiles({path});
-            require(waitUntil([&] { return gate->reached(); }), "the SVG read reports progress");
+            require(bloom::test_support::awaitQtCondition("SVG read reports progress",
+                                                          [&] { return gate->reached(); }),
+                    "the SVG read reports progress");
             require(harness.controller.busy(), "the import is a running job");
             harness.controller.cancel();
             gate->release();
-            require(waitUntil([&] { return !harness.controller.busy(); }), "the cancelled job ends");
+            require(bloom::test_support::awaitQtCondition(
+                        "cancelled job ends", [&] { return !harness.controller.busy(); }),
+                    "the cancelled job ends");
             require(harness.layerCount() == before, "a cancelled SVG import adds nothing");
             require(harness.session.undoLabel() != QStringLiteral("Import SVG"),
                     "a cancelled import leaves no undo step");
@@ -121,7 +121,9 @@ int main(int argc, char** argv) {
             const auto before = harness.layerCount();
             const auto assetsBefore = harness.session.snapshot().project().assets().size();
             harness.controller.importFiles({path});
-            require(waitUntil([&] { return !harness.controller.busy(); }), "the import ends");
+            require(bloom::test_support::awaitQtCondition(
+                        "import ends", [&] { return !harness.controller.busy(); }),
+                    "the import ends");
             require(harness.layerCount() > before, "the SVG adds its layers");
             // #642: with nobody to ask (no window), the default is one layer: one Vector Artwork node.
             {
@@ -145,8 +147,12 @@ int main(int argc, char** argv) {
                 const auto& assets = harness.session.snapshot().project().assets();
                 require(!assets.empty(), "the source record exists");
                 const auto id = assets.back().id;
-                require(waitUntil([&] { return !harness.controller.busy(); }), "thumbnails settle");
-                require(waitUntil([&] { return harness.controller.fileSize(id).has_value(); }),
+                require(bloom::test_support::awaitQtCondition(
+                            "thumbnails settle", [&] { return !harness.controller.busy(); }),
+                        "thumbnails settle");
+                require(bloom::test_support::awaitQtCondition(
+                            "SVG record's preview was computed",
+                            [&] { return harness.controller.fileSize(id).has_value(); }),
                         "the SVG record's preview was computed");
                 require(!harness.controller.missing(id) && harness.controller.problem(id).isEmpty(),
                         "an SVG source on disk is not flagged missing or unshowable");
@@ -172,7 +178,7 @@ int main(int argc, char** argv) {
                     "and the source record with it");
         }
         std::cout << "svg import route: PASS\n";
-        return 0;
+        return bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

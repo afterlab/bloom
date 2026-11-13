@@ -24,6 +24,7 @@
 // footage in the operation cache under a key that named the probed pixel, so each window change
 // (and each new pointer position) retained another set: about 100 MiB per move here.
 
+#include "await_qt.hpp"
 #include "gpu_service_chain_fixture.hpp"
 
 #include <bloom/commands/asset_operations.hpp>
@@ -366,7 +367,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     projectHost.setUnsavedChangeDecisionProvider([] { return ui::UnsavedChangeDecision::Discard; });
     projectHost.setOpenPathProvider([&] { return std::optional(projectPath); });
     projectHost.requestOpen();
-    if (!waitUntil([&] { return replaced || openOutcome.has_value(); }, 120s) || !replaced) {
+    if (!bloom::test_support::awaitQtCondition(
+            "project open finishes", [&] { return replaced || openOutcome.has_value(); }, 120s) ||
+        !replaced) {
         std::cerr << "the soak project did not open\n";
         return 1;
     }
@@ -497,12 +500,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         memoryController.beginShutdown();
         bridge.beginShutdown();
         service.beginShutdown();
-        const bool stopped = waitUntil(
-            [&] {
+        const bool stopped = bloom::test_support::awaitQtCondition(
+            "scheduler quiescent and GPU service stopped", [&] {
                 return scheduler.isQuiescent() &&
                        service.status().state == runtime::GpuPreviewDisplayServiceState::Stopped;
-            },
-            30s);
+            });
         if (auto* viewer = window->displayedViewer())
             viewer->releasePackedFramesForShutdown();
         window->completeShutdown();
@@ -511,13 +513,18 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         frameCache->clear();
         evaluator.operationCache()->close();
         retirementOwner->beginShutdown();
-        const bool retired = waitUntil([&] { return retirementOwner->exitAcknowledged(); }, 15s);
-        while (retired && !retirementOwner->collect())
-            QCoreApplication::processEvents();
-        checks.expect(stopped && retired, "the soak shuts down cleanly");
+        const bool retired =
+            bloom::test_support::awaitQtCondition("packed retirement owner acknowledges exit", [&] {
+                return retirementOwner->exitAcknowledged();
+            });
+        const bool collected = retired && bloom::test_support::awaitQtCondition(
+                                              "packed retirement owner collected",
+                                              [&] { return retirementOwner->collect(); });
+        checks.expect(stopped && retired && collected, "the soak shuts down cleanly");
     };
 
-    if (!waitUntil(
+    if (!bloom::test_support::awaitQtCondition(
+            "GPU preview service leaves Initializing",
             [&] {
                 return service.status().state !=
                        runtime::GpuPreviewDisplayServiceState::Initializing;
@@ -542,7 +549,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                           runtime::GpuPreviewCpuFallbackReason::GpuUnavailable)],
                   "every CPU fallback before the service is ready is counted as GpuUnavailable");
     const auto startupCpuFallbacks = initializing.cpuFallbacks + initializing.gpuAdmissionRefusals;
-    if (!waitUntil([&] { return window->displayedViewer() != nullptr; }, 30s)) {
+    if (!bloom::test_support::awaitQtCondition("window has a displayed Viewer", [&] {
+            return window->displayedViewer() != nullptr;
+        })) {
         shutdown();
         return 1;
     }
@@ -550,7 +559,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const auto current = [&] {
         return viewer->displayedPreviewState().freshness == ui::FrameFreshness::Current;
     };
-    checks.expect(waitUntil(current, 120s), "the parked frame is painted Current");
+    checks.expect(bloom::test_support::awaitQtCondition("parked frame is Current", current, 120s),
+                  "the parked frame is painted Current");
 
     // Rest the pointer over the Viewer, as an artist's hand does while moving the window. A hand
     // never returns to the same pixel, so every rest lands a few pixels from the previous one.
@@ -580,11 +590,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         // checks after a settle compare exact cache contents, which only mean something once the
         // preview has finished, so a slow settle (a compiling machine) is waited out rather than
         // abandoned; it is counted and reported.
-        while (!waitUntil([&] { return current() && scheduler.isQuiescent(); }, 20s))
+        if (!bloom::test_support::awaitQtCondition(
+                "Viewer shows the parked frame Current and the scheduler is idle",
+                [&] { return current() && scheduler.isQuiescent(); }))
             ++slowSettles;
-        const auto until = std::chrono::steady_clock::now() + 150ms;
-        while (std::chrono::steady_clock::now() < until)
-            QApplication::processEvents();
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents();
     };
     // 2548x1388 on the 1.5x screen is the reported placement. On the 1x screen the reported
     // session's Viewer showed the composition below half its size; this workspace gives the Viewer
@@ -597,12 +608,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         if (auto* handle = window->windowHandle())
             handle->setScreen(screen);
         window->setGeometry(QRect(screen->geometry().topLeft() + QPoint(6, 46), size));
-        if (!waitUntil(
-                [&] {
+        if (!bloom::test_support::awaitQtCondition(
+                "viewer and window land on the requested screen and size", [&] {
                     return window->screen() == screen && window->size() == size &&
                            viewer->devicePixelRatioF() == screen->devicePixelRatio();
-                },
-                10s))
+                }))
             std::cout << "SOAK move did not land: screen=" << window->screen()->name().toStdString()
                       << " size=" << window->width() << 'x' << window->height()
                       << " dpr=" << viewer->devicePixelRatioF() << '\n';
@@ -725,7 +735,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         settle();
         window->hide();
         // A hidden Viewer paints nothing, so only the scheduler's quiescence is awaited here.
-        while (!waitUntil([&] { return scheduler.isQuiescent(); }, 20s))
+        if (!bloom::test_support::awaitQtCondition("scheduler quiescent while the window is hidden",
+                                                   [&] { return scheduler.isQuiescent(); }))
             ++slowSettles;
         window->show();
         restPointer();
@@ -796,7 +807,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     }
 
     shutdown();
-    if (checks.failures() != 0) {
+    if (checks.failures() + bloom::test_support::awaitFailureCount() != 0) {
         std::cerr << "window surface soak: " << checks.failures() << " failure(s)\n";
         return 1;
     }

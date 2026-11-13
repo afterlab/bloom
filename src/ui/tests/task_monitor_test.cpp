@@ -1,3 +1,4 @@
+#include "await_qt.hpp"
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/jobs_editor.hpp>
@@ -41,18 +42,6 @@ class Expectations final {
   private:
     int failures_ = 0;
 };
-
-template <typename Predicate>
-bool spinUntil(Predicate&& predicate, const std::chrono::milliseconds timeout = 3s) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < timeout.count()) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        std::this_thread::yield();
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return predicate();
-}
 
 bloom::runtime::TaskOwner owner(const std::uint64_t value) {
     return {.kind = bloom::runtime::TaskOwnerKind::Composition,
@@ -129,10 +118,12 @@ void testBridgeModelAndEditor(Expectations& expectations, QApplication& applicat
         [&firstWork](runtime::TaskContext& context) { return firstWork.run(context, true); });
     expectations.expect(first.accepted(), "the fake observable task is accepted");
     bridge.wake();
-    expectations.expect(spinUntil([&] {
-                            return firstWork.entered.load(std::memory_order_acquire) &&
-                                   model.rowCount() == 1;
-                        }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "bridge publishes a running task into the model",
+                            [&] {
+                                return firstWork.entered.load(std::memory_order_acquire) &&
+                                       model.rowCount() == 1;
+                            }),
                         "the bridge publishes a running task into the model");
 
     const QModelIndex firstIndex = model.indexForTask(first.handle.id());
@@ -213,12 +204,14 @@ void testBridgeModelAndEditor(Expectations& expectations, QApplication& applicat
     expectations.expect(cancel != nullptr && !cancel->isEnabled(),
                         "the stable-ID cancel action disables immediately after acceptance");
     expectations.expect(
-        spinUntil([&] {
-            const auto terminalIndex = model.indexForTask(first.handle.id());
-            return terminalIndex.isValid() &&
-                   model.data(terminalIndex, ui::TaskMonitorModel::TaskStateRole).toInt() ==
-                       static_cast<int>(runtime::TaskState::Cancelled);
-        }),
+        bloom::test_support::awaitQtCondition(
+            "cooperative cancellation reaches an authoritative Cancelled snapshot",
+            [&] {
+                const auto terminalIndex = model.indexForTask(first.handle.id());
+                return terminalIndex.isValid() &&
+                       model.data(terminalIndex, ui::TaskMonitorModel::TaskStateRole).toInt() ==
+                           static_cast<int>(runtime::TaskState::Cancelled);
+            }),
         "cooperative cancellation reaches an authoritative Cancelled snapshot");
 
     CooperativeWork secondWork;
@@ -227,10 +220,12 @@ void testBridgeModelAndEditor(Expectations& expectations, QApplication& applicat
         [&secondWork](runtime::TaskContext& context) { return secondWork.run(context, false); });
     expectations.expect(second.accepted(), "a second slow task is accepted");
     bridge.wake();
-    expectations.expect(spinUntil([&] {
-                            return secondWork.entered.load(std::memory_order_acquire) &&
-                                   model.indexForTask(second.handle.id()).isValid();
-                        }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "newest task becomes observable",
+                            [&] {
+                                return secondWork.entered.load(std::memory_order_acquire) &&
+                                       model.indexForTask(second.handle.id()).isValid();
+                            }),
                         "the newest task becomes observable");
     expectations.expect(model.index(0, ui::TaskMonitorModel::JobColumn)
                                 .data(ui::TaskMonitorModel::TaskIdRole)
@@ -242,12 +237,14 @@ void testBridgeModelAndEditor(Expectations& expectations, QApplication& applicat
     expectations.expect(model.requestCancellation(secondIndex),
                         "panel destruction does not own or disable task cancellation");
     expectations.expect(
-        spinUntil([&] {
-            const auto terminalIndex = model.indexForTask(second.handle.id());
-            return terminalIndex.isValid() &&
-                   model.data(terminalIndex, ui::TaskMonitorModel::TaskStateRole).toInt() ==
-                       static_cast<int>(runtime::TaskState::Cancelled);
-        }),
+        bloom::test_support::awaitQtCondition(
+            "work finishes safely after its Jobs widget is destroyed",
+            [&] {
+                const auto terminalIndex = model.indexForTask(second.handle.id());
+                return terminalIndex.isValid() &&
+                       model.data(terminalIndex, ui::TaskMonitorModel::TaskStateRole).toInt() ==
+                           static_cast<int>(runtime::TaskState::Cancelled);
+            }),
         "work finishes safely after its Jobs widget is destroyed");
 
     editor.reset(registry.editors().front().create(nullptr));
@@ -273,7 +270,9 @@ void testBridgeModelAndEditor(Expectations& expectations, QApplication& applicat
             });
     });
     bridge.beginShutdown();
-    expectations.expect(spinUntil([&] { return quiescentCount == 1; }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "shutdown remains event-driven until the scheduler is quiescent",
+                            [&] { return quiescentCount == 1; }),
                         "shutdown remains event-driven until the scheduler is quiescent");
     expectations.expect(finalPollSequence > 0 && quiescentSequence > finalPollSequence &&
                             finalSnapshotsAreTerminal && !bridge.isRunning(),
@@ -287,7 +286,7 @@ int main(int argc, char* argv[]) {
     QApplication application(argc, argv);
     Expectations expectations;
     testBridgeModelAndEditor(expectations, application);
-    if (expectations.failures() != 0) {
+    if (expectations.failures() + bloom::test_support::awaitFailureCount() != 0) {
         std::cerr << expectations.failures() << " task monitor expectation(s) failed\n";
         return 1;
     }

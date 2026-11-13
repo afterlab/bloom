@@ -5,9 +5,10 @@
 // working from the frame on screen while the new one renders (a press right after an edit). With
 // BLOOM_GRAMMAR_ARTIFACT_DIR set it writes each Viewer to <dir>/<name>-viewer.png.
 
+#include "await_qt.hpp"
 #include <QApplication>
 #include <QDir>
-#include <QElapsedTimer>
+
 #include <QImage>
 #include <QTest>
 
@@ -47,14 +48,6 @@ void expect(const bool value, const std::string& message) {
         ++failures;
         std::cerr << "FAIL: " << message << '\n';
     }
-}
-
-template <typename Predicate> bool waitUntil(Predicate predicate, const int milliseconds = 15000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < milliseconds)
-        QTest::qWait(5);
-    return predicate();
 }
 
 constexpr std::uint32_t kWidth = 320;
@@ -161,11 +154,13 @@ struct Harness final {
         window.show();
         scene.session.selectNode(scene.blur);
         QApplication::processEvents();
-        expect(waitUntil([&] {
-                   mapping = viewer->mappingForTest();
-                   return mapping.has_value() &&
-                          preview.state().activity == ui::PreviewActivity::Ready;
-               }),
+        expect(bloom::test_support::awaitQtCondition("Viewer shows the composition",
+                                                     [&] {
+                                                         mapping = viewer->mappingForTest();
+                                                         return mapping.has_value() &&
+                                                                preview.state().activity ==
+                                                                    ui::PreviewActivity::Ready;
+                                                     }),
                "the Viewer shows the composition");
     }
     [[nodiscard]] QPoint at(const double offsetX, const double offsetY) const {
@@ -194,7 +189,10 @@ struct Harness final {
         if (directory.isEmpty())
             return;
         QDir().mkpath(directory);
-        waitUntil([&] { return preview.state().activity == ui::PreviewActivity::Ready; });
+        expect(bloom::test_support::awaitQtCondition(
+                   "preview ready before capture",
+                   [&] { return preview.state().activity == ui::PreviewActivity::Ready; }),
+               "the preview is ready before the capture is grabbed");
         QApplication::processEvents();
         if (!viewer->grab().save(directory + QLatin1Char('/') + name + QStringLiteral("-viewer.png")))
             std::cerr << "could not write " << name.toStdString() << '\n';
@@ -314,6 +312,7 @@ int main(int argc, char** argv) {
     testSpin();
     testZoom();
     testOtherNodesDrawNoHandle();
+    failures += bloom::test_support::awaitFailureCount();
     if (failures != 0) {
         std::cerr << failures << " motion handle expectation(s) failed\n";
         return 1;

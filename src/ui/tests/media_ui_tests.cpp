@@ -1,4 +1,5 @@
 #include "asset_drop.hpp"
+#include "await_qt.hpp"
 #include "node_editor_add.hpp"
 #include "node_editor_items.hpp"
 #include "timeline_property_rows.hpp"
@@ -60,32 +61,7 @@ bool drop(QWidget& target, const QMimeData& mime) {
     QApplication::sendEvent(&target, &event);
     return event.isAccepted();
 }
-// Waits for `predicate` with no wall-clock limit: the work it waits on takes as long as the machine
-// lets it, and a test of what that work does must not depend on how fast it ran (a compiling
-// machine made a fixed five seconds fail with the catalogue still being prepared). It gives up only
-// when nothing is left that could make the predicate true: the scheduler idle and no completion
-// delivered across 200 consecutive turns of the event loop. Turns are counted, not timed (#623):
-// a starved test thread used to let three poll intervals of wall-clock time pass between two
-// turns and give up before the loop had run once more. Each turn sleeps, so a worker that has
-// yet to post its completion runs first. A real hang is the test runner's timeout.
-template <typename Predicate>
-bool waitUntil(runtime::TaskScheduler& scheduler, const ui::TaskUiBridge& bridge,
-               Predicate predicate) {
-    constexpr int kIdleTurns = 200;
-    int idleTurns = 0;
-    auto delivered = bridge.completionWakeCount();
-    while (!predicate()) {
-        const auto now = bridge.completionWakeCount();
-        if (!scheduler.isQuiescent() || now != delivered) {
-            idleTurns = 0;
-            delivered = now;
-        } else if (++idleTurns > kIdleTurns) {
-            return predicate();
-        }
-        QTest::qWait(1);
-    }
-    return true;
-}
+using bloom::test_support::awaitQtCondition;
 class CatalogWorkerHold final {
   public:
     explicit CatalogWorkerHold(runtime::TaskScheduler& scheduler)
@@ -106,8 +82,11 @@ class CatalogWorkerHold final {
         if (released_.exchange(true))
             return;
         if (submission_.accepted())
-            while (!submission_.handle.tryTakeResult())
-                QTest::qWait(1);
+            // The destructor calls this too and cannot assert; a timeout is counted by the helper
+            // and fails the test's exit.
+            (void)awaitQtCondition("the held catalogue worker task retires", [this] {
+                return submission_.handle.tryTakeResult().has_value();
+            });
     }
 
   private:
@@ -152,8 +131,9 @@ void inputColorCatalogFollowsWorkingSpace() {
 
     {
         CatalogWorkerHold hold(scheduler);
-        require(waitUntil(scheduler, bridge, [&] { return hold.entered(); }),
-                "catalogue worker barrier starts");
+        require(
+            awaitQtCondition("the catalogue worker barrier starts", [&] { return hold.entered(); }),
+            "catalogue worker barrier starts");
         controller.requestInputColorSpaces();
         require(controller.inputColorSpaces() == nullptr, "initial catalogue request is pending");
         require(session.setWorkingColorSpaceOverride(std::string("Linear P3-D65")),
@@ -162,16 +142,17 @@ void inputColorCatalogFollowsWorkingSpace() {
                 "old pending catalogue is not exposed after working-space change");
         hold.release();
     }
-    require(waitUntil(scheduler, bridge,
-                      [&] {
-                          const auto* spaces = controller.inputColorSpaces();
-                          return spaces && !spaces->empty();
-                      }),
+    require(awaitQtCondition("the input colour space catalogue arrives",
+                             [&] {
+                                 const auto* spaces = controller.inputColorSpaces();
+                                 return spaces && !spaces->empty();
+                             }),
             "replacement working-space catalogue completes after old pending request is retired");
 
     {
         CatalogWorkerHold hold(scheduler);
-        require(waitUntil(scheduler, bridge, [&] { return hold.entered(); }),
+        require(awaitQtCondition("the cached catalogue worker barrier starts",
+                                 [&] { return hold.entered(); }),
                 "cached catalogue worker barrier starts");
         require(session.setWorkingColorSpaceOverride(std::nullopt),
                 "cached catalogue working-space override clears");
@@ -179,11 +160,11 @@ void inputColorCatalogFollowsWorkingSpace() {
                 "cached choices are invalidated synchronously on working-space change");
         hold.release();
     }
-    require(waitUntil(scheduler, bridge,
-                      [&] {
-                          const auto* spaces = controller.inputColorSpaces();
-                          return spaces && !spaces->empty();
-                      }),
+    require(awaitQtCondition("the cached input colour space catalogue arrives",
+                             [&] {
+                                 const auto* spaces = controller.inputColorSpaces();
+                                 return spaces && !spaces->empty();
+                             }),
             "catalogue prepares again after cached working-space change");
     const auto* stable = controller.inputColorSpaces();
     require(session.addSolidLayer("Unrelated", {0.1, 0.2, 0.3, 1.0}),
@@ -297,7 +278,7 @@ void partialBatchImport() {
                    QUrl::fromLocalFile(directory.filePath("valid.png"))});
     auto* tree = assets.findChild<QTreeWidget*>("assetsTree");
     require(tree && drop(*tree->viewport(), files), "mixed files drop onto Assets");
-    require(waitUntil(scheduler, bridge, [&] { return !controller.busy(); }),
+    require(awaitQtCondition("the partial import completes", [&] { return !controller.busy(); }),
             "partial import completes");
     require(session.snapshot().project().assets().size() == 1,
             "the valid file imports despite the corrupt one");
@@ -343,15 +324,14 @@ void run() {
                    QUrl::fromLocalFile(directory.filePath("clip.0001.png"))});
     auto* tree = assets.findChild<QTreeWidget*>("assetsTree");
     require(tree && drop(*tree->viewport(), files), "files drop onto Assets");
-    QElapsedTimer timer;
-    timer.start();
-    while (controller.busy() && timer.elapsed() < 15000)
-        QTest::qWait(10);
+    require(
+        awaitQtCondition("the two-file drop import finishes", [&] { return !controller.busy(); }),
+        "the two-file drop import finishes");
     require(session.snapshot().project().assets().size() == 2, "single atomic two-asset import");
     const auto asset = session.snapshot().project().assets().front().id;
-    while (controller.thumbnail(asset).isNull() && timer.elapsed() < 15000)
-        QTest::qWait(10);
-    require(!controller.thumbnail(asset).isNull(), "worker thumbnail arrives");
+    require(awaitQtCondition("the worker thumbnail arrives",
+                             [&] { return !controller.thumbnail(asset).isNull(); }),
+            "worker thumbnail arrives");
     require(tree->topLevelItemCount() == 3, "Assets projects two media rows and composition");
     ui::NodeGraphEditor nodes(session);
     nodes.show();
@@ -415,15 +395,11 @@ void run() {
     require(dimensions && dimensions->text() == QString::fromUtf8("32 × 16"), "source dimensions");
     // ADR 0026: the part and layer pickers read the probe through the Assets worker.
     ui::kit::KDropdown* layerPicker = nullptr;
-    QElapsedTimer partsTimer;
-    partsTimer.start();
-    while (partsTimer.elapsed() < 15000) {
-        QApplication::processEvents();
+    static_cast<void>(awaitQtCondition("the layer picker lists the still's layers", [&] {
         layerPicker = properties.findChild<ui::kit::KDropdown*>("propertiesImageLayer");
-        if (layerPicker != nullptr && layerPicker->toolTip().isEmpty() && layerPicker->count() > 0)
-            break;
-        QTest::qWait(10);
-    }
+        return layerPicker != nullptr && layerPicker->toolTip().isEmpty() &&
+               layerPicker->count() > 0;
+    }));
     require(layerPicker && layerPicker->count() == 1 &&
                 layerPicker->itemText(0) == "Color (root)",
             "the layer picker lists exactly the still's root color layer");
@@ -505,11 +481,9 @@ void run() {
     // Task N1, item 2: a source card carries no preview, so the worker only prepares the Assets
     // panel's own thumbnails; waiting means waiting for that request to settle.
     const auto waitThumbnail = [&] {
-        QElapsedTimer wait;
-        wait.start();
-        while (controller.thumbnailsPending() && wait.elapsed() < 15000)
-            QTest::qWait(10);
-        require(!controller.thumbnailsPending(), "latest thumbnail request completes");
+        require(awaitQtCondition("the latest thumbnail request completes",
+                                 [&] { return !controller.thumbnailsPending(); }),
+                "latest thumbnail request completes");
     };
     const auto renderCard = [&] {
         const auto rect = card->boundingRect();
@@ -641,9 +615,9 @@ void run() {
     require(QFile::remove(directory.filePath("still.png")), "remove fixture media file");
     // Freshness follows document changes, never the playhead (bug #401): an edit refreshes.
     setSource("loopMode", std::int64_t{1});
-    timer.restart();
-    while (!controller.missing(still) && timer.elapsed() < 15000)
-        QTest::qWait(10);
+    require(awaitQtCondition("the removed source is reported missing",
+                             [&] { return controller.missing(still); }),
+            "the removed source is reported missing");
     require(controller.missing(still) && controller.thumbnail(still).isNull(),
             "unreadable asset never reuses a stale decoded proxy");
     require(card->assetProblem() && warningBadge(renderCard()) > 5,
@@ -651,10 +625,9 @@ void run() {
     controller.cancel();
     bridge.beginShutdown();
     scheduler.beginShutdown();
-    timer.restart();
-    while (!scheduler.isQuiescent() && timer.elapsed() < 15000)
-        QTest::qWait(10);
-    require(scheduler.isQuiescent(), "media tasks shut down safely");
+    require(awaitQtCondition("scheduler quiescent after shutdown",
+                             [&] { return scheduler.isQuiescent(); }),
+            "media tasks shut down safely");
 }
 // Bug #401 / task N1, item 2: playback asks the media worker for nothing. With 25 image-sequence
 // layers, 120 playback ticks start no thumbnail, probe or freshness rescan and read no source file.
@@ -687,20 +660,20 @@ void playbackStartsNoMediaJobs() {
     ui::TaskUiBridge bridge(scheduler);
     ui::AssetController controller(session, host, scheduler, bridge);
     controller.importFiles(firsts, std::nullopt);
-    QElapsedTimer timer;
-    timer.start();
-    while ((controller.busy() || session.snapshot().project().assets().size() < 25) &&
-           timer.elapsed() < 30000)
-        QTest::qWait(10);
+    require(awaitQtCondition("the 25 sequences import",
+                             [&] {
+                                 return !controller.busy() &&
+                                        session.snapshot().project().assets().size() >= 25;
+                             }),
+            "the 25 sequences import");
     require(session.snapshot().project().assets().size() == 25, "25 sequences import");
     commands::Transaction layers("Add Layers", session.snapshot().revision());
     for (const auto& asset : session.snapshot().project().assets())
         layers.emplace<commands::AddImageLayer>(session.compositionId(), asset.id);
     require(session.executeTransaction(std::move(layers)).succeeded(), "25 sequence layers");
-    timer.restart();
-    while ((controller.busy() || controller.thumbnailsPending()) && timer.elapsed() < 30000)
-        QTest::qWait(10);
-    require(!controller.thumbnailsPending(), "the media worker settles before playback");
+    require(awaitQtCondition("the media worker settles before playback",
+                             [&] { return !controller.busy() && !controller.thumbnailsPending(); }),
+            "the media worker settles before playback");
     const auto before = platform::sourceReadWork();
     int started = 0;
     for (int tick = 0; tick < 120; ++tick) {
@@ -712,7 +685,8 @@ void playbackStartsNoMediaJobs() {
             ++started;
     }
     // Longer than any delayed check would wait, so a deferred job would show up here too.
-    timer.restart();
+    QElapsedTimer timer;
+    timer.start();
     while (timer.elapsed() < 1500) {
         QTest::qWait(20);
         if (controller.thumbnailsPending() || controller.busy())
@@ -725,9 +699,9 @@ void playbackStartsNoMediaJobs() {
     controller.cancel();
     bridge.beginShutdown();
     scheduler.beginShutdown();
-    timer.restart();
-    while (!scheduler.isQuiescent() && timer.elapsed() < 15000)
-        QTest::qWait(10);
+    require(awaitQtCondition("scheduler quiescent after shutdown",
+                             [&] { return scheduler.isQuiescent(); }),
+            "the playback scheduler reaches quiescence");
 }
 } // namespace
 int main(int argc, char** argv) {
@@ -738,7 +712,7 @@ int main(int argc, char** argv) {
         run();
         partialBatchImport();
         playbackStartsNoMediaJobs();
-        return 0;
+        return bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

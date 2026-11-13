@@ -17,6 +17,7 @@
 // No full-frame readback, no CPU fallback, no mailbox-admission-only proof. Native-only: skips with
 // 77 without a Wayland platform, a packaged loader, or a resident-capable device.
 
+#include "await_qt.hpp"
 #include "gpu_service_chain_fixture.hpp"
 
 #include <bloom/commands/command_stack.hpp>
@@ -231,7 +232,8 @@ struct SecondProject final {
                                               ui::ViewerEditor& viewer,
                                               const document::CompositionId compositionId,
                                               const std::chrono::milliseconds timeout) {
-    return waitUntil(
+    return bloom::test_support::awaitQtCondition(
+        "resident frame of the awaited composition is presented",
         [&] {
             const auto frame = controller.state().frame;
             return isResidentFrame(frame) && viewer.residentPresentationActiveForTest() &&
@@ -295,7 +297,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         scheduler, fixture.productionGpuStage(), fixture.productionCpuStage(),
         fixture.productionCpuFallback(displayPreparer), serviceOptions(options.loader));
 
-    const bool terminal = waitUntil(
+    const bool terminal = bloom::test_support::awaitQtCondition(
+        "GPU preview service leaves Initializing",
         [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; }, 90s);
     const auto status = service.status();
     const bool residentReady =
@@ -371,18 +374,18 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         viewer->setGpuPresentationDependencies(nullptr, nullptr, std::string{}, 1.0);
         return 1;
     }
-    const bool firstAckHidden =
-        waitUntil([&] { return !viewer->gpuCpuCoverVisibleForTest(); }, 15s);
+    const bool firstAckHidden = bloom::test_support::awaitQtCondition(
+        "native CPU cover is hidden after the first present ack",
+        [&] { return !viewer->gpuCpuCoverVisibleForTest(); });
     checks.expect(firstAckHidden, "the native CPU cover is hidden after the first present ack");
 
     QWidget* container = nullptr;
-    const bool containerReady = waitUntil(
-        [&] {
+    const bool containerReady = bloom::test_support::awaitQtCondition(
+        "presenter's native container is visible after the first ack", [&] {
             container = nativeContainer(*viewer);
             return container != nullptr && container->isVisible() &&
                    !container->geometry().isEmpty();
-        },
-        15s);
+        });
     checks.expect(containerReady,
                   "the presenter's native container is visible after the first ack");
     if (!containerReady || container == nullptr) {
@@ -451,8 +454,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     // against the pre-swap count ONLY while the same native target survives. Across a retired and
     // recreated target the genuine evidence is applied >= enqueued > 0 on the CURRENT target plus
     // the current desired resident frame's owner ack.
-    const bool secondGenuinelyPresented = waitUntil(
-        [&] {
+    const bool secondGenuinelyPresented =
+        bloom::test_support::awaitQtCondition("swapped resident frame is applied natively", [&] {
             QWidget* liveContainer = nativeContainer(*viewer);
             QWindow* liveWindow = nativeVulkanWindow(liveContainer, host.get());
             const bool sameTarget = sameNativeTarget(preSwapWindow, liveWindow);
@@ -467,8 +470,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                 isResidentFrame(frame) &&
                 frame->desiredIdentity().compositionId == second.compositionId;
             return nativeProgress && desiredResident;
-        },
-        20s);
+        });
     checks.expect(secondGenuinelyPresented,
                   "the swapped resident frame was genuinely applied natively (applied >= enqueued "
                   "and the owner present count advanced or the target was recreated with a current "
@@ -486,8 +488,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     checks.expect(service.status().counters.cpuFallbacks == afterSwapCounters.cpuFallbacks,
                   "the project swap forced no CPU fallback");
 
-    const bool coverHiddenAfterSwap =
-        waitUntil([&] { return !viewer->gpuCpuCoverVisibleForTest(); }, 15s);
+    const bool coverHiddenAfterSwap = bloom::test_support::awaitQtCondition(
+        "native CPU cover is hidden after the swapped frame's present ack",
+        [&] { return !viewer->gpuCpuCoverVisibleForTest(); });
     checks.expect(coverHiddenAfterSwap,
                   "the native CPU cover is hidden after the swapped frame's present ack");
 
@@ -495,24 +498,22 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     // user-visible invariant is that it settles visible and inside the viewer. A QPointer plus a
     // reacquire keeps the test from dereferencing a container that a target recreation destroyed.
     QPointer<QWidget> swappedContainer;
-    const bool swappedContainerSettled = waitUntil(
-        [&] {
+    const bool swappedContainerSettled = bloom::test_support::awaitQtCondition(
+        "native container settles visible and inside the viewer after the swap", [&] {
             swappedContainer = nativeContainer(*viewer);
             return swappedContainer != nullptr && swappedContainer->isVisible() &&
                    !swappedContainer->geometry().isEmpty() &&
                    viewer->rect().contains(swappedContainer->geometry());
-        },
-        15s);
+        });
     checks.expect(swappedContainerSettled,
                   "the native container settles visible and inside the viewer after the swap");
     QWindow* swappedWindow = nullptr;
-    const bool swappedWindowReady = waitUntil(
-        [&] {
+    const bool swappedWindowReady = bloom::test_support::awaitQtCondition(
+        "presenter still owns its real Vulkan QWindow after the swap", [&] {
             swappedWindow = nativeVulkanWindow(nativeContainer(*viewer), host.get());
             return swappedWindow != nullptr &&
                    swappedWindow->surfaceType() == QSurface::VulkanSurface;
-        },
-        15s);
+        });
     checks.expect(swappedWindowReady,
                   "the presenter still owns its real Vulkan QWindow after the swap");
 
@@ -524,8 +525,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const std::uint64_t resizePresentBefore = viewer->gpuNativePresentCountForTest();
     host->resize(host->width() + 60, host->height() + 40);
     QApplication::processEvents();
-    const bool resizedAndRepresented = waitUntil(
-        [&] {
+    const bool resizedAndRepresented = bloom::test_support::awaitQtCondition(
+        "viewer resize re-presents the resident frame and hides the cover after ack", [&] {
             QWidget* liveContainer = nativeContainer(*viewer);
             QWindow* liveWindow = nativeVulkanWindow(liveContainer, host.get());
             const bool sameTarget = sameNativeTarget(preResizeWindow, liveWindow);
@@ -537,8 +538,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                             : true) &&
                 viewer->residentPresentationActiveForTest();
             return nativeProgress && !viewer->gpuCpuCoverVisibleForTest();
-        },
-        20s);
+        });
     checks.expect(resizedAndRepresented,
                   "a viewer resize re-presents the resident frame and hides the cover after ack");
     if (!resizedAndRepresented) {
@@ -582,14 +582,13 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     checks.expect(session.composition() == nullptr,
                   "the session rebinds to a composition-less document");
     QApplication::processEvents();
-    const bool hiddenOnBlank = waitUntil(
-        [&] {
+    const bool hiddenOnBlank = bloom::test_support::awaitQtCondition(
+        "native surface hides on the composition-less document", [&] {
             QWidget* current = nativeContainer(*viewer);
             return !viewer->residentPresentationActiveForTest() &&
                    (current == nullptr || !current->isVisible()) &&
                    !viewer->gpuCpuCoverVisibleForTest();
-        },
-        15s);
+        });
     if (!hiddenOnBlank) {
         QWidget* current = nativeContainer(*viewer);
         std::cerr << "PHASE blank-hide-failed residentActive="
@@ -615,7 +614,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const bool thirdResident =
         waitForResidentComposition(controller, *viewer, third.compositionId, 30s);
     checks.expect(thirdResident, "the native resident surface returns after the blank rebind");
-    checks.expect(waitUntil([&] { return !viewer->gpuCpuCoverVisibleForTest(); }, 15s),
+    checks.expect(bloom::test_support::awaitQtCondition(
+                      "native CPU cover is hidden again after the returned present ack",
+                      [&] { return !viewer->gpuCpuCoverVisibleForTest(); }),
                   "the native CPU cover is hidden again after the returned present ack");
 
     bool viewerRetired = false;
@@ -625,24 +626,32 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             checks.expect(generation == 92, "the viewer mutation generation is echoed");
             viewerRetired = result.safeToMutate;
         }));
-    checks.expect(waitUntil([&] { return viewerRetired; }, 20s),
-                  "the ViewerEditor native surface retired before teardown");
+    checks.expect(
+        bloom::test_support::awaitQtCondition("ViewerEditor native surface retired before teardown",
+                                              [&] { return viewerRetired; }),
+        "the ViewerEditor native surface retired before teardown");
     viewer->setGpuPresentationDependencies(nullptr, nullptr, std::string{}, 1.0);
     host.reset();
 
     controller.beginShutdown();
     bridge.beginShutdown();
-    (void)waitUntil([&] { return scheduler.isQuiescent(); }, 10s);
+    checks.expect(
+        bloom::test_support::awaitQtCondition("scheduler quiescent after the project-swap run",
+                                              [&] { return scheduler.isQuiescent(); }),
+        "the scheduler quiesces after the project-swap run");
     service.beginShutdown();
-    (void)waitUntil(
-        [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; }, 30s);
+    checks.expect(
+        bloom::test_support::awaitQtCondition(
+            "native service stops after the project-swap run",
+            [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; }),
+        "the native service stops after the project-swap run");
     checks.expect(service.status().counters.fullFrameReadbacks == 0U,
                   "the whole project-swap run performed no full-frame readback");
     std::error_code ignored;
     std::filesystem::remove_all(mediaDirectory, ignored);
     std::filesystem::remove_all(settingsRoot, ignored);
 
-    if (checks.failures() != 0) {
+    if (checks.failures() + bloom::test_support::awaitFailureCount() != 0) {
         std::cerr << "resident project-swap proof: " << checks.failures()
                   << " verification failure(s)\n";
         return 1;

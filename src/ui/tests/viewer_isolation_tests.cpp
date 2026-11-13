@@ -20,6 +20,7 @@
 // The CPU route always runs; the GPU route prints NotRun without a loader or device, and
 // --require-device makes that a failure.
 
+#include "await_qt.hpp"
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
@@ -132,20 +133,6 @@ constexpr auto kBadge =
 <rect id="badge" x="430" y="200" width="50" height="50" fill="#33cc66"/>
 </svg>
 )svg";
-
-template <typename Predicate>
-bool waitUntil(Predicate predicate, const std::chrono::milliseconds limit = 60s) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < limit.count()) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (predicate())
-            return true;
-        std::this_thread::sleep_for(1ms);
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return predicate();
-}
 
 struct Pixels final {
     bool ok = false;
@@ -388,13 +375,15 @@ std::unique_ptr<Viewer> viewerFor(Rig& rig, const Route& route,
             rig.scheduler, gpuStage,
             ui::makeCompositionPreviewCpuStage(*rig.compiler, rig.evaluator, rig.qualified),
             ui::makeCompositionPreviewCpuDisplayFallback(rig.displayPreparer), options);
-        waitUntil(
+        const bool initialized = bloom::test_support::awaitQtCondition(
+            "the GPU preview service leaves Initializing",
             [&] {
                 return viewer->service->status().state !=
                        runtime::GpuPreviewDisplayServiceState::Initializing;
             },
             90s);
-        if (viewer->service->status().state != runtime::GpuPreviewDisplayServiceState::Ready) {
+        if (!initialized ||
+            viewer->service->status().state != runtime::GpuPreviewDisplayServiceState::Ready) {
             std::cout << "NotRun: " << route.name << ": no qualified device ("
                       << viewer->service->status().residentDetail << ")\n";
             viewer->ready = false;
@@ -450,14 +439,16 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
                              const std::string& label) {
         if (session.currentTime() != frameTime(frame))
             static_cast<void>(session.setCurrentTime(frameTime(frame)));
-        const bool ready = waitUntil([&] {
-            const auto displayed = viewer.displayedFrameForTest();
-            return controller.state().activity == ui::PreviewActivity::Ready &&
-                   displayed != nullptr && displayed->desiredIdentity().time == frameTime(frame) &&
-                   displayed->desiredIdentity().isolation == level &&
-                   displayed->provenance().provider == v.provider &&
-                   viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
-        });
+        const bool ready = bloom::test_support::awaitQtCondition(
+            "Viewer shows a current frame from the expected route", [&] {
+                const auto displayed = viewer.displayedFrameForTest();
+                return controller.state().activity == ui::PreviewActivity::Ready &&
+                       displayed != nullptr &&
+                       displayed->desiredIdentity().time == frameTime(frame) &&
+                       displayed->desiredIdentity().isolation == level &&
+                       displayed->provenance().provider == v.provider &&
+                       viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
+            });
         checks.expect(ready, label + ": the Viewer shows a current frame from the expected route");
         return pixelsOf(viewer.displayedFrameForTest());
     };
@@ -535,7 +526,8 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
         ui::RamPreviewController ram(session, controller, rig.scheduler, *rig.bridge, v.pipeline,
                                      nullptr, v.submitter);
         ram.start();
-        const bool done = waitUntil([&] { return !ram.isCaching(); }, 60s);
+        const bool done = bloom::test_support::awaitQtCondition(
+            "RAM Preview finishes caching every frame", [&] { return !ram.isCaching(); }, 60s);
         checks.expect(done && ram.cachedFrameCount() == kFrames,
                       label + ": the RAM Preview retains every frame (" +
                           std::to_string(ram.cachedFrameCount()) + " of " +
@@ -557,10 +549,18 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
           std::tuple{std::vector<document::LayerId>{}, chain, std::string("filled outside")}}) {
         const auto tag = prefix + label;
         static_cast<void>(session.setViewerLevel({}));
-        waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Ready; });
+        checks.expect(
+            bloom::test_support::awaitQtCondition(
+                "preview reaches Ready",
+                [&] { return controller.state().activity == ui::PreviewActivity::Ready; }),
+            tag + ": the preview reaches Ready");
         cache->clear();
         checks.expect(session.setViewerLevel({fillLevel, std::nullopt}).ok(), tag + ": level set");
-        waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Ready; });
+        checks.expect(
+            bloom::test_support::awaitQtCondition(
+                "preview reaches Ready",
+                [&] { return controller.state().activity == ui::PreviewActivity::Ready; }),
+            tag + ": the preview reaches Ready");
         fill(tag);
         const auto filled = keysAt(fillLevel);
         const auto other = keysAt(otherLevel);
@@ -666,7 +666,8 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
             checks.expect(largeSession.setViewerLevel({largeChain, std::nullopt}).ok(),
                           label + ": enter outer");
             const auto countersBefore = v.counters();
-            const bool shown = waitUntil(
+            const bool shown = bloom::test_support::awaitQtCondition(
+                "dimmed Viewer frame from the device is shown",
                 [&] {
                     const auto displayed = largeViewer.displayedFrameForTest();
                     return largeController.state().activity == ui::PreviewActivity::Ready &&
@@ -733,7 +734,7 @@ int main(int argc, char** argv) {
     } catch (const std::exception& exception) {
         checks.expect(false, std::string("unexpected exception: ") + exception.what());
     }
-    if (checks.failures() != 0) {
+    if (checks.failures() + bloom::test_support::awaitFailureCount() != 0) {
         std::cerr << "viewer isolation: " << checks.failures() << " failure(s)\n";
         return 1;
     }

@@ -54,7 +54,7 @@ void testViewerSurroundNeverDrawsInsideTheFrame(Expectations& expectations) {
     {
         ViewerFixture fixture(makeTestProject("Surround only"));
         fixture.viewer.show();
-        expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+        expectations.expect(bloom::test_support::awaitQtCondition("surround fixture reaches a ready frame", [&] { return isReady(fixture.controller); }),
                             "the surround fixture reaches a ready frame");
         expectations.expect(fixture.viewer.backgroundForTest() == ui::ViewerBackground::Solid &&
                                 !fixture.viewer.transparencyGridForTest(),
@@ -126,7 +126,7 @@ void testTransparencyGridSharesOneActionAndPersists(Expectations& expectations) 
         ViewerFixture fixture(makeTestProject("Transparency grid"));
         fixture.viewer.resize(900, 650);
         fixture.viewer.show();
-        expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+        expectations.expect(bloom::test_support::awaitQtCondition("grid fixture reaches a ready frame", [&] { return isReady(fixture.controller); }),
                             "the grid fixture reaches a ready frame");
         const core::Color4d authored{0.1, 0.5, 0.3, 1.0};
         expectations.expect(setCompositionBackground(fixture, authored),
@@ -206,7 +206,7 @@ void testCompositionBackgroundEditRepresentsWithoutEvaluating(Expectations& expe
                         "the re-present fixture adds a half-transparent layer");
     fixture.session.clearSelection(); // no selection handles over the sampled centre
     fixture.viewer.show();
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("re-present fixture reaches a ready frame", [&] { return isReady(fixture.controller); }),
                         "the re-present fixture reaches a ready frame");
     const auto before = probeBackdrop(fixture.viewer).centre();
     const auto frame = fixture.controller.state().frame;
@@ -223,9 +223,12 @@ void testCompositionBackgroundEditRepresentsWithoutEvaluating(Expectations& expe
                         "the edit is one undoable step");
     const auto after = probeBackdrop(fixture.viewer).centre();
     // Let any (wrongly) scheduled evaluation run before counting.
-    const auto settle = std::chrono::steady_clock::now() + 300ms;
-    while (std::chrono::steady_clock::now() < settle)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "scheduler idle after the background-only edit",
+                            [&] { return fixture.scheduler.isQuiescent(); }),
+                        "no evaluation is left running after the background-only edit");
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     expectations.expect(after != before && after.blue() > before.blue(),
                         "the frame re-presents with the new background immediately (" +
                             before.name().toStdString() + " -> " + after.name().toStdString() +
@@ -262,7 +265,7 @@ void testSemiTransparentLayerCompositesOverTheBackground(Expectations& expectati
                         "the composite fixture adds a half-transparent gray layer");
     fixture.session.clearSelection(); // no selection handles over the sampled centre
     fixture.viewer.show();
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("composite fixture reaches a ready frame", [&] { return isReady(fixture.controller); }),
                         "the composite fixture reaches a ready frame");
     expectations.expect(setCompositionBackground(fixture, core::Color4d{1.0, 0.0, 0.0, 1.0}),
                         "a red background commits");
@@ -321,7 +324,7 @@ void testEmptyCompositionShowsNoLayerInvitation(Expectations& expectations) {
     expectations.expect(fixture.session.composition() != nullptr &&
                             fixture.session.composition()->graph().layerOutputs().empty(),
                         "the fixture has an active composition with no layers");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("empty composition reaches a ready frame", [&] { return isReady(fixture.controller); }),
                         "the empty composition reaches a ready frame");
     const core::Color4d authored{0.25, 0.55, 0.75, 1.0};
     expectations.expect(setCompositionBackground(fixture, authored),

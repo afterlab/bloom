@@ -4,6 +4,7 @@
 // that counts what it was asked to render -- never by waiting on real wall time and never by
 // measuring speed. What is pinned is not how fast a frame is but WHETHER a frame was rendered at
 // all: a cache that works shows up as an invocation count that stops moving.
+#include "await_qt.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -14,9 +15,9 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/graph.hpp>
-#include <bloom/document/value_nodes.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/value_nodes.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
@@ -28,12 +29,12 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
-#include <bloom/ui/viewer_editor.hpp>
-#include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 
 #include <filesystem>
@@ -85,18 +86,10 @@ class Expectations final {
     int failures_ = 0;
 };
 
+// Unnamed wait for ram_preview_retention_truth_tests.ipp, which is not converted yet; the waits in
+// this file call awaitQtCondition with a name.
 template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 20'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate)) {
-            return true;
-        }
-        std::this_thread::yield();
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return std::invoke(predicate);
+    return bloom::test_support::awaitQtCondition("test condition", predicate);
 }
 
 [[nodiscard]] runtime::TaskSchedulerConfig testSchedulerConfig(const std::size_t cpuWorkers = 1) {
@@ -256,7 +249,9 @@ struct SessionFixture final {
 void finishFixture(SessionFixture& fixture, Expectations& expectations) {
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "RAM preview fixture reaches asynchronous scheduler quiescence",
+                            [&] { return fixture.scheduler.isQuiescent(); }),
                         "the RAM preview fixture reaches asynchronous scheduler quiescence");
 }
 
@@ -351,7 +346,8 @@ void testCacheHitPublishesWithoutEvaluating(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Frame Cache Hit", time(1)));
     expectations.expect(fixture.session.addSolidLayer("Bounds", {0.2, 0.4, 0.8, 1}),
                         "cache fixture creates selected content");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "first frame renders", [&] { return isReady(fixture.controller); }),
                         "the first frame renders");
     const auto afterFirstFrame = fixture.preparationCount.load();
     const auto freshFrame = fixture.controller.state().frame;
@@ -371,7 +367,8 @@ void testCacheHitPublishesWithoutEvaluating(Expectations& expectations) {
             : std::vector<render::Rgba8>{};
 
     expectations.expect(fixture.session.setCurrentTime(time(1, 25)), "move to frame one");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "frame one renders", [&] { return isReady(fixture.controller); }),
                         "frame one renders");
     const auto afterSecondFrame = fixture.preparationCount.load();
     expectations.expect(afterSecondFrame == afterFirstFrame + 1,
@@ -423,8 +420,10 @@ void testCacheHitPublishesWithoutEvaluating(Expectations& expectations) {
 // its Float32 process image alive.
 void testCachingReleasesTheProcessImage(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Cache Footprint", time(1)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the footprint fixture renders its first frame");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("footprint fixture renders its first frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "the footprint fixture renders its first frame");
     auto firstFrame = fixture.controller.state().frame;
     expectations.expect(firstFrame != nullptr && firstFrame->hasProcessFrame(),
                         "a freshly evaluated frame does carry its process frame");
@@ -448,12 +447,16 @@ void testCachingReleasesTheProcessImage(Expectations& expectations) {
 
     // Move the session on twice, so nothing but the cache still refers to that first frame: the
     // controller's state holds a newer one and no request retains an older.
-    expectations.expect(fixture.session.setCurrentTime(time(1, 25)) &&
-                            waitUntil([&] { return isReady(fixture.controller); }),
-                        "the footprint fixture reaches a second frame");
-    expectations.expect(fixture.session.setCurrentTime(time(2, 25)) &&
-                            waitUntil([&] { return isReady(fixture.controller); }),
-                        "the footprint fixture reaches a third frame");
+    expectations.expect(
+        fixture.session.setCurrentTime(time(1, 25)) &&
+            bloom::test_support::awaitQtCondition("footprint fixture reaches a second frame",
+                                                  [&] { return isReady(fixture.controller); }),
+        "the footprint fixture reaches a second frame");
+    expectations.expect(
+        fixture.session.setCurrentTime(time(2, 25)) &&
+            bloom::test_support::awaitQtCondition("footprint fixture reaches a third frame",
+                                                  [&] { return isReady(fixture.controller); }),
+        "the footprint fixture reaches a third frame");
 
     expectations.expect(fixture.controller.frameCache().contains(firstKey),
                         "the first frame is still cached");
@@ -468,8 +471,10 @@ void testCachingReleasesTheProcessImage(Expectations& expectations) {
 
 void testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Frame Cache Budget", time(1)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the budget fixture renders its first frame");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("budget fixture renders its first frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "the budget fixture renders its first frame");
 
     std::vector<ui::PreparedPreviewFrameHandle> frames;
     // From frame one: frame zero is where the session already is, and setCurrentTime() reports "no
@@ -477,8 +482,10 @@ void testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(Expectations& expecta
     for (std::int64_t frameIndex = 1; frameIndex <= 3; ++frameIndex) {
         expectations.expect(fixture.session.setCurrentTime(time(frameIndex, 25)),
                             "the budget fixture reaches each frame");
-        expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                            "each frame of the budget fixture renders");
+        expectations.expect(
+            bloom::test_support::awaitQtCondition("each frame of the budget fixture renders",
+                                                  [&] { return isReady(fixture.controller); }),
+            "each frame of the budget fixture renders");
         frames.push_back(fixture.controller.state().frame);
     }
     expectations.expect(frames.size() == 3 && frames[0] != nullptr && frames[1] != nullptr &&
@@ -597,8 +604,10 @@ void testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(Expectations& expecta
     expectations.expect(
         fixture.session.addSolidLayer(QStringLiteral("Edit"), core::Color4d{1.0, 0.0, 0.0, 1.0}),
         "an edit advances the document revision");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the edited revision renders a frame");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("edited revision renders a frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "the edited revision renders a frame");
     const auto newRevisionFrame = fixture.controller.state().frame;
     expectations.expect(beforeEdit == 3 && newRevisionFrame != nullptr,
                         "the edited revision produced a frame to insert");
@@ -617,7 +626,8 @@ void testRamPreviewWorkArea(Expectations& expectations) {
     range.emplace<commands::SetWorkArea>(fixture.session.compositionId(), time(2, 25), time(5, 25));
     expectations.expect(fixture.session.executeTransaction(std::move(range)).changed(),
                         "work area accepted");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "foreground settled", [&] { return isReady(fixture.controller); }),
                         "foreground settled");
     fixture.frameCache->clear();
     ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
@@ -625,7 +635,9 @@ void testRamPreviewWorkArea(Expectations& expectations) {
     ram.start();
     expectations.expect(ram.totalFrameCount() == 3,
                         "RAM progress counts work-area frames, excluding its offset");
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 3,
+    expectations.expect(bloom::test_support::awaitQtCondition("RAM caches exactly its work area",
+                                                              [&] { return !ram.isCaching(); }) &&
+                            ram.cachedFrameCount() == 3,
                         "RAM caches exactly its work area");
     for (int frame = 0; frame < 7; ++frame) {
         const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
@@ -641,7 +653,9 @@ void testRamPreviewWorkArea(Expectations& expectations) {
 void testRamPreviewButtonReflectsFillingAndCancels(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM button", time(24, 25)));
     expectations.expect(animateSolidLayer(fixture.session), "animated composition");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "frame ready");
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "frame ready", [&] { return isReady(fixture.controller); }),
+                        "frame ready");
     ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
                                  fixture.bridge, fixture.countingPipeline());
     ui::ViewerEditor viewer(fixture.session, fixture.controller, &ram);
@@ -656,8 +670,11 @@ void testRamPreviewButtonReflectsFillingAndCancels(Expectations& expectations) {
                         "idle: the button reads RAM Preview");
     fixture.gateAtCall = fixture.preparationCount.load();
     button->click();
-    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }) && ram.isCaching(),
-                        "clicking the button starts the fill");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("clicking the button starts the fill",
+                                              [&] { return fixture.gate.entered(); }) &&
+            ram.isCaching(),
+        "clicking the button starts the fill");
     QCoreApplication::processEvents();
     expectations.expect(button->text().startsWith(QStringLiteral("Cancel")) && button->isChecked(),
                         "filling: the button reads Cancel with progress");
@@ -676,16 +693,20 @@ void testRamPreviewCachesTheRangeThenPlaysEveryFrame(Expectations& expectations)
     SessionFixture fixture(makeTestProject("RAM Preview Range", time(24, 25)));
     expectations.expect(animateSolidLayer(fixture.session),
                         "the fixture composition is animated across its range");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the animated composition renders its first frame");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("animated composition renders its first frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "the animated composition renders its first frame");
 
     ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
                                         fixture.bridge, fixture.countingPipeline());
     ramPreview.start();
     expectations.expect(ramPreview.isCaching() && ramPreview.totalFrameCount() == 24,
                         "a RAM preview of this composition covers exactly twenty-four frames");
-    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }),
-                        "the RAM preview finishes caching its range");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("RAM preview finishes caching its range",
+                                              [&] { return !ramPreview.isCaching(); }),
+        "the RAM preview finishes caching its range");
     expectations.expect(ramPreview.cachedFrameCount() == 24,
                         "every frame of the range reached the cache");
     expectations.expect(fixture.controller.frameCache().size() >= 24,
@@ -729,7 +750,8 @@ void testRamPreviewCachesTheRangeThenPlaysEveryFrame(Expectations& expectations)
     ramPreview.resetMetadataWorkForTesting();
     fixture.controller.frameCache().resetMetadataWorkForTesting();
     ramPreview.start();
-    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "second RAM preview finishes", [&] { return !ramPreview.isCaching(); }),
                         "the second RAM preview finishes");
     expectations.expect(ramPreview.cachedFrameCount() == 24 &&
                             fixture.preparationCount.load() == beforeSecondRun,
@@ -750,8 +772,10 @@ void testRamPreviewCachesTheRangeThenPlaysEveryFrame(Expectations& expectations)
 // newest that fit, ends PartialBudget and still plays.
 void testRamPreviewStopsWhenTheRangeOutgrowsTheBudget(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Preview Budget", time(24, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the budget-limited fixture renders its first frame");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("budget-limited fixture renders its first frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "the budget-limited fixture renders its first frame");
     const auto frame = fixture.controller.state().frame;
     expectations.expect(frame != nullptr, "the budget-limited fixture has a frame to measure");
     if (frame == nullptr) {
@@ -770,8 +794,10 @@ void testRamPreviewStopsWhenTheRangeOutgrowsTheBudget(Expectations& expectations
                              outcome == ui::RamPreviewController::Completion::PartialBudget;
                      });
     ramPreview.start();
-    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }),
-                        "the budget-limited run ends on its own");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("budget-limited run ends on its own",
+                                              [&] { return !ramPreview.isCaching(); }),
+        "the budget-limited run ends on its own");
     expectations.expect(
         ramPreview.cachedFrameCount() == 3 && ramPreview.totalFrameCount() == 24 &&
             ramPreview.preparedFrameCount() >= 23,
@@ -792,8 +818,10 @@ void testRamPreviewStopsWhenTheRangeOutgrowsTheBudget(Expectations& expectations
 
 void testRamPreviewExactKeyReplacementKeepsCoverage(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Exact Replacement", time(3, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the replacement fixture renders its first frame");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("replacement fixture renders its first frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "the replacement fixture renders its first frame");
     const auto key = fixture.controller.cacheKeyForTime(time(0));
     expectations.expect(key && fixture.frameCache->contains(*key),
                         "the exact key to replace is initially retained");
@@ -806,7 +834,9 @@ void testRamPreviewExactKeyReplacementKeepsCoverage(Expectations& expectations) 
     ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
                                  fixture.bridge, fixture.countingPipeline());
     ram.start();
-    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }) &&
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "run counts the retained first frame while its next frame waits",
+                            [&] { return fixture.gate.entered(); }) &&
                             ram.cachedFrameCount() == 1,
                         "the run counts the retained first frame while its next frame waits");
 
@@ -820,7 +850,9 @@ void testRamPreviewExactKeyReplacementKeepsCoverage(Expectations& expectations) 
                         "replacement of the same exact key leaves coverage intact");
 
     fixture.gate.release();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "replacement does not turn a complete RAM run into a failure",
+                            [&] { return !ram.isCaching(); }) &&
                             ram.lastCompletion() ==
                                 ui::RamPreviewController::Completion::Complete &&
                             ram.cachedFrameCount() == 3,
@@ -831,8 +863,10 @@ void testRamPreviewExactKeyReplacementKeepsCoverage(Expectations& expectations) 
 
 void testRamPreviewCancellationKeepsWhatItCached(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Preview Cancel", time(24, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the cancellation fixture renders its first frame");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("cancellation fixture renders its first frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "the cancellation fixture renders its first frame");
     // ADAPTED for task VIEW-1: RAM preview progress reports in the WINDOW STATUS BAR now, not the
     // viewer footer -- it is application state, and it has to stay visible whether or not a Viewer
     // is open. The free function the strip's own cell calls is what is read here.
@@ -843,8 +877,10 @@ void testRamPreviewCancellationKeepsWhatItCached(Expectations& expectations) {
     ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
                                         fixture.bridge, fixture.countingPipeline());
     ramPreview.start();
-    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }),
-                        "the run reaches its first uncached frame on the worker");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("run reaches its first uncached frame on the worker",
+                                              [&] { return fixture.gate.entered(); }),
+        "the run reaches its first uncached frame on the worker");
     expectations.expect(ramPreview.isCaching() && ramPreview.cachedFrameCount() == 1,
                         "one frame of the range is cached at the rendezvous");
     expectations.expect(ui::previewCacheText(fixture.controller) == QStringLiteral("Caching 1/24"),
@@ -858,10 +894,12 @@ void testRamPreviewCancellationKeepsWhatItCached(Expectations& expectations) {
         "and stops claiming a run once one is no longer caching");
     expectations.expect(ramPreview.cachedFrameCount() == 1,
                         "a cancelled run keeps every frame it had already cached");
-    expectations.expect(waitUntil([&] {
-                            return fixture.scheduler.isQuiescent() ||
-                                   !fixture.controller.state().taskId.has_value();
-                        }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "cancelled frame's task reaches terminal",
+                            [&] {
+                                return fixture.scheduler.isQuiescent() ||
+                                       !fixture.controller.state().taskId.has_value();
+                            }),
                         "the cancelled frame's task reaches terminal");
 
     finishFixture(fixture, expectations);
@@ -870,14 +908,18 @@ void testRamPreviewCancellationKeepsWhatItCached(Expectations& expectations) {
 void testRamPreviewSharesResolutionAndCachesByPolicy(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Resolution cache", time(3, 25)));
     fixture.controller.setDisplayedCompositionScale(0.25);
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "Auto Quarter becomes ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("Auto Quarter becomes ready",
+                                              [&] { return isReady(fixture.controller); }),
+        "Auto Quarter becomes ready");
     ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
                                         fixture.bridge, fixture.countingPipeline());
     ramPreview.start();
-    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }) &&
-                            ramPreview.cachedFrameCount() == 3,
-                        "RAM preview fills the Auto Quarter range");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("RAM preview fills the Auto Quarter range",
+                                              [&] { return !ramPreview.isCaching(); }) &&
+            ramPreview.cachedFrameCount() == 3,
+        "RAM preview fills the Auto Quarter range");
     const auto count = fixture.preparationCount.load();
     expectations.expect(fixture.session.setCurrentTime(time(1, 25)),
                         "advance to a cached proxy time");
@@ -886,9 +928,11 @@ void testRamPreviewSharesResolutionAndCachesByPolicy(Expectations& expectations)
                         "ordinary playback consumes RAM preview's proxy buffer without evaluation");
     const auto autoKey = fixture.controller.cacheKeyForTime(time(1, 25));
     fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Quarter);
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }) &&
-                            fixture.preparationCount.load() > count,
-                        "fixed Quarter has its own request policy identity");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("fixed Quarter has its own request policy identity",
+                                              [&] { return isReady(fixture.controller); }) &&
+            fixture.preparationCount.load() > count,
+        "fixed Quarter has its own request policy identity");
     expectations.expect(autoKey.has_value() && fixture.controller.frameCache().contains(*autoKey),
                         "switching policy preserves the reusable Auto cache entry");
     const auto afterFixed = fixture.preparationCount.load();
@@ -897,12 +941,15 @@ void testRamPreviewSharesResolutionAndCachesByPolicy(Expectations& expectations)
                             fixture.preparationCount.load() == afterFixed,
                         "returning to Auto serves its cache with the new request generation");
     fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "Half becomes ready", [&] { return isReady(fixture.controller); }),
                         "Half becomes ready");
     ramPreview.start();
-    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }) &&
-                            ramPreview.cachedFrameCount() == 3,
-                        "RAM preview fills the separate Half range");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("RAM preview fills the separate Half range",
+                                              [&] { return !ramPreview.isCaching(); }) &&
+            ramPreview.cachedFrameCount() == 3,
+        "RAM preview fills the separate Half range");
     expectations.expect(
         fixture.controller.frameCache().statistics().uiPixelCopies == 0,
         "Half CPU retention inserts worker-prepared display buffers without UI copying");
@@ -919,14 +966,18 @@ void testRamPreviewSharesResolutionAndCachesByPolicy(Expectations& expectations)
 void testResolutionChangeCancelsAnActiveRamPreview(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Resolution change during RAM preview", time(3, 25)));
     fixture.controller.setDisplayedCompositionScale(0.25);
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "Auto Quarter becomes ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("Auto Quarter becomes ready",
+                                              [&] { return isReady(fixture.controller); }),
+        "Auto Quarter becomes ready");
     ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
                                         fixture.bridge, fixture.countingPipeline());
     fixture.gateAtCall = fixture.preparationCount.load();
     ramPreview.start();
-    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }),
-                        "a RAM preview proxy is in flight");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("RAM preview proxy is in flight",
+                                              [&] { return fixture.gate.entered(); }),
+        "a RAM preview proxy is in flight");
     std::optional<ui::RamPreviewController::Completion> finished;
     QObject::connect(&ramPreview, &ui::RamPreviewController::cachingFinished, &fixture.bridge,
                      [&finished](const ui::RamPreviewController::Completion outcome) {
@@ -936,9 +987,11 @@ void testResolutionChangeCancelsAnActiveRamPreview(Expectations& expectations) {
     expectations.expect(ramPreview.isCaching() && !finished,
                         "an Auto factor change (a Viewer resize) does not end the run");
     fixture.gate.release();
-    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }) &&
-                            finished == ui::RamPreviewController::Completion::Complete,
-                        "the run rescans at the new factor and completes");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("run rescans at the new factor and completes",
+                                              [&] { return !ramPreview.isCaching(); }) &&
+            finished == ui::RamPreviewController::Completion::Complete,
+        "the run rescans at the new factor and completes");
     for (const auto frame : {0, 1, 2}) {
         const auto halfKey = fixture.controller.cacheKeyForTime(time(frame, 25));
         expectations.expect(halfKey && fixture.controller.frameCache().contains(*halfKey),
@@ -968,8 +1021,10 @@ void testCompositionSwitchEndsTheRunAndKeepsItsFrames(Expectations& expectations
         return;
     }
     (void)fixture.session.setComposition(original);
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the original composition renders its first frame");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("original composition renders its first frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "the original composition renders its first frame");
     fixture.gateAtCall = fixture.preparationCount.load() + 2;
     ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
                                         fixture.bridge, fixture.countingPipeline());
@@ -979,7 +1034,9 @@ void testCompositionSwitchEndsTheRunAndKeepsItsFrames(Expectations& expectations
                          finished = outcome;
                      });
     ramPreview.start();
-    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }), "the run is filling");
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "run is filling", [&] { return fixture.gate.entered(); }),
+                        "the run is filling");
     std::vector<ui::PreviewFrameCacheKey> filled;
     for (const auto frame : {0, 1, 2})
         if (const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
@@ -993,8 +1050,10 @@ void testCompositionSwitchEndsTheRunAndKeepsItsFrames(Expectations& expectations
     fixture.gate.release();
     const auto calls = fixture.preparationCount.load();
     (void)fixture.session.setComposition(original);
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "coming back renders the original composition");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("coming back renders the original composition",
+                                              [&] { return isReady(fixture.controller); }),
+        "coming back renders the original composition");
     for (const auto& key : filled)
         expectations.expect(fixture.controller.frameCache().contains(key),
                             "the frames the run filled are still cached after the round trip");
@@ -1011,8 +1070,10 @@ void testRamPreviewLandsFramesInOrder(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM in-order landing", time(6, 25)), 2);
     expectations.expect(animateSolidLayer(fixture.session),
                         "the in-order fixture composition is animated across its range");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the in-order fixture renders its first frame");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("in-order fixture renders its first frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "the in-order fixture renders its first frame");
     const auto before = fixture.preparationCount.load();
     // The run's first preparation (frame 1; frame 0 is the Viewer's) blocks until released.
     fixture.gateAtCall = before;
@@ -1028,10 +1089,14 @@ void testRamPreviewLandsFramesInOrder(Expectations& expectations) {
             contiguous = false;
     });
     ramPreview.start();
-    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }),
-                        "frame 1 is preparing and held at the gate");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("frame 1 is preparing and held at the gate",
+                                              [&] { return fixture.gate.entered(); }),
+        "frame 1 is preparing and held at the gate");
     // Frame 2 prepares beside it and finishes first; it is held, not cached.
-    expectations.expect(waitUntil([&] { return fixture.preparationCount.load() == before + 2; }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "frame 2 prepares beside the held frame 1",
+                            [&] { return fixture.preparationCount.load() == before + 2; }),
                         "frame 2 prepares beside the held frame 1");
     for (int spin = 0; spin < 50; ++spin)
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
@@ -1040,8 +1105,10 @@ void testRamPreviewLandsFramesInOrder(Expectations& expectations) {
     expectations.expect(ramPreview.cachedFrameCount() == 1,
                         "frame 2 does not land ahead of frame 1 (only frame 0 is cached)");
     fixture.gate.release();
-    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }),
-                        "the in-order run finishes once frame 1 lands");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("in-order run finishes once frame 1 lands",
+                                              [&] { return !ramPreview.isCaching(); }),
+        "the in-order run finishes once frame 1 lands");
     expectations.expect(ramPreview.cachedFrameCount() == 6 && contiguous,
                         "every frame landed and the cached range was one run from the start "
                         "throughout");
@@ -1050,8 +1117,10 @@ void testRamPreviewLandsFramesInOrder(Expectations& expectations) {
 
 void testRamPreviewRetriesATransientFrameFailure(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM transient failure", time(6, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the failure fixture renders its first frame");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("failure fixture renders its first frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "the failure fixture renders its first frame");
     fixture.failAtCall = fixture.preparationCount.load() + 1;
     ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
                                         fixture.bridge, fixture.countingPipeline());
@@ -1061,7 +1130,9 @@ void testRamPreviewRetriesATransientFrameFailure(Expectations& expectations) {
                          finished = outcome;
                      });
     ramPreview.start();
-    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }) &&
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "frame that failed once is prepared again and the run completes",
+                            [&] { return !ramPreview.isCaching(); }) &&
                             finished == ui::RamPreviewController::Completion::Complete &&
                             ramPreview.cachedFrameCount() == 6,
                         "a frame that failed once is prepared again and the run completes");
@@ -1072,8 +1143,10 @@ void testRamPreviewRetriesATransientFrameFailure(Expectations& expectations) {
 // work requests (a scrub, a playback tick) and a retained frame being dropped and re-filled.
 void testRamPreviewIgnoresSessionOnlyActivity(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM session activity", time(12, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the session fixture renders its first frame");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("session fixture renders its first frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "the session fixture renders its first frame");
     fixture.gateAtCall = fixture.preparationCount.load() + 2;
     ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
                                         fixture.bridge, fixture.countingPipeline());
@@ -1083,7 +1156,9 @@ void testRamPreviewIgnoresSessionOnlyActivity(Expectations& expectations) {
                          finished = outcome;
                      });
     ramPreview.start();
-    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }), "a frame is in flight");
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "frame is in flight", [&] { return fixture.gate.entered(); }),
+                        "a frame is in flight");
     (void)fixture.session.setCurrentTime(time(7, 25));
     emit fixture.controller.foregroundWorkRequested();
     // The run's retained frames vanish for a non-memory reason (here the whole cache is cleared,
@@ -1092,10 +1167,12 @@ void testRamPreviewIgnoresSessionOnlyActivity(Expectations& expectations) {
     expectations.expect(ramPreview.isCaching() && !finished,
                         "playhead moves, foreground requests and a lost frame do not end the run");
     fixture.gate.release();
-    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }) &&
-                            finished == ui::RamPreviewController::Completion::Complete &&
-                            ramPreview.cachedFrameCount() == 12,
-                        "the run re-fills the lost frame and completes");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("run re-fills the lost frame and completes",
+                                              [&] { return !ramPreview.isCaching(); }) &&
+            finished == ui::RamPreviewController::Completion::Complete &&
+            ramPreview.cachedFrameCount() == 12,
+        "the run re-fills the lost frame and completes");
     finishFixture(fixture, expectations);
 }
 
@@ -1127,14 +1204,17 @@ void testOperationCacheUnderRamPreview(Expectations& expectations) {
     expectations.expect(
         fixture.session.addTextLayer(QStringLiteral("Static text"), QStringLiteral("Bloom")),
         "static text is authored");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "static composition is ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("static composition is ready",
+                                              [&] { return isReady(fixture.controller); }),
+        "static composition is ready");
     const auto beforeMisses = fixture.operationMisses.load();
     const auto beforeHits = fixture.operationHits.load();
     ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
                                         fixture.bridge, fixture.countingPipeline());
     ramPreview.start();
-    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "static RAM preview finishes", [&] { return !ramPreview.isCaching(); }),
                         "static RAM preview finishes");
     expectations.expect(ramPreview.cachedFrameCount() == 24 &&
                             fixture.operationMisses.load() == beforeMisses &&
@@ -1174,8 +1254,10 @@ void testLayoutEditRetainsTheRamRun(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Layout Retain", time(24, 25)));
     expectations.expect(animateSolidLayer(fixture.session),
                         "the fixture composition is animated across its range");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the animated composition renders its first frame");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("animated composition renders its first frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "the animated composition renders its first frame");
 
     const auto evalRevision = fixture.session.evaluationSnapshot().revision();
     const auto nodeId = fixture.session.composition()->graph().nodes().front().id;
@@ -1185,8 +1267,10 @@ void testLayoutEditRetainsTheRamRun(Expectations& expectations) {
     ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
                                  fixture.bridge, fixture.countingPipeline());
     ram.start();
-    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }),
-                        "the RAM run reaches a frame on the worker");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("RAM run reaches a frame on the worker",
+                                              [&] { return fixture.gate.entered(); }),
+        "the RAM run reaches a frame on the worker");
 
     commands::Transaction move("Move Nodes", fixture.session.snapshot().revision());
     move.emplace<commands::MoveNodes>(
@@ -1200,7 +1284,9 @@ void testLayoutEditRetainsTheRamRun(Expectations& expectations) {
                         "the layout edit retains the evaluation snapshot and the run");
 
     fixture.gate.release();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "run completes under one retained evaluation revision",
+                            [&] { return !ram.isCaching(); }) &&
                             ram.cachedFrameCount() == ram.totalFrameCount(),
                         "the run completes under one retained evaluation revision");
     for (std::uint64_t frame = 0; frame < ram.totalFrameCount(); ++frame) {
@@ -1223,8 +1309,10 @@ void testPixelEditCancelsTheRamRun(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Pixel Cancel", time(24, 25)));
     expectations.expect(animateSolidLayer(fixture.session),
                         "the fixture composition is animated across its range");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the animated composition renders its first frame");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("animated composition renders its first frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "the animated composition renders its first frame");
     const auto nodeId = fixture.session.composition()->graph().nodes().front().id;
 
     fixture.gateAtCall = fixture.preparationCount.load();
@@ -1236,8 +1324,11 @@ void testPixelEditCancelsTheRamRun(Expectations& expectations) {
                          finished = outcome;
                      });
     ram.start();
-    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }) && ram.isCaching(),
-                        "the RAM run is in flight on the worker");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("RAM run is in flight on the worker",
+                                              [&] { return fixture.gate.entered(); }) &&
+            ram.isCaching(),
+        "the RAM run is in flight on the worker");
 
     commands::Transaction mute("Mute Node", fixture.session.snapshot().revision());
     mute.emplace<commands::SetNodeMuted>(fixture.session.compositionId(), nodeId, true);
@@ -1248,10 +1339,12 @@ void testPixelEditCancelsTheRamRun(Expectations& expectations) {
                         "a pixel edit advances evaluation and the run keeps going");
 
     fixture.gate.release();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
-                            finished == ui::RamPreviewController::Completion::Complete &&
-                            ram.cachedFrameCount() == 24,
-                        "the run rescans and completes under the new revision");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("run rescans and completes under the new revision",
+                                              [&] { return !ram.isCaching(); }) &&
+            finished == ui::RamPreviewController::Completion::Complete &&
+            ram.cachedFrameCount() == 24,
+        "the run rescans and completes under the new revision");
     const auto key = fixture.controller.cacheKeyForTime(time(12, 25));
     expectations.expect(key && key->sourceRevision == fixture.session.snapshot().revision() &&
                             fixture.controller.frameCache().contains(*key),
@@ -1330,14 +1423,18 @@ void testRamRunReusesBothHalvesAfterSplit(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Split Reuse", time(7, 25)));
     expectations.expect(animateSolidLayer(fixture.session),
                         "the split-reuse fixture is animated across its seven frames");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the foreground frame is ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("foreground frame is ready",
+                                              [&] { return isReady(fixture.controller); }),
+        "the foreground frame is ready");
     const auto boundary = fixture.session.composition()->graph().layerOutputs().front();
     fixture.frameCache->clear();
     ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
                                  fixture.bridge, fixture.countingPipeline());
     ram.start();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 7,
+    expectations.expect(bloom::test_support::awaitQtCondition("whole range caches",
+                                                              [&] { return !ram.isCaching(); }) &&
+                            ram.cachedFrameCount() == 7,
                         "the whole range caches");
     const auto afterFullFill = fixture.preparationCount.load();
     const auto retainedRevision = fixture.session.evaluationSnapshot().revision();
@@ -1354,10 +1451,11 @@ void testRamRunReusesBothHalvesAfterSplit(Expectations& expectations) {
                             retainedRevision,
                         "both halves keep the retained provenance");
     ram.start();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
-                            ram.cachedFrameCount() == 7 &&
-                            fixture.preparationCount.load() == afterFullFill,
-                        "a RAM run after the split prepares nothing");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("RAM run after the split prepares nothing",
+                                              [&] { return !ram.isCaching(); }) &&
+            ram.cachedFrameCount() == 7 && fixture.preparationCount.load() == afterFullFill,
+        "a RAM run after the split prepares nothing");
     for (std::int64_t frame = 0; frame < 7; ++frame) {
         const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
         expectations.expect(key && fixture.frameCache->contains(*key),
@@ -1373,8 +1471,10 @@ void testRamRunReusesBothHalvesAfterSplit(Expectations& expectations) {
 // nothing; out-of-range entries are released as rangeDrops (never eviction/pressure).
 void testWorkAreaRangeManagement(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Work Area Management", time(7, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the work-area fixture renders its first frame");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("work-area fixture renders its first frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "the work-area fixture renders its first frame");
 
     const auto setRange = [&](const core::RationalTime start, const core::RationalTime end) {
         commands::Transaction range("Set Work Area", fixture.session.snapshot().revision());
@@ -1394,7 +1494,9 @@ void testWorkAreaRangeManagement(Expectations& expectations) {
     ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
                                  fixture.bridge, fixture.countingPipeline());
     ram.start();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 3,
+    expectations.expect(bloom::test_support::awaitQtCondition("three-frame work area caches",
+                                                              [&] { return !ram.isCaching(); }) &&
+                            ram.cachedFrameCount() == 3,
                         "the three-frame work area caches");
     const auto preparationAfterFill = fixture.preparationCount.load();
     const auto residentAfterFill = fixture.frameCache->residentBytes();
@@ -1415,17 +1517,20 @@ void testWorkAreaRangeManagement(Expectations& expectations) {
                             fixture.frameCache->statistics().rangeDrops > rangeDropsBefore,
                         "a shrink releases only the departing frame as a range drop");
     ram.start();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
-                            fixture.preparationCount.load() == preparationAfterFill &&
-                            ram.cachedFrameCount() == 2,
-                        "a fully cached shrink evaluates nothing");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("fully cached shrink evaluates nothing",
+                                              [&] { return !ram.isCaching(); }) &&
+            fixture.preparationCount.load() == preparationAfterFill && ram.cachedFrameCount() == 2,
+        "a fully cached shrink evaluates nothing");
 
     // Expand back to [1,5): the two frames the shrink released (1 and 2) are the only ones
     // evaluated; 3 and 4 stay cached.
     expectations.expect(setRange(time(1, 25), time(5, 25)).changed(), "the range expands");
     const auto beforeExpansion = fixture.preparationCount.load();
     ram.start();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 4,
+    expectations.expect(bloom::test_support::awaitQtCondition("expanded range fills",
+                                                              [&] { return !ram.isCaching(); }) &&
+                            ram.cachedFrameCount() == 4,
                         "the expanded range fills");
     const auto key1 = fixture.controller.cacheKeyForTime(time(1, 25));
     if (!key1.has_value() || !key2.has_value() || !key3.has_value() || !key4.has_value()) {
@@ -1442,7 +1547,9 @@ void testWorkAreaRangeManagement(Expectations& expectations) {
     const auto beforeShift = fixture.preparationCount.load();
     expectations.expect(setRange(time(2, 25), time(6, 25)).changed(), "the range shifts");
     ram.start();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 4,
+    expectations.expect(bloom::test_support::awaitQtCondition("shifted range caches four frames",
+                                                              [&] { return !ram.isCaching(); }) &&
+                            ram.cachedFrameCount() == 4,
                         "the shifted range caches four frames");
     const auto key5 = fixture.controller.cacheKeyForTime(time(5, 25));
     if (!key5.has_value()) {
@@ -1471,8 +1578,11 @@ void testWorkAreaRangeManagement(Expectations& expectations) {
                         "clearing the work area publishes");
     const auto beforeClear = fixture.preparationCount.load();
     ram.start();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 7,
-                        "the cleared range covers the whole composition");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("cleared range covers the whole composition",
+                                              [&] { return !ram.isCaching(); }) &&
+            ram.cachedFrameCount() == 7,
+        "the cleared range covers the whole composition");
     expectations.expect(fixture.preparationCount.load() == beforeClear + 3,
                         "clearing fills only the frames outside the previous range");
 
@@ -1506,8 +1616,10 @@ void testWorkAreaRangeManagement(Expectations& expectations) {
 // completion is neither retained nor counted, so progress cannot skip or duplicate a frame.
 void testRamRunAdaptsToRangeEditWhileActive(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Active Range Edit", time(7, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the foreground frame is ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("foreground frame is ready",
+                                              [&] { return isReady(fixture.controller); }),
+        "the foreground frame is ready");
     const auto setRange = [&](const core::RationalTime start, const core::RationalTime end) {
         commands::Transaction range("Set Work Area", fixture.session.snapshot().revision());
         range.emplace<commands::SetWorkArea>(fixture.session.compositionId(), start, end);
@@ -1522,7 +1634,9 @@ void testRamRunAdaptsToRangeEditWhileActive(Expectations& expectations) {
     ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
                                  fixture.bridge, fixture.countingPipeline());
     ram.start();
-    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }) && ram.isCaching(),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "RAM run is in flight", [&] { return fixture.gate.entered(); }) &&
+                            ram.isCaching(),
                         "the RAM run is in flight");
 
     // Shrink to [2,4) while the frame is in flight.
@@ -1530,9 +1644,11 @@ void testRamRunAdaptsToRangeEditWhileActive(Expectations& expectations) {
     expectations.expect(fixture.session.evaluationSnapshot().revision() == evalRevision,
                         "the range edit did not advance evaluation");
     fixture.gate.release();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
-                            ram.cachedFrameCount() == 2 && ram.totalFrameCount() == 2,
-                        "the run adapts to the new two-frame range and completes");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("run adapts to the new two-frame range and completes",
+                                              [&] { return !ram.isCaching(); }) &&
+            ram.cachedFrameCount() == 2 && ram.totalFrameCount() == 2,
+        "the run adapts to the new two-frame range and completes");
     for (std::int64_t frame = 0; frame < 7; ++frame) {
         const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
         const bool inRange = frame >= 2 && frame < 4;
@@ -1552,14 +1668,18 @@ void testRamRunFiniteClipRange(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Finite Clip Range", time(7, 25)));
     expectations.expect(animateSolidLayer(fixture.session),
                         "the finite-range fixture is animated across its seven frames");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the foreground frame is ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("foreground frame is ready",
+                                              [&] { return isReady(fixture.controller); }),
+        "the foreground frame is ready");
     const auto layerId = fixture.session.composition()->graph().layerOutputs().front().layerId;
     fixture.frameCache->clear();
     ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
                                  fixture.bridge, fixture.countingPipeline());
     ram.start();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 7,
+    expectations.expect(bloom::test_support::awaitQtCondition("whole seven-frame range caches",
+                                                              [&] { return !ram.isCaching(); }) &&
+                            ram.cachedFrameCount() == 7,
                         "the whole seven-frame range caches");
     const auto afterFullFill = fixture.preparationCount.load();
     const auto oldRevision = fixture.session.snapshot().revision();
@@ -1574,10 +1694,11 @@ void testRamRunFiniteClipRange(Expectations& expectations) {
                             fixture.session.snapshot().revision(),
                         "the retained overlap keeps an older revision");
     ram.start();
-    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
-                            ram.cachedFrameCount() == 7 &&
-                            fixture.preparationCount.load() == afterFullFill + 4,
-                        "only the four invalidated frames re-prepare");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("only the four invalidated frames re-prepare",
+                                              [&] { return !ram.isCaching(); }) &&
+            ram.cachedFrameCount() == 7 && fixture.preparationCount.load() == afterFullFill + 4,
+        "only the four invalidated frames re-prepare");
     for (std::int64_t frame = 0; frame < 7; ++frame) {
         const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
         expectations.expect(key && fixture.frameCache->contains(*key),
@@ -1605,8 +1726,10 @@ void testPurgePreviewCacheRetiresInFlightAndRecomputes(Expectations& expectation
     SessionFixture fixture(makeTestProject("Purge preview", time(1)));
     expectations.expect(fixture.session.addSolidLayer("Purge", {0.2, 0.4, 0.8, 1.0}),
                         "purge fixture creates selected content");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "purge fixture renders its first frame");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("purge fixture renders its first frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "purge fixture renders its first frame");
     const auto displayed = fixture.controller.state().frame;
     expectations.expect(displayed != nullptr && fixture.frameCache->size() > 0,
                         "purge fixture retains the first frame");
@@ -1615,8 +1738,10 @@ void testPurgePreviewCacheRetiresInFlightAndRecomputes(Expectations& expectation
     // preparation rather than a fixed ordinal: startup may already have used more than one.
     fixture.gateAtCall = static_cast<int>(fixture.preparationCount.load());
     fixture.controller.requestRefresh();
-    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }),
-                        "purge fixture has a gated in-flight request");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("purge fixture has a gated in-flight request",
+                                              [&] { return fixture.gate.entered(); }),
+        "purge fixture has a gated in-flight request");
 
     const auto revisionBefore = fixture.session.snapshot().revision();
     const bool canUndoBefore = fixture.session.canUndo();
@@ -1642,8 +1767,10 @@ void testPurgePreviewCacheRetiresInFlightAndRecomputes(Expectations& expectation
     const auto preparationsBefore = fixture.preparationCount.load();
     expectations.expect(fixture.session.setCurrentTime(time(1, 25)),
                         "purge fixture moves to a new time");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the requested frame renders again");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("requested frame renders again",
+                                              [&] { return isReady(fixture.controller); }),
+        "the requested frame renders again");
     expectations.expect(fixture.preparationCount.load() > preparationsBefore,
                         "the next requested frame recomputes after a purge");
     finishFixture(fixture, expectations);
@@ -1656,16 +1783,20 @@ void testCachePurgeGateCancelsRamPreviewAndBackground(Expectations& expectations
     SessionFixture fixture(makeTestProject("Purge gate", time(24, 25)));
     expectations.expect(animateSolidLayer(fixture.session),
                         "purge gate fixture is animated across its range");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "purge gate fixture renders its first frame");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("purge gate fixture renders its first frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "purge gate fixture renders its first frame");
 
     fixture.gateAtCall = static_cast<int>(fixture.preparationCount.load());
     ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
                                         fixture.bridge, fixture.countingPipeline());
     ramPreview.start();
     expectations.expect(ramPreview.isCaching(), "purge gate: a RAM preview is caching");
-    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }),
-                        "purge gate: a RAM frame is genuinely in flight");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("purge gate: a RAM frame is genuinely in flight",
+                                              [&] { return fixture.gate.entered(); }),
+        "purge gate: a RAM frame is genuinely in flight");
 
     fixture.controller.setCachePurgeGate(true);
     expectations.expect(fixture.controller.cachePurgeGateActive(),
@@ -1724,14 +1855,19 @@ void testImportedSvgPreviewAtHalfScale(Expectations& expectations) {
                         "the SVG imports into the session");
     std::filesystem::remove(file);
     fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the imported artwork previews at Half");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("imported artwork previews at Half",
+                                              [&] { return isReady(fixture.controller); }),
+        "the imported artwork previews at Half");
     ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
                                         fixture.bridge, fixture.countingPipeline());
     const auto cold = fixture.preparationCount.load();
     ramPreview.start();
-    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }) &&
-                            ramPreview.cachedFrameCount() == 3 && fixture.preparationCount.load() > cold,
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "cold RAM preview prepares the imported frames at Half",
+                            [&] { return !ramPreview.isCaching(); }) &&
+                            ramPreview.cachedFrameCount() == 3 &&
+                            fixture.preparationCount.load() > cold,
                         "a cold RAM preview prepares the imported frames at Half");
     const auto warm = fixture.preparationCount.load();
     ramPreview.start();
@@ -1762,10 +1898,14 @@ void testImportedSvgPreviewAtHalfScale(Expectations& expectations) {
         expectations.expect(fixture.session.setParameterValue(ringValue, std::move(edited),
                                                               QStringLiteral("Move Point")),
                             "a point of the inner contour is edited");
-        expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                            "the edited frame is ready");
+        expectations.expect(
+            bloom::test_support::awaitQtCondition("edited frame is ready",
+                                                  [&] { return isReady(fixture.controller); }),
+            "the edited frame is ready");
         ramPreview.start();
-        expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }) &&
+        expectations.expect(bloom::test_support::awaitQtCondition(
+                                "an edit to one path invalidates the cached frames",
+                                [&] { return !ramPreview.isCaching(); }) &&
                                 fixture.preparationCount.load() > warm,
                             "an edit to one path invalidates the cached frames");
     }
@@ -1816,5 +1956,5 @@ int main(int argc, char** argv) {
         std::cerr << "unexpected exception: " << error.what() << '\n';
         return 1;
     }
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

@@ -1,6 +1,7 @@
 // Task FIX1 item G: a value node's own primitive is animatable, and a parameter it drives samples
 // it per frame. The gesture is the card's own keyframe diamond -- the same widget a layer row
 // carries -- and the proof is the composited frame at each of ten frames.
+#include "await_qt.hpp"
 #include "node_production_harness.hpp"
 
 #include <bloom/ui/composition_authoring.hpp>
@@ -84,13 +85,10 @@ void testVector3DrivenReadout() {
         expect(fixture.session.setCurrentTime(frame(index)), "readout moves to a keyed frame");
         fixture.session.refreshDrivenValues();
         const auto expectedText = QString::number(expected, 'g', 12);
-        QElapsedTimer wait;
-        wait.start();
-        while (fixture.session.drivenValueText(opacity->id) != expectedText &&
-               wait.elapsed() < 5000) {
-            QCoreApplication::processEvents();
-            QThread::msleep(5);
-        }
+        expect(bloom::test_support::awaitQtCondition(
+                   "driven opacity readout reaches the keyed value",
+                   [&] { return fixture.session.drivenValueText(opacity->id) == expectedText; }),
+               "the driven opacity readout reaches the keyed value");
         const auto composited = composite(fixture, frame(index));
         expect(fixture.session.drivenValueText(opacity->id) == expectedText && composited.ok &&
                    closeTo(composited.centerPixel[3], expected),
@@ -174,5 +172,5 @@ int main(int argc, char** argv) {
         std::cerr << error.what() << '\n';
         return 1;
     }
-    return failures == 0 ? 0 : 1;
+    return failures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

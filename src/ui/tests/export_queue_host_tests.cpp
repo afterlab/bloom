@@ -3,6 +3,7 @@
 // exportQueueReplaced() fires once per File > New. A running job asks first, is stopped, and the
 // adapter then shows an empty queue. Runs the real service over the deterministic fake runner.
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
+#include "await_qt.hpp"
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -27,7 +28,6 @@
 
 #include <QApplication>
 #include <QDir>
-#include <QElapsedTimer>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
@@ -61,13 +61,7 @@ class FakeNotifier final : public ui::Notifier {
     std::vector<ui::SystemNotification> posted;
 };
 
-template <typename Predicate> bool waitFor(Predicate&& done, const int milliseconds = 20000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!done() && timer.elapsed() < milliseconds)
-        QTest::qWait(5);
-    return done();
-}
+using bloom::test_support::awaitQtCondition;
 
 } // namespace
 
@@ -182,16 +176,21 @@ int main(int argc, char** argv) {
         (void)adapter.editJob(quickJob, ui::jobEdit([&](auto& e) {
                                   e.range = document::ExportRange{document::ExportRangeKind::Custom, 0, 9};
                               }));
-        expect(waitFor([&] {
-                   adapter.drain();
-                   return adapter.snapshot()->jobs[0].commands[host::ExportCommand::Start].available;
-               }),
+        expect(awaitQtCondition("the first job becomes startable",
+                                [&] {
+                                    adapter.drain();
+                                    return adapter.snapshot()
+                                        ->jobs[0]
+                                        .commands[host::ExportCommand::Start]
+                                        .available;
+                                }),
                "the first job becomes startable");
         expect(adapter.start(quickJob).accepted, "the first job starts");
-        expect(waitFor([&] {
-                   adapter.drain();
-                   return playerRef->played.size() == 1;
-               }),
+        expect(awaitQtCondition("the render finish sound plays",
+                                [&] {
+                                    adapter.drain();
+                                    return playerRef->played.size() == 1;
+                                }),
                "the render finish sound plays");
         expect(notifierRef->posted.size() == 1 && !notifierRef->posted[0].failure,
                "the render finish notification posts once");
@@ -215,16 +214,21 @@ int main(int argc, char** argv) {
     expect(edit.accepted, "the destination edit is accepted");
     document::ExportRange range{document::ExportRangeKind::Custom, 0, 239};
     (void)adapter.editJob(job, ui::jobEdit([&](auto& e) { e.range = range; }));
-    expect(waitFor([&] {
-               adapter.drain();
-               return adapter.snapshot()->jobs[0].commands[host::ExportCommand::Start].available;
-           }),
-           "the job becomes startable once the destination is sampled");
+    expect(
+        awaitQtCondition(
+            "the job becomes startable once the destination is sampled",
+            [&] {
+                adapter.drain();
+                return adapter.snapshot()->jobs[0].commands[host::ExportCommand::Start].available;
+            }),
+        "the job becomes startable once the destination is sampled");
     expect(adapter.start(job).accepted, "Start is accepted");
-    expect(waitFor([&] {
-               adapter.drain();
-               return adapter.snapshot()->jobs[0].state == host::ExportJobState::Rendering;
-           }),
+    expect(awaitQtCondition("the fake runner renders the job",
+                            [&] {
+                                adapter.drain();
+                                return adapter.snapshot()->jobs[0].state ==
+                                       host::ExportJobState::Rendering;
+                            }),
            "the fake runner renders the job");
 
     // File > New while it renders: the prompt, then the service is stopped and replaced.
@@ -250,7 +254,8 @@ int main(int argc, char** argv) {
     });
     poll->start(0);
     host.newProject();
-    const bool didReplace = waitFor([&] { return replaced == 1; });
+    const bool didReplace = awaitQtCondition("exportQueueReplaced fires after File > New",
+                                             [&] { return replaced == 1; });
     expect(didReplace, "exportQueueReplaced fires once per File > New");
     poll->stop();
     expect(prompted, "New during a render asks before stopping it");
@@ -266,8 +271,12 @@ int main(int argc, char** argv) {
 
     // Shutdown path used on quit.
     host.beginExportShutdown(host::ExportStopCause::ApplicationQuit);
-    expect(waitFor([&] { return host.pumpExportShutdown(); }), "the service goes quiescent on quit");
+    expect(awaitQtCondition("the service goes quiescent on quit",
+                            [&] { return host.pumpExportShutdown(); }),
+           "the service goes quiescent on quit");
     bridge.beginShutdown();
-    waitFor([&] { return scheduler.isQuiescent(); }, 5000);
-    return gOk ? 0 : 1;
+    expect(awaitQtCondition("scheduler quiescent after bridge shutdown",
+                            [&] { return scheduler.isQuiescent(); }),
+           "the scheduler reaches quiescence");
+    return gOk && bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

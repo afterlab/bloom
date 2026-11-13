@@ -3,6 +3,7 @@
 // AssetTree drop test driven through an injected fake GVFS root, so this never depends on a real
 // mount being present on the machine running the test.
 #include "assets_editor_internal.hpp"
+#include "await_qt.hpp"
 #include "network_share_paths.hpp"
 
 #include <QApplication>
@@ -227,8 +228,9 @@ void assetTreeDropTest() {
         require(drop(*tree->viewport(), mime), "an smb:// drop onto a mounted share is accepted");
     }
     // Wait for the import's own state; CTest's timeout bounds a hang, not a wall-clock guess.
-    while (controller.busy())
-        QTest::qWait(10);
+    require(bloom::test_support::awaitQtCondition("asset import finishes",
+                                                  [&] { return !controller.busy(); }),
+            "the resolved smb:// drop import finished");
     require(session.snapshot().project().assets().size() == 1,
             "the resolved smb:// drop imported exactly one asset");
     require(refused.isEmpty(), "a resolved drop never raises the unmounted-share notice");
@@ -255,9 +257,9 @@ void assetTreeDropTest() {
     controller.cancel();
     bridge.beginShutdown();
     scheduler.beginShutdown();
-    while (!scheduler.isQuiescent())
-        QTest::qWait(10);
-    require(scheduler.isQuiescent(), "network-share drop test tasks shut down safely");
+    require(bloom::test_support::awaitQtCondition("scheduler quiescent",
+                                                  [&] { return scheduler.isQuiescent(); }),
+            "network-share drop test tasks shut down safely");
 }
 
 } // namespace
@@ -311,7 +313,7 @@ int main(int argc, char** argv) {
             std::cout << "SKIP: sidebar case: the saved file dialog places cannot be made "
                          "private on this platform\n";
         assetTreeDropTest();
-        return 0;
+        return bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

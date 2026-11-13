@@ -3,6 +3,8 @@
 // traversal in a plain widget tree, int64 exactness, narrow-width display, the mixed state,
 // default/reset, grab loss and accessibility -- and the Qt-free expression parser behind typing.
 
+#include "await_qt.hpp"
+
 #include <bloom/ui/kit/inline_edit.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/tokens.hpp>
@@ -296,8 +298,10 @@ void testTheWheelGroupsAndAccumulates(Expectations& expectations) {
     expectations.expect(field.value() == 100.0, "and whole notches step both ways");
     expectations.expect(started.count() == 1 && finished.count() == 0,
                         "a burst of wheel steps is ONE edit while it lasts");
-    QTest::qWait(kit::kWheelGestureIdleMs + 150);
-    expectations.expect(finished.count() == 1 && !field.hasLiveEdit(),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "the wheel gesture finishes once the wheel has been still",
+                            [&] { return finished.count() == 1; }) &&
+                            finished.count() == 1 && !field.hasLiveEdit(),
                         "which finishes once the wheel has been still");
     wheel(field, 120);
     expectations.expect(field.value() == 100.0,
@@ -496,5 +500,5 @@ int main(int argc, char** argv) {
     testIntegerMode(expectations);
     testNarrowWidthsNeverClipDigits(expectations);
     testMixedDefaultAndAccessibility(expectations);
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

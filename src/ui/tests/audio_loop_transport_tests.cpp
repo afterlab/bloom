@@ -2,6 +2,8 @@
 // pass is audible, both master clocks wrap without drift, and live work-area and looping changes
 // keep audio and pictures on one period. A NullBackend engine is the device: renders are pulled by
 // the test, so the audio clock advances only when the test says so and no sound is produced.
+#include "await_qt.hpp"
+
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -24,7 +26,6 @@
 
 #include <QApplication>
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QEventLoop>
 
 #include <chrono>
@@ -61,19 +62,6 @@ class Expectations final {
   private:
     int failures_ = 0;
 };
-
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 4'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate))
-            return true;
-        std::this_thread::yield();
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return std::invoke(predicate);
-}
 
 [[nodiscard]] core::RationalTime time(const std::int64_t numerator,
                                       const std::int64_t denominator = 1) {
@@ -166,7 +154,10 @@ struct Fixture final {
         playback.reset();
         preview.beginShutdown();
         bridge.beginShutdown();
-        (void)waitUntil([&] { return scheduler.isQuiescent(); });
+        // A timeout is counted by the helper and fails the test at exit; a destructor cannot
+        // assert.
+        (void)bloom::test_support::awaitQtCondition("scheduler quiescent after shutdown",
+                                                    [&] { return scheduler.isQuiescent(); });
         control->beginShutdown();
         control->drainAfterEventLoop();
     }
@@ -178,7 +169,9 @@ struct Fixture final {
     }
 
     [[nodiscard]] bool settled() {
-        return waitUntil([&] { return control->isIdle() && playback->audioClockActive(); });
+        return bloom::test_support::awaitQtCondition(
+            "audio device control idle with the audio clock active",
+            [&] { return control->isIdle() && playback->audioClockActive(); });
     }
 
     // Pulls `frames` device frames and returns exactly what the device played.
@@ -363,7 +356,8 @@ int main(int argc, char** argv) {
     testOffGridWorkAreaLoopsOnTheFrameGrid(expectations);
     testWorkAreaChangeWhilePlaying(expectations);
     testLoopingToggledWhilePlaying(expectations);
-    if (expectations.failures() == 0)
+    if (expectations.failures() + bloom::test_support::awaitFailureCount() == 0)
         std::cout << "audio loop transport ok\n";
-    return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? EXIT_SUCCESS
+                                                                                   : EXIT_FAILURE;
 }

@@ -7,6 +7,7 @@
 // Usage: bloom_dialog_capture <directory> <1|1.5>
 // Writes <directory>/<name>-dpr1.png or -dpr15.png and prints one audit line per dialog; the exit
 // status is the number of audit findings.
+#include "await_qt.hpp"
 #include "window_fixture.hpp"
 
 #include "composition_settings_dialog.hpp"
@@ -69,9 +70,12 @@ QString gSuffix;
 int gPreferencesLabelX = -1;
 int gFindings = 0;
 
-void settle(const int ms = 150) {
-    QTest::qWait(ms);
-    QApplication::processEvents();
+// Delivers everything already queued (layout, polish, deferred updates) until it is quiet.
+void settle() {
+    for (int pass = 0; pass < 3; ++pass) {
+        QCoreApplication::sendPostedEvents();
+        QApplication::processEvents();
+    }
 }
 
 // The one-height rule, the shared label column and the margins.
@@ -188,8 +192,8 @@ void onModal(const QString& name, std::function<void(QDialog&)> prepare = {},
              std::function<void(QDialog&)> after = {}) {
     QTimer::singleShot(0, [name, prepare = std::move(prepare), after = std::move(after)] {
         QDialog* dialog = nullptr;
-        (void)QTest::qWaitFor([&dialog] { return (dialog = topModal()) != nullptr; }, 3000);
-        if (dialog == nullptr) {
+        if (!bloom::test_support::awaitQtCondition(
+                "a modal dialog appears", [&dialog] { return (dialog = topModal()) != nullptr; })) {
             std::cerr << name.toStdString() << ": no modal dialog appeared\n";
             ++gFindings;
             return;
@@ -208,8 +212,8 @@ void onModal(const QString& name, std::function<void(QDialog&)> prepare = {},
 void shootAsync(const QString& name, const QString& objectName,
                 const std::function<void(kit::KDialog&)>& prepare = {}) {
     kit::KDialog* dialog = nullptr;
-    (void)QTest::qWaitFor([&] { return (dialog = visible(objectName)) != nullptr; }, 3000);
-    if (dialog == nullptr) {
+    if (!bloom::test_support::awaitQtCondition(
+            "the dialog opens", [&] { return (dialog = visible(objectName)) != nullptr; })) {
         std::cerr << name.toStdString() << ": " << objectName.toStdString() << " did not open\n";
         ++gFindings;
         return;
@@ -218,7 +222,7 @@ void shootAsync(const QString& name, const QString& objectName,
         prepare(*dialog);
     shoot(name, *dialog);
     dialog->reject();
-    settle(50);
+    settle();
 }
 
 template <class T> T* child(QWidget& root, const char* name) {
@@ -238,7 +242,7 @@ void compositionDialogs(test::WindowFixture& fixture) {
     auto& window = *fixture.window;
     const auto showTab = [](QDialog& dialog, const int index) {
         child<kit::KTabs>(dialog, "compositionSettingsTabs")->setCurrentIndex(index);
-        settle(200);
+        settle();
     };
     onModal(QStringLiteral("new-composition"), [showTab](QDialog& dialog) { showTab(dialog, 0); });
     trigger(window, "compositionNewAction");
@@ -265,7 +269,7 @@ void compositionDialogs(test::WindowFixture& fixture) {
         showTab(dialog, 1);
         // A size change offers the resize anchor.
         child<kit::KValueField>(dialog, "compositionSettingsWidth")->setValue(2048);
-        settle(100);
+        settle();
     });
     trigger(window, "compositionSettingsAction");
     onModal(QStringLiteral("composition-settings-error"), [showTab](QDialog& dialog) {
@@ -281,7 +285,7 @@ void compositionDialogs(test::WindowFixture& fixture) {
         child<QAbstractButton>(dialog, "compositionSettingsSavePreset")->click();
         if (auto* settings = dynamic_cast<CompositionSettingsDialog*>(&dialog)) {
             const auto refused = settings->savePreset(QStringLiteral("Review 1080"));
-            settle(50);
+            settle();
             auto* rename = child<QAbstractButton>(dialog, "compositionSettingsRenamePreset");
             if (refused || !rename->isEnabled()) {
                 std::cerr << "preset rename: "
@@ -320,7 +324,7 @@ void fileChoosers(test::WindowFixture& fixture, const QString& root) {
                  .defaultSuffix = QStringLiteral("bloom"),
                  .startPath = scratch});
     open->show();
-    settle(400);
+    settle();
     shoot(QStringLiteral("file-chooser-open"), *open);
     open->reject();
     const auto save = kit::buildFileDialog(
@@ -332,7 +336,7 @@ void fileChoosers(test::WindowFixture& fixture, const QString& root) {
                  .startPath = scratch});
     save->selectFile(QStringLiteral("shot_010.exr"));
     save->show();
-    settle(400);
+    settle();
     shoot(QStringLiteral("file-chooser-save"), *save);
     save->reject();
 }
@@ -389,7 +393,7 @@ void projectDialogs(test::WindowFixture& fixture) {
         dialog.resize(dialog.minimumSizeHint().width(), dialog.height());
         shoot(QStringLiteral("preferences-narrow"), dialog);
         dialog.resize(size);
-        settle(100);
+        settle();
         // A Properties section beside a Preferences section: one component, one look.
         auto* properties = window.findChild<QWidget*>(QStringLiteral("propertiesEditor"));
         auto* propertiesSection =
@@ -458,7 +462,9 @@ void importDialogs(test::WindowFixture& fixture) {
     if (!image.save(path))
         return std::nullopt;
     fixture.assets->importFiles({path});
-    (void)QTest::qWaitFor([&] { return !fixture.assets->busy(); }, 10000);
+    if (!bloom::test_support::awaitQtCondition("the plate import finishes",
+                                               [&] { return !fixture.assets->busy(); }))
+        return std::nullopt;
     for (const auto& asset : fixture.session.snapshot().project().assets())
         if (asset.kind == document::AssetKind::Image && asset.name.starts_with("plate_010"))
             return asset.id;
@@ -493,7 +499,7 @@ void assetDialogs(test::WindowFixture& fixture, const QString& scratch) {
         move.emplace<commands::MoveAssets>(std::vector{*asset}, folder, 0);
         (void)fixture.session.executeTransaction(std::move(move));
     }
-    settle(300);
+    settle();
     const auto itemFor = [tree](const int role, const std::uint64_t id) -> QTreeWidgetItem* {
         for (QTreeWidgetItemIterator it(tree); *it; ++it)
             if ((*it)->data(0, role).toULongLong() == id)
@@ -551,12 +557,12 @@ void compositionDeleteAndViewer(test::WindowFixture& fixture) {
     use.emplace<node_editor::AddCompositionSource>(outer, *nested, document::Vec2d{}, true);
     (void)session.executeTransaction(std::move(use));
     (void)session.setComposition(*nested);
-    settle(200);
+    settle();
     trigger(window, "compositionDeleteAction");
     shootAsync(QStringLiteral("delete-composition-in-use"),
                QStringLiteral("assetsDeleteConfirmation"));
     (void)session.setComposition(outer);
-    settle(300);
+    settle();
     trigger(window, "viewerCustomSafeAreasAction");
     shootAsync(QStringLiteral("custom-safe-areas"), QStringLiteral("viewerSafeAreaDialog"));
 }
@@ -571,7 +577,7 @@ void labelColourPicker(test::WindowFixture& fixture) {
     const QPoint at(stack->width() / 2, stack->rowTop(0) + kTimelineRowHeight / 2);
     QContextMenuEvent event(QContextMenuEvent::Mouse, at, stack->mapToGlobal(at));
     QApplication::sendEvent(stack, &event);
-    settle(100);
+    settle();
     auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
     QAction* custom = nullptr;
     for (auto* action : menu != nullptr ? menu->actions() : QList<QAction*>{})
@@ -587,7 +593,7 @@ void labelColourPicker(test::WindowFixture& fixture) {
         return;
     }
     custom->trigger();
-    settle(200);
+    settle();
     for (auto* widget : QApplication::topLevelWidgets())
         if (widget->isVisible() && widget->objectName() == QStringLiteral("kColorPickerPopup")) {
             shoot(QStringLiteral("label-colour-picker"), *widget);
@@ -631,7 +637,7 @@ int main(int argc, char** argv) {
     test::WindowFixture fixture;
     fixture.window->show();
     fixture.projectHost.setDialogOwner(fixture.window.get());
-    settle(500);
+    settle();
     compositionDialogs(fixture);
     projectDialogs(fixture);
     importDialogs(fixture);
@@ -640,5 +646,5 @@ int main(int argc, char** argv) {
     assetDialogs(fixture, scratch.path());
     compositionDeleteAndViewer(fixture);
     std::cout << "findings: " << gFindings << '\n';
-    return gFindings;
+    return gFindings + bloom::test_support::awaitFailureCount();
 }

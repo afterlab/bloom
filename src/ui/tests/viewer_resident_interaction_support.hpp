@@ -211,7 +211,8 @@ struct OverlayProbe final {
                                            ui::ViewerEditor& viewer,
                                            const document::Revision revision,
                                            const std::chrono::milliseconds timeout) {
-    return waitUntil(
+    return bloom::test_support::awaitQtCondition(
+        "native acknowledgement preserves submitted frame identity",
         [&] {
             const auto frame = controller.state().frame;
             const auto actual = viewer.actualDisplayDescriptor();

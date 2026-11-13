@@ -300,10 +300,11 @@ void testPlaybackNeitherResamplesNorRepaintsTheGraph() {
     fixture.expandAndShowGraph();
     auto& session = fixture.session.session;
     // Settle first: pending layout, resize and deferred zoom work are not playback.
-    QElapsedTimer settle;
-    settle.start();
-    while (settle.elapsed() < 300)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    // All of it is queued events (no timers), so delivering them is the settle.
+    for (int pass = 0; pass < 3; ++pass) {
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents();
+    }
     static_cast<void>(fixture.view->grab());
     const auto painted = fixture.view->work();
     expect(painted.curveSamples > 0, "the first paint samples the curve");

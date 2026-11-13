@@ -5,6 +5,7 @@
 
 #include "asset_drop.hpp"
 #include "assets_editor_internal.hpp"
+#include "await_qt.hpp"
 #include "import_progress_dialog.hpp"
 #include "import_progress_test_support.hpp"
 
@@ -49,13 +50,7 @@ void require(const bool ok, const char* message) {
     if (!ok)
         throw std::runtime_error(message);
 }
-template <typename Predicate> bool waitUntil(Predicate predicate, const int timeoutMs = 15000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < timeoutMs)
-        QTest::qWait(5);
-    return predicate();
-}
+using bloom::test_support::awaitQtCondition;
 void writePng(const QString& path, const QColor& colour = Qt::white) {
     QImage image(8, 8, QImage::Format_RGBA8888);
     image.fill(colour);
@@ -90,7 +85,9 @@ struct Harness final {
         if (gate)
             gate->release();
         controller.setImportProgressHookForTesting({});
-        waitUntil([this] { return !controller.busy(); });
+        // A destructor cannot assert; a timeout is counted by the helper and fails the exit.
+        (void)awaitQtCondition("the import controller goes idle",
+                               [this] { return !controller.busy(); });
         if (auto* dialog = presenter->dialog())
             dialog->dismiss();
     }
@@ -120,14 +117,18 @@ void progressAdvancesAndStaysOffTheInterfaceThread(const QTemporaryDir& director
                                     directory.filePath("progress/b.png"),
                                     directory.filePath("progress/c.png")});
     require(harness.controller.importing(), "batch import starts");
-    require(waitUntil([&] { return harness.gate->reached(); }), "worker reaches the second item");
+    require(
+        awaitQtCondition("worker reaches the second item", [&] { return harness.gate->reached(); }),
+        "worker reaches the second item");
     // The worker is blocked, yet timers, painting and the dialog keep running here.
-    require(waitUntil([&] { return harness.visibleDialog() != nullptr; }),
+    require(awaitQtCondition("a held import shows the dialog after the threshold",
+                             [&] { return harness.visibleDialog() != nullptr; }),
             "a held import shows the dialog after the threshold");
     auto* dialog = harness.visibleDialog();
     require(dialog->isModal() && dialog->windowModality() == Qt::ApplicationModal,
             "the import dialog blocks the window");
-    require(waitUntil(
+    require(awaitQtCondition(
+                "the dialog counts and names the item in progress",
                 [&] { return dialog->headingText() == QStringLiteral("Importing 2 of 3: b.png"); }),
             "the dialog counts and names the item in progress");
     require(dialog->detailText() == QStringLiteral("Reading file"), "a still reads as one file");
@@ -135,8 +136,8 @@ void progressAdvancesAndStaysOffTheInterfaceThread(const QTemporaryDir& director
             "the bar shows one of three items done");
     // A file read as one unit has no progress of its own: held long enough, the bar turns busy
     // rather than sitting still.
-    require(waitUntil([&] { return dialog->progressBar()->busy(); },
-                      2 * static_cast<int>(ui::ImportProgressDialog::kItemBusyAfter.count()) + 500),
+    require(awaitQtCondition("a long single-unit file turns the bar busy",
+                             [&] { return dialog->progressBar()->busy(); }),
             "a long single-unit file turns the bar busy");
     require(dialog->progressBar()->sweeping(), "the busy bar animates");
     require(dialog->cancelButton()->isVisible() && dialog->cancelButton()->isEnabled(),
@@ -147,9 +148,11 @@ void progressAdvancesAndStaysOffTheInterfaceThread(const QTemporaryDir& director
             "the import is prepared on a task thread, not the interface thread");
     require(harness.assetCount() == 0, "nothing is added before the batch finishes");
     harness.gate->release();
-    require(waitUntil([&] { return !harness.controller.busy(); }), "import finishes");
+    require(awaitQtCondition("import finishes", [&] { return !harness.controller.busy(); }),
+            "import finishes");
     require(harness.assetCount() == 3, "every file imports");
-    require(waitUntil([&] { return harness.visibleDialog() == nullptr; }),
+    require(awaitQtCondition("an import that added everything closes its dialog",
+                             [&] { return harness.visibleDialog() == nullptr; }),
             "an import that added everything closes its dialog");
     require(harness.notices == QStringList{QStringLiteral("Imported 3 assets")},
             "a successful import still reports its outcome");
@@ -164,7 +167,8 @@ void cancelKeepsWhatFinished(const QTemporaryDir& directory) {
     harness.controller.importFiles({directory.filePath("cancel/a.png"),
                                     directory.filePath("cancel/b.png"),
                                     directory.filePath("cancel/c.png")});
-    require(waitUntil([&] { return harness.visibleDialog() != nullptr; }), "dialog shows");
+    require(awaitQtCondition("dialog shows", [&] { return harness.visibleDialog() != nullptr; }),
+            "dialog shows");
     auto* dialog = harness.visibleDialog();
     QTest::mouseClick(dialog->cancelButton(), Qt::LeftButton);
     require(dialog->headingText() == QStringLiteral("Cancelling…") &&
@@ -172,9 +176,12 @@ void cancelKeepsWhatFinished(const QTemporaryDir& directory) {
             "Cancel acknowledges at once while the worker reaches a safe point");
     require(harness.controller.importProgress().stopping, "the controller records the stop");
     harness.gate->release();
-    require(waitUntil([&] { return !harness.controller.busy(); }), "cancelled import finishes");
+    require(
+        awaitQtCondition("cancelled import finishes", [&] { return !harness.controller.busy(); }),
+        "cancelled import finishes");
     require(harness.assetCount() == 1, "the item finished before Cancel is kept");
-    require(waitUntil([&] { return harness.visibleDialog() && dialog->summarizing(); }),
+    require(awaitQtCondition("a cancelled import shows its summary",
+                             [&] { return harness.visibleDialog() && dialog->summarizing(); }),
             "a cancelled import shows its summary");
     require(dialog->headingText() == QStringLiteral("Import cancelled") &&
                 dialog->detailText() == QStringLiteral("Imported 1 · Not imported 2"),
@@ -184,17 +191,22 @@ void cancelKeepsWhatFinished(const QTemporaryDir& directory) {
             "the kept items are one undoable step");
     require(harness.session.undo() && harness.assetCount() == 0, "one Undo removes the kept item");
     QTest::keyClick(dialog, Qt::Key_Return);
-    require(waitUntil([&] { return harness.visibleDialog() == nullptr; }), "Return closes it");
+    require(
+        awaitQtCondition("Return closes it", [&] { return harness.visibleDialog() == nullptr; }),
+        "Return closes it");
 
     // Escape is Cancel while importing.
     harness.holdAt(1);
     harness.controller.importFiles(
         {directory.filePath("cancel/a.png"), directory.filePath("cancel/b.png")});
-    require(waitUntil([&] { return harness.visibleDialog() != nullptr; }), "second dialog shows");
+    require(
+        awaitQtCondition("second dialog shows", [&] { return harness.visibleDialog() != nullptr; }),
+        "second dialog shows");
     QTest::keyClick(harness.visibleDialog(), Qt::Key_Escape);
     require(harness.controller.importProgress().stopping, "Escape requests the stop");
     harness.gate->release();
-    require(waitUntil([&] { return !harness.controller.busy(); }), "escaped import finishes");
+    require(awaitQtCondition("escaped import finishes", [&] { return !harness.controller.busy(); }),
+            "escaped import finishes");
     require(harness.assetCount() == 1, "Escape keeps what finished too");
 }
 
@@ -210,10 +222,11 @@ void summaryAndThreshold(const QTemporaryDir& directory) {
     timer.start();
     harness.controller.importFiles({directory.filePath("summary/good.png")});
     bool dialogSeen = false;
-    require(waitUntil([&] {
-                dialogSeen = dialogSeen || harness.visibleDialog() != nullptr;
-                return !harness.controller.busy();
-            }),
+    require(awaitQtCondition("short import finishes",
+                             [&] {
+                                 dialogSeen = dialogSeen || harness.visibleDialog() != nullptr;
+                                 return !harness.controller.busy();
+                             }),
             "short import finishes");
     if (timer.elapsed() < ui::ImportProgressPresenter::kShowDelay.count())
         require(!dialogSeen, "an import shorter than the threshold never shows the dialog");
@@ -225,8 +238,10 @@ void summaryAndThreshold(const QTemporaryDir& directory) {
     harness.controller.importFiles({directory.filePath("summary/broken.png"),
                                     directory.filePath("summary/good.png"),
                                     directory.filePath("summary/odd.cube")});
-    require(waitUntil([&] { return !harness.controller.busy(); }), "mixed import finishes");
-    require(waitUntil([&] { return harness.visibleDialog() != nullptr; }),
+    require(awaitQtCondition("mixed import finishes", [&] { return !harness.controller.busy(); }),
+            "mixed import finishes");
+    require(awaitQtCondition("a short import that skipped files still shows its summary",
+                             [&] { return harness.visibleDialog() != nullptr; }),
             "a short import that skipped files still shows its summary");
     auto* dialog = harness.visibleDialog();
     require(dialog->summarizing() &&
@@ -250,7 +265,8 @@ void summaryAndThreshold(const QTemporaryDir& directory) {
     require(dialog->closeButton()->isVisible() && !dialog->cancelButton()->isVisible(),
             "the summary offers Close");
     QTest::mouseClick(dialog->closeButton(), Qt::LeftButton);
-    require(waitUntil([&] { return harness.visibleDialog() == nullptr; }), "Close closes it");
+    require(awaitQtCondition("Close closes it", [&] { return harness.visibleDialog() == nullptr; }),
+            "Close closes it");
 }
 
 // Window input is held back during the threshold so a not-yet-shown import still blocks.
@@ -262,13 +278,15 @@ void inputIsHeldDuringTheThreshold(const QTemporaryDir& directory) {
     harness.field->setFocus();
     harness.controller.importFiles(
         {directory.filePath("hold/a.png"), directory.filePath("hold/b.png")});
-    require(waitUntil([&] { return harness.gate->reached(); }), "worker held");
+    require(awaitQtCondition("worker held", [&] { return harness.gate->reached(); }),
+            "worker held");
     require(harness.visibleDialog() == nullptr, "dialog not shown yet");
     QTest::keyClicks(harness.field, QStringLiteral("typed"));
     require(harness.field->text().isEmpty(),
             "typing during the threshold does not reach the window");
     harness.gate->release();
-    require(waitUntil([&] { return !harness.controller.busy(); }), "held import finishes");
+    require(awaitQtCondition("held import finishes", [&] { return !harness.controller.busy(); }),
+            "held import finishes");
     QTest::keyClicks(harness.field, QStringLiteral("ok"));
     require(harness.field->text() == QStringLiteral("ok"), "input returns once the import ends");
 }
@@ -293,10 +311,13 @@ void folderAndSequenceIntoSelectedFolder(const QTemporaryDir& directory) {
 
     harness.holdAt(1);
     harness.controller.importFiles({directory.filePath("shoot")});
-    require(waitUntil([&] { return harness.gate->reached(); }), "folder import reaches item 2");
+    require(
+        awaitQtCondition("folder import reaches item 2", [&] { return harness.gate->reached(); }),
+        "folder import reaches item 2");
     const auto total = harness.controller.importProgress().total;
     harness.gate->release();
-    require(waitUntil([&] { return !harness.controller.busy(); }), "folder import finishes");
+    require(awaitQtCondition("folder import finishes", [&] { return !harness.controller.busy(); }),
+            "folder import finishes");
     require(total == 2, "a folder with a still and a three-frame sequence is two items");
     const auto& project = harness.session.snapshot().project();
     require(project.assets().size() == 2, "the still and the sequence import");
@@ -315,10 +336,13 @@ void folderAndSequenceIntoSelectedFolder(const QTemporaryDir& directory) {
     harness.controller.importFiles({directory.filePath("shoot/plates/Pulse.0001.png"),
                                     directory.filePath("shoot/plates/Pulse.0002.png"),
                                     directory.filePath("shoot/plates/Pulse.0003.png")});
-    require(waitUntil([&] { return harness.gate->reached(); }), "sequence import held");
+    require(awaitQtCondition("sequence import held", [&] { return harness.gate->reached(); }),
+            "sequence import held");
     require(harness.controller.importProgress().total == 1, "three chosen members are one item");
     harness.gate->release();
-    require(waitUntil([&] { return !harness.controller.busy(); }), "sequence import finishes");
+    require(
+        awaitQtCondition("sequence import finishes", [&] { return !harness.controller.busy(); }),
+        "sequence import finishes");
     require(harness.assetCount() == 1 &&
                 harness.session.snapshot().project().assets().front().kind ==
                     document::AssetKind::Sequence,
@@ -362,17 +386,22 @@ void longSequenceMovesTheBar(const QTemporaryDir& directory) {
         return state.phase == Phase::Finding && state.findingFrames && state.found == 25;
     });
     harness.controller.importFiles({first});
-    require(waitUntil([&] { return harness.gate->reached() && harness.visibleDialog(); }),
+    require(awaitQtCondition("discovery is held with the dialog shown",
+                             [&] { return harness.gate->reached() && harness.visibleDialog(); }),
             "discovery is held with the dialog shown");
     auto* dialog = harness.visibleDialog();
-    require(waitUntil([&] { return dialog->headingText() == QStringLiteral("Finding frames…"); }),
+    require(awaitQtCondition(
+                "discovery says it is finding frames",
+                [&] { return dialog->headingText() == QStringLiteral("Finding frames…"); }),
             "discovery says it is finding frames");
     require(dialog->detailText() == QStringLiteral("Shot010_plate · 25 found"),
             "discovery names the sequence and counts what it found");
     require(dialog->progressBar()->busy() && dialog->progressBar()->sweeping(),
             "the bar is busy and animating while the total is unknown");
     harness.gate->release();
-    require(waitUntil([&] { return !harness.controller.busy(); }), "sequence import finishes");
+    require(
+        awaitQtCondition("sequence import finishes", [&] { return !harness.controller.busy(); }),
+        "sequence import finishes");
     require(harness.assetCount() == 1, "the sequence imports");
     const auto log = harness.gate->log();
     requireMonotonicWork(log, frames);
@@ -388,12 +417,14 @@ void longSequenceMovesTheBar(const QTemporaryDir& directory) {
         return state.phase == Phase::Reading && state.frames == frames && state.framesRead == 20;
     });
     harness.controller.importFiles({first});
-    require(waitUntil([&] { return harness.gate->reached() && harness.visibleDialog(); }),
+    require(awaitQtCondition("reading is held mid-sequence",
+                             [&] { return harness.gate->reached() && harness.visibleDialog(); }),
             "reading is held mid-sequence");
     dialog = harness.visibleDialog();
-    require(
-        waitUntil([&] { return dialog->detailText() == QStringLiteral("Reading frame 21 of 40"); }),
-        "the dialog says which frame it is reading");
+    require(awaitQtCondition(
+                "the dialog says which frame it is reading",
+                [&] { return dialog->detailText() == QStringLiteral("Reading frame 21 of 40"); }),
+            "the dialog says which frame it is reading");
     require(dialog->headingText() == QStringLiteral("Importing Shot010_plate · sequence"),
             "a single item is named without a count");
     require(!dialog->progressBar()->busy() && dialog->progressBar()->completed() == 20 &&
@@ -401,7 +432,8 @@ void longSequenceMovesTheBar(const QTemporaryDir& directory) {
             "the bar is half full inside the one sequence");
     require(harness.assetCount() == 0, "nothing commits mid-sequence");
     harness.gate->release();
-    require(waitUntil([&] { return !harness.controller.busy(); }), "second import finishes");
+    require(awaitQtCondition("second import finishes", [&] { return !harness.controller.busy(); }),
+            "second import finishes");
     requireMonotonicWork(harness.gate->log(), frames);
 }
 
@@ -415,12 +447,15 @@ void singleLargeFileShowsBusy(const QTemporaryDir& directory) {
     require(image.save(directory.filePath("large/Matte_painting.png")), "large still fixture");
     harness.holdAt(0);
     harness.controller.importFiles({directory.filePath("large/Matte_painting.png")});
-    require(waitUntil([&] { return harness.gate->reached() && harness.visibleDialog(); }),
+    require(awaitQtCondition("the large file is held while it is read",
+                             [&] { return harness.gate->reached() && harness.visibleDialog(); }),
             "the large file is held while it is read");
     auto* dialog = harness.visibleDialog();
-    require(waitUntil([&] {
-                return dialog->headingText() == QStringLiteral("Importing Matte_painting.png");
-            }),
+    require(awaitQtCondition("the dialog names the large file",
+                             [&] {
+                                 return dialog->headingText() ==
+                                        QStringLiteral("Importing Matte_painting.png");
+                             }),
             "the dialog names the large file");
     require(dialog->detailText() == QStringLiteral("Reading file"), "it reads as one file");
     for (int sample = 0; sample < 10; ++sample) {
@@ -429,7 +464,8 @@ void singleLargeFileShowsBusy(const QTemporaryDir& directory) {
         QTest::qWait(static_cast<int>(ui::ImportProgressPresenter::kRefreshInterval.count()));
     }
     harness.gate->release();
-    require(waitUntil([&] { return !harness.controller.busy(); }), "the large file imports");
+    require(awaitQtCondition("the large file imports", [&] { return !harness.controller.busy(); }),
+            "the large file imports");
     require(harness.assetCount() == 1, "one asset");
     requireMonotonicWork(harness.gate->log(), 1);
 }
@@ -447,13 +483,15 @@ void mixedItemsWeighByWork(const QTemporaryDir& directory) {
     harness.controller.importFiles({directory.filePath("mixed/a.png"),
                                     directory.filePath("mixed/Seq_0001.png"),
                                     directory.filePath("mixed/b.png")});
-    require(waitUntil([&] { return harness.gate->reached(); }), "held at the last still");
+    require(awaitQtCondition("held at the last still", [&] { return harness.gate->reached(); }),
+            "held at the last still");
     const auto state = harness.controller.importProgress();
     require(!state.finding && state.total == 3 && state.completed == 2 && state.workTotal == 12 &&
                 state.workDone == 11,
             "a still and a ten-frame sequence are eleven of twelve units");
     harness.gate->release();
-    require(waitUntil([&] { return !harness.controller.busy(); }), "mixed import finishes");
+    require(awaitQtCondition("mixed import finishes", [&] { return !harness.controller.busy(); }),
+            "mixed import finishes");
     require(harness.assetCount() == 3, "both stills and the sequence import");
     requireMonotonicWork(harness.gate->log(), 12);
 }
@@ -503,10 +541,12 @@ void dropsImportWithProgress(const QTemporaryDir& directory) {
     harness.holdAt(0);
     require(sendDrop(*tree->viewport(), folderDrop, tree->visualItemRect(row).center()),
             "a folder drops onto Assets");
-    require(waitUntil([&] { return harness.visibleDialog() != nullptr; }),
+    require(awaitQtCondition("a dropped folder shows the import dialog",
+                             [&] { return harness.visibleDialog() != nullptr; }),
             "a dropped folder shows the import dialog");
     harness.gate->release();
-    require(waitUntil([&] { return !harness.controller.busy(); }), "folder drop finishes");
+    require(awaitQtCondition("folder drop finishes", [&] { return !harness.controller.busy(); }),
+            "folder drop finishes");
     require(harness.assetCount() == 2, "both files from the dropped folder import");
     for (const auto& asset : harness.session.snapshot().project().assets())
         require(asset.folder == folder, "a folder dropped on a folder row lands in it");
@@ -521,10 +561,12 @@ void dropsImportWithProgress(const QTemporaryDir& directory) {
     fileDrop.setUrls({QUrl::fromLocalFile(directory.filePath("drops/one.png"))});
     harness.holdAt(0);
     require(sendDrop(panel, fileDrop, {10, 10}), "a file drops onto another panel");
-    require(waitUntil([&] { return harness.visibleDialog() != nullptr; }),
+    require(awaitQtCondition("a panel drop shows the import dialog",
+                             [&] { return harness.visibleDialog() != nullptr; }),
             "a panel drop shows the import dialog");
     harness.gate->release();
-    require(waitUntil([&] { return !harness.controller.busy(); }), "panel drop finishes");
+    require(awaitQtCondition("panel drop finishes", [&] { return !harness.controller.busy(); }),
+            "panel drop finishes");
     require(harness.assetCount() == 3, "the dropped file imports");
     bool atRoot = false;
     for (const auto& asset : harness.session.snapshot().project().assets())
@@ -557,7 +599,7 @@ int main(int argc, char** argv) {
         longSequenceMovesTheBar(directory);
         mixedItemsWeighByWork(directory);
         singleLargeFileShowsBusy(directory);
-        return 0;
+        return bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

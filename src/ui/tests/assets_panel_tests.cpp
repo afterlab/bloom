@@ -2,15 +2,15 @@
 // optional columns, monochrome row glyphs, the nested-row geometry, the fixed summary strip, the
 // collapsible search and the worker-measured File Size column.
 #include "assets_editor_internal.hpp"
+#include "await_qt.hpp"
 #include <QAction>
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QHeaderView>
 #include <QImage>
-#include <QMenu>
-#include <QMouseEvent>
 #include <QJsonObject>
 #include <QLineEdit>
+#include <QMenu>
+#include <QMouseEvent>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -584,10 +584,8 @@ void fileSizeColumn() {
     ui::TaskUiBridge bridge(scheduler);
     ui::AssetController controller(session, host, scheduler, bridge);
     ui::AssetsEditor editor(session);
-    controller.importFiles(
-        {directory.filePath("still.png"), directory.filePath("clip.0001.png")}, std::nullopt);
-    QElapsedTimer timer;
-    timer.start();
+    controller.importFiles({directory.filePath("still.png"), directory.filePath("clip.0001.png")},
+                           std::nullopt);
     const auto& project = [&]() -> const document::Project& {
         return session.snapshot().project();
     };
@@ -596,9 +594,9 @@ void fileSizeColumn() {
                std::ranges::all_of(project().assets(),
                                    [&](const auto& asset) { return controller.fileSize(asset.id).has_value(); });
     };
-    while (!measured() && timer.elapsed() < 20000)
-        QTest::qWait(10);
-    expect(measured(), "the worker measures every imported source");
+    expect(bloom::test_support::awaitQtCondition("the worker measures every imported source",
+                                                 measured),
+           "the worker measures every imported source");
     const auto bytes = [&](const char* name) {
         return static_cast<std::uint64_t>(std::filesystem::file_size(
             std::filesystem::path(directory.filePath(name).toStdString())));
@@ -639,5 +637,5 @@ int main(int argc, char** argv) {
     summaryStrip();
     collapsibleSearch();
     fileSizeColumn();
-    return failures == 0 ? 0 : 1;
+    return failures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

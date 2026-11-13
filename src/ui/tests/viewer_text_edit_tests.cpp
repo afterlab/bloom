@@ -1,3 +1,4 @@
+#include "await_qt.hpp"
 #include <QApplication>
 #include <QClipboard>
 #include <QElapsedTimer>
@@ -38,17 +39,6 @@ void expect(bool condition, const char* message,
         ++failures;
         std::cerr << location.line() << ": " << message << '\n';
     }
-}
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 6000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (predicate())
-            return true;
-        std::this_thread::yield();
-    }
-    return predicate();
 }
 document::NewProject project() {
     const auto format = document::CompositionFormat::create(400, 300);
@@ -105,21 +95,26 @@ struct Fixture {
         key(Qt::Key_Escape);
         preview.beginShutdown();
         bridge.beginShutdown();
-        expect(waitUntil([&] { return scheduler.isQuiescent(); }), "preview shuts down");
+        expect(bloom::test_support::awaitQtCondition("preview scheduler quiescent",
+                                                     [&] { return scheduler.isQuiescent(); }),
+               "preview shuts down");
         viewer.setParent(nullptr);
         properties.setParent(nullptr);
     }
     void ready() {
-        expect(waitUntil([&] {
-                   return preview.state().activity == ui::PreviewActivity::Ready &&
-                          preview.state().frame &&
-                          preview.state().frame->desiredIdentity().sourceRevision ==
-                              session.snapshot().revision();
-               }),
+        expect(bloom::test_support::awaitQtCondition(
+                   "preview ready at the current revision",
+                   [&] {
+                       return preview.state().activity == ui::PreviewActivity::Ready &&
+                              preview.state().frame &&
+                              preview.state().frame->desiredIdentity().sourceRevision ==
+                                  session.snapshot().revision();
+                   }),
                "preview ready");
     }
     void caretReady() {
-        const bool prepared = waitUntil([&] { return !viewer.textCaretForTest().isNull(); });
+        const bool prepared = bloom::test_support::awaitQtCondition(
+            "caret layout ready", [&] { return !viewer.textCaretForTest().isNull(); });
         expect(prepared, "caret layout ready");
         if (!prepared)
             std::cerr << "edit=" << viewer.textEditing() << " live=" << session.valueEditActive()
@@ -385,5 +380,5 @@ int main(int argc, char** argv) {
     testFocusAndProperties();
     testReversedAdvances();
     testEmptyAndInvalidation();
-    return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    return failures + bloom::test_support::awaitFailureCount() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

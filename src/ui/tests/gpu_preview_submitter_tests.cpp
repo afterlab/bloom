@@ -11,6 +11,8 @@
 // Nothing here needs a GPU or a loader. The device-dependent application smoke/bench is an
 // integration step and is deliberately not claimed by this preparation.
 
+#include "await_qt.hpp"
+
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
@@ -32,7 +34,6 @@
 
 #include <QApplication>
 #include <QCoreApplication>
-#include <QElapsedTimer>
 
 #include <atomic>
 #include <chrono>
@@ -71,19 +72,7 @@ class Expectations final {
     int failures_ = 0;
 };
 
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 15'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate)) {
-            return true;
-        }
-        std::this_thread::yield();
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return std::invoke(predicate);
-}
+using bloom::test_support::awaitQtCondition;
 
 [[nodiscard]] runtime::TaskSchedulerConfig testSchedulerConfig() {
     return {.cpuWorkerCount = 1,
@@ -205,8 +194,10 @@ void finish(runtime::TaskScheduler& scheduler, ui::TaskUiBridge& bridge, Expecta
         shutdown();
     }
     bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
-                        "the preview fixture reaches asynchronous scheduler quiescence");
+    expectations.expect(
+        awaitQtCondition("the preview fixture reaches asynchronous scheduler quiescence",
+                         [&] { return scheduler.isQuiescent(); }),
+        "the preview fixture reaches asynchronous scheduler quiescence");
 }
 
 // The foreground controller must hand its preview request to the injected submitter; the
@@ -226,7 +217,8 @@ void testForegroundRoutesThroughSubmitter(Expectations& expectations) {
         session, scheduler, bridge, countingPreparation(fixture.pipeline, probe), {}, frameCache,
         nullptr, makeSubmitter(scheduler, fixture.pipeline, probe));
 
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(awaitQtCondition("the foreground frame becomes ready through the submitter",
+                                         [&] { return isReady(controller); }),
                         "the foreground frame becomes ready through the submitter");
     expectations.expect(probe.submitted.load() >= 1,
                         "the foreground preview request was routed to the submitter");
@@ -262,12 +254,14 @@ void testRamPreviewRoutesThroughSubmitter(Expectations& expectations) {
                                         countingPreparation(fixture.pipeline, probe), nullptr,
                                         makeSubmitter(scheduler, fixture.pipeline, probe));
 
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(awaitQtCondition("the foreground frame settles before the RAM run",
+                                         [&] { return isReady(controller); }),
                         "the foreground frame settles before the RAM run");
     ramPreview.start();
     expectations.expect(ramPreview.isCaching(), "the RAM preview run starts");
-    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }),
-                        "the RAM preview run completes");
+    expectations.expect(
+        awaitQtCondition("the RAM preview run completes", [&] { return !ramPreview.isCaching(); }),
+        "the RAM preview run completes");
     expectations.expect(probe.submitted.load() >= 1 && probe.legacy.load() == 0,
                         "every RAM preview frame was routed through the submitter");
     expectations.expect(ramPreview.totalFrameCount() > 0 &&
@@ -295,7 +289,8 @@ void testBackgroundRoutesThroughSubmitter(Expectations& expectations) {
     ui::CompositionPreviewController controller(
         session, scheduler, bridge, countingPreparation(fixture.pipeline, probe), {}, frameCache,
         nullptr, makeSubmitter(scheduler, fixture.pipeline, probe));
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(awaitQtCondition("the foreground frame settles before background fill",
+                                         [&] { return isReady(controller); }),
                         "the foreground frame settles before background fill");
     const int submittedBefore = probe.submitted.load();
 
@@ -304,7 +299,8 @@ void testBackgroundRoutesThroughSubmitter(Expectations& expectations) {
         nullptr, makeSubmitter(scheduler, fixture.pipeline, probe));
     background.setIdleFill(true); // Qualifies the idle-fill route through the submitter.
     background.fillNextFrame();
-    expectations.expect(waitUntil([&] { return frameCache->size() >= 1; }),
+    expectations.expect(awaitQtCondition("the background fill caches a frame",
+                                         [&] { return frameCache->size() >= 1; }),
                         "the background fill caches a frame");
     expectations.expect(probe.submitted.load() > submittedBefore && probe.legacy.load() == 0,
                         "the background fill was routed through the submitter");
@@ -334,24 +330,29 @@ void testCachedRequestBypassesSubmitter(Expectations& expectations) {
         session, controller, scheduler, bridge, countingPreparation(fixture.pipeline, probe),
         nullptr, makeSubmitter(scheduler, fixture.pipeline, probe));
     background.setIdleFill(true); // Qualifies the idle-fill route through the submitter.
-    expectations.expect(waitUntil([&] { return isReady(controller); }), "opening frame ready");
+    expectations.expect(
+        awaitQtCondition("opening frame ready", [&] { return isReady(controller); }),
+        "opening frame ready");
 
     background.fillNextFrame();
-    expectations.expect(waitUntil([&] {
-                            const auto key = controller.cacheKeyForTime(time(0));
-                            return key.has_value() && frameCache->contains(*key);
-                        }),
+    expectations.expect(awaitQtCondition("the background controller caches the opening frame",
+                                         [&] {
+                                             const auto key = controller.cacheKeyForTime(time(0));
+                                             return key.has_value() && frameCache->contains(*key);
+                                         }),
                         "the background controller caches the opening frame");
     background.beginShutdown();
 
     expectations.expect(session.setCurrentTime(time(1, 25)) &&
-                            waitUntil([&] { return isReady(controller); }),
+                            awaitQtCondition("a different time is evaluated through the submitter",
+                                             [&] { return isReady(controller); }),
                         "a different time is evaluated through the submitter");
     const int afterEvaluation = probe.submitted.load();
     expectations.expect(afterEvaluation >= 2, "the uncached time submitted a real evaluation");
 
     expectations.expect(session.setCurrentTime(time(0)) &&
-                            waitUntil([&] { return isReady(controller); }),
+                            awaitQtCondition("returning to the cached time publishes a frame",
+                                             [&] { return isReady(controller); }),
                         "returning to the cached time publishes a frame");
     expectations.expect(probe.submitted.load() == afterEvaluation,
                         "a cached time is answered with no submitter call");
@@ -378,7 +379,8 @@ void testLegacyPathWithoutSubmitter(Expectations& expectations) {
     ui::CompositionPreviewController controller(
         session, scheduler, bridge, countingPreparation(fixture.pipeline, probe), {}, frameCache);
 
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(awaitQtCondition("the untouched CPU path still prepares the opening frame",
+                                         [&] { return isReady(controller); }),
                         "the untouched CPU path still prepares the opening frame");
     expectations.expect(probe.legacy.load() >= 1 && probe.submitted.load() == 0,
                         "without a submitter the controller runs its own CPU preparation");
@@ -405,5 +407,5 @@ int main(int argc, char** argv) {
         std::cerr << error.what() << '\n';
         return 1;
     }
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

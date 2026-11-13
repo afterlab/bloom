@@ -30,9 +30,10 @@ QString gDirectory;
 QString gRatio;
 QString gPrefix;
 
-void settle(const int ms = 80) {
+// Delivers the queued events (layout, repaint requests); a grab renders synchronously after this.
+void settle() {
+    QCoreApplication::sendPostedEvents();
     QApplication::processEvents();
-    QTest::qWait(ms);
 }
 
 void save(const QImage& image, const QString& name) {
@@ -60,7 +61,7 @@ void sizeArea(MainWindow& window, EditorArea& area, const QSize target) {
         if (delta.isNull())
             return;
         window.resize(window.size() + delta);
-        QTest::qWait(30);
+        settle();
     }
 }
 
@@ -127,7 +128,7 @@ int capture(int argc, char** argv) {
             std::cerr << "new composition refused\n";
             return 1;
         }
-        settle(200);
+        settle();
         std::cout << "zoom " << editor->graphView()->zoomFactor() << '\n';
         save(area->grab().toImage(), QStringLiteral("new-composition"));
     }
@@ -153,24 +154,24 @@ int capture(int argc, char** argv) {
         // Over empty canvas, left of the graph.
         const QPoint empty(view->viewport()->width() / 6, view->viewport()->height() / 6);
         pointTo(empty);
-        settle(40);
+        settle();
         blur->trigger();
-        settle(40);
+        settle();
         pointTo(empty + QPoint(12, 8));
-        settle(80);
+        settle();
         save(area->grab().toImage(), QStringLiteral("add-node-empty"));
         // Over a link.
         if (const auto link = linkMidpoint(*editor)) {
             pointTo(link->toPoint());
-            settle(80);
+            settle();
             save(area->grab().toImage(), QStringLiteral("add-node-over-link"));
             send(QEvent::MouseButtonPress, link->toPoint(), Qt::LeftButton, Qt::LeftButton);
             send(QEvent::MouseButtonRelease, link->toPoint(), Qt::LeftButton, Qt::NoButton);
-            settle(120);
+            settle();
             // The new card keeps clear of the cards under the click, which can take it out of the
             // view; Fit shows the whole result.
             view->frameGraph();
-            settle(120);
+            settle();
             save(area->grab().toImage(), QStringLiteral("add-node-inserted"));
         }
     }

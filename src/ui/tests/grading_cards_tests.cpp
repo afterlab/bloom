@@ -9,11 +9,11 @@
 // jumps, Ctrl is a tenth of the speed and a modifier change starts a new segment, a double-click
 // resets, and each gesture is one command.
 
+#include "await_qt.hpp"
 #include "node_editor_items.hpp"
 
 #include <QApplication>
 #include <QDir>
-#include <QElapsedTimer>
 #include <QGraphicsProxyWidget>
 #include <QImage>
 #include <QLabel>
@@ -22,29 +22,17 @@
 #include <QPainter>
 #include <QRegularExpression>
 #include <QStyleOptionGraphicsItem>
-#include <bloom/ui/color_matrix_widget.hpp>
-#include <bloom/document/value_utility_nodes.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_cpu_color_space_processor.hpp>
+#include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
-#include <bloom/color/ocio_builtin_registry.hpp>
-#include <bloom/color/ocio_cpu_color_space_processor.hpp>
-#include <bloom/color/ocio_cpu_display_processor.hpp>
-#include <bloom/document/color_cleanup_nodes.hpp>
-#include <bloom/document/color_grade_nodes.hpp>
-#include <bloom/document/channel_nodes.hpp>
-#include <bloom/document/colorize_nodes.hpp>
-#include <bloom/document/light_rays_nodes.hpp>
-#include <bloom/document/depth_effect_nodes.hpp>
-#include <bloom/document/lens_flare_definition.hpp>
-#include <bloom/document/film_grain_definition.hpp>
-#include <bloom/document/motion_blur_parameters.hpp>
-#include <bloom/document/motion_blur_nodes.hpp>
-#include <bloom/document/sharpen_definition.hpp>
 #include <bloom/document/audio_effect_nodes.hpp>
 #include <bloom/document/auto_exposure_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/depth_effect_nodes.hpp>
@@ -61,32 +49,34 @@
 #include <bloom/document/sharpen_definition.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/warp_nodes.hpp>
 #include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/host/project_color_choice.hpp>
 #include <bloom/ui/chromatic_aberration_widget.hpp>
 #include <bloom/ui/codec_degrade_widget.hpp>
+#include <bloom/ui/color_matrix_widget.hpp>
 #include <bloom/ui/colorize_widget.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/corner_pin_widget.hpp>
 #include <bloom/ui/curve_graph.hpp>
 #include <bloom/ui/depth_effect_widget.hpp>
+#include <bloom/ui/dither_widget.hpp>
 #include <bloom/ui/film_grain_widget.hpp>
 #include <bloom/ui/grade_wheels.hpp>
 #include <bloom/ui/gradient_parameter_row.hpp>
 #include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/hue_saturation_widget.hpp>
-#include <bloom/ui/dither_widget.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/controls.hpp>
-#include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/gradient_editor.hpp>
 #include <bloom/ui/kit/point_pad.hpp>
+#include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/range_selector.hpp>
 #include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/tab_bar.hpp>
@@ -283,10 +273,9 @@ void capture(CardFixture& fixture, const QString& name, const std::vector<qreal>
         return;
     QDir().mkpath(directory);
     // The colour chips and gradient bars draw in display colour once the converter lands.
-    QElapsedTimer converter;
-    converter.start();
-    while (!fixture.session.colorConverterReady() && converter.elapsed() < 5'000)
-        QApplication::processEvents(QEventLoop::AllEvents, 20);
+    expect(bloom::test_support::awaitQtCondition(
+               "the colour converter lands", [&] { return fixture.session.colorConverterReady(); }),
+           "the colour converter becomes ready");
     QApplication::processEvents();
     auto& item = *fixture.item;
     auto& editor = *fixture.editor;
@@ -1208,10 +1197,9 @@ void testCardCard() {
     set("patchStep", true);
     expect(!card->showsRole("patchValue"), "a stepping Patch hides its single value");
     set("patchStep", false);
-    QElapsedTimer wait;
-    wait.start();
-    while (card->expectedText().isEmpty() && wait.elapsed() < 5'000)
-        QApplication::processEvents(QEventLoop::AllEvents, 20);
+    expect(bloom::test_support::awaitQtCondition("the Patch card shows its expected text",
+                                                 [&] { return !card->expectedText().isEmpty(); }),
+           "the Patch card shows its expected text");
     expect(!card->signalText().isEmpty() && !card->expectedText().isEmpty(),
            "a Patch shows its signal and the expected display value");
     if (!paintsInsideCard(*fixture.item)) {
@@ -1273,11 +1261,13 @@ std::optional<ShownPatch> independentPatch(const document::ColorSettings& settin
 
 // The readout's text, once the worker has answered; "Expected on <view>: 8-bit r g b, float r g b".
 QString waitForExpected(ui::TestCardCardWidget& card) {
-    QElapsedTimer wait;
-    wait.start();
-    while ((card.expectedText().isEmpty() || card.expectedText().contains(QChar(0x2026))) &&
-           wait.elapsed() < 10'000)
-        QApplication::processEvents(QEventLoop::AllEvents, 20);
+    expect(bloom::test_support::awaitQtCondition("the Patch readout is answered by the worker",
+                                                 [&] {
+                                                     return !card.expectedText().isEmpty() &&
+                                                            !card.expectedText().contains(
+                                                                QChar(0x2026));
+                                                 }),
+           "the Patch readout is answered by the worker");
     QApplication::processEvents();
     return card.expectedText();
 }
@@ -1422,10 +1412,10 @@ void lightRaysCard() {
     {
         // The tint chip converts its reference color for display (a constant color key
         // must not fall back to the unconverted gray).
-        QElapsedTimer converter;
-        converter.start();
-        while (!fixture.session.colorConverterReady() && converter.elapsed() < 5'000)
-            QApplication::processEvents(QEventLoop::AllEvents, 20);
+        expect(bloom::test_support::awaitQtCondition(
+                   "the colour converter lands",
+                   [&] { return fixture.session.colorConverterReady(); }),
+               "the colour converter becomes ready");
         const auto reference = ui::kit::KColor::fromRgba(1.0F, 1.0F, 1.0F, 1.0F,
                                                          ui::kit::ColorSpace::Reference);
         const auto display = reference.converted(
@@ -2542,10 +2532,10 @@ void nodeControlCards() {
                 const auto* value = constant ? std::get_if<core::Color4d>(&constant->value) : nullptr;
                 return value ? std::optional(*value) : std::nullopt;
             };
-            QElapsedTimer converter;
-            converter.start();
-            while (!fixture.session.colorConverterReady() && converter.elapsed() < 5'000)
-                QApplication::processEvents(QEventLoop::AllEvents, 20);
+            expect(bloom::test_support::awaitQtCondition(
+                       "the colour converter lands",
+                       [&] { return fixture.session.colorConverterReady(); }),
+                   "the colour converter becomes ready");
             const auto colourBefore = colourOf();
             chip->setColor(ui::kit::KColor::fromRgba(0.2F, 0.4F, 0.6F, 1.0F));
             QApplication::processEvents();
@@ -2886,8 +2876,6 @@ void linkedGradientStop() {
                "a Colour output links to a gradient stop colour");
     }
     // The card and Properties refresh, and the driven value resolves.
-    QElapsedTimer settle;
-    settle.start();
     const auto linkRow = [&]() -> const ui::GradientParameterRow::StopRow* {
         for (const auto& candidate : row->stopRows())
             if (candidate.stop == 1 &&
@@ -2895,9 +2883,12 @@ void linkedGradientStop() {
                 return &candidate;
         return nullptr;
     };
-    while (settle.elapsed() < 5'000 &&
-           !(row->editor()->stops().size() == 2 && driven(row->editor()->stops()[1].color)))
-        QApplication::processEvents(QEventLoop::AllEvents, 20);
+    expect(bloom::test_support::awaitQtCondition("the linked stop's driven colour resolves",
+                                                 [&] {
+                                                     return row->editor()->stops().size() == 2 &&
+                                                            driven(row->editor()->stops()[1].color);
+                                                 }),
+           "the linked stop's driven colour resolves");
     fixture.item =
         ui::node_editor::nodeItemAncestor(fixture.editor->graphScene()->findNodeItem(fixture.node));
     card = fixture.item ? qobject_cast<ui::NodeControlsCardWidget*>(fixture.item->cardWidget())
@@ -2936,11 +2927,14 @@ void linkedGradientStop() {
     const ui::GradientParameterRow* inProperties = nullptr;
     for (auto* candidate : properties->findChildren<ui::GradientParameterRow*>())
         inProperties = candidate;
-    settle.restart();
-    while (settle.elapsed() < 5'000 && inProperties &&
-           !(inProperties->editor()->stops().size() == 2 &&
-             driven(inProperties->editor()->stops()[1].color)))
-        QApplication::processEvents(QEventLoop::AllEvents, 20);
+    if (inProperties)
+        expect(bloom::test_support::awaitQtCondition(
+                   "Properties shows the driven colour on the linked stop",
+                   [&] {
+                       return inProperties->editor()->stops().size() == 2 &&
+                              driven(inProperties->editor()->stops()[1].color);
+                   }),
+               "Properties shows the driven colour on the linked stop");
     bool propertiesLinked = false;
     if (inProperties)
         for (const auto& candidate : inProperties->stopRows())
@@ -3398,16 +3392,11 @@ void warpPathRefusal() {
     properties.resize(700, 1200);
     properties.show();
     const auto settle = [&](const bool problem) {
-        QElapsedTimer wait;
-        wait.start();
-        while (wait.elapsed() < 15'000) {
+        return bloom::test_support::awaitQtCondition("the warp readout settles", [&] {
             fixture.session.refreshDrivenValues();
-            QApplication::processEvents(QEventLoop::AllEvents, 20);
-            if (fixture.item != nullptr && fixture.item->valueProblem().isEmpty() != problem &&
-                !fixture.session.valueOutputText(fixture.node, "path").isEmpty())
-                return true;
-        }
-        return false;
+            return fixture.item != nullptr && fixture.item->valueProblem().isEmpty() != problem &&
+                   !fixture.session.valueOutputText(fixture.node, "path").isEmpty();
+        });
     };
     const auto readout = [&] {
         auto* label = properties.findChild<QLabel*>("propertiesValueOutput.path");
@@ -3945,35 +3934,35 @@ int main(int argc, char** argv) {
     // BLOOM_GRADING_CARDS_ONLY=quantize (dither or warp) runs only the Quantize (Dither, Procedural Warp) card(s) (the whole run writes every card).
     if (qEnvironmentVariable("BLOOM_GRADING_CARDS_ONLY") == QStringLiteral("dither")) {
         ditherCard();
-        if (failures != 0)
+        if (failures + bloom::test_support::awaitFailureCount() != 0)
             return 1;
         std::cout << "PASS: Dither card\n";
         return 0;
     }
     if (qEnvironmentVariable("BLOOM_GRADING_CARDS_ONLY") == QStringLiteral("warp")) {
         proceduralWarpCards();
-        if (failures != 0)
+        if (failures + bloom::test_support::awaitFailureCount() != 0)
             return 1;
         std::cout << "PASS: Procedural Warp cards\n";
         return 0;
     }
     if (qEnvironmentVariable("BLOOM_GRADING_CARDS_ONLY") == QStringLiteral("apply-lut")) {
         applyLutProcessSpaceCard();
-        if (failures != 0)
+        if (failures + bloom::test_support::awaitFailureCount() != 0)
             return 1;
         std::cout << "PASS: Apply LUT card\n";
         return 0;
     }
     if (qEnvironmentVariable("BLOOM_GRADING_CARDS_ONLY") == QStringLiteral("widget-rule")) {
         widgetRuleCards();
-        if (failures != 0)
+        if (failures + bloom::test_support::awaitFailureCount() != 0)
             return 1;
         std::cout << "PASS: widget rule cards\n";
         return 0;
     }
     if (qEnvironmentVariable("BLOOM_GRADING_CARDS_ONLY") == QStringLiteral("quantize")) {
         quantizeCards();
-        if (failures != 0)
+        if (failures + bloom::test_support::awaitFailureCount() != 0)
             return 1;
         std::cout << "PASS: Quantize card\n";
         return 0;
@@ -4012,7 +4001,7 @@ int main(int argc, char** argv) {
     denoiseCard();
     linkedGradientStop();
     gradientBlendModes();
-    if (failures != 0)
+    if (failures + bloom::test_support::awaitFailureCount() != 0)
         return 1;
     std::cout << "PASS: grading cards\n";
     return 0;

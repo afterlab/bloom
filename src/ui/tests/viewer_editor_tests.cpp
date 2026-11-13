@@ -1,3 +1,4 @@
+#include "await_qt.hpp"
 #include "editor_chrome_test_support.hpp"
 #include "layer_mask_support.hpp"
 #include "node_editor_add.hpp"
@@ -6,16 +7,15 @@
 #include <array>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/image_types.hpp>
-#include <bloom/ui/editor_registry.hpp>
-#include <bloom/ui/kit/dialog.hpp>
-#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/context_bar.hpp>
 #include <bloom/ui/editor_registry.hpp>
-#include <bloom/ui/workspace_host.hpp>
-#include <bloom/ui/workspace_presets.hpp>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/dialog.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/tool_controller.hpp>
 #include <bloom/ui/viewer_editor.hpp>
+#include <bloom/ui/workspace_host.hpp>
+#include <bloom/ui/workspace_presets.hpp>
 
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
@@ -303,18 +303,10 @@ bloom::runtime::TaskSchedulerConfig testSchedulerConfig() {
             .groupRegistryCapacity = 8};
 }
 
+// Unnamed wait for the shared test fragments included below that are not converted yet; the
+// converted waits in this file call awaitQtCondition with a name.
 template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 4'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate)) {
-            return true;
-        }
-        std::this_thread::yield();
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return std::invoke(predicate);
+    return bloom::test_support::awaitQtCondition("test condition", predicate);
 }
 
 bool isReady(const bloom::ui::CompositionPreviewController& controller) {
@@ -329,7 +321,9 @@ void reachQuiescence(bloom::ui::CompositionPreviewController& controller,
                      [&quiescentSignal] { quiescentSignal = true; });
     controller.beginShutdown();
     bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return quiescentSignal && scheduler.isQuiescent(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "viewer fixture reaches asynchronous scheduler quiescence",
+                            [&] { return quiescentSignal && scheduler.isQuiescent(); }),
                         "viewer fixture reaches asynchronous scheduler quiescence");
 }
 
@@ -367,17 +361,22 @@ void testViewerRendersQualifiedFrameAndReportsColorState(Expectations& expectati
     viewer.show();
     controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);
 
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
-                        "an initial reference-labeled frame becomes ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("an initial reference-labeled frame becomes ready",
+                                              [&] { return isReady(controller); }),
+        "an initial reference-labeled frame becomes ready");
     const QImage beforeReadiness = viewer.grab().toImage();
     expectations.expect(!beforeReadiness.isNull(),
                         "the viewer renders offscreen before the qualified processor is ready");
-    expectations.expect(waitUntil([&] {
-                            return viewer.accessibleDescription().contains(
-                                QStringLiteral("Reference (unqualified)"));
-                        }),
-                        "the status surface reports the reference (unqualified) color state before "
-                        "readiness");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "status surface reports the reference (unqualified) color state before ",
+            [&] {
+                return viewer.accessibleDescription().contains(
+                    QStringLiteral("Reference (unqualified)"));
+            }),
+        "the status surface reports the reference (unqualified) color state before "
+        "readiness");
     expectations.expect(
         ui::previewColorState(controller.state()).text == QStringLiteral("Reference (unqualified)"),
         "the window status bar's own color chip text agrees with the accessible description");
@@ -402,20 +401,24 @@ void testViewerRendersQualifiedFrameAndReportsColorState(Expectations& expectati
         }
     }
     controller.requestRefresh();
-    expectations.expect(waitUntil([&] {
-                            return isReady(controller) && controller.state().frame != nullptr &&
-                                   controller.state().frame->isOcioQualified();
-                        }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "qualified frame becomes ready",
+                            [&] {
+                                return isReady(controller) && controller.state().frame != nullptr &&
+                                       controller.state().frame->isOcioQualified();
+                            }),
                         "a qualified frame becomes ready");
 
     const QImage afterReadiness = viewer.grab().toImage();
     expectations.expect(!afterReadiness.isNull(),
                         "the viewer renders the qualified frame's buffer offscreen (smoke)");
     expectations.expect(
-        waitUntil([&] {
-            return viewer.accessibleDescription().contains(
-                QStringLiteral("Qualified · Bloom Neutral"));
-        }),
+        bloom::test_support::awaitQtCondition(
+            "status surface reports the qualified color state once the frame is qualified",
+            [&] {
+                return viewer.accessibleDescription().contains(
+                    QStringLiteral("Qualified · Bloom Neutral"));
+            }),
         "the status surface reports the qualified color state once the frame is qualified");
     expectations.expect(
         ui::previewColorState(controller.state()).text ==
@@ -458,7 +461,9 @@ void testViewerStatusSurfaceReflectsFailClosedColorState(Expectations& expectati
     ui::ViewerEditor viewer(session, controller);
     viewer.resize(320, 240);
 
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "honest startup window still renders a reference-labeled frame",
+                            [&] { return isReady(controller); }),
                         "the honest startup window still renders a reference-labeled frame");
     const QImage lastGoodImage = viewer.grab().toImage();
     expectations.expect(!lastGoodImage.isNull(), "the last-good frame renders offscreen");
@@ -471,7 +476,9 @@ void testViewerStatusSurfaceReflectsFailClosedColorState(Expectations& expectati
          .suggestedAction = {}}));
     controller.requestRefresh();
     expectations.expect(
-        waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Failed; }),
+        bloom::test_support::awaitQtCondition(
+            "request after a forced qualification failure reaches Failed",
+            [&] { return controller.state().activity == ui::PreviewActivity::Failed; }),
         "a request after a forced qualification failure reaches Failed");
 
     const QImage failedImage = viewer.grab().toImage();
@@ -570,7 +577,8 @@ void testToolColumnUsesViewGestures(Expectations& expectations) {
     using namespace bloom;
     ViewerFixture fixture(makeTestProject("Tool gestures"));
     fixture.viewer.show();
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "tool fixture ready", [&] { return isReady(fixture.controller); }),
                         "tool fixture ready");
     // ADR 0031: the bar's tool buttons choose the one app-wide tool the Viewer acts with.
     auto& bar = contextBar(fixture);
@@ -604,8 +612,10 @@ void testToolColumnUsesViewGestures(Expectations& expectations) {
                         "view tools do not mutate project truth");
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
-                        "tool fixture shuts down");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("tool fixture shuts down",
+                                              [&] { return fixture.scheduler.isQuiescent(); }),
+        "tool fixture shuts down");
 }
 
 // The zoom dropdown (decision 3) drives ViewerEditor's ViewTransform in both directions: choosing
@@ -614,8 +624,10 @@ void testToolColumnUsesViewGestures(Expectations& expectations) {
 void testStatusBarZoomDropdownDrivesViewTransform(Expectations& expectations) {
     using namespace bloom;
     ViewerFixture fixture(makeTestProject("Zoom Dropdown Test"));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the fixture's initial frame becomes ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("fixture's initial frame becomes ready",
+                                              [&] { return isReady(fixture.controller); }),
+        "the fixture's initial frame becomes ready");
 
     expectations.expect(fixture.viewer.viewTransformForTest().fitToWindow,
                         "the viewer starts in Fit mode");
@@ -652,7 +664,9 @@ void testStatusBarZoomDropdownDrivesViewTransform(Expectations& expectations) {
 
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "zoom-dropdown fixture reaches asynchronous scheduler quiescence",
+                            [&] { return fixture.scheduler.isQuiescent(); }),
                         "the zoom-dropdown fixture reaches asynchronous scheduler quiescence");
 }
 
@@ -675,8 +689,10 @@ void testStatusBarZoomDropdownDrivesViewTransform(Expectations& expectations) {
 void testTakeFooterWidgetExposesTheStatusBarWithItsColorStateChip(Expectations& expectations) {
     using namespace bloom;
     ViewerFixture fixture(makeTestProject("Take Footer Widget Test"));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the fixture's initial frame becomes ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("fixture's initial frame becomes ready",
+                                              [&] { return isReady(fixture.controller); }),
+        "the fixture's initial frame becomes ready");
 
     auto* firstCall = bloom::ui::test::footer(fixture.viewer);
     expectations.expect(firstCall != nullptr, "takeFooterWidget() returns a real widget");
@@ -723,7 +739,9 @@ void testTakeFooterWidgetExposesTheStatusBarWithItsColorStateChip(Expectations& 
 
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "take-footer-widget fixture reaches asynchronous scheduler quiescence",
+                            [&] { return fixture.scheduler.isQuiescent(); }),
                         "the take-footer-widget fixture reaches asynchronous scheduler quiescence");
 }
 
@@ -735,7 +753,9 @@ void testTakeFooterWidgetExposesTheStatusBarWithItsColorStateChip(Expectations& 
 void testStatusBarDroppedFrameReadoutOnlyClaimsWhatItMeasures(Expectations& expectations) {
     using namespace bloom;
     ViewerFixture fixture(makeTestProject("Dropped Frame Readout Test"));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "dropped-frame readout fixture reaches its first ready frame",
+                            [&] { return isReady(fixture.controller); }),
                         "the dropped-frame readout fixture reaches its first ready frame");
 
     expectations.expect(ui::droppedFrameText(fixture.controller).isEmpty(),
@@ -763,8 +783,10 @@ void testStatusBarReadoutMatchesExactSessionTimeIncludingSubframe(Expectations& 
     using namespace bloom;
     QSettings().setValue("timeline/time-format", QStringLiteral("frames"));
     ViewerFixture fixture(makeTestProject("Readout Subframe Test"));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the fixture's initial frame becomes ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("fixture's initial frame becomes ready",
+                                              [&] { return isReady(fixture.controller); }),
+        "the fixture's initial frame becomes ready");
 
     // ADAPTED for task VIEW-1: the footer's one combined string became two controls -- the
     // Resolution readout ("Auto · 1", part of the Resolution dropdown) and the click-to-edit
@@ -788,7 +810,9 @@ void testStatusBarReadoutMatchesExactSessionTimeIncludingSubframe(Expectations& 
 
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "readout fixture reaches asynchronous scheduler quiescence",
+                            [&] { return fixture.scheduler.isQuiescent(); }),
                         "the readout fixture reaches asynchronous scheduler quiescence");
 }
 
@@ -798,8 +822,10 @@ void testStatusBarReadoutMatchesExactSessionTimeIncludingSubframe(Expectations& 
 void testMiddleDragPans(Expectations& expectations) {
     using namespace bloom;
     ViewerFixture fixture(makeTestProject("Middle Pan Test"));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the fixture's initial frame becomes ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("fixture's initial frame becomes ready",
+                                              [&] { return isReady(fixture.controller); }),
+        "the fixture's initial frame becomes ready");
     expectations.expect(fixture.viewer.viewTransformForTest().fitToWindow,
                         "the viewer starts in Fit mode with no pan");
 
@@ -830,7 +856,9 @@ void testMiddleDragPans(Expectations& expectations) {
 
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "middle-pan fixture reaches asynchronous scheduler quiescence",
+                            [&] { return fixture.scheduler.isQuiescent(); }),
                         "the middle-pan fixture reaches asynchronous scheduler quiescence");
 }
 
@@ -839,8 +867,10 @@ void testMiddleDragPans(Expectations& expectations) {
 void testCtrlZeroFitsAndCtrlOneIsActualSize(Expectations& expectations) {
     using namespace bloom;
     ViewerFixture fixture(makeTestProject("Viewer Zoom Keys Test"));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the fixture's initial frame becomes ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("fixture's initial frame becomes ready",
+                                              [&] { return isReady(fixture.controller); }),
+        "the fixture's initial frame becomes ready");
     expectations.expect(fixture.viewer.viewTransformForTest().fitToWindow,
                         "the viewer starts in Fit mode");
 
@@ -868,7 +898,9 @@ void testCtrlZeroFitsAndCtrlOneIsActualSize(Expectations& expectations) {
 
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "zoom-key fixture reaches asynchronous scheduler quiescence",
+                            [&] { return fixture.scheduler.isQuiescent(); }),
                         "the zoom-key fixture reaches asynchronous scheduler quiescence");
 }
 
@@ -951,8 +983,10 @@ void testProxyPaintingAndAutoZoom(Expectations& expectations) {
         "the proxy painting fixture has opaque content");
     fixture.viewer.show();
     fixture.viewer.zoomDropdownForTest()->setCurrentIndex(3);
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "Full is ready at actual size");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("Full is ready at actual size",
+                                              [&] { return isReady(fixture.controller); }),
+        "Full is ready at actual size");
     const auto fullImage = fixture.viewer.grab().toImage();
     const auto inside = fixture.viewer.canvasRectForTest().center().toPoint() + QPoint(13, 11);
     const auto outside = fixture.viewer.canvasRectForTest().topLeft().toPoint() + QPoint(2, 2);
@@ -961,7 +995,8 @@ void testProxyPaintingAndAutoZoom(Expectations& expectations) {
                             interior != fullImage.pixelColor(outside),
                         "the sample lies inside the full composition");
     fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Quarter);
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "fixed Quarter is ready", [&] { return isReady(fixture.controller); }),
                         "fixed Quarter is ready");
     const auto proxyImage = fixture.viewer.grab().toImage();
     expectations.expect(proxyImage.pixelColor(inside) == interior,
@@ -971,8 +1006,10 @@ void testProxyPaintingAndAutoZoom(Expectations& expectations) {
                         "the painted proxy really has quarter-width pixels");
     fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Auto);
     fixture.viewer.zoomDropdownForTest()->setCurrentIndex(1);
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "Auto at 25 percent is ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("Auto at 25 percent is ready",
+                                              [&] { return isReady(fixture.controller); }),
+        "Auto at 25 percent is ready");
     expectations.expect(
         fixture.controller.resolutionDivisor() == 4 &&
             fixture.viewer.statusBarReadoutTextForTest().startsWith(QStringLiteral("Auto · ¼")),
@@ -1237,8 +1274,10 @@ void testChannelDropdownRemapsOnlyThePresentedImage(Expectations& expectations) 
         "the channel fixture has opaque colored content");
     fixture.viewer.show();
     fixture.viewer.zoomDropdownForTest()->setCurrentIndex(3); // 100%
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the channel fixture reaches a ready frame");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("channel fixture reaches a ready frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "the channel fixture reaches a ready frame");
 
     auto* channel = fixture.viewer.findChild<ui::kit::KDropdown*>("viewerChannelDropdown");
     expectations.expect(channel != nullptr && channel->count() == 6 &&
@@ -1255,10 +1294,12 @@ void testChannelDropdownRemapsOnlyThePresentedImage(Expectations& expectations) 
     channel->setCurrentIndex(2); // "R"
     expectations.expect(fixture.viewer.channelForTest() == ui::ViewerChannel::Red,
                         "choosing R puts the viewer in the red-channel view");
-    expectations.expect(waitUntil([&] {
-                            return fixture.viewer.displayedPreviewState().freshness ==
-                                   ui::FrameFreshness::Current;
-                        }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "asynchronous channel derivation becomes current",
+                            [&] {
+                                return fixture.viewer.displayedPreviewState().freshness ==
+                                       ui::FrameFreshness::Current;
+                            }),
                         "the asynchronous channel derivation becomes current");
     const QImage red = fixture.viewer.grab().toImage();
     expectations.expect(red != rgba, "a single-channel view really changes the presented pixels");
@@ -1315,13 +1356,18 @@ void testChannelPendingRefusalAndSupersession(Expectations& checks) {
     checks.expect(fixture.session.addSolidLayer("Marker", {0.125, 0.25, 0.5, 1.0}),
                   "the channel publication fixture has distinct RGB pixels");
     fixture.viewer.show();
-    checks.expect(waitUntil([&] { return isReady(fixture.controller); }), "base prepares");
+    checks.expect(bloom::test_support::awaitQtCondition(
+                      "base prepares", [&] { return isReady(fixture.controller); }),
+                  "base prepares");
     const auto nextTime = core::RationalTime::fromInteger(1);
     checks.expect(fixture.session.setCurrentTime(nextTime), "a second exact time is requested");
-    checks.expect(waitUntil([&] {
-                      return isReady(fixture.controller) &&
-                             fixture.controller.state().frame->desiredIdentity().time == nextTime;
-                  }),
+    checks.expect(bloom::test_support::awaitQtCondition(
+                      "second source is cached",
+                      [&] {
+                          return isReady(fixture.controller) &&
+                                 fixture.controller.state().frame->desiredIdentity().time ==
+                                     nextTime;
+                      }),
                   "the second source is cached");
     checks.expect(fixture.session.setCurrentTime(core::RationalTime::fromInteger(0)),
                   "return to the original source");
@@ -1329,46 +1375,57 @@ void testChannelPendingRefusalAndSupersession(Expectations& checks) {
     if (!channel)
         return;
     channel->setCurrentIndex(2);
-    checks.expect(waitUntil([&] {
-                      const auto state = fixture.viewer.displayedPreviewState();
-                      return state.freshness == ui::FrameFreshness::Current &&
-                             state.viewerStatusText.contains("Red") &&
-                             state.viewerStatusText.contains("CPU channel presentation");
-                  }),
+    checks.expect(bloom::test_support::awaitQtCondition(
+                      "completed Red presentation is explicitly CPU-derived",
+                      [&] {
+                          const auto state = fixture.viewer.displayedPreviewState();
+                          return state.freshness == ui::FrameFreshness::Current &&
+                                 state.viewerStatusText.contains("Red") &&
+                                 state.viewerStatusText.contains("CPU channel presentation");
+                      }),
                   "the completed Red presentation is explicitly CPU-derived");
     ui::WindowStatusBar status(fixture.session, &fixture.controller);
     status.setDisplayedViewer(&fixture.viewer);
     const auto original = fixture.viewer.displayedFrameForTest();
     {
         ChannelWorkerHold hold(fixture.scheduler);
-        checks.expect(waitUntil([&] { return hold.entered.load(); }), "CPU worker is held");
+        checks.expect(bloom::test_support::awaitQtCondition("CPU worker is held",
+                                                            [&] { return hold.entered.load(); }),
+                      "CPU worker is held");
         checks.expect(fixture.session.setCurrentTime(nextTime), "cached next source is selected");
-        checks.expect(waitUntil([&] {
-                          const auto state = fixture.viewer.displayedPreviewState();
-                          return state.activity == ui::PreviewActivity::Rendering &&
-                                 state.freshness == ui::FrameFreshness::Stale;
-                      }),
+        checks.expect(bloom::test_support::awaitQtCondition(
+                          "same-channel/new-source task reports Pending before completion",
+                          [&] {
+                              const auto state = fixture.viewer.displayedPreviewState();
+                              return state.activity == ui::PreviewActivity::Rendering &&
+                                     state.freshness == ui::FrameFreshness::Stale;
+                          }),
                       "same-channel/new-source task reports Pending before completion");
         checks.expect(fixture.viewer.displayedFrameForTest() == original &&
                           status.previewStateTextForTest().contains("Previous display"),
                       "held derivative preserves the actual old frame and refreshes status");
         hold.released = true;
-        checks.expect(waitUntil([&] {
-                          const auto state = fixture.viewer.displayedPreviewState();
-                          return state.freshness == ui::FrameFreshness::Current && state.frame &&
-                                 state.frame->desiredIdentity().time == nextTime;
-                      }),
+        checks.expect(bloom::test_support::awaitQtCondition(
+                          "new Red pixels publish after real worker completion",
+                          [&] {
+                              const auto state = fixture.viewer.displayedPreviewState();
+                              return state.freshness == ui::FrameFreshness::Current &&
+                                     state.frame && state.frame->desiredIdentity().time == nextTime;
+                          }),
                       "new Red pixels publish after real worker completion");
     }
     {
         ChannelWorkerHold hold(fixture.scheduler);
-        checks.expect(waitUntil([&] { return hold.entered.load(); }),
+        checks.expect(bloom::test_support::awaitQtCondition("worker held for channel edits",
+                                                            [&] { return hold.entered.load(); }),
                       "worker held for channel edits");
         channel->setCurrentIndex(4);
-        checks.expect(waitUntil([&] {
-                          return fixture.viewer.displayedPreviewState().activity ==
-                                 ui::PreviewActivity::Rendering;
-                      }),
+        checks.expect(bloom::test_support::awaitQtCondition(
+                          "Blue requests a held replacement while showing Red",
+                          [&] {
+                              return fixture.viewer.displayedPreviewState().activity ==
+                                     ui::PreviewActivity::Rendering;
+                          }),
                       "Blue requests a held replacement while showing Red");
         channel->setCurrentIndex(2);
         QCoreApplication::processEvents();
@@ -1389,11 +1446,13 @@ void testChannelPendingRefusalAndSupersession(Expectations& checks) {
         }
         fixture.session.rebind(*replacement, *replacementCommands, fixture.session.compositionId());
         hold.released = true;
-        checks.expect(waitUntil([&] {
-                          const auto state = fixture.viewer.displayedPreviewState();
-                          return state.freshness == ui::FrameFreshness::Current &&
-                                 state.viewerStatusText.contains("Blue");
-                      }),
+        checks.expect(bloom::test_support::awaitQtCondition(
+                          "rebind rejects old work and publishes only the new domain/channel",
+                          [&] {
+                              const auto state = fixture.viewer.displayedPreviewState();
+                              return state.freshness == ui::FrameFreshness::Current &&
+                                     state.viewerStatusText.contains("Blue");
+                          }),
                       "rebind rejects old work and publishes only the new domain/channel");
         const auto rebound = fixture.viewer.displayedFrameForTest()->displayBufferView();
         checks.expect(rebound && std::ranges::any_of(rebound->pixels,
@@ -1404,11 +1463,13 @@ void testChannelPendingRefusalAndSupersession(Expectations& checks) {
     }
     fixture.scheduler.beginShutdown();
     channel->setCurrentIndex(2);
-    checks.expect(waitUntil([&] {
-                      return fixture.viewer.displayedPreviewState().activity ==
-                                 ui::PreviewActivity::Failed &&
-                             status.previewStateTextForTest().contains("could not be admitted");
-                  }),
+    checks.expect(bloom::test_support::awaitQtCondition(
+                      "local channel refusal refreshes status without a completion signal",
+                      [&] {
+                          return fixture.viewer.displayedPreviewState().activity ==
+                                     ui::PreviewActivity::Failed &&
+                                 status.previewStateTextForTest().contains("could not be admitted");
+                      }),
                   "local channel refusal refreshes status without a completion signal");
     checks.expect(fixture.viewer.displayedPreviewState().freshness == ui::FrameFreshness::Stale &&
                       fixture.viewer.displayedPreviewState().viewerStatusText.contains(
@@ -1424,8 +1485,10 @@ void testTimeReadoutEditsFramesAndSwitchesFormat(Expectations& expectations) {
     using namespace bloom;
     QSettings().setValue("timeline/time-format", QStringLiteral("frames"));
     ViewerFixture fixture(makeTestProject("Readout Edit Test"));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the readout fixture reaches a ready frame");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("readout fixture reaches a ready frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "the readout fixture reaches a ready frame");
 
     auto* readout = fixture.viewer.findChild<QWidget*>("viewerTimeReadout");
     auto* editor = fixture.viewer.findChild<QLineEdit*>("viewerTimeReadoutEditor");
@@ -1614,15 +1677,18 @@ void testSelectedBoundsOverlayPixels(Expectations& expectations) {
     fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Full);
     fixture.viewer.show();
     fixture.viewer.zoomDropdownForTest()->setCurrentIndex(3);
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "bounds frame delivered", [&] { return isReady(fixture.controller); }),
                         "bounds frame delivered");
     const auto bounds = fixture.controller.selectedLayerBounds();
     expectations.expect(bounds.size() == 1 && bounds[0].anchor == document::Vec2d{80, 60} &&
                             bounds[0].local == runtime::ContentBounds{0, 0, 80, 40},
                         "query returns delivered local bounds and composition anchor");
-    expectations.expect(fixture.session.setCurrentTime(core::RationalTime::fromInteger(1)) &&
-                            waitUntil([&] { return isReady(fixture.controller); }),
-                        "a second bounds frame renders");
+    expectations.expect(
+        fixture.session.setCurrentTime(core::RationalTime::fromInteger(1)) &&
+            bloom::test_support::awaitQtCondition("second bounds frame renders",
+                                                  [&] { return isReady(fixture.controller); }),
+        "a second bounds frame renders");
     expectations.expect(fixture.session.setCurrentTime({}) && fixture.controller.state().frame &&
                             !fixture.controller.state().frame->hasProcessFrame(),
                         "pixel probes use a cached display-only frame");
@@ -1749,7 +1815,8 @@ void testMissingFontOverlayMarksEveryWiringOfTheLayer(Expectations& expectations
     fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Full);
     fixture.viewer.resize(900, 560);
     fixture.viewer.show();
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "frame is delivered", [&] { return isReady(fixture.controller); }),
                         "the frame is delivered");
     const auto marked = fixture.controller.missingFontBounds();
     expectations.expect(marked.size() == 2,
@@ -2082,8 +2149,10 @@ void testViewerAdjustments(Expectations& expectations) {
     expectations.expect(
         fixture.session.addSolidLayer(QStringLiteral("Solid"), {0.125, 0.25, 0.5, 1}),
         "display fixture creates a known solid");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "display fixture is ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("display fixture is ready",
+                                              [&] { return isReady(fixture.controller); }),
+        "display fixture is ready");
     ui::EditorRegistry registry;
     expectations.expect(registry.registerEditor({"viewer-test", QStringLiteral("Viewer"),
                                                  [&](QWidget* parent) {
@@ -2107,17 +2176,21 @@ void testViewerAdjustments(Expectations& expectations) {
         first.show();
         second.show();
         expectations.expect(
-            waitUntil([&] { return one->displayedFrameForTest() && two->displayedFrameForTest(); }),
+            bloom::test_support::awaitQtCondition(
+                "both viewers paint their independent initial display before adjustments",
+                [&] { return one->displayedFrameForTest() && two->displayedFrameForTest(); }),
             "both viewers paint their independent initial display before adjustments");
         auto* exposure = first.findChild<ui::kit::KValueField*>("viewerExposure");
         auto* gamma = first.findChild<ui::kit::KValueField*>("viewerGamma");
         exposure->stepBy(10);
         gamma->stepBy(20);
-        expectations.expect(waitUntil([&] {
-                                const auto frame = one->displayedFrameForTest();
-                                return frame && frame->desiredIdentity().viewAdjust ==
-                                                    runtime::ViewAdjust{1, 2};
-                            }),
+        expectations.expect(bloom::test_support::awaitQtCondition(
+                                "viewer publishes its asynchronously adjusted frame",
+                                [&] {
+                                    const auto frame = one->displayedFrameForTest();
+                                    return frame && frame->desiredIdentity().viewAdjust ==
+                                                        runtime::ViewAdjust{1, 2};
+                                }),
                             "viewer publishes its asynchronously adjusted frame");
         expectations.expect(
             two->displayedFrameForTest()->desiredIdentity().viewAdjust.neutral() &&
@@ -2127,17 +2200,21 @@ void testViewerAdjustments(Expectations& expectations) {
                             "display adjustments never edit document or export truth");
         exposure->stepBy(-10);
         gamma->stepBy(-20);
-        expectations.expect(waitUntil([&] {
-                                const auto frame = one->displayedFrameForTest();
-                                return frame && frame->desiredIdentity().viewAdjust.neutral();
-                            }),
+        expectations.expect(bloom::test_support::awaitQtCondition(
+                                "neutral controls publish the original buffer through CPU paint",
+                                [&] {
+                                    const auto frame = one->displayedFrameForTest();
+                                    return frame && frame->desiredIdentity().viewAdjust.neutral();
+                                }),
                             "neutral controls publish the original buffer through CPU paint");
         exposure->stepBy(10);
-        expectations.expect(waitUntil([&] {
-                                const auto frame = one->displayedFrameForTest();
-                                return frame && frame->desiredIdentity().viewAdjust ==
-                                                    runtime::ViewAdjust{1, 1};
-                            }),
+        expectations.expect(bloom::test_support::awaitQtCondition(
+                                "returning to an earlier adjustment still prepares a frame",
+                                [&] {
+                                    const auto frame = one->displayedFrameForTest();
+                                    return frame && frame->desiredIdentity().viewAdjust ==
+                                                        runtime::ViewAdjust{1, 1};
+                                }),
                             "returning to an earlier adjustment still prepares a frame");
     }
     {
@@ -2170,8 +2247,10 @@ void testAddMenuOffersShapeLayers(Expectations& expectations) {
     using namespace bloom;
     ViewerFixture fixture(makeTestProject("Add Menu Shapes"));
     fixture.viewer.show();
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "shape add-menu fixture ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("shape add-menu fixture ready",
+                                              [&] { return isReady(fixture.controller); }),
+        "shape add-menu fixture ready");
     auto* addMenu = fixture.viewer.findChild<QMenu*>("viewerAddMenu");
     auto* rectangleAction = addMenu ? addMenu->findChild<QAction*>("viewerAddShape.0") : nullptr;
     expectations.expect(addMenu != nullptr && rectangleAction != nullptr,
@@ -2215,8 +2294,10 @@ void testAddMenuOffersShapeLayers(Expectations& expectations) {
     }
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
-                        "shape add-menu fixture shuts down");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("shape add-menu fixture shuts down",
+                                              [&] { return fixture.scheduler.isQuiescent(); }),
+        "shape add-menu fixture shuts down");
 }
 
 // Lane C: the Viewer's Delete Composition takes the Assets delete path (a used composition warns
@@ -2405,5 +2486,5 @@ int main(int argc, char** argv) {
     } catch (const std::exception& error) {
         expectations.expect(false, error.what());
     }
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

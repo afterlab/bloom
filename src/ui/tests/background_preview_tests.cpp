@@ -1,3 +1,5 @@
+#include "await_qt.hpp"
+
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -29,7 +31,6 @@
 
 #include <QApplication>
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QMouseEvent>
 #include <QRectF>
 #include <QWidget>
@@ -76,18 +77,13 @@ class Expectations final {
     int failures_ = 0;
 };
 
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 20'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate)) {
-            return true;
-        }
-        std::this_thread::yield();
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return std::invoke(predicate);
+using bloom::test_support::awaitQtCondition;
+
+// background_preview_playback.ipp (textually included below, outside this conversion's file list)
+// still calls waitUntil(predicate): this forwarding shim keeps it building until it is converted.
+template <typename Predicate> bool waitUntil(Predicate&& predicate) {
+    return awaitQtCondition("condition awaited by background_preview_playback.ipp",
+                            std::forward<Predicate>(predicate));
 }
 
 [[nodiscard]] runtime::TaskSchedulerConfig testSchedulerConfig() {
@@ -233,8 +229,10 @@ struct SessionFixture final {
 void finishFixture(SessionFixture& fixture, Expectations& expectations) {
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
-                        "the RAM preview fixture reaches asynchronous scheduler quiescence");
+    expectations.expect(
+        awaitQtCondition("the RAM preview fixture reaches asynchronous scheduler quiescence",
+                         [&] { return fixture.scheduler.isQuiescent(); }),
+        "the RAM preview fixture reaches asynchronous scheduler quiescence");
 }
 
 [[nodiscard]] bool isReady(const ui::CompositionPreviewController& controller) {
@@ -247,15 +245,17 @@ void testWorkAreaBoundsBackground(Expectations& expectations) {
     range.emplace<commands::SetWorkArea>(fixture.session.compositionId(), time(2, 25), time(5, 25));
     expectations.expect(fixture.session.executeTransaction(std::move(range)).changed(),
                         "work area accepted");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "foreground settled");
+    expectations.expect(
+        awaitQtCondition("foreground settled", [&] { return isReady(fixture.controller); }),
+        "foreground settled");
     fixture.frameCache->clear();
     ui::BackgroundPreviewController background(fixture.session, fixture.controller,
                                                fixture.scheduler, fixture.bridge,
                                                fixture.countingPipeline());
     background.setIdleFill(true); // Qualifies the idle-fill mechanics.
     background.fillNextFrame();
-    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 3; }),
+    expectations.expect(awaitQtCondition("only three work-area frames fill",
+                                         [&] { return fixture.frameCache->size() == 3; }),
                         "only three work-area frames fill");
     for (int frame = 0; frame < 7; ++frame) {
         const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
@@ -272,7 +272,8 @@ void testWorkAreaBoundsBackground(Expectations& expectations) {
 // frame was silently discarded and never entered the cache.
 void testBackgroundFillHonoursRegionOfInterest(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Background ROI", time(3, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("ROI fixture foreground settled",
+                                         [&] { return isReady(fixture.controller); }),
                         "ROI fixture foreground settled");
     fixture.controller.setRegionOfInterest(QRectF(0.25, 0.25, 0.5, 0.5));
     expectations.expect(fixture.controller.regionOfInterest().has_value(),
@@ -284,7 +285,8 @@ void testBackgroundFillHonoursRegionOfInterest(Expectations& expectations) {
                                                fixture.countingPipeline());
     background.setIdleFill(true); // Qualifies the idle-fill mechanics.
     background.fillNextFrame();
-    expectations.expect(waitUntil([&] { return fixture.frameCache->size() >= 1; }),
+    expectations.expect(awaitQtCondition("a ROI background frame enters the cache",
+                                         [&] { return fixture.frameCache->size() >= 1; }),
                         "a ROI background frame enters the cache");
 
     const auto roiKey = fixture.controller.cacheKeyForTime(time(0, 25));
@@ -306,10 +308,13 @@ void testBackgroundFillHonoursRegionOfInterest(Expectations& expectations) {
 
 void testOutwardOrderBudgetAndRestart(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Speculation order", time(7, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "opening frame ready");
+    expectations.expect(
+        awaitQtCondition("opening frame ready", [&] { return isReady(fixture.controller); }),
+        "opening frame ready");
     (void)fixture.session.setCurrentTime(time(3, 25));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "playhead ready");
+    expectations.expect(
+        awaitQtCondition("playhead ready", [&] { return isReady(fixture.controller); }),
+        "playhead ready");
     fixture.frameCache->clear();
     std::mutex mutex;
     std::vector<core::RationalTime> order;
@@ -327,7 +332,8 @@ void testOutwardOrderBudgetAndRestart(Expectations& expectations) {
                                                fixture.scheduler, fixture.bridge, prepare);
     background.setIdleFill(true); // Qualifies the idle-fill mechanics.
     background.fillNextFrame();
-    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 7; }),
+    expectations.expect(awaitQtCondition("idle renderer fills the whole bounded composition",
+                                         [&] { return fixture.frameCache->size() == 7; }),
                         "idle renderer fills the whole bounded composition");
     {
         std::lock_guard lock(mutex);
@@ -354,42 +360,50 @@ void testOutwardOrderBudgetAndRestart(Expectations& expectations) {
     // Settled: the nearest three frames are cached and nothing is still preparing. A frame still
     // in flight here would land later and evict one of them.
     expectations.expect(
-        waitUntil([&] { return nearestThreeCached() && background.inFlightCount() == 0; }),
+        awaitQtCondition("budget fills with the nearest three frames",
+                         [&] { return nearestThreeCached() && background.inFlightCount() == 0; }),
         "budget fills with the nearest three frames");
     const auto filled = submissions();
     for (int i = 0; i < 10; ++i) {
         background.fillNextFrame();
     }
-    expectations.expect(waitUntil([&] { return background.inFlightCount() == 0; }),
-                        "repeated fills settle");
+    expectations.expect(
+        awaitQtCondition("repeated fills settle", [&] { return background.inFlightCount() == 0; }),
+        "repeated fills settle");
     expectations.expect(nearestThreeCached() && fixture.frameCache->size() == 3 &&
                             submissions() == filled,
                         "budget retains the nearest three frames without churn");
     fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Quarter);
-    expectations.expect(waitUntil([&] {
-                            const auto key = fixture.controller.cacheKeyForTime(time(0));
-                            return key.has_value() && fixture.frameCache->contains(*key);
-                        }),
-                        "resolution change restarts the range at the new factor");
+    expectations.expect(
+        awaitQtCondition("resolution change restarts the range at the new factor",
+                         [&] {
+                             const auto key = fixture.controller.cacheKeyForTime(time(0));
+                             return key.has_value() && fixture.frameCache->contains(*key);
+                         }),
+        "resolution change restarts the range at the new factor");
     expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Edit"), {1, 0, 0, 1}),
                         "revision changes");
     // The edit's second layer adds evaluated geometry to every retained frame, so the budget now
     // holds about four quarter frames: the restarted pass fills the nearest of the new revision.
-    expectations.expect(waitUntil([&] {
-                            return std::ranges::all_of(std::array{2, 4}, [&](const int index) {
-                                const auto key =
-                                    fixture.controller.cacheKeyForTime(time(index, 25));
-                                return key.has_value() && fixture.frameCache->contains(*key);
-                            });
-                        }),
-                        "revision change restarts and fills the new revision");
+    expectations.expect(
+        awaitQtCondition("revision change restarts and fills the new revision",
+                         [&] {
+                             return std::ranges::all_of(std::array{2, 4}, [&](const int index) {
+                                 const auto key =
+                                     fixture.controller.cacheKeyForTime(time(index, 25));
+                                 return key.has_value() && fixture.frameCache->contains(*key);
+                             });
+                         }),
+        "revision change restarts and fills the new revision");
     background.beginShutdown();
     finishFixture(fixture, expectations);
 }
 
 void testYieldsAndKeepsCancelledHandleUntilTerminal(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Speculation cancellation", time(7, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "opening ready");
+    expectations.expect(
+        awaitQtCondition("opening ready", [&] { return isReady(fixture.controller); }),
+        "opening ready");
     WorkerGate gate;
     // Every later speculative frame waits here until the end of the test, so what the cache holds
     // at each check depends only on the cancelled first frame, never on how far the idle timer
@@ -414,7 +428,9 @@ void testYieldsAndKeepsCancelledHandleUntilTerminal(Expectations& expectations) 
                                                fixture.scheduler, fixture.bridge, prepare);
     background.setIdleFill(true); // Qualifies the idle-fill mechanics.
     background.fillNextFrame();
-    expectations.expect(waitUntil([&] { return gate.entered(); }), "background frame in flight");
+    expectations.expect(
+        awaitQtCondition("background frame in flight", [&] { return gate.entered(); }),
+        "background frame in flight");
     const auto snapshots = fixture.scheduler.snapshots();
     expectations.expect(
         std::ranges::any_of(snapshots,
@@ -439,8 +455,11 @@ void testYieldsAndKeepsCancelledHandleUntilTerminal(Expectations& expectations) 
                               }) == 1,
         "restart retains the cancelled one-in-flight gate");
     gate.release();
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }) && cancelled,
-                        "interactive request cancels speculation and reaches ready first");
+    expectations.expect(
+        awaitQtCondition("interactive request cancels speculation and reaches ready first",
+                         [&] { return isReady(fixture.controller); }) &&
+            cancelled,
+        "interactive request cancels speculation and reaches ready first");
     const auto key = fixture.controller.cacheKeyForTime(time(1, 25));
     expectations.expect(key.has_value() && !fixture.frameCache->contains(*key),
                         "cancelled speculative result never enters cache");
@@ -455,7 +474,9 @@ void testYieldsAndKeepsCancelledHandleUntilTerminal(Expectations& expectations) 
 
 void testPointerPressCancelsBeforePreviewChanges(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Pointer yields speculation", time(4, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "opening ready");
+    expectations.expect(
+        awaitQtCondition("opening ready", [&] { return isReady(fixture.controller); }),
+        "opening ready");
     WorkerGate gate;
     std::atomic<bool> cancelled = false;
     auto prepare = [&](const document::Snapshot& snapshot,
@@ -473,14 +494,17 @@ void testPointerPressCancelsBeforePreviewChanges(Expectations& expectations) {
                                                fixture.scheduler, fixture.bridge, prepare);
     background.setIdleFill(true); // Qualifies the idle-fill mechanics.
     background.fillNextFrame();
-    expectations.expect(waitUntil([&] { return gate.entered(); }), "speculation in flight");
+    expectations.expect(awaitQtCondition("speculation in flight", [&] { return gate.entered(); }),
+                        "speculation in flight");
     QWidget panel;
     QMouseEvent press(QEvent::MouseButtonPress, QPointF(1, 1), QPointF(1, 1), Qt::LeftButton,
                       Qt::LeftButton, Qt::NoModifier);
     QCoreApplication::sendEvent(&panel, &press);
     gate.release();
-    expectations.expect(waitUntil([&] { return cancelled.load(); }),
-                        "any panel pointer press cancels speculation before session changes");
+    expectations.expect(
+        awaitQtCondition("any panel pointer press cancels speculation before session changes",
+                         [&] { return cancelled.load(); }),
+        "any panel pointer press cancels speculation before session changes");
     background.beginShutdown();
     finishFixture(fixture, expectations);
 }
@@ -489,7 +513,9 @@ void testPointerPressCancelsBeforePreviewChanges(Expectations& expectations) {
 
 void testVisibleAdmissionAndSupersession(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Visible playback admission", time(8, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "initial ready");
+    expectations.expect(
+        awaitQtCondition("initial ready", [&] { return isReady(fixture.controller); }),
+        "initial ready");
     // A generous deterministic deadline admits the measured small fixture, without relying on
     // the machine completing it inside a 16ms wall-clock race.
     auto now = std::chrono::steady_clock::now();
@@ -497,8 +523,9 @@ void testVisibleAdmissionAndSupersession(Expectations& expectations) {
     playback.play();
     now += 40ms;
     playback.tick();
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "admitted miss is displayed");
+    expectations.expect(
+        awaitQtCondition("admitted miss is displayed", [&] { return isReady(fixture.controller); }),
+        "admitted miss is displayed");
     const auto taskId = fixture.controller.state().taskId;
     const auto task = taskId.has_value() ? fixture.scheduler.snapshot(*taskId) : std::nullopt;
     expectations.expect(task.has_value() && task->priority == runtime::TaskPriority::Visible,
@@ -507,8 +534,9 @@ void testVisibleAdmissionAndSupersession(Expectations& expectations) {
     fixture.gateAtCall = beforeHeld;
     now += 40ms;
     playback.tick();
-    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }),
-                        "next evaluation held in flight");
+    expectations.expect(
+        awaitQtCondition("next evaluation held in flight", [&] { return fixture.gate.entered(); }),
+        "next evaluation held in flight");
     now += 40ms;
     playback.tick();
     expectations.expect(fixture.controller.droppedFrameCount() == 1 &&
@@ -523,12 +551,15 @@ void testVisibleAdmissionAndSupersession(Expectations& expectations) {
                 staleTwo = fixture.controller.state().freshness == ui::FrameFreshness::Stale;
         });
     fixture.gate.release();
-    expectations.expect(waitUntil([&] {
-                            return fixture.scheduler.isQuiescent() && isReady(fixture.controller) &&
-                                   fixture.controller.state().frame->desiredIdentity().time ==
-                                       time(3, 25);
-                        }),
-                        "terminal notification displays newest pending frame without another tick");
+    expectations.expect(
+        awaitQtCondition("terminal notification displays newest pending frame without another tick",
+                         [&] {
+                             return fixture.scheduler.isQuiescent() &&
+                                    isReady(fixture.controller) &&
+                                    fixture.controller.state().frame->desiredIdentity().time ==
+                                        time(3, 25);
+                         }),
+        "terminal notification displays newest pending frame without another tick");
     const auto staleKey = fixture.controller.cacheKeyForTime(time(2, 25));
     expectations.expect(
         staleTwo && staleKey && fixture.frameCache->contains(*staleKey) &&
@@ -541,9 +572,13 @@ void testVisibleAdmissionAndSupersession(Expectations& expectations) {
 
 void testBackgroundFillsAheadWhilePlaying(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Ahead while playing", time(6, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "initial ready");
+    expectations.expect(
+        awaitQtCondition("initial ready", [&] { return isReady(fixture.controller); }),
+        "initial ready");
     (void)fixture.session.setCurrentTime(time(3, 25));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "anchor ready");
+    expectations.expect(
+        awaitQtCondition("anchor ready", [&] { return isReady(fixture.controller); }),
+        "anchor ready");
     fixture.frameCache->clear();
     std::mutex mutex;
     std::vector<core::RationalTime> order;
@@ -561,7 +596,8 @@ void testBackgroundFillsAheadWhilePlaying(Expectations& expectations) {
                                                fixture.scheduler, fixture.bridge, prepare);
     fixture.controller.setPlaybackActive(true);
     background.fillNextFrame();
-    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 6; }),
+    expectations.expect(awaitQtCondition("background runs during playback",
+                                         [&] { return fixture.frameCache->size() == 6; }),
                         "background runs during playback");
     {
         std::lock_guard lock(mutex);
@@ -578,7 +614,9 @@ void testBackgroundFillsAheadWhilePlaying(Expectations& expectations) {
 // the playhead are in flight at once, none is submitted twice, and every one lands exactly once.
 void testReadAheadKeepsCapacitySizedFramesInFlight(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Read ahead width", time(8, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "initial ready");
+    expectations.expect(
+        awaitQtCondition("initial ready", [&] { return isReady(fixture.controller); }),
+        "initial ready");
     fixture.frameCache->clear();
     std::mutex mutex;
     std::condition_variable released;
@@ -605,8 +643,10 @@ void testReadAheadKeepsCapacitySizedFramesInFlight(Expectations& expectations) {
     });
     fixture.controller.setPlaybackActive(true);
     background.fillNextFrame();
-    expectations.expect(waitUntil([&] { return background.inFlightCount() == 3; }),
-                        "three read-ahead frames are in flight while the first prepares");
+    expectations.expect(
+        awaitQtCondition("three read-ahead frames are in flight while the first prepares",
+                         [&] { return background.inFlightCount() == 3; }),
+        "three read-ahead frames are in flight while the first prepares");
     background.fillNextFrame();
     expectations.expect(background.inFlightCount() == 3,
                         "a full read-ahead set does not grow while its frames are in flight");
@@ -615,7 +655,8 @@ void testReadAheadKeepsCapacitySizedFramesInFlight(Expectations& expectations) {
         open = true;
     }
     released.notify_all();
-    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 8; }),
+    expectations.expect(awaitQtCondition("every read-ahead frame lands in the cache",
+                                         [&] { return fixture.frameCache->size() == 8; }),
                         "every read-ahead frame lands in the cache");
     {
         std::lock_guard lock(mutex);
@@ -631,7 +672,9 @@ void testReadAheadKeepsCapacitySizedFramesInFlight(Expectations& expectations) {
 // so the frames nearest the playhead are not slowed by a wide concurrent window.
 void testReadAheadStaysWithinItsMaximum(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Read ahead maximum", time(12, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "initial ready");
+    expectations.expect(
+        awaitQtCondition("initial ready", [&] { return isReady(fixture.controller); }),
+        "initial ready");
     fixture.frameCache->clear();
     std::mutex mutex;
     std::condition_variable released;
@@ -653,7 +696,8 @@ void testReadAheadStaysWithinItsMaximum(Expectations& expectations) {
     fixture.controller.setPlaybackActive(true);
     background.fillNextFrame();
     constexpr auto maximum = ui::BackgroundPreviewController::kMaximumReadAheadFrames;
-    expectations.expect(waitUntil([&] { return background.inFlightCount() == maximum; }),
+    expectations.expect(awaitQtCondition("read-ahead fills its maximum window",
+                                         [&] { return background.inFlightCount() == maximum; }),
                         "read-ahead fills its maximum window");
     background.fillNextFrame();
     expectations.expect(background.inFlightCount() == maximum,
@@ -663,7 +707,8 @@ void testReadAheadStaysWithinItsMaximum(Expectations& expectations) {
         open = true;
     }
     released.notify_all();
-    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 12; }),
+    expectations.expect(awaitQtCondition("every frame still lands in the cache",
+                                         [&] { return fixture.frameCache->size() == 12; }),
                         "every frame still lands in the cache");
     background.beginShutdown();
     fixture.controller.setPlaybackActive(false);
@@ -675,7 +720,8 @@ void testReadAheadStaysWithinItsMaximum(Expectations& expectations) {
 // disagree. (Deliberate foreground priority still yields through the existing event filter.)
 void testLayoutEditKeepsBackgroundOnRetainedRevision(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Background Layout Retain", time(7, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the foreground preview settles before background fills",
+                                         [&] { return isReady(fixture.controller); }),
                         "the foreground preview settles before background fills");
     fixture.frameCache->clear();
     const auto evalRevision = fixture.session.evaluationSnapshot().revision();
@@ -687,7 +733,8 @@ void testLayoutEditKeepsBackgroundOnRetainedRevision(Expectations& expectations)
     background.setIdleFill(true); // Qualifies the idle-fill mechanics.
     background.fillNextFrame();
     // The idle timer may land a second frame before the wait observes the first.
-    expectations.expect(waitUntil([&] { return fixture.frameCache->size() >= 1; }),
+    expectations.expect(awaitQtCondition("the background pass fills its first frame",
+                                         [&] { return fixture.frameCache->size() >= 1; }),
                         "the background pass fills its first frame");
 
     commands::Transaction move("Move Nodes", fixture.session.snapshot().revision());
@@ -700,7 +747,8 @@ void testLayoutEditKeepsBackgroundOnRetainedRevision(Expectations& expectations)
                         "the layout edit retains the evaluation revision");
 
     background.fillNextFrame();
-    expectations.expect(waitUntil([&] { return fixture.frameCache->size() >= 2; }),
+    expectations.expect(awaitQtCondition("the background pass keeps filling after the layout edit",
+                                         [&] { return fixture.frameCache->size() >= 2; }),
                         "the background pass keeps filling after the layout edit");
     for (std::int64_t frame = 0; frame < 7; ++frame) {
         const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
@@ -718,7 +766,8 @@ void testLayoutEditKeepsBackgroundOnRetainedRevision(Expectations& expectations)
 // in-range frames are skipped), and a fully cached shrink submits nothing.
 void testBackgroundFillFollowsWorkArea(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Background Work Area", time(7, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the foreground preview settles",
+                                         [&] { return isReady(fixture.controller); }),
                         "the foreground preview settles");
     const auto setRange = [&](const core::RationalTime start, const core::RationalTime end) {
         commands::Transaction range("Set Work Area", fixture.session.snapshot().revision());
@@ -732,14 +781,16 @@ void testBackgroundFillFollowsWorkArea(Expectations& expectations) {
                                                fixture.countingPipeline());
     background.setIdleFill(true); // Qualifies the idle-fill mechanics.
     background.fillNextFrame();
-    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 3; }),
+    expectations.expect(awaitQtCondition("the initial range fills",
+                                         [&] { return fixture.frameCache->size() == 3; }),
                         "the initial range fills");
     const auto afterInitial = fixture.preparationCount.load();
 
     // Expand to [0,5): only frames 3 and 4 are missing.
     expectations.expect(setRange(time(0, 25), time(5, 25)).changed(), "the range expands");
     background.fillNextFrame();
-    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 5; }),
+    expectations.expect(awaitQtCondition("the expanded range fills",
+                                         [&] { return fixture.frameCache->size() == 5; }),
                         "the expanded range fills");
     expectations.expect(fixture.preparationCount.load() == afterInitial + 2,
                         "expansion evaluates only the two entering frames");
@@ -771,7 +822,8 @@ void testBackgroundFillFiniteClipRange(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Background Finite Range", time(7, 25)));
     expectations.expect(fixture.session.addSolidLayer("Fill", core::Color4d{0.2, 0.4, 0.8, 1.0}),
                         "the finite-range background fixture has content");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the foreground frame is ready",
+                                         [&] { return isReady(fixture.controller); }),
                         "the foreground frame is ready");
     const auto layerId = fixture.session.composition()->graph().layerOutputs().front().layerId;
     fixture.frameCache->clear();
@@ -782,7 +834,8 @@ void testBackgroundFillFiniteClipRange(Expectations& expectations) {
     const auto fillTo = [&](const std::size_t expected) {
         for (int attempt = 0; attempt < 400 && fixture.frameCache->size() < expected; ++attempt) {
             background.fillNextFrame();
-            if (!waitUntil([&] { return fixture.frameCache->size() >= expected; }))
+            if (!awaitQtCondition("the whole seven-frame range fills",
+                                  [&] { return fixture.frameCache->size() >= expected; }))
                 break;
         }
         return fixture.frameCache->size() >= expected;
@@ -811,7 +864,9 @@ void testBackgroundFillFiniteClipRange(Expectations& expectations) {
 // and an edit never render; Play renders just ahead of the playhead and stops when playback stops.
 void testIdleCausesNoFillAndPlayDrivesReadAhead(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("No idle fill", time(6, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "initial ready");
+    expectations.expect(
+        awaitQtCondition("initial ready", [&] { return isReady(fixture.controller); }),
+        "initial ready");
     fixture.frameCache->clear();
     ui::BackgroundPreviewController background(fixture.session, fixture.controller,
                                                fixture.scheduler, fixture.bridge,
@@ -827,10 +882,12 @@ void testIdleCausesNoFillAndPlayDrivesReadAhead(Expectations& expectations) {
     expectations.expect(background.inFlightCount() == 0, "idle submits nothing");
 
     fixture.controller.setPlaybackActive(true);
-    expectations.expect(waitUntil([&] { return fixture.frameCache->size() >= 1; }),
+    expectations.expect(awaitQtCondition("Play renders and caches frames ahead of the playhead",
+                                         [&] { return fixture.frameCache->size() >= 1; }),
                         "Play renders and caches frames ahead of the playhead");
     fixture.controller.setPlaybackActive(false);
-    expectations.expect(waitUntil([&] { return background.inFlightCount() == 0; }),
+    expectations.expect(awaitQtCondition("stopping playback ends the read-ahead",
+                                         [&] { return background.inFlightCount() == 0; }),
                         "stopping playback ends the read-ahead");
     const auto stopped = fixture.preparationCount.load();
     const auto stoppedEnd = std::chrono::steady_clock::now() + 300ms;
@@ -848,7 +905,9 @@ void testIdleCausesNoFillAndPlayDrivesReadAhead(Expectations& expectations) {
 // and no frame is prepared twice.
 void testPlaybackTicksKeepReadAhead(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Read-ahead survives ticks", time(6, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "initial ready");
+    expectations.expect(
+        awaitQtCondition("initial ready", [&] { return isReady(fixture.controller); }),
+        "initial ready");
     fixture.frameCache->clear();
     std::mutex mutex;
     std::vector<core::RationalTime> order;
@@ -870,16 +929,20 @@ void testPlaybackTicksKeepReadAhead(Expectations& expectations) {
     ui::BackgroundPreviewController background(fixture.session, fixture.controller,
                                                fixture.scheduler, fixture.bridge, prepare);
     fixture.controller.setPlaybackActive(true);
-    expectations.expect(waitUntil([&] { return gate.entered(); }),
-                        "the first read-ahead frame is in flight");
+    expectations.expect(
+        awaitQtCondition("the first read-ahead frame is in flight", [&] { return gate.entered(); }),
+        "the first read-ahead frame is in flight");
     for (int tick = 0; tick < 3; ++tick) {
         emit fixture.controller.foregroundWorkRequested(); // A playback tick's cache miss.
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     }
     gate.release();
-    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 6; }),
-                        "the read-ahead fills the range while playback ticks ask for foreground "
-                        "work");
+    expectations.expect(
+        awaitQtCondition("the read-ahead fills the range while playback ticks ask for foreground "
+                         "work",
+                         [&] { return fixture.frameCache->size() == 6; }),
+        "the read-ahead fills the range while playback ticks ask for foreground "
+        "work");
     {
         std::lock_guard lock(mutex);
         const auto first = order.front();
@@ -898,7 +961,9 @@ void testPlaybackTicksKeepReadAhead(Expectations& expectations) {
 // to decode again.
 void testBudgetChangeKeepsReadAhead(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Read-ahead survives budget changes", time(6, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "initial ready");
+    expectations.expect(
+        awaitQtCondition("initial ready", [&] { return isReady(fixture.controller); }),
+        "initial ready");
     fixture.frameCache->clear();
     std::mutex mutex;
     std::vector<core::RationalTime> order;
@@ -920,15 +985,17 @@ void testBudgetChangeKeepsReadAhead(Expectations& expectations) {
     ui::BackgroundPreviewController background(fixture.session, fixture.controller,
                                                fixture.scheduler, fixture.bridge, prepare);
     fixture.controller.setPlaybackActive(true);
-    expectations.expect(waitUntil([&] { return gate.entered(); }),
-                        "the first read-ahead frame is in flight");
+    expectations.expect(
+        awaitQtCondition("the first read-ahead frame is in flight", [&] { return gate.entered(); }),
+        "the first read-ahead frame is in flight");
     const auto budget = fixture.frameCache->byteBudget();
     for (const auto bytes : {budget / 2, budget}) {
         fixture.frameCache->setByteBudget(bytes);
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     }
     gate.release();
-    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 6; }),
+    expectations.expect(awaitQtCondition("the read-ahead fills the range across budget changes",
+                                         [&] { return fixture.frameCache->size() == 6; }),
                         "the read-ahead fills the range across budget changes");
     {
         std::lock_guard lock(mutex);
@@ -969,5 +1036,5 @@ int main(int argc, char** argv) {
         std::cerr << error.what() << '\n';
         return 1;
     }
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

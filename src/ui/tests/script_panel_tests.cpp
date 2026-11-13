@@ -1,3 +1,4 @@
+#include "await_qt.hpp"
 #include "script_panel.hpp"
 #include "window_fixture.hpp"
 
@@ -22,12 +23,8 @@ void require(bool condition, const char* message) {
     if (!condition)
         throw std::runtime_error(message);
 }
-template <typename Predicate> void waitFor(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < 30000)
-        QTest::qWait(5);
-    require(predicate(), "Script integration timed out");
+template <typename Predicate> void waitFor(const std::string_view name, Predicate predicate) {
+    require(bloom::test_support::awaitQtCondition(name, predicate), "Script integration timed out");
 }
 core::RationalTime halfSecond() {
     const auto time = core::RationalTime::create(1, 2);
@@ -77,14 +74,14 @@ void exercise() {
         input->setText("exec(" + quote(source) + ")");
         fixture.window->activateWindow();
         input->setFocus();
-        QTest::qWait(20);
+        waitFor("script input has keyboard focus", [&] { return input->hasFocus(); });
         QTest::keyClick(input, Qt::Key_Return, Qt::ControlModifier);
         require(input->text().isEmpty(), "Ctrl+Enter submits the input");
     };
     const auto run = [&](const QString& source, bool success = true) {
         const auto before = finished.size();
         start(source);
-        waitFor([&] { return finished.size() > before; });
+        waitFor("script execution finishes", [&] { return finished.size() > before; });
         if (finished.last().front().toBool() != success) {
             std::cerr << output->text().toStdString() << '\n';
             throw std::runtime_error("Unexpected Python result");
@@ -145,7 +142,7 @@ void exercise() {
     const auto project = directory.filePath("scene.bloom");
     QSignalSpy saved(&fixture.projectHost, &ui::ProjectHost::saveFinished);
     fixture.projectHost.beginSaveAs(project.toStdString());
-    waitFor([&] { return !saved.empty(); });
+    waitFor("project save finishes", [&] { return !saved.empty(); });
     require(QFile::exists(project), "UI saved the shared project");
     const auto pythonPath = directory.filePath("python.png");
     run("result = bloom.render.frame(12, out=" + quote(pythonPath) +
@@ -154,7 +151,7 @@ void exercise() {
     cli.start(QStringLiteral(BLOOM_SCRIPT_CLI),
               {"render", "--project", project, "--frame", "12", "--preset", "PngRgba8SrgbV1",
                "--out", directory.filePath("cli")});
-    waitFor([&] { return cli.state() == QProcess::NotRunning; });
+    waitFor("CLI render process exits", [&] { return cli.state() == QProcess::NotRunning; });
     require(cli.exitStatus() == QProcess::NormalExit && cli.exitCode() == 0,
             "CLI rendered frame 12");
     require(fixture.session.setCurrentTime(halfSecond()), "UI selects frame 12");
@@ -178,14 +175,14 @@ void exercise() {
         if (button->text() == "Cancel")
             cancel = button;
     require(cancel != nullptr, "Cancel kit button exists");
-    waitFor([&] { return cancel->isEnabled(); });
+    waitFor("background task becomes cancellable", [&] { return cancel->isEnabled(); });
     cancel->click();
-    QTest::qWait(100);
+    waitFor("background task cancellation settles", [&] { return !cancel->isEnabled(); });
     run("assert job.cancellation_requested\nassert job.done\nprint('Task cancelled')");
     const auto beforeCancel = finished.size();
     start("while True: pass");
     QTimer::singleShot(100, cancel, &ui::kit::KButton::click);
-    waitFor([&] { return finished.size() > beforeCancel; });
+    waitFor("foreground loop cancelled", [&] { return finished.size() > beforeCancel; });
     require(!finished.last().front().toBool() && output->text().contains("CancelledError"),
             "Foreground loop cancels");
     run("print('Console recovered after cancellation')");
@@ -222,7 +219,8 @@ void exercise() {
     const auto beforeReplace = finished.size();
     start("time.sleep(0.2)\nbloom.ops.project.set_name(name='Must not reach new project')");
     QTimer::singleShot(50, &fixture.projectHost, &ui::ProjectHost::newProject);
-    waitFor([&] { return finished.size() > beforeReplace; });
+    waitFor("old script work finishes after project replacement",
+            [&] { return finished.size() > beforeReplace; });
     QObject::disconnect(replacementWindow);
     require(!finished.last().front().toBool(), "Project replacement cancels old work");
     run("assert bloom.context.project.name == 'Untitled'\ntry:\n    old.resolve()\nexcept "
@@ -247,5 +245,5 @@ int main(int argc, char** argv) {
         std::cerr << error.what() << '\n';
         return 1;
     }
-    return 0;
+    return bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

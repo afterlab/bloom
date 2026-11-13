@@ -8,6 +8,8 @@
 // Mirrors composition_preview_controller_tests.cpp's PipelineFixture/Expectations/waitUntil idiom
 // and timeline_ruler_tests.cpp's synthesized-mouse-event idiom.
 
+#include "await_qt.hpp"
+
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -38,14 +40,13 @@
 #include <QToolButton>
 
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QKeyEvent>
-#include <QWheelEvent>
 #include <QMouseEvent>
 #include <QPointF>
 #include <QResizeEvent>
 #include <QSize>
+#include <QWheelEvent>
 
 #include <chrono>
 #include <cmath>
@@ -83,19 +84,7 @@ class Expectations final {
     int failures_ = 0;
 };
 
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 4'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate)) {
-            return true;
-        }
-        std::this_thread::yield();
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return std::invoke(predicate);
-}
+using bloom::test_support::awaitQtCondition;
 
 bloom::runtime::TaskSchedulerConfig testSchedulerConfig() {
     return {.cpuWorkerCount = 1,
@@ -185,8 +174,10 @@ void reachQuiescence(bloom::ui::CompositionPreviewController& controller,
                      [&quiescentSignal] { quiescentSignal = true; });
     controller.beginShutdown();
     bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return quiescentSignal && scheduler.isQuiescent(); }),
-                        "direct manipulation fixture reaches asynchronous scheduler quiescence");
+    expectations.expect(
+        awaitQtCondition("direct manipulation fixture reaches asynchronous scheduler quiescence",
+                         [&] { return quiescentSignal && scheduler.isQuiescent(); }),
+        "direct manipulation fixture reaches asynchronous scheduler quiescence");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -270,7 +261,8 @@ void testControllerAttachesOverrideOnlyToArmedInteractiveRequests(Expectations& 
         return std::nullopt;
     };
 
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(awaitQtCondition("the initial Visible frame becomes ready",
+                                         [&] { return isReady(controller); }),
                         "the initial Visible frame becomes ready");
     {
         const auto initial = invocationForGeneration(currentGeneration(controller));
@@ -285,7 +277,8 @@ void testControllerAttachesOverrideOnlyToArmedInteractiveRequests(Expectations& 
                         "the interaction begins for the selected layer");
     {
         const auto generation = currentGeneration(controller);
-        expectations.expect(waitUntil([&] { return isReady(controller); }),
+        expectations.expect(awaitQtCondition("the armed begin's Interactive request reaches Ready",
+                                             [&] { return isReady(controller); }),
                             "the armed begin's Interactive request reaches Ready");
         const auto invocation = invocationForGeneration(generation);
         expectations.expect(
@@ -298,7 +291,8 @@ void testControllerAttachesOverrideOnlyToArmedInteractiveRequests(Expectations& 
     session.updateTransformInteraction({40.0, 20.0});
     {
         const auto generation = currentGeneration(controller);
-        expectations.expect(waitUntil([&] { return isReady(controller); }),
+        expectations.expect(awaitQtCondition("the updated Interactive request reaches Ready",
+                                             [&] { return isReady(controller); }),
                             "the updated Interactive request reaches Ready");
         const auto invocation = invocationForGeneration(generation);
         const document::Vec2d expected{10.0 + 40.0 / 200.0 * 1000.0, 20.0 + 20.0 / 100.0 * 500.0};
@@ -312,7 +306,8 @@ void testControllerAttachesOverrideOnlyToArmedInteractiveRequests(Expectations& 
     controller.requestRefresh();
     {
         const auto generation = currentGeneration(controller);
-        expectations.expect(waitUntil([&] { return isReady(controller); }),
+        expectations.expect(awaitQtCondition("the Visible refresh reaches Ready",
+                                             [&] { return isReady(controller); }),
                             "the Visible refresh reaches Ready");
         const auto invocation = invocationForGeneration(generation);
         expectations.expect(invocation.has_value() && !invocation->hasOverride,
@@ -325,7 +320,8 @@ void testControllerAttachesOverrideOnlyToArmedInteractiveRequests(Expectations& 
     // override.
     expectations.expect(session.commitTransformInteraction(), "commit succeeds");
     controller.notifyScrubEnded();
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(awaitQtCondition("the post-commit request reaches Ready",
+                                         [&] { return isReady(controller); }),
                         "the post-commit request reaches Ready");
     expectations.expect(session.transformInteractionOverrides().empty(),
                         "the override is gone after commit");
@@ -388,8 +384,10 @@ void testCommitNeverPresentsAPreEditFrame(Expectations& expectations) {
         return false;
     };
 
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
-                        "the pre-edit frame is ready, and so is in the RAM preview cache");
+    expectations.expect(
+        awaitQtCondition("the pre-edit frame is ready, and so is in the RAM preview cache",
+                         [&] { return isReady(controller); }),
+        "the pre-edit frame is ready, and so is in the RAM preview cache");
     const auto preEditRevision = session.snapshot().revision();
 
     session.selectLayer(ids.layer);
@@ -398,8 +396,10 @@ void testCommitNeverPresentsAPreEditFrame(Expectations& expectations) {
     expectations.expect(!session.beginTransformInteraction({}, mapping).has_value(),
                         "the gesture begins on the selected layer");
     session.updateTransformInteraction({40.0, 20.0});
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
-                        "the dragged override frame is on screen before the commit");
+    expectations.expect(
+        awaitQtCondition("the dragged override frame is on screen before the commit",
+                         [&] { return isReady(controller); }),
+        "the dragged override frame is on screen before the commit");
 
     // Every frame the viewer is handed from here on, in order.
     std::vector<std::pair<document::Revision, std::uint64_t>> presented;
@@ -417,12 +417,14 @@ void testCommitNeverPresentsAPreEditFrame(Expectations& expectations) {
     const auto committedRevision = session.snapshot().revision();
     expectations.expect(committedRevision != preEditRevision,
                         "the commit published a new document revision");
-    expectations.expect(waitUntil([&] {
-                            return isReady(controller) && controller.state().frame != nullptr &&
-                                   controller.state().frame->desiredIdentity().sourceRevision ==
-                                       committedRevision;
-                        }),
-                        "a frame for the committed revision reaches the viewer");
+    expectations.expect(
+        awaitQtCondition("a frame for the committed revision reaches the viewer",
+                         [&] {
+                             return isReady(controller) && controller.state().frame != nullptr &&
+                                    controller.state().frame->desiredIdentity().sourceRevision ==
+                                        committedRevision;
+                         }),
+        "a frame for the committed revision reaches the viewer");
 
     bool bounced = false;
     for (const auto& [revision, generation] : presented) {
@@ -478,7 +480,8 @@ void testAdmissionRejectedOverrideSurfacesErrorWithoutKillingInteraction(
                             context);
         });
 
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(awaitQtCondition("the initial (override-free) frame becomes ready",
+                                         [&] { return isReady(controller); }),
                         "the initial (override-free) frame becomes ready");
 
     session.selectLayer(ids.layer);
@@ -489,7 +492,9 @@ void testAdmissionRejectedOverrideSurfacesErrorWithoutKillingInteraction(
     session.updateTransformInteraction({10.0, 10.0});
 
     expectations.expect(
-        waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Failed; }),
+        awaitQtCondition(
+            "the rejected override surfaces as a Failed preview, never a crash",
+            [&] { return controller.state().activity == ui::PreviewActivity::Failed; }),
         "the rejected override surfaces as a Failed preview, never a crash");
     expectations.expect(session.transformInteractionActive(),
                         "an admission-rejected override never kills the live interaction -- the "
@@ -497,7 +502,8 @@ void testAdmissionRejectedOverrideSurfacesErrorWithoutKillingInteraction(
 
     session.cancelTransformInteraction();
     controller.notifyScrubEnded();
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(awaitQtCondition("clearing the override recovers a Ready preview",
+                                         [&] { return isReady(controller); }),
                         "clearing the override recovers a Ready preview");
 
     reachQuiescence(controller, bridge, scheduler, expectations);
@@ -587,7 +593,8 @@ struct GestureFixture final {
 void testDragMovesSelectedSolidLayerCommitsAndUndoes(Expectations& expectations) {
     using namespace bloom;
     GestureFixture fixture(makeTestProject("Viewer Drag Test"));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the initial frame becomes ready before dragging",
+                                         [&] { return isReady(fixture.controller); }),
                         "the initial frame becomes ready before dragging");
     // addSolidLayer() places the new layer at the composition center (1000x500 -> (500, 250)) and
     // selects it, exactly like a real "Add Solid Layer" action would.
@@ -596,7 +603,8 @@ void testDragMovesSelectedSolidLayerCommitsAndUndoes(Expectations& expectations)
         "the fixture layer is added and selected");
     // addSolidLayer() advances the document revision, which makes the frame currentMapping() would
     // use stale until a fresh Ready frame for the new revision arrives.
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the frame becomes ready again for the post-add revision",
+                                         [&] { return isReady(fixture.controller); }),
                         "the frame becomes ready again for the post-add revision");
     const auto* layerId = std::get_if<document::LayerId>(&fixture.session.selection().primary);
     expectations.expect(layerId != nullptr, "addSolidLayer() leaves the new layer selected");
@@ -648,8 +656,10 @@ void testDragMovesSelectedSolidLayerCommitsAndUndoes(Expectations& expectations)
 
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
-                        "the drag fixture reaches asynchronous scheduler quiescence");
+    expectations.expect(
+        awaitQtCondition("the drag fixture reaches asynchronous scheduler quiescence",
+                         [&] { return fixture.scheduler.isQuiescent(); }),
+        "the drag fixture reaches asynchronous scheduler quiescence");
 }
 
 // Selects the dropdown item whose visible text is `label` (never hardcodes an index -- the fixed
@@ -673,12 +683,14 @@ void selectZoomPreset(bloom::ui::kit::KDropdown& dropdown, const QString& label)
 void testDragAtNonIdentityZoomLandsExactlyUnderCursor(Expectations& expectations) {
     using namespace bloom;
     GestureFixture fixture(makeTestProject("Viewer Drag Zoomed Test"));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the initial frame becomes ready before dragging",
+                                         [&] { return isReady(fixture.controller); }),
                         "the initial frame becomes ready before dragging");
     expectations.expect(
         fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
         "the fixture layer is added and selected");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the frame becomes ready again for the post-add revision",
+                                         [&] { return isReady(fixture.controller); }),
                         "the frame becomes ready again for the post-add revision");
     const auto* position = fixture.session.parameterForSelection(document::kPositionParameterRole);
     expectations.expect(position != nullptr, "the new solid layer exposes a position parameter");
@@ -746,8 +758,10 @@ void testDragAtNonIdentityZoomLandsExactlyUnderCursor(Expectations& expectations
 
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
-                        "the zoomed-drag fixture reaches asynchronous scheduler quiescence");
+    expectations.expect(
+        awaitQtCondition("the zoomed-drag fixture reaches asynchronous scheduler quiescence",
+                         [&] { return fixture.scheduler.isQuiescent(); }),
+        "the zoomed-drag fixture reaches asynchronous scheduler quiescence");
 }
 
 // THE SEAM, combined with a non-zero pan (task U3, issue #119, decision 2): a direct-manipulation
@@ -759,12 +773,14 @@ void testDragAtNonIdentityZoomLandsExactlyUnderCursor(Expectations& expectations
 void testDragAtNonIdentityZoomAndPanLandsExactlyUnderCursor(Expectations& expectations) {
     using namespace bloom;
     GestureFixture fixture(makeTestProject("Viewer Drag Zoomed Panned Test"));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the initial frame becomes ready before dragging",
+                                         [&] { return isReady(fixture.controller); }),
                         "the initial frame becomes ready before dragging");
     expectations.expect(
         fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
         "the fixture layer is added and selected");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the frame becomes ready again for the post-add revision",
+                                         [&] { return isReady(fixture.controller); }),
                         "the frame becomes ready again for the post-add revision");
     const auto* position = fixture.session.parameterForSelection(document::kPositionParameterRole);
     expectations.expect(position != nullptr, "the new solid layer exposes a position parameter");
@@ -829,9 +845,12 @@ void testDragAtNonIdentityZoomAndPanLandsExactlyUnderCursor(Expectations& expect
 
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
-                        "the zoomed-and-panned-drag fixture reaches asynchronous scheduler "
-                        "quiescence");
+    expectations.expect(
+        awaitQtCondition("the zoomed-and-panned-drag fixture reaches asynchronous scheduler "
+                         "quiescence",
+                         [&] { return fixture.scheduler.isQuiescent(); }),
+        "the zoomed-and-panned-drag fixture reaches asynchronous scheduler "
+        "quiescence");
 }
 
 void testPickingAtZoomAndPan(Expectations& expectations) {
@@ -841,8 +860,9 @@ void testPickingAtZoomAndPan(Expectations& expectations) {
                         "add bottom layer");
     expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Top"), {0, 1, 0, 1}),
                         "add top layer");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "picking frame ready");
+    expectations.expect(
+        awaitQtCondition("picking frame ready", [&] { return isReady(fixture.controller); }),
+        "picking frame ready");
     QKeyEvent actualSize(QEvent::KeyPress, Qt::Key_1, Qt::ControlModifier);
     QCoreApplication::sendEvent(&fixture.viewer, &actualSize);
     sendMouse(fixture.viewer, QEvent::MouseButtonPress, {100, 100}, Qt::MiddleButton,
@@ -913,11 +933,15 @@ bool near(const double a, const double b, const double tolerance = 1e-6) {
 void testShiftConstrainsMoveToAxes(Expectations& expectations) {
     using namespace bloom;
     GestureFixture fixture(makeTestProject("Viewer Shift Axis"));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "frame ready");
+    expectations.expect(
+        awaitQtCondition("frame ready", [&] { return isReady(fixture.controller); }),
+        "frame ready");
     expectations.expect(
         fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
         "add layer");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "frame re-ready");
+    expectations.expect(
+        awaitQtCondition("frame re-ready", [&] { return isReady(fixture.controller); }),
+        "frame re-ready");
     const auto* position = fixture.session.parameterForSelection(document::kPositionParameterRole);
     if (position == nullptr) {
         expectations.expect(false, "layer exposes position");
@@ -942,8 +966,9 @@ void testShiftConstrainsMoveToAxes(Expectations& expectations) {
         expectations.expect(fixture.session.constantVec2Value(positionId) == *base,
                             "one undo restores the pre-drag position");
         // A fresh Ready frame for the post-undo revision must own the next press.
-        expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                            "frame ready after undo");
+        expectations.expect(
+            awaitQtCondition("frame ready after undo", [&] { return isReady(fixture.controller); }),
+            "frame ready after undo");
         return delta;
     };
     const auto revision = fixture.session.snapshot().revision().value();
@@ -976,8 +1001,9 @@ void testShiftConstrainsMoveToAxes(Expectations& expectations) {
     expectations.expect(fixture.session.undo(), "mid-drag toggled drag undoes once");
     expectations.expect(fixture.session.constantVec2Value(positionId) == *base,
                         "a single undo entry covers the toggled drag");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "frame ready after undo");
+    expectations.expect(
+        awaitQtCondition("frame ready after undo", [&] { return isReady(fixture.controller); }),
+        "frame ready after undo");
 
     // Pressing Shift mid-drag snaps, with the same result as Shift from the start.
     sendPress(fixture.viewer, press);
@@ -991,14 +1017,17 @@ void testShiftConstrainsMoveToAxes(Expectations& expectations) {
 
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+    expectations.expect(awaitQtCondition("shift-axis fixture reaches quiescence",
+                                         [&] { return fixture.scheduler.isQuiescent(); }),
                         "shift-axis fixture reaches quiescence");
 }
 
 void testShiftConstrainFollowsRotatedParent(Expectations& expectations) {
     using namespace bloom;
     GestureFixture fixture(makeTestProject("Viewer Shift Parent"));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "frame ready");
+    expectations.expect(
+        awaitQtCondition("frame ready", [&] { return isReady(fixture.controller); }),
+        "frame ready");
     expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Parent"), {1, 0, 0, 1}),
                         "add parent");
     const auto parentId = *std::get_if<document::LayerId>(&fixture.session.selection().primary);
@@ -1011,7 +1040,9 @@ void testShiftConstrainFollowsRotatedParent(Expectations& expectations) {
     const auto childId = *std::get_if<document::LayerId>(&fixture.session.selection().primary);
     expectations.expect(fixture.session.setLayerParent(childId, parentId), "parent the child");
     fixture.session.selectLayer(childId);
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "frame re-ready");
+    expectations.expect(
+        awaitQtCondition("frame re-ready", [&] { return isReady(fixture.controller); }),
+        "frame re-ready");
     const auto* position = fixture.session.parameterForSelection(document::kPositionParameterRole);
     if (position == nullptr) {
         expectations.expect(false, "child exposes position");
@@ -1037,7 +1068,8 @@ void testShiftConstrainFollowsRotatedParent(Expectations& expectations) {
 
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+    expectations.expect(awaitQtCondition("shift-parent fixture reaches quiescence",
+                                         [&] { return fixture.scheduler.isQuiescent(); }),
                         "shift-parent fixture reaches quiescence");
 }
 
@@ -1078,7 +1110,8 @@ void testKeyboardNudgeAndDelete(Expectations& expectations) {
 void testDragOnEmptyOrUnselectedDoesNothing(Expectations& expectations) {
     using namespace bloom;
     GestureFixture fixture(makeTestProject("Viewer Drag Unselected Test"));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the initial frame becomes ready",
+                                         [&] { return isReady(fixture.controller); }),
                         "the initial frame becomes ready");
     expectations.expect(
         fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
@@ -1099,8 +1132,10 @@ void testDragOnEmptyOrUnselectedDoesNothing(Expectations& expectations) {
 
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
-                        "the unselected-drag fixture reaches asynchronous scheduler quiescence");
+    expectations.expect(
+        awaitQtCondition("the unselected-drag fixture reaches asynchronous scheduler quiescence",
+                         [&] { return fixture.scheduler.isQuiescent(); }),
+        "the unselected-drag fixture reaches asynchronous scheduler quiescence");
 }
 
 void testSelectionCallbackInvalidatesPress(Expectations& expectations) {
@@ -1109,7 +1144,8 @@ void testSelectionCallbackInvalidatesPress(Expectations& expectations) {
     expectations.expect(
         fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
         "the reentrant-selection fixture has a real pickable solid");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the pickable solid is prepared before the press",
+                                         [&] { return isReady(fixture.controller); }),
                         "the pickable solid is prepared before the press");
     fixture.session.clearSelection();
     const auto revisionBeforePress = fixture.session.snapshot().revision();
@@ -1131,19 +1167,23 @@ void testSelectionCallbackInvalidatesPress(Expectations& expectations) {
                         "the invalidated press and release create no document command");
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
-                        "the reentrant-selection fixture reaches scheduler quiescence");
+    expectations.expect(
+        awaitQtCondition("the reentrant-selection fixture reaches scheduler quiescence",
+                         [&] { return fixture.scheduler.isQuiescent(); }),
+        "the reentrant-selection fixture reaches scheduler quiescence");
 }
 
 void testMidDragResizeCancelsWithNoCommitAndNoOverrideLeft(Expectations& expectations) {
     using namespace bloom;
     GestureFixture fixture(makeTestProject("Viewer Drag Resize Test"));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the initial frame becomes ready before dragging",
+                                         [&] { return isReady(fixture.controller); }),
                         "the initial frame becomes ready before dragging");
     expectations.expect(
         fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
         "the fixture layer is added and selected");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the frame becomes ready again for the post-add revision",
+                                         [&] { return isReady(fixture.controller); }),
                         "the frame becomes ready again for the post-add revision");
     const auto* position = fixture.session.parameterForSelection(document::kPositionParameterRole);
     expectations.expect(position != nullptr, "the new solid layer exposes a position parameter");
@@ -1182,8 +1222,10 @@ void testMidDragResizeCancelsWithNoCommitAndNoOverrideLeft(Expectations& expecta
 
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
-                        "the resize-cancel fixture reaches asynchronous scheduler quiescence");
+    expectations.expect(
+        awaitQtCondition("the resize-cancel fixture reaches asynchronous scheduler quiescence",
+                         [&] { return fixture.scheduler.isQuiescent(); }),
+        "the resize-cancel fixture reaches asynchronous scheduler quiescence");
 }
 
 // Escape confirms a gizmo drag everywhere in the Viewer: the move, rotate, scale or anchor-point
@@ -1198,15 +1240,21 @@ void testEscapeConfirmsMidDrag(Expectations& expectations) {
                                   : grip == Grip::Scale  ? "scale"
                                                          : "anchor";
         GestureFixture fixture(makeTestProject("Viewer Drag Escape Test"));
-        expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+        expectations.expect(awaitQtCondition("the initial frame becomes ready before dragging",
+                                             [&] { return isReady(fixture.controller); }),
                             "the initial frame becomes ready before dragging");
         expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Solid"),
                                                           core::Color4d{0.2, 0.3, 0.4, 1.0}),
                             "the fixture layer is added and selected");
-        expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                            "the frame becomes ready again for the post-add revision");
+        expectations.expect(
+            awaitQtCondition("the frame becomes ready again for the post-add revision",
+                             [&] { return isReady(fixture.controller); }),
+            "the frame becomes ready again for the post-add revision");
         fixture.viewer.show();
-        (void)waitUntil([&] { return fixture.viewer.mappingForTest().has_value(); });
+        expectations.expect(
+            awaitQtCondition("the Viewer has a display mapping",
+                             [&] { return fixture.viewer.mappingForTest().has_value(); }),
+            label + ": the Viewer has a display mapping");
         // Fit has no padding (#536), so a full-frame layer's rotate zone outside its corners is
         // off the Viewer: zoom out one notch, as an artist does, to reach it.
         const QPointF center = QRectF(fixture.viewer.rect()).center();
@@ -1214,7 +1262,9 @@ void testEscapeConfirmsMidDrag(Expectations& expectations) {
                             QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase,
                             false);
         QCoreApplication::sendEvent(&fixture.viewer, &zoomOut);
-        (void)waitUntil([&] { return isReady(fixture.controller); });
+        expectations.expect(awaitQtCondition("the frame is ready after zooming out",
+                                             [&] { return isReady(fixture.controller); }),
+                            label + ": the frame is ready after zooming out");
         (void)fixture.viewer.grab();
         const auto mapping = fixture.viewer.mappingForTest();
         const auto bounds =
@@ -1290,8 +1340,10 @@ void testEscapeConfirmsMidDrag(Expectations& expectations) {
 
         fixture.controller.beginShutdown();
         fixture.bridge.beginShutdown();
-        expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
-                            "the escape fixture reaches asynchronous scheduler quiescence");
+        expectations.expect(
+            awaitQtCondition("the escape fixture reaches asynchronous scheduler quiescence",
+                             [&] { return fixture.scheduler.isQuiescent(); }),
+            "the escape fixture reaches asynchronous scheduler quiescence");
     }
 }
 
@@ -1302,12 +1354,14 @@ void testEscapeConfirmsMidDrag(Expectations& expectations) {
 void testGestureAfterLayoutEditUsesLiveRevision(Expectations& expectations) {
     using namespace bloom;
     GestureFixture fixture(makeTestProject("Viewer Layout Edit Gesture"));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the initial frame becomes ready",
+                                         [&] { return isReady(fixture.controller); }),
                         "the initial frame becomes ready");
     expectations.expect(
         fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
         "the fixture layer is added and selected");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the post-add frame becomes ready",
+                                         [&] { return isReady(fixture.controller); }),
                         "the post-add frame becomes ready");
     const auto* position = fixture.session.parameterForSelection(document::kPositionParameterRole);
     expectations.expect(position != nullptr, "the solid layer exposes a position parameter");
@@ -1354,8 +1408,10 @@ void testGestureAfterLayoutEditUsesLiveRevision(Expectations& expectations) {
 
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
-                        "the layout-edit gesture fixture reaches scheduler quiescence");
+    expectations.expect(
+        awaitQtCondition("the layout-edit gesture fixture reaches scheduler quiescence",
+                         [&] { return fixture.scheduler.isQuiescent(); }),
+        "the layout-edit gesture fixture reaches scheduler quiescence");
 }
 
 // SPLIT-2: after an output-equivalent split, a real Qt pointer drag on the retained tail frame
@@ -1363,12 +1419,14 @@ void testGestureAfterLayoutEditUsesLiveRevision(Expectations& expectations) {
 void testPointerDragAfterSplitTargetsNewTail(Expectations& expectations) {
     using namespace bloom;
     GestureFixture fixture(makeTestProject("Split Drag"));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the initial frame is ready");
+    expectations.expect(
+        awaitQtCondition("the initial frame is ready", [&] { return isReady(fixture.controller); }),
+        "the initial frame is ready");
     expectations.expect(
         fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.3, 0.4, 0.5, 1.0}),
         "the split-drag fixture has a layer");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the post-add frame is ready",
+                                         [&] { return isReady(fixture.controller); }),
                         "the post-add frame is ready");
     const auto boundary = fixture.session.composition()->graph().layerOutputs().back();
     const auto* position = fixture.session.parameterForSelection(document::kPositionParameterRole);
@@ -1381,7 +1439,8 @@ void testPointerDragAfterSplitTargetsNewTail(Expectations& expectations) {
         return;
     // Warm the tail time, then split at t=2 so the displayed frame is retained at the OLD revision.
     expectations.expect(fixture.session.setCurrentTime(core::RationalTime::fromInteger(4)) &&
-                            waitUntil([&] { return isReady(fixture.controller); }),
+                            awaitQtCondition("the tail time is warmed",
+                                             [&] { return isReady(fixture.controller); }),
                         "the tail time is warmed");
     commands::Transaction split("Split", fixture.session.snapshot().revision());
     split.emplace<commands::SplitLayerAtTime>(fixture.session.compositionId(), boundary.layerId,
@@ -1393,7 +1452,8 @@ void testPointerDragAfterSplitTargetsNewTail(Expectations& expectations) {
     if (!tail.has_value())
         return;
     // The displayed time 4 still shows the pre-split pixels; hit-select must resolve the live tail.
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+    expectations.expect(awaitQtCondition("the retained tail frame is displayed",
+                                         [&] { return isReady(fixture.controller); }),
                         "the retained tail frame is displayed");
     const auto revisionBeforeDrag = fixture.session.snapshot().revision();
     const auto displayRect = expectedDisplayRect(fixture.viewer, fixture.controller);
@@ -1435,7 +1495,8 @@ void testPointerDragAfterSplitTargetsNewTail(Expectations& expectations) {
 
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+    expectations.expect(awaitQtCondition("the split-drag fixture reaches scheduler quiescence",
+                                         [&] { return fixture.scheduler.isQuiescent(); }),
                         "the split-drag fixture reaches scheduler quiescence");
 }
 
@@ -1461,5 +1522,5 @@ int main(int argc, char** argv) {
     testEscapeConfirmsMidDrag(expectations);
     testGestureAfterLayoutEditUsesLiveRevision(expectations);
     testPointerDragAfterSplitTargetsNewTail(expectations);
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

@@ -406,7 +406,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     GpuPreviewDisplayService service(scheduler, gpuStage, cpuStage, cpuFallback,
                                      serviceOptions(options.loader_path));
 
-    const bool terminal = waitUntil(
+    const bool terminal = awaitProof(
+        "the service leaves Initializing",
         [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; }, 90s);
     const auto status = service.status();
     const bool residentReady =
@@ -505,14 +506,13 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     viewer->setGpuPresentationDependencies(client, &scheduler, options.loader_path.string(), 1.0);
     controller.requestRefresh();
 
-    const bool presented = waitUntil(
-        [&] {
+    const bool presented =
+        awaitProof("the Viewer presents the resident GPU frame", [&] {
             const auto frame = controller.state().frame;
             return frame != nullptr &&
                    frame->provenance().provider == runtime::PreviewDisplayProvider::GpuResident &&
                    viewer->residentPresentationActiveForTest();
-        },
-        30s);
+        });
     const auto displayed = controller.state().frame;
     phase("viewer-diagnostic",
           "activity=" + std::to_string(static_cast<int>(controller.state().activity)) +
@@ -564,7 +564,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     if (!presented || displayed == nullptr) {
         service.beginShutdown();
         bridge.beginShutdown();
-        (void)waitUntil([&] { return scheduler.isQuiescent(); }, 10s);
+        checks.expect(awaitProof("scheduler quiescent after the failed presentation",
+                                 [&] { return scheduler.isQuiescent(); }),
+                      "the scheduler reaches quiescence");
         return 1;
     }
     phase("viewer-presented",
@@ -611,7 +613,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                                  Qt::NoButton, Qt::NoModifier);
         QApplication::sendEvent(viewer.get(), &releaseEvent);
     }
-    checks.expect(waitUntil([&] { return viewer->residentPresentationActiveForTest(); }, 15s),
+    checks.expect(awaitProof("the viewer re-presents after zoom/pan",
+                             [&] { return viewer->residentPresentationActiveForTest(); }),
                   "the viewer re-presents after zoom/pan");
     reference = referenceFor();
     checks.expect(reference != nullptr,
@@ -623,10 +626,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     checks.expect(setDropdownIndex(*viewer, "viewerChannelDropdown",
                                    static_cast<int>(ui::ViewerChannel::Red)),
                   "the channel dropdown is reachable and set to Red");
-    checks.expect(
-        waitUntil([&] { return viewer->channelForTest() == ui::ViewerChannel::Red; }, 10s),
-        "the viewer reports the Red channel");
-    checks.expect(waitUntil([&] { return viewer->residentPresentationActiveForTest(); }, 15s),
+    checks.expect(awaitProof("the viewer reports the Red channel",
+                             [&] { return viewer->channelForTest() == ui::ViewerChannel::Red; }),
+                  "the viewer reports the Red channel");
+    checks.expect(awaitProof("the viewer re-presents after the channel change",
+                             [&] { return viewer->residentPresentationActiveForTest(); }),
                   "the viewer re-presents after the channel change");
     reference = referenceFor();
     checks.expect(reference != nullptr,
@@ -644,9 +648,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     checks.expect(setDropdownIndex(*viewer, "viewerChannelDropdown",
                                    static_cast<int>(ui::ViewerChannel::Rgba)),
                   "the channel dropdown is returned to RGBA for the backdrop phases");
-    checks.expect(
-        waitUntil([&] { return viewer->channelForTest() == ui::ViewerChannel::Rgba; }, 10s),
-        "the viewer reports the RGBA channel for the backdrop phases");
+    checks.expect(awaitProof("the viewer reports the RGBA channel for the backdrop phases",
+                             [&] { return viewer->channelForTest() == ui::ViewerChannel::Rgba; }),
+                  "the viewer reports the RGBA channel for the backdrop phases");
     // A distinctive composition background: presentation only, so it re-presents the resident
     // frame without a new evaluation.
     const core::Color4d authoredBackground{0.75, 0.25, 0.5, 1.0};
@@ -680,14 +684,15 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                       std::string("the background dropdown is set for ") + phaseSpec.label);
         if (gridAction != nullptr)
             gridAction->setChecked(phaseSpec.grid);
-        checks.expect(waitUntil(
+        checks.expect(awaitProof(
+                          std::string("the viewer reports the backdrop for ") + phaseSpec.label,
                           [&] {
                               return viewer->backgroundForTest() == phaseSpec.surround &&
                                      viewer->transparencyGridForTest() == phaseSpec.grid;
-                          },
-                          10s),
+                          }),
                       std::string("the viewer reports the backdrop for ") + phaseSpec.label);
-        checks.expect(waitUntil([&] { return viewer->residentPresentationActiveForTest(); }, 15s),
+        checks.expect(awaitProof(std::string("the viewer re-presents for ") + phaseSpec.label,
+                                 [&] { return viewer->residentPresentationActiveForTest(); }),
                       std::string("the viewer re-presents for ") + phaseSpec.label);
         reference = referenceFor();
         checks.expect(reference != nullptr,
@@ -717,7 +722,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             checks.expect(generation == 77, "the viewer mutation generation is echoed");
             viewerRetired = r.safeToMutate;
         }));
-    checks.expect(waitUntil([&] { return viewerRetired; }, 20s),
+    checks.expect(awaitProof("the ViewerEditor native surface genuinely retired before teardown",
+                             [&] { return viewerRetired; }),
                   "the ViewerEditor native surface genuinely retired before teardown");
     viewer->setGpuPresentationDependencies(nullptr, nullptr, std::string{}, 1.0);
     // Destroy the ViewerEditor and its native QWindow surface while the borrowed instance is still
@@ -727,10 +733,16 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
 
     controller.beginShutdown();
     bridge.beginShutdown();
-    (void)waitUntil([&] { return scheduler.isQuiescent(); }, 10s);
+    checks.expect(awaitProof("scheduler quiescent after the bridge shutdown",
+                             [&] { return scheduler.isQuiescent(); }),
+                  "the viewer proof scheduler reaches quiescence");
     service.beginShutdown();
-    (void)waitUntil(
-        [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; }, 30s);
+    checks.expect(awaitProof("the service owner stops",
+                             [&] {
+                                 return service.status().state ==
+                                        GpuPreviewDisplayServiceState::Stopped;
+                             }),
+                  "the viewer proof service stops");
     phase("shutdown", "drained=1");
     std::error_code ignored;
     std::filesystem::remove_all(mediaDirectory, ignored);

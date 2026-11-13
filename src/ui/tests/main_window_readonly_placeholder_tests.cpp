@@ -1,3 +1,5 @@
+#include "await_qt.hpp"
+
 #include <bloom/platform/private_temporary_directory.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/main_window.hpp>
@@ -26,7 +28,6 @@
 #include <QAction>
 #include <QApplication>
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QLabel>
 #include <QString>
@@ -112,21 +113,9 @@ class TempDirectory final {
     std::filesystem::path path_;
 };
 
-template <typename Predicate> [[nodiscard]] bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 4'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate)) {
-            return true;
-        }
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return std::invoke(predicate);
-}
-
 [[nodiscard]] bool waitUntilIdle(const ProjectHost& host) {
-    return waitUntil([&host] { return !host.isBusy(); });
+    return bloom::test_support::awaitQtCondition("the project host goes idle",
+                                                 [&host] { return !host.isBusy(); });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -664,5 +653,5 @@ int main(int argc, char** argv) {
     Expectations expectations;
     testPlaceholderSwitchesOnPreservedReadOnlyOpenAndBack(expectations);
     testSaveCopyFromReadOnlyPlaceholder(expectations);
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

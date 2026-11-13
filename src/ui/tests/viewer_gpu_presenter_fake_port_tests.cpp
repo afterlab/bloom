@@ -6,6 +6,7 @@
 // quarantined / unproven target is retained with no fake ack. A bare device-less VkInstance lets
 // the real QWindow / VkSurfaceKHR path run without a GpuDevice.
 
+#include "await_qt.hpp"
 #include <bloom/render/gpu_presentation_types.hpp>
 #include <bloom/runtime/gpu_presentation_coordinator.hpp>
 #include <bloom/ui/viewer_gpu_presenter.hpp>
@@ -51,28 +52,18 @@ using bloom::runtime::kInvalidPresentationTarget;
 using bloom::ui::ViewerGpuPort;
 using bloom::ui::ViewerGpuPresenter;
 
-void pumpQt(const int milliseconds) {
-    QEventLoop loop;
-    QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
-    loop.exec();
-}
-
 // Drives the presenter's own poll at the bounded Qt event loop until the fixture-observed condition
 // holds. A fixed sleep is not authoritative here: the attach path needs the real QWindow exposed
 // and a real VkSurfaceKHR, both of which the platform publishes asynchronously.
 template <typename Predicate>
-[[nodiscard]] bool waitForPresenter(ViewerGpuPresenter& presenter, Predicate predicate,
-                                    const int timeoutMilliseconds = 5000) {
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMilliseconds);
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (predicate()) {
-            return true;
-        }
+[[nodiscard]] bool waitForPresenter(const std::string_view name, ViewerGpuPresenter& presenter,
+                                    Predicate predicate) {
+    return bloom::test_support::awaitConditionWith(name, predicate, [&] {
         static_cast<void>(presenter.pollNow());
-        pumpQt(5);
-    }
-    return predicate();
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    });
 }
 
 class Expectations final {
@@ -269,7 +260,7 @@ int main(int argc, char** argv) {
         expectations.expect(presenter->initialize(), "the duplicate probe initializes");
         layout->addWidget(presenter->container());
         presenter->container()->show();
-        expectations.expect(waitForPresenter(*presenter,
+        expectations.expect(waitForPresenter("duplicate-surface attach is Retained", *presenter,
                                              [&] {
                                                  return presenter->state() ==
                                                         ViewerGpuPresenter::State::Retained;
@@ -303,14 +294,15 @@ int main(int argc, char** argv) {
         expectations.expect(presenter->initialize(), "the quarantine probe initializes");
         layout->addWidget(presenter->container());
         presenter->container()->show();
-        expectations.expect(waitForPresenter(*presenter, [&] { return presenter->attached(); }),
+        expectations.expect(waitForPresenter("quarantine probe attaches a real target", *presenter,
+                                             [&] { return presenter->attached(); }),
                             "the quarantine probe attaches a real target: " +
                                 bloom::ui::test::describeViewerGpuPresenter(*presenter));
         expectations.expect(presenter->state() == ViewerGpuPresenter::State::Attaching,
                             "the quarantine probe reports Attaching after a real attach: " +
                                 bloom::ui::test::describeViewerGpuPresenter(*presenter));
         port->setState(presenter->targetId(), GpuPresentationTargetState::Active, false);
-        expectations.expect(waitForPresenter(*presenter,
+        expectations.expect(waitForPresenter("quarantine probe becomes Active", *presenter,
                                              [&] {
                                                  return presenter->state() ==
                                                         ViewerGpuPresenter::State::Active;
@@ -348,12 +340,13 @@ int main(int argc, char** argv) {
         expectations.expect(presenter->initialize(), "the retired probe initializes");
         layout->addWidget(presenter->container());
         presenter->container()->show();
-        expectations.expect(waitForPresenter(*presenter, [&] { return presenter->attached(); }),
+        expectations.expect(waitForPresenter("retired probe attaches a real target", *presenter,
+                                             [&] { return presenter->attached(); }),
                             "the retired probe attaches a real target: " +
                                 bloom::ui::test::describeViewerGpuPresenter(*presenter));
         const GpuPresentationTargetId id = presenter->targetId();
         port->setState(id, GpuPresentationTargetState::Active, false);
-        expectations.expect(waitForPresenter(*presenter,
+        expectations.expect(waitForPresenter("retired probe becomes Active", *presenter,
                                              [&] {
                                                  return presenter->state() ==
                                                         ViewerGpuPresenter::State::Active;
@@ -368,7 +361,8 @@ int main(int argc, char** argv) {
                 safe = result.outcome == ViewerGpuPresenter::MutationOutcome::SafeToMutate;
             }));
         port->setState(id, GpuPresentationTargetState::Retired, true, "engine proof");
-        expectations.expect(waitForPresenter(*presenter, [&] { return called; }),
+        expectations.expect(waitForPresenter("proven Retired acks SafeToMutate", *presenter,
+                                             [&] { return called; }),
                             "the proven Retired acks SafeToMutate: " +
                                 bloom::ui::test::describeViewerGpuPresenter(*presenter));
         expectations.expect(called && safe, "the proven Retired acks SafeToMutate");
@@ -391,12 +385,13 @@ int main(int argc, char** argv) {
         expectations.expect(presenter->initialize(), "the rejected probe initializes");
         layout->addWidget(presenter->container());
         presenter->container()->show();
-        expectations.expect(waitForPresenter(*presenter, [&] { return presenter->attached(); }),
+        expectations.expect(waitForPresenter("rejected probe attaches a real target", *presenter,
+                                             [&] { return presenter->attached(); }),
                             "the rejected probe attaches a real target: " +
                                 bloom::ui::test::describeViewerGpuPresenter(*presenter));
         const GpuPresentationTargetId id = presenter->targetId();
         port->setState(id, GpuPresentationTargetState::Rejected, true, "stale epoch");
-        expectations.expect(waitForPresenter(*presenter,
+        expectations.expect(waitForPresenter("Rejected target is terminal", *presenter,
                                              [&] {
                                                  return presenter->state() ==
                                                         ViewerGpuPresenter::State::Unsupported;
@@ -435,12 +430,13 @@ int main(int argc, char** argv) {
         expectations.expect(presenter->initialize(), "the embedded-resize probe initializes");
         embeddedLayout->addWidget(presenter->container());
         presenter->container()->show();
-        expectations.expect(waitForPresenter(*presenter, [&] { return presenter->attached(); }),
+        expectations.expect(waitForPresenter("embedded-resize probe attaches", *presenter,
+                                             [&] { return presenter->attached(); }),
                             "the embedded-resize probe attaches: " +
                                 bloom::ui::test::describeViewerGpuPresenter(*presenter));
         const GpuPresentationTargetId id = presenter->targetId();
         port->setState(id, GpuPresentationTargetState::Active, false);
-        expectations.expect(waitForPresenter(*presenter,
+        expectations.expect(waitForPresenter("embedded-resize probe becomes Active", *presenter,
                                              [&] {
                                                  return presenter->state() ==
                                                         ViewerGpuPresenter::State::Active;
@@ -472,7 +468,8 @@ int main(int argc, char** argv) {
             port->snapshots[id].info.height = height;
             port->snapshots[id].completedResizeSequence = port->resizeSequences.back();
             port->setState(id, GpuPresentationTargetState::Active, false);
-            expectations.expect(waitForPresenter(*presenter,
+            expectations.expect(waitForPresenter("embedded resize settles back to Active",
+                                                 *presenter,
                                                  [&] {
                                                      return presenter->state() ==
                                                             ViewerGpuPresenter::State::Active;
@@ -530,7 +527,8 @@ int main(int argc, char** argv) {
                 safe = result.outcome == ViewerGpuPresenter::MutationOutcome::SafeToMutate;
             }));
         port->setState(id, GpuPresentationTargetState::Retired, true, "embedded probe done");
-        expectations.expect(waitForPresenter(*presenter, [&] { return called; }),
+        expectations.expect(waitForPresenter("embedded-resize probe retires cleanly", *presenter,
+                                             [&] { return called; }),
                             "the embedded-resize probe retires cleanly: " +
                                 bloom::ui::test::describeViewerGpuPresenter(*presenter));
         expectations.expect(called && safe, "the embedded-resize probe is safe to destroy");
@@ -542,5 +540,5 @@ int main(int argc, char** argv) {
                      "never forgotten, proven terminals forgotten once) and embedded resize "
                      "ownership (container keeps the geometry, GPU gets the physical extent)\n";
     }
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

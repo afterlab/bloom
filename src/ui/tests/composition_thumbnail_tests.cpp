@@ -2,8 +2,8 @@
 // on a worker through the composition preview pipeline, kept per composition and revision (so
 // refreshing the header costs nothing), shown stale while an edit is prepared, then replaced.
 
+#include "await_qt.hpp"
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QPixmap>
 #include <QThread>
 #include <QTreeWidget>
@@ -41,13 +41,6 @@ void expect(const bool value, const char* message) {
         ++failures;
         std::cerr << "FAIL: " << message << '\n';
     }
-}
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < 20000)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return predicate();
 }
 
 struct Pipeline final {
@@ -87,8 +80,9 @@ struct Fixture final {
     ~Fixture() {
         thumbnails.cancel();
         bridge.beginShutdown();
-        for (int i = 0; i < 400 && !scheduler.isQuiescent(); ++i)
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        // A destructor cannot assert; a timeout is counted by the helper and fails the exit.
+        (void)bloom::test_support::awaitQtCondition("scheduler quiescent after shutdown",
+                                                    [&] { return scheduler.isQuiescent(); });
     }
 };
 
@@ -122,8 +116,10 @@ int main(int argc, char** argv) {
     expect(!fixture.thumbnails.current(composition), "the frame is not ready at once");
     QApplication::processEvents();
     expect(fixture.thumbnails.submissionCount() == 1, "selecting a composition asks for a frame");
-    expect(waitUntil([&] { return centre(*thumbnail).red() > 200; }),
-           "the header shows the composition's rendered frame");
+    expect(
+        bloom::test_support::awaitQtCondition("the header shows the composition's rendered frame",
+                                              [&] { return centre(*thumbnail).red() > 200; }),
+        "the header shows the composition's rendered frame");
     const auto red = centre(*thumbnail);
     expect(red.green() < 60 && red.blue() < 60, "the rendered frame is the red solid");
     expect(fixture.thumbnails.lastWorkerThread().has_value() &&
@@ -150,7 +146,8 @@ int main(int argc, char** argv) {
     expect(fixture.thumbnails.submissionCount() == 2, "an edit asks for a new frame");
     expect(!fixture.thumbnails.thumbnail(composition).isNull(),
            "the previous frame is shown while the new one is prepared");
-    expect(waitUntil([&] { return centre(*thumbnail).blue() > 200; }),
+    expect(bloom::test_support::awaitQtCondition("the header updates to the edited composition",
+                                                 [&] { return centre(*thumbnail).blue() > 200; }),
            "the header updates to the edited composition");
     expect(fixture.thumbnails.current(composition), "the frame now matches the revision");
 
@@ -174,10 +171,11 @@ int main(int argc, char** argv) {
                    "gray solid added");
             const auto id = aces.session.compositionId();
             (void)aces.thumbnails.thumbnail(id); // asks for the frame on a worker
-            expect(waitUntil([&] {
-                       (void)aces.thumbnails.thumbnail(id);
-                       return aces.thumbnails.current(id);
-                   }),
+            expect(bloom::test_support::awaitQtCondition("the ACES composition frame is prepared",
+                                                         [&] {
+                                                             (void)aces.thumbnails.thumbnail(id);
+                                                             return aces.thumbnails.current(id);
+                                                         }),
                    "the ACES composition frame is prepared");
             const auto image = aces.thumbnails.thumbnail(id);
             const auto gray =
@@ -188,7 +186,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (failures != 0)
+    if (failures + bloom::test_support::awaitFailureCount() != 0)
         return 1;
     std::cout << "PASS: composition thumbnails\n";
     return 0;

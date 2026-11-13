@@ -1,6 +1,6 @@
 #pragma once
+#include "await_qt.hpp"
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QEvent>
 #include <QSettings>
 #include <QSplitter>
@@ -22,18 +22,18 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/export_queue_adapter.hpp>
-#include <bloom/ui/kit/mnemonic_style.hpp>
-#include <bloom/ui/editor_area.hpp>
-#include <bloom/ui/main_window.hpp>
-#include <bloom/ui/workspace_host.hpp>
-#include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/image_preview_controller.hpp>
+#include <bloom/ui/kit/mnemonic_style.hpp>
+#include <bloom/ui/main_window.hpp>
+#include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/timeline_editor.hpp>
 #include <bloom/ui/viewer_preview_pool.hpp>
+#include <bloom/ui/workspace_host.hpp>
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -179,19 +179,23 @@ struct WindowFixture {
                 break;
             }
         }
-        QElapsedTimer timer;
-        timer.start();
-        while (preview->state().activity != PreviewActivity::Ready && timer.elapsed() < 15000)
-            QTest::qWait(10);
-        if (preview->state().activity != PreviewActivity::Ready)
+        if (!test_support::awaitQtCondition("fixture preview ready", [&] {
+                return preview->state().activity == PreviewActivity::Ready;
+            }))
             throw std::runtime_error("Fixture preview did not become ready");
         // Colour swatches show display colour once the converter is up; capture only after it
         // is, or the same window renders two different Properties panels from run to run.
-        while (!session.colorConverter() && timer.elapsed() < 15000)
-            QTest::qWait(10);
-        if (!session.colorConverter())
+        if (!test_support::awaitQtCondition("fixture color converter ready", [&] {
+                return static_cast<bool>(session.colorConverter());
+            }))
             throw std::runtime_error("Fixture color converter did not become ready");
-        QTest::qWait(100);
+        // The converter landing re-projects the preview; wait for it to be ready and the
+        // scheduler idle again instead of a fixed pause.
+        if (!test_support::awaitQtCondition("fixture preview ready and scheduler idle", [&] {
+                return preview->state().activity == PreviewActivity::Ready &&
+                       scheduler.isQuiescent();
+            }))
+            throw std::runtime_error("Fixture preview did not settle after the converter");
         auto* stack = window->findChild<TimelineLayerStack*>();
         for (const auto& layer : session.composition()->graph().layerOutputs()) {
             if (layer.name == "Background") {
@@ -206,7 +210,9 @@ struct WindowFixture {
                 break;
             }
         }
-        QTest::qWait(50);
+        // Deliver the expansion signals' queued work (row creation, relayout).
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents();
         clearInteraction();
     }
     // NOLINTEND(clang-analyzer-cplusplus.NewDeleteLeaks)
@@ -229,11 +235,9 @@ struct WindowFixture {
         viewerPreviews->beginShutdown();
         preview->beginShutdown();
         bridge.beginShutdown();
-        QElapsedTimer timer;
-        timer.start();
-        while (!scheduler.isQuiescent() && timer.elapsed() < 15000) {
-            QTest::qWait(5);
-        }
+        // A destructor cannot return the result; a timeout is still counted by awaitFailureCount().
+        (void)test_support::awaitQtCondition("fixture scheduler quiescent",
+                                             [&] { return scheduler.isQuiescent(); });
     }
 };
 } // namespace bloom::ui::test

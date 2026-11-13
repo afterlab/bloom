@@ -35,9 +35,10 @@ void save(const QPixmap& pixmap, const QString& name) {
 }
 
 void settle() {
+    // Deliver everything already queued (layout, polish, deferred updates) until it is quiet.
     for (int pass = 0; pass < 4; ++pass) {
+        QCoreApplication::sendPostedEvents();
         QCoreApplication::processEvents();
-        QTest::qWait(30);
     }
 }
 

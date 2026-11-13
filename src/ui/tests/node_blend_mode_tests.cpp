@@ -2,6 +2,7 @@
 // session write every surface (timeline row, Properties, node card) calls, and the frame compared
 // against the blend kernel's own answer -- plus the preview controller, because "the viewer does
 // not change" is a claim about the preview path and not only about the evaluator.
+#include "await_qt.hpp"
 #include "node_production_harness.hpp"
 
 #include <bloom/color/ocio_builtin_registry.hpp>
@@ -13,7 +14,6 @@
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
-#include <QElapsedTimer>
 #include <QEventLoop>
 
 #include <chrono>
@@ -26,19 +26,6 @@ using namespace bloom::ui::production_test;
 using namespace std::chrono_literals;
 
 namespace {
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 6'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (predicate())
-            return true;
-        std::this_thread::yield();
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return predicate();
-}
-
 // The kernel's own answer for one premultiplied source over one premultiplied backdrop.
 [[nodiscard]] std::array<float, 4> kernelGolden(const core::BlendMode mode,
                                                 const std::array<float, 4>& source,
@@ -157,7 +144,9 @@ int main(int argc, char** argv) {
             CompositionPreviewController controller(
                 a.session, scheduler, bridge,
                 makeCompositionPreviewPipeline(compiler, evaluator, preparer, provider));
-            expect(waitUntil([&] { return controller.state().activity == PreviewActivity::Ready; }),
+            expect(bloom::test_support::awaitQtCondition(
+                       "preview reaches Ready for the Multiply frame",
+                       [&] { return controller.state().activity == PreviewActivity::Ready; }),
                    "the preview reaches Ready for the Multiply frame");
             const auto firstGeneration = controller.state().desiredIdentity.has_value()
                                              ? controller.state().desiredIdentity->requestGeneration
@@ -171,12 +160,14 @@ int main(int argc, char** argv) {
 
             expect(a.session.setLayerBlendMode(topLayer, core::BlendMode::Screen),
                    "the artist picks Screen");
-            expect(waitUntil([&] {
-                       const auto& state = controller.state();
-                       return state.activity == PreviewActivity::Ready &&
-                              state.desiredIdentity.has_value() &&
-                              state.desiredIdentity->requestGeneration != firstGeneration;
-                   }),
+            expect(bloom::test_support::awaitQtCondition(
+                       "parameter-only change re-requests the preview and reaches Ready again",
+                       [&] {
+                           const auto& state = controller.state();
+                           return state.activity == PreviewActivity::Ready &&
+                                  state.desiredIdentity.has_value() &&
+                                  state.desiredIdentity->requestGeneration != firstGeneration;
+                       }),
                    "a parameter-only change re-requests the preview and reaches Ready again");
             std::vector<render::Rgba8> after;
             if (controller.state().frame) {
@@ -187,7 +178,8 @@ int main(int argc, char** argv) {
                    "and the published display buffer the viewer paints actually changes");
             controller.beginShutdown();
             bridge.beginShutdown();
-            expect(waitUntil([&] { return scheduler.isQuiescent(); }),
+            expect(bloom::test_support::awaitQtCondition("preview fixture reaches quiescence",
+                                                         [&] { return scheduler.isQuiescent(); }),
                    "the preview fixture reaches quiescence");
         }
 
@@ -208,5 +200,5 @@ int main(int argc, char** argv) {
         std::cerr << error.what() << '\n';
         return 1;
     }
-    return failures == 0 ? 0 : 1;
+    return failures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

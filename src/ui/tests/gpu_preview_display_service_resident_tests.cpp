@@ -17,6 +17,7 @@
 // --loader pins an explicit loader; --require-device fails closed without a compatible presentable
 // device. Nothing here fabricates an image or a qualification report.
 
+#include "await_qt.hpp"
 #include "gpu_preview_display_service_private.hpp"
 
 #include "gpu_borrowed_instance.hpp"
@@ -237,43 +238,20 @@ residentFallback(std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessor
     };
 }
 
-template <typename Predicate>
-[[nodiscard]] bool waitUntil(Predicate predicate, const std::chrono::milliseconds timeout) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (predicate()) {
-            return true;
-        }
-        std::this_thread::sleep_for(500us);
-    }
-    return predicate();
-}
+using bloom::test_support::awaitCondition;
+using bloom::test_support::awaitQtCondition;
 
-template <typename Predicate>
-[[nodiscard]] bool waitUntilEvents(Predicate predicate, const std::chrono::milliseconds timeout) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-        QGuiApplication::processEvents();
-        if (predicate()) {
-            return true;
-        }
-        std::this_thread::sleep_for(1ms);
-    }
-    QGuiApplication::processEvents();
-    return predicate();
-}
-
+// The result of a scheduler task, awaited on the calling thread (no event loop is needed).
 template <typename Value>
 [[nodiscard]] std::optional<TaskResult<Value>>
 awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds timeout = 30s) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (auto result = handle.tryTakeResult()) {
-            return result;
-        }
-        std::this_thread::sleep_for(500us);
+    std::optional<TaskResult<Value>> result;
+    if (!awaitCondition(
+            "a scheduler task result",
+            [&] { return (result = handle.tryTakeResult()).has_value(); }, timeout)) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    return result;
 }
 
 [[nodiscard]] GpuPresentationUpdate makeUpdate(const GpuResidentFrameLease& lease,
@@ -354,7 +332,8 @@ int runTests(int argc, char** argv) {
         residentCpuStageFunction(plan, processor, evaluator), residentFallback(processor),
         serviceOptions(options.loader_path, policy));
 
-    const bool terminal = waitUntil(
+    const bool terminal = awaitCondition(
+        "the service leaves Initializing",
         [&] {
             const auto state = service.status().state;
             return state != GpuPreviewDisplayServiceState::Initializing;
@@ -375,7 +354,7 @@ int runTests(int argc, char** argv) {
         if (expectations.failures() == 0) {
             std::cout << "SKIP: resident route unavailable; no native success claimed\n";
         }
-        return expectations.failures() == 0 ? 0 : 1;
+        return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
     }
 
     const auto core = bloom::runtime::detail::GpuPreviewDisplayServiceTestAccess::coreOf(service);
@@ -408,14 +387,14 @@ int runTests(int argc, char** argv) {
     surface.window->show();
     surface.width = 320U;
     surface.height = 240U;
-    expectations.expect(waitUntilEvents(
-                            [&] {
-                                if (!surface.window->isExposed())
-                                    return false;
-                                surface.surface = QVulkanInstance::surfaceForWindow(surface.window);
-                                return surface.surface != VK_NULL_HANDLE;
-                            },
-                            10s),
+    expectations.expect(awaitQtCondition("the UI QWindow produced a Wayland VkSurfaceKHR",
+                                         [&] {
+                                             if (!surface.window->isExposed())
+                                                 return false;
+                                             surface.surface =
+                                                 QVulkanInstance::surfaceForWindow(surface.window);
+                                             return surface.surface != VK_NULL_HANDLE;
+                                         }),
                         "the UI QWindow produced a Wayland VkSurfaceKHR");
     if (surface.surface == VK_NULL_HANDLE) {
         return 1;
@@ -426,12 +405,11 @@ int runTests(int argc, char** argv) {
     const auto attached = client->attach(borrowed, 320U, 240U);
     expectations.expect(attached.code == GpuPresentationPortCode::Accepted,
                         "the service client admitted the attach");
-    expectations.expect(waitUntil(
-                            [&] {
-                                return client->status(attached.target).state ==
-                                       GpuPresentationTargetState::Active;
-                            },
-                            15s),
+    expectations.expect(awaitCondition("the service owner created and activated the swapchain",
+                                       [&] {
+                                           return client->status(attached.target).state ==
+                                                  GpuPresentationTargetState::Active;
+                                       }),
                         "the service owner created and activated the swapchain");
 
     // --- Resident request: real prepared GPU scene -> resident product ---------------------------
@@ -509,7 +487,8 @@ int runTests(int argc, char** argv) {
         client->update(attached.target, 1U, makeUpdate(*presentedLease, 320U, 240U)).accepted(),
         "the resident present update is admitted");
     expectations.expect(
-        waitUntil([&] { return client->status(attached.target).appliedSequence >= 1U; }, 15s),
+        awaitCondition("the resident present was applied on the owner thread",
+                       [&] { return client->status(attached.target).appliedSequence >= 1U; }),
         "the resident present was applied on the owner thread");
     expectations.expect(client->status(attached.target).presentCount == 1U,
                         "exactly one resident present completed");
@@ -600,7 +579,8 @@ int runTests(int argc, char** argv) {
     expectations.expect(gated.status == bloom::runtime::TaskSubmissionStatus::Accepted,
                         "the gated resident request was admitted");
     expectations.expect(
-        waitUntil([&] { return gateEntered->load(std::memory_order_acquire); }, 15s),
+        awaitCondition("the GPU-scene CPU stage started on a CPU worker",
+                       [&] { return gateEntered->load(std::memory_order_acquire); }),
         "the GPU-scene CPU stage started on a CPU worker");
     static_cast<void>(gated.handle.cancel());
     gateRelease->store(true, std::memory_order_release);
@@ -624,12 +604,12 @@ int runTests(int argc, char** argv) {
     expectations.expect(stalled.status == bloom::runtime::TaskSubmissionStatus::Accepted,
                         "the stalled resident request was admitted");
     expectations.expect(
-        waitUntil(
+        awaitCondition(
+            "the stalled submission entered the explicit Retiring phase",
             [&] {
                 return bloom::runtime::detail::GpuPreviewDisplayServiceTestAccess::residentRetiring(
                     *core);
-            },
-            30s),
+            }),
         "the stalled submission entered the explicit Retiring phase");
     // The parent completion and its request-owned admission are still held while Retiring.
     expectations.expect(!stalled.handle.tryTakeResult().has_value(),
@@ -665,17 +645,20 @@ int runTests(int argc, char** argv) {
                         "the presented lease is still valid before retirement");
     static_cast<void>(client->retire(attached.target, 5U));
     expectations.expect(
-        waitUntilEvents([&] { return client->status(attached.target).surfaceSafeToDestroy; }, 30s),
+        awaitQtCondition("the resident target proved retirement and its surface is safe to destroy",
+                         [&] { return client->status(attached.target).surfaceSafeToDestroy; }),
         "the resident target proved retirement and its surface is safe to destroy");
     surface.window->hide();
     delete surface.window;
     surface.window = nullptr;
 
     service.beginShutdown();
-    expectations.expect(
-        waitUntilEvents(
-            [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; }, 30s),
-        "the resident service owner drained and stopped");
+    expectations.expect(awaitQtCondition("the resident service owner drained and stopped",
+                                         [&] {
+                                             return service.status().state ==
+                                                    GpuPreviewDisplayServiceState::Stopped;
+                                         }),
+                        "the resident service owner drained and stopped");
     const auto finalStatus = service.status();
     expectations.expect(finalStatus.presentationClient == nullptr,
                         "the stopped resident service publishes no live presentation client");
@@ -697,7 +680,7 @@ int runTests(int argc, char** argv) {
                      "provenance -> Wayland present; warm cache reuse with zero native operations; "
                      "unsupported GPU-subset CPU fallback; cancellation; host-ordered shutdown\n";
     }
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }
 
 int main(int argc, char** argv) {

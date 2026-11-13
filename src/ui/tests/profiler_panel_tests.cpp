@@ -1,6 +1,7 @@
 // The Profiler panel (#423): registration and switcher glyph, feed subscription on show/hide/close
 // with a refcount across panels, fixed history rings that wrap at 600 without allocating, absent
 // versus zero, stale ages, the unattributed math, and the snapshot's trivial copyability.
+#include "await_qt.hpp"
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/profiler_sampler.hpp>
 #include <bloom/runtime/profiler_snapshot.hpp>
@@ -516,7 +517,8 @@ void testRuntimeFeedDrivesTheSampler(Expectations& expectations) {
             expectations.expect(sampler.running() && sampler.subscribers() == 1,
                                 "showing the Profiler starts the sampler");
             const bool delivered =
-                QTest::qWaitFor([&] { return panel.current().serial >= 2; }, 5000);
+                bloom::test_support::awaitQtCondition("Profiler panel receives live samples",
+                                                      [&] { return panel.current().serial >= 2; });
             expectations.expect(delivered, "the panel receives live samples");
             const auto& snapshot = panel.current();
             expectations.expect(snapshot.memory.rssBytes.present, "RSS is live");
@@ -558,7 +560,7 @@ int main(int argc, char** argv) {
     testSnapshotIsTriviallyCopyable(expectations);
     testSampleRingAndFormatting(expectations);
     testRuntimeFeedDrivesTheSampler(expectations);
-    if (expectations.failures() != 0) {
+    if (expectations.failures() + bloom::test_support::awaitFailureCount() != 0) {
         std::cerr << expectations.failures() << " Profiler expectation(s) failed\n";
         return 1;
     }

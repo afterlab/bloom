@@ -49,13 +49,15 @@ int main(int argc, char** argv) {
         window.resize(2000, 1200);
         for (int pass = 0; pass < 8; ++pass) {
             QCoreApplication::processEvents();
-            QTest::qWait(60);
+            QCoreApplication::sendPostedEvents();
+            QCoreApplication::processEvents();
         }
         const auto name = QString::fromStdString(svg.stem().string());
         const auto settle = [] {
             for (int pass = 0; pass < 6; ++pass) {
                 QCoreApplication::processEvents();
-                QTest::qWait(60);
+                QCoreApplication::sendPostedEvents();
+                QCoreApplication::processEvents();
             }
         };
         // The imported group's layer open in the Timeline.

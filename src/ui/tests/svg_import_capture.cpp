@@ -39,9 +39,9 @@ int main(int argc, char** argv) {
             throw std::runtime_error("could not write a capture");
     };
     const auto settle = [] {
-        for (int pass = 0; pass < 6; ++pass) {
+        for (int pass = 0; pass < 3; ++pass) {
+            QCoreApplication::sendPostedEvents();
             QCoreApplication::processEvents();
-            QTest::qWait(60);
         }
     };
     try {
@@ -100,8 +100,9 @@ int main(int argc, char** argv) {
         }
         const auto layer = fixture.session.composition()->graph().layerOutputs().front().layerId;
         fixture.assets->breakApartSvg(fixture.session.compositionId(), layer);
-        for (int pass = 0; pass < 200 && fixture.assets->busy(); ++pass)
-            QTest::qWait(25);
+        if (!bloom::test_support::awaitQtCondition("Break Apart finishes",
+                                                   [&] { return !fixture.assets->busy(); }))
+            throw std::runtime_error("Break Apart did not finish");
         settle();
         save(window, "window-after-break-apart");
         std::filesystem::remove(svg);

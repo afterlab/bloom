@@ -12,6 +12,8 @@
 // production image pipeline, every plan is a real CompiledCompositionPlan, and the scene builders
 // consume them through the production CpuGpuSceneBuilder.
 
+#include "await.hpp"
+
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/file_uri.hpp>
@@ -79,7 +81,11 @@ class Expectations final {
         ++failures_;
         std::cerr << loc.file_name() << ':' << loc.line() << ": " << message << '\n';
     }
-    [[nodiscard]] int failures() const noexcept { return failures_; }
+    // Includes the waits that timed out (awaitFailureCount), so every exit code built from this
+    // count fails when an awaited condition never held.
+    [[nodiscard]] int failures() const noexcept {
+        return failures_ + bloom::test_support::awaitFailureCount();
+    }
 
   private:
     int failures_ = 0;
@@ -114,12 +120,30 @@ struct TestOptions final {
     return options;
 }
 
+// Awaits `predicate` through the shared await helper. The pump keeps the real QWindow responsive to
+// the compositor while the native owner thread works, so an external grim capture is not occluded
+// by a "not responding" dialog.
+template <typename Predicate>
+[[nodiscard]] inline bool
+awaitProof(const std::string_view name, Predicate&& predicate,
+           const std::chrono::milliseconds timeout = bloom::test_support::kAwaitLimit) {
+    return bloom::test_support::awaitConditionWith(
+        name, std::forward<Predicate>(predicate),
+        [] {
+            QGuiApplication::processEvents();
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
+        },
+        timeout);
+}
+
+// A probe: true when `predicate` held within `timeout`, false (silently) when it did not. For a
+// question whose "not yet" answer is expected and acted on, never for a condition the test needs:
+// that is awaitProof, which names what it awaits and fails the test when it never holds. Call
+// sites in files that have not been converted yet still use this form.
 template <typename Predicate>
 [[nodiscard]] inline bool waitUntil(Predicate predicate, const std::chrono::milliseconds timeout) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
-        // Keep the real QWindow responsive to the compositor while the native owner thread works,
-        // so an external grim capture is not occluded by a "not responding" dialog.
         QGuiApplication::processEvents();
         if (predicate()) {
             return true;
@@ -134,14 +158,13 @@ template <typename Value>
 [[nodiscard]] inline std::optional<runtime::TaskResult<Value>>
 awaitResult(const runtime::TaskHandle<Value>& handle,
             const std::chrono::milliseconds timeout = std::chrono::milliseconds(30'000)) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (auto result = handle.tryTakeResult()) {
-            return result;
-        }
-        std::this_thread::sleep_for(std::chrono::microseconds(500));
+    std::optional<runtime::TaskResult<Value>> result;
+    if (!bloom::test_support::awaitCondition(
+            "a task result", [&] { return (result = handle.tryTakeResult()).has_value(); },
+            timeout)) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    return result;
 }
 
 // ---------------------------------------------------------------------------------------------

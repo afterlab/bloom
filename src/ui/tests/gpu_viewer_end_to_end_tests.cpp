@@ -10,6 +10,8 @@
 // It is deliberately device-free: no Vulkan, no native target, no resident frame. The native
 // service-chain half lives in gpu_resident_service_chain_tests.cpp.
 
+#include "await_qt.hpp"
+
 #include <bloom/ui/viewer_editor.hpp>
 
 #include <bloom/commands/command_stack.hpp>
@@ -30,7 +32,6 @@
 
 #include <QApplication>
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QImage>
 #include <QPixmap>
@@ -213,20 +214,6 @@ void testPanIsTranslationOnly(Expectations& checks) {
             .groupRegistryCapacity = 8};
 }
 
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 8'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (predicate()) {
-            return true;
-        }
-        std::this_thread::yield();
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return predicate();
-}
-
 void testRealViewerInputStaysConsistent(Expectations& checks) {
     auto newProject = makeProject();
     const auto compositionId = newProject.initialCompositionId;
@@ -253,10 +240,12 @@ void testRealViewerInputStaysConsistent(Expectations& checks) {
     viewer.resize(800, 600);
     viewer.show();
 
-    checks.expect(waitUntil([&] {
-                      return controller.state().activity == ui::PreviewActivity::Ready &&
-                             controller.state().frame != nullptr;
-                  }),
+    checks.expect(bloom::test_support::awaitQtCondition(
+                      "the real viewer fixture shows a ready CPU frame",
+                      [&] {
+                          return controller.state().activity == ui::PreviewActivity::Ready &&
+                                 controller.state().frame != nullptr;
+                      }),
                   "a CPU frame becomes ready in the real viewer fixture");
 
     // Geometry accessors are coherent and the CPU paint path is live.
@@ -339,7 +328,9 @@ void testRealViewerInputStaysConsistent(Expectations& checks) {
 
     controller.beginShutdown();
     bridge.beginShutdown();
-    (void)waitUntil([&] { return scheduler.isQuiescent(); });
+    checks.expect(bloom::test_support::awaitQtCondition("scheduler quiescent after shutdown",
+                                                        [&] { return scheduler.isQuiescent(); }),
+                  "the scheduler reaches quiescence");
 }
 
 } // namespace
@@ -351,10 +342,10 @@ int main(int argc, char** argv) {
     testZoomAboutCursorInvariant(checks);
     testPanIsTranslationOnly(checks);
     testRealViewerInputStaysConsistent(checks);
-    if (checks.failures() == 0) {
+    if (checks.failures() + bloom::test_support::awaitFailureCount() == 0) {
         std::cout << "PASS: ViewerEditor fit/zoom/pan coordinates match the CPU reference\n";
         return 0;
     }
-    std::cerr << checks.failures() << " failure(s)\n";
+    std::cerr << checks.failures() + bloom::test_support::awaitFailureCount() << " failure(s)\n";
     return 1;
 }

@@ -9,6 +9,8 @@
 // that the fallback reuses the exact ProcessFrame the stage evaluated, never recompiling or
 // re-evaluating.
 
+#include "await.hpp"
+
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/color.hpp>
@@ -118,14 +120,14 @@ runOnWorker(bloom::runtime::TaskScheduler& scheduler, Callable callable) {
     if (!submission.accepted()) {
         return std::nullopt;
     }
-    const auto deadline = std::chrono::steady_clock::now() + 4s;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (auto result = submission.handle.tryTakeResult()) {
-            return result;
-        }
-        std::this_thread::sleep_for(1ms);
+    std::optional<bloom::runtime::TaskResult<Value>> result;
+    if (!bloom::test_support::awaitCondition("CPU stage task reaches a terminal result", [&] {
+            result = submission.handle.tryTakeResult();
+            return result.has_value();
+        })) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    return result;
 }
 
 struct Fixture final {
@@ -397,8 +399,9 @@ int main(int argc, char** argv) {
     testFailedProviderFailsClosed(expectations);
     testOverrideChangesPixels(expectations);
 
-    if (expectations.failures() != 0) {
-        std::cerr << expectations.failures() << " CPU-stage expectation(s) failed\n";
+    if (expectations.failures() + bloom::test_support::awaitFailureCount() != 0) {
+        std::cerr << expectations.failures() + bloom::test_support::awaitFailureCount()
+                  << " CPU-stage expectation(s) failed\n";
         return 1;
     }
     std::cout << "CPU-stage: all expectations passed\n";

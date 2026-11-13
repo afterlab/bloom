@@ -35,7 +35,8 @@ void sizeViewerArea(MainWindow& window, EditorArea& area, const QSize target) {
         if (delta.isNull())
             return;
         window.resize(window.size() + delta);
-        QTest::qWait(30);
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents();
     }
 }
 
@@ -78,14 +79,16 @@ int run(int argc, char** argv) {
         return 1;
     }
     Q_EMIT area->maximizeRequested(area);
-    QTest::qWait(50);
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     int failures = 0;
     const auto capture = [&](const char* state) {
         for (const auto& [name, size] :
              {std::pair{"small", QSize(800, 600)}, std::pair{"large", QSize(1900, 1000)}}) {
             sizeViewerArea(*fixture.window, *area, size);
             fixture.clearInteraction();
-            QTest::qWait(50);
+            QCoreApplication::sendPostedEvents();
+            QCoreApplication::processEvents();
             const QString label =
                 QStringLiteral("viewer-%1-%2-%3-%4").arg(stage, QString::fromLatin1(state),
                                                         QString::fromLatin1(name), dpr);
@@ -126,13 +129,15 @@ int run(int argc, char** argv) {
         ++failures;
     } else {
         sizeViewerArea(*fixture.window, *area, QSize(800, 600));
-        QTest::qWait(300);
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents();
         for (const bool on : {false, true}) {
             grid->setChecked(on);
             for (int index = 0; index < background->count(); ++index) {
                 background->setCurrentIndex(index);
                 fixture.clearInteraction();
-                QTest::qWait(80);
+                QCoreApplication::sendPostedEvents();
+                QCoreApplication::processEvents();
                 const QString label = QStringLiteral("viewer-bg-%1-grid-%2-%3-%4")
                                           .arg(stage, on ? QStringLiteral("on")
                                                          : QStringLiteral("off"),
@@ -151,7 +156,8 @@ int run(int argc, char** argv) {
         std::cerr << "could not delete the fixture composition\n";
         return 1;
     }
-    QTest::qWait(200);
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     capture("empty");
     return failures == 0 ? 0 : 1;
 }

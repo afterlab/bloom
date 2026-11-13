@@ -1,5 +1,6 @@
 // Production offscreen GPU preparation -> one packed transfer -> ordinary EditorArea/Viewer.
 // All observation windows run only under the caller's private compositor.
+#include "await.hpp"
 #include "fixed_memory_budget.hpp"
 #include "gpu_service_chain_fixture.hpp"
 #include "image_source.hpp"
@@ -445,7 +446,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     runtime::GpuPreviewDisplayService service(scheduler, gpuStage, fixture.productionCpuStage(),
                                               fixture.productionCpuFallback(displayPreparer),
                                               serviceSettings);
-    checks.expect(waitUntil(
+    checks.expect(awaitProof(
+                      "production GPU service initializes",
                       [&] {
                           return service.status().state !=
                                  runtime::GpuPreviewDisplayServiceState::Initializing;
@@ -519,11 +521,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     ui::WindowStatusBar status(session, &controller);
     status.setDisplayedViewer(viewer);
     const auto current = [&] {
-        return waitUntil(
-            [&] {
-                return viewer->displayedPreviewState().freshness == ui::FrameFreshness::Current;
-            },
-            30s);
+        return awaitProof("the Viewer paints a Current frame", [&] {
+            return viewer->displayedPreviewState().freshness == ui::FrameFreshness::Current;
+        });
     };
     const auto recover = [&] {
         hold->store(false);
@@ -536,14 +536,17 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         polls->store(0);
         hold->store(true);
         checks.expect(session.setSelectedSolidColor(color), "new GPU display work requested");
-        checks.expect(waitUntil([&] { return polls->load() > 0; }, 30s),
+        checks.expect(awaitProof("real final GPU copy is held before fence observation",
+                                 [&] { return polls->load() > 0; }),
                       "real final GPU copy is held before fence observation");
     };
     checks.expect(current(), "genuine GPU-prepared product is actually QWidget-painted Current");
-    checks.expect(waitUntil([&] { return status.colorChipTextForTest() == "GPU render"; }, 3s) &&
-                      !viewer->displayedPreviewState().ownerAppliedDisplay &&
-                      !viewer->residentPresentationActiveForTest(),
-                  "the status says GPU render and the frame is never native/ownerApplied");
+    checks.expect(
+        awaitProof("the status says GPU render and the frame is never native/ownerApplied",
+                   [&] { return status.colorChipTextForTest() == "GPU render"; }) &&
+            !viewer->displayedPreviewState().ownerAppliedDisplay &&
+            !viewer->residentPresentationActiveForTest(),
+        "the status says GPU render and the frame is never native/ownerApplied");
     // #681: nothing an artist can read about a GPU-rendered frame says "CPU": the Render value,
     // its color-state text, its tooltip and its accessible name.
     for (const QString& text :
@@ -571,7 +574,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             external && view &&
                 external->displayOnlyFrame()->packedHostOwnership() ==
                     render::PackedRgba8Ownership::RootedPublished &&
-                waitUntil(
+                awaitProof(
+                    "actual production QWidget frame owns one independent rooted packed allocation",
                     [&] {
                         const auto root = processingPolicy->snapshot().reservations;
                         return root.admittedPhases == 0 && root.hostReservedBytes == 0 &&
@@ -580,14 +584,15 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                                root.ownedPackedHostBytes ==
                                    external->provenance()
                                        .gpuPreparedPacked->transfer.hostStorageBytes;
-                    },
-                    2s),
+                    }),
             "actual production QWidget frame owns one independent rooted packed allocation");
         checks.expect(
             session.setCurrentTime(core::RationalTime::fromInteger(1)) && current() &&
-                waitUntil(
-                    [&] { return processingPolicy->snapshot().reservations.admittedPhases == 0; },
-                    2s) &&
+                awaitProof(
+                    "second exact Viewer time cold-prepares a second actual owned allocation",
+                    [&] {
+                        return processingPolicy->snapshot().reservations.admittedPhases == 0;
+                    }) &&
                 processingPolicy->snapshot().reservations.ownedPackedHostAllocations == 2,
             "second exact Viewer time cold-prepares a second actual owned allocation");
         const auto beforeWarm = service.status().counters;
@@ -608,14 +613,14 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         controller.purgePreviewCache();
         viewer->update();
         checks.expect(
-            waitUntil(
+            awaitProof(
+                "real cache purge leaves Viewer-painted/external aliases charged and readable",
                 [&] {
                     const auto painted = viewer->actualDisplayDescriptor();
                     return painted && painted->frame &&
                            painted->frame->displayOnlyFrame() == external->displayOnlyFrame() &&
                            painted->mapping && !painted->native && !painted->cover;
-                },
-                3s) &&
+                }) &&
                 frameCache->size() == 0 && frameCache->residentBytes() == 0 &&
                 processingPolicy->snapshot().reservations.ownedPackedHostBytes == publishedBytes &&
                 processingPolicy->snapshot().reservations.ownedPackedHostAllocations == 1,
@@ -638,23 +643,22 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         const auto revision = processingPolicy->snapshot().reservations.admissionRevision;
         external.reset();
         checks.expect(
-            waitUntil(
+            awaitProof(
+                "last external alias releases one owned allocation and advances admission once",
                 [&] {
                     const auto root = processingPolicy->snapshot().reservations;
                     return root.ownedPackedHostAllocations == 0 && root.ownedPackedHostBytes == 0 &&
                            root.totalHostClaimBytes == 0 && root.admissionRevision == revision + 1;
-                },
-                2s),
+                }),
             "last external alias releases one owned allocation and advances admission once");
         bridge.beginShutdown();
         service.beginShutdown();
-        checks.expect(waitUntil(
-                          [&] {
-                              return scheduler.isQuiescent() &&
-                                     service.status().state ==
-                                         runtime::GpuPreviewDisplayServiceState::Stopped;
-                          },
-                          30s),
+        checks.expect(awaitProof("rooted QWidget proof retires asynchronously",
+                                 [&] {
+                                     return scheduler.isQuiescent() &&
+                                            service.status().state ==
+                                                runtime::GpuPreviewDisplayServiceState::Stopped;
+                                 }),
                       "rooted QWidget proof retires asynchronously");
         const auto nativeRetired = processingPolicy->snapshot().reservations;
         checks.expect(nativeRetired.ownedNativeImageBytes == 0 &&
@@ -680,13 +684,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         controller.beginShutdown();
         bridge.beginShutdown();
         service.beginShutdown();
-        checks.expect(waitUntil(
-                          [&] {
-                              return scheduler.isQuiescent() &&
-                                     service.status().state ==
-                                         runtime::GpuPreviewDisplayServiceState::Stopped;
-                          },
-                          30s),
+        checks.expect(awaitProof("playing/input service retires asynchronously",
+                                 [&] {
+                                     return scheduler.isQuiescent() &&
+                                            service.status().state ==
+                                                runtime::GpuPreviewDisplayServiceState::Stopped;
+                                 }),
                       "playing/input service retires asynchronously");
         std::cout << (checks.failures() ? "FAIL" : "PASS")
                   << ": production GPU-packed playing/input\n";
@@ -751,13 +754,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     controller.beginShutdown();
     bridge.beginShutdown();
     service.beginShutdown();
-    checks.expect(waitUntil(
-                      [&] {
-                          return scheduler.isQuiescent() &&
-                                 service.status().state ==
-                                     runtime::GpuPreviewDisplayServiceState::Stopped;
-                      },
-                      30s),
+    checks.expect(awaitProof("widget/service shutdown retires asynchronously",
+                             [&] {
+                                 return scheduler.isQuiescent() &&
+                                        service.status().state ==
+                                            runtime::GpuPreviewDisplayServiceState::Stopped;
+                             }),
                   "widget/service shutdown retires asynchronously");
     std::cout << (checks.failures() ? "FAIL" : "PASS")
               << ": production GPU-packed QWidget Viewer\n";

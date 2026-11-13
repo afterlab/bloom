@@ -65,6 +65,14 @@ host::ExportJobView shotJob(const std::uint64_t id, const std::string& name,
     return job;
 }
 
+// Delivers everything already queued (layout, polish, deferred updates) until it is quiet.
+void settle() {
+    for (int pass = 0; pass < 3; ++pass) {
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents();
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -110,10 +118,10 @@ int main(int argc, char** argv) {
                           kit::KDialog* prompt = nullptr) {
         for (const auto& [width, size] : widths) {
             area.resize(size);
-            QTest::qWait(80);
+            settle();
             auto image = area.grab().toImage();
             if (dialog != nullptr) {
-                QTest::qWait(40);
+                settle();
                 const auto over = dialog->grab().toImage();
                 const auto ratio = image.devicePixelRatio();
                 const QSize logical(std::max(qRound(image.width() / ratio), qRound(over.width() / ratio)),
@@ -149,7 +157,7 @@ int main(int argc, char** argv) {
                        "No job is running.");
         });
         adapter.drain();
-        QTest::qWait(40);
+        settle();
     };
     const auto composition = session.compositionId();
     const auto open = [&](const std::uint64_t job, const bool expanded) {
@@ -221,48 +229,48 @@ int main(int argc, char** argv) {
     publish(queued);
     open(1, true);
     auto* settings = editor->openRenderSettings(document::ExportJobId::fromRaw(1));
-    QTest::qWait(60);
+    settle();
     shot("render-settings", settings);
     settings->reject();
-    QTest::qWait(40);
+    settle();
     auto* prores = editor->openOutputModule(document::ExportJobId::fromRaw(1), document::ExportOutputId::fromRaw(11));
-    QTest::qWait(60);
+    settle();
     shot("output-module-prores", prores);
     prores->reject();
-    QTest::qWait(40);
+    settle();
     auto* exr = editor->openOutputModule(document::ExportJobId::fromRaw(1), document::ExportOutputId::fromRaw(12));
-    QTest::qWait(60);
+    settle();
     shot("output-module-exr", exr);
     exr->reject();
-    QTest::qWait(40);
+    settle();
 
     // Save as preset (#382): the button beside Format, its name prompt (empty, then a taken name,
     // then a new one) and the dialog with the saved preset chosen under My presets.
     auto* saving = editor->openOutputModule(document::ExportJobId::fromRaw(1), document::ExportOutputId::fromRaw(11));
-    QTest::qWait(60);
+    settle();
     shot("output-module-save-preset", saving);
     auto* namePrompt = saving->promptPresetName();
-    QTest::qWait(60);
+    settle();
     auto* nameField = namePrompt->findChild<kit::KLineEdit*>(QStringLiteral("exportSavePresetPromptField"));
     if (nameField == nullptr)
         ++failures;
     shot("output-module-preset-name-empty", saving, namePrompt);
     if (nameField != nullptr) {
         nameField->setText(QStringLiteral("ProRes 422 HQ"));
-        QTest::qWait(40);
+        settle();
         shot("output-module-preset-name-taken", saving, namePrompt);
         nameField->setText(QStringLiteral("Client review"));
-        QTest::qWait(40);
+        settle();
         shot("output-module-preset-name", saving, namePrompt);
     }
     namePrompt->button(kit::KDialog::Role::Accept)->click();
-    QTest::qWait(60);
+    settle();
     if (saving->format()->currentData().toString().isEmpty() ||
         !saving->format()->currentData().toString().startsWith(QStringLiteral("user:")))
         ++failures;
     shot("output-module-preset-saved", saving);
     saving->reject();
-    QTest::qWait(40);
+    settle();
 
     // The replace question Start All asks.
     publish([&](host::ExportQueueSnapshot& s) {
@@ -276,7 +284,7 @@ int main(int argc, char** argv) {
     });
     open(1, false);
     editor->startAll();
-    QTest::qWait(60);
+    settle();
     kit::KDialog* prompt = nullptr;
     for (auto* dialog : area.findChildren<kit::KDialog*>(QStringLiteral("exportReplaceConfirm")))
         if (dialog->isVisible())
@@ -318,7 +326,7 @@ int main(int argc, char** argv) {
     });
     open(1, false);
     auto* details = editor->openDetails(document::ExportJobId::fromRaw(2));
-    QTest::qWait(60);
+    settle();
     if (details == nullptr)
         ++failures;
     shot("details-reopen-quality", details);

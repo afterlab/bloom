@@ -1,3 +1,4 @@
+#include "await_qt.hpp"
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <QCoreApplication>
@@ -40,15 +41,12 @@ runtime::TaskRequest request() {
     return {"Completion bridge proof",
             {runtime::TaskOwnerKind::PanelRequest, runtime::TaskOwnerId::fromRaw(1)}};
 }
-template <typename Condition> bool spinUntil(Condition condition, const bool events = true) {
-    const auto end = std::chrono::steady_clock::now() + 2s;
-    while (!condition() && std::chrono::steady_clock::now() < end) {
-        if (events)
-            QCoreApplication::processEvents();
-        else
-            std::this_thread::yield();
-    }
-    return condition();
+// Pumps the UI event loop while waiting, or not at all when the proof needs UI delivery held.
+template <typename Condition>
+[[nodiscard]] bool spinUntil(const std::string_view name, Condition condition,
+                             const bool events = true) {
+    return events ? bloom::test_support::awaitQtCondition(name, condition)
+                  : bloom::test_support::awaitCondition(name, condition);
 }
 
 void testStoppedMonitorAndBurst(Expectations& checks) {
@@ -75,8 +73,9 @@ void testStoppedMonitorAndBurst(Expectations& checks) {
         }
     });
     bridge.start();
-    checks.expect(spinUntil([&] { return wakes > 0; }),
-                  "start queues initial drain after consumers connect");
+    checks.expect(
+        spinUntil("start queues initial drain after consumers connect", [&] { return wakes > 0; }),
+        "start queues initial drain after consumers connect");
     bridge.stop();
     const auto priorPolls = polls;
     const auto priorWakes = bridge.completionWakeCount();
@@ -94,8 +93,10 @@ void testStoppedMonitorAndBurst(Expectations& checks) {
     QObject::connect(&busyHeartbeat, &QTimer::timeout, &bridge, [&] { ++busyPulses; });
     busyHeartbeat.start();
     checks.expect(
-        spinUntil([&] { return busyPulses >= 4; }) && polls == priorPolls &&
-            bridge.completionWakeCount() == priorWakes,
+        spinUntil(
+            "held long worker leaves UI responsive with stopped Jobs and no completion polling",
+            [&] { return busyPulses >= 4; }) &&
+            polls == priorPolls && bridge.completionWakeCount() == priorWakes,
         "held long worker leaves UI responsive with stopped Jobs and no completion polling");
     busyHeartbeat.stop();
     for (int i = 0; i < 63; ++i) {
@@ -106,10 +107,15 @@ void testStoppedMonitorAndBurst(Expectations& checks) {
         handles.push_back(submitted.handle);
     }
     release.count_down();
-    checks.expect(spinUntil([&] { return scheduler.isQuiescent(); }, false),
+    checks.expect(spinUntil(
+                      "burst terminals finish before UI event queue is drained",
+                      [&] { return scheduler.isQuiescent(); }, false),
                   "burst terminals finish before UI event queue is drained");
     checks.expect(
-        spinUntil([&] { return delivered == 64; }) && polls == priorPolls && !bridge.isRunning(),
+        spinUntil(
+            "all 64 results deliver while Jobs monitor stays stopped with zero snapshot polls",
+            [&] { return delivered == 64; }) &&
+            polls == priorPolls && !bridge.isRunning(),
         "all 64 results deliver while Jobs monitor stays stopped with zero snapshot polls");
     checks.expect(bridge.completionWakeCount() - priorWakes <= 2,
                   "burst queues a bounded coalesced wake instead of one GUI callback per task");
@@ -128,7 +134,10 @@ void testStoppedMonitorAndBurst(Expectations& checks) {
     QObject::connect(&heartbeat, &QTimer::timeout, &bridge, [&] { ++pulses; });
     heartbeat.start();
     checks.expect(
-        spinUntil([&] { return pulses >= 4; }) && bridge.completionWakeCount() == idleWakes,
+        spinUntil(
+            "idle bridge has no recurring completion wake while event loop remains responsive",
+            [&] { return pulses >= 4; }) &&
+            bridge.completionWakeCount() == idleWakes,
         "idle bridge has no recurring completion wake while event loop remains responsive");
     heartbeat.stop();
     scheduler.beginShutdown();
@@ -138,7 +147,9 @@ void testDuringDrainAndAlreadyReady(Expectations& checks) {
     runtime::TaskScheduler scheduler(config());
     auto initial = scheduler.submit<void>(
         request(), [](runtime::TaskContext&) { return runtime::TaskResult<void>::succeeded(); });
-    checks.expect(spinUntil([&] { return scheduler.isQuiescent(); }, false),
+    checks.expect(spinUntil(
+                      "owned handle is already complete before bridge admission",
+                      [&] { return scheduler.isQuiescent(); }, false),
                   "owned handle is already complete before bridge admission");
     ui::TaskUiBridge bridge(scheduler);
     std::optional<runtime::TaskHandle<void>> second;
@@ -152,7 +163,9 @@ void testDuringDrainAndAlreadyReady(Expectations& checks) {
                 return runtime::TaskResult<void>::succeeded();
             });
             second = submitted.handle;
-            checks.expect(spinUntil([&] { return scheduler.isQuiescent(); }, false),
+            checks.expect(spinUntil(
+                              "second completion is deliberately inside first synchronous UI drain",
+                              [&] { return scheduler.isQuiescent(); }, false),
                           "second completion is deliberately inside first synchronous UI drain");
             return;
         }
@@ -162,7 +175,10 @@ void testDuringDrainAndAlreadyReady(Expectations& checks) {
     bridge.wake();
     bridge.stop();
     checks.expect(
-        spinUntil([&] { return delivered == 2; }) && wakes >= 2,
+        spinUntil(
+            "historical owned result and completion during drain both deliver without lost wake",
+            [&] { return delivered == 2; }) &&
+            wakes >= 2,
         "historical owned result and completion during drain both deliver without lost wake");
     scheduler.beginShutdown();
 }
@@ -179,7 +195,9 @@ void testDestructionAndObserverDeletion(Expectations& checks) {
                      QCoreApplication::instance(), [&] { ++oldSignals; });
     auto task = scheduler.submit<void>(
         request(), [](runtime::TaskContext&) { return runtime::TaskResult<void>::succeeded(); });
-    checks.expect(spinUntil([&] { return scheduler.isQuiescent(); }, false),
+    checks.expect(spinUntil(
+                      "terminal is ready while old UI drain stays queued",
+                      [&] { return scheduler.isQuiescent(); }, false),
                   "terminal is ready while old UI drain stays queued");
     bridge->wake(); // Guarantees a pending drain and a waiter that may be awaiting its UI ack.
     bridge.reset();
@@ -193,7 +211,8 @@ void testDestructionAndObserverDeletion(Expectations& checks) {
                      QCoreApplication::instance(), [&] { bridge.reset(); });
     bridge->wake();
     checks.expect(
-        spinUntil([&] { return guarded.isNull(); }),
+        spinUntil("observer can delete bridge synchronously after neutral ack without later access",
+                  [&] { return guarded.isNull(); }),
         "observer can delete bridge synchronously after neutral ack without later access");
     scheduler.beginShutdown();
 }
@@ -217,7 +236,8 @@ void testConstructionRefusal(Expectations& checks) {
     ui::TaskUiBridge recovered(scheduler);
     recovered.wake();
     recovered.stop();
-    checks.expect(spinUntil([&] { return recovered.completionWakeCount() > 0; }),
+    checks.expect(spinUntil("released slot admits functional adapter after failed construction",
+                            [&] { return recovered.completionWakeCount() > 0; }),
                   "released slot admits functional adapter after failed construction");
     scheduler.beginShutdown();
 }
@@ -236,11 +256,12 @@ void testCompletionServiceClosure(Expectations& checks) {
     // failure handler must not dereference the expired scheduler while delivering its diagnostic.
     scheduler.reset();
     checks.expect(errors == 0, "completion closure is queued instead of invoking UI on waiter");
-    checks.expect(spinUntil([&] { return errors == 1; }) &&
-                      errorThread == QCoreApplication::instance()->thread() &&
-                      bridge->monitorError().contains(QStringLiteral("closed unexpectedly")) &&
-                      !bridge->isRunning(),
-                  "closed completion service reports one UI-thread error with stopped monitor");
+    checks.expect(
+        spinUntil("completion service reports the closure error", [&] { return errors == 1; }) &&
+            errorThread == QCoreApplication::instance()->thread() &&
+            bridge->monitorError().contains(QStringLiteral("closed unexpectedly")) &&
+            !bridge->isRunning(),
+        "closed completion service reports one UI-thread error with stopped monitor");
     bridge.reset();
 
     scheduler = std::make_unique<runtime::TaskScheduler>(config());
@@ -262,5 +283,5 @@ int main(int argc, char** argv) {
     testDestructionAndObserverDeletion(checks);
     testConstructionRefusal(checks);
     testCompletionServiceClosure(checks);
-    return checks.failures == 0 ? 0 : 1;
+    return checks.failures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

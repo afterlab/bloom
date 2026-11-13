@@ -7,13 +7,13 @@
 
 #include "asset_drop.hpp"
 #include "assets_editor_internal.hpp"
+#include "await_qt.hpp"
 #include "layer_drop.hpp"
 
 #include <QApplication>
 #include <QDragLeaveEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
-#include <QElapsedTimer>
 #include <QImage>
 #include <QItemSelectionModel>
 #include <QMimeData>
@@ -62,13 +62,7 @@ void expect(const bool value, const std::string& message) {
         std::cerr << "FAIL: " << message << '\n';
     }
 }
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < 20000)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return predicate();
-}
+using bloom::test_support::awaitQtCondition;
 core::RationalTime frame(const std::int64_t index) {
     return *core::RationalTime::create(index, 24);
 }
@@ -160,8 +154,9 @@ struct Fixture final {
         controller->cancel();
         preview->beginShutdown();
         bridge.beginShutdown();
-        for (int i = 0; i < 400 && !scheduler.isQuiescent(); ++i)
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        // A destructor cannot assert; a timeout is counted by the helper and fails the exit.
+        (void)bloom::test_support::awaitQtCondition("scheduler quiescent after shutdown",
+                                                    [&] { return scheduler.isQuiescent(); });
     }
     [[nodiscard]] const document::Composition& composition() const {
         return *session.snapshot().project().findComposition(main);
@@ -431,7 +426,8 @@ void fileDropImportsThenAddsLayers(Fixture& fixture) {
            "the Timeline accepts files");
     expect(lanes->dropMarkerTimeForTest() == frame(40), "files show the time marker too");
     expect(sendDrag(timeline, QEvent::Drop, point, mime), "drop the file");
-    expect(waitUntil([&] { return !fixture.controller->busy(); }), "the import finishes");
+    expect(awaitQtCondition("the import finishes", [&] { return !fixture.controller->busy(); }),
+           "the import finishes");
     const auto layers = fixture.stack();
     expect(session.snapshot().project().assets().size() == assetsBefore + 1,
            "the file is imported");
@@ -500,7 +496,7 @@ int main(int argc, char** argv) {
         fileDropImportsThenAddsLayers(fixture);
         viewerDrop(fixture);
     }
-    if (failures != 0)
+    if (failures + bloom::test_support::awaitFailureCount() != 0)
         return 1;
     std::cout << "PASS: layer drops\n";
     return 0;

@@ -1,6 +1,7 @@
 // Playback preroll (#404): Play holds the transport clock until the first frames are cached, for at
 // most half a second. Every test drives time with a manual clock: no wall-clock sleeps decide an
 // outcome. Event-loop waits only let real asynchronous work (CPU frames, the audio worker) land.
+#include "await_qt.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -62,20 +63,6 @@ class Expectations final {
   private:
     int failures_ = 0;
 };
-
-// Returns as soon as the predicate holds; the bound only stops a broken test from hanging.
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 4'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate))
-            return true;
-        std::this_thread::yield();
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return std::invoke(predicate);
-}
 
 [[nodiscard]] bloom::core::RationalTime time(const std::int64_t numerator,
                                              const std::int64_t denominator = 1) {
@@ -155,15 +142,18 @@ struct Fixture final {
             controller.requestRefresh();
         else
             (void)session.setCurrentTime(time(frame, 25));
-        return waitUntil([&] { return cached(frame); });
+        return bloom::test_support::awaitQtCondition("frame is cached",
+                                                     [&] { return cached(frame); });
     }
 
     void finish(Expectations& expectations) {
         playback.pause();
         controller.beginShutdown();
         bridge.beginShutdown();
-        expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
-                            "the preroll fixture reaches scheduler quiescence");
+        expectations.expect(
+            bloom::test_support::awaitQtCondition("preroll fixture reaches scheduler quiescence",
+                                                  [&] { return scheduler.isQuiescent(); }),
+            "the preroll fixture reaches scheduler quiescence");
     }
 };
 
@@ -245,8 +235,10 @@ void testHoldsUntilReady(Expectations& expectations) {
                          if (!preparing && !background.active())
                              ++cancelledAtRelease;
                      });
-    expectations.expect(waitUntil([&] { return !fixture.playback.isPreparing(); }),
-                        "the read-ahead's frames release the hold");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("read-ahead's frames release the hold",
+                                              [&] { return !fixture.playback.isPreparing(); }),
+        "the read-ahead's frames release the hold");
     expectations.expect(cancelledAtRelease == 0 && background.active(),
                         "the release keeps the read-ahead running, with its frames in flight");
     expectations.expect(fixture.cached(1) && fixture.cached(2), "the window is cached");
@@ -402,38 +394,52 @@ void testAudioStartsAtRelease(Expectations& expectations) {
     mix.clips.push_back({bloom::document::NodeId::fromRaw(1), bloom::document::AssetId::fromRaw(1),
                          time(0), time(10)});
     fixture.playback.setAudioMix(mix, {audio::AudioClip{nullptr, time(0)}});
-    expectations.expect(waitUntil([&] { return control.isIdle(); }), "the mix is applied");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("mix is applied", [&] { return control.isIdle(); }),
+        "the mix is applied");
 
     fixture.playback.play();
     expectations.expect(fixture.playback.isPreparing(), "Play holds");
-    expectations.expect(waitUntil([&] { return control.isIdle(); }),
-                        "the audio worker drains the requests Play made");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("audio worker drains the requests Play made",
+                                              [&] { return control.isIdle(); }),
+        "the audio worker drains the requests Play made");
     expectations.expect(!control.isPlaying() && !fixture.playback.audioClockActive(),
                         "audio does not start while the clock holds");
     // A mix that arrives during the hold does not start audio either.
     fixture.playback.setAudioMix({}, {});
     fixture.playback.setAudioMix(mix, {audio::AudioClip{nullptr, time(0)}});
-    expectations.expect(waitUntil([&] { return control.isIdle(); }) && !control.isPlaying(),
-                        "a mix during the hold waits for the release");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("mix during the hold waits for the release",
+                                              [&] { return control.isIdle(); }) &&
+            !control.isPlaying(),
+        "a mix during the hold waits for the release");
 
     fixture.clock.advance(500ms);
     fixture.playback.tick();
     expectations.expect(!fixture.playback.isPreparing(), "the cap releases the clock");
-    expectations.expect(waitUntil([&] { return fixture.playback.audioClockActive(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "audio starts with the released clock and becomes the master",
+                            [&] { return fixture.playback.audioClockActive(); }),
                         "audio starts with the released clock and becomes the master");
     expectations.expect(control.positionNow() == time(0),
                         "audio starts at the run's anchor, not 0.5 s into it");
 
     // Stop during a later hold leaves the audio stopped.
     fixture.playback.pause();
-    expectations.expect(waitUntil([&] { return control.isIdle(); }) && !control.isPlaying(),
+    expectations.expect(bloom::test_support::awaitQtCondition("pause stops audio",
+                                                              [&] { return control.isIdle(); }) &&
+                            !control.isPlaying(),
                         "pause stops audio");
     (void)fixture.session.setCurrentTime(time(40, 25));
     fixture.playback.play();
     expectations.expect(fixture.playback.isPreparing(), "the second Play holds");
     fixture.playback.pause();
-    expectations.expect(waitUntil([&] { return control.isIdle(); }) && !control.isPlaying(),
-                        "Stop during the hold never started audio");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("Stop during the hold never started audio",
+                                              [&] { return control.isIdle(); }) &&
+            !control.isPlaying(),
+        "Stop during the hold never started audio");
     fixture.playback.setAudioDeviceControl(nullptr);
     fixture.finish(expectations);
     control.beginShutdown();
@@ -468,7 +474,7 @@ int main(int argc, char** argv) {
     testCachedFramesStartImmediately(expectations);
     testAudioStartsAtRelease(expectations);
     testNoProviderNoHold(expectations);
-    if (expectations.failures() != 0) {
+    if (expectations.failures() + bloom::test_support::awaitFailureCount() != 0) {
         std::cerr << expectations.failures() << " playback preroll expectation(s) failed\n";
         return EXIT_FAILURE;
     }

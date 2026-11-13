@@ -1,3 +1,5 @@
+#include "await_qt.hpp"
+
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -15,8 +17,6 @@
 #include <bloom/ui/timeline_frame_math.hpp>
 
 #include <QCoreApplication>
-#include <QElapsedTimer>
-#include <QThread>
 
 #include <array>
 #include <cstdlib>
@@ -254,12 +254,10 @@ void testDriverChainAccessors() {
     require(session.drivenValueText(ids.position).isEmpty(),
             "nothing is resolved before anything asks");
     session.refreshDrivenValues();
-    QElapsedTimer wait;
-    wait.start();
-    while (session.drivenValueText(ids.position).isEmpty() && wait.elapsed() < 5000) {
-        QCoreApplication::processEvents();
-        QThread::msleep(5);
-    }
+    require(bloom::test_support::awaitQtCondition(
+                "the driven parameter value resolves",
+                [&] { return !session.drivenValueText(ids.position).isEmpty(); }),
+            "the driven parameter value resolves after one refresh");
     require(!session.drivenValueText(ids.position).isEmpty(),
             "and after one refresh the driven parameter reads back a resolved value");
     require(session.drivenValueText(ids.opacity).isEmpty(),
@@ -275,12 +273,10 @@ void testDriverChainAccessors() {
         static_cast<void>(
             session.setCurrentTime(core::RationalTime::create(frame, 12).value_or(time(0))));
         session.refreshDrivenValues();
-        QElapsedTimer step;
-        step.start();
-        while (session.drivenValueWork().evaluations == before && step.elapsed() < 5000) {
-            QCoreApplication::processEvents();
-            QThread::msleep(1);
-        }
+        require(bloom::test_support::awaitQtCondition(
+                    "the playhead move is evaluated",
+                    [&] { return session.drivenValueWork().evaluations != before; }),
+                "each playhead move is evaluated");
     }
     const auto played = session.drivenValueWork();
     require(played.probeCompiles == first.probeCompiles,
@@ -880,5 +876,5 @@ int main(int argc, char** argv) {
     testParameterKeyedGestureNeedsNoSelection();
     testSteppingEveryFrameSamplesItsOwnExactValue();
     testGraphEditorKeyframeSeams();
-    return 0;
+    return bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

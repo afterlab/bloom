@@ -35,6 +35,7 @@
 #include <QVulkanInstance>
 #include <QWindow>
 
+#include "await_qt.hpp"
 #include "gpu_borrowed_instance.hpp"
 
 // Test-only access to the private construction-fault seam. The Qt include above already defines
@@ -94,24 +95,7 @@ struct TestOptions final {
     return options;
 }
 
-void pump(const int milliseconds) {
-    QEventLoop loop;
-    QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
-    loop.exec();
-}
-
-template <typename Predicate>
-[[nodiscard]] bool waitUntil(Predicate predicate, const int timeoutMilliseconds) {
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMilliseconds);
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (predicate()) {
-            return true;
-        }
-        pump(8);
-    }
-    return predicate();
-}
+using bloom::test_support::awaitQtCondition;
 
 [[nodiscard]] std::uint64_t surfaceBits(const VkSurfaceKHR surface) {
     return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(surface));
@@ -292,12 +276,11 @@ int main(int argc, char** argv) {
     // A VkSurface may exist before the initial xdg_surface configure has been processed.
     // Raw owner-side Vulkan presentation must wait for Qt's exposed/configured window.
     VkSurfaceKHR surface = VK_NULL_HANDLE;
-    if (!waitUntil(
-            [&surface, window] {
-                surface = QVulkanInstance::surfaceForWindow(window);
-                return surface != VK_NULL_HANDLE && window->isExposed();
-            },
-            10'000)) {
+    if (!awaitQtCondition("the QWindow exposes a configured Wayland VkSurfaceKHR",
+                          [&surface, window] {
+                              surface = QVulkanInstance::surfaceForWindow(window);
+                              return surface != VK_NULL_HANDLE && window->isExposed();
+                          })) {
         window->hide();
         delete window;
         instance.destroy();
@@ -359,29 +342,25 @@ int main(int argc, char** argv) {
                                  ? bloom::render::GpuPresentationAcquireMode::BoundedProgress
                                  : bloom::render::GpuPresentationAcquireMode::Poll;
     const auto presentFrame = [&]() -> bool {
-        for (int attempt = 0; attempt < 400; ++attempt) {
+        return awaitQtCondition("the target acquires and presents a clear frame", [&] {
             static_cast<void>(target.pollRetirement());
             const auto acquire = target.acquire(acquireMode);
             if (acquire == bloom::render::GpuPresentationTargetCode::Ok ||
                 acquire == bloom::render::GpuPresentationTargetCode::Suboptimal) {
                 const auto present = target.present(
                     bloom::render::GpuClearColor{.red = 0.1, .green = 0.2, .blue = 0.3});
-                if (present == bloom::render::GpuPresentationTargetCode::Ok ||
-                    present == bloom::render::GpuPresentationTargetCode::Suboptimal) {
-                    return true;
-                }
+                return present == bloom::render::GpuPresentationTargetCode::Ok ||
+                       present == bloom::render::GpuPresentationTargetCode::Suboptimal;
             }
-            pump(8);
-        }
-        return false;
+            return false;
+        });
     };
     const auto drain = [&]() {
-        for (int attempt = 0; attempt < 2000; ++attempt) {
-            if (target.pollRetirement() !=
-                bloom::render::GpuPresentationTargetCode::RetirePending) {
-                break;
-            }
-            pump(8);
+        if (!awaitQtCondition("the target's pending retirement is proven", [&] {
+                return target.pollRetirement() !=
+                       bloom::render::GpuPresentationTargetCode::RetirePending;
+            })) {
+            std::cerr << "FAIL: the presentation retirement stayed pending\n";
         }
     };
 
@@ -416,30 +395,38 @@ int main(int argc, char** argv) {
     const std::array<std::uint8_t, std::size_t{4} * 4 * 4> transparentOverlay{};
     const auto presentResident = [&](const std::uint32_t width, const std::uint32_t height) {
         const auto params = residentParams(width, height);
-        for (int attempt = 0; attempt < 400; ++attempt) {
-            static_cast<void>(target.pollRetirement());
-            const auto acquire = target.acquire(acquireMode);
-            if (acquire == bloom::render::GpuPresentationTargetCode::Ok ||
-                acquire == bloom::render::GpuPresentationTargetCode::Suboptimal) {
-                const bloom::render::GpuPresentOverlay overlay{
-                    .pixels = transparentOverlay.data(), .width = 4, .height = 4, .token = 1};
-                const auto present = target.presentImage(displayImage, params, overlay);
-                if (present == bloom::render::GpuPresentationTargetCode::Ok ||
-                    present == bloom::render::GpuPresentationTargetCode::Suboptimal) {
-                    const auto owned = presentationBudget.snapshot();
-                    return owned.ownedPresentationImages == 1 &&
-                           owned.ownedPresentationBuffers == 2 && owned.admittedPhases == 0;
+        bool finished = false;
+        bool presented = false;
+        const bool settled =
+            awaitQtCondition("the target acquires and presents the resident image", [&] {
+                static_cast<void>(target.pollRetirement());
+                const auto acquire = target.acquire(acquireMode);
+                if (acquire == bloom::render::GpuPresentationTargetCode::Ok ||
+                    acquire == bloom::render::GpuPresentationTargetCode::Suboptimal) {
+                    const bloom::render::GpuPresentOverlay overlay{
+                        .pixels = transparentOverlay.data(), .width = 4, .height = 4, .token = 1};
+                    const auto present = target.presentImage(displayImage, params, overlay);
+                    if (present == bloom::render::GpuPresentationTargetCode::Ok ||
+                        present == bloom::render::GpuPresentationTargetCode::Suboptimal) {
+                        const auto owned = presentationBudget.snapshot();
+                        presented = owned.ownedPresentationImages == 1 &&
+                                    owned.ownedPresentationBuffers == 2 &&
+                                    owned.admittedPhases == 0;
+                        finished = true;
+                        return true;
+                    }
+                    if (present == bloom::render::GpuPresentationTargetCode::InvalidArgument ||
+                        present ==
+                            bloom::render::GpuPresentationTargetCode::PresentationUnavailable) {
+                        std::cerr << "FAIL: presentImage rejected the frame: "
+                                  << target.lastMessage() << '\n';
+                        finished = true;
+                        return true;
+                    }
                 }
-                if (present == bloom::render::GpuPresentationTargetCode::InvalidArgument ||
-                    present == bloom::render::GpuPresentationTargetCode::PresentationUnavailable) {
-                    std::cerr << "FAIL: presentImage rejected the frame: " << target.lastMessage()
-                              << '\n';
-                    return false;
-                }
-            }
-            pump(8);
-        }
-        return false;
+                return false;
+            });
+        return settled && finished && presented;
     };
     if (!presentResident(description.width, description.height)) {
         window->hide();
@@ -490,26 +477,22 @@ int main(int argc, char** argv) {
         window->resize(static_cast<int>(width), static_cast<int>(height));
         // Process Qt/Wayland resize events before rebuilding the native swapchain; the target
         // extent must match the actual exposed fixture window rather than a synthetic size.
-        pump(8);
-        if (!waitUntil(
-                [&] {
-                    return window->isExposed() && window->width() == static_cast<int>(width) &&
-                           window->height() == static_cast<int>(height);
-                },
-                10'000))
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents();
+        if (!awaitQtCondition("the QWindow reports the resized extent", [&] {
+                return window->isExposed() && window->width() == static_cast<int>(width) &&
+                       window->height() == static_cast<int>(height);
+            }))
             return false;
         bloom::render::GpuPresentationTargetDescription resized = description;
         resized.width = width;
         resized.height = height;
         auto recreated = bloom::render::GpuPresentationTargetCode::NotReady;
-        for (int attempt = 0; attempt < 2000; ++attempt) {
+        static_cast<void>(awaitQtCondition("the target recreates for the resized window", [&] {
             static_cast<void>(target.pollRetirement());
             recreated = target.recreate(resized);
-            if (recreated != bloom::render::GpuPresentationTargetCode::NotReady) {
-                break;
-            }
-            pump(8);
-        }
+            return recreated != bloom::render::GpuPresentationTargetCode::NotReady;
+        }));
         return recreated == bloom::render::GpuPresentationTargetCode::Ok ||
                recreated == bloom::render::GpuPresentationTargetCode::Suboptimal;
     };
@@ -546,14 +529,11 @@ int main(int argc, char** argv) {
     // Acquired-but-unpresented close: beginRetire must legally discard the acquired image and only
     // report Retired once that discard present is proven retired.
     auto acquired = bloom::render::GpuPresentationTargetCode::NotReady;
-    for (int attempt = 0; attempt < 2000; ++attempt) {
+    static_cast<void>(awaitQtCondition("the target acquires the image to be left unpresented", [&] {
         static_cast<void>(target.pollRetirement());
         acquired = target.acquire(acquireMode);
-        if (acquired != bloom::render::GpuPresentationTargetCode::NotReady) {
-            break;
-        }
-        pump(8);
-    }
+        return acquired != bloom::render::GpuPresentationTargetCode::NotReady;
+    }));
     if (acquired != bloom::render::GpuPresentationTargetCode::Ok &&
         acquired != bloom::render::GpuPresentationTargetCode::Suboptimal) {
         window->hide();
@@ -615,5 +595,5 @@ int main(int argc, char** argv) {
     std::cout
         << "PASS: Wayland surface acquired, presented, recreated/resized, acquired-unpresented "
            "close, and safely retired on the owner thread\n";
-    return 0;
+    return bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

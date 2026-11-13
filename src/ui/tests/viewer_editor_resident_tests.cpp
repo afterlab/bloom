@@ -6,6 +6,7 @@
 // seam configures the controller without a device. The real-device
 // first-present/ack path is the separate native test.
 
+#include "await_qt.hpp"
 #include <bloom/ui/viewer_editor.hpp>
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
@@ -164,20 +165,6 @@ runtime::TaskSchedulerConfig testSchedulerConfig() {
             .groupRegistryCapacity = 8};
 }
 
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 4'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate)) {
-            return true;
-        }
-        std::this_thread::yield();
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return std::invoke(predicate);
-}
-
 void testViewerEditorResidentGateIsInertAndKeepsCpuPaint(Expectations& expectations) {
     auto newProject = makeTestProject("Viewer GPU resident prep");
     const auto compositionId = newProject.initialCompositionId;
@@ -202,10 +189,12 @@ void testViewerEditorResidentGateIsInertAndKeepsCpuPaint(Expectations& expectati
     viewer.resize(320, 240);
     viewer.show();
 
-    expectations.expect(waitUntil([&] {
-                            return controller.state().activity == ui::PreviewActivity::Ready &&
-                                   controller.state().frame != nullptr;
-                        }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "CPU frame becomes ready in the real viewer fixture",
+                            [&] {
+                                return controller.state().activity == ui::PreviewActivity::Ready &&
+                                       controller.state().frame != nullptr;
+                            }),
                         "a CPU frame becomes ready in the real viewer fixture");
 
     // 1. No client: the integration is inert and the EditorNativeSurface gate is
@@ -369,7 +358,9 @@ void testViewerEditorResidentGateIsInertAndKeepsCpuPaint(Expectations& expectati
 
     controller.beginShutdown();
     bridge.beginShutdown();
-    (void)waitUntil([&] { return scheduler.isQuiescent(); });
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "scheduler quiescent", [&] { return scheduler.isQuiescent(); }),
+                        "the scheduler reaches quiescence");
 }
 
 // Regression for the standalone external retirement completion. The host retirement gate never
@@ -489,7 +480,9 @@ void testViewerEditorExternalUnsafeCompletionClearsMutationGate(Expectations& ex
 
     controller.beginShutdown();
     bridge.beginShutdown();
-    (void)waitUntil([&] { return scheduler.isQuiescent(); });
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "scheduler quiescent", [&] { return scheduler.isQuiescent(); }),
+                        "the scheduler reaches quiescence");
 }
 
 void testResidentFrameGeometryResolvesTheSameMappingDescriptor(Expectations& expectations) {
@@ -602,19 +595,23 @@ void testViewerEditorBlankCoverIsOpaqueCurrentCpuPaint(Expectations& expectation
     viewer.resize(320, 240);
     viewer.show();
     controller.requestRefresh();
-    expectations.expect(waitUntil([&] {
-                            const auto frame = controller.state().frame;
-                            return frame != nullptr &&
-                                   frame->provenance().provider !=
-                                       runtime::PreviewDisplayProvider::GpuResident;
-                        }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "CPU frame is displayed before the blank rebind",
+                            [&] {
+                                const auto frame = controller.state().frame;
+                                return frame != nullptr &&
+                                       frame->provenance().provider !=
+                                           runtime::PreviewDisplayProvider::GpuResident;
+                            }),
                         "a CPU frame is displayed before the blank rebind");
     static_cast<void>(viewer.grab()); // paints the CPU frame, populating the last-CPU-frame cache
     const QPixmap beforeCover = viewer.renderCpuCoverSnapshotForTest();
     expectations.expect(!beforeCover.isNull(), "the composition cover snapshot renders");
 
     session.rebind(blankDocument, blankCommands, document::CompositionId{});
-    expectations.expect(waitUntil([&] { return viewer.displayedFrameForTest() == nullptr; }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "composition-less rebind clears the displayed frame",
+                            [&] { return viewer.displayedFrameForTest() == nullptr; }),
                         "the composition-less rebind clears the displayed frame");
     QApplication::processEvents();
     const QPixmap afterCover = viewer.renderCpuCoverSnapshotForTest();
@@ -630,7 +627,9 @@ void testViewerEditorBlankCoverIsOpaqueCurrentCpuPaint(Expectations& expectation
 
     controller.beginShutdown();
     bridge.beginShutdown();
-    (void)waitUntil([&] { return scheduler.isQuiescent(); });
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "scheduler quiescent", [&] { return scheduler.isQuiescent(); }),
+                        "the scheduler reaches quiescence");
 }
 
 // Structural regression for the native CPU cover. Qt's QWidget::setAttribute(WA_NativeWindow)
@@ -710,7 +709,9 @@ void testNativeCoverPromotionIsFencedAndStable(Expectations& expectations) {
     const auto childrenBefore = coverHost->findChildren<QWidget*>(Qt::FindDirectChildrenOnly);
     const auto descendantsBefore = editor.findChildren<QObject*>().size();
     const auto windowsBefore = QGuiApplication::allWindows().size();
-    expectations.expect(waitUntil([&] { return controller.cpuCoverPaintCountForTest() > 0; }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "cover completes an initial paint before the unchanged-update check",
+                            [&] { return controller.cpuCoverPaintCountForTest() > 0; }),
                         "the cover completes an initial paint before the unchanged-update check");
     const auto paintsBefore = controller.cpuCoverPaintCountForTest();
     expectations.expect(childrenBefore.size() == 1,
@@ -804,10 +805,11 @@ int main(int argc, char** argv) {
     testNativeCoverPromotionIsFencedAndStable(expectations);
     testViewerActualAdjustmentFailureAndCover(expectations);
     testViewerSharedFailureWithoutCandidate(expectations);
-    if (expectations.failures() == 0) {
+    if (expectations.failures() + bloom::test_support::awaitFailureCount() == 0) {
         std::cout << "PASS: actual ViewerEditor resident integration (CPU/inert gate)\n";
         return 0;
     }
-    std::cerr << expectations.failures() << " failure(s)\n";
+    std::cerr << expectations.failures() + bloom::test_support::awaitFailureCount()
+              << " failure(s)\n";
     return 1;
 }

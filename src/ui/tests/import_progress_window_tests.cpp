@@ -106,7 +106,8 @@ int run(int argc, char** argv) {
     ui::test::WindowFixture fixture;
     fixture.window->show();
     require(QTest::qWaitForWindowExposed(fixture.window.get()), "window exposed");
-    QTest::qWait(200);
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     auto& assets = *fixture.assets;
     const auto capture = Capture{};
     std::shared_ptr<ui::test::ImportGate> gate;

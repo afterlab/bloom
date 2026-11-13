@@ -50,7 +50,7 @@ pauseResizeOwner(Expectations& checks, TaskScheduler& scheduler,
             static_cast<void>(std::move(completion).succeed(0));
         });
     checks.expect(submitted.accepted() &&
-                      waitUntil([&] { return pause->entered.load(std::memory_order_acquire); }, 3s),
+                      bloom::test_support::awaitQtCondition("bounded private barrier holds genuine owner progress", [&] { return pause->entered.load(std::memory_order_acquire); }),
                   "the bounded private barrier holds genuine owner progress");
     return pause;
 }
@@ -109,13 +109,11 @@ void exerciseViewerResizeProof(
     const std::shared_ptr<runtime::detail::PreviewDisplayServiceCore>& core,
     const std::shared_ptr<GpuPresentationClient>& client) {
     const auto recover = [&] {
-        return waitUntil(
-            [&] {
+        return bloom::test_support::awaitQtCondition("resize baseline is actually current and uncovered", [&] {
                 return viewer.residentPresentationActiveForTest() &&
                        !viewer.gpuCpuCoverVisibleForTest() &&
                        viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
-            },
-            20s);
+            });
     };
     checks.expect(recover(), "the resize baseline is actually current and uncovered");
     observeResizePhase("BASE", viewer, splitter, host, client);
@@ -171,13 +169,11 @@ void exerciseGeometryAdmissionProof(
             }));
     };
     const auto recover = [&] {
-        return waitUntil(
-            [&] {
+        return bloom::test_support::awaitQtCondition("admission starts from genuinely displayed current pixels", [&] {
                 return !gate.isPending() && viewer.residentPresentationActiveForTest() &&
                        !viewer.gpuCpuCoverVisibleForTest() &&
                        viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
-            },
-            20s);
+            });
     };
     checks.expect(recover(), "admission starts from genuinely displayed current pixels");
     observeResizePhase("GATE_BASE", viewer, splitter, host, client);

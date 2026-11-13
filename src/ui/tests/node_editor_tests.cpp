@@ -1,3 +1,4 @@
+#include "await_qt.hpp"
 #include "editor_chrome_test_support.hpp"
 #include "node_placement_test_support.hpp"
 // Task U4 (issue #123): the Afterlab node editor's navigation, selection, typed connectors,
@@ -698,10 +699,9 @@ void testWriteToAPathIsOneUndoStep(Expectations& expectations) {
     };
     expectations.expect(pathNodes() == 0, "no Path node exists yet");
     write->trigger();
-    QElapsedTimer timer;
-    timer.start();
-    while (pathNodes() == 0 && timer.elapsed() < 20000)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    expectations.expect(bloom::test_support::awaitQtCondition("Write to a Path adds a Path node",
+                                                              [&] { return pathNodes() != 0; }),
+                        "the Path node write completes");
     expectations.expect(pathNodes() == 1, "Write to a Path adds one Path node");
     expectations.expect(fixture.session.undo() && pathNodes() == 0,
                         "ONE undo step removes the Path node it wrote");
@@ -945,12 +945,9 @@ void testColorIsAReadOnlyChipAndParameterlessNodesStayClean(Expectations& expect
     // honesty rule points the other way -- an enabled chip whose picker result really commits. What
     // stays pinned is that the exact authoring value is still reported in text, because the swatch
     // cannot show an HDR or negative channel.
-    QElapsedTimer preparation;
-    preparation.start();
-    while (!chip->isEnabled() && preparation.elapsed() < 5000) {
-        QCoreApplication::processEvents();
-        QThread::msleep(1);
-    }
+    expectations.expect(bloom::test_support::awaitQtCondition("color chip becomes enabled",
+                                                              [&] { return chip->isEnabled(); }),
+                        "the chip becomes enabled");
     expectations.expect(chip->isEnabled(), "the chip is editable: a command now sets a color");
     expectations.expect(!chip->isPickerOpen(), "and it opens its picker only when asked");
     expectations.expect(chip->toolTip().contains(QStringLiteral("R 0.62")),
@@ -1113,14 +1110,14 @@ void testNoNodeCardStaysOnResolving(Expectations& expectations) {
         }
         return found;
     };
-    QElapsedTimer wait;
-    wait.start();
     auto found = readouts();
-    while (wait.elapsed() < 20000 && (found.readoutLabels == 0 || found.resolving != 0)) {
-        QCoreApplication::processEvents();
-        QThread::msleep(5);
-        found = readouts();
-    }
+    expectations.expect(bloom::test_support::awaitQtCondition("node card readouts resolve",
+                                                              [&] {
+                                                                  found = readouts();
+                                                                  return found.readoutLabels != 0 &&
+                                                                         found.resolving == 0;
+                                                              }),
+                        "the node card readouts resolve");
     expectations.expect(found.readoutLabels == 4,
                         "only the Layer Bounds card carries value readouts (its four outputs): " +
                             std::to_string(found.readoutLabels));
@@ -1136,8 +1133,6 @@ void testNoNodeCardStaysOnResolving(Expectations& expectations) {
                                            document::Vec2d{64.0, 64.0});
     expectations.expect(clean.scene()->submit(std::move(transaction)).succeeded(),
                         "the canvas adds a Layer Bounds node");
-    QElapsedTimer waitClean;
-    waitClean.start();
     const auto cleanTexts = [&clean] {
         QStringList texts;
         for (auto* item : clean.scene()->items())
@@ -1149,12 +1144,14 @@ void testNoNodeCardStaysOnResolving(Expectations& expectations) {
         return texts;
     };
     auto texts = cleanTexts();
-    while (waitClean.elapsed() < 20000 &&
-           (texts.size() != 4 || texts.contains(QStringLiteral("Resolving…")))) {
-        QCoreApplication::processEvents();
-        QThread::msleep(5);
-        texts = cleanTexts();
-    }
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "Layer Bounds card readouts leave the placeholder",
+                            [&] {
+                                texts = cleanTexts();
+                                return texts.size() == 4 &&
+                                       !texts.contains(QStringLiteral("Resolving…"));
+                            }),
+                        "the Layer Bounds card readouts resolve");
     expectations.expect(texts.size() == 4 && !texts.contains(QStringLiteral("Resolving…")),
                         "a Layer Bounds card's four readouts leave the placeholder");
 }
@@ -1182,7 +1179,7 @@ int runAll() {
     testHeaderMenuBarCollapsesIntoAnOverflowButtonWhenNarrow(expectations);
     testApplyApplicationPreferencesReachesTheScene(expectations);
     testNoNodeCardStaysOnResolving(expectations);
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }
 } // namespace
 

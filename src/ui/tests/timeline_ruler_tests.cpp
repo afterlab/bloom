@@ -1,3 +1,4 @@
+#include "await_qt.hpp"
 #include "timeline_property_rows.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
@@ -77,20 +78,6 @@ struct DeferredWidgetCleanup final {
     }
 };
 
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 4'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate)) {
-            return true;
-        }
-        std::this_thread::yield();
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return std::invoke(predicate);
-}
-
 bloom::runtime::TaskSchedulerConfig testSchedulerConfig() {
     return {.cpuWorkerCount = 1,
             .blockingIoWorkerCount = 1,
@@ -168,7 +155,8 @@ struct SessionFixture final {
         // Rebuilt rows are detached and deleted later. Flush them while their referenced session
         // is still alive, before another fixture pumps paint events for those top-level widgets.
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-        if (!waitUntil([&] { return scheduler.isQuiescent(); }))
+        if (!bloom::test_support::awaitQtCondition("ruler fixture scheduler quiescent",
+                                                   [&] { return scheduler.isQuiescent(); }))
             std::abort();
     }
 };
@@ -280,11 +268,11 @@ void sendKey(QWidget& widget, const Qt::Key key) {
 void testRulerScrubLandsOnExactFrameTimesIncludingATie(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Ruler Scrub Test", time(1)));
-    expectations.expect(waitUntil([&] {
-                            return fixture.controller.state().activity !=
-                                   ui::PreviewActivity::Rendering;
-                        }),
-                        "the initial preview leaves the Rendering activity before scrubbing");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "initial preview leaves the Rendering activity before scrubbing",
+            [&] { return fixture.controller.state().activity != ui::PreviewActivity::Rendering; }),
+        "the initial preview leaves the Rendering activity before scrubbing");
 
     ui::TimelineRuler ruler(fixture.session, fixture.controller);
     ruler.resize(49 + 2 * ui::kit::px(ui::kit::Spacing::LanePadding), 26);
@@ -324,13 +312,16 @@ void testRulerScrubLandsOnExactFrameTimesIncludingATie(Expectations& expectation
                         "a pointer move during a drag scrubs to its own exact frame time");
     sendRelease(ruler, ui::kit::px(ui::kit::Spacing::LanePadding) + 20.0);
     expectations.expect(
-        waitUntil(
+        bloom::test_support::awaitQtCondition(
+            "scrub-end still reaches a ready preview frame for the final scrubbed time",
             [&] { return fixture.controller.state().activity == ui::PreviewActivity::Ready; }),
         "scrub-end still reaches a ready preview frame for the final scrubbed time");
 
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "ruler fixture reaches asynchronous scheduler quiescence",
+                            [&] { return fixture.scheduler.isQuiescent(); }),
                         "the ruler fixture reaches asynchronous scheduler quiescence");
 }
 
@@ -1061,7 +1052,8 @@ void testRulerMajorTickLabelsNeverCollideAtTwoWidths(Expectations& expectations)
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Ruler Density Test", time(999, 24)));
     expectations.expect(
-        waitUntil(
+        bloom::test_support::awaitQtCondition(
+            "initial preview leaves the Rendering activity before measuring labels",
             [&] { return fixture.controller.state().activity != ui::PreviewActivity::Rendering; }),
         "the initial preview leaves the Rendering activity before measuring labels");
 
@@ -1081,7 +1073,9 @@ void testRulerMajorTickLabelsNeverCollideAtTwoWidths(Expectations& expectations)
 
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "density fixture reaches asynchronous scheduler quiescence",
+                            [&] { return fixture.scheduler.isQuiescent(); }),
                         "the density fixture reaches asynchronous scheduler quiescence");
 }
 
@@ -1093,11 +1087,11 @@ void testRulerMajorTickLabelsNeverCollideAtTwoWidths(Expectations& expectations)
 void testRulerPlayheadPaintsAOnePixelAccentLine(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Ruler Playhead Color Test", time(1)));
-    expectations.expect(waitUntil([&] {
-                            return fixture.controller.state().activity !=
-                                   ui::PreviewActivity::Rendering;
-                        }),
-                        "the initial preview leaves the Rendering activity before sampling");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "initial preview leaves the Rendering activity before sampling",
+            [&] { return fixture.controller.state().activity != ui::PreviewActivity::Rendering; }),
+        "the initial preview leaves the Rendering activity before sampling");
 
     ui::TimelineRuler ruler(fixture.session, fixture.controller);
     ruler.resize(200, 26);
@@ -1150,7 +1144,9 @@ void testRulerPlayheadPaintsAOnePixelAccentLine(Expectations& expectations) {
 
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "playhead color fixture reaches asynchronous scheduler quiescence",
+                            [&] { return fixture.scheduler.isQuiescent(); }),
                         "the playhead color fixture reaches asynchronous scheduler quiescence");
 }
 
@@ -1188,26 +1184,29 @@ void testCacheBarTracksAxisIdentityEvictionAndBatches(Expectations& expectations
     std::vector<ui::PreparedPreviewFrameHandle> frames;
     for (const auto index : {0, 2, 4}) {
         (void)fixture.session.setCurrentTime(time(index, 24));
-        expectations.expect(waitUntil([&] {
-                                return fixture.controller.state().activity ==
-                                       ui::PreviewActivity::Ready;
-                            }),
-                            "seed a ruler cache frame");
+        expectations.expect(
+            bloom::test_support::awaitQtCondition(
+                "seed a ruler cache frame",
+                [&] { return fixture.controller.state().activity == ui::PreviewActivity::Ready; }),
+            "seed a ruler cache frame");
         frames.push_back(fixture.controller.state().frame);
     }
     int notifications = 0;
     QObject::connect(&cache, &ui::PreviewFrameCache::contentsChanged, &ruler,
                      [&] { ++notifications; });
     cache.clear();
-    expectations.expect(waitUntil([&] { return notifications != 0; }),
+    expectations.expect(bloom::test_support::awaitQtCondition("clear is notified asynchronously",
+                                                              [&] { return notifications != 0; }),
                         "clear is notified asynchronously");
     notifications = 0;
     for (const auto& frame : frames) {
         cache.insert(frame);
     }
     expectations.expect(notifications == 0, "insertion does not repaint once per frame");
-    expectations.expect(waitUntil([&] { return notifications == 1; }),
-                        "three inserts coalesce into one notification");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("three inserts coalesce into one notification",
+                                              [&] { return notifications == 1; }),
+        "three inserts coalesce into one notification");
     for (const int width : {501, 1001}) {
         ruler.resize(width, ruler.height());
         const auto axis = ruler.axisForWidth(width);
@@ -1254,40 +1253,40 @@ void testCacheBarTracksAxisIdentityEvictionAndBatches(Expectations& expectations
     expectations.expect(ruler.cachedFrameRects().size() == 1, "eviction removes ruler segments");
     cache.setByteBudget(bytes * 8);
     (void)fixture.session.setCurrentTime(time(1, 48));
-    expectations.expect(waitUntil([&] {
-                            return fixture.controller.state().activity ==
-                                   ui::PreviewActivity::Ready;
-                        }),
-                        "subframe sample is ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "subframe sample is ready",
+            [&] { return fixture.controller.state().activity == ui::PreviewActivity::Ready; }),
+        "subframe sample is ready");
     expectations.expect(cache.size() == 2 && ruler.cachedFrameRects().size() == 1,
                         "a cached subframe never certifies a frame-grid sample");
     fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);
     expectations.expect(ruler.cachedFrameRects().empty(),
                         "old resolution coverage disappears immediately");
     (void)fixture.session.setCurrentTime(time(0));
-    expectations.expect(waitUntil([&] {
-                            return fixture.controller.state().activity ==
-                                   ui::PreviewActivity::Ready;
-                        }),
-                        "new resolution frame ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "new resolution frame ready",
+            [&] { return fixture.controller.state().activity == ui::PreviewActivity::Ready; }),
+        "new resolution frame ready");
     expectations.expect(ruler.cachedFrameRects().size() == 1, "only current resolution is shown");
     expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Edit"), {1, 0, 0, 1}),
                         "revision edit succeeds");
     expectations.expect(ruler.cachedFrameRects().empty(),
                         "old revision coverage disappears immediately");
-    expectations.expect(waitUntil([&] {
-                            return fixture.controller.state().activity ==
-                                   ui::PreviewActivity::Ready;
-                        }),
-                        "edited frame ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "edited frame ready",
+            [&] { return fixture.controller.state().activity == ui::PreviewActivity::Ready; }),
+        "edited frame ready");
     expectations.expect(ruler.cachedFrameRects().size() == 1, "new revision coverage returns");
     // #358: adjacent cached frames paint as ONE segment rather than one rect per frame.
     (void)fixture.session.setCurrentTime(time(1, 24));
-    expectations.expect(waitUntil([&] {
-                            return fixture.controller.state().activity ==
-                                   ui::PreviewActivity::Ready;
-                        }),
-                        "the adjacent frame is ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "adjacent frame is ready",
+            [&] { return fixture.controller.state().activity == ui::PreviewActivity::Ready; }),
+        "the adjacent frame is ready");
     const auto merged = ruler.cachedFrameRects();
     const auto mergedAxis = ruler.axisForWidth(ruler.width());
     expectations.expect(
@@ -1296,8 +1295,10 @@ void testCacheBarTracksAxisIdentityEvictionAndBatches(Expectations& expectations
         "two adjacent cached frames merge into one coverage segment");
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
-                        "ruler fixture shuts down");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("ruler fixture shuts down",
+                                              [&] { return fixture.scheduler.isQuiescent(); }),
+        "ruler fixture shuts down");
 }
 
 void testComponentRowsAndLaneSelections(Expectations& expectations) {
@@ -1513,5 +1514,5 @@ int main(int argc, char** argv) {
     testRulerPlayheadPaintsAOnePixelAccentLine(expectations);
     testWorkAreaStripSpansFullWidthWithDimAccentBand(expectations);
     testFreeKeyDragClampsExactlyAtZero(expectations);
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

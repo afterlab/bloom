@@ -20,6 +20,7 @@
 // The device-loss/quarantine case cannot be induced on this hardware and is left unproven rather
 // than faked.
 
+#include "await_qt.hpp"
 #include <bloom/core/color.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
@@ -145,19 +146,6 @@ void pumpQt(const int milliseconds) {
     QEventLoop loop;
     QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
     loop.exec();
-}
-
-template <typename Predicate>
-[[nodiscard]] bool waitUntil(Predicate predicate, const int timeoutMilliseconds) {
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMilliseconds);
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (predicate()) {
-            return true;
-        }
-        pumpQt(4);
-    }
-    return predicate();
 }
 
 enum class Cmd { None, ProduceLease, SetGate, Barrier };
@@ -337,12 +325,11 @@ int main(int argc, char** argv) {
     Shared shared;
     std::thread owner(ownerMain, std::ref(shared), options, std::ref(expectations));
 
-    const bool initialized = waitUntil(
-        [&shared] {
+    const bool initialized =
+        bloom::test_support::awaitQtCondition("owner thread initializes", [&shared] {
             std::lock_guard lock(shared.mutex);
             return shared.initDone;
-        },
-        30'000);
+        });
     if (!initialized || !shared.ran) {
         owner.join();
         std::string reason;
@@ -363,16 +350,18 @@ int main(int argc, char** argv) {
             shared.cmd = command;
         }
         shared.cv.notify_all();
-        (void)waitUntil(
-            [&shared] {
-                std::lock_guard lock(shared.mutex);
-                return shared.cmdDone;
-            },
-            10'000);
+        expectations.expect(
+            bloom::test_support::awaitQtCondition("owner thread acknowledges the command",
+                                                  [&shared] {
+                                                      std::lock_guard lock(shared.mutex);
+                                                      return shared.cmdDone;
+                                                  }),
+            "the owner thread acknowledges the command");
     };
-    const auto waitActive = [&](ViewerGpuPresenter& presenter, const int timeout) {
-        const bool active = waitUntil(
-            [&] { return presenter.state() == ViewerGpuPresenter::State::Active; }, timeout);
+    const auto waitActive = [&](ViewerGpuPresenter& presenter) {
+        const bool active = bloom::test_support::awaitQtCondition("viewer becomes Active", [&] {
+            return presenter.state() == ViewerGpuPresenter::State::Active;
+        });
         if (!active) {
             std::cerr << "DIAG: viewer never became Active: "
                       << bloom::ui::test::describeViewerGpuPresenter(presenter) << '\n';
@@ -422,7 +411,7 @@ int main(int argc, char** argv) {
     expectations.expect(presenter->container() != nullptr, "the real viewer has a container");
     layout->addWidget(presenter->container());
     presenter->container()->show();
-    expectations.expect(waitActive(*presenter, 15'000), "the real viewer becomes Active");
+    expectations.expect(waitActive(*presenter), "the real viewer becomes Active");
     expectations.expect(ready, "the ready callback reported readiness");
     expectations.expect(presenter->attached(), "the real viewer attached a target");
     const GpuPresentationTargetId firstTarget = presenter->targetId();
@@ -446,7 +435,16 @@ int main(int argc, char** argv) {
                           Qt::NoScrollPhase, false);
         QApplication::sendEvent(presenter->container(), &wheel);
     }
-    pumpQt(20);
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "all forwarded input events are captured",
+                            [&] {
+                                return captured.last(ViewerGpuInputKind::MouseMove).has_value() &&
+                                       captured.count(ViewerGpuInputKind::MousePress) >= 1U &&
+                                       captured.count(ViewerGpuInputKind::MouseRelease) >= 1U &&
+                                       captured.last(ViewerGpuInputKind::KeyPress).has_value() &&
+                                       captured.last(ViewerGpuInputKind::Wheel).has_value();
+                            }),
+                        "the forwarded input events arrive");
     const auto move = captured.last(ViewerGpuInputKind::MouseMove);
     const QPointF expectedGlobal = presenter->container()->mapToGlobal(QPoint(15, 26));
     expectations.expect(move.has_value() && std::abs(move->local.x() - 15.0) < 1.0 &&
@@ -474,28 +472,30 @@ int main(int argc, char** argv) {
     expectations.expect(lease.isValid(), "a resident lease is produced");
     expectations.expect(presenter->present(lease, makeParams(320U, 240U), nullptr),
                         "the first present is admitted");
-    expectations.expect(
-        waitUntil([&] { return client->status(firstTarget).appliedSequence >= 1U; }, 15'000),
-        "the first present applied");
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "first present applied",
+                            [&] { return client->status(firstTarget).appliedSequence >= 1U; }),
+                        "the first present applied");
     const std::uint64_t surfaceBefore = presenter->surfaceBits();
     expectations.expect(surfaceBefore != 0U, "the adapter recorded its VkSurfaceKHR");
 
     expectations.expect(presenter->requestResize(400U, 300U), "the resize is admitted");
-    expectations.expect(waitUntil(
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "owner resized to the real window extent",
                             [&] {
                                 return presenter->state() == ViewerGpuPresenter::State::Active &&
                                        client->status(firstTarget).info.width == 400U &&
                                        client->status(firstTarget).info.height == 300U;
-                            },
-                            15'000),
+                            }),
                         "the owner resized to the real window extent");
     expectations.expect(presenter->surfaceBits() == surfaceBefore,
                         "the VkSurfaceKHR identity is stable across the resize");
     expectations.expect(presenter->present(lease, makeParams(400U, 300U), nullptr),
                         "an update after resize is admitted");
-    expectations.expect(
-        waitUntil([&] { return client->status(firstTarget).appliedSequence >= 3U; }, 15'000),
-        "the resized present applied");
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "resized present applied",
+                            [&] { return client->status(firstTarget).appliedSequence >= 3U; }),
+                        "the resized present applied");
 
     // 5. Retire in flight never acks before proven Retired; no update during retirement.
     runCommand(Cmd::SetGate, true);
@@ -514,7 +514,9 @@ int main(int argc, char** argv) {
     expectations.expect(!presenter->present(lease, makeParams(400U, 300U), nullptr),
                         "a present during retirement is refused");
     runCommand(Cmd::SetGate, false);
-    expectations.expect(waitUntil([&] { return mutationCalled; }, 15'000),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "mutation callback fires after the owner proves retirement",
+                            [&] { return mutationCalled; }),
                         "the mutation callback fires after the owner proves retirement");
     expectations.expect(mutationSafe, "the mutation outcome is SafeToMutate");
     expectations.expect(presenter->surfaceSafeToDestroy(),
@@ -534,7 +536,10 @@ int main(int argc, char** argv) {
     secondHost.show();
     layout->removeWidget(presenter->container());
     secondLayout->addWidget(presenter->container());
-    pumpQt(30);
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("reparented surface is safe to destroy",
+                                              [&] { return presenter->surfaceSafeToDestroy(); }),
+        "the surface becomes safe after the approved reparent");
     expectations.expect(presenter->surfaceSafeToDestroy(),
                         "the surface stays safe after the approved reparent");
     presenter.reset();
@@ -554,15 +559,16 @@ int main(int argc, char** argv) {
     host.show();
     host.raise();
     host.activateWindow();
-    expectations.expect(waitActive(*reattached, 15'000), "the reattached viewer becomes Active");
+    expectations.expect(waitActive(*reattached), "the reattached viewer becomes Active");
     expectations.expect(reattached->targetId() != firstTarget,
                         "reattachment creates a fresh target id");
     expectations.expect(reattached->lastSequence() <= 1U, "reattachment starts a fresh sequence");
     expectations.expect(reattached->present(lease, makeParams(320U, 240U), nullptr),
                         "the reattached viewer presents");
     expectations.expect(
-        waitUntil([&] { return client->status(reattached->targetId()).appliedSequence >= 1U; },
-                  15'000),
+        bloom::test_support::awaitQtCondition(
+            "reattached present applied",
+            [&] { return client->status(reattached->targetId()).appliedSequence >= 1U; }),
         "the reattached present applied");
 
     // 7. Two independent viewers share one lease and one device.
@@ -582,17 +588,17 @@ int main(int argc, char** argv) {
     layoutB->addWidget(viewerB->container());
     viewerA->container()->show();
     viewerB->container()->show();
-    expectations.expect(waitActive(*viewerA, 15'000) && waitActive(*viewerB, 15'000),
+    expectations.expect(waitActive(*viewerA) && waitActive(*viewerB),
                         "both independent viewers become Active");
     expectations.expect(viewerA->present(lease, makeParams(320U, 240U), nullptr) &&
                             viewerB->present(lease, makeParams(320U, 240U), nullptr),
                         "both independent viewers present the shared lease");
-    expectations.expect(waitUntil(
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "both independent viewers applied the shared lease",
                             [&] {
                                 return client->status(viewerA->targetId()).appliedSequence >= 1U &&
                                        client->status(viewerB->targetId()).appliedSequence >= 1U;
-                            },
-                            15'000),
+                            }),
                         "both independent viewers applied the shared lease");
 
     // 8. Retire every remaining viewer and destroy only after proven retirement.
@@ -605,7 +611,8 @@ int main(int argc, char** argv) {
                 safe = result.outcome == ViewerGpuPresenter::MutationOutcome::SafeToMutate;
             }),
             label + ": the retire is admitted");
-        expectations.expect(waitUntil([&] { return called; }, 15'000),
+        expectations.expect(bloom::test_support::awaitQtCondition("the mutation callback fires",
+                                                                  [&] { return called; }),
                             label + ": the mutation callback fires");
         expectations.expect(safe, label + ": the final outcome is SafeToMutate");
     };
@@ -642,12 +649,13 @@ int main(int argc, char** argv) {
         host.show();
         host.raise();
         host.activateWindow();
-        expectations.expect(waitActive(*viewer, 15'000), "cycle viewer becomes Active");
+        expectations.expect(waitActive(*viewer), "cycle viewer becomes Active");
         const GpuPresentationTargetId id = viewer->targetId();
         expectations.expect(viewer->present(lease, makeParams(320U, 240U), nullptr),
                             "cycle viewer presents");
         expectations.expect(
-            waitUntil([&] { return client->status(id).appliedSequence >= 1U; }, 15'000),
+            bloom::test_support::awaitQtCondition(
+                "cycle present applied", [&] { return client->status(id).appliedSequence >= 1U; }),
             "cycle present applied");
         bool called = false;
         bool safe = false;
@@ -657,7 +665,8 @@ int main(int argc, char** argv) {
                 safe = result.outcome == ViewerGpuPresenter::MutationOutcome::SafeToMutate;
             }),
             "cycle retire is admitted");
-        expectations.expect(waitUntil([&] { return called; }, 15'000),
+        expectations.expect(bloom::test_support::awaitQtCondition("cycle mutation callback fires",
+                                                                  [&] { return called; }),
                             "cycle mutation callback fires");
         expectations.expect(safe, "cycle outcome is SafeToMutate");
         expectations.expect(client->status(id).state == GpuPresentationTargetState::Gone,
@@ -675,9 +684,9 @@ int main(int argc, char** argv) {
     expectations.expect(GpuPresentationCoordinator::quarantinedGenerationCount() == 0U,
                         "the normal lifecycle left no quarantined generation");
 
-    if (expectations.failures() == 0) {
+    if (expectations.failures() + bloom::test_support::awaitFailureCount() == 0) {
         std::cout << "PASS: Wayland embedded QWindow attach/present/resize/retire-gate/reattach/"
                      "two-viewers/input/forget-beyond-maxRetained through ViewerGpuPresenter\n";
     }
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

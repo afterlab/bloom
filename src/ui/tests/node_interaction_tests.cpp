@@ -1,3 +1,4 @@
+#include "await_qt.hpp"
 #include "node_interaction_test_support.hpp"
 #include <QImage>
 #include <QLabel>
@@ -339,11 +340,9 @@ void publishWithoutDocumentChange(Fixture& f) {
 void waitForConverterToLand(Fixture& f) {
     (void)f.session.colorConverter();
     QSignalSpy landed(&f.session, &CompositionSession::snapshotChanged);
-    QElapsedTimer timer;
-    timer.start();
-    while (landed.isEmpty() && timer.elapsed() < 5'000)
-        QTest::qWait(5);
-    expect(!landed.isEmpty(), "the color converter's publication arrives");
+    expect(bloom::test_support::awaitQtCondition("color converter publication arrives",
+                                                 [&] { return !landed.isEmpty(); }),
+           "the color converter's publication arrives");
 }
 } // namespace
 
@@ -425,5 +424,5 @@ int main(int argc, char** argv) {
         std::cerr << error.what() << '\n';
         return 1;
     }
-    return bloom::ui::test::failures == 0 ? 0 : 1;
+    return bloom::ui::test::failures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

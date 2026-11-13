@@ -12,6 +12,7 @@
 // turns that into a failure. A movie needs the media worker: where it is absent the test says
 // NotRun for that route.
 
+#include "await_qt.hpp"
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
@@ -109,21 +110,6 @@ constexpr std::uint32_t kHeight = 48;
 constexpr std::uint64_t kFps = 24;
 // The session's frames: two seconds.
 constexpr std::size_t kSessionFrames = 2 * kFps;
-
-template <typename Predicate>
-bool waitUntil(Predicate predicate, const std::chrono::milliseconds limit = 30s) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < limit.count()) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (predicate()) {
-            return true;
-        }
-        std::this_thread::sleep_for(1ms);
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return predicate();
-}
 
 struct Pixels final {
     bool ok = false;
@@ -348,13 +334,15 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
             rig.scheduler, gpuStage,
             ui::makeCompositionPreviewCpuStage(*rig.compiler, rig.evaluator, rig.qualified),
             ui::makeCompositionPreviewCpuDisplayFallback(rig.displayPreparer), options);
-        waitUntil(
+        const bool initialized = bloom::test_support::awaitQtCondition(
+            "the GPU preview service leaves Initializing",
             [&] {
                 return service->status().state !=
                        runtime::GpuPreviewDisplayServiceState::Initializing;
             },
             90s);
-        if (service->status().state != runtime::GpuPreviewDisplayServiceState::Ready) {
+        if (!initialized ||
+            service->status().state != runtime::GpuPreviewDisplayServiceState::Ready) {
             std::cout << "NotRun: " << route.name << " preview: no qualified device ("
                       << service->status().residentDetail << ")\n";
             checks.expect(!gRequireDevice, prefix + "--require-device needs a GPU device");
@@ -395,13 +383,14 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
         controller.requestRefresh();
         const auto before =
             index == 0 ? ui::PreparedPreviewFrameHandle{} : viewer.displayedFrameForTest();
-        const bool ready = waitUntil([&] {
-            const auto displayed = viewer.displayedFrameForTest();
-            return controller.state().activity == ui::PreviewActivity::Ready &&
-                   displayed != nullptr && (index == 0 || displayed != before || index == 3) &&
-                   displayed->provenance().provider == expectedProvider &&
-                   viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
-        });
+        const bool ready = bloom::test_support::awaitQtCondition(
+            "Viewer displays a current frame from the expected route", [&] {
+                const auto displayed = viewer.displayedFrameForTest();
+                return controller.state().activity == ui::PreviewActivity::Ready &&
+                       displayed != nullptr && (index == 0 || displayed != before || index == 3) &&
+                       displayed->provenance().provider == expectedProvider &&
+                       viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
+            });
         checks.expect(ready, label + "the Viewer displays a current frame from the expected route");
         shown.at(index) = pixelsOf(viewer.displayedFrameForTest());
         checks.expect(shown.at(index).ok && shown.at(index).width == kWidth &&
@@ -433,19 +422,22 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
 
     // RAM preview at Half: cold fills every frame, warm prepares nothing and dispatches nothing.
     controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);
-    checks.expect(waitUntil([&] {
-                      const auto displayed = viewer.displayedFrameForTest();
-                      return controller.state().activity == ui::PreviewActivity::Ready &&
-                             displayed != nullptr &&
-                             displayed->provenance().provider == expectedProvider &&
-                             pixelsOf(displayed).width == kWidth / 2;
-                  }),
+    checks.expect(bloom::test_support::awaitQtCondition(
+                      "Viewer shows the line at Half from the expected route",
+                      [&] {
+                          const auto displayed = viewer.displayedFrameForTest();
+                          return controller.state().activity == ui::PreviewActivity::Ready &&
+                                 displayed != nullptr &&
+                                 displayed->provenance().provider == expectedProvider &&
+                                 pixelsOf(displayed).width == kWidth / 2;
+                      }),
                   prefix + "the Viewer shows the line at Half from the expected route");
     ui::RamPreviewController ram(session, controller, rig.scheduler, *rig.bridge, pipeline, nullptr,
                                  submitter);
     const auto beforeCold = counters();
     ram.start();
-    const bool coldDone = waitUntil([&] { return !ram.isCaching(); }, 180s);
+    const bool coldDone = bloom::test_support::awaitQtCondition(
+        "cold RAM preview at Half finishes caching", [&] { return !ram.isCaching(); }, 180s);
     const auto afterCold = counters();
     checks.expect(coldDone && ram.cachedFrameCount() == kSessionFrames &&
                       ram.lastCompletion() == ui::RamPreviewController::Completion::Complete,
@@ -457,7 +449,8 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     checks.expect(!route.gpu || afterCold.nativeDispatches > beforeCold.nativeDispatches,
                   prefix + "the cold RAM preview ran on the device");
     ram.start();
-    const bool warmDone = waitUntil([&] { return !ram.isCaching(); }, 60s);
+    const bool warmDone = bloom::test_support::awaitQtCondition(
+        "warm RAM preview finishes caching", [&] { return !ram.isCaching(); }, 60s);
     const auto afterWarm = counters();
     checks.expect(warmDone && ram.preparedFrameCount() == 0 &&
                       ram.cachedFrameCount() == kSessionFrames,
@@ -571,13 +564,20 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
 
     controller.beginShutdown();
     rig.bridge->beginShutdown();
-    (void)waitUntil([&] { return rig.scheduler.isQuiescent(); }, 10s);
+    checks.expect(
+        bloom::test_support::awaitQtCondition("the rig scheduler reaches quiescence",
+                                              [&] { return rig.scheduler.isQuiescent(); }),
+        "the rig scheduler reaches quiescence");
 #if defined(BLOOM_UI_LINE_END_ROUTES_GPU)
     if (service != nullptr) {
         service->beginShutdown();
-        (void)waitUntil([&] {
-            return service->status().state == runtime::GpuPreviewDisplayServiceState::Stopped;
-        });
+        checks.expect(bloom::test_support::awaitQtCondition(
+                          "the GPU preview service stops",
+                          [&] {
+                              return service->status().state ==
+                                     runtime::GpuPreviewDisplayServiceState::Stopped;
+                          }),
+                      "the GPU preview service stops");
     }
 #endif
 }
@@ -622,7 +622,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     checks.expect(!gRequireDevice, "--require-device needs a Vulkan build");
 #endif
 
-    if (checks.failures() != 0) {
+    if (checks.failures() + bloom::test_support::awaitFailureCount() != 0) {
         std::cerr << "viewer/export line ends: " << checks.failures() << " failure(s)\n";
         return 1;
     }

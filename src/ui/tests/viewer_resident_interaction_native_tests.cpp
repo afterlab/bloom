@@ -1,4 +1,5 @@
 // Native resident viewer interaction, cancellation recovery and safe teardown acceptance.
+#include "await_qt.hpp"
 #include "gpu_service_chain_fixture.hpp"
 
 #include <bloom/commands/command_stack.hpp>
@@ -182,7 +183,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     GpuPreviewDisplayService service(scheduler, gpuStage, fixture.productionCpuStage(),
                                      fixture.productionCpuFallback(displayPreparer), gpuOptions);
 
-    const bool terminal = waitUntil(
+    const bool terminal = bloom::test_support::awaitQtCondition(
+        "GPU preview service leaves Initializing",
         [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; }, 90s);
     const auto status = service.status();
     const bool residentReady =
@@ -317,7 +319,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         const auto compositionFormat = session.composition()->format();
         const bool firstResident =
             options.baseline
-                ? waitUntil(
+                ? bloom::test_support::awaitQtCondition(
+                      "controller produced and the viewer presented a resident frame",
                       [&] {
                           const auto& state = controller.state();
                           const auto& ack = trace->lastNativeAcknowledgement();
@@ -330,8 +333,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                                  state.frame->desiredIdentity() == *state.desiredIdentity && ack &&
                                  ack->identity ==
                                      ui::PreviewFrameTrace::identity(*state.desiredIdentity);
-                      },
-                      30s)
+                      })
                 : waitForResidentRevision(controller, *viewer, session.snapshot().revision(), 30s);
         const auto displayed = controller.state().frame;
         checks.expect(firstResident && displayed != nullptr,
@@ -383,15 +385,14 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                               geometry->displayExtent.height() == 1080,
                           "the baseline evaluates at full 1920x1080 (not an Auto proxy)");
             const auto waitForTracedFrame = [&](const core::RationalTime expectedTime) {
-                return waitUntil(
-                    [&] {
+                return bloom::test_support::awaitQtCondition(
+                    "first cold frame has its own native owner acknowledgement", [&] {
                         const auto& desired = controller.state().desiredIdentity;
                         const auto& ack = trace->lastNativeAcknowledgement();
                         return desired && desired->time == expectedTime && ack &&
                                ack->identity.generation == desired->requestGeneration &&
                                ack->identity == ui::PreviewFrameTrace::identity(*desired);
-                    },
-                    30s);
+                    });
             };
             checks.expect(waitForTracedFrame(core::RationalTime::fromInteger(0)),
                           "the first cold frame has its own native owner acknowledgement");
@@ -438,17 +439,18 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         session.clearSelection();
         checks.expect(session.selectedNodes().empty(),
                       "nothing is selected before the viewer click");
-        checks.expect(waitUntil([&] { return viewer->mappingForTest().has_value(); }, 20s),
+        checks.expect(bloom::test_support::awaitQtCondition(
+                          "passive picking waits for the cleared selection outline domain to apply",
+                          [&] { return viewer->mappingForTest().has_value(); }),
                       "passive picking waits for the cleared selection outline domain to apply");
 
         QWidget* container = nullptr;
-        const bool containerReady = waitUntil(
-            [&] {
+        const bool containerReady = bloom::test_support::awaitQtCondition(
+            "presenter's real native GPU container exists and is visible", [&] {
                 container = nativeContainer(*viewer);
                 return container != nullptr && container->isVisible() &&
                        !container->geometry().isEmpty();
-            },
-            15s);
+            });
         checks.expect(containerReady,
                       "the presenter's real native GPU container exists and is visible");
         if (!containerReady || container == nullptr) {
@@ -524,8 +526,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         // this setup prerequisite is not rapid selection-to-drag input or latency qualification.
         const bool mappingBeforeSecondDrag = viewer->mappingForTest().has_value();
         const auto mappingWaitStarted = std::chrono::steady_clock::now();
-        const bool secondDragMappingReady =
-            waitUntil([&] { return viewer->mappingForTest().has_value(); }, 20s);
+        const bool secondDragMappingReady = bloom::test_support::awaitQtCondition(
+            "viewer mapping is applied before the second drag",
+            [&] { return viewer->mappingForTest().has_value(); });
         const auto mappingWaitMicroseconds =
             std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() -
                                                                   mappingWaitStarted)
@@ -599,14 +602,13 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             const auto appliedBeforeRefusal = viewer->gpuNativeAppliedSequenceForTest();
             scheduler.beginShutdown();
             session.clearSelection();
-            const bool overlayRefused = waitUntil(
-                [&] {
+            const bool overlayRefused = bloom::test_support::awaitQtCondition(
+                "overlay refusal is shown on the CPU cover", [&] {
                     const auto shown = viewer->displayedPreviewState();
                     return shown.activity == ui::PreviewActivity::Failed &&
                            shown.message.contains("overlay raster task was not admitted") &&
                            viewer->gpuCpuCoverVisibleForTest();
-                },
-                20s);
+                });
             if (!overlayRefused) {
                 const auto shown = viewer->displayedPreviewState();
                 auto* cover = viewer->findChild<QWidget*>("bloomViewerGpuCpuCover");
@@ -724,14 +726,13 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             // Genuine native present progress: the owner must have applied a NEW enqueued present
             // sequence (applied >= enqueued) and advanced its applied present count. The mailbox
             // admission counters are deliberately not used here: admission is not a native present.
-            const bool secondGenuinelyPresented = waitUntil(
-                [&] {
+            const bool secondGenuinelyPresented = bloom::test_support::awaitQtCondition(
+                "second resident lease is applied natively", [&] {
                     const std::uint64_t enqueued = viewer->gpuNativeLastEnqueuedSequenceForTest();
                     const std::uint64_t applied = viewer->gpuNativeAppliedSequenceForTest();
                     return enqueued > enqueuedBefore && applied >= enqueued &&
                            viewer->gpuNativePresentCountForTest() > presentCountBefore;
-                },
-                20s);
+                });
             checks.expect(
                 secondGenuinelyPresented,
                 "the second resident lease was genuinely applied natively (applied >= enqueued "
@@ -840,7 +841,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             }));
     if (viewer == nullptr)
         viewerRetired = true;
-    const bool safe = waitUntil([&] { return viewerRetired; }, 20s);
+    const bool safe = bloom::test_support::awaitQtCondition(
+        "ViewerEditor native surface retired before teardown", [&] { return viewerRetired; });
     checks.expect(safe, "the ViewerEditor native surface retired before teardown");
     if (!safe) {
         // Keep ALL stack and widget owners alive. Running RAII destructors would invalidate the
@@ -854,12 +856,15 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     host.reset();
 
     bridge.beginShutdown();
-    checks.expect(waitUntil([&] { return scheduler.isQuiescent(); }, 10s),
+    checks.expect(bloom::test_support::awaitQtCondition(
+                      "all controller tasks quiesce before service shutdown",
+                      [&] { return scheduler.isQuiescent(); }),
                   "all controller tasks quiesce before service shutdown");
     service.beginShutdown();
     checks.expect(
-        waitUntil([&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; },
-                  30s),
+        bloom::test_support::awaitQtCondition(
+            "native service completes bounded safe shutdown",
+            [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; }),
         "the native service completes bounded safe shutdown");
     checks.expect(service.status().counters.fullFrameReadbacks == 0U,
                   "the whole resident interaction run performed no full-frame readback");
@@ -869,7 +874,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
 
 #include "viewer_resident_interaction_trace_report.ipp"
 
-    if (runResult != 0 || checks.failures() != 0) {
+    if (runResult != 0 || checks.failures() + bloom::test_support::awaitFailureCount() != 0) {
         std::cerr << "resident interaction proof: " << checks.failures()
                   << " verification failure(s)\n";
         return 1;

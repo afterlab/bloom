@@ -4,6 +4,7 @@
 // marquee border keeps its on-screen width), #704 (Backspace deletes; Dissolve and Delete work on
 // the whole selection) and #705 (right-click keeps a selection).
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
+#include "await_qt.hpp"
 #include "export_render_list.hpp"
 #include "export_test_support.hpp"
 #include "native_gesture_support.hpp"
@@ -51,9 +52,23 @@ using namespace bloom;
 using namespace bloom::ui;
 using test::expect;
 
-void settle(const int ms = 40) {
+// Delivers the queued events (layout, repaint requests, deferred slots).
+void settle() {
+    QCoreApplication::sendPostedEvents();
     QApplication::processEvents();
-    QTest::qWait(ms);
+}
+
+// Waits until the Viewer's preview has caught up with every edit and no task is left running,
+// then delivers what they posted.
+void settleIdle(test::WindowFixture& fixture) {
+    expect(bloom::test_support::awaitQtCondition("preview ready and scheduler idle",
+                                                 [&] {
+                                                     return fixture.preview->state().activity ==
+                                                                PreviewActivity::Ready &&
+                                                            fixture.scheduler.isQuiescent();
+                                                 }),
+           "the preview catches up and the scheduler goes idle");
+    settle();
 }
 
 QMenu* openNodeMenu() {
@@ -496,7 +511,7 @@ void testExposureFieldReadsInFull() {
     host.show();
     for (const double value : {0.0, 1.5, -12.5, 31.99, -32.0}) {
         field->setValue(value);
-        settle(10);
+        settle();
         expect(field->paintedLabel() == QStringLiteral("EV"),
                ("the label reads in full at the footer width: " + field->paintedLabel().toStdString()).c_str());
         const auto text = field->paintedText();
@@ -689,7 +704,7 @@ void testExportPanelFillsWidth() {
     editor->setCurrentRenderExpanded(true);
     for (const int width : {1000, 2200}) {
         area.resize(width, 520);
-        settle(100);
+        settle();
         auto* list = area.findChild<exportpanel::RenderList*>();
         auto* bar = area.findChild<QWidget*>(QStringLiteral("exportCurrentRenderBar"));
         expect(list != nullptr && bar != nullptr, "the list and the current render bar exist");
@@ -745,12 +760,14 @@ void testAlignOnSvgLayerAndParts() {
             if (found.size() != 1)
                 continue;
             fixture.session.selectLayer(found.front());
-            QElapsedTimer timer;
-            timer.start();
             // #713: the button follows the selection; the run needs the Viewer's current frame.
-            while (!actions.unavailableReason(commands::LayerArrangement::AlignLeft).isEmpty() &&
-                   timer.elapsed() < 10000)
-                settle(20);
+            expect(bloom::test_support::awaitQtCondition(
+                       "Align Left becomes available for the selection",
+                       [&] {
+                           return actions.unavailableReason(commands::LayerArrangement::AlignLeft)
+                               .isEmpty();
+                       }),
+                   ("Align becomes available for: " + name).c_str());
             auto* alignLeft = actions.action(commands::LayerArrangement::AlignLeft);
             expect(alignLeft->isEnabled(),
                    ("Align is enabled with the SVG layer or part selected: " + name + " (" +
@@ -812,7 +829,7 @@ void testPlaybackRepaints() {
            "the status bar, Nodes and Properties exist");
     if (statusBar == nullptr || nodes == nullptr || properties == nullptr)
         return;
-    settle(300);
+    settleIdle(fixture);
     PaintCounter counter;
     counter.roots = {statusBar, nodes, properties};
     qApp->installEventFilter(&counter);
@@ -822,7 +839,7 @@ void testPlaybackRepaints() {
     for (int frame = 1; frame <= kFrames; ++frame) {
         if (const auto time = core::RationalTime::create(frame, 24))
             static_cast<void>(fixture.session.setCurrentTime(*time));
-        settle(30);
+        settleIdle(fixture);
     }
     qApp->removeEventFilter(&counter);
     // The Memory and Cache readouts also refresh on their own 250 ms clock, whatever the frame
@@ -895,16 +912,14 @@ void testImagePreviewPlaybackRepaints() {
         });
         const char* label = animated ? "an animated" : "a static";
         // Let the first thumbnail arrive and settle.
-        settle(600);
-        for (int i = 0; i < 10; ++i)
-            settle(100);
+        settleIdle(fixture);
         const auto before = node_editor::imagePreviewPaintCount();
         for (int frame = 1; frame <= kFrames; ++frame) {
             if (const auto time = core::RationalTime::create(frame, 24))
                 static_cast<void>(fixture.session.setCurrentTime(*time));
-            settle(60);
+            settleIdle(fixture);
         }
-        settle(200);
+        settleIdle(fixture);
         const auto paints = node_editor::imagePreviewPaintCount() - before;
         std::cout << "image-preview " << (animated ? "animated" : "static") << ": frames=" << kFrames
                   << " thumbnailPaints=" << paints << '\n';
@@ -944,14 +959,16 @@ void testAlignButtonsDoNotRepaintDuringDrag() {
     if (!logo)
         return;
     fixture.session.selectLayer(*logo);
-    QElapsedTimer timer;
-    timer.start();
-    while (!actions.unavailableReason(commands::LayerArrangement::AlignLeft).isEmpty() &&
-           timer.elapsed() < 10000)
-        settle(20);
+    expect(
+        bloom::test_support::awaitQtCondition(
+            "Align Left becomes available for the selected SVG layer",
+            [&] {
+                return actions.unavailableReason(commands::LayerArrangement::AlignLeft).isEmpty();
+            }),
+        "Align becomes available for the selected SVG layer");
     auto* alignLeft = actions.action(commands::LayerArrangement::AlignLeft);
     expect(alignLeft->isEnabled(), "Align is offered for the selected SVG layer");
-    settle(200);
+    settleIdle(fixture);
 
     int actionChanges = 0;
     std::vector<QMetaObject::Connection> connections;
@@ -980,9 +997,9 @@ void testAlignButtonsDoNotRepaintDuringDrag() {
                "a drag step moves the layer");
         everBehind = everBehind ||
                      !actions.unavailableReason(commands::LayerArrangement::AlignLeft).isEmpty();
-        settle(30);
+        settleIdle(fixture);
     }
-    settle(300);
+    settleIdle(fixture);
     qApp->removeEventFilter(&counter);
     for (const auto& connection : connections)
         QObject::disconnect(connection);
@@ -1011,9 +1028,9 @@ void testAlignButtonsDoNotRepaintDuringDrag() {
     expect(fixture.session.setSelectedPosition(400.0, 300.0), "the layer moves once more");
     const auto moved = positionNow();
     alignLeft->trigger();
-    timer.restart();
-    while (positionNow().x == moved.x && timer.elapsed() < 10000)
-        settle(20);
+    expect(bloom::test_support::awaitQtCondition("Align Left runs once the frame is current",
+                                                 [&] { return positionNow().x != moved.x; }),
+           "Align Left runs once the frame is current");
     expect(positionNow().x != moved.x,
            "#713: Align Left clicked while the Viewer catches up runs once the frame is current");
     expect(fixture.session.undo() && positionNow().x == moved.x, "and is one undo step");
@@ -1028,7 +1045,7 @@ void testPixelReadoutRepaintsOnlyOnTextChange() {
     expect(statusBar != nullptr, "the status bar exists");
     if (statusBar == nullptr)
         return;
-    settle(300);
+    settleIdle(fixture);
     auto* viewer = statusBar->displayedViewerForTest();
     auto* group = statusBar->findChild<QWidget*>(QStringLiteral("windowStatusBarPixel"));
     auto* probe = statusBar->findChild<QWidget*>(QStringLiteral("windowStatusBarProbe"));
@@ -1054,8 +1071,10 @@ void testPixelReadoutRepaintsOnlyOnTextChange() {
     sampling.pending = true;
 
     emit viewer->probeChanged(readout(0.5));
-    settle(100);
-    expect(!group->isHidden(), "a readout shows the pixel group");
+    expect(bloom::test_support::awaitQtCondition("pixel group shows the readout",
+                                                 [&] { return !group->isHidden(); }),
+           "a readout shows the pixel group");
+    settle();
     PaintCounter counter;
     counter.roots = {group};
     qApp->installEventFilter(&counter);
@@ -1065,11 +1084,11 @@ void testPixelReadoutRepaintsOnlyOnTextChange() {
     for (int frame = 0; frame < kFrames; ++frame) {
         emit viewer->probeChanged(awaiting);
         everHidden = everHidden || group->isHidden();
-        settle(5);
+        settle();
         emit viewer->probeChanged(sampling);
-        settle(5);
+        settle();
         emit viewer->probeChanged(readout(0.5));
-        settle(20);
+        settle();
     }
     for (const auto& [widget, count] : counter.counts)
         expect(count <= 1,
@@ -1083,11 +1102,11 @@ void testPixelReadoutRepaintsOnlyOnTextChange() {
     counter.counts.clear();
     for (int frame = 0; frame < kFrames; ++frame) {
         emit viewer->probeChanged(awaiting);
-        settle(5);
+        settle();
         emit viewer->probeChanged(sampling);
-        settle(5);
+        settle();
         emit viewer->probeChanged(readout(0.5 + 0.01 * (frame + 1)));
-        settle(20);
+        settle();
     }
     qApp->removeEventFilter(&counter);
     const int probePaints = counter.counts.contains(probe) ? counter.counts.at(probe) : 0;
@@ -1105,14 +1124,20 @@ void testPixelReadoutRepaintsOnlyOnTextChange() {
                    .c_str());
     // A wait that outlasts the delay is shown, and leaving the image hides the group at once.
     emit viewer->probeChanged(sampling);
-    settle(600);
+    expect(bloom::test_support::awaitQtCondition(
+               "pixel group says Sampling after the delay",
+               [&] {
+                   return !group->isHidden() &&
+                          probe->property("text").toString().contains(QStringLiteral("Sampling"));
+               }),
+           "the pixel group reports the pending sample after the delay");
     expect(!group->isHidden() &&
                probe->property("text").toString().contains(QStringLiteral("Sampling")),
            "a sample that takes longer than the delay says it is sampling");
     emit viewer->probeChanged(readout(0.5));
-    settle(50);
+    settle();
     emit viewer->probeChanged(ui::ProbeReadout{});
-    settle(20);
+    settle();
     expect(group->isHidden(), "#715: the pointer leaving the image hides the pixel group at once");
 }
 
@@ -1142,6 +1167,7 @@ int main(int argc, char** argv) {
     testAlignButtonsDoNotRepaintDuringDrag();
     testPixelReadoutRepaintsOnlyOnTextChange();
     testImagePreviewPlaybackRepaints();
+    test::failures += bloom::test_support::awaitFailureCount();
     if (test::failures != 0) {
         std::cerr << test::failures << " UI bug batch checks failed\n";
         return 1;

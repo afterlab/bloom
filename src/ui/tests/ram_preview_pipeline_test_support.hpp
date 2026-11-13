@@ -3,6 +3,7 @@
 // Shared harness for the RAM preview two-deep pipeline tests. Split out so each focused test
 // translation unit stays readable; every helper is inline, and nothing here owns a global.
 
+#include "await_qt.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
@@ -21,7 +22,6 @@
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <QCoreApplication>
-#include <QElapsedTimer>
 
 #include <atomic>
 #include <chrono>
@@ -36,6 +36,7 @@
 #include <set>
 #include <source_location>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -61,18 +62,15 @@ class Expectations final {
     int failures_ = 0;
 };
 
-template <typename Predicate> inline bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 20'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate)) {
-            return true;
-        }
-        std::this_thread::yield();
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return std::invoke(predicate);
+// Awaits `predicate` through the shared helper; `name` says what is awaited.
+template <typename Predicate>
+[[nodiscard]] inline bool waitUntil(const std::string_view name, Predicate&& predicate) {
+    return bloom::test_support::awaitQtCondition(name, std::forward<Predicate>(predicate));
+}
+
+// Unnamed form kept for callers outside this cleanup's file list.
+template <typename Predicate> inline bool waitUntil(Predicate&& predicate) {
+    return waitUntil("test condition", std::forward<Predicate>(predicate));
 }
 
 [[nodiscard]] inline runtime::TaskSchedulerConfig twoWorkerConfig() {
@@ -280,7 +278,8 @@ struct SessionFixture final {
 
 inline void finishFixture(SessionFixture& fixture, Expectations& expectations) {
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+    expectations.expect(waitUntil("the RAM pipeline fixture scheduler quiescent",
+                                  [&] { return fixture.scheduler.isQuiescent(); }),
                         "the RAM pipeline fixture reaches asynchronous scheduler quiescence");
 }
 

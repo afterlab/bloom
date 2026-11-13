@@ -23,6 +23,8 @@
 // the runtime preparation/native suites (which exercise the same builder + shared resolver
 // context).
 
+#include "await.hpp"
+
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/command_stack.hpp>
@@ -164,15 +166,17 @@ runStage(Fixture& fixture, std::shared_ptr<bloom::runtime::GpuOcioContextResolve
     if (!submission.accepted()) {
         return nullptr;
     }
-    const auto deadline = std::chrono::steady_clock::now() + 60s;
     std::optional<TaskResult<StageValue>> result;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (auto taken = submission.handle.tryTakeResult()) {
-            result = std::move(*taken);
-            break;
-        }
-        std::this_thread::sleep_for(1ms);
-    }
+    expectations.expect(bloom::test_support::awaitCondition(
+                            label + ": the stage task reaches a terminal result",
+                            [&] {
+                                if (auto taken = submission.handle.tryTakeResult()) {
+                                    result = std::move(*taken);
+                                }
+                                return result.has_value();
+                            },
+                            std::chrono::seconds{60}),
+                        label + ": the stage task finishes");
     expectations.expect(result.has_value() && result->state() == TaskState::Succeeded &&
                             result->value().has_value() && *result->value() != nullptr,
                         label + ": the stage completes with an outcome");
@@ -433,8 +437,9 @@ int runTests(int argc, char** argv) {
                         "missing-tools: no general display program is fabricated");
 #endif
 
-    if (expectations.failures() != 0) {
-        std::cerr << expectations.failures() << " general stage expectation(s) failed\n";
+    if (expectations.failures() + bloom::test_support::awaitFailureCount() != 0) {
+        std::cerr << expectations.failures() + bloom::test_support::awaitFailureCount()
+                  << " general stage expectation(s) failed\n";
         return 1;
     }
     std::cout << "composition-preview-gpu-scene-general: all expectations passed\n";

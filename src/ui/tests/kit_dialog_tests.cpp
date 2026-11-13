@@ -66,7 +66,7 @@ void expect(const bool condition, const std::string& message,
 void open(QWidget& dialog) {
     dialog.show();
     dialog.activateWindow();
-    (void)QTest::qWaitForWindowExposed(&dialog);
+    expect(QTest::qWaitForWindowExposed(&dialog), "the dialog window is exposed");
     QApplication::processEvents();
 }
 
@@ -463,7 +463,8 @@ void writeScreenshots(QWidget& owner, const QString& directory) {
     spec.defaultRole = Role::Reject;
     std::unique_ptr<kit::KDialog> confirm(kit::buildConfirm(owner, spec));
     open(*confirm);
-    QTest::qWait(100);
+    QCoreApplication::sendPostedEvents();
+    QApplication::processEvents();
     expect(confirm->grab().save(directory + QStringLiteral("/kit-confirm.png")), "confirm shot");
     confirm->reject();
     kit::KTextPromptSpec text;
@@ -477,7 +478,8 @@ void writeScreenshots(QWidget& owner, const QString& directory) {
     };
     std::unique_ptr<kit::KDialog> prompt(kit::buildTextPrompt(owner, text));
     open(*prompt);
-    QTest::qWait(100);
+    QCoreApplication::sendPostedEvents();
+    QApplication::processEvents();
     expect(prompt->grab().save(directory + QStringLiteral("/kit-prompt-refused.png")),
            "prompt shot");
     prompt->reject();

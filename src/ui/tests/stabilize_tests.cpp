@@ -4,6 +4,7 @@
 // detail, its progress and its result stored as one undoable edit (a data block and the keys), a
 // cancel that stores nothing, and a track that loses its feature stored as far as it got.
 
+#include "await_qt.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -16,8 +17,8 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
-#include <bloom/ui/kit/progress_bar.hpp>
 #include <bloom/ui/kit/point_pad.hpp>
+#include <bloom/ui/kit/progress_bar.hpp>
 #include <bloom/ui/node_card_widget.hpp>
 #include <bloom/ui/node_controls_widget.hpp>
 #include <bloom/ui/stabilize_widget.hpp>
@@ -84,18 +85,15 @@ struct Fixture final {
     ~Fixture() {
         controller.reset();
         scheduler.beginShutdown();
-        QElapsedTimer timer;
-        timer.start();
-        while (!scheduler.isQuiescent() && timer.elapsed() < 10'000)
-            QApplication::processEvents(QEventLoop::AllEvents, 10);
+        // A destructor cannot return the result; a timeout is counted by awaitFailureCount().
+        (void)bloom::test_support::awaitQtCondition("stabilize scheduler quiescent",
+                                                    [&] { return scheduler.isQuiescent(); });
     }
     // Runs the event loop until the job is no longer running.
     bool wait() {
-        QElapsedTimer timer;
-        timer.start();
-        while (controller->running() && timer.elapsed() < 120'000)
-            QApplication::processEvents(QEventLoop::AllEvents, 10);
-        return !controller->running();
+        return bloom::test_support::awaitQtCondition(
+            "stabilize job finishes", [&] { return !controller->running(); },
+            std::chrono::seconds{120});
     }
     [[nodiscard]] std::size_t blocks() const {
         return session.snapshot().project().dataBlocks().size();
@@ -203,7 +201,7 @@ int main(int argc, char** argv) {
     testTrack();
     testCancel();
     testNoDetail();
-    if (failures != 0) {
+    if (failures + bloom::test_support::awaitFailureCount() != 0) {
         std::cerr << failures << " stabilize expectation(s) failed\n";
         return 1;
     }

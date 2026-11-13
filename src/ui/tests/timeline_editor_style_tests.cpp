@@ -1,3 +1,4 @@
+#include "await_qt.hpp"
 #include "editor_chrome_test_support.hpp"
 #include "timeline_property_rows.hpp"
 
@@ -185,11 +186,9 @@ struct SessionFixture final {
 void finishFixture(SessionFixture& fixture) {
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    QElapsedTimer timer;
-    timer.start();
-    while (!fixture.scheduler.isQuiescent() && timer.elapsed() < 4'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    }
+    // Teardown returns nothing; a timeout is counted by awaitFailureCount().
+    (void)bloom::test_support::awaitQtCondition("style fixture scheduler quiescent",
+                                                [&] { return fixture.scheduler.isQuiescent(); });
 }
 
 // Forces the panel's real geometry to materialize (a fixed-width column, an expanding lane region,
@@ -206,15 +205,9 @@ void layoutEditor(QWidget& host, const int width = 1200, const int height = 420)
 }
 
 [[nodiscard]] bool waitUntilReady(SessionFixture& fixture) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 4'000) {
-        if (fixture.controller.state().activity == bloom::ui::PreviewActivity::Ready) {
-            return true;
-        }
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    }
-    return false;
+    return bloom::test_support::awaitQtCondition("style fixture preview ready", [&] {
+        return fixture.controller.state().activity == bloom::ui::PreviewActivity::Ready;
+    });
 }
 
 void sendMouse(QWidget& widget, const QEvent::Type type, const qreal pixelX, const qreal pixelY) {
@@ -1887,15 +1880,15 @@ void testPropertyRows(Expectations& expectations) {
     // converts a picked colour through it, so wait for that announcement (as Properties' tests do)
     // before driving the chip.
     {
-        QElapsedTimer converterWait;
-        converterWait.start();
-        while (!fixture.session.colorConverterReady() && converterWait.elapsed() < 5'000) {
-            (void)fixture.session.colorConverter(document::kTextColorParameterSchemaKey);
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        }
+        expectations.expect(
+            bloom::test_support::awaitQtCondition("session colour converter is published",
+                                                  [&] {
+                                                      (void)fixture.session.colorConverter(
+                                                          document::kTextColorParameterSchemaKey);
+                                                      return fixture.session.colorConverterReady();
+                                                  }),
+            "the session colour converter is published");
         QCoreApplication::processEvents();
-        expectations.expect(fixture.session.colorConverterReady(),
-                            "the session colour converter is published");
     }
     for (auto* row : editor.findChildren<QWidget*>("timelinePropertyRow")) {
         if (!row->isVisible() || row->property("role").toString() != "color")
@@ -2042,12 +2035,10 @@ void testDrivenParameterRowsAndUpstreamGroups(Expectations& expectations) {
                                                  }),
                         "and shows no editor, because a driven parameter has no authored value to "
                         "edit here");
-    QElapsedTimer wait;
-    wait.start();
-    while (session.drivenValueText(textSize).isEmpty() && wait.elapsed() < 5000) {
-        QCoreApplication::processEvents();
-        QThread::msleep(5);
-    }
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "driven text size value resolves",
+                            [&] { return !session.drivenValueText(textSize).isEmpty(); }),
+                        "the driven text size value resolves");
     QCoreApplication::processEvents();
     expectations.expect(value != nullptr && !value->text().isEmpty() &&
                             value->text() != QObject::tr("Resolving…") &&
@@ -3041,5 +3032,5 @@ int main(int argc, char** argv) {
         std::cerr << "FAILED: legacy text fixture: " << error.what() << '\n';
         return 1;
     }
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

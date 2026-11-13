@@ -5,6 +5,7 @@
 // Copy's refusal for an editable project -- through the real McpLiveUiBinding over the real window
 // fixture. None of them may dirty the project or enter its undo history. Offscreen.
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
+#include "await_qt.hpp"
 #include "window_fixture.hpp"
 
 #include <bloom/ui/application_preferences.hpp>
@@ -200,11 +201,13 @@ void agentRoutes(const mcp::McpLiveUiPort& port) {
     QObject::connect(cancel, &QAbstractButton::clicked, [&] { cancelled = true; });
     box.setWindowModality(Qt::ApplicationModal);
     box.show();
-    QTest::qWait(50);
+    expect(QTest::qWaitForWindowExposed(&box), "the dialog is exposed");
 
     // Off: the dialog is untouched and the refusal says who can allow it.
     result = port.answerDialog("Cancel");
-    QTest::qWait(30);
+    // Deliver anything the (refused) answer might have queued, so a wrongly pressed button shows.
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     expect(result.refusal == McpUiRefusal::NotAllowed && !cancelled && box.isVisible(),
            "dialog.answer with the switch off presses nothing");
     expect(port.setPreferences({{.key = "loopPlayback", .value = true}}).refusal ==
@@ -219,7 +222,10 @@ void agentRoutes(const mcp::McpLiveUiPort& port) {
                result.message.find("Discard (discards or overwrites data)") != std::string::npos,
            "an unknown button lists the buttons and marks the discarding one");
     result = port.answerDialog("cancel");
-    QTest::qWait(50);
+    expect(
+        bloom::test_support::awaitQtCondition("the named button is pressed and the dialog closes",
+                                              [&] { return cancelled && !box.isVisible(); }),
+        "the named button is pressed and the dialog closes");
     expect(result.ok() && cancelled && !discarded && !box.isVisible(),
            "dialog.answer presses the named button, case-insensitively, and the dialog closes");
     result = port.answerDialog("Cancel");
@@ -234,9 +240,11 @@ void agentRoutes(const mcp::McpLiveUiPort& port) {
     QObject::connect(second, &QAbstractButton::clicked, [&] { pressed = true; });
     again.setWindowModality(Qt::ApplicationModal);
     again.show();
-    QTest::qWait(50);
+    expect(QTest::qWaitForWindowExposed(&again), "the second dialog is exposed");
     result = port.answerDialog("Discard");
-    QTest::qWait(50);
+    expect(bloom::test_support::awaitQtCondition("the Discard button is pressed",
+                                                 [&] { return pressed; }),
+           "the Discard button is pressed");
     expect(result.ok() && pressed && result.message.find("discards or overwrites") != std::string::npos,
            "a discarding button is pressed only on request and named as discarding");
 
@@ -357,5 +365,5 @@ int main(int argc, char** argv) {
     }
     if (gFailures != 0)
         std::fprintf(stderr, "%d failure(s)\n", gFailures);
-    return gFailures == 0 ? 0 : 1;
+    return gFailures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

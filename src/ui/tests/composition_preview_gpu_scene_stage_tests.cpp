@@ -9,6 +9,7 @@
 // The CPU-stage regression is covered separately by re-linking the existing
 // composition_preview_cpu_stage test against the mirrored TU (proof/run_cpu_stage_regression).
 
+#include "await.hpp"
 #include "gpu_scene_preparation_test_support.hpp"
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
@@ -111,14 +112,14 @@ template <typename Value, typename Callable>
     if (!submission.accepted()) {
         return std::nullopt;
     }
-    const auto deadline = std::chrono::steady_clock::now() + 8s;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (auto result = submission.handle.tryTakeResult()) {
-            return result;
-        }
-        std::this_thread::sleep_for(1ms);
+    std::optional<TaskResult<Value>> result;
+    if (!bloom::test_support::awaitCondition("GPU scene stage task reaches a terminal result", [&] {
+            result = submission.handle.tryTakeResult();
+            return result.has_value();
+        })) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    return result;
 }
 
 struct Fixture final {
@@ -549,16 +550,17 @@ void testPreCancellationStaysCancelled(Expectations& expectations) {
     submission.handle.cancel();
     release.store(true);
 
-    const auto deadline = std::chrono::steady_clock::now() + 8s;
     std::optional<TaskResult<StageValue>> stageResult;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (auto taken = submission.handle.tryTakeResult()) {
-            stageResult = std::move(*taken);
-            break;
-        }
-        std::this_thread::sleep_for(1ms);
-    }
-    expectations.expect(stageResult.has_value(), "the cancelled stage reaches a terminal state");
+    expectations.expect(bloom::test_support::awaitCondition(
+                            "the cancelled stage reaches a terminal state",
+                            [&] {
+                                if (auto taken = submission.handle.tryTakeResult()) {
+                                    stageResult = std::move(*taken);
+                                }
+                                return stageResult.has_value();
+                            }) &&
+                            stageResult.has_value(),
+                        "the cancelled stage reaches a terminal state");
     expectations.expect(stageResult.has_value() && stageResult->state() == TaskState::Cancelled,
                         "a pre-cancelled stage returns TaskResult::cancelled");
     if (auto blockerResult = blocker.handle.tryTakeResult()) {
@@ -756,10 +758,9 @@ void testCancelledStatisticsCacheNothing(Expectations& expectations) {
         [&](const bloom::runtime::ImageStatisticsQuery&, const bloom::runtime::EvaluationRequest&,
             const bloom::runtime::CancellationToken& token) -> bloom::runtime::ImageStatisticsRun {
         entered.store(true);
-        const auto deadline = std::chrono::steady_clock::now() + 8s;
-        while (!token.isCancellationRequested() && std::chrono::steady_clock::now() < deadline)
-            std::this_thread::sleep_for(1ms);
-        sawCancellation.store(token.isCancellationRequested());
+        sawCancellation.store(
+            bloom::test_support::awaitCondition("the device measure sees the cancellation",
+                                                [&] { return token.isCancellationRequested(); }));
         return {{bloom::runtime::ImageStatisticsOutcome::Cancelled, {}}, {}};
     };
     StatisticsComposition composition(makeProject());
@@ -778,19 +779,20 @@ void testCancelledStatisticsCacheNothing(Expectations& expectations) {
                             context);
         });
     expectations.expect(submission.accepted(), "the statistics stage is accepted");
-    const auto enterDeadline = std::chrono::steady_clock::now() + 8s;
-    while (!entered.load() && std::chrono::steady_clock::now() < enterDeadline)
-        std::this_thread::sleep_for(1ms);
-    expectations.expect(entered.load(), "the stage asked the device to measure the picture");
+    expectations.expect(bloom::test_support::awaitCondition("the stage asks the device to measure",
+                                                            [&] { return entered.load(); }) &&
+                            entered.load(),
+                        "the stage asked the device to measure the picture");
     submission.handle.cancel();
     std::optional<TaskResult<StageValue>> result;
-    const auto deadline = std::chrono::steady_clock::now() + 8s;
-    while (!result && std::chrono::steady_clock::now() < deadline) {
-        if (auto taken = submission.handle.tryTakeResult())
-            result = std::move(*taken);
-        else
-            std::this_thread::sleep_for(1ms);
-    }
+    expectations.expect(bloom::test_support::awaitCondition(
+                            "the cancelled statistics stage reaches a terminal state",
+                            [&] {
+                                if (auto taken = submission.handle.tryTakeResult())
+                                    result = std::move(*taken);
+                                return result.has_value();
+                            }),
+                        "the cancelled statistics stage reaches a terminal state");
     expectations.expect(sawCancellation.load(), "the cancellation reached the device measure");
     expectations.expect(result.has_value() && result->state() == TaskState::Cancelled,
                         "the stage is cancelled, not prepared and not a CPU fallback");
@@ -820,7 +822,7 @@ int runTests(int argc, char** argv) {
     testUnavailableStatisticsTakeTheCpuPath(expectations);
     testCancelledStatisticsCacheNothing(expectations);
 
-    if (!expectations.ok()) {
+    if (!expectations.ok() || bloom::test_support::awaitFailureCount() != 0) {
         std::cerr << "GPU-scene-stage expectation(s) failed\n";
         return 1;
     }

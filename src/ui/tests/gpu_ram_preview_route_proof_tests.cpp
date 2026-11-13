@@ -36,6 +36,7 @@
 // `--montage <dir>` writes the source, the CPU frame and the GPU frame (sampled every 4th pixel)
 // of its first and last frames.
 
+#include "await.hpp"
 #include "gpu_preview_test_phase.hpp"
 #include "gpu_route_proof_harness_support.hpp"
 
@@ -563,10 +564,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         PackedHostTeardown& operator=(const PackedHostTeardown&) = delete;
         ~PackedHostTeardown() {
             owner->beginShutdown();
-            while (!owner->exitAcknowledged())
-                std::this_thread::sleep_for(1ms);
-            while (!owner->collect())
-                std::this_thread::sleep_for(1ms);
+            // A destructor cannot assert; a timeout is counted by the helper and fails the exit.
+            (void)bloom::test_support::awaitCondition("retirement worker acknowledges its exit",
+                                                      [&] { return owner->exitAcknowledged(); });
+            (void)bloom::test_support::awaitCondition("retirement worker is collected",
+                                                      [&] { return owner->collect(); });
         }
     } packedHostTeardown(packedHostRetirement);
     std::shared_ptr<runtime::GpuProcessingPhasePolicy> processingPolicy;
@@ -599,7 +601,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             host::makePackagedGpuOcioResolver(host::currentExecutablePath());
         statisticsProvider = host::GpuExportProvider::create(evaluatorOptions);
         statisticsProvider->prepare(statisticsScheduler);
-        if (!waitUntil([&] { return statisticsProvider->prepared(); }, 90s) ||
+        if (!awaitProof(
+                "the Image Statistics device route prepares",
+                [&] { return statisticsProvider->prepared(); }, 90s) ||
             !statisticsProvider->deviceAvailable()) {
             std::cout << "SKIP: the device route that measures Image Statistics is unavailable\n";
             return options.requireDevice ? 1 : 0;
@@ -770,7 +774,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     GpuPreviewDisplayService service(scheduler, fixture.productionGpuStage(),
                                      fixture.productionCpuStage(),
                                      fixture.productionCpuFallback(displayPreparer), nativeOptions);
-    const bool terminal = waitUntil(
+    const bool terminal = awaitProof(
+        "the RAM resident service leaves Initializing",
         [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; }, 90s);
     const auto status = service.status();
     const bool residentReady =
@@ -818,12 +823,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     window->resize(320, 240);
     window->show();
     VkSurfaceKHR surface = VK_NULL_HANDLE;
-    checks.expect(waitUntil(
-                      [&] {
-                          surface = QVulkanInstance::surfaceForWindow(window.get());
-                          return surface != VK_NULL_HANDLE;
-                      },
-                      10s),
+    checks.expect(awaitProof("the RAM proof QWindow produced a Wayland VkSurfaceKHR",
+                             [&] {
+                                 surface = QVulkanInstance::surfaceForWindow(window.get());
+                                 return surface != VK_NULL_HANDLE;
+                             }),
                   "the RAM proof QWindow produced a Wayland VkSurfaceKHR");
     if (surface == VK_NULL_HANDLE) {
         instance.destroy();
@@ -836,12 +840,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const auto attached = client->attach(borrowed, 320U, 240U);
     checks.expect(attached.code == GpuPresentationPortCode::Accepted,
                   "the RAM service client admitted the Wayland surface");
-    checks.expect(waitUntil(
-                      [&] {
-                          return client->status(attached.target).state ==
-                                 GpuPresentationTargetState::Active;
-                      },
-                      15s),
+    checks.expect(awaitProof("the RAM service owner activated the presentation target",
+                             [&] {
+                                 return client->status(attached.target).state ==
+                                        GpuPresentationTargetState::Active;
+                             }),
                   "the RAM service owner activated the presentation target");
 
     ui::TaskUiBridge bridge(scheduler, nullptr, std::chrono::milliseconds(1));
@@ -874,8 +877,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     ui::RamPreviewController ram(session, controller, scheduler, bridge, pipeline, nullptr,
                                  submitter);
     checks.expect(
-        waitUntil([&] { return controller.state().activity != ui::PreviewActivity::Rendering; },
-                  30s),
+        awaitProof("the foreground frame settled before the RAM run",
+                   [&] { return controller.state().activity != ui::PreviewActivity::Rendering; }),
         "the foreground frame settled before the RAM run");
     const std::string mode = options.imageStatistics ? "statistics" : "path-nodes";
     // #349: the measures since `first`: each made on the device, one per statistics node and frame,
@@ -973,13 +976,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             const auto beforeRefresh = service.status().counters;
             const auto beforeRefreshMeasures = statisticsLog->size();
             controller.requestRefresh();
-            checks.expect(waitUntil(
-                              [&] {
-                                  return controller.state().frame != nullptr &&
-                                         controller.state().activity !=
-                                             ui::PreviewActivity::Rendering;
-                              },
-                              30s),
+            checks.expect(awaitProof("the warm viewer refresh settled",
+                                     [&] {
+                                         return controller.state().frame != nullptr &&
+                                                controller.state().activity !=
+                                                    ui::PreviewActivity::Rendering;
+                                     }),
                           "the warm viewer refresh settled");
             const auto afterRefresh = service.status().counters;
             checks.expect(afterRefresh.nativeDispatches == beforeRefresh.nativeDispatches &&
@@ -1008,17 +1010,14 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     if (options.expireBeforeAdmission) {
         // Hold UI delivery while genuine production tasks finish, then invalidate their real
         // leases through normal owner shutdown. No fake GPU product or foreign registry mutation.
-        const auto readyDeadline = std::chrono::steady_clock::now() + 30s;
-        while (!scheduler.isQuiescent() && std::chrono::steady_clock::now() < readyDeadline)
-            std::this_thread::sleep_for(1ms);
-        checks.expect(scheduler.isQuiescent(),
+        // The wait must not pump the event loop: UI delivery is held on purpose.
+        checks.expect(bloom::test_support::awaitCondition("pending RAM products settle",
+                                                          [&] { return scheduler.isQuiescent(); }),
                       "genuine pending RAM products settled before expiry");
         static_cast<void>(client->retire(attached.target, 5U));
-        const auto retireDeadline = std::chrono::steady_clock::now() + 30s;
-        while (!client->status(attached.target).surfaceSafeToDestroy &&
-               std::chrono::steady_clock::now() < retireDeadline)
-            std::this_thread::sleep_for(1ms);
-        if (!client->status(attached.target).surfaceSafeToDestroy) {
+        if (!bloom::test_support::awaitCondition(
+                "the expiry-fixture surface retires and is safe to destroy",
+                [&] { return client->status(attached.target).surfaceSafeToDestroy; })) {
             std::cerr << "FATAL: unproved expiry-fixture surface retirement\n";
             std::_Exit(1);
         }
@@ -1026,12 +1025,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         window.reset();
         instance.destroy();
         service.beginShutdown();
-        const auto stopDeadline = std::chrono::steady_clock::now() + 30s;
-        while (service.status().state != GpuPreviewDisplayServiceState::Stopped &&
-               std::chrono::steady_clock::now() < stopDeadline)
-            std::this_thread::sleep_for(1ms);
-        checks.expect(service.status().state == GpuPreviewDisplayServiceState::Stopped,
-                      "owner shutdown invalidated the genuine leases before UI admission");
+        checks.expect(
+            bloom::test_support::awaitCondition(
+                "the service owner stops",
+                [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; }),
+            "owner shutdown invalidated the genuine leases before UI admission");
         auto foreign = *controller.cacheKeyForTime(frameTime(0));
         foreign.resolutionPolicy = runtime::PreviewResolutionPolicy::Half;
         const auto halfExtent = render::ImageExtent::create(960, 540);
@@ -1050,7 +1048,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                           "explicit stale evidence");
         }
     }
-    const bool coldComplete = waitUntil([&] { return !ram.isCaching(); }, 120s);
+    const bool coldComplete =
+        awaitProof("the cold RAM fill finishes", [&] { return !ram.isCaching(); }, 120s);
     const auto coldMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - coldStart)
                             .count();
@@ -1223,13 +1222,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const auto warmStart = std::chrono::steady_clock::now();
     if (!options.expectPartial && !options.expireBeforeAdmission)
         ram.start();
-    const bool warmComplete = waitUntil(
-        [&] {
+    const bool warmComplete =
+        awaitProof("the warm RAM pass finishes", [&] {
             return !ram.isCaching() &&
                    (options.expectPartial || options.expireBeforeAdmission ||
                     ram.cachedFrameCount() == static_cast<std::uint64_t>(frameCount));
-        },
-        30s);
+        });
     const auto afterWarm = service.status().counters;
     if (options.animatedMask) {
         const auto afterWarmPreparer = preparerCounters();
@@ -1294,8 +1292,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         ++sequence;
         // Wait for the present to COMPLETE (presentCount), not merely to be submitted
         // (appliedSequence), so the next replay never replaces an in-flight present.
-        const bool applied = waitUntil(
-            [&] { return client->status(attached.target).presentCount >= sequence; }, 15s);
+        const bool applied = awaitProof("the replayed present completes", [&] {
+            return client->status(attached.target).presentCount >= sequence;
+        });
         std::cout << "PHASE ram-replay index=" << index << " code=" << static_cast<int>(update.code)
                   << " seq=" << sequence
                   << " presentCount=" << client->status(attached.target).presentCount
@@ -1333,13 +1332,16 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             pathNodes->set(pathNodes->gradientNode, "color3", core::Color4d{0.05, 0.3, 1.4, 1.0});
         else
             pathNodes->set(pathNodes->booleanNode, "operation", std::int64_t{2});
-        checks.expect(
-            waitUntil([&] { return controller.state().activity != ui::PreviewActivity::Rendering; },
-                      30s),
-            "the viewer settled after the operand edit");
+        checks.expect(awaitProof("the viewer settled after the operand edit",
+                                 [&] {
+                                     return controller.state().activity !=
+                                            ui::PreviewActivity::Rendering;
+                                 }),
+                      "the viewer settled after the operand edit");
         const auto beforeEdit = service.status().counters;
         ram.start();
-        const bool editComplete = waitUntil([&] { return !ram.isCaching(); }, 120s);
+        const bool editComplete =
+            awaitProof("the edited range refills", [&] { return !ram.isCaching(); }, 120s);
         const auto afterEdit = service.status().counters;
         checks.expect(editComplete &&
                           ram.cachedFrameCount() == static_cast<std::uint64_t>(frameCount),
@@ -1386,7 +1388,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         const auto beforeRefusalMeasures = statisticsLog->size();
         const auto previous = controller.state().frame;
         pathNodes->set(pathNodes->gradientNode, "color3", core::Color4d{0.4, 0.1, 0.9, 1.0});
-        const bool shown = waitUntil(
+        const bool shown = awaitProof(
+            "the refused-measure edit shows a new frame",
             [&] {
                 const auto frame = controller.state().frame;
                 return frame != nullptr && frame != previous &&
@@ -1448,8 +1451,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     // The expiry case already retired this surface before invalidating the borrowed instance.
     if (window) {
         static_cast<void>(client->retire(attached.target, 5U));
-        const bool safe =
-            waitUntil([&] { return client->status(attached.target).surfaceSafeToDestroy; }, 30s);
+        const bool safe = awaitProof("the RAM proof surface retires and is safe to destroy", [&] {
+            return client->status(attached.target).surfaceSafeToDestroy;
+        });
         if (!safe) {
             std::cerr << "FATAL: unproved RAM proof surface retirement\n";
             std::_Exit(1);
@@ -1462,10 +1466,16 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     ram.beginShutdown();
     controller.beginShutdown();
     bridge.beginShutdown();
-    (void)waitUntil([&] { return scheduler.isQuiescent(); }, 10s);
+    checks.expect(awaitProof("scheduler quiescent after the bridge shutdown",
+                             [&] { return scheduler.isQuiescent(); }),
+                  "the RAM proof scheduler reaches quiescence");
     service.beginShutdown();
-    (void)waitUntil(
-        [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; }, 30s);
+    checks.expect(awaitProof("the service owner stops",
+                             [&] {
+                                 return service.status().state ==
+                                        GpuPreviewDisplayServiceState::Stopped;
+                             }),
+                  "the RAM proof service stops");
     checks.expect(service.status().counters.fullFrameReadbacks == 0U,
                   "the whole RAM run performed no full-frame readback");
     std::error_code ignored;

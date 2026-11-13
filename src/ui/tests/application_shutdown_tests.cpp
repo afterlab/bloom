@@ -24,10 +24,11 @@
 #include <bloom/ui/qualified_display_processor_bootstrap.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
+#include "await_qt.hpp"
+
 #include <QAction>
 #include <QApplication>
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QEvent>
 #include <QEventLoop>
 #include <QKeySequence>
@@ -53,6 +54,7 @@
 
 namespace {
 
+using bloom::test_support::awaitQtCondition;
 using namespace std::chrono_literals;
 
 class Expectations final {
@@ -98,25 +100,6 @@ class WorkerGate final {
     bool entered_ = false;
     bool released_ = false;
 };
-
-template <typename Predicate> bool waitUntilBounded(Predicate predicate, const int timeoutMs) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < timeoutMs) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate)) {
-            return true;
-        }
-        std::this_thread::yield();
-    }
-    return std::invoke(predicate);
-}
-
-// The 2s bound FORMAL AMENDMENT 1 (S1-A) asks every reproduction shape to assert
-// shutdownQuiescent within.
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    return waitUntilBounded(std::move(predicate), 2'000);
-}
 
 // A manually-advanced fake for PlaybackController::ClockFunction (mirrors playback_controller_
 // tests.cpp's own ManualClock exactly): no dependency on real elapsed wall time, so shape (c)
@@ -190,7 +173,8 @@ void testShutdownAndCloseRouting(Expectations& expectations) {
         window.saveApplicationState(settings);
     });
 
-    expectations.expect(waitUntil([&] { return gate.entered(); }),
+    expectations.expect(awaitQtCondition("shutdown fixture starts worker preparation",
+                                         [&] { return gate.entered(); }),
                         "shutdown fixture starts worker preparation");
     int heartbeatCount = 0;
     QTimer heartbeat;
@@ -225,7 +209,8 @@ void testShutdownAndCloseRouting(Expectations& expectations) {
                         "preview publication is cancelled before runtime shutdown");
 
     gate.release();
-    expectations.expect(waitUntil([&] { return shutdownQuiescent; }),
+    expectations.expect(awaitQtCondition("coordinator publishes shutdownQuiescent",
+                                         [&] { return shutdownQuiescent; }),
                         "coordinator publishes only bridge-observed quiescence");
     expectations.expect(scheduler.isQuiescent(),
                         "shutdownQuiescent corresponds to scheduler quiescence");
@@ -363,7 +348,8 @@ void testIdleApplicationQuitsOnClose(Expectations& expectations) {
     // reached a terminal state and the task scheduler has nothing in flight, well before the
     // artist ever asks to quit.
     expectations.expect(
-        waitUntil([&scheduler] { return scheduler.isQuiescent(); }),
+        awaitQtCondition("idle fixture scheduler quiescence",
+                         [&scheduler] { return scheduler.isQuiescent(); }),
         "idle fixture settles to scheduler quiescence before any quit is requested");
 
     // The same action MainWindow's close button (and File -> Quit, whatever menu action reaches
@@ -371,7 +357,8 @@ void testIdleApplicationQuitsOnClose(Expectations& expectations) {
     window.close();
 
     expectations.expect(
-        waitUntil([&quitRequested] { return quitRequested; }),
+        awaitQtCondition("shutdownQuiescent publishes quit request",
+                         [&quitRequested] { return quitRequested; }),
         "an idle application reaches shutdown quiescence within a bounded timeout after close");
     expectations.expect(scheduler.isQuiescent(),
                         "shutdownQuiescent corresponds to scheduler quiescence for an idle app");
@@ -443,18 +430,20 @@ void testShapeSolidLayerPreviewDeliveredThenClose(Expectations& expectations) {
 
     window.show();
 
-    expectations.expect(
-        waitUntilBounded(
-            [&] { return previewController.state().activity == ui::PreviewActivity::Ready; },
-            8'000),
-        "shape (a): the solid-layer preview reaches Ready with a delivered frame");
+    expectations.expect(awaitQtCondition("shape (a) preview reaches Ready",
+                                         [&] {
+                                             return previewController.state().activity ==
+                                                    ui::PreviewActivity::Ready;
+                                         }),
+                        "shape (a): the solid-layer preview reaches Ready with a delivered frame");
     expectations.expect(previewController.state().frame != nullptr,
                         "shape (a): the delivered frame carries real pixels before close");
 
     window.close();
 
     expectations.expect(
-        waitUntil([&quitRequested] { return quitRequested; }),
+        awaitQtCondition("shutdownQuiescent publishes quit request",
+                         [&quitRequested] { return quitRequested; }),
         "shape (a): a delivered preview does not block shutdown quiescence within a bounded "
         "timeout");
     expectations.expect(scheduler.isQuiescent(),
@@ -525,7 +514,9 @@ void testShapeCloseWhilePreviewInFlight(Expectations& expectations) {
     window.show();
     // Settle the startup work (bootstrap build, the constructor's own initial preview request)
     // first, so the in-flight task below is unambiguously the NEW one this shape adds.
-    (void)waitUntil([&scheduler] { return scheduler.isQuiescent(); });
+    expectations.expect(awaitQtCondition("shape startup work reaches scheduler quiescence",
+                                         [&scheduler] { return scheduler.isQuiescent(); }),
+                        "startup work settles before the new task is added");
 
     expectations.expect(
         session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.4, 0.6, 1.0}),
@@ -536,7 +527,8 @@ void testShapeCloseWhilePreviewInFlight(Expectations& expectations) {
     window.close();
 
     expectations.expect(
-        waitUntil([&quitRequested] { return quitRequested; }),
+        awaitQtCondition("shutdownQuiescent publishes quit request",
+                         [&quitRequested] { return quitRequested; }),
         "shape (b): a preview genuinely in flight at close time still reaches quiescence within a "
         "bounded timeout");
     expectations.expect(scheduler.isQuiescent(),
@@ -602,7 +594,9 @@ void testShapeCloseWhilePlaybackArmed(Expectations& expectations) {
                      [&quitRequested] { quitRequested = true; });
 
     window.show();
-    (void)waitUntil([&scheduler] { return scheduler.isQuiescent(); });
+    expectations.expect(awaitQtCondition("shape startup work reaches scheduler quiescence",
+                                         [&scheduler] { return scheduler.isQuiescent(); }),
+                        "startup work settles before the new task is added");
 
     playback.play();
     clock.advance(std::chrono::milliseconds{160});
@@ -615,7 +609,8 @@ void testShapeCloseWhilePlaybackArmed(Expectations& expectations) {
     window.close();
 
     expectations.expect(
-        waitUntil([&quitRequested] { return quitRequested; }),
+        awaitQtCondition("shutdownQuiescent publishes quit request",
+                         [&quitRequested] { return quitRequested; }),
         "shape (c): an application closed while playback is armed still reaches quiescence within "
         "a bounded timeout");
     expectations.expect(scheduler.isQuiescent(),
@@ -651,7 +646,8 @@ void testStuckShutdownDiagnosticLogsAfterFiveSeconds(Expectations& expectations)
         });
     ui::ApplicationShutdownCoordinator shutdown(controller, bridge);
 
-    expectations.expect(waitUntil([&] { return gate.entered(); }),
+    expectations.expect(awaitQtCondition("diagnostic fixture starts worker preparation",
+                                         [&] { return gate.entered(); }),
                         "diagnostic fixture starts worker preparation");
 
     capturedDiagnosticMessages().clear();
@@ -661,9 +657,10 @@ void testStuckShutdownDiagnosticLogsAfterFiveSeconds(Expectations& expectations)
     // The gate holds the worker open indefinitely -- a genuine in-flight task that has not yet
     // signalled completion, exactly the case the original task package allowed to "delay, never
     // block forever" -- so shutdownQuiescent has not arrived by the time the 5s watchdog fires.
-    const bool loggedDiagnostic = waitUntilBounded(
-        [] { return capturedDiagnosticMessages().contains(QStringLiteral("outstanding task")); },
-        6'500);
+    const bool loggedDiagnostic =
+        awaitQtCondition("watchdog logs the outstanding-task diagnostic", [] {
+            return capturedDiagnosticMessages().contains(QStringLiteral("outstanding task"));
+        });
     qInstallMessageHandler(previousHandler);
     expectations.expect(loggedDiagnostic,
                         "the 5s watchdog logs a diagnostic while a genuine worker is still in "
@@ -671,7 +668,8 @@ void testStuckShutdownDiagnosticLogsAfterFiveSeconds(Expectations& expectations)
 
     gate.release();
     expectations.expect(
-        waitUntil([&scheduler] { return scheduler.isQuiescent(); }),
+        awaitQtCondition("scheduler quiescence after gate release",
+                         [&scheduler] { return scheduler.isQuiescent(); }),
         "releasing the gated worker still lets shutdown reach quiescence normally afterward");
 }
 
@@ -862,7 +860,8 @@ void testGpuRetirementWithholdsQuiescenceUntilComplete(Expectations& expectation
     QObject::connect(&shutdown, &ui::ApplicationShutdownCoordinator::shutdownQuiescent, &shutdown,
                      [&quiescent] { quiescent = true; });
 
-    expectations.expect(waitUntil([&scheduler] { return scheduler.isQuiescent(); }),
+    expectations.expect(awaitQtCondition("gpu-retirement scheduler idle",
+                                         [&scheduler] { return scheduler.isQuiescent(); }),
                         "gpu-retirement: scheduler is idle before shutdown");
     shutdown.beginShutdown();
     expectations.expect(gpuBegun->load(std::memory_order_acquire),
@@ -878,7 +877,8 @@ void testGpuRetirementWithholdsQuiescenceUntilComplete(Expectations& expectation
                         "gpu-retirement: quiescence is withheld until retirement is proven");
 
     gpuComplete->store(true, std::memory_order_release);
-    expectations.expect(waitUntil([&quiescent] { return quiescent; }),
+    expectations.expect(awaitQtCondition("gpu-retirement async completion releases quiescence",
+                                         [&quiescent] { return quiescent; }),
                         "gpu-retirement: async completion releases quiescence");
     expectations.expect(shutdown.gpuExportRetirementSatisfied(),
                         "gpu-retirement: the coordinator reports the GPU half satisfied");
@@ -899,5 +899,5 @@ int main(int argc, char** argv) {
     testShapeCloseWhilePlaybackArmed(expectations);
     testGpuRetirementWithholdsQuiescenceUntilComplete(expectations);
     testStuckShutdownDiagnosticLogsAfterFiveSeconds(expectations);
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

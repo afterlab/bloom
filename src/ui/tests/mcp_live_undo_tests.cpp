@@ -2,6 +2,7 @@
 // artist's undo history as one step with its label, shows in the snapshot and the panels, reverts
 // with the UI's Undo, is reported by `events`, waits for an open gesture, and a commit still queued
 // when the project is replaced fails with project-replaced. Real CompositionSession, offscreen.
+#include "await_qt.hpp"
 #include "window_fixture.hpp"
 
 #include <QAction>
@@ -29,13 +30,7 @@ void require(const bool condition, const char* message) {
         throw std::runtime_error(message);
 }
 
-template <typename Predicate> bool waitFor(Predicate predicate, const int milliseconds = 30000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < milliseconds)
-        QTest::qWait(5);
-    return predicate();
-}
+using bloom::test_support::awaitQtCondition;
 
 using ui::test::mcp_http::Response;
 using ui::test::mcp_http::Startup;
@@ -72,16 +67,20 @@ void exercise() {
     QTimer pump;
     QObject::connect(&pump, &QTimer::timeout, [&service] { service.pump(); });
     pump.start(5);
-    require(waitFor([&] { return service.snapshot()->token.state == mcp::McpTokenState::Ready; }),
+    require(awaitQtCondition(
+                "Token ready",
+                [&] { return service.snapshot()->token.state == mcp::McpTokenState::Ready; }),
             "Token ready");
     require(service.start().accepted, "Server started");
     const auto token = service.revealToken().token;
 
     const auto async = [&](auto work) {
         auto future = std::async(std::launch::async, std::move(work));
-        require(waitFor([&] {
-                    return future.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
-                }),
+        require(awaitQtCondition("HTTP exchange finished",
+                                 [&] {
+                                     return future.wait_for(std::chrono::seconds(0)) ==
+                                            std::future_status::ready;
+                                 }),
                 "HTTP exchange finished");
         return future.get();
     };
@@ -141,14 +140,18 @@ void exercise() {
                 R"({"expectedRevision":)" + std::to_string(during) +
                     R"(,"operations":[{"op":"bloom.project.set-name","args":{"name":"After drag"}}]})"));
     });
-    require(waitFor([&] { return live.waitingForGesture(); }), "The commit waits for the gesture");
+    require(awaitQtCondition("The commit waits for the gesture",
+                             [&] { return live.waitingForGesture(); }),
+            "The commit waits for the gesture");
     QTest::qWait(150);
     require(fixture.session.snapshot().project().name() != "After drag",
             "Nothing applies while the drag is open");
     fixture.session.cancelValueEdit();
-    require(waitFor([&] {
-                return waiting.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
-            }),
+    require(awaitQtCondition("The commit finishes after the drag",
+                             [&] {
+                                 return waiting.wait_for(std::chrono::seconds(0)) ==
+                                        std::future_status::ready;
+                             }),
             "The commit finishes after the drag");
     require(waiting.get().body.find("\"isError\":false") != std::string::npos &&
                 fixture.session.snapshot().project().name() == "After drag",
@@ -165,15 +168,18 @@ void exercise() {
                  R"({"expectedRevision":)" + std::to_string(held) +
                      R"(,"operations":[{"op":"bloom.project.set-name","args":{"name":"Lost"}}]})"));
     });
-    require(waitFor([&] { return live.queuedCommits() == 1; }), "The commit is queued");
+    require(awaitQtCondition("The commit is queued", [&] { return live.queuedCommits() == 1; }),
+            "The commit is queued");
     fixture.session.cancelValueEdit();
     fixture.projectHost.setUnsavedChangeDecisionProvider(
         [] { return ui::UnsavedChangeDecision::Discard; });
     // Replace before the drain slice runs.
     fixture.projectHost.newProject();
-    require(waitFor([&] {
-                return replaced.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
-            }),
+    require(awaitQtCondition("The queued commit ends",
+                             [&] {
+                                 return replaced.wait_for(std::chrono::seconds(0)) ==
+                                        std::future_status::ready;
+                             }),
             "The queued commit ends");
     const auto lost = replaced.get();
     require(lost.body.find("bloom.mcp.project-replaced") != std::string::npos,
@@ -182,7 +188,8 @@ void exercise() {
             "Nothing reached the new project");
 
     service.beginShutdown();
-    require(waitFor([&] { return service.quiescent(); }), "Server shut down");
+    require(awaitQtCondition("Server shut down", [&] { return service.quiescent(); }),
+            "Server shut down");
     pump.stop();
     adapter.shutdown();
     scheduler.beginShutdown();
@@ -203,5 +210,5 @@ int main(int argc, char** argv) {
         std::cerr << error.what() << '\n';
         return 1;
     }
-    return 0;
+    return bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

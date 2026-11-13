@@ -4,12 +4,12 @@
 // Interpret Footage's alpha and pixel aspect. With BLOOM_INTERPRET_CAPTURE_DIR set it also saves
 // the Import dialog and the Import preferences page as PNGs.
 
+#include "await_qt.hpp"
 #include "import_options_pane.hpp"
 #include "preferences_window.hpp"
 
 #include <QApplication>
 #include <QDir>
-#include <QElapsedTimer>
 #include <QFileDialog>
 #include <QGridLayout>
 #include <QImage>
@@ -45,13 +45,7 @@ void expect(const bool condition, const char* message) {
         ok = false;
     }
 }
-template <typename Predicate> bool waitUntil(Predicate predicate, const int timeoutMs = 15000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < timeoutMs)
-        QTest::qWait(5);
-    return predicate();
-}
+using bloom::test_support::awaitQtCondition;
 void capture(QWidget& widget, const QString& name) {
     const auto directory = qEnvironmentVariable("BLOOM_INTERPRET_CAPTURE_DIR");
     if (directory.isEmpty())
@@ -84,7 +78,9 @@ struct Harness final {
     ui::TaskUiBridge bridge{scheduler};
     ui::AssetController controller{session, host, scheduler, bridge};
     ~Harness() {
-        waitUntil([this] { return !controller.busy(); });
+        // A destructor cannot assert; a timeout is counted by the helper and fails the exit.
+        (void)awaitQtCondition("the import controller goes idle",
+                               [this] { return !controller.busy(); });
     }
     [[nodiscard]] const document::AssetRecord* asset(const std::size_t index) const {
         const auto& assets = session.snapshot().project().assets();
@@ -214,7 +210,8 @@ void importReadsOptionsAndPreferences(const QTemporaryDir& directory) {
     harness.controller.importFiles(
         {directory.filePath("import/shot.0001.png"), directory.filePath("import/logo.png")},
         std::nullopt, harness.controller.compositionFollowUp(), options);
-    expect(waitUntil([&] { return !harness.controller.busy(); }), "the import finishes");
+    expect(awaitQtCondition("the import finishes", [&] { return !harness.controller.busy(); }),
+           "the import finishes");
     const auto* shot = harness.asset(0);
     const auto* logo = harness.asset(1);
     expect(shot != nullptr && shot->kind == document::AssetKind::Sequence &&
@@ -240,7 +237,8 @@ void thumbnailsFollowInterpretation(const QTemporaryDir& directory) {
     commands::ImportOptions options;
     harness.controller.importFiles({directory.filePath("import/half.png")}, std::nullopt, {},
                                    options);
-    expect(waitUntil([&] { return !harness.controller.busy(); }), "the still imports");
+    expect(awaitQtCondition("the still imports", [&] { return !harness.controller.busy(); }),
+           "the still imports");
     const auto* asset = harness.asset(0);
     if (asset == nullptr) {
         expect(false, "the still is in the project");
@@ -248,10 +246,12 @@ void thumbnailsFollowInterpretation(const QTemporaryDir& directory) {
     }
     const auto id = asset->id;
     const auto thumbnail = [&] {
-        waitUntil([&] {
-            return !harness.controller.thumbnailsPending() &&
-                   !harness.controller.thumbnail(id).isNull();
-        });
+        expect(awaitQtCondition("the thumbnail is ready",
+                                [&] {
+                                    return !harness.controller.thumbnailsPending() &&
+                                           !harness.controller.thumbnail(id).isNull();
+                                }),
+               "the thumbnail is ready");
         return harness.controller.thumbnail(id);
     };
     const auto before = thumbnail();
@@ -268,10 +268,12 @@ void thumbnailsFollowInterpretation(const QTemporaryDir& directory) {
     ignore.alphaMode = document::AssetAlphaMode::Ignore;
     interpret(ignore);
     QImage ignored;
-    waitUntil([&] {
-        ignored = thumbnail();
-        return !ignored.isNull() && qAlpha(ignored.pixel(0, 4)) == 255;
-    });
+    expect(awaitQtCondition("the Ignore thumbnail turns opaque",
+                            [&] {
+                                ignored = thumbnail();
+                                return !ignored.isNull() && qAlpha(ignored.pixel(0, 4)) == 255;
+                            }),
+           "the Ignore thumbnail turns opaque");
     expect(!ignored.isNull() && qAlpha(ignored.pixel(0, 4)) == 255 &&
                qRed(ignored.pixel(0, 4)) > 200,
            "Ignore shows the stored red as opaque, as the renderer does");
@@ -280,10 +282,12 @@ void thumbnailsFollowInterpretation(const QTemporaryDir& directory) {
     invert.invertAlpha = true;
     interpret(invert);
     QImage inverted;
-    waitUntil([&] {
-        inverted = thumbnail();
-        return !inverted.isNull() && qAlpha(inverted.pixel(7, 4)) == 0;
-    });
+    expect(awaitQtCondition("the Invert thumbnail swaps its halves",
+                            [&] {
+                                inverted = thumbnail();
+                                return !inverted.isNull() && qAlpha(inverted.pixel(7, 4)) == 0;
+                            }),
+           "the Invert thumbnail swaps its halves");
     expect(!inverted.isNull() && qAlpha(inverted.pixel(0, 4)) == 255 &&
                qAlpha(inverted.pixel(7, 4)) == 0,
            "Invert swaps the transparent and the opaque halves");
@@ -291,10 +295,12 @@ void thumbnailsFollowInterpretation(const QTemporaryDir& directory) {
     wide.pixelAspect = core::PixelAspectRatio::create(2, 1);
     interpret(wide);
     QImage stretched;
-    waitUntil([&] {
-        stretched = thumbnail();
-        return stretched.width() == 2 * stretched.height();
-    });
+    expect(awaitQtCondition("the 2:1 thumbnail is twice as wide",
+                            [&] {
+                                stretched = thumbnail();
+                                return stretched.width() == 2 * stretched.height();
+                            }),
+           "the 2:1 thumbnail is twice as wide");
     expect(stretched.width() == 16 && stretched.height() == 8,
            "a 2:1 pixel aspect draws the thumbnail twice as wide");
 }
@@ -313,5 +319,5 @@ int main(int argc, char** argv) {
     preferencesPage();
     importReadsOptionsAndPreferences(directory);
     thumbnailsFollowInterpretation(directory);
-    return ok ? 0 : 1;
+    return ok && bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

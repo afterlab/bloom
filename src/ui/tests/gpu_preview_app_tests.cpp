@@ -5,6 +5,7 @@
 // evaluation, the live cached-frame re-request, and a warm-cache paired timing. It never fabricates
 // a GPU success or an eligibility report.
 
+#include "await_qt.hpp"
 #include "fixed_memory_budget.hpp"
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
@@ -40,7 +41,6 @@
 
 #include <QApplication>
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QString>
 
 #include <algorithm>
@@ -108,18 +108,14 @@ struct Options final {
     return options;
 }
 
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 15'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate)) {
-            return true;
-        }
-        std::this_thread::yield();
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return std::invoke(predicate);
+using bloom::test_support::awaitQtCondition;
+
+// gpu_preview_app_budget_recovery_tests.ipp (textually included below, outside this conversion's
+// file list) still calls waitUntil(predicate): this forwarding shim keeps it building until it is
+// converted.
+template <typename Predicate> bool waitUntil(Predicate&& predicate) {
+    return awaitQtCondition("condition awaited by gpu_preview_app_budget_recovery_tests.ipp",
+                            std::forward<Predicate>(predicate));
 }
 
 [[nodiscard]] runtime::TaskSchedulerConfig serviceSchedulerConfig() {
@@ -218,14 +214,17 @@ class AppProcessingRoot final {
             const auto delivered = ledger_.state();
             policy->applyHostSample(delivered, ledger_.physicalByteBudget());
         });
-        if (!waitUntil([&] { return policy->snapshot().reservations.hostReady; }))
+        if (!awaitQtCondition("the processing root receives its first host sample",
+                              [&] { return policy->snapshot().reservations.hostReady; }))
             throw std::runtime_error("App fixture actual processing root sample unavailable");
     }
     ~AppProcessingRoot() {
         sampler_.beginShutdown();
         scheduler_.beginShutdown();
-        expectations_.expect(waitUntil([&] { return scheduler_.isQuiescent(); }),
-                             "fixture sampler/tasks retire before borrowed ledger teardown");
+        expectations_.expect(
+            awaitQtCondition("fixture sampler/tasks retire before borrowed ledger teardown",
+                             [&] { return scheduler_.isQuiescent(); }),
+            "fixture sampler/tasks retire before borrowed ledger teardown");
         // A failed timeout never makes a live worker/borrowed fixture safe to destroy.
         while (!scheduler_.isQuiescent()) {
             QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
@@ -314,7 +313,7 @@ void testControllerGpuPathAndParity(Expectations& expectations, const Options& o
     auto serviceCalls = std::make_shared<std::atomic<int>>(0);
     runtime::GpuPreviewDisplayService service(scheduler, fixture.stage(), fixture.fallback(),
                                               gpuOptions(options.loader, processing.policy));
-    const bool terminal = waitUntil([&] {
+    const bool terminal = awaitQtCondition("the GPU service leaves Initializing", [&] {
         return service.status().state != runtime::GpuPreviewDisplayServiceState::Initializing;
     });
     const bool ready =
@@ -334,17 +333,20 @@ void testControllerGpuPathAndParity(Expectations& expectations, const Options& o
          .showLook = true,
          .pixelStorageByteLimit = kBudget},
         frameCache, nullptr, serviceSubmitter(service, serviceCalls), nullptr, processing.policy);
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(awaitQtCondition("foreground frame is ready through the real service",
+                                         [&] { return isReady(controller); }),
                         "the foreground frame is ready through the real service");
     if (ready) {
         // The controller may publish an initial CPU frame synchronously; wait for the routed GPU
         // result to replace it before asserting provenance.
         expectations.expect(
-            waitUntil([&] {
-                const auto current = controller.state().frame;
-                return current != nullptr && current->provenance().provider ==
-                                                 runtime::PreviewDisplayProvider::GpuNeutral;
-            }),
+            awaitQtCondition(
+                "routed service result replaces the opening frame with actual GPU provenance",
+                [&] {
+                    const auto current = controller.state().frame;
+                    return current != nullptr && current->provenance().provider ==
+                                                     runtime::PreviewDisplayProvider::GpuNeutral;
+                }),
             "the routed service result replaces the opening frame with actual GPU provenance");
     }
 
@@ -421,15 +423,18 @@ void testControllerGpuPathAndParity(Expectations& expectations, const Options& o
     // original time is answered by the frame cache with zero extra preparation.
     const int callsBeforeNewTime = serviceCalls->load();
     expectations.expect(session.setCurrentTime(time(1, 25)) &&
-                            waitUntil([&] { return isReady(controller); }),
+                            awaitQtCondition("different time evaluates through the service",
+                                             [&] { return isReady(controller); }),
                         "a different time evaluates through the service");
     const int callsAfterNewTime = serviceCalls->load();
     const int evaluationsAfterNewTime = fixture.stageEvaluations.load();
     expectations.expect(callsAfterNewTime > callsBeforeNewTime,
                         "the uncached time submitted a real request");
-    expectations.expect(session.setCurrentTime(time(0)) &&
-                            waitUntil([&] { return isReady(controller); }),
-                        "returning to the cached time publishes the retained frame");
+    expectations.expect(
+        session.setCurrentTime(time(0)) &&
+            awaitQtCondition("returning to the cached time publishes the retained frame",
+                             [&] { return isReady(controller); }),
+        "returning to the cached time publishes the retained frame");
     expectations.expect(serviceCalls->load() == callsAfterNewTime &&
                             fixture.stageEvaluations.load() == evaluationsAfterNewTime,
                         "the live cached frame is re-served with zero extra preparation");
@@ -474,7 +479,8 @@ void testControllerGpuPathAndParity(Expectations& expectations, const Options& o
     controller.beginShutdown();
     service.beginShutdown();
     bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
+    expectations.expect(awaitQtCondition("application pipeline reaches scheduler quiescence",
+                                         [&] { return scheduler.isQuiescent(); }),
                         "the application pipeline reaches scheduler quiescence");
 }
 
@@ -497,9 +503,11 @@ void testMissingLoaderCpuFallback(Expectations& expectations) {
         scheduler, fixture.stage(), fixture.fallback(),
         gpuOptions("/nonexistent/bloom-loader.so", processing.policy));
     expectations.expect(
-        waitUntil([&] {
-            return service.status().state != runtime::GpuPreviewDisplayServiceState::Initializing;
-        }) &&
+        awaitQtCondition("missing loader reports Unavailable",
+                         [&] {
+                             return service.status().state !=
+                                    runtime::GpuPreviewDisplayServiceState::Initializing;
+                         }) &&
             service.status().state == runtime::GpuPreviewDisplayServiceState::Unavailable,
         "a missing loader reports Unavailable");
     ui::CompositionPreviewController controller(
@@ -514,7 +522,8 @@ void testMissingLoaderCpuFallback(Expectations& expectations) {
          .pixelStorageByteLimit = kBudget},
         std::make_shared<ui::PreviewFrameCache>(), nullptr, serviceSubmitter(service, serviceCalls),
         nullptr, processing.policy);
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(awaitQtCondition("missing-loader path still publishes a frame",
+                                         [&] { return isReady(controller); }),
                         "the missing-loader path still publishes a frame");
     expectations.expect(controller.state().frame != nullptr &&
                             controller.state().frame->displayBufferView().has_value(),
@@ -525,8 +534,9 @@ void testMissingLoaderCpuFallback(Expectations& expectations) {
     controller.beginShutdown();
     service.beginShutdown();
     bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
-                        "the missing-loader path quiesces");
+    expectations.expect(
+        awaitQtCondition("missing-loader path quiesces", [&] { return scheduler.isQuiescent(); }),
+        "the missing-loader path quiesces");
 }
 
 // Gate 3: warm-cache paired timing through the service seam, including handoff until result.
@@ -547,11 +557,13 @@ void testPipelineTiming(Expectations& expectations, const Options& options) {
 
     runtime::GpuPreviewDisplayService gpuService(scheduler, fixture.stage(), fixture.fallback(),
                                                  gpuOptions(options.loader, processing.policy));
-    const bool ready = waitUntil([&] {
-                           return gpuService.status().state !=
-                                  runtime::GpuPreviewDisplayServiceState::Initializing;
-                       }) &&
-                       gpuService.status().state == runtime::GpuPreviewDisplayServiceState::Ready;
+    const bool ready =
+        awaitQtCondition("the GPU service leaves Initializing for the timing run",
+                         [&] {
+                             return gpuService.status().state !=
+                                    runtime::GpuPreviewDisplayServiceState::Initializing;
+                         }) &&
+        gpuService.status().state == runtime::GpuPreviewDisplayServiceState::Ready;
     if (!ready) {
         expectations.expect(!options.requireDevice, "the timing gate requires a qualified device");
         return;
@@ -658,8 +670,9 @@ void testPipelineTiming(Expectations& expectations, const Options& options) {
     expectations.expect(gpuMedian > 0.0 && gpuMedian < cpuMedian,
                         "the 1080p GPU service path is faster than the CPU-forced service "
                         "(submit-to-result, no presentation claim)");
-    expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
-                        "the timing path quiesces");
+    expectations.expect(
+        awaitQtCondition("timing path quiesces", [&] { return scheduler.isQuiescent(); }),
+        "the timing path quiesces");
 }
 
 } // namespace
@@ -684,8 +697,9 @@ int main(int argc, char** argv) {
         std::cerr << "unexpected exception: " << error.what() << '\n';
         return 1;
     }
-    if (expectations.failures() != 0) {
-        std::cerr << expectations.failures() << " GPU app expectation(s) failed\n";
+    if (expectations.failures() + bloom::test_support::awaitFailureCount() != 0) {
+        std::cerr << expectations.failures() + bloom::test_support::awaitFailureCount()
+                  << " GPU app expectation(s) failed\n";
         return 1;
     }
     std::cout << "gpu_preview_app_tests: all expectations passed\n";

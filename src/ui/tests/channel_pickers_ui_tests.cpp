@@ -5,6 +5,7 @@
 // pattern behind a toggle; a data reader picks a block of its kind; the Video audio stream on the
 // node card is a dropdown. Properties and the node cards show the same controls.
 
+#include "await_qt.hpp"
 #include "channel_checklist_field.hpp"
 #include "node_editor_items.hpp"
 
@@ -37,7 +38,6 @@
 #include <ImfOutputFile.h>
 
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QTest>
 
 #include <filesystem>
@@ -58,13 +58,7 @@ void expect(const bool value, const std::string& message) {
     }
 }
 
-template <typename Predicate> bool waitUntil(Predicate predicate, const int milliseconds = 15000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < milliseconds)
-        QTest::qWait(5);
-    return predicate();
-}
+using bloom::test_support::awaitQtCondition;
 
 constexpr int kSide = 4;
 
@@ -236,11 +230,13 @@ void run() {
     // default (empty) slots show the first colour layer's channels they read.
     scene.session.selectNode(scene.shuffle);
     QList<ui::kit::KDropdown*> slotBoxes;
-    expect(waitUntil([&] {
-               slotBoxes = properties->findChildren<ui::kit::KDropdown*>("propertiesShuffleSlot");
-               return slotBoxes.size() == 4 && slotBoxes.front()->isEnabled() &&
-                      slotBoxes.front()->count() == 10;
-           }),
+    expect(awaitQtCondition("the Shuffle slotBoxes fill once the worker listing arrives",
+                            [&] {
+                                slotBoxes = properties->findChildren<ui::kit::KDropdown*>(
+                                    "propertiesShuffleSlot");
+                                return slotBoxes.size() == 4 && slotBoxes.front()->isEnabled() &&
+                                       slotBoxes.front()->count() == 10;
+                            }),
            "the Shuffle slotBoxes fill once the worker listing arrives");
     if (slotBoxes.size() == 4) {
         expect(slotBoxes[0]->currentText() == "ViewLayer.Combined.R" &&
@@ -264,9 +260,11 @@ void run() {
         return controls.isEmpty() ? nullptr : controls.front();
     };
     auto* cardGreen = qobject_cast<ui::kit::KDropdown*>(cardControl(scene.shuffle, "green"));
-    expect(waitUntil([&] {
-               return cardGreen != nullptr && cardGreen->currentText() == "ViewLayer.Combined.G";
-           }),
+    expect(awaitQtCondition("the card's slot is the same dropdown with the same default",
+                            [&] {
+                                return cardGreen != nullptr &&
+                                       cardGreen->currentText() == "ViewLayer.Combined.G";
+                            }),
            "the card's slot is the same dropdown with the same default");
     auto* cardRed = qobject_cast<ui::kit::KDropdown*>(cardControl(scene.shuffle, "red"));
     expect(cardRed != nullptr && cardRed->currentText() == "ViewLayer.Depth.Z",
@@ -275,11 +273,12 @@ void run() {
     // Select Channels: a checklist of the input's layers, empty by default.
     scene.session.selectNode(scene.remove);
     ui::ChannelChecklistField* checklist = nullptr;
-    expect(waitUntil([&] {
-               checklist =
-                   properties->findChild<ui::ChannelChecklistField*>("propertiesChannelChecklist");
-               return checklist != nullptr && checklist->entries().size() == 3;
-           }),
+    expect(awaitQtCondition("Select Channels lists the input's three layers",
+                            [&] {
+                                checklist = properties->findChild<ui::ChannelChecklistField*>(
+                                    "propertiesChannelChecklist");
+                                return checklist != nullptr && checklist->entries().size() == 3;
+                            }),
            "Select Channels lists the input's three layers");
     if (checklist != nullptr && checklist->entries().size() == 3) {
         expect(checklist->entries()[1].token == "ViewLayer.Depth" &&
@@ -309,11 +308,12 @@ void run() {
 
     // Channel Copy: every layer of `from` by default (`*`); unchecking lists the rest.
     scene.session.selectNode(scene.copy);
-    expect(waitUntil([&] {
-               checklist =
-                   properties->findChild<ui::ChannelChecklistField*>("propertiesChannelChecklist");
-               return checklist != nullptr && checklist->entries().size() == 3;
-           }),
+    expect(awaitQtCondition("Channel Copy lists the layers of its from input",
+                            [&] {
+                                checklist = properties->findChild<ui::ChannelChecklistField*>(
+                                    "propertiesChannelChecklist");
+                                return checklist != nullptr && checklist->entries().size() == 3;
+                            }),
            "Channel Copy lists the layers of its from input");
     if (checklist != nullptr && checklist->entries().size() == 3) {
         expect(checklist->summary()->text() == "All", "Channel Copy copies every layer by default");
@@ -332,11 +332,12 @@ void run() {
     // layer cannot be unchecked (an empty list means every layer).
     scene.session.selectNode(scene.output);
     ui::ChannelChecklistField* layers = nullptr;
-    expect(waitUntil([&] {
-               layers = properties->findChild<ui::ChannelChecklistField*>(
-                   "propertiesOutputChannelLayers");
-               return layers != nullptr && layers->entries().size() == 3;
-           }),
+    expect(awaitQtCondition("the output layer checklist lists the connected set's layers",
+                            [&] {
+                                layers = properties->findChild<ui::ChannelChecklistField*>(
+                                    "propertiesOutputChannelLayers");
+                                return layers != nullptr && layers->entries().size() == 3;
+                            }),
            "the output layer checklist lists the connected set's layers");
     if (layers != nullptr && layers->entries().size() == 3) {
         expect(layers->summary()->text() == "Every layer", "every layer is written by default");
@@ -386,10 +387,9 @@ void run() {
 
     bridge.beginShutdown();
     scheduler.beginShutdown();
-    QElapsedTimer timer;
-    timer.start();
-    while (!scheduler.isQuiescent() && timer.elapsed() < 4000)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    expect(awaitQtCondition("scheduler quiescent after shutdown",
+                            [&] { return scheduler.isQuiescent(); }),
+           "the scheduler reaches quiescence");
 }
 
 } // namespace
@@ -403,5 +403,5 @@ int main(int argc, char** argv) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;
     }
-    return failures == 0 ? 0 : 1;
+    return failures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

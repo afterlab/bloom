@@ -375,12 +375,9 @@ void testCachePurgeWaitsForInFlightProducerThenClears(Expectations& check) {
             return runtime::TaskResult<std::uint64_t>::succeeded(std::uint64_t{0});
         });
     check.expect(submission.accepted(), "cache purge wait: the producer is admitted");
-    const auto producerDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-    while (!producerGate.entered() && std::chrono::steady_clock::now() < producerDeadline) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    check.expect(producerGate.entered(), "cache purge wait: the producer is in flight");
+    check.expect(bloom::test_support::awaitQtCondition("the producer enters its gate",
+                                                       [&] { return producerGate.entered(); }),
+                 "cache purge wait: the producer is in flight");
 
     ui::CachePurgeController controller(scheduler, bridge, nullptr, &operationCache, nullptr);
     check.expect(controller.requestPreviewPurge(), "cache purge wait: the purge starts");
@@ -437,12 +434,9 @@ void testCachePurgeProceedsWhileSaveIsHeld(Expectations& check) {
     // Wait in wall time, not event-loop turns: processEvents returns at once when idle, so a turn
     // count expires in a fraction of a second while a loaded machine has not yet started the
     // BlockingIo worker.
-    const auto saveDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-    while (!saveGate.entered() && std::chrono::steady_clock::now() < saveDeadline) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    check.expect(saveGate.entered(), "cache purge scope: Save is genuinely in flight");
+    check.expect(bloom::test_support::awaitQtCondition("the Save task enters its gate",
+                                                       [&] { return saveGate.entered(); }),
+                 "cache purge scope: Save is genuinely in flight");
 
     ui::CachePurgeController controller(scheduler, bridge, &disk, &operationCache, nullptr);
     const auto drain = [&] {
@@ -539,5 +533,5 @@ int main(int argc, char** argv) {
     testCachePurgeWaitsForInFlightProducerThenClears(check);
     testCachePurgeProceedsWhileSaveIsHeld(check);
     testServiceCachePurgeTimeoutWithdrawsAndSerializes(check);
-    return check.failures() == 0 ? 0 : 1;
+    return check.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

@@ -7,7 +7,6 @@
 #include "await_qt.hpp"
 #include <QApplication>
 #include <QDir>
-#include <QElapsedTimer>
 #include <QImage>
 #include <QTest>
 

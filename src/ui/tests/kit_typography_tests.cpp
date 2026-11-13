@@ -11,6 +11,7 @@
 //
 // BLOOM_TYPOGRAPHY_TABLE=<file> writes the class-to-font table; BLOOM_TYPOGRAPHY_CAPTURE=<prefix>
 // saves the Assets panel under the hostile theme as <prefix>-dpr<ratio>.png.
+#include "await_qt.hpp"
 #include "import_progress_dialog.hpp"
 #include "preferences_window.hpp"
 #include "window_fixture.hpp"
@@ -32,7 +33,6 @@
 #include <QApplication>
 #include <QDialog>
 #include <QDirIterator>
-#include <QElapsedTimer>
 #include <QFile>
 #include <QFontDatabase>
 #include <QFontInfo>
@@ -326,12 +326,10 @@ void auditModal(Audit& audit, const QString& name, const std::function<void()>& 
     });
     poll.start();
     open();
-    QElapsedTimer waited;
-    waited.start();
-    while (!seen && waited.elapsed() < 3000)
-        QApplication::processEvents(QEventLoop::AllEvents, 10);
+    const bool appeared = bloom::test_support::awaitQtCondition(
+        (name + QStringLiteral(" modal appears")).toStdString(), [&] { return seen; });
     poll.stop();
-    audit.expect(seen, (name + QStringLiteral(" opened for the audit")).toStdString());
+    audit.expect(appeared && seen, (name + QStringLiteral(" opened for the audit")).toStdString());
 }
 
 QTreeWidgetItem* findRow(QTreeWidget& tree, const QString& text) {
@@ -563,7 +561,7 @@ int run(int argc, char** argv) {
         audit.writeTable(table);
     std::cout << "Typography audit: " << audit.observations() << " observations, " << audit.leaks()
               << " platform-font leaks\n";
-    return audit.failures() == 0 ? 0 : 1;
+    return audit.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }
 
 } // namespace

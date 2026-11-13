@@ -70,14 +70,14 @@ void testViewerActualAdjustmentFailureAndCover(Expectations& checks) {
     ui::ViewerEditor viewer(session, controller);
     viewer.resize(400, 300);
     checks.expect(
-        waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Ready; }),
+        bloom::test_support::awaitQtCondition("qualified candidate prepares without a paint", [&] { return controller.state().activity == ui::PreviewActivity::Ready; }),
         "a qualified candidate prepares without a paint");
     checks.expect(!viewer.displayedFrameForTest() && !viewer.mappingForTest() &&
                       viewer.displayedPreviewState().freshness == ui::FrameFreshness::None &&
                       viewer.displayedPreviewState().activity != ui::PreviewActivity::Ready,
                   "an unpainted hidden viewer cannot claim displayed readiness or hit geometry");
     viewer.show();
-    checks.expect(waitUntil([&] { return viewer.displayedFrameForTest() != nullptr; }),
+    checks.expect(bloom::test_support::awaitQtCondition("actual CPU paint publishes the qualified frame", [&] { return viewer.displayedFrameForTest() != nullptr; }),
                   "the actual CPU paint publishes the qualified frame");
     const auto original = viewer.displayedFrameForTest();
     checks.expect(original && original->isOcioQualified(), "the last-good frame is qualified");
@@ -88,7 +88,7 @@ void testViewerActualAdjustmentFailureAndCover(Expectations& checks) {
     if (!exposure)
         return;
     exposure->stepBy(10);
-    checks.expect(waitUntil([&] { return adjustmentCalls.load() == 1; }),
+    checks.expect(bloom::test_support::awaitQtCondition("adjusted task is held off-thread", [&] { return adjustmentCalls.load() == 1; }),
                   "the adjusted task is held off-thread");
     const auto pending = viewer.displayedPreviewState();
     checks.expect(
@@ -100,7 +100,7 @@ void testViewerActualAdjustmentFailureAndCover(Expectations& checks) {
     checks.expect(status.colorChipTextForTest() == "Qualified · Bloom Neutral",
                   "pending work preserves qualification");
     blocked = false;
-    checks.expect(waitUntil([&] {
+    checks.expect(bloom::test_support::awaitQtCondition("actual adjustment refusal is published", [&] {
                       return viewer.displayedPreviewState().activity == ui::PreviewActivity::Failed;
                   }),
                   "the actual adjustment refusal is published");
@@ -118,7 +118,7 @@ void testViewerActualAdjustmentFailureAndCover(Expectations& checks) {
                   "the identical failed adjustment is not retried per poll");
     fail = false;
     exposure->stepBy(10);
-    checks.expect(waitUntil([&] {
+    checks.expect(bloom::test_support::awaitQtCondition("changed desired adjustment recovers through real CPU publication", [&] {
                       const auto shown = viewer.displayedFrameForTest();
                       return shown && shown->desiredIdentity().viewAdjust.exposure == 2.0 &&
                              viewer.displayedPreviewState().freshness ==
@@ -171,7 +171,7 @@ void testViewerActualAdjustmentFailureAndCover(Expectations& checks) {
     allowLateCompletion = true;
     blocked = true;
     exposure->stepBy(10);
-    checks.expect(waitUntil([&] {
+    checks.expect(bloom::test_support::awaitQtCondition("next genuine adjusted result is held before completion delivery", [&] {
                       return adjustmentCalls.load() > failedCalls + 1 && latePreparedSucceeded;
                   }),
                   "the next genuine adjusted result is held before completion delivery");
@@ -206,7 +206,7 @@ void testViewerActualAdjustmentFailureAndCover(Expectations& checks) {
     allowLateCompletion = false;
     blocked = false;
     checks.expect(
-        waitUntil([&] {
+        bloom::test_support::awaitQtCondition("detached old adjustment completion cannot replace the new same-ID actual frame", [&] {
             const auto shown = viewer.displayedFrameForTest();
             return lateCompletions == 1 && shown && shown != adjusted &&
                    shown->desiredIdentity().viewAdjust.exposure == 3.0 &&
@@ -226,7 +226,7 @@ void testViewerActualAdjustmentFailureAndCover(Expectations& checks) {
         "the current same-ID adjusted display contains the replacement document's blue pixels");
     exposure->stepBy(-30);
     checks.expect(
-        waitUntil([&] {
+        bloom::test_support::awaitQtCondition("neutral transition cancels pending work and publishes the real neutral candidate", [&] {
             const auto shown = viewer.displayedFrameForTest();
             return shown && shown->desiredIdentity().viewAdjust.neutral() &&
                    scheduler.isQuiescent();
@@ -257,7 +257,7 @@ void testViewerActualAdjustmentFailureAndCover(Expectations& checks) {
                   "non-neutral controls cannot mask the no-composition state as adjustment work");
     controller.beginShutdown();
     bridge.beginShutdown();
-    checks.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
+    checks.expect(bloom::test_support::awaitQtCondition("display truth fixture drains", [&] { return scheduler.isQuiescent(); }),
                   "display truth fixture drains");
     QSettings().remove("viewer/analysis/default");
 }
@@ -291,7 +291,7 @@ void testViewerSharedFailureWithoutCandidate(Expectations& checks) {
     ui::CompositionPreviewController controller(session, scheduler, bridge, refuse);
     ui::ViewerEditor viewer(session, controller);
     checks.expect(
-        waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Failed; }),
+        bloom::test_support::awaitQtCondition("shared pipeline fails before any candidate exists", [&] { return controller.state().activity == ui::PreviewActivity::Failed; }),
         "the shared pipeline fails before any candidate exists");
     auto* exposure = viewer.findChild<ui::kit::KValueField*>("viewerExposure");
     if (exposure)
@@ -303,14 +303,14 @@ void testViewerSharedFailureWithoutCandidate(Expectations& checks) {
     unsupported = true;
     controller.requestRefresh();
     checks.expect(
-        waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Unsupported; }),
+        bloom::test_support::awaitQtCondition("shared unsupported result is observed", [&] { return controller.state().activity == ui::PreviewActivity::Unsupported; }),
         "the shared unsupported result is observed");
     checks.expect(viewer.displayedPreviewState().activity == ui::PreviewActivity::Unsupported &&
                       viewer.displayedPreviewState().message == controller.state().message,
                   "local pending text never overwrites shared Unsupported diagnostics");
     controller.beginShutdown();
     bridge.beginShutdown();
-    checks.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
+    checks.expect(bloom::test_support::awaitQtCondition("shared failure fixture drains", [&] { return scheduler.isQuiescent(); }),
                   "shared failure fixture drains");
     QSettings().remove("viewer/analysis/default");
 }

@@ -2,6 +2,7 @@
 // the frame it was delivered (CompositionPreviewController::currentLayerBounds, no UI-thread
 // evaluation); scripting and MCP measure with runtime::queryLayerBounds. For the same snapshot and
 // time both give the same bounds, the same alignment geometry and the same planned move.
+#include "await_qt.hpp"
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/layer_alignment_operations.hpp>
@@ -24,7 +25,6 @@
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QEventLoop>
 
 #include <chrono>
@@ -51,18 +51,7 @@ void expect(const bool condition, const std::string& message,
     }
 }
 
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 8'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate))
-            return true;
-        std::this_thread::yield();
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return std::invoke(predicate);
-}
+using bloom::test_support::awaitQtCondition;
 
 [[nodiscard]] bool near(const double a, const double b) { return std::abs(a - b) <= 1e-9; }
 
@@ -160,10 +149,11 @@ void testDeliveredFrameMatchesHeadlessQuery() {
     ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
     PipelineFixture fixture;
     ui::CompositionPreviewController controller(session, scheduler, bridge, fixture.pipeline);
-    expect(waitUntil([&] {
-               return controller.state().activity == ui::PreviewActivity::Ready &&
-                      controller.state().frame != nullptr;
-           }),
+    expect(awaitQtCondition("the preview delivers a frame",
+                            [&] {
+                                return controller.state().activity == ui::PreviewActivity::Ready &&
+                                       controller.state().frame != nullptr;
+                            }),
            "the preview delivers a frame");
     const auto frame = controller.state().frame;
     if (frame != nullptr) {
@@ -209,7 +199,8 @@ void testDeliveredFrameMatchesHeadlessQuery() {
                      [&quiescent] { quiescent = true; });
     controller.beginShutdown();
     bridge.beginShutdown();
-    expect(waitUntil([&] { return quiescent && scheduler.isQuiescent(); }),
+    expect(awaitQtCondition("the parity fixture reaches scheduler quiescence",
+                            [&] { return quiescent && scheduler.isQuiescent(); }),
            "the parity fixture reaches scheduler quiescence");
 }
 
@@ -219,8 +210,9 @@ int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QCoreApplication application(argc, argv);
     testDeliveredFrameMatchesHeadlessQuery();
-    if (failures != 0) {
-        std::cerr << failures << " layer alignment parity checks failed\n";
+    if (failures + bloom::test_support::awaitFailureCount() != 0) {
+        std::cerr << failures + bloom::test_support::awaitFailureCount()
+                  << " layer alignment parity checks failed\n";
         return 1;
     }
     return 0;

@@ -1,3 +1,4 @@
+#include "await_qt.hpp"
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/interaction_sounds.hpp>
@@ -301,17 +302,6 @@ class RecordingBackend final : public playback::Backend {
     return best;
 }
 
-template <typename Predicate>
-[[nodiscard]] bool waitFor(Predicate predicate) {
-    const auto deadline = Clock::now() + std::chrono::seconds{5};
-    while (!predicate()) {
-        if (Clock::now() > deadline)
-            return false;
-        std::this_thread::sleep_for(std::chrono::milliseconds{2});
-    }
-    return true;
-}
-
 void testEngineDecodesOffTheUiThread(Expectations& check) {
     auto backend = std::make_unique<RecordingBackend>();
     auto* raw = backend.get();
@@ -342,7 +332,8 @@ void testEngineDecodesOffTheUiThread(Expectations& check) {
                  "the device stays closed until the first sound is played");
 
     engine.play(ui::FeedbackSound::RenderSucceeded, 1.0F);
-    check.expect(waitFor([&] { return engine.deviceOpen(); }),
+    check.expect(bloom::test_support::awaitCondition("first play opens the device",
+                                                     [&] { return engine.deviceOpen(); }),
                  "the first play opens the device");
     check.expect(raw->startThread == engine.workerThread(),
                  "and the worker opens it, not the calling thread");
@@ -385,10 +376,12 @@ void testEngineStaysSilentWithoutADevice(Expectations& check) {
     engine.start();
     engine.waitUntilSettled();
     engine.play(ui::FeedbackSound::Button, 1.0F);
-    check.expect(waitFor([&] {
-                     const std::lock_guard lock(mutex);
-                     return diagnostics.size() == 1;
-                 }),
+    check.expect(bloom::test_support::awaitCondition(
+                     "an output that cannot open reports one diagnostic and no dialog",
+                     [&] {
+                         const std::lock_guard lock(mutex);
+                         return diagnostics.size() == 1;
+                     }),
                  "an output that cannot open reports one diagnostic and no dialog");
     check.expect(peak(raw->pull(128)) == 0.0F && !engine.deviceOpen(), "and stays silent");
 }
@@ -403,7 +396,9 @@ void testEngineSurvivesMissingSounds(Expectations& check) {
     engine.start();
     engine.waitUntilSettled();
     engine.play(ui::FeedbackSound::Button, 1.0F);
-    check.expect(waitFor([&] { return engine.deviceOpen(); }), "the device opens");
+    check.expect(
+        bloom::test_support::awaitCondition("device opens", [&] { return engine.deviceOpen(); }),
+        "the device opens");
     check.expect(peak(raw->pull(128)) == 0.0F, "a sound that failed to load is skipped");
     engine.play(ui::FeedbackSound::Select, 1.0F);
     check.expect(peak(raw->pull(128)) > 0.0F, "the others still play");
@@ -421,15 +416,22 @@ void testDeviceOpensLazilyAndClosesWhenIdle(Expectations& check) {
                  "an engine that is never asked to play never opens the device");
 
     engine.play(ui::FeedbackSound::Select, 1.0F);
-    check.expect(waitFor([&] { return engine.deviceOpen(); }) && raw->starts == 1,
+    check.expect(bloom::test_support::awaitCondition("device opens on the first play",
+                                                     [&] { return engine.deviceOpen(); }) &&
+                     raw->starts == 1,
                  "the device opens on the first play");
     check.expect(peak(raw->pull(256)) > 0.0F, "the sound plays through the lazily opened device");
-    check.expect(waitFor([&] { return !engine.deviceOpen(); }) && raw->stops == 1,
+    check.expect(bloom::test_support::awaitCondition("device closes after the idle period",
+                                                     [&] { return !engine.deviceOpen(); }) &&
+                     raw->stops == 1,
                  "the device closes after the idle period");
 
     engine.play(ui::FeedbackSound::Select, 1.0F);
-    check.expect(waitFor([&] { return engine.deviceOpen(); }) && raw->starts == 2,
-                 "a later play reopens it with the sounds still resident");
+    check.expect(
+        bloom::test_support::awaitCondition("later play reopens it with the sounds still resident",
+                                            [&] { return engine.deviceOpen(); }) &&
+            raw->starts == 2,
+        "a later play reopens it with the sounds still resident");
     check.expect(peak(raw->pull(256)) > 0.0F, "and plays");
     engine.shutdown();
     check.expect(!engine.deviceOpen() && raw->stops == 2, "shutdown closes an open device");
@@ -587,5 +589,5 @@ int main(int argc, char** argv) {
     testEngineSurvivesMissingSounds(check);
     testInteractionObserver(check);
     testDialogCues(check);
-    return check.failures() == 0 ? 0 : 1;
+    return check.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

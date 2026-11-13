@@ -2,6 +2,7 @@
 // availability reasons, the port field's inline reasons, token masking, regeneration confirmation,
 // clients, incremental activity, the copy-config menu, the status bar indicator and the warning
 // sound.
+#include "await_qt.hpp"
 #include "mcp_test_support.hpp"
 
 #include <bloom/commands/command_stack.hpp>
@@ -84,10 +85,15 @@ void testAdapterDrain() {
     port.publish();
     port.publish();
     // The waiter thread may start after the first publish; keep waking until it has drained.
-    for (int i = 0; i < 100 && changed.count() < 2; ++i) {
-        port.publish();
-        QTest::qWait(10);
-    }
+    expect(bloom::test_support::awaitConditionWith(
+               "the waiter's wakes drain into two changed() emissions",
+               [&] { return changed.count() >= 2; },
+               [&] {
+                   port.publish();
+                   QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+                   std::this_thread::sleep_for(std::chrono::milliseconds{10});
+               }),
+           "the waiter's wakes drain into two changed() emissions");
     expect(changed.count() == 2, "the waiter's wakes drain once and emit one changed()");
 }
 
@@ -312,13 +318,17 @@ void testRegenerateConfirms() {
         mentionsClients = mentionsClients || label->text().contains(QStringLiteral("connected client"));
     expect(mentionsClients, "it says every connected client will be disconnected");
     (void)dialog->activate(ui::kit::KDialog::Role::Reject);
-    QTest::qWait(20);
+    // Deliver anything the Cancel might have queued, so a wrong regenerate shows.
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     expect(port.regenerates == 0, "Cancel does not regenerate");
     regenerate->click();
     dialog = panel.window()->findChild<ui::kit::KDialog*>(QStringLiteral("mcpRegenerateConfirm"));
     if (dialog != nullptr)
         (void)dialog->activate(ui::kit::KDialog::Role::Destructive);
-    QTest::qWait(20);
+    expect(bloom::test_support::awaitQtCondition("the confirmed regenerate reaches the port",
+                                                 [&] { return port.regenerates >= 1; }),
+           "Confirming regenerates");
     expect(port.regenerates == 1, "Confirming regenerates once");
 }
 
@@ -599,27 +609,32 @@ void testRealService() {
             .limits = {}});
         ui::McpServerServicePort port(service);
         ui::McpServerAdapter adapter(port);
-        const auto pumpUntil = [&](auto predicate) {
-            for (int i = 0; i < 2000 && !predicate(); ++i) {
+        const auto pumpUntil = [&](const std::string_view what, auto predicate) {
+            return bloom::test_support::awaitQtCondition(what, [&] {
                 adapter.drain();
-                QTest::qWait(5);
-            }
-            return predicate();
+                return predicate();
+            });
         };
-        expect(pumpUntil([&] { return adapter.snapshot()->token.state == m::McpTokenState::Ready; }),
-               "the token loads");
+        expect(
+            pumpUntil("the token loads",
+                      [&] { return adapter.snapshot()->token.state == m::McpTokenState::Ready; }),
+            "the token loads");
         expect(adapter.start().availability.available, "start is accepted");
-        expect(pumpUntil([&] { return adapter.snapshot()->state == m::McpServerState::Running; }),
+        expect(pumpUntil("the snapshot shows Running",
+                         [&] { return adapter.snapshot()->state == m::McpServerState::Running; }),
                "the snapshot shows Running");
         expect(adapter.stop().availability.available, "stop is accepted");
-        expect(pumpUntil([&] { return adapter.snapshot()->state == m::McpServerState::Stopped; }),
+        expect(pumpUntil("the snapshot shows Stopped",
+                         [&] { return adapter.snapshot()->state == m::McpServerState::Stopped; }),
                "the snapshot shows Stopped");
         service.beginShutdown();
-        pumpUntil([&] { return service.quiescent(); });
+        expect(pumpUntil("the service is quiescent", [&] { return service.quiescent(); }),
+               "the service is quiescent");
     }
     scheduler.beginShutdown();
-    while (!scheduler.isQuiescent())
-        QTest::qWait(1);
+    expect(bloom::test_support::awaitQtCondition("scheduler quiescent after shutdown",
+                                                 [&] { return scheduler.isQuiescent(); }),
+           "the scheduler reaches quiescence");
     fs::remove_all(folder, ignored);
 }
 
@@ -644,5 +659,5 @@ int main(int argc, char** argv) {
     testRealService();
     if (gFailures != 0)
         std::cerr << gFailures << " failure(s)\n";
-    return gFailures == 0 ? 0 : 1;
+    return gFailures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

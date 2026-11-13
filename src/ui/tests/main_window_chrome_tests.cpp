@@ -1,6 +1,7 @@
 #ifndef BLOOM_GRAMMAR_ARTIFACT_DIR
 #define BLOOM_GRAMMAR_ARTIFACT_DIR "."
 #endif
+#include "await_qt.hpp"
 #include "window_fixture.hpp"
 #undef BLOOM_GRAMMAR_ARTIFACT_DIR
 
@@ -546,7 +547,10 @@ void testNumpadZeroReachesRamPreviewFromEveryEditor(Expectations& expectations) 
         auto* field = new QLineEdit(window);
         field->show();
         field->setFocus();
-        QTest::qWait(20);
+        expectations.expect(bloom::test_support::awaitQtCondition(
+                                "the line edit takes the focus",
+                                [&] { return QApplication::focusWidget() == field; }),
+                            "the line edit takes the focus");
         const int before = triggered;
         press(field, Qt::Key_0, Qt::KeypadModifier, 90);
         press(field, Qt::Key_0, Qt::NoModifier, 90);
@@ -557,7 +561,10 @@ void testNumpadZeroReachesRamPreviewFromEveryEditor(Expectations& expectations) 
         value->show();
         value->lineEdit()->show();
         value->lineEdit()->setFocus();
-        QTest::qWait(20);
+        expectations.expect(bloom::test_support::awaitQtCondition(
+                                "the value field's editor takes the focus",
+                                [&] { return QApplication::focusWidget() == value->lineEdit(); }),
+                            "the value field's editor takes the focus");
         press(value->lineEdit(), Qt::Key_0, Qt::KeypadModifier, 90);
         expectations.expect(QApplication::focusWidget() == value->lineEdit() &&
                                 triggered == before,
@@ -1001,10 +1008,10 @@ void testMediaPurgeDropsCompletedSourceFrames(Expectations& expectations) {
                         "memory-only media refresh drops cached frames while preserving display");
 
     fixture.preview->requestRefresh();
-    QElapsedTimer timer;
-    timer.start();
-    while (fixture.preview->frameCache().size() == 0 && timer.elapsed() < 15000)
-        QTest::qWait(5);
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "the fresh request repopulates the frame cache",
+                            [&] { return fixture.preview->frameCache().size() != 0; }),
+                        "the frame cache is repopulated");
     expectations.expect(fixture.preview->frameCache().size() > 0,
                         "a fresh request repopulates the completed-frame cache");
     fixture.window.reset();
@@ -1026,11 +1033,14 @@ void testMediaPurgeDropsCompletedSourceFrames(Expectations& expectations) {
     expectations.expect(fixture.preview->cachePurgeGateActive() &&
                             fixture.preview->frameCache().size() == 0,
                         "asynchronous media refresh clears completed frames under producer gate");
-    timer.restart();
-    while ((purge.isPurging() ||
-            fixture.preview->frameCache().statistics().insertions == insertions) &&
-           timer.elapsed() < 15000)
-        QTest::qWait(5);
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "the purge ends and a new frame is inserted",
+                            [&] {
+                                return !purge.isPurging() &&
+                                       fixture.preview->frameCache().statistics().insertions !=
+                                           insertions;
+                            }),
+                        "the purge ends and a new frame is inserted");
     expectations.expect(!purge.isPurging() && !fixture.preview->cachePurgeGateActive() &&
                             fixture.preview->frameCache().statistics().insertions > insertions,
                         "gate release computes a new frame instead of reusing a pre-refresh hit");
@@ -1061,7 +1071,8 @@ void testContextBarIsAFixedSurfaceUnderTheMenuBar(Expectations& expectations) {
                                     workspace->mapTo(fixture.window.get(), QPoint()).y() &&
                                 bar->width() == workspace->width(),
                             "the bar spans the window above the workspace");
-        QTest::qWait(20);
+        QCoreApplication::sendPostedEvents();
+        QApplication::processEvents();
         expectations.expect(bar->viewer() != nullptr &&
                                 bar->viewer() ==
                                     fixture.window->statusStrip()->displayedViewerForTest(),
@@ -1090,9 +1101,6 @@ void testContextBarIsAFixedSurfaceUnderTheMenuBar(Expectations& expectations) {
 
 // The window follows its viewers through coalesced deferred updates, so a state is awaited, never
 // assumed after a fixed delay.
-template <typename Condition> bool eventually(Condition condition) {
-    return QTest::qWaitFor(std::move(condition), 5000);
-}
 
 void testDisplayedViewerStatusPolicy(Expectations& expectations) {
     bloom::ui::test::WindowFixture fixture;
@@ -1101,17 +1109,22 @@ void testDisplayedViewerStatusPolicy(Expectations& expectations) {
     workspace->resetToSingleArea("bloom.viewer");
     auto* firstArea = workspace->activeArea();
     ViewerEditor* first = nullptr;
-    expectations.expect(eventually([&] {
-                            first = firstArea->findChild<ViewerEditor*>();
-                            return first && status->displayedViewerForTest() == first;
-                        }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "active visible viewer owns global display status",
+                            [&] {
+                                first = firstArea->findChild<ViewerEditor*>();
+                                return first && status->displayedViewerForTest() == first;
+                            }),
                         "active visible viewer owns global display status");
     auto* secondArea = workspace->splitArea(*firstArea, Qt::Horizontal, "bloom.viewer");
     ViewerEditor* second = nullptr;
-    expectations.expect(eventually([&] {
-                            second = secondArea ? secondArea->findChild<ViewerEditor*>() : nullptr;
-                            return second != nullptr;
-                        }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "a second real viewer is created",
+                            [&] {
+                                second =
+                                    secondArea ? secondArea->findChild<ViewerEditor*>() : nullptr;
+                                return second != nullptr;
+                            }),
                         "a second real viewer is created");
     if (!second)
         return;
@@ -1122,14 +1135,18 @@ void testDisplayedViewerStatusPolicy(Expectations& expectations) {
         return;
     channel->setCurrentIndex(static_cast<int>(ViewerChannel::Red));
     workspace->setActiveArea(secondArea);
-    expectations.expect(eventually([&] {
-                            return status->displayedViewerForTest() == second &&
-                                   status->previewStateTextForTest().contains("Red");
-                        }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "active second viewer reports its own painted channel intent",
+                            [&] {
+                                return status->displayedViewerForTest() == second &&
+                                       status->previewStateTextForTest().contains("Red");
+                            }),
                         "active second viewer reports its own painted channel intent");
     auto* nodesArea = workspace->splitArea(*secondArea, Qt::Vertical, "bloom.nodes");
     workspace->setActiveArea(nodesArea);
-    expectations.expect(eventually([&] { return status->displayedViewerForTest() == second; }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "a non-viewer active panel retains the last-active visible viewer",
+                            [&] { return status->displayedViewerForTest() == second; }),
                         "a non-viewer active panel retains the last-active visible viewer");
     ProbeReadout readout;
     readout.valid = true;
@@ -1139,21 +1156,26 @@ void testDisplayedViewerStatusPolicy(Expectations& expectations) {
     expectations.expect(probe && !probe->text().isEmpty(),
                         "selected viewer supplies the probe cell");
     workspace->toggleMaximizeActiveArea();
-    expectations.expect(eventually([&] {
-                            return !status->displayedViewerForTest() &&
-                                   status->colorChipTextForTest() == "No visible viewer" &&
-                                   status->previewStateTextForTest().isEmpty() &&
-                                   probe->text().isEmpty();
-                        }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "no visible viewer clears displayed qualification, activity and probe",
+                            [&] {
+                                return !status->displayedViewerForTest() &&
+                                       status->colorChipTextForTest() == "No visible viewer" &&
+                                       status->previewStateTextForTest().isEmpty() &&
+                                       probe->text().isEmpty();
+                            }),
                         "no visible viewer clears displayed qualification, activity and probe");
     workspace->toggleMaximizeActiveArea();
-    expectations.expect(eventually([&] { return status->displayedViewerForTest() == second; }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "restoring visibility restores the last-active viewer",
+                            [&] { return status->displayedViewerForTest() == second; }),
                         "restoring visibility restores the last-active viewer");
     Q_EMIT second->probeChanged(readout);
     expectations.expect(secondArea->setEditorId("bloom.nodes"),
                         "selected viewer replacement succeeds");
     expectations.expect(
-        eventually(
+        bloom::test_support::awaitQtCondition(
+            "destroyed selected viewer clears its probe and falls back to first visible viewer",
             [&] { return status->displayedViewerForTest() == first && probe->text().isEmpty(); }),
         "destroyed selected viewer clears its probe and falls back to first visible viewer");
 }
@@ -1187,7 +1209,7 @@ void testPriorityRowsKeepControlsInside(Expectations& expectations) {
         workspace->resetToSingleArea(editor);
         for (const int width : {640, 800, 1000, 1280, 1920}) {
             fixture.window->resize(width, 900);
-            QTest::qWait(30);
+            QCoreApplication::sendPostedEvents();
             QApplication::processEvents();
             const std::string at = std::string{editor} + " at " + std::to_string(width) + " px";
             for (auto* area : fixture.window->findChildren<EditorArea*>()) {
@@ -1349,6 +1371,7 @@ void testProjectColorDialogPreservesCurrentIntent(Expectations& expectations) {
     const auto choose = [&](const QString& expectedConfig, const QString& expectedWorking,
                             const QString& changeConfig = {},
                             const QString& expectedWorkingLabel = {}) {
+        bool answered = false;
         QTimer::singleShot(0, &window, [&] {
             auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
             auto* config =
@@ -1370,17 +1393,18 @@ void testProjectColorDialogPreservesCurrentIntent(Expectations& expectations) {
             }
             if (dialog)
                 dialog->accept();
+            answered = true;
         });
         action->trigger();
-        // The dialog is asynchronous: let it open, be answered and close.
-        QTest::qWait(20);
-        (void)QTest::qWaitFor(
-            [&window] {
-                auto* open =
-                    window.findChild<QDialog*>(QStringLiteral("projectColorSettingsDialog"));
-                return open == nullptr || !open->isVisible();
-            },
-            2000);
+        // The dialog is asynchronous: await it being answered and closed.
+        expectations.expect(bloom::test_support::awaitQtCondition(
+                                "the colour settings dialog is answered and closes",
+                                [&] {
+                                    auto* open = window.findChild<QDialog*>(
+                                        QStringLiteral("projectColorSettingsDialog"));
+                                    return answered && (open == nullptr || !open->isVisible());
+                                }),
+                            "color settings: the dialog is answered and closes");
         QApplication::processEvents();
     };
 
@@ -1469,7 +1493,7 @@ int main(int argc, char** argv) {
     testRejectedCommandsBecomeStatusBarNotices(expectations);
     testPurgeMenuActionsExistAndAreInTheEditMenu(expectations);
     testPurgePreviewCacheActionHasRealEffect(expectations);
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }
 
 #include "main_window_chrome_tests.moc"

@@ -7,10 +7,11 @@ class PackedHostTestTeardown final {
         : owner_(std::move(owner)) {}
     ~PackedHostTestTeardown() {
         owner_->beginShutdown();
-        while (!owner_->exitAcknowledged())
-            std::this_thread::sleep_for(1ms);
-        while (!owner_->collect())
-            std::this_thread::sleep_for(1ms);
+        // A destructor cannot assert; a timeout is counted by the helper and fails the test's exit.
+        (void)bloom::test_support::awaitCondition("retirement worker acknowledges its exit",
+                                                  [&] { return owner_->exitAcknowledged(); });
+        (void)bloom::test_support::awaitCondition("retirement worker is collected",
+                                                  [&] { return owner_->collect(); });
     }
 
   private:
@@ -58,15 +59,13 @@ int exercisePackedHostRetirement(Expectations& checks, ui::ViewerEditor& viewer,
     outgoing->show();
     QPointer<ui::EditorArea> deferredArea(outgoing);
     auto* outgoingViewer = outgoing->findChild<ui::ViewerEditor*>();
-    checks.expect(outgoingViewer && waitUntil(
-                                        [&] {
+    checks.expect(outgoingViewer && awaitProof("outgoing real Viewer has painted and retained the same owned backing", [&] {
                                             const auto painted =
                                                 outgoingViewer->actualDisplayDescriptor();
                                             return painted && painted->frame &&
                                                    painted->frame->displayOnlyFrame() ==
                                                        external->displayOnlyFrame();
-                                        },
-                                        3s),
+                                        }),
                   "outgoing real Viewer has painted and retained the same owned backing");
     outgoing->setParent(nullptr);
     PackedHostFreeGate freeGate;
@@ -119,13 +118,14 @@ int exercisePackedHostRetirement(Expectations& checks, ui::ViewerEditor& viewer,
         "active loop destroys it and retires producer while external pin keeps host alive");
     const auto releaseRevision = policy->snapshot().reservations.admissionRevision;
     external.reset(); // Actual final owner on the UI thread: enqueue only.
-    checks.expect(waitUntil([&] { return freeGate.hasEntered(); }, 3s),
+    checks.expect(awaitProof("real last-alias backing deletion reaches the retirement worker", [&] { return freeGate.hasEntered(); }),
                   "real last-alias backing deletion reaches the retirement worker");
     std::size_t heartbeats = 0;
     QTimer heartbeat;
     QObject::connect(&heartbeat, &QTimer::timeout, &shutdown, [&] { ++heartbeats; });
     heartbeat.start(1);
-    checks.expect(waitUntil([&] { return heartbeats >= 5; }, 1s) && preHost && !quiescent &&
+    checks.expect(awaitProof("active Qt loop remains responsive with released Viewer/cache pins while free "
+                  "and actual exit are withheld", [&] { return heartbeats >= 5; }) && preHost && !quiescent &&
                       !shutdown.packedHostRetirementSatisfied() && !owner->exitAcknowledged() &&
                       !viewer.actualDisplayDescriptor() && !controller.state().frame &&
                       controller.frameCache().size() == 0,
@@ -140,7 +140,7 @@ int exercisePackedHostRetirement(Expectations& checks, ui::ViewerEditor& viewer,
                           held.ownedPackedHostBytes + held.ownedPackedHostMetadataBytes,
                   "queued and in-progress backing remains exactly charged before actual free");
     freeGate.release();
-    checks.expect(waitUntil([&] { return quiescent; }, 3s) && owner->exitAcknowledged() &&
+    checks.expect(awaitProof("GUI final quiescence requires actual worker exit but performs no join", [&] { return quiescent; }) && owner->exitAcknowledged() &&
                       !owner->snapshot().collected,
                   "GUI final quiescence requires actual worker exit but performs no join");
     heartbeat.stop();

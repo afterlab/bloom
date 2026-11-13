@@ -47,8 +47,7 @@ void reportOutlineFailure(ui::ViewerEditor& viewer, ui::CompositionPreviewContro
 void settleEditorOutlineAndHold(Expectations& checks, ui::ViewerEditor& viewer,
                                 ui::CompositionPreviewController& controller,
                                 const std::shared_ptr<ui::PreviewFrameTrace>& trace) {
-    checks.expect(waitUntil(
-                      [&] {
+    checks.expect(bloom::test_support::awaitQtCondition("selected image/outline publication settles before visible drag proof", [&] {
                           const auto ack = trace->lastNativeAcknowledgement();
                           const auto shown = controller.state().frame;
                           return ack && shown &&
@@ -56,8 +55,7 @@ void settleEditorOutlineAndHold(Expectations& checks, ui::ViewerEditor& viewer,
                                      ui::PreviewFrameTrace::identity(shown->desiredIdentity()) &&
                                  viewer.residentPresentationActiveForTest() &&
                                  !viewer.gpuCpuCoverVisibleForTest();
-                      },
-                      20s),
+                      }),
                   "the selected image/outline publication settles before visible drag proof");
     std::cout << "PHASE_EDITOR_BASE\n" << std::flush;
     holdEditorOutlinePhase();
@@ -74,8 +72,7 @@ void moveNativeOutlineSteps(Expectations& checks, ui::ViewerEditor& viewer,
                         centre + delta * (static_cast<double>(step) / 4.0), Qt::NoButton,
                         Qt::LeftButton);
         checks.expect(
-            waitUntil(
-                [&] {
+            bloom::test_support::awaitQtCondition("real native drag makes coherent visible publication progress before release", [&] {
                     const auto ack = trace->lastNativeAcknowledgement();
                     const auto shown = controller.state().frame;
                     return ack && shown &&
@@ -83,8 +80,7 @@ void moveNativeOutlineSteps(Expectations& checks, ui::ViewerEditor& viewer,
                                ui::PreviewFrameTrace::identity(shown->desiredIdentity()) &&
                            viewer.gpuNativeAppliedSequenceForTest() > sequenceBefore &&
                            session.transformInteractionActive();
-                },
-                20s),
+                }),
             "a real native drag makes coherent visible publication progress before release");
         std::cout << "PHASE_EDITOR_DRAG_" << step << '\n' << std::flush;
         holdEditorOutlinePhase();
@@ -107,7 +103,7 @@ void exerciseNativeTextOutline(Expectations& checks, ui::ViewerEditor& viewer,
     checks.expect(!viewer.mappingForTest(),
                   "a new selection cannot pick handles against the pending old native outline");
     checks.expect(
-        waitUntil([&] { return viewer.mappingForTest().has_value(); }, 20s),
+        bloom::test_support::awaitQtCondition("text selected domain becomes passively pickable only after actual publication", [&] { return viewer.mappingForTest().has_value(); }),
         "the text selected domain becomes passively pickable only after actual publication");
     const auto actual = viewer.actualDisplayDescriptor();
     const auto bounds = actual ? controller.selectedLayerBounds(actual->frame)
@@ -143,14 +139,12 @@ void exerciseNativeTextOutline(Expectations& checks, ui::ViewerEditor& viewer,
         sendNativeMouse(window, container, QEvent::MouseMove,
                         centre + delta * (static_cast<double>(step) / 4.0), Qt::NoButton,
                         Qt::LeftButton);
-        checks.expect(waitUntil(
-                          [&] {
+        checks.expect(bloom::test_support::awaitQtCondition("held text drag publishes another coherent actual text and outline pair", [&] {
                               return session.transformInteractionActive() &&
                                      viewer.gpuNativeAppliedSequenceForTest() > previous &&
                                      viewer.displayedPreviewState().freshness ==
                                          ui::FrameFreshness::Current;
-                          },
-                          20s),
+                          }),
                       "held text drag publishes another coherent actual text and outline pair");
         if (!session.transformInteractionActive())
             reportOutlineFailure(viewer, controller, trace, window, observer);
@@ -173,15 +167,13 @@ void exerciseNativeTextOutline(Expectations& checks, ui::ViewerEditor& viewer,
     checks.expect(waitForResidentRevision(controller, viewer, session.snapshot().revision(), 30s),
                   "text undo reaches real resident presentation");
     checks.expect(
-        waitUntil(
-            [&] {
+        bloom::test_support::awaitQtCondition("undone text phase waits for the exact owner-applied undone identity and outline", [&] {
                 const auto shown = viewer.displayedPreviewState();
                 return shown.frame &&
                        shown.frame->desiredIdentity().sourceRevision ==
                            session.snapshot().revision() &&
                        shown.freshness == ui::FrameFreshness::Current;
-            },
-            20s),
+            }),
         "undone text phase waits for the exact owner-applied undone identity and outline");
     std::cout << "PHASE_TEXT_UNDONE\n" << std::flush;
     holdEditorOutlinePhase();
@@ -202,7 +194,7 @@ void exerciseNativeAdjustmentIntent(Expectations& checks, ui::ViewerEditor& view
     holdEditorOutlinePhase();
     blocked = true;
     exposure->stepBy(10);
-    checks.expect(waitUntil([&] { return calls.load() == 1; }, 20s),
+    checks.expect(bloom::test_support::awaitQtCondition("native viewer's explicit CPU analysis adjustment is held off-thread", [&] { return calls.load() == 1; }),
                   "the native viewer's explicit CPU analysis adjustment is held off-thread");
     checks.expect(viewer.displayedFrameForTest() == original &&
                       viewer.residentPresentationActiveForTest() &&
@@ -225,9 +217,7 @@ void exerciseNativeAdjustmentIntent(Expectations& checks, ui::ViewerEditor& view
     holdEditorOutlinePhase();
     blocked = false;
     checks.expect(
-        waitUntil(
-            [&] { return viewer.displayedPreviewState().activity == ui::PreviewActivity::Failed; },
-            20s),
+        bloom::test_support::awaitQtCondition("actual adjustment refusal is visible with the retained native frame", [&] { return viewer.displayedPreviewState().activity == ui::PreviewActivity::Failed; }),
         "the actual adjustment refusal is visible with the retained native frame");
     checks.expect(viewer.displayedFrameForTest() == original &&
                       viewer.residentPresentationActiveForTest() &&
@@ -240,14 +230,12 @@ void exerciseNativeAdjustmentIntent(Expectations& checks, ui::ViewerEditor& view
     refuse = false;
     exposure->stepBy(10);
     checks.expect(
-        waitUntil(
-            [&] {
+        bloom::test_support::awaitQtCondition("changed EV publishes a real qualified CPU adjustment after safe native retirement", [&] {
                 const auto shown = viewer.displayedPreviewState();
                 return shown.frame && shown.frame->desiredIdentity().viewAdjust.exposure == 2.0 &&
                        shown.freshness == ui::FrameFreshness::Current &&
                        !viewer.hasLiveNativeTarget();
-            },
-            20s),
+            }),
         "changed EV publishes a real qualified CPU adjustment after safe native retirement");
     const auto adjusted = viewer.actualDisplayDescriptor();
     checks.expect(adjusted && adjusted->frame && adjusted->frame->isOcioQualified() &&
@@ -256,15 +244,13 @@ void exerciseNativeAdjustmentIntent(Expectations& checks, ui::ViewerEditor& view
     std::cout << "PHASE_INTENT_ADJUSTED\n" << std::flush;
     holdEditorOutlinePhase();
     exposure->stepBy(-20);
-    checks.expect(waitUntil(
-                      [&] {
+    checks.expect(bloom::test_support::awaitQtCondition("neutral controls recover through a new genuine native applied publication", [&] {
                           const auto shown = viewer.displayedPreviewState();
                           return shown.frame &&
                                  shown.frame->desiredIdentity().viewAdjust.neutral() &&
                                  shown.freshness == ui::FrameFreshness::Current &&
                                  viewer.residentPresentationActiveForTest();
-                      },
-                      20s),
+                      }),
                   "neutral controls recover through a new genuine native applied publication");
     bool recoveredCover = false;
     for (auto* window : QGuiApplication::allWindows()) {

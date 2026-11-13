@@ -3,10 +3,10 @@
 // valid, not "Missing — Relink", and each gets a thumbnail. Extra file paths on the command line
 // are imported and reported the same way.
 
+#include "await_qt.hpp"
 #include "cryptomatte_fixture_support.hpp"
 
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QImage>
 #include <QProcess>
 #include <QStandardPaths>
@@ -50,13 +50,9 @@ void expect(const bool value, const std::string& message) {
     }
 }
 
-template <typename Predicate> bool waitUntil(Predicate predicate, const int milliseconds = 60000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < milliseconds)
-        QTest::qWait(10);
-    return predicate();
-}
+using bloom::test_support::awaitQtCondition;
+// The import of one asset can take a while on a loaded machine: keep the longer limit.
+constexpr std::chrono::milliseconds kImportLimit{60'000};
 
 struct Harness final {
     runtime::TaskScheduler scheduler;
@@ -87,10 +83,9 @@ struct Harness final {
         controller->cancel();
         bridge.beginShutdown();
         scheduler.beginShutdown();
-        QElapsedTimer timer;
-        timer.start();
-        while (!scheduler.isQuiescent() && timer.elapsed() < 10000)
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        expect(awaitQtCondition("scheduler quiescent after harness shutdown",
+                                [&] { return scheduler.isQuiescent(); }),
+               "the harness scheduler reaches quiescence");
     }
     Harness(const Harness&) = delete;
     Harness& operator=(const Harness&) = delete;
@@ -119,7 +114,9 @@ Outcome importAndInspect(const std::filesystem::path& path, const bool chooseRec
     Harness harness;
     Outcome outcome;
     harness.controller->importFiles({QString::fromStdString(path.string())});
-    waitUntil([&] { return !harness.controller->busy(); });
+    expect(awaitQtCondition(
+               "import finishes", [&] { return !harness.controller->busy(); }, kImportLimit),
+           "the import finishes");
     const auto& assets = harness.session.snapshot().project().assets();
     if (assets.empty())
         return outcome;
@@ -127,11 +124,15 @@ Outcome importAndInspect(const std::filesystem::path& path, const bool chooseRec
     const auto& asset = assets.front();
     outcome.kind = std::to_string(static_cast<int>(asset.kind));
     // Settled: a thumbnail, a missing source, or a stated problem.
-    waitUntil([&] {
-        return !harness.controller->thumbnail(asset.id).isNull() ||
-               harness.controller->missing(asset.id) ||
-               !harness.controller->problem(asset.id).isEmpty();
-    });
+    expect(awaitQtCondition(
+               "asset settles to a thumbnail, a missing source or a problem",
+               [&] {
+                   return !harness.controller->thumbnail(asset.id).isNull() ||
+                          harness.controller->missing(asset.id) ||
+                          !harness.controller->problem(asset.id).isEmpty();
+               },
+               kImportLimit),
+           "the asset settles");
     outcome.missing = harness.controller->missing(asset.id);
     outcome.thumbnail = !harness.controller->thumbnail(asset.id).isNull();
     outcome.dataOnly = harness.controller->dataOnly(asset.id);
@@ -164,13 +165,12 @@ Outcome importAndInspect(const std::filesystem::path& path, const bool chooseRec
                 std::string(config->rec709VideoColorSpaceId()));
             if (harness.session.executeTransaction(std::move(choose)).succeeded())
                 // The explicit choice replaces the assumption (and its note) with a new thumbnail.
-                outcome.thumbnailAfterChoice = waitUntil(
-                    [&] {
+                outcome.thumbnailAfterChoice = awaitQtCondition(
+                    "explicit Rec.709 choice replaces the assumption with a new thumbnail", [&] {
                         return !harness.controller->inputColorSpaceAssumed(asset.id) &&
                                harness.controller->inputColorSpaceWarning(asset.id).isEmpty() &&
                                !harness.controller->thumbnail(asset.id).isNull();
-                    },
-                    30000);
+                    });
         }
     }
     outcome.note = (harness.controller->audioDiagnostic(asset.id) + " | " +
@@ -185,7 +185,10 @@ Outcome importAndInspect(const std::filesystem::path& path, const bool chooseRec
 void statusBarVideoNote(const std::filesystem::path& clip, const std::string& family) {
     Harness harness;
     harness.controller->importFiles({QString::fromStdString(clip.string())});
-    waitUntil([&] { return !harness.controller->busy(); });
+    expect(awaitQtCondition(
+               "status bar import finishes", [&] { return !harness.controller->busy(); },
+               kImportLimit),
+           "status bar: the import finishes");
     const auto& assets = harness.session.snapshot().project().assets();
     expect(!assets.empty(), "status bar: the clip imports");
     if (assets.empty())
@@ -365,7 +368,7 @@ int main(int argc, char** argv) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;
     }
-    if (failures != 0)
+    if (failures + bloom::test_support::awaitFailureCount() != 0)
         return 1;
     std::cout << "PASS: asset validity\n";
     return 0;

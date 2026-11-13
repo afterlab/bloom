@@ -1,3 +1,4 @@
+#include "await_qt.hpp"
 #include "node_editor_items.hpp"
 #include "window_fixture.hpp"
 #include <QDir>
@@ -88,10 +89,9 @@ void author(ui::test::WindowFixture& fixture, const QTemporaryDir& directory) {
                                                     core::RationalTime::fromInteger(1));
     require(fixture.session.executeTransaction(std::move(setup)).succeeded(), "composition setup");
     fixture.assets->importFiles({directory.filePath("Orbit.png"), directory.filePath("Tone.wav")});
-    QElapsedTimer timer;
-    timer.start();
-    while (fixture.assets->busy() && timer.elapsed() < 15000)
-        QTest::qWait(10);
+    require(bloom::test_support::awaitQtCondition("the PNG and WAV import finishes",
+                                                  [&] { return !fixture.assets->busy(); }),
+            "the PNG and WAV import finishes");
     require(fixture.session.snapshot().project().assets().size() == 2, "PNG and sequence import");
     const auto imported = fixture.session.snapshot();
     const auto records = imported.project().assets();
@@ -135,20 +135,20 @@ int run(int argc, char** argv) {
     fixture.session.selectNode(audioNode);
     for (auto* editor : fixture.window->findChildren<ui::NodeGraphEditor*>())
         editor->graphView()->frameGraph();
-    QTest::qWait(200);
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     fixture.clearInteraction();
     require(fixture.window->devicePixelRatioF() == 1.0, "capture requires DPR 1");
-    QElapsedTimer waveformWait;
-    waveformWait.start();
     document::AssetId audioAsset;
     for (const auto& binding :
          fixture.session.composition()->graph().findNode(audioNode)->parameters)
         if (binding.role == "asset")
             if (const auto value = fixture.session.constantStringValue(binding.parameterId))
                 audioAsset = document::AssetId::fromRaw(value->toULongLong());
-    while (fixture.assets->waveform(audioAsset) == nullptr && waveformWait.elapsed() < 15000)
-        QTest::qWait(10);
-    require(fixture.assets->waveform(audioAsset) != nullptr, "audio waveform ready");
+    require(bloom::test_support::awaitQtCondition(
+                "the audio waveform is ready",
+                [&] { return fixture.assets->waveform(audioAsset) != nullptr; }),
+            "audio waveform ready");
     bool captured = false;
     for (auto* editor : fixture.window->findChildren<ui::NodeGraphEditor*>())
         for (auto* item : editor->graphView()->scene()->items())
@@ -167,7 +167,7 @@ int run(int argc, char** argv) {
     const auto destination = QStringLiteral(BLOOM_GRAMMAR_ARTIFACT_DIR "/audio2-window-dpr1.png");
     require(fixture.window->grab().save(destination), "write full window capture");
     std::cout << destination.toStdString() << " — frame 12, WAV + image layer\n";
-    return 0;
+    return bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }
 } // namespace
 int main(int argc, char** argv) {

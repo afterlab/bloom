@@ -8,6 +8,7 @@
 // The device-loss/quarantine case cannot be induced on this hardware and is
 // left unproven.
 
+#include "await_qt.hpp"
 #include <bloom/core/color.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
@@ -108,17 +109,12 @@ void pumpQt(const int milliseconds) {
     loop.exec();
 }
 
+// Unnamed wait for viewer_resident_outline_proof.ipp, which is not converted yet; the waits in this
+// file call awaitQtCondition with a name.
 template <typename Predicate>
 [[nodiscard]] bool waitUntil(Predicate predicate, const int timeoutMilliseconds) {
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMilliseconds);
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (predicate()) {
-            return true;
-        }
-        pumpQt(4);
-    }
-    return predicate();
+    return bloom::test_support::awaitQtCondition("test condition", predicate,
+                                                 std::chrono::milliseconds{timeoutMilliseconds});
 }
 
 enum class Cmd { None, ProduceLease, SetGate, Barrier, ExpireLeases };
@@ -319,12 +315,11 @@ int main(int argc, char** argv) {
     Expectations expectations;
     Shared shared;
     std::thread owner(ownerMain, std::ref(shared), options, std::ref(expectations));
-    if (!waitUntil(
-            [&] {
-                std::lock_guard lock(shared.mutex);
-                return shared.initDone;
-            },
-            30'000) ||
+    if (!bloom::test_support::awaitQtCondition("owner thread initializes",
+                                               [&] {
+                                                   std::lock_guard lock(shared.mutex);
+                                                   return shared.initDone;
+                                               }) ||
         !shared.ran) {
         owner.join();
         std::string reason;
@@ -345,12 +340,13 @@ int main(int argc, char** argv) {
             shared.cmd = command;
         }
         shared.cv.notify_all();
-        (void)waitUntil(
-            [&] {
-                std::lock_guard lock(shared.mutex);
-                return shared.cmdDone;
-            },
-            10'000);
+        expectations.expect(
+            bloom::test_support::awaitQtCondition("owner thread acknowledges the command",
+                                                  [&] {
+                                                      std::lock_guard lock(shared.mutex);
+                                                      return shared.cmdDone;
+                                                  }),
+            "the owner thread acknowledges the command");
     };
 
     QWidget host;
@@ -441,13 +437,13 @@ int main(int argc, char** argv) {
         runCommand(Cmd::SetGate, true);
         expectations.expect(controller->present(*frame, makeRequest(320.0, 240.0)),
                             "the delayed first present is admitted");
-        expectations.expect(waitUntil(
+        expectations.expect(bloom::test_support::awaitQtCondition(
+                                "CPU cover is visible during the delayed first present",
                                 [&] {
                                     controller->poll();
                                     return controller->cpuCoverForTest() != nullptr &&
                                            controller->cpuCoverForTest()->isVisible();
-                                },
-                                10'000),
+                                }),
                             "the CPU cover is visible during the delayed first present");
         expectations.expect(controller->cpuCoverForTest() != nullptr &&
                                 controller->cpuCoverForTest()->size() == QSize(320, 240),
@@ -468,12 +464,12 @@ int main(int argc, char** argv) {
         std::cout << "PHASE_COVER\n" << std::flush;
         pumpQt(2500);
         runCommand(Cmd::SetGate, false);
-        expectations.expect(waitUntil(
+        expectations.expect(bloom::test_support::awaitQtCondition(
+                                "delayed first present is genuinely acknowledged ",
                                 [&] {
                                     controller->poll();
                                     return controller->presentationAcknowledged();
-                                },
-                                20'000),
+                                }),
                             "the delayed first present is genuinely acknowledged "
                             "after the gate opens");
         expectations.expect(
@@ -489,13 +485,13 @@ int main(int argc, char** argv) {
             99, [&](const std::uint64_t, const ui::EditorNativeSurface::PrepareResult& r) {
                 safe = r.safeToMutate;
             }));
-        expectations.expect(waitUntil(
-                                [&] {
-                                    controller->poll();
-                                    return safe;
-                                },
-                                20'000),
-                            "the visible-proof surface retired before teardown");
+        expectations.expect(
+            bloom::test_support::awaitQtCondition("visible-proof surface retired before teardown",
+                                                  [&] {
+                                                      controller->poll();
+                                                      return safe;
+                                                  }),
+            "the visible-proof surface retired before teardown");
         controller.reset();
         {
             std::lock_guard lock(shared.mutex);
@@ -503,7 +499,7 @@ int main(int argc, char** argv) {
         }
         shared.cv.notify_all();
         owner.join();
-        return expectations.failures() == 0 ? 0 : 1;
+        return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
     }
 
     if (!options.outline_proof) {
@@ -534,13 +530,13 @@ int main(int argc, char** argv) {
             controller->cpuCoverForTest() != nullptr &&
                 controller->cpuCoverForTest()->size() == QSize(320, 240),
             "the native CPU cover fills the requested 320x240 present extent before ack");
-        expectations.expect(waitUntil(
-                                [&] {
-                                    controller->poll();
-                                    return controller->presentationAcknowledged();
-                                },
-                                20'000),
-                            "the owner genuinely acknowledged the first present");
+        expectations.expect(
+            bloom::test_support::awaitQtCondition("owner genuinely acknowledged the first present",
+                                                  [&] {
+                                                      controller->poll();
+                                                      return controller->presentationAcknowledged();
+                                                  }),
+            "the owner genuinely acknowledged the first present");
         expectations.expect(!controller->cpuCoverForTest()->isVisible(),
                             "the native CPU cover is hidden after the genuine present ack");
         expectations.expect(!controller->cpuCoverVisibleForTest(),
@@ -564,7 +560,9 @@ int main(int argc, char** argv) {
                                 "G0 frame A enqueued");
             const auto sequenceA = controller->nativeLastEnqueuedSequence();
             expectations.expect(
-                waitUntil([&] { return controller->nativeAppliedSequence() >= sequenceA; }, 20'000),
+                bloom::test_support::awaitQtCondition(
+                    "G0 frame A applies without resident-controller polling",
+                    [&] { return controller->nativeAppliedSequence() >= sequenceA; }),
                 "G0 frame A applies without resident-controller polling");
             runCommand(Cmd::SetGate, true);
             expectations.expect(controller->present(*frameB, makeRequest(320.0, 240.0)),
@@ -577,12 +575,12 @@ int main(int argc, char** argv) {
                     ackA->identity.generation == 101 && !controller->presentationAcknowledged(),
                 "G0 older A acknowledgement is not stamped with pending B identity");
             runCommand(Cmd::SetGate, false);
-            expectations.expect(waitUntil(
+            expectations.expect(bloom::test_support::awaitQtCondition(
+                                    "G0 frame B later receives its own acknowledgement",
                                     [&] {
                                         controller->poll();
                                         return controller->presentationAcknowledged();
-                                    },
-                                    20'000),
+                                    }),
                                 "G0 frame B later receives its own acknowledgement");
             const auto ackB = trace->lastNativeAcknowledgement();
             expectations.expect(ackB && ackB->sequence == sequenceB &&
@@ -595,12 +593,12 @@ int main(int argc, char** argv) {
         for (int index = 0; index < 3; ++index) {
             expectations.expect(controller->present(*frame, makeRequest(320.0, 240.0)),
                                 "an ordinary native present is admitted");
-            expectations.expect(waitUntil(
+            expectations.expect(bloom::test_support::awaitQtCondition(
+                                    "an ordinary native present is acknowledged",
                                     [&] {
                                         controller->poll();
                                         return controller->presentationAcknowledged();
-                                    },
-                                    20'000),
+                                    }),
                                 "an ordinary native present is acknowledged");
         }
         expectations.expect(coverCaptures.load() == capturesAfterFirstAck,
@@ -616,23 +614,23 @@ int main(int argc, char** argv) {
         // on the new one.
         expectations.expect(controller->requestTargetResize(640U, 480U),
                             "the resize gate is admitted");
-        expectations.expect(waitUntil(
+        expectations.expect(bloom::test_support::awaitQtCondition(
+                                "target becomes Active again after the resize",
                                 [&] {
                                     controller->poll();
                                     return controller->presenterState() ==
                                            ui::ViewerGpuPresenter::State::Active;
-                                },
-                                20'000),
+                                }),
                             "the target becomes Active again after the resize");
         expectations.expect(controller->present(*frame, makeRequest(640.0, 480.0)),
                             "present resumes at the new extent");
-        expectations.expect(waitUntil(
-                                [&] {
-                                    controller->poll();
-                                    return controller->presentationAcknowledged();
-                                },
-                                20'000),
-                            "the post-resize present is acknowledged");
+        expectations.expect(
+            bloom::test_support::awaitQtCondition("post-resize present is acknowledged",
+                                                  [&] {
+                                                      controller->poll();
+                                                      return controller->presentationAcknowledged();
+                                                  }),
+            "the post-resize present is acknowledged");
 
         // 3. Retire-before-mutation gate and resume on the surviving tree.
         bool mutationSafe = false;
@@ -645,23 +643,23 @@ int main(int argc, char** argv) {
         expectations.expect(outcome == ui::EditorNativeSurface::PrepareOutcome::RetirePending ||
                                 outcome == ui::EditorNativeSurface::PrepareOutcome::NoLiveTarget,
                             "the mutation gate is admitted");
-        expectations.expect(waitUntil(
-                                [&] {
-                                    controller->poll();
-                                    return mutationSafe;
-                                },
-                                20'000),
-                            "the surface genuinely retired before mutation");
+        expectations.expect(
+            bloom::test_support::awaitQtCondition("surface genuinely retired before mutation",
+                                                  [&] {
+                                                      controller->poll();
+                                                      return mutationSafe;
+                                                  }),
+            "the surface genuinely retired before mutation");
         controller->resumeAfterMutation();
         expectations.expect(controller->present(*frame, makeRequest(320.0, 240.0)),
                             "a surviving editor re-presents after resume");
-        expectations.expect(waitUntil(
-                                [&] {
-                                    controller->poll();
-                                    return controller->presentationAcknowledged();
-                                },
-                                20'000),
-                            "the resumed present is acknowledged");
+        expectations.expect(
+            bloom::test_support::awaitQtCondition("resumed present is acknowledged",
+                                                  [&] {
+                                                      controller->poll();
+                                                      return controller->presentationAcknowledged();
+                                                  }),
+            "the resumed present is acknowledged");
     }
 
     // 4. Settle the live target before destroying the controller
@@ -671,13 +669,13 @@ int main(int argc, char** argv) {
         8, [&](const std::uint64_t, const ui::EditorNativeSurface::PrepareResult& r) {
             finalSafe = r.safeToMutate;
         }));
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller->poll();
-                                return finalSafe;
-                            },
-                            20'000),
-                        "the final surface retirement is proven before teardown");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("final surface retirement is proven before teardown",
+                                              [&] {
+                                                  controller->poll();
+                                                  return finalSafe;
+                                              }),
+        "the final surface retirement is proven before teardown");
 
     static_cast<void>(fallback);
     // Destroy the controller and its native surface while the presentation owner
@@ -691,11 +689,12 @@ int main(int argc, char** argv) {
     shared.cv.notify_all();
     owner.join();
 
-    if (expectations.failures() == 0) {
+    if (expectations.failures() + bloom::test_support::awaitFailureCount() == 0) {
         std::cout << "PASS: native ViewerGpuResidentController "
                      "present/ack/resize/resume\n";
         return 0;
     }
-    std::cerr << expectations.failures() << " failure(s)\n";
+    std::cerr << expectations.failures() + bloom::test_support::awaitFailureCount()
+              << " failure(s)\n";
     return 1;
 }

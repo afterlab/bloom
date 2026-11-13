@@ -1,5 +1,5 @@
+#include "await_qt.hpp"
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QEvent>
 #include <QImage>
 #include <QLabel>
@@ -50,13 +50,9 @@ QRect gridPointRect(const int index) {
     return {index % 3 * 12 + 2, index / 3 * 12 + 2, 8, 8};
 }
 void waitForBounds(QWidget& grid) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!grid.isEnabled() && timer.elapsed() < 10000) {
-        settle();
-        QThread::msleep(5);
-    }
-    expect(grid.isEnabled(), "anchor bounds resolve asynchronously");
+    expect(bloom::test_support::awaitQtCondition("anchor bounds resolve",
+                                                 [&] { return grid.isEnabled(); }),
+           "anchor bounds resolve asynchronously");
 }
 void click(QWidget& widget, QPoint point) {
     QMouseEvent press(QEvent::MouseButtonPress, QPointF(point), QPointF(widget.mapToGlobal(point)),
@@ -143,13 +139,9 @@ void run() {
     idle(*visible);
     idle(*solo);
     // The thumb travels with the Fast motion; sample only once it arrives.
-    QElapsedTimer thumbTimer;
-    thumbTimer.start();
-    while (visible->thumbPosition() < 1.0 && thumbTimer.elapsed() < 2000) {
-        QCoreApplication::processEvents();
-        QThread::msleep(5);
-    }
-    expect(visible->thumbPosition() >= 1.0, "checked switch thumb arrives at the on end");
+    expect(bloom::test_support::awaitQtCondition("checked switch thumb reaches the on end",
+                                                 [&] { return visible->thumbPosition() >= 1.0; }),
+           "checked switch thumb arrives at the on end");
     const auto on = visible->grab().toImage();
     const auto off = solo->grab().toImage();
     // At the thumb's on-end rest position: thumb ink when on, field when off. Left of the
@@ -357,7 +349,7 @@ int main(int argc, char** argv) try {
     ui::kit::installAfterlabTheme(app);
     run();
     QSettings().clear();
-    return failures ? 1 : 0;
+    return failures + bloom::test_support::awaitFailureCount() != 0 ? 1 : 0;
 }
 
 catch (const std::exception& error) {

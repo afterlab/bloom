@@ -1,4 +1,5 @@
 #include "asset_thumbnail_display.hpp"
+#include "await_qt.hpp"
 
 #include <algorithm>
 #include <bloom/color/ocio_builtin_registry.hpp>
@@ -28,16 +29,14 @@
 #include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
-#include <filesystem>
-#include <vector>
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QGraphicsProxyWidget>
 #include <QGraphicsView>
 #include <QLineEdit>
 #include <QSettings>
-#include <QThread>
 #include <QVBoxLayout>
+#include <filesystem>
+#include <vector>
 
 #include <array>
 #include <cmath>
@@ -54,16 +53,7 @@ void expect(const bool condition, const char* message) {
         std::cerr << message << '\n';
     }
 }
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < 5000) {
-        QCoreApplication::processEvents();
-        QThread::msleep(1);
-    }
-    QCoreApplication::processEvents();
-    return predicate();
-}
+using bloom::test_support::awaitQtCondition;
 void typeHex(ui::kit::KColorChip& chip, const QString& text) {
     auto* picker = chip.picker();
     picker->hexField()->setText(text);
@@ -100,7 +90,8 @@ void boundaryPins() {
     commands::CommandStack stack(document);
     ui::CompositionSession session(document, stack, id);
     expect(session.addSolidLayer("Solid", {0.2, 0.3, 0.4, 1}), "solid fixture created");
-    expect(waitUntil([&] { return static_cast<bool>(session.colorConverter()); }),
+    expect(awaitQtCondition("session converter prepares off-thread",
+                            [&] { return static_cast<bool>(session.colorConverter()); }),
            "session converter prepares off-thread");
     expect(!session.colorConverter("unknown.encoding"), "unknown parameter schema fails closed");
     const auto* parameter = session.parameterForSelection(document::kSolidColorParameterRole);
@@ -162,7 +153,8 @@ void boundaryPins() {
     const auto pipeline =
         ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer, provider);
     ui::CompositionPreviewController preview(session, scheduler, bridge, pipeline);
-    expect(waitUntil([&] { return preview.state().activity == ui::PreviewActivity::Ready; }),
+    expect(awaitQtCondition("qualified viewer frame completes",
+                            [&] { return preview.state().activity == ui::PreviewActivity::Ready; }),
            "qualified viewer frame completes");
     const auto frame = preview.state().frame;
     const auto display = frame ? frame->displayBufferView() : std::nullopt;
@@ -203,7 +195,8 @@ void boundaryPins() {
     }
     preview.beginShutdown();
     bridge.beginShutdown();
-    expect(waitUntil([&] { return scheduler.isQuiescent(); }), "preview shuts down safely");
+    expect(awaitQtCondition("preview shuts down safely", [&] { return scheduler.isQuiescent(); }),
+           "preview shuts down safely");
 }
 
 // SHAPEFIX-1, deliverable 1: the registry-generated Color4d row (the shape source's fillColor and
@@ -233,7 +226,8 @@ void shapeColorPin() {
     expect(shapeLayerId != nullptr, "shape layer is selected after creation");
     const auto shapeLayer = shapeLayerId ? *shapeLayerId : document::LayerId{};
 
-    expect(waitUntil([&] { return static_cast<bool>(session.colorConverter()); }),
+    expect(awaitQtCondition("session converter prepares off-thread",
+                            [&] { return static_cast<bool>(session.colorConverter()); }),
            "session converter prepares off-thread");
     expect(static_cast<bool>(session.colorConverter("bloom.shape.fill-color")),
            "the shape source's fill-color schema is a recognized color schema");
@@ -388,14 +382,17 @@ void workingSpaceConverterPin() {
         const auto converter = session.colorConverter();
         return converter ? source.converted(ui::kit::ColorSpace::Display, converter) : std::nullopt;
     };
-    expect(waitUntil([&] { return displayed().has_value(); }), "initial ACEScg converter prepares");
+    expect(awaitQtCondition("initial ACEScg converter prepares",
+                            [&] { return displayed().has_value(); }),
+           "initial ACEScg converter prepares");
     const auto aces = displayed();
     expect(session.addSolidLayer("Unrelated", {0.2, 0.3, 0.4, 1.0}),
            "unrelated authoring edit succeeds");
     expect(displayed().has_value(), "unrelated document revision keeps the ready converter");
     expect(session.setWorkingColorSpaceOverride(std::string("Linear P3-D65")),
            "composition working-space override applies");
-    expect(waitUntil([&] { return displayed().has_value(); }),
+    expect(awaitQtCondition("converter prepares after composition override",
+                            [&] { return displayed().has_value(); }),
            "converter prepares after composition override");
     const auto p3 = displayed();
     const auto changed =
@@ -405,7 +402,8 @@ void workingSpaceConverterPin() {
     expect(changed, "composition override changes the authoring swatch transform");
 
     expect(stack.undo().changed(), "working-space override is undoable");
-    expect(waitUntil([&] { return displayed().has_value(); }),
+    expect(awaitQtCondition("converter prepares after working-space undo",
+                            [&] { return displayed().has_value(); }),
            "converter prepares after working-space undo");
     const auto undone = displayed();
     expect(aces && undone && std::abs(aces->red - undone->red) < 1e-6F &&
@@ -414,7 +412,8 @@ void workingSpaceConverterPin() {
            "undo restores the original swatch transform");
 
     expect(stack.redo().changed(), "working-space override is redoable");
-    expect(waitUntil([&] { return displayed().has_value(); }),
+    expect(awaitQtCondition("converter prepares after working-space redo",
+                            [&] { return displayed().has_value(); }),
            "converter prepares after working-space redo");
     const auto redone = displayed();
     expect(p3 && redone && std::abs(p3->red - redone->red) < 1e-6F &&
@@ -428,7 +427,8 @@ void workingSpaceConverterPin() {
     document::Document replacementDocument(std::move(replacement.project));
     commands::CommandStack replacementStack(replacementDocument);
     session.rebind(replacementDocument, replacementStack, replacementId);
-    expect(waitUntil([&] { return displayed().has_value(); }),
+    expect(awaitQtCondition("converter prepares for the rebound composition",
+                            [&] { return displayed().has_value(); }),
            "converter prepares for the rebound composition");
     const auto rebound = displayed();
     expect(aces && rebound && std::abs(aces->red - rebound->red) < 1e-6F &&
@@ -483,7 +483,8 @@ void reopenPin() {
     auto& document = *rebuilt.value()->document;
     commands::CommandStack reopenedStack(document);
     ui::CompositionSession reopened(document, reopenedStack, id);
-    expect(waitUntil([&] { return static_cast<bool>(reopened.colorConverter()); }),
+    expect(awaitQtCondition("reopened session converter prepares",
+                            [&] { return static_cast<bool>(reopened.colorConverter()); }),
            "reopened session converter prepares");
     const auto* composition = reopened.composition();
     for (const auto& layer : composition->graph().layerStack().entries())
@@ -599,7 +600,7 @@ int main(int argc, char** argv) try {
     relativeArchiveIntentPin();
     reopenPin();
     acesThumbnailDisplayPin();
-    return failures == 0 ? 0 : 1;
+    return failures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

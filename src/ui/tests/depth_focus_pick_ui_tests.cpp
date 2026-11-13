@@ -8,7 +8,6 @@
 #include "await_qt.hpp"
 #include <QApplication>
 #include <QDir>
-#include <QElapsedTimer>
 #include <QImage>
 #include <QTest>
 
@@ -240,10 +239,9 @@ void testFocusPick() {
     preview.beginShutdown();
     bridge.beginShutdown();
     scheduler.beginShutdown();
-    QElapsedTimer timer;
-    timer.start();
-    while (!scheduler.isQuiescent() && timer.elapsed() < 4000)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    expect(bloom::test_support::awaitQtCondition("scheduler quiescent after shutdown",
+                                                 [&] { return scheduler.isQuiescent(); }),
+           "the scheduler reaches quiescence");
 }
 
 } // namespace

@@ -7,6 +7,7 @@
 //
 // Review captures: BLOOM_TIMELINE_LAYERS_CAPTURE_DIR saves each state at 2000 and 900 pixels wide,
 // suffixed with the device pixel ratio (run once with QT_SCALE_FACTOR=1.5 for the second ratio).
+#include "await_qt.hpp"
 #include "surface_harness.hpp"
 
 #include "timeline_layer_fields.hpp"
@@ -90,10 +91,9 @@ struct Table final {
     ~Table() {
         controller.beginShutdown();
         bridge.beginShutdown();
-        QElapsedTimer timer;
-        timer.start();
-        while (!scheduler.isQuiescent() && timer.elapsed() < 4'000)
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        // A destructor cannot return the result; a timeout is counted by awaitFailureCount().
+        (void)bloom::test_support::awaitQtCondition("table scheduler quiescent",
+                                                    [&] { return scheduler.isQuiescent(); });
     }
     Table(const Table&) = delete;
     Table& operator=(const Table&) = delete;
@@ -185,7 +185,8 @@ void capture(Table& table, const QString& name, QMenu* menu = nullptr) {
     const auto directory = qEnvironmentVariable("BLOOM_TIMELINE_LAYERS_CAPTURE_DIR");
     if (directory.isEmpty())
         return;
-    QTest::qWait(50);
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     QPixmap shot = table.window.grab();
     if (menu != nullptr) {
         QPainter painter(&shot);
@@ -634,7 +635,8 @@ void testPlaybackCost() {
     QCoreApplication::processEvents();
     keyPosition(table, table.layer(0), {2, 20});
     // Playback with a layer selected, as an artist plays it. Let every deferred refresh of the
-    // setup land before counting.
+    // setup land before counting. They are timer-driven inside the Timeline, with no state to
+    // await, so this stays a fixed wait.
     table.session.selectLayer(table.layer(0));
     QTest::qWait(100);
     int visibleProperties = 0;
@@ -711,7 +713,11 @@ void testPlaybackChurn() {
     if (auto* row = surfaces.layerRow(0))
         if (auto* disclosure = qobject_cast<kit::KRow*>(row)->disclosureButton())
             click(disclosure);
-    QTest::qWait(100);
+    expect(bloom::test_support::awaitQtCondition("disclosure refreshes land",
+                                                 [&] { return surfaces.scheduler.isQuiescent(); }),
+           "the disclosure's refreshes land before counting");
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     PlaybackChurn churn;
     QCoreApplication::instance()->installEventFilter(&churn);
     const auto structure = TimelinePropertyRow::structureBindCount();
@@ -895,11 +901,13 @@ void captureMergeEntries() {
     layout->addWidget(nodes);
     nodesWindow.show();
     (void)QTest::qWaitForWindowExposed(&nodesWindow);
-    QTest::qWait(200);
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     QCoreApplication::processEvents();
     if (auto* view = nodes->findChild<NodeGraphicsView*>())
         view->frameGraph();
-    QTest::qWait(200);
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     (void)nodesWindow.grab().save(QDir(directory).filePath(QStringLiteral("i502-nodes.png")));
     QWidget propertiesWindow;
     propertiesWindow.resize(480, 700);
@@ -909,7 +917,8 @@ void captureMergeEntries() {
     propertiesLayout->addWidget(new PropertiesEditor(table.session, &propertiesWindow));
     propertiesWindow.show();
     (void)QTest::qWaitForWindowExposed(&propertiesWindow);
-    QTest::qWait(100);
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     (void)propertiesWindow.grab().save(
         QDir(directory).filePath(QStringLiteral("i502-properties-merge.png")));
 }
@@ -993,5 +1002,5 @@ int main(int argc, char** argv) {
     captureMergeEntries();
     if (failures != 0)
         std::cerr << failures << " failure(s)\n";
-    return failures == 0 ? 0 : 1;
+    return failures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

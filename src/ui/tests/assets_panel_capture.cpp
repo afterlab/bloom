@@ -3,6 +3,7 @@
 // Imports generated PNG sequences through the asset controller's worker, so the rows, File Size and
 // thumbnails are the real ones. Writes PNGs to BLOOM_GRAMMAR_ARTIFACT_DIR (or the directory given
 // as the first argument) and checks that the shown columns span the tree at every size.
+#include "await_qt.hpp"
 #include "window_fixture.hpp"
 #include <QDir>
 #include <QHeaderView>
@@ -33,7 +34,9 @@ void sizeArea(MainWindow& window, EditorArea& area, const QSize target) {
         if (delta.isNull())
             return;
         window.resize(window.size() + delta);
-        QTest::qWait(30);
+        // The resize is applied by the queued layout events: deliver them.
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents();
     }
 }
 
@@ -75,11 +78,10 @@ int run(int argc, char** argv) {
     const QString dpr = ratio == 1.0 ? QStringLiteral("dpr1") : QStringLiteral("dpr15");
     auto& session = fixture.session;
     fixture.assets->importFiles(firsts, std::nullopt);
-    QElapsedTimer timer;
-    timer.start();
-    while ((fixture.assets->busy() || session.snapshot().project().assets().size() < 5) &&
-           timer.elapsed() < 30000)
-        QTest::qWait(20);
+    if (!bloom::test_support::awaitQtCondition("plate import finishes with five assets", [&] {
+            return !fixture.assets->busy() && session.snapshot().project().assets().size() >= 5;
+        }))
+        return 1;
     // A second composition, and a folder holding the first plate.
     bloom::commands::Transaction organise("Organise", session.snapshot().revision());
     organise.emplace<bloom::commands::AddComposition>(
@@ -99,22 +101,21 @@ int run(int argc, char** argv) {
                                               std::size_t{0});
     if (!session.executeTransaction(std::move(move)).succeeded())
         return 1;
-    timer.restart();
-    while (timer.elapsed() < 20000) {
-        QTest::qWait(20);
-        bool ready = !fixture.assets->busy();
-        for (const auto& asset : session.snapshot().project().assets())
-            ready = ready && !fixture.assets->thumbnail(asset.id).isNull();
-        if (ready)
-            break;
-    }
+    if (!bloom::test_support::awaitQtCondition("every asset has a thumbnail", [&] {
+            bool ready = !fixture.assets->busy();
+            for (const auto& asset : session.snapshot().project().assets())
+                ready = ready && !fixture.assets->thumbnail(asset.id).isNull();
+            return ready;
+        }))
+        return 1;
     auto* area = assetsArea(*fixture.window);
     if (area == nullptr) {
         std::cerr << "no Assets area\n";
         return 1;
     }
     Q_EMIT area->maximizeRequested(area);
-    QTest::qWait(50);
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     auto* editor = area->findChild<AssetsEditor*>();
     auto* tree = editor ? editor->findChild<QTreeWidget*>("assetsTree") : nullptr;
     auto* search = editor ? editor->findChild<QLineEdit*>("assetsSearchField") : nullptr;
@@ -125,7 +126,8 @@ int run(int argc, char** argv) {
         for (const auto& [name, size] :
              {std::pair{"narrow", QSize(735, 800)}, std::pair{"wide", QSize(1550, 780)}}) {
             sizeArea(*fixture.window, *area, size);
-            QTest::qWait(60);
+            QCoreApplication::sendPostedEvents();
+            QCoreApplication::processEvents();
             int spanned = 0;
             for (int column = 0; column < tree->columnCount(); ++column)
                 if (!tree->header()->isSectionHidden(column))
@@ -162,7 +164,7 @@ int run(int argc, char** argv) {
     search->setText(QStringLiteral("0101"));
     tree->setFocus();
     capture("search");
-    return failures == 0 ? 0 : 1;
+    return failures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }
 } // namespace
 

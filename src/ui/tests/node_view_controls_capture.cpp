@@ -21,9 +21,10 @@ namespace {
 using namespace bloom;
 using namespace bloom::ui;
 
-void settle(const int ms = 80) {
+// Delivers the queued events (layout, repaint requests); a grab renders synchronously after this.
+void settle() {
+    QCoreApplication::sendPostedEvents();
     QApplication::processEvents();
-    QTest::qWait(ms);
 }
 
 bool save(const QImage& image, const QString& path) {

@@ -26,6 +26,7 @@
 #include <bloom/runtime/gpu_presentation_coordinator.hpp>
 #include <bloom/runtime/gpu_resident_frame_lease.hpp>
 
+#include "await_qt.hpp"
 #include "gpu_borrowed_instance.hpp"
 #include "gpu_native_test_environment.hpp"
 
@@ -134,24 +135,7 @@ class Expectations final {
     std::atomic<int> failures_{0};
 };
 
-void pumpQt(const int milliseconds) {
-    QEventLoop loop;
-    QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
-    loop.exec();
-}
-
-template <typename Predicate>
-[[nodiscard]] bool waitUntil(Predicate predicate, const int timeoutMilliseconds) {
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMilliseconds);
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (predicate()) {
-            return true;
-        }
-        pumpQt(8);
-    }
-    return predicate();
-}
+using bloom::test_support::awaitQtCondition;
 
 enum class Cmd { None, ProduceLease, ProduceForeignLease, SetGate, Barrier };
 
@@ -258,12 +242,11 @@ int main(int argc, char** argv) {
     Shared shared;
     std::thread owner(ownerMain, std::ref(shared), options, std::ref(expectations));
 
-    const bool initialized = waitUntil(
-        [&shared] {
+    const bool initialized =
+        awaitQtCondition("the GPU owner thread finishes initializing", [&shared] {
             std::lock_guard lock(shared.mutex);
             return shared.initDone;
-        },
-        30'000);
+        });
     if (!initialized || !shared.ran) {
         owner.join();
         std::string reason;
@@ -284,20 +267,21 @@ int main(int argc, char** argv) {
             shared.cmd = command;
         }
         shared.cv.notify_all();
-        (void)waitUntil(
-            [&shared] {
-                std::lock_guard lock(shared.mutex);
-                return shared.cmdDone;
-            },
-            10'000);
+        expectations.expect(awaitQtCondition("the GPU owner completes the command",
+                                             [&shared] {
+                                                 std::lock_guard lock(shared.mutex);
+                                                 return shared.cmdDone;
+                                             }),
+                            "the GPU owner completes the command");
     };
     const auto waitState = [&](const GpuPresentationTargetId id,
-                               const GpuPresentationTargetState state, const int timeout) {
-        return waitUntil([&] { return client->status(id).state == state; }, timeout);
+                               const GpuPresentationTargetState state) {
+        return awaitQtCondition("the presentation target reaches the requested state",
+                                [&] { return client->status(id).state == state; });
     };
-    const auto waitApplied = [&](const GpuPresentationTargetId id, const std::uint64_t sequence,
-                                 const int timeout) {
-        return waitUntil([&] { return client->status(id).appliedSequence >= sequence; }, timeout);
+    const auto waitApplied = [&](const GpuPresentationTargetId id, const std::uint64_t sequence) {
+        return awaitQtCondition("the presentation target applies the update sequence",
+                                [&] { return client->status(id).appliedSequence >= sequence; });
     };
 
     const GpuBorrowedInstanceView view = client->instanceView();
@@ -326,12 +310,10 @@ int main(int argc, char** argv) {
         ui.window->show();
         ui.width = width;
         ui.height = height;
-        if (!waitUntil(
-                [&ui] {
-                    ui.surface = QVulkanInstance::surfaceForWindow(ui.window);
-                    return ui.surface != VK_NULL_HANDLE && ui.window->isExposed();
-                },
-                10'000)) {
+        if (!awaitQtCondition("the QWindow produces an exposed VkSurfaceKHR", [&ui] {
+                ui.surface = QVulkanInstance::surfaceForWindow(ui.window);
+                return ui.surface != VK_NULL_HANDLE && ui.window->isExposed();
+            })) {
             return std::optional<UiSurface>{};
         }
         return std::optional<UiSurface>{ui};
@@ -375,9 +357,8 @@ int main(int argc, char** argv) {
         expectations.expect(staleSurface.has_value(), "the stale-epoch surface was created");
         if (staleSurface) {
             const auto stale = attach(*staleSurface, 320U, 240U, view.epoch.value + 1U);
-            expectations.expect(
-                waitState(stale.target, GpuPresentationTargetState::Rejected, 10'000),
-                "the stale epoch was rejected");
+            expectations.expect(waitState(stale.target, GpuPresentationTargetState::Rejected),
+                                "the stale epoch was rejected");
             const auto snapshot = client->status(stale.target);
             expectations.expect(snapshot.surfaceSafeToDestroy,
                                 "a stale-epoch rejection is safe to destroy the surface");
@@ -388,7 +369,7 @@ int main(int argc, char** argv) {
 
     const auto targetA = attach(*surfaceA, 320U, 240U, view.epoch.value);
     expectations.expect(targetA.code == GpuPresentationPortCode::Accepted, "target A attaches");
-    expectations.expect(waitState(targetA.target, GpuPresentationTargetState::Active, 10'000),
+    expectations.expect(waitState(targetA.target, GpuPresentationTargetState::Active),
                         "target A becomes Active");
 
     runCommand(Cmd::ProduceLease);
@@ -399,7 +380,7 @@ int main(int argc, char** argv) {
     expectations.expect(
         client->update(targetA.target, 1U, makeUpdate(lease, nullptr, 320U, 240U)).accepted(),
         "the first update is admitted");
-    expectations.expect(waitApplied(targetA.target, 1U, 10'000), "the first update is presented");
+    expectations.expect(waitApplied(targetA.target, 1U), "the first update is presented");
     expectations.expect(client->status(targetA.target).presentCount == 1U,
                         "exactly one present completed");
 
@@ -411,11 +392,11 @@ int main(int argc, char** argv) {
     expectations.expect(
         client->update(targetA.target, 2U, makeUpdate(lease, overlayOne, 320U, 240U)).accepted(),
         "the first overlay update is admitted");
-    expectations.expect(waitApplied(targetA.target, 2U, 10'000), "the first overlay presents");
+    expectations.expect(waitApplied(targetA.target, 2U), "the first overlay presents");
     expectations.expect(
         client->update(targetA.target, 3U, makeUpdate(lease, overlayTwo, 320U, 240U)).accepted(),
         "the second overlay update is admitted");
-    expectations.expect(waitApplied(targetA.target, 3U, 10'000), "the second overlay presents");
+    expectations.expect(waitApplied(targetA.target, 3U), "the second overlay presents");
 
     // Latest-only coalescing: gate the owner, enqueue three updates, then release one pump.
     const std::uint64_t presentsBefore = client->status(targetA.target).presentCount;
@@ -432,7 +413,7 @@ int main(int argc, char** argv) {
             GpuPresentationPortCode::Coalesced,
         "coalescing update 12 supersedes 11");
     runCommand(Cmd::SetGate, false);
-    expectations.expect(waitApplied(targetA.target, 12U, 10'000), "only the newest update applies");
+    expectations.expect(waitApplied(targetA.target, 12U), "only the newest update applies");
     expectations.expect(client->status(targetA.target).presentCount == presentsBefore + 1U,
                         "coalescing produced exactly one present");
 
@@ -459,14 +440,14 @@ int main(int argc, char** argv) {
         client->update(targetA.target, 21U, makeUpdate(shared.foreignLease, nullptr, 320U, 240U))
             .accepted(),
         "the foreign-lease update is admitted");
-    expectations.expect(waitUntil(
-                            [&] {
-                                const auto snapshot = client->status(targetA.target);
-                                return snapshot.state == GpuPresentationTargetState::Active &&
-                                       !snapshot.message.empty();
-                            },
-                            10'000),
-                        "a foreign lease is refused while the target stays Active");
+    expectations.expect(
+        awaitQtCondition("the foreign lease is refused while the target stays Active",
+                         [&] {
+                             const auto snapshot = client->status(targetA.target);
+                             return snapshot.state == GpuPresentationTargetState::Active &&
+                                    !snapshot.message.empty();
+                         }),
+        "a foreign lease is refused while the target stays Active");
     expectations.expect(client->status(targetA.target).appliedSequence == 12U,
                         "a foreign lease is never presented");
 
@@ -487,22 +468,22 @@ int main(int argc, char** argv) {
     // Two distinct targets share one lease, each on its own real surface.
     const auto targetB = attach(*surfaceB, 320U, 240U, view.epoch.value);
     expectations.expect(targetB.code == GpuPresentationPortCode::Accepted, "target B attaches");
-    expectations.expect(waitState(targetB.target, GpuPresentationTargetState::Active, 10'000),
+    expectations.expect(waitState(targetB.target, GpuPresentationTargetState::Active),
                         "target B becomes Active");
     expectations.expect(
         client->update(targetB.target, 1U, makeUpdate(lease, nullptr, 320U, 240U)).accepted(),
         "target B admits the shared lease");
-    expectations.expect(waitApplied(targetB.target, 1U, 10'000),
-                        "two targets present the same lease");
+    expectations.expect(waitApplied(targetB.target, 1U), "two targets present the same lease");
 
     // Resize: drive the real QWindow A, process its resize, and expect the swapchain extent to
     // follow.
     surfaceA->window->resize(400, 300);
-    expectations.expect(
-        waitUntil(
-            [&] { return surfaceA->window->width() == 400 && surfaceA->window->height() == 300; },
-            5000),
-        "the QWindow A reports the new size");
+    expectations.expect(awaitQtCondition("the QWindow A reports the new size",
+                                         [&] {
+                                             return surfaceA->window->width() == 400 &&
+                                                    surfaceA->window->height() == 300;
+                                         }),
+                        "the QWindow A reports the new size");
     runCommand(Cmd::SetGate, true);
     expectations.expect(client->resize(targetA.target, 28U, 400U, 300U).accepted(),
                         "the first resize is admitted while the owner is held");
@@ -513,19 +494,18 @@ int main(int argc, char** argv) {
     expectations.expect(client->status(targetA.target).completedResizeSequence == 0U,
                         "mailbox resize admission is not native completion");
     runCommand(Cmd::SetGate, false);
-    expectations.expect(waitUntil(
-                            [&] {
-                                const auto snapshot = client->status(targetA.target);
-                                return snapshot.info.width == 400U &&
-                                       snapshot.info.height == 300U &&
-                                       snapshot.completedResizeSequence == 30U;
-                            },
-                            15'000),
+    expectations.expect(awaitQtCondition("the target resizes to the real window extent",
+                                         [&] {
+                                             const auto snapshot = client->status(targetA.target);
+                                             return snapshot.info.width == 400U &&
+                                                    snapshot.info.height == 300U &&
+                                                    snapshot.completedResizeSequence == 30U;
+                                         }),
                         "the target resized to match the real window extent");
     expectations.expect(
         client->update(targetA.target, 31U, makeUpdate(lease, nullptr, 400U, 300U)).accepted(),
         "an update after resize is admitted");
-    expectations.expect(waitApplied(targetA.target, 31U, 10'000), "the resized target presents");
+    expectations.expect(waitApplied(targetA.target, 31U), "the resized target presents");
     expectations.expect(client->status(targetA.target).completedResizeSequence == 30U,
                         "image publication does not overwrite completed resize sequence");
 
@@ -537,15 +517,15 @@ int main(int argc, char** argv) {
                             client->resize(targetC.target, 2U, 320U, 240U).accepted(),
                         "the newest geometry is admitted while attach is pending");
     runCommand(Cmd::SetGate, false);
-    expectations.expect(waitState(targetC.target, GpuPresentationTargetState::Active, 10'000),
+    expectations.expect(waitState(targetC.target, GpuPresentationTargetState::Active),
                         "target C becomes Active");
-    expectations.expect(waitUntil(
-                            [&] {
-                                const auto snapshot = client->status(targetC.target);
-                                return snapshot.completedResizeSequence == 2U &&
-                                       snapshot.info.width == 320U && snapshot.info.height == 240U;
-                            },
-                            10'000),
+    expectations.expect(awaitQtCondition("the attach and coalesced resize complete",
+                                         [&] {
+                                             const auto snapshot = client->status(targetC.target);
+                                             return snapshot.completedResizeSequence == 2U &&
+                                                    snapshot.info.width == 320U &&
+                                                    snapshot.info.height == 240U;
+                                         }),
                         "attach followed by coalesced resize acknowledges genuine recreation");
     // Exercise real WSI progress with three simultaneously eligible targets across reuse cycles.
     for (std::uint64_t sequence = 100U; sequence < 108U; ++sequence) {
@@ -560,7 +540,7 @@ int main(int argc, char** argv) {
                 "B/C admit the repeated three-target update");
         runCommand(Cmd::SetGate, false);
         for (const auto id : {targetA.target, targetB.target, targetC.target})
-            expectations.expect(waitApplied(id, sequence, 10'000),
+            expectations.expect(waitApplied(id, sequence),
                                 "every target makes real progress through repeated WSI reuse");
     }
     auto surfaceD = createSurface(320U, 240U);
@@ -590,7 +570,7 @@ int main(int argc, char** argv) {
                             "retire is admitted");
     }
     for (const auto id : targets) {
-        expectations.expect(waitState(id, GpuPresentationTargetState::Retired, 15'000),
+        expectations.expect(waitState(id, GpuPresentationTargetState::Retired),
                             "the target retires after engine proof");
         expectations.expect(client->status(id).surfaceSafeToDestroy,
                             "a Retired target is safe for the UI to destroy");
@@ -603,15 +583,13 @@ int main(int argc, char** argv) {
         expectations.expect(reattached.code == GpuPresentationPortCode::Accepted,
                             "a retired surface may be re-attached");
         if (reattached.code == GpuPresentationPortCode::Accepted) {
-            expectations.expect(
-                waitState(reattached.target, GpuPresentationTargetState::Active, 10'000),
-                "the re-attached target becomes Active");
+            expectations.expect(waitState(reattached.target, GpuPresentationTargetState::Active),
+                                "the re-attached target becomes Active");
             expectations.expect(client->retire(reattached.target, 200U).code ==
                                     GpuPresentationPortCode::Accepted,
                                 "the re-attached target retires");
-            expectations.expect(
-                waitState(reattached.target, GpuPresentationTargetState::Retired, 15'000),
-                "the re-attached target retires after engine proof");
+            expectations.expect(waitState(reattached.target, GpuPresentationTargetState::Retired),
+                                "the re-attached target retires after engine proof");
         }
     }
 
@@ -642,5 +620,5 @@ int main(int argc, char** argv) {
             << "PASS: Wayland attach/present/overlay/coalesce/cancel/resize/duplicate-surface/"
                "retire/reattach across the presentation coordinator port\n";
     }
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

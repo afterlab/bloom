@@ -1,7 +1,7 @@
 #pragma once
+#include "await_qt.hpp"
 #include "node_editor_interactions.hpp"
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QLineEdit>
 #include <QListView>
 #include <QMenu>
@@ -55,10 +55,9 @@ struct Fixture final {
         // gesture in flight. Let it land here, before any test gestures; under load it could
         // otherwise arrive in the middle of one.
         (void)session.colorConverter();
-        QElapsedTimer converter;
-        converter.start();
-        while (!session.colorConverterReady() && converter.elapsed() < 5'000)
-            QTest::qWait(5);
+        if (!test_support::awaitQtCondition("display color converter ready",
+                                            [&] { return session.colorConverterReady(); }))
+            throw std::runtime_error("fixture display color converter did not become ready");
         editor.graphView()->zoomToActualSize();
         editor.graphView()->setTransform(QTransform::fromTranslate(40, 40));
         editor.graphView()->setFocus();

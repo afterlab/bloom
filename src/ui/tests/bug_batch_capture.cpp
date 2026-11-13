@@ -61,9 +61,13 @@ QString gDirectory;
 QString gPhase;
 int gFailures = 0;
 
-void settle(const int ms = 60) {
-    QApplication::processEvents();
-    QTest::qWait(ms);
+// Delivers everything already queued (layout, polish, deferred updates) until it is quiet. The
+// captures need the UI to have processed its own posted work, not a stretch of wall-clock time.
+void settle() {
+    for (int pass = 0; pass < 3; ++pass) {
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents();
+    }
 }
 
 void save(const QImage& image, const QString& issue, const QString& name) {
@@ -273,7 +277,7 @@ void captureDropdownShadow() {
     window.show();
     settle();
     dropdown->showPopup();
-    settle(200);
+    settle();
     if (auto* popup = dropdown->findChild<QWidget*>(QStringLiteral("kDropdownPopup"))) {
         const QImage shot = popup->grab().toImage();
         for (const auto& [name, color] : {std::pair{"light", QColor(235, 235, 235)},
@@ -307,11 +311,11 @@ void captureWindowSurfaces() {
         return;
     }
     Q_EMIT viewer->maximizeRequested(viewer);
-    QTest::qWait(50);
+    settle();
     for (const auto& [name, size] : {std::pair{"normal", QSize(1400, 800)},
                                      std::pair{"narrow", QSize(640, 600)}}) {
         for (int pass = 0; pass < 3; ++pass) {
-            settle(30);
+            settle();
             const QSize delta = size - viewer->size();
             if (!delta.isNull())
                 fixture.window->resize(fixture.window->size() + delta);
@@ -369,7 +373,7 @@ void captureExportPanel() {
     editor->setCurrentRenderExpanded(true);
     for (const int width : {900, 2000}) {
         area.resize(width, 520);
-        settle(100);
+        settle();
         save(area.grab().toImage(), QStringLiteral("691"), QStringLiteral("export-panel-%1").arg(width));
     }
 }
@@ -489,7 +493,7 @@ void probeSvgAlignmentUi() {
             (void)f.session.addSolidLayer("Backdrop", {0.2, 0.2, 0.2, 1.0});
         });
         LayerAlignmentActions actions(fixture.session, fixture.preview.get());
-        settle(200);
+        settle();
         const auto report = [&](const QString& what, const std::vector<document::LayerId>& layers) {
             std::set<document::NodeId> nodes;
             for (const auto id : layers)
@@ -499,7 +503,7 @@ void probeSvgAlignmentUi() {
                 return;
             for (const auto layer : layers)
                 fixture.session.selectLayer(layer);
-            settle(150);
+            settle();
             text << "   nodes=" << fixture.session.selectedNodes().size() << " entries="
                  << fixture.session.selectedEntries().size() << " selectedLayers=" << actions.selectedLayers().size() << '\n';
             for (const auto& entry : fixture.session.selectedEntries()) {
@@ -586,13 +590,13 @@ void probeFlicker() {
         if (area->editorId() == "bloom.properties")
             counter.properties = area;
     }
-    settle(200);
+    settle();
     qApp->installEventFilter(&counter);
     constexpr int kFrames = 24;
     for (int frame = 1; frame <= kFrames; ++frame) {
         if (const auto time = core::RationalTime::create(frame, 24))
             static_cast<void>(fixture.session.setCurrentTime(*time));
-        settle(30);
+        settle();
     }
     qApp->removeEventFilter(&counter);
     QFile out(gDirectory + QStringLiteral("/685-") + gPhase + QStringLiteral("-paint-counts.txt"));
@@ -623,7 +627,7 @@ void captureAlignToolbar() {
         for (const auto& layer : fixture.session.composition()->graph().layerOutputs())
             if (layer.name == name)
                 fixture.session.selectLayer(layer.layerId);
-        settle(400);
+        settle();
         for (auto* widget : fixture.window->findChildren<QWidget*>(QStringLiteral("contextBarAlign")))
             if (widget->isVisible()) {
                 save(grabWidget(widget), QStringLiteral("693"), QStringLiteral("align-buttons-%1").arg(QLatin1String(name)));
@@ -666,11 +670,11 @@ void captureLaneWindow() {
             .withProjectDirectory(svg.parent_path());
         (void)f.session.executeTransaction(std::move(transaction));
     });
-    settle(300);
+    settle();
     for (const auto& layer : fixture.session.composition()->graph().layerOutputs())
         if (layer.name == "logo")
             fixture.session.selectLayer(layer.layerId);
-    settle(600);
+    settle();
     const QImage window = fixture.window->grab().toImage();
     save(window, QStringLiteral("687"), QStringLiteral("window"));
     const int strip = static_cast<int>(kit::px(kit::Size::Control) * 3 * window.devicePixelRatio());
@@ -685,7 +689,7 @@ void captureLaneWindow() {
         remove.emplace<commands::RemoveNodes>(fixture.session.compositionId(),
                                               std::set<document::NodeId>{output->nodeId});
         (void)fixture.session.executeTransaction(std::move(remove));
-        settle(200);
+        settle();
         if (auto* bar = fixture.window->findChild<WindowStatusBar*>())
             save(grabWidget(bar), QStringLiteral("716"), QStringLiteral("no-output-status-bar"));
     }

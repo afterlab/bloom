@@ -15,6 +15,7 @@
 // stamps and outlined by Alpha Contour, a text whose Text Outline is stroked over it in a Merge, a
 // solid's mask stroked through Mask Path, and the Saber glowing path preset.
 
+#include "await_qt.hpp"
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/layer_mask_operations.hpp>
@@ -107,21 +108,6 @@ bool gRequireDevice = false;
 constexpr std::uint32_t kWidth = 64;
 constexpr std::uint32_t kHeight = 48;
 constexpr std::uint64_t kFps = 24;
-
-template <typename Predicate>
-bool waitUntil(Predicate predicate, const std::chrono::milliseconds limit = 30s) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < limit.count()) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (predicate()) {
-            return true;
-        }
-        std::this_thread::sleep_for(1ms);
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return predicate();
-}
 
 struct Pixels final {
     bool ok = false;
@@ -523,13 +509,15 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
             rig.scheduler, gpuStage,
             ui::makeCompositionPreviewCpuStage(*rig.compiler, rig.evaluator, rig.qualified),
             ui::makeCompositionPreviewCpuDisplayFallback(rig.displayPreparer), options);
-        waitUntil(
+        const bool initialized = bloom::test_support::awaitQtCondition(
+            "the GPU preview service leaves Initializing",
             [&] {
                 return service->status().state !=
                        runtime::GpuPreviewDisplayServiceState::Initializing;
             },
             90s);
-        if (service->status().state != runtime::GpuPreviewDisplayServiceState::Ready) {
+        if (!initialized ||
+            service->status().state != runtime::GpuPreviewDisplayServiceState::Ready) {
             std::cout << "NotRun: " << route.name << " preview: no qualified device ("
                       << service->status().residentDetail << ")\n";
             checks.expect(!gRequireDevice, prefix + "--require-device needs a GPU device");
@@ -571,7 +559,8 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
         // features need 17, compiled by 16 runs of the shader tools): about a second on an idle
         // machine and four with every core oversubscribed twice, well inside the wait. Its
         // FIRST-FRAME line below says what it compiled and how long it waited.
-        const bool ready = waitUntil(
+        const bool ready = bloom::test_support::awaitQtCondition(
+            "Viewer displays the first frame of the route",
             [&] {
                 const auto displayed = viewer.displayedFrameForTest();
                 return controller.state().activity == ui::PreviewActivity::Ready &&
@@ -745,13 +734,20 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
 
     controller.beginShutdown();
     rig.bridge->beginShutdown();
-    (void)waitUntil([&] { return rig.scheduler.isQuiescent(); }, 10s);
+    checks.expect(
+        bloom::test_support::awaitQtCondition("the rig scheduler reaches quiescence",
+                                              [&] { return rig.scheduler.isQuiescent(); }),
+        "the rig scheduler reaches quiescence");
 #if defined(BLOOM_UI_PATH_VALUE_ROUTES_GPU)
     if (service != nullptr) {
         service->beginShutdown();
-        (void)waitUntil([&] {
-            return service->status().state == runtime::GpuPreviewDisplayServiceState::Stopped;
-        });
+        checks.expect(bloom::test_support::awaitQtCondition(
+                          "the GPU preview service stops",
+                          [&] {
+                              return service->status().state ==
+                                     runtime::GpuPreviewDisplayServiceState::Stopped;
+                          }),
+                      "the GPU preview service stops");
     }
 #endif
 }
@@ -798,7 +794,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     checks.expect(!gRequireDevice, "--require-device needs a Vulkan build");
 #endif
 
-    if (checks.failures() != 0) {
+    if (checks.failures() + bloom::test_support::awaitFailureCount() != 0) {
         std::cerr << "viewer/export path value: " << checks.failures() << " failure(s)\n";
         return 1;
     }

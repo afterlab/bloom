@@ -4,7 +4,6 @@
 // session state with its own Fit / 100% / zoom / pan.
 
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QMenu>
 
 #include <bloom/commands/command_stack.hpp>
@@ -30,6 +29,7 @@
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
+#include "await_qt.hpp"
 #include "node_editor_items.hpp"
 
 #include <algorithm>
@@ -51,13 +51,7 @@ void expect(const bool value, const char* message) {
         std::cerr << "FAIL: " << message << '\n';
     }
 }
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < 20000)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return predicate();
-}
+using bloom::test_support::awaitQtCondition;
 
 struct Pipeline final {
     runtime::NodeDefinitionRegistry definitions;
@@ -98,8 +92,9 @@ struct Fixture final {
         preview.beginShutdown();
         bridge.beginShutdown();
         scheduler.beginShutdown();
-        for (int i = 0; i < 400 && !scheduler.isQuiescent(); ++i)
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        // A destructor cannot assert; a timeout is counted by the helper and fails the exit.
+        (void)bloom::test_support::awaitQtCondition("scheduler quiescent after shutdown",
+                                                    [&] { return scheduler.isQuiescent(); });
     }
 
     [[nodiscard]] std::optional<document::NodeId> nodeOfType(const std::string_view type,
@@ -130,10 +125,13 @@ struct Fixture final {
     // Asks until the drawn identity is ready; every call is what a paint does.
     ui::ImagePreviewController::Preview ready(const document::NodeId node, const QSize size) {
         ui::ImagePreviewController::Preview shown;
-        waitUntil([&] {
-            shown = previews.preview(node, size);
-            return shown.state == State::Ready || shown.state == State::Failed;
-        });
+        expect(awaitQtCondition("the image preview is ready or has failed",
+                                [&] {
+                                    shown = previews.preview(node, size);
+                                    return shown.state == State::Ready ||
+                                           shown.state == State::Failed;
+                                }),
+               "the image preview is ready or has failed");
         return shown;
     }
 };
@@ -361,11 +359,14 @@ int main(int argc, char** argv) {
     // A paint asks for the background at its drawn size (capped at the composition's), on a
     // worker.
     view->viewport()->grab();
-    expect(waitUntil([&] {
-               view->viewport()->grab();
-               return previews.preview(*node, (fitted.size() * view->devicePixelRatioF()).toSize())
-                          .state == State::Ready;
-           }),
+    expect(awaitQtCondition(
+               "the background is prepared at its drawn size",
+               [&] {
+                   view->viewport()->grab();
+                   return previews
+                              .preview(*node, (fitted.size() * view->devicePixelRatioF()).toSize())
+                              .state == State::Ready;
+               }),
            "the background is prepared at its drawn size");
     previews.setBackgroundVisible(false);
     expect(view->backgroundRect().isEmpty(), "a hidden background is not drawn");
@@ -402,10 +403,12 @@ int main(int argc, char** argv) {
         expect(previews.submissionCount() == submittedBefore + 1,
                "painting the graph asks for its input histogram once");
         ui::ImagePreviewController::Histogram histogram;
-        expect(waitUntil([&] {
-                   histogram = previews.histogram(*curves);
-                   return histogram.state == State::Ready || histogram.state == State::Failed;
-               }),
+        expect(awaitQtCondition("the histogram is prepared",
+                                [&] {
+                                    histogram = previews.histogram(*curves);
+                                    return histogram.state == State::Ready ||
+                                           histogram.state == State::Failed;
+                                }),
                "the histogram is prepared");
         std::size_t filled = 0;
         float fullest = 0.0F;
@@ -438,7 +441,7 @@ int main(int argc, char** argv) {
                "a Curves card draws its curve graph");
     }
 
-    if (failures != 0)
+    if (failures + bloom::test_support::awaitFailureCount() != 0)
         return 1;
     std::cout << "PASS: image preview\n";
     return 0;

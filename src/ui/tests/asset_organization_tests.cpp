@@ -1,13 +1,13 @@
-#include "asset_input_picker_guard.hpp"
 #include "asset_drop.hpp"
+#include "asset_input_picker_guard.hpp"
 #include "assets_editor_internal.hpp"
+#include "await_qt.hpp"
 #include <QAbstractButton>
 #include <QApplication>
 #include <QDialog>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
-#include <QElapsedTimer>
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
@@ -41,6 +41,7 @@
 
 namespace {
 using namespace bloom;
+using test_support::awaitQtCondition;
 namespace assets = ui::assets;
 void require(bool ok, const char* message) {
     if (!ok)
@@ -135,7 +136,10 @@ class Confirmation final {
     int shown_ = 0;
     QString text_;
 };
-void pressDelete(QTreeWidget& tree, const QList<QTreeWidgetItem*>& items) {
+// `answer` is the Confirmation that answers this delete; `expectedConfirmations` is how many
+// warnings the delete must raise (0 when it deletes at once, without a warning).
+void pressDelete(QTreeWidget& tree, const QList<QTreeWidgetItem*>& items,
+                 const Confirmation& answer, const int expectedConfirmations) {
     tree.clearSelection();
     for (auto* item : items)
         item->setSelected(true);
@@ -143,9 +147,19 @@ void pressDelete(QTreeWidget& tree, const QList<QTreeWidgetItem*>& items) {
     tree.setFocus();
     QTest::keyClick(&tree, Qt::Key_Delete);
     QApplication::processEvents();
-    // The warning is asynchronous: let it appear and be answered.
-    QTest::qWait(40);
-    (void)QTest::qWaitFor([] { return visibleConfirmation() == nullptr; }, 2000);
+    if (expectedConfirmations > 0) {
+        // The warning is asynchronous: await it being shown and answered.
+        require(awaitQtCondition("delete confirmation shown and answered",
+                                 [&] {
+                                     return answer.shown() >= expectedConfirmations &&
+                                            visibleConfirmation() == nullptr;
+                                 }),
+                "delete confirmation is shown and answered");
+    } else {
+        // A delete that raises no warning has no positive event to await: give a warning that
+        // would wrongly appear the time to show itself, so the caller can assert none did.
+        QTest::qWait(40);
+    }
     QApplication::processEvents();
 }
 // Triggers one action of the context menu for `item`.
@@ -177,13 +191,6 @@ project::ProjectIoOperationMemory memory() {
     if (!operation)
         throw std::runtime_error("memory");
     return std::move(*operation);
-}
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < 15000)
-        QTest::qWait(5);
-    return predicate();
 }
 
 void run() {
@@ -337,9 +344,12 @@ void run() {
     });
     contextAction(*tree, item(assets::kAssetRole, a.value()), "assetsEditTagsAction");
     // Edit Tags is an asynchronous kit dialog: wait for it to be answered.
-    (void)QTest::qWaitFor(
-        [&] { return editedDialog && session.snapshot().project().findAsset(a)->tags.size() == 2; },
-        2000);
+    require(awaitQtCondition("edit tags dialog answered and tags authored",
+                             [&] {
+                                 return editedDialog &&
+                                        session.snapshot().project().findAsset(a)->tags.size() == 2;
+                             }),
+            "tag dialog is answered");
     require(editedDialog && session.snapshot().project().findAsset(a)->tags ==
                                 std::vector<std::string>{"hero", "review"},
             "tag dialog authors normalized tags");
@@ -387,21 +397,21 @@ void run() {
     // Delete: unused items go at once; a used one asks first.
     {
         Confirmation answer({});
-        pressDelete(*tree, {item(assets::kAssetRole, c.value())});
+        pressDelete(*tree, {item(assets::kAssetRole, c.value())}, answer, 0);
         require(answer.shown() == 0 && !session.snapshot().project().findAsset(c),
                 "an unused asset deletes without a warning");
         require(session.undo(), "unused delete undo");
     }
     {
         Confirmation answer({});
-        pressDelete(*tree, {item(assets::kAssetRole, b.value())});
+        pressDelete(*tree, {item(assets::kAssetRole, b.value())}, answer, 1);
         require(answer.shown() == 1 && answer.text().contains("used once in 1 composition") &&
                     session.snapshot().project().findAsset(b),
                 "deleting a used asset warns with its usage, and Cancel keeps it");
     }
     {
         Confirmation answer(QStringLiteral("assetsDeleteConfirmationDestructiveButton"));
-        pressDelete(*tree, {item(assets::kAssetRole, b.value())});
+        pressDelete(*tree, {item(assets::kAssetRole, b.value())}, answer, 1);
         require(answer.shown() == 1 && !session.snapshot().project().findAsset(b),
                 "confirming deletes the used asset");
         require(session.undo() && session.snapshot().project().findAsset(b),
@@ -409,7 +419,7 @@ void run() {
     }
     {
         Confirmation answer(QStringLiteral("assetsDeleteConfirmationAlternateButton"));
-        pressDelete(*tree, {item(assets::kFolderRole, shots.value())});
+        pressDelete(*tree, {item(assets::kFolderRole, shots.value())}, answer, 1);
         const auto& project = session.snapshot().project();
         require(answer.shown() == 1 && !project.findAssetFolder(shots) &&
                     project.findAssetFolder(plates) && !project.findAssetFolder(plates)->parent &&
@@ -419,7 +429,7 @@ void run() {
     }
     {
         Confirmation answer(QStringLiteral("assetsDeleteConfirmationDestructiveButton"));
-        pressDelete(*tree, {item(assets::kFolderRole, shots.value())});
+        pressDelete(*tree, {item(assets::kFolderRole, shots.value())}, answer, 1);
         const auto& project = session.snapshot().project();
         require(answer.shown() == 1 && !project.findAssetFolder(shots) &&
                     !project.findAssetFolder(plates) && !project.findAsset(a) &&
@@ -520,21 +530,24 @@ void importIntoSelectedFolder() {
         return std::optional<document::AssetRecord>{};
     };
     controller.importFiles({directory.filePath("one.png")});
-    require(waitUntil([&] { return !controller.busy() && imported("one.png"); }),
+    require(awaitQtCondition("selected-folder import completes",
+                             [&] { return !controller.busy() && imported("one.png"); }),
             "selected-folder import completes");
     require(imported("one.png")->folder == folder, "File > Import lands in the selected folder");
     QMimeData files;
     files.setUrls({QUrl::fromLocalFile(directory.filePath("two.png"))});
     require(drop(*tree, files, centre(*tree, find(*tree, assets::kFolderRole, folder->value()))),
             "files drop onto a folder row");
-    require(waitUntil([&] { return !controller.busy() && imported("two.png"); }),
+    require(awaitQtCondition("folder drop import completes",
+                             [&] { return !controller.busy() && imported("two.png"); }),
             "folder drop import completes");
     require(imported("two.png")->folder == folder && imported("two.png")->order == 1,
             "a file dropped on a folder lands in it after its assets");
     QMimeData rootFiles;
     rootFiles.setUrls({QUrl::fromLocalFile(directory.filePath("three.png"))});
     require(drop(*tree, rootFiles, emptySpace(*tree)), "files drop onto empty space");
-    require(waitUntil([&] { return !controller.busy() && imported("three.png"); }),
+    require(awaitQtCondition("root drop import completes",
+                             [&] { return !controller.busy() && imported("three.png"); }),
             "root drop import completes");
     require(!imported("three.png")->folder, "a file dropped on empty space lands at the root");
     // Dragging out: Timeline, Viewer and Nodes read the canvas payload of the first asset.
@@ -555,7 +568,7 @@ int main(int argc, char** argv) {
     try {
         run();
         importIntoSelectedFolder();
-        return 0;
+        return test_support::awaitFailureCount() == 0 ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

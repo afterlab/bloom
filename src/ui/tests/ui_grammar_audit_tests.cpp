@@ -422,7 +422,8 @@ int run(int argc, char** argv) {
            "audit real node cards and socket/control pairs");
     for (int width : {1600, 1920}) {
         fixture.window->resize(width, 1200);
-        QTest::qWait(20);
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents();
         auto* timeline = fixture.window->findChild<QWidget*>("timelineHeaderMenus");
         expect(!timeline->property("collapsed").toBool(), timeline,
                "timeline menus fit at >=1600px");

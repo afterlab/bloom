@@ -67,8 +67,6 @@
 #include <vector>
 
 namespace {
-// The ceiling for a broken run; a passing wait returns as soon as its condition holds.
-constexpr std::chrono::milliseconds kWait{20000};
 
 using namespace bloom;
 using namespace std::chrono_literals;
@@ -184,9 +182,8 @@ struct App final {
     ~App() {
         window.reset();
         session.setAssetController(nullptr);
-        if (!bloom::test_support::awaitQtCondition(
-                "the asset controller settles at teardown", [this] { return !assets.busy(); },
-                kWait))
+        if (!bloom::test_support::awaitQtCondition("the asset controller settles at teardown",
+                                                   [this] { return !assets.busy(); }))
             std::cerr << "FAIL: the asset controller did not settle at teardown\n";
         preview->beginShutdown();
     }
@@ -234,16 +231,14 @@ struct App final {
     }
     // The Viewer shows a frame of the current document and time.
     bool settle() {
-        const bool ok = bloom::test_support::awaitQtCondition(
-            "the Viewer shows a painted frame",
-            [this] {
+        const bool ok =
+            bloom::test_support::awaitQtCondition("the Viewer shows a painted frame", [this] {
                 const auto state = viewer->displayedPreviewState();
                 // mappingForTest() holds only for a painted frame of the current document and time.
                 return state.frame != nullptr &&
                        state.frame->desiredIdentity().time == session.currentTime() &&
                        viewer->mappingForTest().has_value();
-            },
-            kWait);
+            });
         QApplication::processEvents();
         return ok;
     }
@@ -259,10 +254,10 @@ struct App final {
         QApplication::sendEvent(viewer, &event);
     }
     void waitPick() {
-        expect(bloom::test_support::awaitQtCondition(
-                   "the drill pick finishes", [this] { return !viewer->drillPickPendingForTest(); },
-                   kWait),
-               "the drill pick finishes");
+        expect(
+            bloom::test_support::awaitQtCondition(
+                "the drill pick finishes", [this] { return !viewer->drillPickPendingForTest(); }),
+            "the drill pick finishes");
         QApplication::processEvents();
     }
     // A platform double-click: press, release, double-click, release. Between the two the event
@@ -272,7 +267,6 @@ struct App final {
         const auto screen = at(point);
         mouse(QEvent::MouseButtonPress, screen, Qt::LeftButton);
         mouse(QEvent::MouseButtonRelease, screen, Qt::NoButton);
-        QTest::qWait(30);
         settle();
         mouse(QEvent::MouseButtonDblClick, screen, Qt::LeftButton);
         mouse(QEvent::MouseButtonRelease, screen, Qt::NoButton);
@@ -708,13 +702,11 @@ void testKeyedPointDrag(App& app, const Scene& s) {
     expect(app.settle(), "the Viewer shows 0.5 s");
     expect(pathKeys(app.composition(), s.triPath) == 2, "tri's path has two keys");
     std::optional<std::pair<document::PathContour, QTransform>> target;
-    expect(bloom::test_support::awaitQtCondition(
-               "tri's points are on the Viewer",
-               [&] {
-                   target = app.viewer->anchorEditTargetForTest();
-                   return target.has_value();
-               },
-               kWait),
+    expect(bloom::test_support::awaitQtCondition("tri's points are on the Viewer",
+                                                 [&] {
+                                                     target = app.viewer->anchorEditTargetForTest();
+                                                     return target.has_value();
+                                                 }),
            "tri's points are on the Viewer");
     if (!target || target->first.anchors.empty())
         return;
@@ -801,13 +793,14 @@ void testPickThreadStaleAndCancel(App& app, const Scene& s) {
     app.mouse(QEvent::MouseButtonPress, screen, Qt::LeftButton);
     app.mouse(QEvent::MouseButtonRelease, screen, Qt::NoButton);
     expect(app.viewer->drillPickPendingForTest(), "the click's pick is out");
-    expect(bloom::test_support::awaitQtCondition(
-               "the pick is held on its worker", [&] { return held.load() == 1; }, kWait),
+    expect(bloom::test_support::awaitQtCondition("the pick is held on its worker",
+                                                 [&] { return held.load() == 1; }),
            "the pick is held on its worker");
     expect(app.session.setCurrentTime(kZero), "the playhead moves to 0 s");
     hold = false;
     app.waitPick();
-    QTest::qWait(50);
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     expect(!app.primary(), "an answer for a frame no longer shown is dropped");
 
     // Cancel: a newer click cancels the older pick; only the newer answer applies.
@@ -818,14 +811,15 @@ void testPickThreadStaleAndCancel(App& app, const Scene& s) {
     const auto second = app.at({250.0, 190.0});
     app.mouse(QEvent::MouseButtonPress, first, Qt::LeftButton);
     app.mouse(QEvent::MouseButtonRelease, first, Qt::NoButton);
-    expect(bloom::test_support::awaitQtCondition(
-               "the first pick is held", [&] { return held.load() == 1; }, kWait),
+    expect(bloom::test_support::awaitQtCondition("the first pick is held",
+                                                 [&] { return held.load() == 1; }),
            "the first pick is held");
     app.mouse(QEvent::MouseButtonPress, second, Qt::LeftButton);
     app.mouse(QEvent::MouseButtonRelease, second, Qt::NoButton);
     hold = false;
     app.waitPick();
-    QTest::qWait(50);
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     expect(app.primary() == s.tri, "the newer click's answer applies, the older pick's never does");
 
     // The controller's route: a cancelled pick task answers Cancelled, never a stale selection.
@@ -841,20 +835,19 @@ void testPickThreadStaleAndCancel(App& app, const Scene& s) {
          .plan = nullptr});
     expect(submission.accepted(), "a pick task is accepted");
     if (submission.accepted()) {
-        expect(bloom::test_support::awaitQtCondition(
-                   "the pick task is held on its worker", [&] { return held.load() == 1; }, kWait),
+        expect(bloom::test_support::awaitQtCondition("the pick task is held on its worker",
+                                                     [&] { return held.load() == 1; }),
                "the pick task is held on its worker");
         submission.handle.cancel();
         hold = false;
         std::optional<runtime::TaskResult<std::shared_ptr<const runtime::ViewerPickResult>>> result;
-        expect(bloom::test_support::awaitQtCondition(
-                   "the cancelled pick finishes",
-                   [&] {
-                       if (!result)
-                           result = submission.handle.tryTakeResult();
-                       return result.has_value();
-                   },
-                   kWait),
+        expect(bloom::test_support::awaitQtCondition("the cancelled pick finishes",
+                                                     [&] {
+                                                         if (!result)
+                                                             result =
+                                                                 submission.handle.tryTakeResult();
+                                                         return result.has_value();
+                                                     }),
                "the cancelled pick finishes");
         expect(result && result->state() == runtime::TaskState::Cancelled,
                "a cancelled pick answers Cancelled");
@@ -890,23 +883,23 @@ void testBreakApartOffer() {
     // Cancel changes nothing.
     app.doubleClick({100.0, 90.0});
     ui::kit::KDialog* dialog = nullptr;
-    expect(bloom::test_support::awaitQtCondition(
-               "double-click on a one-layer SVG offers Break Apart",
-               [&] { return (dialog = offer()) != nullptr; }, std::chrono::milliseconds{5000}),
-           "double-click on a one-layer SVG offers Break Apart");
+    expect(
+        bloom::test_support::awaitQtCondition("double-click on a one-layer SVG offers Break Apart",
+                                              [&] { return (dialog = offer()) != nullptr; }),
+        "double-click on a one-layer SVG offers Break Apart");
     if (dialog == nullptr)
         return;
     expect(dialog->activate(ui::kit::KDialog::Role::Reject), "Cancel the offer");
-    QTest::qWait(50);
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     expect(app.session.snapshot().revision() == revision && artworks() == 1 && app.level().empty(),
            "Cancel breaks nothing apart and enters nothing");
 
     // Break Apart: one step, then the Viewer is inside the result with the part under the pointer.
     app.doubleClick({100.0, 90.0});
     dialog = nullptr;
-    expect(bloom::test_support::awaitQtCondition(
-               "the offer again", [&] { return (dialog = offer()) != nullptr; },
-               std::chrono::milliseconds{5000}),
+    expect(bloom::test_support::awaitQtCondition("the offer again",
+                                                 [&] { return (dialog = offer()) != nullptr; }),
            "the offer again");
     if (dialog == nullptr)
         return;
@@ -918,8 +911,7 @@ void testBreakApartOffer() {
                           app.level() == std::vector{layer} &&
                           !app.viewer->breakApartDrillPendingForTest() &&
                           !app.viewer->drillPickPendingForTest() && app.primary().has_value();
-               },
-               kWait),
+               }),
            "the SVG is broken apart and the Viewer enters it");
     const auto box = app.child(layer, "box");
     expect(app.level() == std::vector{layer} && app.primary() == box,
@@ -990,9 +982,8 @@ bool samePixels(const std::shared_ptr<const runtime::ProcessFrame>& a,
 bool settleRevision(App& app) {
     // A render-neutral revision keeps the frame of an earlier one (retained provenance): the
     // frame must be the controller's current answer, for this level, painted.
-    const bool ok = bloom::test_support::awaitQtCondition(
-        "the Viewer shows the current revision",
-        [&] {
+    const bool ok =
+        bloom::test_support::awaitQtCondition("the Viewer shows the current revision", [&] {
             const auto state = app.viewer->displayedPreviewState();
             const auto& desired = app.preview->state().desiredIdentity;
             return state.frame != nullptr && desired.has_value() &&
@@ -1001,8 +992,7 @@ bool settleRevision(App& app) {
                    state.frame->desiredIdentity().time == app.session.currentTime() &&
                    state.frame->desiredIdentity().isolation == app.preview->isolation() &&
                    app.viewer->mappingForTest().has_value();
-        },
-        kWait);
+        });
     if (!ok) {
         const auto state = app.viewer->displayedPreviewState();
         std::cerr << "settleRevision: frame " << (state.frame != nullptr);

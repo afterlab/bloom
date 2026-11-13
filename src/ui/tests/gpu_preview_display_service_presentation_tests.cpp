@@ -8,6 +8,7 @@
 // device. When presentation is genuinely unavailable the test proves the CPU/packed fallback takes
 // no blank activation claim instead of fabricating one.
 
+#include "await_qt.hpp"
 #include "gpu_preview_display_service_private.hpp"
 
 #include "gpu_borrowed_instance.hpp"
@@ -169,45 +170,20 @@ class Expectations final {
     return options;
 }
 
-template <typename Predicate>
-[[nodiscard]] bool waitUntil(Predicate predicate, const std::chrono::milliseconds timeout) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (predicate()) {
-            return true;
-        }
-        std::this_thread::sleep_for(500us);
-    }
-    return predicate();
-}
+using bloom::test_support::awaitCondition;
+using bloom::test_support::awaitQtCondition;
 
-// Waits while driving the Qt event loop: a Wayland present completion/present fence can require the
-// UI event queue to be dispatched, so a shutdown wait must not block it.
-template <typename Predicate>
-[[nodiscard]] bool waitUntilEvents(Predicate predicate, const std::chrono::milliseconds timeout) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-        QGuiApplication::processEvents();
-        if (predicate()) {
-            return true;
-        }
-        std::this_thread::sleep_for(1ms);
-    }
-    QGuiApplication::processEvents();
-    return predicate();
-}
-
+// The result of a scheduler task, awaited on the calling thread (no event loop is needed).
 template <typename Value>
 [[nodiscard]] std::optional<TaskResult<Value>>
-awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds timeout = 15s) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (auto result = handle.tryTakeResult()) {
-            return result;
-        }
-        std::this_thread::sleep_for(500us);
+awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds timeout = 30s) {
+    std::optional<TaskResult<Value>> result;
+    if (!awaitCondition(
+            "a scheduler task result",
+            [&] { return (result = handle.tryTakeResult()).has_value(); }, timeout)) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    return result;
 }
 
 [[nodiscard]] bloom::document::Snapshot makeSnapshot(const std::uint64_t id, std::string name) {
@@ -298,9 +274,12 @@ struct UiSurface final {
     options.previewByteAllowance = kBudget;
     options.processingPhasePolicy = bloom::ui::test::previewProcessingPhase();
     GpuPreviewDisplayService service(scheduler, unsupportedStage(), unreachableFallback(), options);
-    static_cast<void>(waitUntil(
-        [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; },
-        30s));
+    expectations.expect(awaitCondition("the service leaves Initializing without a loader",
+                                       [&] {
+                                           return service.status().state !=
+                                                  GpuPreviewDisplayServiceState::Initializing;
+                                       }),
+                        "the service without a loader leaves Initializing");
     const auto status = service.status();
     expectations.expect(status.presentationClient == nullptr,
                         "an unavailable presentation publishes no client");
@@ -339,7 +318,8 @@ int runTests(int argc, char** argv) {
     GpuPreviewDisplayService service(scheduler, unsupportedStage(), unreachableFallback(),
                                      serviceOptions(options.loader_path));
 
-    const bool terminal = waitUntil(
+    const bool terminal = awaitCondition(
+        "the service leaves Initializing",
         [&] {
             const auto state = service.status().state;
             return state != GpuPreviewDisplayServiceState::Initializing;
@@ -360,7 +340,7 @@ int runTests(int argc, char** argv) {
         if (expectations.failures() == 0) {
             std::cout << "SKIP: presentation unavailable; CPU/packed fallback verified\n";
         }
-        return expectations.failures() == 0 ? 0 : 1;
+        return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
     }
 
     const auto core = bloom::runtime::detail::GpuPreviewDisplayServiceTestAccess::coreOf(service);
@@ -399,14 +379,12 @@ int runTests(int argc, char** argv) {
         surface.window->show();
         surface.width = width;
         surface.height = height;
-        if (!waitUntilEvents(
-                [&surface] {
-                    if (!surface.window->isExposed())
-                        return false;
-                    surface.surface = QVulkanInstance::surfaceForWindow(surface.window);
-                    return surface.surface != VK_NULL_HANDLE;
-                },
-                10s)) {
+        if (!awaitQtCondition("the UI QWindow produced a Wayland VkSurfaceKHR", [&surface] {
+                if (!surface.window->isExposed())
+                    return false;
+                surface.surface = QVulkanInstance::surfaceForWindow(surface.window);
+                return surface.surface != VK_NULL_HANDLE;
+            })) {
             return std::optional<UiSurface>{};
         }
         return std::optional<UiSurface>{surface};
@@ -423,12 +401,11 @@ int runTests(int argc, char** argv) {
     const auto attached = client->attach(borrowed, 320U, 240U);
     expectations.expect(attached.code == GpuPresentationPortCode::Accepted,
                         "the service client admitted the attach");
-    expectations.expect(waitUntil(
-                            [&] {
-                                return client->status(attached.target).state ==
-                                       GpuPresentationTargetState::Active;
-                            },
-                            15s),
+    expectations.expect(awaitCondition("the service owner created and activated the swapchain",
+                                       [&] {
+                                           return client->status(attached.target).state ==
+                                                  GpuPresentationTargetState::Active;
+                                       }),
                         "the service owner created and activated the swapchain");
 
     // Real owner-thread resident image through an actual scheduler GPU task.
@@ -453,22 +430,26 @@ int runTests(int argc, char** argv) {
         client->update(attached.target, 1U, makeUpdate(lease, 320U, 240U)).accepted(),
         "the first present update is admitted");
     expectations.expect(
-        waitUntil([&] { return client->status(attached.target).appliedSequence >= 1U; }, 15s),
+        awaitCondition("the first present was applied on the owner thread",
+                       [&] { return client->status(attached.target).appliedSequence >= 1U; }),
         "the first present was applied on the owner thread");
     expectations.expect(client->status(attached.target).presentCount == 1U,
                         "exactly one present completed");
 
     // Resize through the real QWindow and present again.
     mainSurface->window->resize(400, 300);
-    for (int tick = 0; tick < 100; ++tick) {
-        QGuiApplication::processEvents();
-        std::this_thread::sleep_for(5ms);
-    }
+    expectations.expect(awaitQtCondition("the QWindow reports the resized extent",
+                                         [&] {
+                                             return mainSurface->window->width() == 400 &&
+                                                    mainSurface->window->height() == 300;
+                                         }),
+                        "the QWindow reports the resized extent");
     expectations.expect(
         client->update(attached.target, 2U, makeUpdate(lease, 400U, 300U)).accepted(),
         "the resize present update is admitted");
     expectations.expect(
-        waitUntil([&] { return client->status(attached.target).appliedSequence >= 2U; }, 15s),
+        awaitCondition("the resize present was applied",
+                       [&] { return client->status(attached.target).appliedSequence >= 2U; }),
         "the resize present was applied");
 
     // A concurrent ordinary preview request on the same service, admitted before shutdown.
@@ -503,25 +484,23 @@ int runTests(int argc, char** argv) {
     using IdleAccess = bloom::runtime::detail::GpuPreviewDisplayServiceTestAccess;
     const auto idlePresents = client->status(attached.target).presentCount;
     IdleAccess::OwnerIdleProbe settled;
-    const bool ownerSettled = waitUntil(
-        [&] {
+    const bool ownerSettled =
+        awaitCondition("the owner of an idle Active target reaches its idle wait", [&] {
             const auto first = IdleAccess::ownerIdleProbe(service);
             if (first.lastWaitInterval != IdleAccess::kOwnerIdleWaitInterval)
                 return false;
             settled = first;
             return true;
-        },
-        30s);
+        });
     expectations.expect(ownerSettled, "the owner of an idle Active target reaches its idle wait");
     constexpr std::uint64_t kIdleWaits = 4;
     bool everShort = false;
-    const bool waitedOn = waitUntil(
-        [&] {
+    const bool waitedOn = awaitCondition(
+        "the idle owner keeps waiting for its idle interval, never the short poll", [&] {
             const auto probe = IdleAccess::ownerIdleProbe(service);
             everShort = everShort || probe.lastWaitInterval != IdleAccess::kOwnerIdleWaitInterval;
             return probe.waits >= settled.waits + kIdleWaits;
-        },
-        30s);
+        });
     const auto idled = IdleAccess::ownerIdleProbe(service);
     expectations.expect(waitedOn && !everShort,
                         "the idle owner keeps waiting for its idle interval, never the short poll");
@@ -538,7 +517,8 @@ int runTests(int argc, char** argv) {
         client->update(attached.target, 5U, makeUpdate(lease, 400U, 300U)).accepted(),
         "a new frame after idle is admitted");
     expectations.expect(
-        waitUntil([&] { return client->status(attached.target).appliedSequence >= 5U; }, 15s),
+        awaitCondition("the new frame after idle was applied (the idle wait was woken, not missed)",
+                       [&] { return client->status(attached.target).appliedSequence >= 5U; }),
         "the new frame after idle was applied (the idle wait was woken, not missed)");
 
     // Cancel path after idle. Whether the cancel wins the race against the owner pump or reports a
@@ -564,7 +544,8 @@ int runTests(int argc, char** argv) {
     // while the service is still running.
     static_cast<void>(client->retire(attached.target, 4U));
     expectations.expect(
-        waitUntilEvents([&] { return client->status(attached.target).surfaceSafeToDestroy; }, 30s),
+        awaitQtCondition("the target proved retirement and its surface is safe to destroy",
+                         [&] { return client->status(attached.target).surfaceSafeToDestroy; }),
         "the target proved retirement and its surface is safe to destroy");
     mainSurface->window->hide();
     delete mainSurface->window;
@@ -581,7 +562,8 @@ int runTests(int argc, char** argv) {
     expectations.expect(rejectedSubmission.status != bloom::runtime::TaskSubmissionStatus::Accepted,
                         "beginShutdown refuses a new service root");
     expectations.expect(
-        waitUntilEvents([&] { return !service.status().presentationShutdown.accepting; }, 15s),
+        awaitQtCondition("the owner published a non-accepting presentation shutdown snapshot",
+                         [&] { return !service.status().presentationShutdown.accepting; }),
         "the owner published a non-accepting presentation shutdown snapshot");
 
     // A new attach after shutdown must be refused, not admitted. A nonzero fake surface is enough:
@@ -595,10 +577,12 @@ int runTests(int argc, char** argv) {
                             refusedAttach.code == GpuPresentationPortCode::OwnerGone,
                         "attach after beginShutdown is refused, never admitted");
 
-    expectations.expect(
-        waitUntilEvents(
-            [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; }, 30s),
-        "the service owner drained and stopped");
+    expectations.expect(awaitQtCondition("the service owner drained and stopped",
+                                         [&] {
+                                             return service.status().state ==
+                                                    GpuPreviewDisplayServiceState::Stopped;
+                                         }),
+                        "the service owner drained and stopped");
     const auto finalStatus = service.status();
     expectations.expect(finalStatus.presentationClient == nullptr,
                         "the stopped service publishes no live presentation client");
@@ -618,7 +602,7 @@ int runTests(int argc, char** argv) {
         std::cout << "PASS: service-owned Wayland attach/present/resize/retire with a concurrent "
                      "ordinary preview request, foreign-lease rejection, and bounded shutdown\n";
     }
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }
 
 int main(int argc, char** argv) {

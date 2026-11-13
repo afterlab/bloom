@@ -3,6 +3,7 @@
 // ready, then plays on; cached frames keep real time. Every test drives time with a manual clock
 // and a scripted availability, so no wall-clock sleep decides an outcome. Event-loop waits only let
 // real asynchronous work (CPU frames, the audio worker) land.
+#include "await_qt.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
@@ -65,19 +66,6 @@ class Expectations final {
 };
 
 // Returns as soon as the predicate holds; the bound only stops a broken test from hanging.
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 4'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate))
-            return true;
-        std::this_thread::yield();
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return std::invoke(predicate);
-}
-
 [[nodiscard]] bloom::core::RationalTime time(const std::int64_t numerator,
                                              const std::int64_t denominator = 1) {
     const auto value = bloom::core::RationalTime::create(numerator, denominator);
@@ -176,7 +164,8 @@ struct Fixture final {
             controller.requestRefresh();
         else
             (void)session.setCurrentTime(frame(index));
-        return waitUntil([&] { return cached(index); });
+        return bloom::test_support::awaitQtCondition("frame is cached",
+                                                     [&] { return cached(index); });
     }
     void step(const std::chrono::nanoseconds delta) {
         clock.advance(delta);
@@ -187,8 +176,10 @@ struct Fixture final {
         playback.pause();
         controller.beginShutdown();
         bridge.beginShutdown();
-        expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
-                            "the wait fixture reaches scheduler quiescence");
+        expectations.expect(
+            bloom::test_support::awaitQtCondition("wait fixture reaches scheduler quiescence",
+                                                  [&] { return scheduler.isQuiescent(); }),
+            "the wait fixture reaches scheduler quiescence");
     }
 };
 
@@ -374,12 +365,16 @@ void testAudioMutesWhileWaiting(Expectations& expectations) {
     mix.clips.push_back({bloom::document::NodeId::fromRaw(1), bloom::document::AssetId::fromRaw(1),
                          time(0), time(10)});
     fixture.playback.setAudioMix(mix, {audio::AudioClip{nullptr, time(0)}});
-    expectations.expect(waitUntil([&] { return control.isIdle(); }), "the mix is applied");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("mix is applied", [&] { return control.isIdle(); }),
+        "the mix is applied");
 
     fixture.ready = {1};
     fixture.playback.play();
-    expectations.expect(waitUntil([&] { return fixture.playback.audioClockActive(); }),
-                        "audio drives a run whose next frame is ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("audio drives a run whose next frame is ready",
+                                              [&] { return fixture.playback.audioClockActive(); }),
+        "audio drives a run whose next frame is ready");
     expectations.expect(!engine->renderForTesting(40), "audio reaches frame 1");
     fixture.playback.tick();
     expectations.expect(fixture.at(1), "frame 1 plays on the audio clock");
@@ -387,9 +382,11 @@ void testAudioMutesWhileWaiting(Expectations& expectations) {
     fixture.playback.tick();
     expectations.expect(fixture.at(1) && fixture.playback.isWaitingForFrames(),
                         "frame 2 is pending: the playhead holds");
-    expectations.expect(waitUntil([&] { return control.isIdle(); }) && !control.isPlaying() &&
-                            !fixture.playback.audioClockActive(),
-                        "audio is muted while the playhead waits");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("audio is muted while the playhead waits",
+                                              [&] { return control.isIdle(); }) &&
+            !control.isPlaying() && !fixture.playback.audioClockActive(),
+        "audio is muted while the playhead waits");
     fixture.step(1s);
     expectations.expect(fixture.at(1), "the wall clock does not move a held playhead either");
 
@@ -398,15 +395,19 @@ void testAudioMutesWhileWaiting(Expectations& expectations) {
     fixture.playback.tick();
     expectations.expect(fixture.at(2) && !fixture.playback.isWaitingForFrames(),
                         "frame 2 arrives and real-time playback resumes");
-    expectations.expect(waitUntil([&] { return fixture.playback.audioClockActive(); }),
-                        "audio resumes and drives the clock again");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("audio resumes and drives the clock again",
+                                              [&] { return fixture.playback.audioClockActive(); }),
+        "audio resumes and drives the clock again");
     expectations.expect(control.positionNow() == frame(2),
                         "audio resumes at the playhead, in sync with the shown frame");
     expectations.expect(!engine->renderForTesting(40), "audio reaches frame 3");
     fixture.playback.tick();
     expectations.expect(fixture.at(3), "after the wait, audio and pictures stay in step");
     fixture.playback.pause();
-    expectations.expect(waitUntil([&] { return control.isIdle(); }) && !control.isPlaying(),
+    expectations.expect(bloom::test_support::awaitQtCondition("pause stops audio",
+                                                              [&] { return control.isIdle(); }) &&
+                            !control.isPlaying(),
                         "pause stops audio");
 
     // A preroll that reaches its maximum starts the run waiting, without starting audio.
@@ -419,9 +420,11 @@ void testAudioMutesWhileWaiting(Expectations& expectations) {
     expectations.expect(!fixture.playback.isPreparing() && fixture.playback.isWaitingForFrames() &&
                             fixture.controller.playbackWaiting(),
                         "a preroll at its maximum starts the run waiting for frames");
-    expectations.expect(waitUntil([&] { return control.isIdle(); }) && !control.isPlaying() &&
-                            !fixture.playback.audioClockActive(),
-                        "audio does not start while the run waits");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("audio does not start while the run waits",
+                                              [&] { return control.isIdle(); }) &&
+            !control.isPlaying() && !fixture.playback.audioClockActive(),
+        "audio does not start while the run waits");
     fixture.ready.insert(11);
     fixture.step(40ms);
     expectations.expect(fixture.at(11) && fixture.playback.isWaitingForFrames(),
@@ -431,9 +434,11 @@ void testAudioMutesWhileWaiting(Expectations& expectations) {
     fixture.step(40ms);
     expectations.expect(fixture.at(12) && !fixture.playback.isWaitingForFrames(),
                         "the window ahead is ready: real-time playback resumes");
-    expectations.expect(waitUntil([&] { return fixture.playback.audioClockActive(); }) &&
-                            control.positionNow() == frame(12),
-                        "audio resumes at the playhead");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "audio resumes at the playhead", [&] { return fixture.playback.audioClockActive(); }) &&
+            control.positionNow() == frame(12),
+        "audio resumes at the playhead");
     fixture.playback.setAudioDeviceControl(nullptr);
     fixture.finish(expectations);
     control.beginShutdown();
@@ -470,11 +475,13 @@ void testReadAheadFillsContiguously(Expectations& expectations) {
                         "an uncached frame is not ready");
     fixture.playback.play();
     // One frame per wake: a transport that does not wait would move onto uncached frames.
-    expectations.expect(waitUntil([&] {
-                            fixture.step(40ms);
-                            return fixture.session.currentTime() >= frame(12);
-                        }),
-                        "uncached playback reaches frame 12");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("uncached playback reaches frame 12",
+                                              [&] {
+                                                  fixture.step(40ms);
+                                                  return fixture.session.currentTime() >= frame(12);
+                                              }),
+        "uncached playback reaches frame 12");
     fixture.playback.pause();
     bool contiguous = shown.size() >= 13;
     for (std::size_t index = 1; index < shown.size() && index <= 12; ++index)
@@ -519,7 +526,7 @@ int main(int argc, char** argv) {
     testAudioMutesWhileWaiting(expectations);
     testReadAheadFillsContiguously(expectations);
     testNoProviderNeverWaits(expectations);
-    if (expectations.failures() != 0) {
+    if (expectations.failures() + bloom::test_support::awaitFailureCount() != 0) {
         std::cerr << expectations.failures() << " playback wait expectation(s) failed\n";
         return EXIT_FAILURE;
     }

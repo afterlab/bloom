@@ -46,15 +46,10 @@ void expect(const bool valid, const char* message) {
         std::cerr << message << '\n';
     }
 }
-template <class Predicate> bool spin(Predicate done, const bool events = true) {
-    const auto end = std::chrono::steady_clock::now() + 3s;
-    while (!done() && std::chrono::steady_clock::now() < end) {
-        if (events)
-            QCoreApplication::processEvents();
-        else
-            std::this_thread::yield();
-    }
-    return done();
+template <class Predicate>
+[[nodiscard]] bool spin(const std::string_view name, Predicate done, const bool events = true) {
+    return events ? test_support::awaitQtCondition(name, done)
+                  : test_support::awaitCondition(name, done);
 }
 runtime::TaskSchedulerConfig config() {
     auto value = runtime::TaskSchedulerConfig::defaults();
@@ -108,7 +103,8 @@ void heldSampling() {
         nullptr, std::nullopt);
     QObject::connect(&owner, &ui::MemoryBudgetController::sampleApplied, &owner,
                      [&] { ++applied; });
-    expect(spin([&] { return state->entered.load(); }), "sample worker entered off UI");
+    expect(spin("sample worker entered off UI", [&] { return state->entered.load(); }),
+           "sample worker entered off UI");
     int pulses = 0;
     QTimer heartbeat;
     heartbeat.setInterval(1);
@@ -116,7 +112,8 @@ void heldSampling() {
     bool heldPastMonitorInterval = false;
     QTimer::singleShot(150, &heartbeat, [&] { heldPastMonitorInterval = true; });
     heartbeat.start();
-    expect(spin([&] { return pulses >= 4 && heldPastMonitorInterval; }),
+    expect(spin("GUI heartbeat continues while sample is held",
+                [&] { return pulses >= 4 && heldPastMonitorInterval; }),
            "GUI heartbeat continues while sample is held");
     heartbeat.stop();
     for (int index = 0; index < 20; ++index)
@@ -125,14 +122,16 @@ void heldSampling() {
                budget == 0 && polls == 0 && !bridge.isRunning() && state->offUi,
            "held sample has no backlog, no result/Jobs poll, no GUI I/O or cold retention");
     state->release.count_down();
-    expect(spin([&] { return applied == 1; }), "completion delivers sample with Jobs stopped");
+    expect(spin("completion delivers sample with Jobs stopped", [&] { return applied == 1; }),
+           "completion delivers sample with Jobs stopped");
     expect(budget == 8 * gib && appliedOnUi && polls == 0 && !owner.sampleActive(),
            "cache callback applies the actual finite OS limit only on the UI thread");
     owner.beginShutdown();
     owner.requestSample();
     expect(owner.admittedSampleCount() == 1, "shutdown closes sample admission");
     scheduler.beginShutdown();
-    expect(spin([&] { return scheduler.isQuiescent(); }), "sample scheduler retires");
+    expect(spin("sample scheduler retires", [&] { return scheduler.isQuiescent(); }),
+           "sample scheduler retires");
     ledger.unregisterCache(&budget);
 }
 void teardown() {
@@ -150,16 +149,20 @@ void teardown() {
             return sample();
         },
         nullptr, std::nullopt);
-    expect(spin([&] { return state->entered.load(); }), "teardown fixture worker entered");
+    expect(spin("teardown fixture worker entered", [&] { return state->entered.load(); }),
+           "teardown fixture worker entered");
     owner.reset(); // Cancels without waiting on held OS work or retaining a QObject in it.
     state->release.count_down();
-    expect(spin([&] { return scheduler.isQuiescent(); }), "destroyed owner worker retires safely");
+    expect(spin("destroyed owner worker retires safely", [&] { return scheduler.isQuiescent(); }),
+           "destroyed owner worker retires safely");
     expect(ledger.state().sampleSerial == 0 && ledger.state().effectiveBytes == 0,
            "late completion after destruction cannot publish or rearm");
     owner = std::make_unique<ui::MemoryBudgetController>(
         scheduler, bridge, ledger, [](const auto&) { return sample(); }, nullptr, std::nullopt);
     owner->requestSample();
-    expect(spin([&] { return scheduler.isQuiescent(); }, false), "result held before GUI delivery");
+    expect(spin(
+               "result held before GUI delivery", [&] { return scheduler.isQuiescent(); }, false),
+           "result held before GUI delivery");
     owner.reset();
     QCoreApplication::processEvents();
     expect(ledger.state().sampleSerial == 0, "queued completion cannot dereference deleted owner");
@@ -167,9 +170,11 @@ void teardown() {
         scheduler, bridge, ledger, [](const auto&) { return sample(); }, nullptr, std::nullopt);
     QObject::connect(owner.get(), &ui::MemoryBudgetController::sampleApplied,
                      QCoreApplication::instance(), [&] { owner.reset(); });
-    expect(spin([&] { return !owner; }), "synchronous completion observer may delete owner");
+    expect(spin("synchronous completion observer may delete owner", [&] { return !owner; }),
+           "synchronous completion observer may delete owner");
     scheduler.beginShutdown();
-    expect(spin([&] { return scheduler.isQuiescent(); }), "teardown scheduler retires");
+    expect(spin("teardown scheduler retires", [&] { return scheduler.isQuiescent(); }),
+           "teardown scheduler retires");
 }
 void liveSettingsAndDeliveredCapacity() {
     runtime::MemoryBudgetLedger ledger(60 * gib, 22 * gib);
@@ -348,12 +353,14 @@ void sampledPressurePreviewRecovery() {
                                 ledger.allocate(18 * gib, 12 * gib));
         preview.notifyProcessingCapacityChanged();
     });
-    expect(spin([&] { return readyAt(timeAt(0), runtime::PreviewResolutionPolicy::Full); }) &&
+    expect(spin("first delivered sample prepares and retains a real Full preview",
+                [&] { return readyAt(timeAt(0), runtime::PreviewResolutionPolicy::Full); }) &&
                preparations == 1 && cache->size() != 0 && cache->residentBytes() > 0,
            "first delivered sample prepares and retains a real Full preview");
     available = 22 * gib;
     owner.requestSample();
-    expect(spin([&] { return ledger.state().sampleSerial == 2; }),
+    expect(spin("22 GiB availability is delivered through the actual sampler owner",
+                [&] { return ledger.state().sampleSerial == 2; }),
            "22 GiB availability is delivered through the actual sampler owner");
     const auto pressure = ledger.state();
     const auto host = policy->snapshot().reservations;
@@ -367,12 +374,16 @@ void sampledPressurePreviewRecovery() {
     cache->setByteBudget(1);
     expect(cache->size() == 0 && cache->byteBudget() == 1,
            "a deliberately tiny retention target drops cached frames before independent live work");
-    expect(session.setCurrentTime(timeAt(1)) &&
-               spin([&] { return readyAt(timeAt(1), runtime::PreviewResolutionPolicy::Full); }) &&
-               preparations == 2,
-           "uncached Full preview executes even when the cache target cannot retain one frame");
+    expect(
+        session.setCurrentTime(timeAt(1)) &&
+            spin(
+                "uncached Full preview executes even when the cache target cannot retain one frame",
+                [&] { return readyAt(timeAt(1), runtime::PreviewResolutionPolicy::Full); }) &&
+            preparations == 2,
+        "uncached Full preview executes even when the cache target cannot retain one frame");
     preview.setResolutionPolicy(runtime::PreviewResolutionPolicy::Quarter);
-    expect(spin([&] { return readyAt(timeAt(1), runtime::PreviewResolutionPolicy::Quarter); }) &&
+    expect(spin("uncached Quarter preview executes with a fitting real phase and request budget",
+                [&] { return readyAt(timeAt(1), runtime::PreviewResolutionPolicy::Quarter); }) &&
                preparations == 3 && admittedWithinLiveBudget,
            "uncached Quarter preview executes with a fitting real phase and request budget");
     // Preview submission wakes the Jobs monitor. Stop it after the completed renders so the
@@ -384,7 +395,8 @@ void sampledPressurePreviewRecovery() {
     expect(view->publish(stale), "stalled sample fixture expires actual delivered defaults");
     holdNext = true;
     owner.requestSample();
-    expect(spin([&] { return held->entered.load(); }), "replacement memory sampler is held off UI");
+    expect(spin("replacement memory sampler is held off UI", [&] { return held->entered.load(); }),
+           "replacement memory sampler is held off UI");
     expect(session.setCurrentTime(timeAt(2)) &&
                preview.state().activity == ui::PreviewActivity::Failed &&
                preview.state().message ==
@@ -401,14 +413,16 @@ void sampledPressurePreviewRecovery() {
                jobsPolls == pollsBeforeHold,
            "held sampler and stale defaults admit no backlog or retry spin with Jobs stopped");
     held->release.count_down();
-    expect(spin([&] { return readyAt(timeAt(3), runtime::PreviewResolutionPolicy::Quarter); }) &&
+    expect(spin("sample completion automatically recovers only the newest Quarter intent",
+                [&] { return readyAt(timeAt(3), runtime::PreviewResolutionPolicy::Quarter); }) &&
                preparations == 4 && admittedWithinLiveBudget,
            "sample completion automatically recovers only the newest Quarter intent");
     owner.beginShutdown();
     preview.beginShutdown();
     service.beginShutdown();
     bridge.beginShutdown();
-    expect(spin([&] { return scheduler.isQuiescent(); }), "pressure recovery tasks retire");
+    expect(spin("pressure recovery tasks retire", [&] { return scheduler.isQuiescent(); }),
+           "pressure recovery tasks retire");
     expect(policy->snapshot().reservations.admittedPhases == 0,
            "pressure recovery leaves no processing phase claims");
 }
@@ -460,7 +474,8 @@ void coldForegroundAndSettings() {
         ui::makeCompositionPreviewPipeline(compiler, evaluator, display, qualified), {}, cache);
     ui::WindowStatusBar first(session, &preview, nullptr, evaluator.operationCache().get());
     ui::WindowStatusBar second(session, &preview, nullptr, evaluator.operationCache().get());
-    expect(spin([&] { return preview.state().activity == ui::PreviewActivity::Ready; }),
+    expect(spin("ordinary cold Visible production pipeline completes with Jobs stopped",
+                [&] { return preview.state().activity == ui::PreviewActivity::Ready; }),
            "ordinary cold Visible production pipeline completes with Jobs stopped");
     expect(
         preview.state().frame && cache->size() == 0 && cache->byteBudget() == 0 &&
@@ -468,8 +483,9 @@ void coldForegroundAndSettings() {
         "foreground frame remains visible while reusable caches and status observers remain cold");
     ui::MemoryBudgetController owner(
         scheduler, bridge, ledger, [](const auto&) { return sample(); }, nullptr, std::nullopt);
-    expect(spin([&] { return ledger.state().sampleSerial == 1; }),
-           "one owner delivers shared sample");
+    expect(
+        spin("one owner delivers shared sample", [&] { return ledger.state().sampleSerial == 1; }),
+        "one owner delivers shared sample");
     const auto requested = ui::cacheMemoryBudgetsFromSettings(settings);
     cache->setByteBudget(requested.previewFrameCacheByteBudget);
     expect(owner.admittedSampleCount() == 1 &&
@@ -493,7 +509,8 @@ void coldForegroundAndSettings() {
     owner.beginShutdown();
     preview.beginShutdown();
     scheduler.beginShutdown();
-    expect(spin([&] { return scheduler.isQuiescent(); }), "cold foreground scheduler retires");
+    expect(spin("cold foreground scheduler retires", [&] { return scheduler.isQuiescent(); }),
+           "cold foreground scheduler retires");
 }
 } // namespace
 // The pressure monitor samples on its own thread; a sample short of the headroom is applied on
@@ -532,7 +549,8 @@ void pressureAppliesOnUiThread() {
     expect(owner.pressureApplications() == 0 && held == 4 * gib,
            "a machine above the headroom applies no pressure");
     taken = 19 * gib; // Another program takes memory: 1 GiB short of the 2 GiB headroom.
-    expect(spin([&] { return owner.pressureApplications() > 0 && held < 4 * gib; }),
+    expect(spin("pressure shrinks a UI-owned cache without waiting for the next process sample",
+                [&] { return owner.pressureApplications() > 0 && held < 4 * gib; }),
            "pressure shrinks a UI-owned cache without waiting for the next process sample");
     const auto settleEnd = std::chrono::steady_clock::now() + 150ms;
     while (std::chrono::steady_clock::now() < settleEnd)
@@ -541,7 +559,8 @@ void pressureAppliesOnUiThread() {
            "the cache gives back the deficit plus the margin, on the UI thread, then holds");
     owner.beginShutdown();
     scheduler.beginShutdown();
-    expect(spin([&] { return scheduler.isQuiescent(); }), "pressure scheduler retires");
+    expect(spin("pressure scheduler retires", [&] { return scheduler.isQuiescent(); }),
+           "pressure scheduler retires");
     ledger.unregisterCache(&held);
 }
 // Evict-on-demand: a processing-phase reclaimer on a worker thread makes the UI-owned pools give
@@ -563,7 +582,8 @@ void reclaimForWorkOnUiThread() {
     std::optional<runtime::MemoryPressureMonitor::Options> noMonitor;
     ui::MemoryBudgetController owner(scheduler, bridge, ledger, [](const auto&) { return sample(); },
                                      nullptr, noMonitor);
-    expect(spin([&] { return owner.admittedSampleCount() >= 1 && !owner.sampleActive(); }),
+    expect(spin("initial sample settles",
+                [&] { return owner.admittedSampleCount() >= 1 && !owner.sampleActive(); }),
            "the initial sample settles");
     const auto samplesBefore = owner.admittedSampleCount();
     auto reclaim = owner.workReclaimer();
@@ -572,7 +592,8 @@ void reclaimForWorkOnUiThread() {
         reclaim(gib / 2); // Coalesced with the first while it is queued.
     });
     worker.join();
-    expect(spin([&] { return owner.reclaimApplications() == 1; }),
+    expect(spin("reclaim is applied once on the UI thread",
+                [&] { return owner.reclaimApplications() == 1; }),
            "the reclaim is applied once on the UI thread");
     expect(held == 3 * gib && appliedOnUi,
            "the pools gave back the shortfall, on the UI thread");
@@ -586,7 +607,8 @@ void reclaimForWorkOnUiThread() {
     expect(held == 3 * gib && owner.reclaimApplications() == 1,
            "a reclaimer kept past shutdown does nothing");
     scheduler.beginShutdown();
-    expect(spin([&] { return scheduler.isQuiescent(); }), "reclaim scheduler retires");
+    expect(spin("reclaim scheduler retires", [&] { return scheduler.isQuiescent(); }),
+           "reclaim scheduler retires");
     ledger.unregisterCache(&held);
 }
 // #411: the RAM-fill benchmark harness wired its own copy of the application's memory model and
@@ -626,7 +648,8 @@ void applicationWiringKeepsUsableCapacity() {
     ui::TaskUiBridge bridge(scheduler);
     std::optional<runtime::MemoryPressureMonitor::Options> noMonitor;
     ui::MemoryBudgetController owner(scheduler, bridge, ledger, cgroup, nullptr, noMonitor);
-    expect(spin([&] { return owner.admittedSampleCount() >= 1 && !owner.sampleActive(); }),
+    expect(spin("initial cgroup sample settles",
+                [&] { return owner.admittedSampleCount() >= 1 && !owner.sampleActive(); }),
            "the initial cgroup sample settles");
     expect(ledger.cacheByteBudget(&held) == 20 * gib,
            "without the application wiring a reusable pool may take the whole OS limit");
@@ -640,10 +663,11 @@ void applicationWiringKeepsUsableCapacity() {
            "the pool fills usable capacity, not the whole limit");
     const auto samples = owner.admittedSampleCount();
     owner.requestSample();
-    expect(spin([&] {
-               return owner.admittedSampleCount() > samples && !owner.sampleActive() &&
-                      policy->usableCapacity().hostReady;
-           }),
+    expect(spin("delivered samples reach the processing policy",
+                [&] {
+                    return owner.admittedSampleCount() > samples && !owner.sampleActive() &&
+                           policy->usableCapacity().hostReady;
+                }),
            "delivered samples reach the processing policy");
     expect(policy->usableCapacity().hostUsableBytes == 10 * gib,
            "usable host capacity is the room in the limit minus the headroom");
@@ -657,7 +681,8 @@ void applicationWiringKeepsUsableCapacity() {
     held = 9 * gib;
     const auto filled = owner.admittedSampleCount();
     owner.requestSample();
-    expect(spin([&] { return owner.admittedSampleCount() > filled && !owner.sampleActive(); }),
+    expect(spin("filled pool is sampled",
+                [&] { return owner.admittedSampleCount() > filled && !owner.sampleActive(); }),
            "the filled pool is sampled");
     const std::uint64_t pixels = 3840ULL * 2160;
     const runtime::GpuProcessingPhaseEnvelope frame{
@@ -676,17 +701,20 @@ void applicationWiringKeepsUsableCapacity() {
                need->domain == render::GpuProcessingPhaseDomain::Host && need->shortfallBytes > 0,
            "a frame that does not fit the free capacity waits on the host");
     // The reclaim runs on this thread and takes a fresh sample at once.
-    expect(spin([&] {
-               return owner.reclaimApplications() == 1 &&
-                      owner.admittedSampleCount() > beforeReclaim && !owner.sampleActive();
-           }) && held <= 9 * gib - need->shortfallBytes,
+    expect(spin("waiting frame's shortfall is evicted from the reusable pool at once",
+                [&] {
+                    return owner.reclaimApplications() == 1 &&
+                           owner.admittedSampleCount() > beforeReclaim && !owner.sampleActive();
+                }) &&
+               held <= 9 * gib - need->shortfallBytes,
            "the waiting frame's shortfall is evicted from the reusable pool at once");
     auto grant = policy->reserve(frame);
     expect(grant.lease != nullptr,
            "the frame is admitted once the eviction is sampled; it does not wait forever");
     const auto admitted = owner.admittedSampleCount();
     owner.requestSample();
-    expect(spin([&] { return owner.admittedSampleCount() > admitted && !owner.sampleActive(); }),
+    expect(spin("admitted work is sampled",
+                [&] { return owner.admittedSampleCount() > admitted && !owner.sampleActive(); }),
            "the admitted work is sampled");
     // The limit still has room beyond the headroom and its margin, but the admitted frame's
     // claims (none of its bytes are allocated yet, so all of them are pending) take it.
@@ -699,7 +727,8 @@ void applicationWiringKeepsUsableCapacity() {
     grant.lease.reset();
     owner.beginShutdown();
     scheduler.beginShutdown();
-    expect(spin([&] { return scheduler.isQuiescent(); }), "wiring scheduler retires");
+    expect(spin("wiring scheduler retires", [&] { return scheduler.isQuiescent(); }),
+           "wiring scheduler retires");
     ledger.unregisterCache(&held);
 }
 int main(int argc, char** argv) {
@@ -712,5 +741,5 @@ int main(int argc, char** argv) {
     sampledPressurePreviewRecovery();
     coldForegroundAndSettings();
     applicationWiringKeepsUsableCapacity();
-    return failures == 0 ? 0 : 1;
+    return failures + test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

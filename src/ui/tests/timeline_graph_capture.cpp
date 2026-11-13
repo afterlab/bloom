@@ -70,14 +70,15 @@ EditorArea* timelineArea(MainWindow& window) {
     return nullptr;
 }
 
-void settle(const int milliseconds = 60) {
-    QTest::qWait(milliseconds);
+// Delivers the queued events (layout, repaint requests); a grab renders synchronously after this.
+void settle() {
+    QCoreApplication::sendPostedEvents();
     QApplication::processEvents();
 }
 
 void sizeArea(MainWindow& window, EditorArea& area, const QSize target) {
     for (int pass = 0; pass < 4; ++pass) {
-        settle(30);
+        settle();
         const QSize delta = target - area.size();
         if (delta.isNull())
             return;
@@ -135,7 +136,7 @@ int run(int argc, char** argv) {
         return 1;
     }
     Q_EMIT area->maximizeRequested(area);
-    settle(80);
+    settle();
     auto& session = fixture.session;
     std::optional<document::LayerId> layer;
     for (const auto& output : session.composition()->graph().layerOutputs())
@@ -230,13 +231,13 @@ int run(int argc, char** argv) {
             std::unique_ptr<QMenu> menu(kit::makeMenu(view));
             view->populateContextMenu(*menu);
             menu->popup(view->mapToGlobal(center.value_or(QPointF()).toPoint()));
-            settle(120);
+            settle();
             QMenu* easing = menu->findChild<QMenu*>(QStringLiteral("graphEasingMenu"));
             if (easing != nullptr) {
                 menu->setActiveAction(easing->menuAction());
                 const QRect row = menu->actionGeometry(easing->menuAction());
                 easing->popup(menu->mapToGlobal(QPoint(row.right(), row.top())));
-                settle(120);
+                settle();
             }
             save(withPopups(*area, {menu.get(), easing}), QStringLiteral("menu-easing"), width);
             if (easing != nullptr)

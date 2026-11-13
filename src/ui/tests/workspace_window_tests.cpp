@@ -4,6 +4,7 @@
 // Viewers, a window's own display transform in the preview cache key, Fit without padding, and
 // (#550) reopening a project on its last viewed composition and pinned targets.
 
+#include "await_qt.hpp"
 #include "window_fixture.hpp"
 
 #include <bloom/ui/context_bar.hpp>
@@ -59,18 +60,11 @@ class Expectations final {
     int failures_ = 0;
 };
 
-void settle(const int milliseconds = 30) {
-    QTest::qWait(milliseconds);
+// Delivers the queued events, including deferred deletes (layout, rebuilt rows, closed windows).
+void settle() {
+    QCoreApplication::sendPostedEvents();
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     QCoreApplication::processEvents();
-}
-
-bool waitFor(const std::function<bool()>& condition, const int milliseconds = 10000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!condition() && timer.elapsed() < milliseconds)
-        QTest::qWait(10);
-    return condition();
 }
 
 EditorArea* areaFor(WorkspaceHost& host, const std::string& editorId) {
@@ -445,11 +439,13 @@ void testPinnedAndFollowingViewers(Expectations& expectations, test::WindowFixtu
                         "the following Viewer shows the newly active composition");
     expectations.expect(windowViewer->boundPreviewForTest().targetCompositionId() == first,
                         "the pinned Viewer keeps showing its composition");
-    expectations.expect(waitFor([&] {
-                            const auto& state = windowViewer->boundPreviewForTest().state();
-                            return state.desiredIdentity &&
-                                   state.desiredIdentity->compositionId == first;
-                        }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "preview requests are for the pinned composition",
+                            [&] {
+                                const auto& state = windowViewer->boundPreviewForTest().state();
+                                return state.desiredIdentity &&
+                                       state.desiredIdentity->compositionId == first;
+                            }),
                         "its preview requests are for the pinned composition");
     expectations.expect(windowViewer->isReferenceOnly() && !mainViewer->isReferenceOnly(),
                         "a Viewer pinned elsewhere is a reference view");
@@ -533,13 +529,16 @@ void testDisplayTransformIdentity(Expectations& expectations, test::WindowFixtur
     expectations.expect(ownKey && mainKey && ownKey->displayName == chosen[0].toStdString() &&
                             ownKey->viewName == chosen[1].toStdString() && !(*ownKey == *mainKey),
                         "the display transform is part of the preview cache key");
-    expectations.expect(waitFor([&] {
-                            const auto& state = own.state();
-                            return state.desiredIdentity &&
-                                   PreviewFrameCacheKey::forIdentity(*state.desiredIdentity)
-                                           .displayName == chosen[0].toStdString();
-                        }),
-                        "and of every request the window's Viewer makes");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "every request the window's Viewer makes is for its pinned composition",
+            [&] {
+                const auto& state = own.state();
+                return state.desiredIdentity &&
+                       PreviewFrameCacheKey::forIdentity(*state.desiredIdentity).displayName ==
+                           chosen[0].toStdString();
+            }),
+        "and of every request the window's Viewer makes");
     expectations.expect(area->editorSessionState().value("displayView").toArray().size() == 2,
                         "the choice is saved with the window's workspace");
     secondary->close();
@@ -570,36 +569,46 @@ void testFitHasNoPadding(Expectations& expectations, test::WindowFixture& fixtur
     auto* mainViewer = viewerIn(*window.workspaceHost());
     std::string detail;
     expectations.expect(mainViewer != nullptr &&
-                            waitFor([&] { return fitTouchesEdges(*mainViewer, detail); }),
+                            bloom::test_support::awaitQtCondition(
+                                "Fit fills a docked Viewer to its limiting edges",
+                                [&] { return fitTouchesEdges(*mainViewer, detail); }),
                         "Fit fills a docked Viewer to its limiting edges: " + detail);
     window.resize(1500, 1100);
-    settle(100);
-    expectations.expect(waitFor([&] { return fitTouchesEdges(*mainViewer, detail); }),
-                        "and stays exact when the Viewer resizes: " + detail);
+    settle();
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("Fit stays exact when the Viewer resizes",
+                                              [&] { return fitTouchesEdges(*mainViewer, detail); }),
+        "and stays exact when the Viewer resizes: " + detail);
 
     auto* secondary = window.openWorkspaceWindow();
     secondary->resize(1100, 500);
-    settle(100);
+    settle();
     auto* windowViewer = viewerIn(*secondary->workspaceHost());
     expectations.expect(windowViewer != nullptr &&
-                            waitFor([&] { return fitTouchesEdges(*windowViewer, detail); }),
+                            bloom::test_support::awaitQtCondition(
+                                "Fit fills a Viewer in a separate window",
+                                [&] { return fitTouchesEdges(*windowViewer, detail); }),
                         "Fit fills a Viewer in a separate window: " + detail);
     secondary->resize(600, 900);
-    settle(100);
-    expectations.expect(waitFor([&] { return fitTouchesEdges(*windowViewer, detail); }),
+    settle();
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "Fit has the other axis limiting after a resize",
+                            [&] { return fitTouchesEdges(*windowViewer, detail); }),
                         "with the other axis limiting after a resize: " + detail);
     secondary->showFullScreen();
-    settle(150);
-    expectations.expect(waitFor([&] { return fitTouchesEdges(*windowViewer, detail); }),
-                        "and full screen: " + detail);
+    settle();
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "Fit is exact in full screen", [&] { return fitTouchesEdges(*windowViewer, detail); }),
+        "and full screen: " + detail);
     if (const auto directory = qEnvironmentVariable("BLOOM_WORKSPACE_WINDOW_CAPTURE");
         !directory.isEmpty()) {
         (void)window.grab().save(directory + QStringLiteral("/main-window.png"));
         secondary->showNormal();
         secondary->resize(1100, 640);
-        settle(200);
+        settle();
         (void)windowViewer->pinToActiveComposition();
-        settle(200);
+        settle();
         (void)secondary->grab().save(directory + QStringLiteral("/secondary-window.png"));
     }
     secondary->close();
@@ -635,7 +644,9 @@ void testReopenLastViewedComposition(Expectations& expectations, test::WindowFix
     const auto open = [&](const std::filesystem::path& path) {
         const int before = opens;
         host.beginOpen(path);
-        return waitFor([&] { return opens > before && !host.isBusy(); }) &&
+        return bloom::test_support::awaitQtCondition(
+                   "reopen of the second project finishes",
+                   [&] { return opens > before && !host.isBusy(); }) &&
                session.composition() != nullptr;
     };
     const auto fileBytes = [](const QString& path) {
@@ -663,8 +674,11 @@ void testReopenLastViewedComposition(Expectations& expectations, test::WindowFix
 
     const auto path = fixture.settingsDirectory.filePath(QStringLiteral("reopen-last.bloom"));
     host.beginSaveAs(path.toStdString());
-    expectations.expect(waitFor([&] { return saves == 1 && !host.isBusy(); }) && !host.isDirty(),
-                        "reopen: the project is saved");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("project save finishes",
+                                              [&] { return saves == 1 && !host.isBusy(); }) &&
+            !host.isDirty(),
+        "reopen: the project is saved");
     const auto savedBytes = fileBytes(path);
     const auto savedRevision = session.snapshot().revision();
     expectations.expect(session.setComposition(first) && session.setComposition(second) &&
@@ -779,7 +793,7 @@ int main(int argc, char** argv) {
         std::cerr << "fixture failed: " << error.what() << '\n';
         return 2;
     }
-    if (expectations.failures() != 0) {
+    if (expectations.failures() + bloom::test_support::awaitFailureCount() != 0) {
         std::cerr << expectations.failures() << " expectation(s) failed\n";
         return 1;
     }

@@ -9,6 +9,7 @@
 // maps the point onto the widget's own window and hands it to Qt's real delivery path, so the
 // receiver is picked by QWidget::childAt() exactly as it is under a live pointer -- which is the
 // only way a hit-testing defect can show up in a test at all.
+#include "await_qt.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -35,7 +36,6 @@
 #include <bloom/ui/timeline_ruler.hpp>
 
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QListView>
 #include <QScrollBar>
@@ -127,11 +127,9 @@ struct Surfaces final {
     ~Surfaces() {
         controller.beginShutdown();
         bridge.beginShutdown();
-        QElapsedTimer timer;
-        timer.start();
-        while (!scheduler.isQuiescent() && timer.elapsed() < 4'000) {
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        }
+        // A destructor cannot return the result; a timeout is still counted by awaitFailureCount().
+        (void)test_support::awaitQtCondition("surface scheduler quiescent",
+                                             [&] { return scheduler.isQuiescent(); });
     }
 
     Surfaces(const Surfaces&) = delete;

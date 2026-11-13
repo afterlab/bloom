@@ -44,9 +44,10 @@ int gFailures = 0;
 QString gDirectory;
 QString gRatio;
 
-void settle(const int ms = 80) {
+// Delivers the queued events (layout, repaint requests); a grab renders synchronously after this.
+void settle() {
+    QCoreApplication::sendPostedEvents();
     QApplication::processEvents();
-    QTest::qWait(ms);
 }
 
 void save(const QImage& image, const QString& name) {
@@ -74,7 +75,7 @@ void sizeArea(MainWindow& window, EditorArea& area, const QSize target) {
         if (delta.isNull())
             return;
         window.resize(window.size() + delta);
-        QTest::qWait(30);
+        settle();
     }
 }
 
@@ -88,7 +89,7 @@ bool run(CompositionSession& session, commands::Transaction&& transaction) {
         std::cerr << '\n';
         ++gFailures;
     }
-    settle(20);
+    settle();
     return result.succeeded();
 }
 
@@ -215,7 +216,7 @@ int capture(int argc, char** argv) {
                     bounds = bounds.isNull() ? card->sceneBoundingRect()
                                              : bounds.united(card->sceneBoundingRect());
             editor->graphView()->frameRect(bounds.adjusted(-60, -60, 60, 60));
-            settle(120);
+            settle();
             save(area->grab().toImage(), QStringLiteral("nodes-path-key-%1").arg(state));
         };
         (void)session.setParameterValue(value, square(60.0), "Path");
@@ -276,14 +277,14 @@ int capture(int argc, char** argv) {
             saveExact(whole.copy(0, whole.height() - strip, whole.width(), strip), name);
         };
         editor->graphView()->frameGraph();
-        settle(120);
+        settle();
         shootFooter(QStringLiteral("701-%1-footer").arg(tag));
         saveExact(area->grab().toImage(), QStringLiteral("701-%1-graph").arg(tag));
         if (auto* button = area->findChild<kit::KButton*>(QStringLiteral("nodeDeleteUnusedButton"))) {
             button->click();
             settle();
             editor->graphView()->frameGraph();
-            settle(120);
+            settle();
             saveExact(area->grab().toImage(), QStringLiteral("701-after-graph"));
         }
         return gFailures == 0 ? 0 : 1;
@@ -309,7 +310,7 @@ int capture(int argc, char** argv) {
         for (const auto& [id, name] : nodes) {
             if (auto* card = editor->graphScene()->findNodeItem(id)) {
                 editor->graphView()->frameRect(card->sceneBoundingRect().adjusted(-50, -50, 50, 50));
-                settle(120);
+                settle();
                 save(area->grab().toImage(), QStringLiteral("nodes-radio-card-%1").arg(name));
             } else {
                 std::cerr << "no card for " << name << '\n';
@@ -321,7 +322,7 @@ int capture(int argc, char** argv) {
         properties.show();
         for (const auto& [id, name] : nodes) {
             session.selectNode(id);
-            settle(120);
+            settle();
             save(properties.grab().toImage(), QStringLiteral("nodes-radio-properties-%1").arg(name));
         }
         return gFailures == 0 ? 0 : 1;
@@ -381,7 +382,7 @@ int capture(int argc, char** argv) {
                     bounds = bounds.isNull() ? card->sceneBoundingRect()
                                              : bounds.united(card->sceneBoundingRect());
             editor->graphView()->frameRect(bounds.adjusted(-60, -60, 60, 60));
-            settle(120);
+            settle();
             save(area->grab().toImage(), QStringLiteral("nodes-path-socket-%1").arg(name));
         }
         return gFailures == 0 ? 0 : 1;
@@ -394,7 +395,7 @@ int capture(int argc, char** argv) {
             sizeArea(*fixture.window, *area, size);
             settle();
             frame();
-            settle(120);
+            settle();
             save(area->grab().toImage(),
                  QStringLiteral("nodes-%1-%2").arg(QLatin1String(state), QLatin1String(name)));
         }
@@ -493,12 +494,12 @@ int capture(int argc, char** argv) {
             ++gFailures;
             continue;
         }
-        settle(20);
+        settle();
         sizeArea(*fixture.window, *area, QSize(900, 1300));
         settle();
         if (auto* card = editor->graphScene()->findNodeItem(*node))
             editor->graphView()->frameRect(card->sceneBoundingRect().adjusted(-40, -40, 40, 40));
-        settle(120);
+        settle();
         auto name = QString::fromLatin1(spec.typeId.data(),
                                         static_cast<qsizetype>(spec.typeId.size()));
         name.replace(QLatin1Char('.'), QLatin1Char('-'));

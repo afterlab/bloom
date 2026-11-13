@@ -1,3 +1,4 @@
+#include "await_qt.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -15,8 +16,8 @@
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
-#include <bloom/ui/composition_editors.hpp>
 #include <bloom/ui/audio_device_control.hpp>
+#include <bloom/ui/composition_editors.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -95,20 +96,6 @@ class Expectations final {
   private:
     int failures_ = 0;
 };
-
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 4'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate)) {
-            return true;
-        }
-        std::this_thread::yield();
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return std::invoke(predicate);
-}
 
 bloom::runtime::TaskSchedulerConfig testSchedulerConfig() {
     return {.cpuWorkerCount = 1,
@@ -248,7 +235,9 @@ struct TestAudioOwner final {
 void finishFixture(SessionFixture& fixture, Expectations& expectations) {
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "playback fixture reaches asynchronous scheduler quiescence",
+                            [&] { return fixture.scheduler.isQuiescent(); }),
                         "the playback fixture reaches asynchronous scheduler quiescence");
 }
 
@@ -368,11 +357,13 @@ void testCachedFramesUseElapsedClock(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Cached Playback Clock", time(4)));
     for (const auto index : {5, 6, 12, 0}) {
         (void)fixture.session.setCurrentTime(time(index, 25));
-        expectations.expect(waitUntil([&] {
-                                return fixture.controller.state().freshness ==
-                                       ui::FrameFreshness::Current;
-                            }),
-                            "seed genuine cached exact-time product");
+        expectations.expect(
+            bloom::test_support::awaitQtCondition("seed genuine cached exact-time product",
+                                                  [&] {
+                                                      return fixture.controller.state().freshness ==
+                                                             ui::FrameFreshness::Current;
+                                                  }),
+            "seed genuine cached exact-time product");
     }
     ManualClock clock;
     ui::PlaybackController playback(
@@ -463,8 +454,10 @@ void testAudioMasterFloorLoopAndDisableReanchor(Expectations& expectations) {
         {document::NodeId::fromRaw(1), document::AssetId::fromRaw(1), time(0), time(10)});
     playback.setAudioMix(std::move(mix), {audio::AudioClip{nullptr, time(0)}});
     playback.play();
-    expectations.expect(waitUntil([&] { return playback.audioClockActive(); }),
-                        "audio master starts on the device worker");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("audio master starts on the device worker",
+                                              [&] { return playback.audioClockActive(); }),
+        "audio master starts on the device worker");
     clock.advance(20s);
     playback.tick();
     expectations.expect(fixture.session.currentTime() == time(0),
@@ -485,8 +478,10 @@ void testAudioMasterFloorLoopAndDisableReanchor(Expectations& expectations) {
     republished.clips.push_back(
         {document::NodeId::fromRaw(1), document::AssetId::fromRaw(1), time(0), time(10)});
     playback.setAudioMix(std::move(republished), {audio::AudioClip{nullptr, time(0)}});
-    expectations.expect(waitUntil([&] { return audioOwner.control.isIdle(); }),
-                        "looped audio mix replacement reaches worker");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("looped audio mix replacement reaches worker",
+                                              [&] { return audioOwner.control.isIdle(); }),
+        "looped audio mix replacement reaches worker");
     expectations.expect(playback.audioClockActive() && engine->isPlaying() &&
                             audioOwner.control.positionNow() >= time(16, 5),
                         "mix-only completion preserves the unwrapped audio master after a loop");
@@ -502,8 +497,10 @@ void testAudioMasterFloorLoopAndDisableReanchor(Expectations& expectations) {
                         "nonloop audio stops exactly on work-area last frame");
     playback.setLooping(true);
     playback.play();
-    expectations.expect(waitUntil([&] { return playback.audioClockActive(); }),
-                        "resumed audio master starts on the device worker");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("resumed audio master starts on the device worker",
+                                              [&] { return playback.audioClockActive(); }),
+        "resumed audio master starts on the device worker");
     expectations.expect(!engine->renderForTesting(80), "audio resumes from last-frame origin");
     playback.tick();
     expectations.expect(fixture.session.currentTime() == time(1, 25),
@@ -561,10 +558,11 @@ void testRepeatedEmptyMixAndDelayedStopPreserveWallClock(Expectations& expectati
     playback.setAudioDeviceControl(&audioOwner.control);
     playback.play();
     playback.setAudioMix({}, {});
-    const bool held = waitUntil([&] {
-        const std::lock_guard lock(gate->mutex);
-        return gate->entered;
-    });
+    const bool held = bloom::test_support::awaitQtCondition(
+        "repeated empty mixes preserve cumulative wall time", [&] {
+            const std::lock_guard lock(gate->mutex);
+            return gate->entered;
+        });
     for (int update = 1; update <= 4; ++update) {
         clock.advance(20ms);
         playback.setAudioMix({}, {});
@@ -577,7 +575,10 @@ void testRepeatedEmptyMixAndDelayedStopPreserveWallClock(Expectations& expectati
         gate->open = true;
     }
     gate->ready.notify_all();
-    expectations.expect(held && waitUntil([&] { return audioOwner.control.isIdle(); }),
+    expectations.expect(held &&
+                            bloom::test_support::awaitQtCondition(
+                                "delayed stop completion reaches an already wall-driven transport",
+                                [&] { return audioOwner.control.isIdle(); }),
                         "delayed stop completion reaches an already wall-driven transport");
     clock.advance(40ms);
     playback.tick();
@@ -636,10 +637,11 @@ void testDelayedAudioStartFailureKeepsWallTransport(Expectations& expectations) 
     playback.setAudioMix(std::move(mix),
                          {media::audio::playback::AudioClip{nullptr, time(0)}});
     playback.play();
-    const bool held = waitUntil([&] {
-        const std::lock_guard lock(gate->mutex);
-        return gate->entered;
-    });
+    const bool held = bloom::test_support::awaitQtCondition(
+        "held device start leaves wall playback responsive", [&] {
+            const std::lock_guard lock(gate->mutex);
+            return gate->entered;
+        });
     clock.advance(500ms);
     playback.tick();
     const auto beforeRelease = fixture.session.currentTime();
@@ -650,10 +652,11 @@ void testDelayedAudioStartFailureKeepsWallTransport(Expectations& expectations) 
     gate->ready.notify_all();
     expectations.expect(held && beforeRelease == time(12, 25),
                         "held device start leaves wall playback responsive");
-    expectations.expect(waitUntil([&] {
-                            return gate->starts.load() >= 2 && audioOwner.control.isIdle();
-                        }),
-                        "delayed first start triggers one alignment retry and typed failure");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "delayed first start triggers one alignment retry and typed failure",
+            [&] { return gate->starts.load() >= 2 && audioOwner.control.isIdle(); }),
+        "delayed first start triggers one alignment retry and typed failure");
     expectations.expect(playback.state() == ui::PlaybackState::Playing &&
                             !playback.audioClockActive() &&
                             fixture.session.currentTime() == beforeRelease,
@@ -709,10 +712,11 @@ void testSecondLateAlignmentStopsAudioAndKeepsWallTransport(Expectations& expect
                          {media::audio::playback::AudioClip{nullptr, time(0)}});
     playback.play();
     const auto entered = [&](const int count) {
-        return waitUntil([&] {
-            const std::lock_guard lock(gate->mutex);
-            return gate->entered >= count;
-        });
+        return bloom::test_support::awaitQtCondition(
+            "audio start gate entered the requested number of times", [&] {
+                const std::lock_guard lock(gate->mutex);
+                return gate->entered >= count;
+            });
     };
     const auto release = [&](const int count) {
         {
@@ -732,11 +736,11 @@ void testSecondLateAlignmentStopsAudioAndKeepsWallTransport(Expectations& expect
     release(2);
     expectations.expect(firstHeld && secondHeld && beforeRelease == time(1),
                         "both delayed starts leave the wall clock advancing");
-    expectations.expect(waitUntil([&] {
-                            return audioOwner.control.isIdle() &&
-                                   !audioOwner.control.isPlaying();
-                        }),
-                        "second late alignment stops the device");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "second late alignment stops the device",
+            [&] { return audioOwner.control.isIdle() && !audioOwner.control.isPlaying(); }),
+        "second late alignment stops the device");
     expectations.expect(playback.state() == ui::PlaybackState::Playing &&
                             !playback.audioClockActive() &&
                             fixture.session.currentTime() == beforeRelease,
@@ -775,7 +779,9 @@ void testSharedSubframeOriginAndNonOneAudioRates(Expectations& expectations) {
             }
             playback.play();
             if (useAudio)
-                expectations.expect(waitUntil([&] { return playback.audioClockActive(); }),
+                expectations.expect(bloom::test_support::awaitQtCondition(
+                                        "subframe audio worker start delivered",
+                                        [&] { return playback.audioClockActive(); }),
                                     "subframe audio worker start delivered");
             expectations.expect(fixture.session.currentTime() == origin,
                                 "play preserves immediate exact subframe session time");
@@ -797,7 +803,9 @@ void testSharedSubframeOriginAndNonOneAudioRates(Expectations& expectations) {
             (void)fixture.session.setCurrentTime(origin);
             playback.play();
             if (useAudio)
-                expectations.expect(waitUntil([&] { return playback.audioClockActive(); }),
+                expectations.expect(bloom::test_support::awaitQtCondition(
+                                        "subframe audio worker resume delivered",
+                                        [&] { return playback.audioClockActive(); }),
                                     "subframe audio worker resume delivered");
             clock.advance(40ms);
             if (engine)
@@ -811,11 +819,13 @@ void testSharedSubframeOriginAndNonOneAudioRates(Expectations& expectations) {
     }
     for (const auto speed : {2.0, 0.5}) {
         SessionFixture fixture(makeTestProject("Non-one audio", time(4)));
-        expectations.expect(waitUntil([&] {
-                                return fixture.controller.state().freshness ==
-                                       ui::FrameFreshness::Current;
-                            }),
-                            "non-one fixture opening is ready");
+        expectations.expect(
+            bloom::test_support::awaitQtCondition("non-one fixture opening is ready",
+                                                  [&] {
+                                                      return fixture.controller.state().freshness ==
+                                                             ui::FrameFreshness::Current;
+                                                  }),
+            "non-one fixture opening is ready");
         ManualClock clock;
         auto owned = std::make_unique<audio::AudioEngine>(
             std::make_unique<audio::NullBackend>(), audio::AudioEngine::Config{1000, 2, 4096});
@@ -830,8 +840,10 @@ void testSharedSubframeOriginAndNonOneAudioRates(Expectations& expectations) {
             {document::NodeId::fromRaw(1), document::AssetId::fromRaw(1), time(0), time(10)});
         playback.setAudioMix(std::move(mix), {audio::AudioClip{nullptr, time(0)}});
         playback.play();
-        expectations.expect(waitUntil([&] { return playback.audioClockActive(); }),
-                            "non-one audio worker start delivered");
+        expectations.expect(
+            bloom::test_support::awaitQtCondition("non-one audio worker start delivered",
+                                                  [&] { return playback.audioClockActive(); }),
+            "non-one audio worker start delivered");
         const auto wallFrames = speed == 2.0 ? std::size_t{20} : std::size_t{80};
         const auto budget = speed == 2.0 ? 20ms : 80ms;
         expectations.expect(!engine->renderForTesting(wallFrames - 1),
@@ -1033,11 +1045,11 @@ void testLiveWorkAreaEditsReanchorSafely(Expectations& expectations) {
 void testNonLoopingEndKeepsLastFrameAndCountsInRangeDrops(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Playback End Accounting", time(4)));
-    expectations.expect(waitUntil([&] {
-                            return fixture.controller.state().activity !=
-                                   ui::PreviewActivity::Rendering;
-                        }),
-                        "the initial preview settles before playback");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "initial preview settles before playback",
+            [&] { return fixture.controller.state().activity != ui::PreviewActivity::Rendering; }),
+        "the initial preview settles before playback");
     ManualClock clock;
     ui::PlaybackController playback(
         fixture.session, fixture.controller, [&clock] { return clock.now; }, 16ms);
@@ -1052,12 +1064,14 @@ void testNonLoopingEndKeepsLastFrameAndCountsInRangeDrops(Expectations& expectat
     expectations.expect(fixture.controller.droppedFrameCount() == 98,
                         "only the skipped frames inside the range are dropped, and the final "
                         "submitted frame is not cancelled and counted");
-    expectations.expect(waitUntil([&] {
-                            const auto state = fixture.controller.state();
-                            return state.freshness == ui::FrameFreshness::Current &&
-                                   state.frame &&
-                                   state.frame->desiredIdentity().time == lastTime;
-                        }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "last submitted frame publishes as the Current product",
+                            [&] {
+                                const auto state = fixture.controller.state();
+                                return state.freshness == ui::FrameFreshness::Current &&
+                                       state.frame &&
+                                       state.frame->desiredIdentity().time == lastTime;
+                            }),
                         "the last submitted frame publishes as the Current product");
     expectations.expect(fixture.controller.droppedFrameCount() == 98,
                         "completing the kept frame adds no dropped count");
@@ -1072,11 +1086,11 @@ void testNonLoopingEndKeepsLastFrameAndCountsInRangeDrops(Expectations& expectat
 void testSlowPlaybackStillSubmitsWhenIdle(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Slow Playback Admission", time(4)));
-    expectations.expect(waitUntil([&] {
-                            return fixture.controller.state().activity !=
-                                   ui::PreviewActivity::Rendering;
-                        }),
-                        "the initial preview reaches a terminal activity before playback");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "initial preview reaches a terminal activity before playback",
+            [&] { return fixture.controller.state().activity != ui::PreviewActivity::Rendering; }),
+        "the initial preview reaches a terminal activity before playback");
 
     const auto identity = fixture.controller.state().desiredIdentity;
     expectations.expect(identity.has_value(), "the initial preview published its identity");
@@ -1100,11 +1114,11 @@ void testSlowPlaybackStillSubmitsWhenIdle(Expectations& expectations) {
     expectations.expect(first.activity == ui::PreviewActivity::Rendering,
                         "a slow idle playback tick still submits a frame instead of starving");
 
-    expectations.expect(waitUntil([&] {
-                            return fixture.controller.state().activity !=
-                                   ui::PreviewActivity::Rendering;
-                        }),
-                        "the slow playback frame reaches a terminal activity");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "slow playback frame reaches a terminal activity",
+            [&] { return fixture.controller.state().activity != ui::PreviewActivity::Rendering; }),
+        "the slow playback frame reaches a terminal activity");
 
     // Slow but admitted: the cold frame still enters the RAM cache, so a later pass over the range
     // becomes cached hits rather than starving again.
@@ -1382,7 +1396,9 @@ void testPendingDeadlineRetainsIntentAndCountsLateOnce(Expectations& expectation
     };
     ui::CompositionPreviewController controller(session, scheduler, bridge, prepare);
     expectations.expect(
-        waitUntil([&] { return controller.state().freshness == ui::FrameFreshness::Current; }),
+        bloom::test_support::awaitQtCondition(
+            "deadline fixture opening frame is ready",
+            [&] { return controller.state().freshness == ui::FrameFreshness::Current; }),
         "deadline fixture opening frame is ready");
     ManualClock clock;
     ui::PlaybackController playback(session, controller, [&clock] { return clock.now; });
@@ -1394,25 +1410,34 @@ void testPendingDeadlineRetainsIntentAndCountsLateOnce(Expectations& expectation
     const auto active = ui::CompositionPreviewDeadlineTestAccess::active(controller);
     expectations.expect(active && *active >= before + 40ms && *active <= after + 40ms,
                         "25fps intent has40ms rational budget independent of16ms wake cap");
-    expectations.expect(waitUntil([&] { return first.entered(); }), "first producer held");
+    expectations.expect(bloom::test_support::awaitQtCondition("first producer held",
+                                                              [&] { return first.entered(); }),
+                        "first producer held");
     clock.advance(40ms);
     playback.tick();
     const auto captured = ui::CompositionPreviewDeadlineTestAccess::pending(controller);
     expectations.expect(captured.has_value(), "newest pending intent captures absolute deadline");
-    expectations.expect(captured &&
-                            waitUntil([&] { return std::chrono::steady_clock::now() > *captured; }),
-                        "held producer lasts beyond actual rational frame deadline without sleeps");
+    expectations.expect(
+        captured && bloom::test_support::awaitQtCondition(
+                        "held producer lasts beyond actual rational frame deadline without sleeps",
+                        [&] { return std::chrono::steady_clock::now() > *captured; }),
+        "held producer lasts beyond actual rational frame deadline without sleeps");
     first.release();
-    expectations.expect(waitUntil([&] { return second.entered(); }),
-                        "completion admits newest pending producer once");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("completion admits newest pending producer once",
+                                              [&] { return second.entered(); }),
+        "completion admits newest pending producer once");
     expectations.expect(ui::CompositionPreviewDeadlineTestAccess::active(controller) == captured,
                         "pending deadline survives queue retirement without rebasing at submit");
     second.release();
-    expectations.expect(waitUntil([&] {
-                            return controller.state().freshness == ui::FrameFreshness::Current &&
-                                   controller.state().frame->desiredIdentity().time == time(2, 25);
-                        }),
-                        "late clean current product remains useful while deadline is accounting");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "late clean current product remains useful while deadline is accounting",
+            [&] {
+                return controller.state().freshness == ui::FrameFreshness::Current &&
+                       controller.state().frame->desiredIdentity().time == time(2, 25);
+            }),
+        "late clean current product remains useful while deadline is accounting");
     expectations.expect(controller.droppedFrameCount() == 2,
                         "superseded first ask and late second delivery each count exactly once");
     bridge.wake();
@@ -1421,7 +1446,8 @@ void testPendingDeadlineRetainsIntentAndCountsLateOnce(Expectations& expectation
     playback.pause();
     controller.beginShutdown();
     bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "deadline fixture drains", [&] { return scheduler.isQuiescent(); }),
                         "deadline fixture drains");
 }
 
@@ -1463,7 +1489,9 @@ void testIntegrationPlaybackCoalescesWhileForegroundGateIsBusy(Expectations& exp
                             context);
         });
 
-    expectations.expect(waitUntil([&] { return firstRequest.entered(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "controller's own initial preview request enters preparation and ",
+                            [&] { return firstRequest.entered(); }),
                         "the controller's own initial preview request enters preparation and "
                         "gates as the active request");
     expectations.expect(scheduler.snapshots().size() == 1,
@@ -1483,11 +1511,14 @@ void testIntegrationPlaybackCoalescesWhileForegroundGateIsBusy(Expectations& exp
 
     firstRequest.release();
     expectations.expect(
-        waitUntil([&] {
-            return controller.state().freshness == ui::FrameFreshness::Current &&
-                   controller.state().frame &&
-                   controller.state().frame->desiredIdentity().requestGeneration == tickGeneration;
-        }),
+        bloom::test_support::awaitQtCondition(
+            "one newest playback intent is delivered after cancelled foreground work drains",
+            [&] {
+                return controller.state().freshness == ui::FrameFreshness::Current &&
+                       controller.state().frame &&
+                       controller.state().frame->desiredIdentity().requestGeneration ==
+                           tickGeneration;
+            }),
         "the one newest playback intent is delivered after cancelled foreground work drains");
     const auto tickSnapshot = snapshotForGeneration(scheduler, tickGeneration);
     expectations.expect(tickSnapshot.has_value() && invocationCount.load() == 2 &&
@@ -1500,7 +1531,9 @@ void testIntegrationPlaybackCoalescesWhileForegroundGateIsBusy(Expectations& exp
     playback.pause();
     controller.beginShutdown();
     bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "interactive-gate fixture reaches asynchronous scheduler quiescence",
+                            [&] { return scheduler.isQuiescent(); }),
                         "the interactive-gate fixture reaches asynchronous scheduler quiescence");
 }
 
@@ -2012,11 +2045,13 @@ void testRealClockProof(Expectations& expectations) {
         fixtures[index] = std::make_unique<SessionFixture>(
             document::makeNewProject("Real clock", "Main", time(120), testFormat(p, q)), 100ms);
         auto& fixture = *fixtures[index];
-        expectations.expect(waitUntil([&] {
-                                return fixture.controller.state().freshness ==
-                                       ui::FrameFreshness::Current;
-                            }),
-                            "clock proof opening product is ready");
+        expectations.expect(
+            bloom::test_support::awaitQtCondition("clock proof opening product is ready",
+                                                  [&] {
+                                                      return fixture.controller.state().freshness ==
+                                                             ui::FrameFreshness::Current;
+                                                  }),
+            "clock proof opening product is ready");
         transports[index] = std::make_unique<ui::PlaybackController>(
             fixture.session, fixture.controller, [&, index] {
                 auto& sample = samples[index];
@@ -2130,7 +2165,7 @@ int main(int argc, char** argv) try {
     Expectations expectations;
     if (argc == 2 && std::string_view(argv[1]) == "--real-clock-proof") {
         testRealClockProof(expectations);
-        return expectations.failures() == 0 ? 0 : 1;
+        return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
     }
     testWorkAreaLoop(expectations);
     testPlaybackWithoutAnOutputNodeIsRefused(expectations);
@@ -2163,7 +2198,7 @@ int main(int argc, char** argv) try {
     testFrameStepShortcutsMoveTimeAndTextEntryFocusWins(expectations);
     testArrowKeysOnLayerStackStillNavigateAndStepIsSuppressed(expectations);
     testTimeReadoutFormatsFrameExactTimeAndResetsOnCompositionSwitch(expectations);
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 } catch (const std::exception& error) {
     std::cerr << "FAIL: playback regression threw: " << error.what() << '\n';
     return 1;

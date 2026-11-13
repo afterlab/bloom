@@ -387,10 +387,10 @@ void testBinding() {
         expect(moved.ok() && !ram.isCaching(), "Stop ends a RAM preview that is caching");
         ram.beginShutdown();
         // Let the cancelled run's tasks settle before the controller goes.
-        for (int spin = 0; spin < 400 && !fixture.scheduler.isQuiescent(); ++spin) {
-            QCoreApplication::processEvents();
-            QThread::msleep(5);
-        }
+        expect(
+            bloom::test_support::awaitQtCondition("scheduler quiescent after the cancelled run",
+                                                  [&] { return fixture.scheduler.isQuiescent(); }),
+            "the cancelled run's tasks settle");
         binding.setRamPreview(nullptr);
     }
 
@@ -626,7 +626,10 @@ void testBinding() {
                        busy.message.find("Its buttons") != std::string::npos,
                    "and the refusal describes the dialog");
             dialog->close();
-            QTest::qWait(50);
+            expect(bloom::test_support::awaitQtCondition(
+                       "the failed-open dialog closes",
+                       [] { return QApplication::activeModalWidget() == nullptr; }),
+                   "the failed-open dialog closes");
         }
     }
 

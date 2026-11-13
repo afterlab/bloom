@@ -3,6 +3,7 @@
 // across composition switches, Viewer re-creation and project reopen
 // (docs/architecture/color-management.md, "Viewer display/view and look selection").
 
+#include "await_qt.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/document.hpp>
@@ -110,10 +111,9 @@ struct Fixture final {
     ~Fixture() {
         controller.beginShutdown();
         bridge.beginShutdown();
-        QElapsedTimer timer;
-        timer.start();
-        while (!scheduler.isQuiescent() && timer.elapsed() < 4'000)
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        // A destructor cannot return the result; a timeout is counted by awaitFailureCount().
+        (void)bloom::test_support::awaitQtCondition("display view scheduler quiescent",
+                                                    [&] { return scheduler.isQuiescent(); });
     }
 };
 
@@ -263,7 +263,7 @@ int main(int argc, char** argv) {
     testAcesStartsUntoneMappedAndRemembersInSession();
     testSavedProjectRemembersAcrossReopen(projects);
     testSaveAsCarriesTheChoice(projects);
-    if (failures == 0)
+    if (failures + bloom::test_support::awaitFailureCount() == 0)
         std::cout << "viewer display/view: all checks passed\n";
-    return failures == 0 ? 0 : 1;
+    return failures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

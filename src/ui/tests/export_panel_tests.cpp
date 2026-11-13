@@ -5,6 +5,7 @@
 // Assets, the Current Render strip, Details…, plain words everywhere, and the narrow layout.
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
 #include "asset_drop.hpp"
+#include "await_qt.hpp"
 #include "export_job_details.hpp"
 #include "export_job_lines.hpp"
 #include "export_output_module_dialog.hpp"
@@ -46,12 +47,11 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QDir>
-#include <QElapsedTimer>
-#include <QFile>
-#include <QGuiApplication>
 #include <QDragEnterEvent>
 #include <QDragLeaveEvent>
 #include <QDropEvent>
+#include <QFile>
+#include <QGuiApplication>
 #include <QHeaderView>
 #include <QImage>
 #include <QLabel>
@@ -249,7 +249,8 @@ void adapterTests(TestContext& context) {
     rig.active = false;
     rig.port.raise(host::ExportJobFailed{.job = document::ExportJobId::fromRaw(2),
                                          .reason = {.reason = "Disk full"}});
-    QTest::qWait(120);
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     rig.adapter->drain();
     context.expect(rig.player->played.size() == 2 &&
                        rig.player->played[1] == FeedbackSound::RenderFailed,
@@ -257,7 +258,8 @@ void adapterTests(TestContext& context) {
     context.expect(rig.notifier->posted.size() == 1 && rig.notifier->posted[0].failure,
                    "a failure while Bloom is inactive posts a system notification");
     rig.port.raise(host::ExportQueueDrained{.succeeded = 1, .failed = 1});
-    QTest::qWait(120);
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     rig.adapter->drain();
     context.expect(rig.player->played.size() == 2, "a drained queue makes no second sound");
     // The same events are never announced twice.
@@ -292,10 +294,9 @@ void jobsLink(TestContext& context) {
         handles.push_back(std::move(submitted.handle));
     }
     bridge.wake();
-    QElapsedTimer timer;
-    timer.start();
-    while (model.rowCount() != 1 && timer.elapsed() < 3000)
-        QTest::qWait(10);
+    context.expect(bloom::test_support::awaitQtCondition("the export run appears as one task row",
+                                                         [&] { return model.rowCount() == 1; }),
+                   "one export run is one row, however many tasks it has");
     context.expect(model.rowCount() == 1, "one export run is one row, however many tasks it has");
     if (model.rowCount() == 1) {
         const auto index = model.index(0, TaskMonitorModel::JobColumn);
@@ -311,9 +312,9 @@ void jobsLink(TestContext& context) {
     }
     release = true;
     bridge.beginShutdown();
-    timer.restart();
-    while (!scheduler.isQuiescent() && timer.elapsed() < 5000)
-        QTest::qWait(10);
+    context.expect(bloom::test_support::awaitQtCondition("scheduler quiescent after the jobs link",
+                                                         [&] { return scheduler.isQuiescent(); }),
+                   "the jobs-link scheduler reaches quiescence");
 }
 
 void addingRevealsAndSelects(TestContext& context) {
@@ -534,11 +535,10 @@ void dropManyFromAssets(TestContext& context) {
         return;
     (void)session.setComposition(comps[0]);
     controller.importFiles({directory.filePath("still.png")}, std::nullopt);
-    QElapsedTimer timer;
-    timer.start();
-    while (session.snapshot().project().assets().empty() && timer.elapsed() < 20000)
-        QTest::qWait(10);
-    context.expect(!session.snapshot().project().assets().empty(), "the footage is imported");
+    context.expect(bloom::test_support::awaitQtCondition(
+                       "the footage import adds an asset",
+                       [&] { return !session.snapshot().project().assets().empty(); }),
+                   "the footage is imported");
     if (session.snapshot().project().assets().empty())
         return;
     const auto asset = session.snapshot().project().assets().front().id;
@@ -659,9 +659,9 @@ void dropManyFromAssets(TestContext& context) {
         context.expect(!editor->dropIndicatorShown(), "the line goes away after the drop");
     }
     bridge.beginShutdown();
-    timer.restart();
-    while (!scheduler.isQuiescent() && timer.elapsed() < 5000)
-        QTest::qWait(10);
+    context.expect(bloom::test_support::awaitQtCondition("scheduler quiescent after the drop test",
+                                                         [&] { return scheduler.isQuiescent(); }),
+                   "the drop-test scheduler reaches quiescence");
 }
 
 
@@ -996,10 +996,10 @@ void saveAsPreset(TestContext& context) {
         auto real = host::ExportPresetCatalogue::create({.userDataDirectory = store, .initialEncoders = {}});
         const auto before = real->snapshot()->revision;
         real->loadUserPresets(scheduler);
-        QElapsedTimer timer;
-        timer.start();
-        while (real->snapshot()->revision == before && timer.elapsed() < 10000)
-            QTest::qWait(5);
+        context.expect(bloom::test_support::awaitQtCondition(
+                           "the user presets load into the catalogue",
+                           [&] { return real->snapshot()->revision != before; }),
+                       "the real catalogue loads its user presets");
         rig.port.presets = real;
         dialog = rig.editor->openOutputModule(J(1), O(12));
         QApplication::processEvents();
@@ -1023,16 +1023,14 @@ void saveAsPreset(TestContext& context) {
         };
         // Read once per turn and judged on that reading: the store replaces its file, so a second
         // look right after a successful one can meet the file while it is being replaced.
-        timer.restart();
-        bool landed = written();
-        while (!landed && timer.elapsed() < 20000) {
-            QTest::qWait(5);
-            landed = written();
-        }
-        context.expect(landed, "the store file holds the saved preset");
+        context.expect(bloom::test_support::awaitQtCondition("the preset store file is written",
+                                                             [&] { return written(); }),
+                       "the store file holds the saved preset");
         scheduler.beginShutdown();
-        while (!scheduler.isQuiescent())
-            QTest::qWait(1);
+        context.expect(bloom::test_support::awaitQtCondition(
+                           "scheduler quiescent after the preset store write",
+                           [&] { return scheduler.isQuiescent(); }),
+                       "the catalogue scheduler reaches quiescence");
     }
     runtime::TaskScheduler second;
     auto reloaded = host::ExportPresetCatalogue::create({.userDataDirectory = store, .initialEncoders = {}});
@@ -1043,18 +1041,19 @@ void saveAsPreset(TestContext& context) {
                 return &preset;
         return nullptr;
     };
-    QElapsedTimer timer;
-    timer.start();
-    while (findSaved(*reloaded->snapshot()) == nullptr && timer.elapsed() < 10000)
-        QTest::qWait(5);
+    context.expect(bloom::test_support::awaitQtCondition(
+                       "the reloaded catalogue lists the saved preset",
+                       [&] { return findSaved(*reloaded->snapshot()) != nullptr; }),
+                   "the reloaded catalogue lists the saved preset");
     const auto snapshot = reloaded->snapshot();
     const auto* persisted = findSaved(*snapshot);
     context.expect(persisted != nullptr && persisted->category == host::ExportPresetCategory::User &&
                        persisted->settings.format == document::ExportFormat::ProResMov,
                    "the saved preset persists across a catalogue reload");
     second.beginShutdown();
-    while (!second.isQuiescent())
-        QTest::qWait(1);
+    context.expect(bloom::test_support::awaitQtCondition("reload scheduler quiescent",
+                                                         [&] { return second.isQuiescent(); }),
+                   "the reload scheduler reaches quiescence");
 
     // Without a store the catalogue refuses, and the dialog says so under Format.
     auto none = host::ExportPresetCatalogue::create({.userDataDirectory = std::nullopt, .initialEncoders = {}});
@@ -1741,5 +1740,5 @@ int main(int argc, char** argv) {
     addingRevealsAndSelects(context);
     editsAreUndoable(context);
     menusAndAssets(context);
-    return context.ok ? 0 : 1;
+    return context.ok && bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

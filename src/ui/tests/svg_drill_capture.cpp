@@ -3,6 +3,7 @@
 // editing on a shape whose path is keyed, and the Break Apart offer a one-layer SVG makes. Writes
 // PNGs to the directory given as the first argument; the scale factor is the environment's
 // QT_SCALE_FACTOR. Not a ctest.
+#include "await_qt.hpp"
 #include "window_fixture.hpp"
 
 #include <QDir>
@@ -131,9 +132,9 @@ int main(int argc, char** argv) {
             throw std::runtime_error("could not write a capture");
     };
     const auto settle = [] {
-        for (int pass = 0; pass < 10; ++pass) {
+        for (int pass = 0; pass < 3; ++pass) {
+            QCoreApplication::sendPostedEvents();
             QCoreApplication::processEvents();
-            QTest::qWait(60);
         }
     };
     try {
@@ -152,15 +153,15 @@ int main(int argc, char** argv) {
         if (viewer == nullptr)
             throw std::runtime_error("the window has no Viewer");
         const auto viewerReady = [&] {
-            for (int pass = 0; pass < 200; ++pass) {
-                const auto state = viewer->displayedPreviewState();
-                if (state.frame != nullptr &&
-                    state.frame->desiredIdentity().time == session.currentTime() &&
-                    state.frame->desiredIdentity().isolation == session.viewerLevel().groups &&
-                    viewer->mappingForTest().has_value())
-                    break;
-                QTest::qWait(25);
-            }
+            if (!bloom::test_support::awaitQtCondition("Viewer shows the current frame", [&] {
+                    const auto state = viewer->displayedPreviewState();
+                    return state.frame != nullptr &&
+                           state.frame->desiredIdentity().time == session.currentTime() &&
+                           state.frame->desiredIdentity().isolation ==
+                               session.viewerLevel().groups &&
+                           viewer->mappingForTest().has_value();
+                }))
+                throw std::runtime_error("the Viewer did not show the current frame");
             settle();
         };
         const auto& composition = *session.composition();
@@ -219,20 +220,22 @@ int main(int argc, char** argv) {
         };
         mouse(QEvent::MouseButtonPress, Qt::LeftButton);
         mouse(QEvent::MouseButtonRelease, Qt::NoButton);
-        QTest::qWait(30);
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents();
         mouse(QEvent::MouseButtonDblClick, Qt::LeftButton);
         mouse(QEvent::MouseButtonRelease, Qt::NoButton);
         ui::kit::KDialog* offer = nullptr;
-        for (int pass = 0; pass < 200 && offer == nullptr; ++pass) {
-            for (auto* widget : QApplication::topLevelWidgets())
-                if (auto* dialog = qobject_cast<ui::kit::KDialog*>(widget);
-                    dialog != nullptr &&
-                    dialog->objectName() == QStringLiteral("viewerBreakApartOffer") &&
-                    dialog->isVisible())
-                    offer = dialog;
-            QTest::qWait(25);
-        }
-        if (offer == nullptr)
+        const bool offerOpened =
+            bloom::test_support::awaitQtCondition("Break Apart offer opens", [&] {
+                for (auto* widget : QApplication::topLevelWidgets())
+                    if (auto* dialog = qobject_cast<ui::kit::KDialog*>(widget);
+                        dialog != nullptr &&
+                        dialog->objectName() == QStringLiteral("viewerBreakApartOffer") &&
+                        dialog->isVisible())
+                        offer = dialog;
+                return offer != nullptr;
+            });
+        if (!offerOpened || offer == nullptr)
             throw std::runtime_error("the Break Apart offer did not open");
         settle();
         save(*offer, "drill-break-apart-offer");

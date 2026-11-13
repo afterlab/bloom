@@ -42,10 +42,12 @@ QString gDirectory;
 QString gPhase;
 int gFailures = 0;
 
-void settle(const int ms = 60) {
-    QApplication::processEvents();
-    QTest::qWait(ms);
-    QApplication::processEvents();
+// Delivers everything already queued (layout, polish, deferred updates) until it is quiet.
+void settle() {
+    for (int pass = 0; pass < 3; ++pass) {
+        QCoreApplication::sendPostedEvents();
+        QApplication::processEvents();
+    }
 }
 
 void save(const QImage& image, const char* issue, const QString& name) {
@@ -95,10 +97,10 @@ std::optional<document::LayerId> logoLayer(test::WindowFixture& f) {
 void captureWindow() {
     const auto svg = writeSvg();
     test::WindowFixture fixture([&](test::WindowFixture& f) { importSvgLayer(f, svg); });
-    settle(300);
+    settle();
     if (const auto layer = logoLayer(fixture))
         fixture.session.selectLayer(*layer);
-    settle(600);
+    settle();
     const QImage window = fixture.window->grab().toImage();
     const int strip = static_cast<int>(kit::px(kit::Size::Control) * 3 * window.devicePixelRatio());
     save(window.copy(0, 0, window.width(), std::min(strip, window.height())), "687", "top-strip");
@@ -110,7 +112,7 @@ void captureWindow() {
     // #698: a drag that starts on empty space inside the frame, above and left of the artwork.
     if (auto* viewer = viewerArea != nullptr ? viewerArea->findChild<ViewerEditor*>() : nullptr) {
         fixture.session.clearSelection();
-        settle(200);
+        settle();
         const QPoint a(viewer->width() * 9 / 100, viewer->height() * 4 / 100);
         const QPoint b(viewer->width() * 46 / 100, viewer->height() * 60 / 100);
         QTest::mousePress(viewer, Qt::LeftButton, Qt::NoModifier, a);
@@ -127,7 +129,7 @@ void captureWindow() {
         remove.emplace<commands::RemoveNodes>(fixture.session.compositionId(),
                                               std::set<document::NodeId>{output->nodeId});
         (void)fixture.session.executeTransaction(std::move(remove));
-        settle(200);
+        settle();
         if (auto* bar = fixture.window->findChild<WindowStatusBar*>())
             save(bar->grab().toImage(), "716", "status-bar-after-deleting-output");
     }
@@ -137,14 +139,14 @@ void captureWindow() {
 void captureLayerDelete() {
     const auto svg = writeSvg();
     test::WindowFixture fixture([&](test::WindowFixture& f) { importSvgLayer(f, svg); });
-    settle(300);
+    settle();
     auto* nodes = areaOf(fixture, "bloom.nodes");
     if (nodes == nullptr) {
         ++gFailures;
         return;
     }
     Q_EMIT nodes->maximizeRequested(nodes);
-    settle(300);
+    settle();
     save(nodes->grab().toImage(), "714", "graph-with-svg-layer");
     if (const auto layer = logoLayer(fixture)) {
         commands::Transaction remove("Delete Layer", fixture.session.snapshot().revision());
@@ -152,7 +154,7 @@ void captureLayerDelete() {
                                                std::vector<document::LayerId>{*layer});
         (void)fixture.session.executeTransaction(std::move(remove));
     }
-    settle(300);
+    settle();
     save(nodes->grab().toImage(), "714", "graph-after-deleting-the-layer");
 }
 
@@ -160,7 +162,7 @@ void captureLayerDelete() {
 void captureAssets() {
     const auto svg = writeSvg();
     test::WindowFixture fixture([&](test::WindowFixture& f) { importSvgLayer(f, svg); });
-    settle(300);
+    settle();
     auto* assets = areaOf(fixture, "bloom.assets");
     if (assets == nullptr) {
         ++gFailures;
@@ -214,12 +216,12 @@ void captureDissolve() {
                                          content);
     settle();
     f.view()->frameGraph();
-    settle(200);
+    settle();
     save(f.editor.grab().toImage(), "723", "graph-before-dissolve");
     (void)f.edit<commands::DissolveNode>(curves);
     settle();
     f.view()->frameGraph();
-    settle(200);
+    settle();
     save(f.editor.grab().toImage(), "723", "graph-after-dissolving-curves");
 }
 
@@ -239,7 +241,7 @@ void captureCards() {
           Card{"638", "bloom.color-matrix", "color-matrix"}}) {
         test::Fixture f;
         const auto node = f.add(type, {0, 0});
-        settle(150);
+        settle();
         const auto grabCard = [&](const QString& suffix) {
             auto* card = f.card(node);
             if (card == nullptr) {
@@ -247,7 +249,7 @@ void captureCards() {
                 return;
             }
             f.view()->centerOn(card);
-            settle(100);
+            settle();
             const QRect region = f.view()
                                      ->mapFromScene(card->sceneBoundingRect().adjusted(-16, -16, 16, 16))
                                      .boundingRect()
@@ -260,19 +262,19 @@ void captureCards() {
         PropertiesEditor properties(f.session);
         properties.resize(420, 700);
         properties.show();
-        settle(150);
+        settle();
         save(properties.grab().toImage(), issue, QLatin1String(name) + QStringLiteral("-properties-420"));
         if (std::string_view(type) != "bloom.ocio-file-transform")
             continue;
         // #610: the Process Space choices, and a space the project's configuration lacks.
         (void)f.edit<commands::SetNodeParameterValue>(
             node, "processSpace", document::ParameterValue{std::string("srgb_rec709_display")});
-        settle(150);
+        settle();
         grabCard(QStringLiteral("-card-process-space-srgb"));
         save(properties.grab().toImage(), "610", QStringLiteral("lut-properties-process-space-srgb"));
         (void)f.edit<commands::SetNodeParameterValue>(
             node, "processSpace", document::ParameterValue{std::string("ACEScct")});
-        settle(150);
+        settle();
         grabCard(QStringLiteral("-card-process-space-missing"));
         save(properties.grab().toImage(), "610",
              QStringLiteral("lut-properties-process-space-missing"));

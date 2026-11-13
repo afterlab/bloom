@@ -7,6 +7,7 @@
 // <dir>/profiler-<state>-dpr<scale>.png, where <dir> is BLOOM_PROFILER_CAPTURE_DIR (or the first
 // argument) and the scale follows QT_SCALE_FACTOR. Without either it captures into a temporary
 // directory and only checks that each capture rendered.
+#include "await_qt.hpp"
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/memory_pool_counters.hpp>
@@ -43,11 +44,13 @@ namespace ui = bloom::ui;
 QImage grabWhole(ui::ProfilerEditor& panel, const int width) {
     auto* content = panel.findChild<QWidget*>(QStringLiteral("profilerContent"));
     panel.resize(width, content != nullptr ? content->sizeHint().height() : width);
-    QTest::qWait(30);
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     if (content != nullptr)
         panel.resize(width, content->heightForWidth(width) > 0 ? content->heightForWidth(width)
                                                                : content->sizeHint().height());
-    QTest::qWait(30);
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     return panel.grab().toImage();
 }
 
@@ -174,8 +177,9 @@ int captureLive(const QString& directory, const QString& scale) {
     released.store(true);
     ledger.unregisterCache(&cacheOwner);
     scheduler.beginShutdown();
-    while (!scheduler.isQuiescent())
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    if (!bloom::test_support::awaitCondition("scheduler quiescent",
+                                             [&] { return scheduler.isQuiescent(); }))
+        ++failures;
     return failures;
 }
 

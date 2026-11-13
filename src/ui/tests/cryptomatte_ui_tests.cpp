@@ -4,6 +4,7 @@
 // adds with a click or Shift-click and removes with Alt-click, reading the object under the cursor
 // on a worker (manifest names, and raw IDs without a manifest).
 
+#include "await_qt.hpp"
 #include "cryptomatte_fixture_support.hpp"
 #include "layer_parent_transform.hpp"
 
@@ -36,7 +37,6 @@
 
 #include <QApplication>
 #include <QDir>
-#include <QElapsedTimer>
 #include <QTest>
 #include <QToolButton>
 
@@ -59,13 +59,7 @@ void expect(const bool value, const std::string& message) {
     }
 }
 
-template <typename Predicate> bool waitUntil(Predicate predicate, const int milliseconds = 15000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < milliseconds)
-        QTest::qWait(5);
-    return predicate();
-}
+using bloom::test_support::awaitQtCondition;
 
 struct Scene final {
     std::filesystem::path folder;
@@ -179,10 +173,9 @@ void shutdown(runtime::TaskScheduler& scheduler, ui::TaskUiBridge& bridge,
         preview->beginShutdown();
     bridge.beginShutdown();
     scheduler.beginShutdown();
-    QElapsedTimer timer;
-    timer.start();
-    while (!scheduler.isQuiescent() && timer.elapsed() < 4000)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    expect(awaitQtCondition("scheduler quiescent after shutdown",
+                            [&] { return scheduler.isQuiescent(); }),
+           "the scheduler reaches quiescence");
 }
 
 void testPropertiesAndViewer() {
@@ -212,10 +205,13 @@ void testPropertiesAndViewer() {
 
     // Properties: the layer picker reads the channel set's Cryptomatte types on a worker.
     ui::kit::KDropdown* picker = nullptr;
-    expect(waitUntil([&] {
-               picker = properties->findChild<ui::kit::KDropdown*>("propertiesCryptomatteLayer");
-               return picker != nullptr && picker->toolTip().isEmpty() && picker->count() == 1;
-           }),
+    expect(awaitQtCondition("the layer picker fills once the worker listing arrives",
+                            [&] {
+                                picker = properties->findChild<ui::kit::KDropdown*>(
+                                    "propertiesCryptomatteLayer");
+                                return picker != nullptr && picker->toolTip().isEmpty() &&
+                                       picker->count() == 1;
+                            }),
            "the layer picker fills once the worker listing arrives");
     expect(picker != nullptr && picker->count() == 1 && picker->itemText(0) == "CryptoObject",
            "the layer picker lists exactly CryptoObject");
@@ -235,14 +231,15 @@ void testPropertiesAndViewer() {
            "typed names join the matte list");
     QApplication::processEvents();
     std::vector<ui::kit::KButton*> removes;
-    expect(waitUntil([&] {
-               removes.clear();
-               for (auto* button :
-                    properties->findChildren<ui::kit::KButton*>("propertiesCryptomatteRemove"))
-                   if (button->isVisible())
-                       removes.push_back(button);
-               return removes.size() == 2;
-           }),
+    expect(awaitQtCondition("each selected matte has a remove button",
+                            [&] {
+                                removes.clear();
+                                for (auto* button : properties->findChildren<ui::kit::KButton*>(
+                                         "propertiesCryptomatteRemove"))
+                                    if (button->isVisible())
+                                        removes.push_back(button);
+                                return removes.size() == 2;
+                            }),
            "each selected matte has a remove button");
     for (auto* button : removes)
         if (button->property("matteName").toString() == "cube")
@@ -255,20 +252,23 @@ void testPropertiesAndViewer() {
            "removing a matte is one undoable edit");
     expect(controller.setMattes(scene.cryptomatte, {}, "Clear"), "the list clears");
 
-    expect(waitUntil([&] { return preview.state().activity == ui::PreviewActivity::Ready; }),
+    expect(awaitQtCondition("the composition preview renders",
+                            [&] { return preview.state().activity == ui::PreviewActivity::Ready; }),
            "the composition preview renders");
     // Viewer: the channel menu previews the matte (a viewer-only plan of the Mask output).
     auto* dropdown = viewer->findChild<ui::kit::KDropdown*>("viewerChannelDropdown");
     int matteIndex = -1;
-    expect(waitUntil([&] {
-               dropdown = viewer->findChild<ui::kit::KDropdown*>("viewerChannelDropdown");
-               if (dropdown == nullptr)
-                   return false;
-               for (int index = 0; index < dropdown->count(); ++index)
-                   if (dropdown->itemText(index).contains("Cryptomatte matte"))
-                       matteIndex = index;
-               return matteIndex >= 0;
-           }),
+    expect(awaitQtCondition("the Viewer channel menu offers the Cryptomatte matte",
+                            [&] {
+                                dropdown =
+                                    viewer->findChild<ui::kit::KDropdown*>("viewerChannelDropdown");
+                                if (dropdown == nullptr)
+                                    return false;
+                                for (int index = 0; index < dropdown->count(); ++index)
+                                    if (dropdown->itemText(index).contains("Cryptomatte matte"))
+                                        matteIndex = index;
+                                return matteIndex >= 0;
+                            }),
            "the Viewer channel menu offers the Cryptomatte matte");
     if (dropdown != nullptr && matteIndex >= 0) {
         dropdown->setCurrentIndex(matteIndex);
@@ -278,11 +278,14 @@ void testPropertiesAndViewer() {
                    inspection->port == document::kCryptomatteMaskOutputPort &&
                    inspection->channels.empty(),
                "choosing it inspects the node's Mask output");
-        expect(waitUntil([&] {
-                   return preview.state().activity == ui::PreviewActivity::Ready &&
-                          preview.state().frame != nullptr &&
-                          preview.state().frame->desiredIdentity().channelInspection == inspection;
-               }),
+        expect(awaitQtCondition(
+                   "the matte preview renders for the inspection it was asked for",
+                   [&] {
+                       return preview.state().activity == ui::PreviewActivity::Ready &&
+                              preview.state().frame != nullptr &&
+                              preview.state().frame->desiredIdentity().channelInspection ==
+                                  inspection;
+                   }),
                "the matte preview renders for the inspection it was asked for");
     }
 
@@ -290,10 +293,11 @@ void testPropertiesAndViewer() {
     // ADR 0031: the eyedropper is one of the app-wide tools.
     scene.session.tools().setTool(ui::ViewerTool::Cryptomatte);
     std::optional<ui::ViewerMapping> mapping;
-    expect(waitUntil([&] {
-               mapping = viewer->mappingForTest();
-               return mapping.has_value();
-           }),
+    expect(awaitQtCondition("the Viewer has a display mapping",
+                            [&] {
+                                mapping = viewer->mappingForTest();
+                                return mapping.has_value();
+                            }),
            "the Viewer has a display mapping");
     if (!mapping) {
         std::cerr << "preview activity " << static_cast<int>(preview.state().activity) << "\n";
@@ -305,7 +309,8 @@ void testPropertiesAndViewer() {
             return;
         const auto point = mapping->toScreen(document::Vec2d{x, y}).toPoint();
         QTest::mouseClick(viewer, Qt::LeftButton, modifiers, point);
-        waitUntil([&] { return !controller.pickPending(); });
+        expect(awaitQtCondition("the pick completes", [&] { return !controller.pickPending(); }),
+               "the pick completes");
         QApplication::processEvents();
     };
     // Pixel (1, 0): sphere 0.6, cube 0.4 -- the dominant object is the sphere.
@@ -332,13 +337,15 @@ void testPropertiesAndViewer() {
                controller.mattes(scene.cryptomatte) == std::vector<std::string>{"sphere", "sky"},
            "each pick is one undoable edit");
     // The matte preview shows exactly the selected objects' coverage.
-    expect(waitUntil([&] {
-               const auto& state = preview.state();
-               return state.activity == ui::PreviewActivity::Ready && state.frame != nullptr &&
-                      state.frame->desiredIdentity().sourceRevision ==
-                          scene.session.snapshot().revision() &&
-                      state.frame->hasProcessFrame();
-           }),
+    expect(awaitQtCondition("the matte preview re-renders for the edited selection",
+                            [&] {
+                                const auto& state = preview.state();
+                                return state.activity == ui::PreviewActivity::Ready &&
+                                       state.frame != nullptr &&
+                                       state.frame->desiredIdentity().sourceRevision ==
+                                           scene.session.snapshot().revision() &&
+                                       state.frame->hasProcessFrame();
+                            }),
            "the matte preview re-renders for the edited selection");
     if (const auto frame = preview.state().frame; frame != nullptr && frame->hasProcessFrame()) {
         bool exact = true;
@@ -405,13 +412,15 @@ void testLayerMapping() {
     // geometry the artist still sees.
     std::optional<ui::ViewerMapping> lastMapping;
     const auto settle = [&](const std::string& label) {
-        expect(waitUntil([&] {
-                   const auto& state = preview.state();
-                   return state.activity == ui::PreviewActivity::Ready && state.frame != nullptr &&
-                          state.frame->desiredIdentity().sourceRevision ==
-                              scene.session.snapshot().revision() &&
-                          viewer->mappingForTest().has_value();
-               }),
+        expect(awaitQtCondition(label + ": the Viewer shows the edited composition",
+                                [&] {
+                                    const auto& state = preview.state();
+                                    return state.activity == ui::PreviewActivity::Ready &&
+                                           state.frame != nullptr &&
+                                           state.frame->desiredIdentity().sourceRevision ==
+                                               scene.session.snapshot().revision() &&
+                                           viewer->mappingForTest().has_value();
+                                }),
                label + ": the Viewer shows the edited composition");
         lastMapping = viewer->mappingForTest();
     };
@@ -427,7 +436,8 @@ void testLayerMapping() {
             return;
         const auto point = world.map({(pixel % fixture::kWidth) + 0.5, (pixel / fixture::kWidth) + 0.5});
         QTest::mouseClick(viewer, Qt::LeftButton, modifiers, mapping->toScreen(point).toPoint());
-        waitUntil([&] { return !controller.pickPending(); });
+        expect(awaitQtCondition("the pick completes", [&] { return !controller.pickPending(); }),
+               "the pick completes");
         QApplication::processEvents();
     };
     using runtime::detail::LayerMatrix;
@@ -509,13 +519,15 @@ void testRawIdsWithoutManifest() {
                                          layerProvider(pipeline, scene.folder),
                                          pickProvider(pipeline, scene.folder));
     controller.pick(scene.cryptomatte, 0, 0, ui::CryptomatteController::PickAction::Add);
-    expect(waitUntil([&] { return !controller.pickPending(); }), "the pick completes");
+    expect(awaitQtCondition("the pick completes", [&] { return !controller.pickPending(); }),
+           "the pick completes");
     QApplication::processEvents();
     const auto expected = runtime::formatCryptomatteRawId(runtime::cryptomatteNameId("sphere"));
     expect(controller.mattes(scene.cryptomatte) == std::vector<std::string>{expected},
            "without a manifest the pick stores the raw ID");
     controller.requestLayers(scene.cryptomatte);
-    expect(waitUntil([&] { return controller.layers(scene.cryptomatte) != nullptr; }),
+    expect(awaitQtCondition("the layer listing completes",
+                            [&] { return controller.layers(scene.cryptomatte) != nullptr; }),
            "the layer listing completes");
     const auto* layers = controller.layers(scene.cryptomatte);
     expect(layers != nullptr && *layers == std::vector<std::string>{"CryptoObject"},
@@ -535,7 +547,7 @@ int main(int argc, char** argv) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;
     }
-    if (failures != 0)
+    if (failures + bloom::test_support::awaitFailureCount() != 0)
         return 1;
     std::cout << "PASS: Cryptomatte UI\n";
     return 0;

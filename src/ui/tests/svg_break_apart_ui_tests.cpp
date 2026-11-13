@@ -6,6 +6,7 @@
 //  - Break Apart is reachable from the Composition menu and from the Timeline's layer context menu,
 //    reads the held SVG on the import worker, and is one undo step.
 
+#include "await_qt.hpp"
 #include "import_progress_test_support.hpp"
 
 #include <bloom/commands/svg_import_operations.hpp>
@@ -61,13 +62,6 @@ void require(const bool ok, const char* message) {
     if (!ok)
         throw std::runtime_error(message);
 }
-template <typename Predicate> bool waitUntil(Predicate predicate, const int timeoutMs = 20000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < timeoutMs)
-        QTest::qWait(5);
-    return predicate();
-}
 
 constexpr auto kSvg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100">
 <rect id="box" x="10" y="10" width="80" height="60" fill="#cc3333"/>
@@ -99,7 +93,9 @@ struct Harness final {
     }
     ~Harness() {
         session.setAssetController(nullptr);
-        waitUntil([this] { return !controller.busy(); });
+        // A destructor cannot return the result; a timeout is counted by awaitFailureCount().
+        (void)bloom::test_support::awaitQtCondition("asset controller idle",
+                                                    [this] { return !controller.busy(); });
     }
     [[nodiscard]] const document::Composition& composition() const {
         return *session.snapshot().project().findComposition(session.compositionId());
@@ -181,7 +177,11 @@ int main(int argc, char** argv) {
                 return std::optional(commands::SvgImportMode::Shapes);
             });
             harness.controller.importFiles({first, second});
-            require(waitUntil([&] { return !harness.controller.busy() && harness.count(kPathNodes) >= 4; }),
+            require(bloom::test_support::awaitQtCondition("both SVG files import",
+                                                          [&] {
+                                                              return !harness.controller.busy() &&
+                                                                     harness.count(kPathNodes) >= 4;
+                                                          }),
                     "both SVG files import");
             require(asked == std::vector<std::size_t>{2}, "the chooser is asked once for the batch of two");
             require(harness.count(document::kVectorArtworkNodeType) == 0 && harness.count(kPathNodes) == 4,
@@ -195,7 +195,11 @@ int main(int argc, char** argv) {
             harness.controller.setSvgImportChooserForTesting(
                 [](std::size_t) { return std::optional<commands::SvgImportMode>{}; });
             harness.controller.importFiles({first});
-            QTest::qWait(100);
+            require(
+                bloom::test_support::awaitQtCondition(
+                    "cancelled import leaves the controller and scheduler idle",
+                    [&] { return !harness.controller.busy() && harness.scheduler.isQuiescent(); }),
+                "the cancelled import settles");
             require(!harness.controller.busy() && harness.layers() == layersBefore,
                     "cancelling the chooser imports nothing");
         }
@@ -205,8 +209,11 @@ int main(int argc, char** argv) {
             Harness harness;
             const auto layersBefore = harness.layers();
             harness.controller.importFiles({first});
-            require(waitUntil([&] { return !harness.controller.busy() && harness.layers() > layersBefore; }),
-                    "the SVG imports");
+            require(
+                bloom::test_support::awaitQtCondition(
+                    "SVG imports",
+                    [&] { return !harness.controller.busy() && harness.layers() > layersBefore; }),
+                "the SVG imports");
             require(harness.count(document::kVectorArtworkNodeType) == 1 && harness.count(kPathNodes) == 0 &&
                         harness.layers() == layersBefore + 1,
                     "with no window to ask in, the default imports one layer and one node");
@@ -221,7 +228,9 @@ int main(int argc, char** argv) {
             owner.resize(400, 300);
             owner.show();
             owner.activateWindow();
-            require(waitUntil([&] { return QApplication::activeWindow() == &owner; }, 5000),
+            require(bloom::test_support::awaitQtCondition(
+                        "owner window is active",
+                        [&] { return QApplication::activeWindow() == &owner; }),
                     "the owner window is active");
             std::optional<std::optional<commands::SvgImportMode>> answer;
             harness.controller.chooseSvgImportMode(
@@ -236,7 +245,9 @@ int main(int argc, char** argv) {
             require(dialog != nullptr && !answer, "the chooser opens and waits");
             require(dialog->mode() == commands::SvgImportMode::Layer, "it offers As one layer first");
             dialog->reject();
-            require(waitUntil([&] { return answer.has_value(); }, 5000) && !*answer,
+            require(bloom::test_support::awaitQtCondition("Cancel answers nothing",
+                                                          [&] { return answer.has_value(); }) &&
+                        !*answer,
                     "Cancel answers nothing");
             require(ui::loadApplicationPreferences(QSettings{}).importSvgMode == ui::SvgImportChoice::Ask,
                     "Cancel remembers nothing");
@@ -248,7 +259,9 @@ int main(int argc, char** argv) {
             dialog->choices()->setCurrentIndex(1);
             dialog->rememberBox()->setChecked(true);
             require(dialog->activate(ui::kit::KDialog::Role::Accept), "Import accepts the chooser");
-            require(waitUntil([&] { return answer.has_value(); }, 5000) && *answer == commands::SvgImportMode::Shapes,
+            require(bloom::test_support::awaitQtCondition("answer is As editable shapes",
+                                                          [&] { return answer.has_value(); }) &&
+                        *answer == commands::SvgImportMode::Shapes,
                     "the answer is As editable shapes");
             require(ui::loadApplicationPreferences(QSettings{}).importSvgMode == ui::SvgImportChoice::Shapes,
                     "Remember my choice stores the answer as the import preference");
@@ -263,7 +276,11 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("the chooser must not be asked");
             });
             harness.controller.importFiles({first});
-            require(waitUntil([&] { return !harness.controller.busy() && harness.count(kPathNodes) == 2; }),
+            require(bloom::test_support::awaitQtCondition("remembered mode imports editable shapes",
+                                                          [&] {
+                                                              return !harness.controller.busy() &&
+                                                                     harness.count(kPathNodes) == 2;
+                                                          }),
                     "the remembered mode imports editable shapes");
             QSettings().clear();
         }
@@ -299,7 +316,12 @@ int main(int argc, char** argv) {
             require(!menuAction->isEnabled(), "Break Apart SVG is disabled with no layer selected");
 
             harness.controller.importFiles({first});
-            require(waitUntil([&] { return !harness.controller.busy() && harness.count(document::kVectorArtworkNodeType) == 1; }),
+            require(bloom::test_support::awaitQtCondition(
+                        "SVG imports as one layer",
+                        [&] {
+                            return !harness.controller.busy() &&
+                                   harness.count(document::kVectorArtworkNodeType) == 1;
+                        }),
                     "the SVG imports as one layer");
             const auto layer = harness.topLayer();
             const auto* boundary = harness.composition().graph().findLayer(layer);
@@ -333,7 +355,12 @@ int main(int argc, char** argv) {
             const auto nodesBefore = harness.composition().graph().nodes().size();
             const auto revisionBefore = harness.session.snapshot().revision();
             menuAction->trigger();
-            require(waitUntil([&] { return !harness.controller.busy() && harness.count(document::kVectorArtworkNodeType) == 0; }),
+            require(bloom::test_support::awaitQtCondition(
+                        "Break Apart replaces the Vector Artwork",
+                        [&] {
+                            return !harness.controller.busy() &&
+                                   harness.count(document::kVectorArtworkNodeType) == 0;
+                        }),
                     "Break Apart replaces the Vector Artwork");
             require(harness.count(kPathNodes) == 2 && harness.composition().graph().findLayer(layer) != nullptr,
                     "the shapes are there and the layer is the same layer");
@@ -363,7 +390,12 @@ int main(int argc, char** argv) {
                 auto* action = menu ? menu->findChild<QAction*>(QStringLiteral("timelineBreakApartSvgAction")) : nullptr;
                 require(action != nullptr, "the context menu offers Break Apart SVG again");
                 action->trigger();
-                require(waitUntil([&] { return !harness.controller.busy() && harness.count(document::kVectorArtworkNodeType) == 0; }),
+                require(bloom::test_support::awaitQtCondition(
+                            "Break Apart from the context menu replaces the Vector Artwork",
+                            [&] {
+                                return !harness.controller.busy() &&
+                                       harness.count(document::kVectorArtworkNodeType) == 0;
+                            }),
                         "Break Apart from the context menu replaces the Vector Artwork");
                 require(harness.count(kPathNodes) == 2, "the context menu breaks it into the same shapes");
             }
@@ -379,10 +411,20 @@ int main(int argc, char** argv) {
             rememberChoice(ui::SvgImportChoice::Layer);
             Harness harness;
             harness.controller.importFiles({first});
-            require(waitUntil([&] { return !harness.controller.busy() && harness.count(document::kVectorArtworkNodeType) == 1; }),
+            require(bloom::test_support::awaitQtCondition(
+                        "first SVG imports",
+                        [&] {
+                            return !harness.controller.busy() &&
+                                   harness.count(document::kVectorArtworkNodeType) == 1;
+                        }),
                     "the first SVG imports");
             harness.controller.importFiles({second});
-            require(waitUntil([&] { return !harness.controller.busy() && harness.count(document::kVectorArtworkNodeType) == 2; }),
+            require(bloom::test_support::awaitQtCondition(
+                        "second SVG imports",
+                        [&] {
+                            return !harness.controller.busy() &&
+                                   harness.count(document::kVectorArtworkNodeType) == 2;
+                        }),
                     "the second SVG imports");
             std::vector<document::LayerId> both;
             for (const auto& entry : harness.composition().graph().layerStack().entries())
@@ -408,7 +450,12 @@ int main(int argc, char** argv) {
             const auto revision = harness.session.snapshot().revision();
             harness.diagnostics.clear();
             harness.controller.breakApartSvg(harness.session.compositionId(), harness.controller.selectedVectorArtworkLayers());
-            require(waitUntil([&] { return !harness.controller.busy() && harness.count(document::kVectorArtworkNodeType) == 0; }),
+            require(bloom::test_support::awaitQtCondition(
+                        "both layers are broken apart",
+                        [&] {
+                            return !harness.controller.busy() &&
+                                   harness.count(document::kVectorArtworkNodeType) == 0;
+                        }),
                     "both layers are broken apart");
             require(harness.count(kPathNodes) == 4, "both SVGs became their shapes");
             require(harness.session.snapshot().revision().value() == revision.value() + 1,
@@ -421,6 +468,8 @@ int main(int argc, char** argv) {
                     "one undo gives both one-layer SVGs back");
         }
         QSettings().clear();
+        if (bloom::test_support::awaitFailureCount() != 0)
+            return 1;
         std::cout << "svg break apart ui: PASS\n";
         return 0;
     } catch (const std::exception& error) {

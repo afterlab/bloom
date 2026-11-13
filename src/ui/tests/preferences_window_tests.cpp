@@ -1,3 +1,4 @@
+#include "await_qt.hpp"
 #include "preferences_window.hpp"
 
 #include <bloom/ui/acceleration_status.hpp>
@@ -779,6 +780,8 @@ class MutableAccelerationStatus final : public ui::AccelerationStatusProvider {
     ui::AccelerationStatus status;
 };
 
+// A window in which a refresh must NOT happen (hidden or destroyed dialog): there is no positive
+// event to await, so the refresh interval is waited out.
 void waitForPerformanceRefresh() {
     QEventLoop loop;
     QTimer::singleShot(400, &loop, &QEventLoop::quit);
@@ -815,7 +818,10 @@ void testPerformancePageRefreshesWhileVisible(Expectations& check) {
     provider.status.previewRoute = QStringLiteral("Available for eligible previews");
     provider.status.summary =
         QStringLiteral("GPU acceleration is available for eligible previews.");
-    waitForPerformanceRefresh();
+    check.expect(bloom::test_support::awaitQtCondition(
+                     "visible page follows the cached status to Vulkan",
+                     [&] { return backend->text() == QStringLiteral("Vulkan"); }),
+                 "the visible page refreshes from the cached provider");
     check.expect(backend->text() == QStringLiteral("Vulkan"),
                  "the visible page follows the cached status to Ready");
     check.expect(state->text() == QStringLiteral("Ready"),
@@ -830,7 +836,10 @@ void testPerformancePageRefreshesWhileVisible(Expectations& check) {
     provider.status.deviceName.clear();
     provider.status.driver.clear();
     provider.status.summary = QStringLiteral("GPU acceleration is unavailable.");
-    waitForPerformanceRefresh();
+    check.expect(bloom::test_support::awaitQtCondition(
+                     "visible page follows the lost capability to CPU reference",
+                     [&] { return backend->text() == QStringLiteral("CPU reference"); }),
+                 "the visible page refreshes after the capability loss");
     check.expect(backend->text() == QStringLiteral("CPU reference"),
                  "the page follows a lost capability");
     check.expect(deviceRow->isHidden(), "the device row hides again after the loss");
@@ -869,7 +878,8 @@ void testCaptureGeneralPage(Expectations&) {
         rail->setCurrentRow(0);
     for (const int width : {2000, 900}) {
         window.resize(width, window.height());
-        QTest::qWait(100);
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents();
         (void)QDir().mkpath(directory);
         (void)window.grab().save(QDir(directory).filePath(
             QStringLiteral("preferences-general-w%1-%2.png")

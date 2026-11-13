@@ -4,6 +4,7 @@
 // contains()/timesFor() visibility, and the invalidation rule: an invalidated lease must never be a
 // hit, never listed, and never inserted. Without a device the test skips cleanly.
 
+#include "await_qt.hpp"
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/core/color.hpp>
@@ -250,14 +251,16 @@ produceResidentDisplay(GpuDevice& device, GpuSolid& solid, GpuResidentDisplay& d
             .code != bloom::render::GpuSolidDiagnosticCode::None) {
         return nullptr;
     }
-    for (int spin = 0; spin < 1'000'000; ++spin) {
-        const auto poll = solid.poll();
-        if (poll == bloom::render::GpuSolidPollResult::Ready) {
-            break;
-        }
-        if (poll == bloom::render::GpuSolidPollResult::Failure) {
-            return nullptr;
-        }
+    bool solidFailed = false;
+    if (!bloom::test_support::awaitCondition(
+            "GPU solid image is ready",
+            [&] {
+                const auto poll = solid.poll();
+                solidFailed = poll == bloom::render::GpuSolidPollResult::Failure;
+                return poll == bloom::render::GpuSolidPollResult::Ready || solidFailed;
+            }) ||
+        solidFailed) {
+        return nullptr;
     }
     GpuImage processImage = solid.takeImage();
     if (!processImage.isValid() || !processImage.isBoundTo(device)) {
@@ -268,14 +271,16 @@ produceResidentDisplay(GpuDevice& device, GpuSolid& solid, GpuResidentDisplay& d
         bloom::render::GpuResidentDisplayDiagnosticCode::None) {
         return nullptr;
     }
-    for (int spin = 0; spin < 1'000'000; ++spin) {
-        const auto poll = display.poll();
-        if (poll == bloom::render::GpuResidentDisplayPollResult::Ready) {
-            break;
-        }
-        if (poll == bloom::render::GpuResidentDisplayPollResult::Failure) {
-            return nullptr;
-        }
+    bool displayFailed = false;
+    if (!bloom::test_support::awaitCondition(
+            "GPU resident display image is ready",
+            [&] {
+                const auto poll = display.poll();
+                displayFailed = poll == bloom::render::GpuResidentDisplayPollResult::Failure;
+                return poll == bloom::render::GpuResidentDisplayPollResult::Ready || displayFailed;
+            }) ||
+        displayFailed) {
+        return nullptr;
     }
     GpuDisplayImage image = display.takeImage();
     if (!image.isValid() || !image.isBoundTo(device)) {
@@ -566,19 +571,17 @@ int main(int argc, char** argv) {
                          [&] { ++notifications; });
         registry->invalidateAll();
         const auto hitsBeforeRefresh = recoveryCache.statistics().hits;
-        QElapsedTimer expiryWait;
-        expiryWait.start();
-        while (expiryWait.elapsed() < 1000 && (recoveryCache.size() != 0 || notifications == 0)) {
-            QCoreApplication::processEvents();
-            std::this_thread::yield();
-        }
+        expectations.expect(bloom::test_support::awaitQtCondition(
+                                "stale resident coverage is released and announced",
+                                [&] { return recoveryCache.size() == 0 && notifications != 0; }),
+                            "the bounded resident refresh completes");
         expectations.expect(
             recoveryCache.size() == 0 && notifications > 0 &&
                 recoveryCache.statistics().hits == hitsBeforeRefresh &&
                 recoveryCache.residentBytes() == 0,
             "bounded resident refresh releases stale coverage and notifies without a hit");
 
-        if (expectations.failures() != 0) {
+        if (expectations.failures() + bloom::test_support::awaitFailureCount() != 0) {
             std::cerr << expectations.failures() << " cache resident expectation(s) failed\n";
             return 1;
         }

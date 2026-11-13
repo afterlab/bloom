@@ -456,7 +456,8 @@ struct BenchScrub {
     for (const auto& target : targets) {
         const auto started = std::chrono::steady_clock::now();
         static_cast<void>(session.setCurrentTime(target));
-        const bool shown = waitUntil(
+        const bool shown = awaitProof(
+            "the Viewer shows the scrub target frame",
             [&] {
                 const auto state = viewer.displayedPreviewState();
                 return state.freshness == ui::FrameFreshness::Current && state.frame &&
@@ -555,7 +556,9 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     projectHost.setUnsavedChangeDecisionProvider([] { return ui::UnsavedChangeDecision::Discard; });
     projectHost.setOpenPathProvider([&] { return std::optional(projectPath); });
     projectHost.requestOpen();
-    if (!waitUntil([&] { return replaced || openOutcome.has_value(); }, 300s) || !replaced) {
+    if (!awaitProof("the project open finishes", [&] { return replaced || openOutcome.has_value(); },
+                    300s) ||
+        !replaced) {
         std::cout << "BENCH_ERROR open " << projectPath << " failed: "
                   << openMessage.toStdString() << '\n';
         return 2;
@@ -727,8 +730,9 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
                                                   &controller, nullptr, &playback);
         window->resize(1920, 1080);
         window->show();
-        static_cast<void>(waitUntil([&] { return window->displayedViewer() != nullptr; }, 30s));
-        if (window->displayedViewer() == nullptr) {
+        if (!awaitProof("the workspace shows a Viewer",
+                        [&] { return window->displayedViewer() != nullptr; }) ||
+            window->displayedViewer() == nullptr) {
             std::cout << "BENCH_ERROR the workspace has no Viewer\n";
             return 2;
         }
@@ -751,12 +755,12 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
         memoryController.beginShutdown();
         bridge.beginShutdown();
         service.beginShutdown();
-        const bool stopped = waitUntil(
+        const bool stopped = awaitProof(
+            "the scheduler quiesces and the GPU service stops",
             [&] {
                 return scheduler.isQuiescent() &&
                        service.status().state == runtime::GpuPreviewDisplayServiceState::Stopped;
-            },
-            30s);
+            });
         viewer.releasePackedFramesForShutdown();
         if (window) {
             window->completeShutdown();
@@ -766,7 +770,8 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
         frameCache->clear();
         evaluator.operationCache()->close();
         retirementOwner->beginShutdown();
-        const bool retired = waitUntil([&] { return retirementOwner->exitAcknowledged(); }, 15s);
+        const bool retired = awaitProof("the retirement owner acknowledges its exit",
+                                        [&] { return retirementOwner->exitAcknowledged(); });
         if (!stopped || !retired) {
             std::cout << "BENCH_WARNING shutdown stopped=" << stopped << " retired=" << retired
                       << '\n'
@@ -775,7 +780,8 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
         }
     };
 
-    if (!waitUntil(
+    if (!awaitProof(
+            "the GPU service finishes initializing",
             [&] {
                 return service.status().state !=
                        runtime::GpuPreviewDisplayServiceState::Initializing;
@@ -788,8 +794,10 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     }
     const auto serviceReadySeconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - firstStarted).count();
-    static_cast<void>(waitUntil([&] { return policy->snapshot().reservations.hostReady; }, 30s));
-    const bool firstPainted = waitUntil(
+    static_cast<void>(awaitProof("the processing policy reports the host ready",
+                                 [&] { return policy->snapshot().reservations.hostReady; }));
+    const bool firstPainted = awaitProof(
+        "the Viewer paints its first Current frame",
         [&] { return viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current; },
         300s);
     const auto firstFrameSeconds =
@@ -966,7 +974,8 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
             const auto shown = benchScrubPass(session, viewer, {target});
             viewerProbeSeconds.insert(viewerProbeSeconds.end(), shown.begin(), shown.end());
         }
-        const bool finished = waitUntil([&] { return !ram.isCaching(); }, gBenchTimeout);
+        const bool finished = awaitProof("the RAM preview fill finishes",
+                                         [&] { return !ram.isCaching(); }, gBenchTimeout);
         if (gBenchViewerProbes != 0)
             benchSecondsJson(json, "viewerDuringFillSeconds", viewerProbeSeconds);
         const auto wall =
@@ -1060,7 +1069,8 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
             return std::chrono::duration<double>(std::chrono::steady_clock::now() - idleStarted)
                 .count();
         };
-        static_cast<void>(waitUntil(
+        static_cast<void>(awaitProof(
+            "the measured idle period elapses",
             [&] {
                 if (trimSeconds < 0 && service.status().counters.idleTrims > trimsBefore)
                     trimSeconds = elapsed();

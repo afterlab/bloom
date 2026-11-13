@@ -1,3 +1,4 @@
+#include "await_qt.hpp"
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/color.hpp>
@@ -24,7 +25,6 @@
 
 #include <QAction>
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QGraphicsItem>
 #include <QLabel>
@@ -50,16 +50,6 @@ namespace {
         std::cerr << "Failure: " << message << '\n';
     }
     return condition;
-}
-
-template <typename Predicate> [[nodiscard]] bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < 2'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        std::this_thread::yield();
-    }
-    return predicate();
 }
 
 const bloom::document::ParameterRecord*
@@ -133,7 +123,9 @@ parameterForRole(const bloom::document::Composition& composition,
 
     previewController.beginShutdown();
     taskUiBridge.beginShutdown();
-    return paletteOk && require(waitUntil([&scheduler] { return scheduler.isQuiescent(); }),
+    return paletteOk && require(bloom::test_support::awaitQtCondition(
+                                    "solid palette fixture reaches scheduler quiescence",
+                                    [&scheduler] { return scheduler.isQuiescent(); }),
                                 "solid palette fixture reaches scheduler quiescence");
 }
 
@@ -204,7 +196,9 @@ parameterForRole(const bloom::document::Composition& composition,
     previewController.beginShutdown();
     taskUiBridge.beginShutdown();
     return wiringOk && topologyOk && kindOk &&
-           require(waitUntil([&scheduler] { return scheduler.isQuiescent(); }),
+           require(bloom::test_support::awaitQtCondition(
+                       "shape add-menu fixture reaches scheduler quiescence",
+                       [&scheduler] { return scheduler.isQuiescent(); }),
                    "shape add-menu fixture reaches scheduler quiescence");
 }
 
@@ -253,10 +247,11 @@ parameterForRole(const bloom::document::Composition& composition,
     [[maybe_unused]] ui::AssetsEditor assets(session);
     ui::ViewerEditor viewer(session, previewController);
 
-    if (!require(waitUntil([&] {
-                     return previewController.state().activity == ui::PreviewActivity::Ready;
-                 }),
-                 "built-in pipeline renders the initial composition") ||
+    if (!require(
+            bloom::test_support::awaitQtCondition(
+                "built-in pipeline renders the initial composition",
+                [&] { return previewController.state().activity == ui::PreviewActivity::Ready; }),
+            "built-in pipeline renders the initial composition") ||
         !require(previewController.state().desiredIdentity.has_value() &&
                      previewController.state().desiredIdentity->sourceRevision ==
                          session.snapshot().revision(),
@@ -298,10 +293,12 @@ parameterForRole(const bloom::document::Composition& composition,
                  "the text action creates a layer and reports no refusal"))
         return false;
 
-    if (!require(waitUntil([&] {
-                     return previewController.state().activity == ui::PreviewActivity::Ready &&
-                            previewController.state().frame != nullptr;
-                 }),
+    if (!require(bloom::test_support::awaitQtCondition(
+                     "reachable text produces a real preview frame",
+                     [&] {
+                         return previewController.state().activity == ui::PreviewActivity::Ready &&
+                                previewController.state().frame != nullptr;
+                     }),
                  "reachable text produces a real preview frame") ||
         !require(previewController.state().diagnostics.empty(),
                  "a text layer produces no preview diagnostics at all")) {
@@ -471,7 +468,9 @@ parameterForRole(const bloom::document::Composition& composition,
     auto* solidColorGreen = properties.findChild<ui::kit::KValueField*>("solidColorGreenEditor");
     auto* solidColorBlue = properties.findChild<ui::kit::KValueField*>("solidColorBlueEditor");
     auto* solidColorAlpha = properties.findChild<ui::kit::KValueField*>("solidColorAlphaEditor");
-    if (!require(waitUntil([&] { return solidColorRed && solidColorRed->unit().isEmpty(); }),
+    if (!require(bloom::test_support::awaitQtCondition(
+                     "qualified color presentation becomes ready",
+                     [&] { return solidColorRed && solidColorRed->unit().isEmpty(); }),
                  "qualified color presentation becomes ready"))
         return false;
     if (!require(solidSourceNode != nullptr &&
@@ -559,10 +558,12 @@ parameterForRole(const bloom::document::Composition& composition,
         // composition
         // -- one text layer and two solids -- must reach a real frame, and the viewer must be
         // showing current pixels rather than retained previous ones.
-        !require(waitUntil([&] {
-                     return previewController.state().activity == ui::PreviewActivity::Ready &&
-                            previewController.state().frame != nullptr;
-                 }),
+        !require(bloom::test_support::awaitQtCondition(
+                     "a composition mixing text and solid layers keeps producing real frames",
+                     [&] {
+                         return previewController.state().activity == ui::PreviewActivity::Ready &&
+                                previewController.state().frame != nullptr;
+                     }),
                  "a composition mixing text and solid layers keeps producing real frames") ||
         !require(previewController.state().diagnostics.empty(),
                  "and reports no diagnostics once text is renderable") ||
@@ -574,8 +575,10 @@ parameterForRole(const bloom::document::Composition& composition,
 
     previewController.beginShutdown();
     taskUiBridge.beginShutdown();
-    return require(waitUntil([&scheduler] { return scheduler.isQuiescent(); }),
-                   "preview fixture reaches scheduler quiescence");
+    return require(
+        bloom::test_support::awaitQtCondition("preview fixture reaches scheduler quiescence",
+                                              [&scheduler] { return scheduler.isQuiescent(); }),
+        "preview fixture reaches scheduler quiescence");
 }
 
 } // namespace
@@ -584,7 +587,8 @@ int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     try {
-        return runSolidPaletteTest() && runShapeAddMenuTest() && runProjectionTest() ? 0 : 1;
+        const bool passed = runSolidPaletteTest() && runShapeAddMenuTest() && runProjectionTest();
+        return passed && bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << "composition projection test failed with an exception: " << error.what()
                   << '\n';

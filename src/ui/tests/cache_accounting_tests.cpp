@@ -13,6 +13,8 @@
 // This drives the cache APIs directly rather than the Assets panel. The accounting under test lives
 // in the caches, the importer only feeds them, and two hundred real 4K files on disk would make the
 // suite cost gigabytes of I/O to assert nothing extra.
+#include "await_qt.hpp"
+
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/media/audio/audio.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
@@ -29,7 +31,6 @@
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QImage>
 #include <QTemporaryDir>
 
@@ -586,11 +587,13 @@ void testAssetProxyAndAudioParticipation(Expectations& check) {
     bloom::ui::AssetController assets(session, host, scheduler, bridge, nullptr, nullptr,
                                       {.policy = {}, .standaloneByteAllowance = 16 * 1024 * 1024});
     assets.importFiles({directory.filePath("proxy.png"), audioPath});
-    QElapsedTimer timer;
-    timer.start();
-    while ((assets.busy() || assets.proxyCacheBytes() == 0 || assets.decodedAudioBytes() == 0) &&
-           timer.elapsed() < 15000)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    check.expect(bloom::test_support::awaitQtCondition(
+                     "asset controller retains proxy and audio bytes",
+                     [&] {
+                         return !assets.busy() && assets.proxyCacheBytes() != 0 &&
+                                assets.decodedAudioBytes() != 0;
+                     }),
+                 "the import finishes with proxy and audio bytes retained");
     check.expect(assets.proxyCacheBytes() > 0 && assets.decodedAudioBytes() > 0,
                  "real asset controller retains decoded proxy and audio bytes");
     // Explicit finite zero applies through the actual owner callbacks; no invented competing
@@ -607,10 +610,8 @@ void testAssetProxyAndAudioParticipation(Expectations& check) {
     assets.cancel();
     bridge.beginShutdown();
     scheduler.beginShutdown();
-    timer.restart();
-    while (!scheduler.isQuiescent() && timer.elapsed() < 15000)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    check.expect(scheduler.isQuiescent(),
+    check.expect(bloom::test_support::awaitQtCondition("scheduler quiescent after cancellation",
+                                                       [&] { return scheduler.isQuiescent(); }),
                  "finite-limit eviction and cancellation leave media tasks safe to shut down");
 }
 
@@ -627,5 +628,5 @@ int main(int argc, char** argv) {
     testProxyCacheBoundIsMeasuredRatherThanAssumed(check);
     testDecodedAudioAggregateIsBounded(check);
     testAssetProxyAndAudioParticipation(check);
-    return check.failures() == 0 ? 0 : 1;
+    return check.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

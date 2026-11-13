@@ -15,6 +15,8 @@
 //      prepared-upload caches stay shared across requests;
 //   4. the additive cache sublimits leave the overall CPU cache budget and CPU entries untouched.
 
+#include "await.hpp"
+
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
@@ -360,10 +362,9 @@ void testBootstrapAppliesResolvedCapacity() {
            "an unchanged resolved plan is applied once and stays installed");
 
     scheduler.beginShutdown();
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!scheduler.isQuiescent() && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::yield();
-    }
+    expect(bloom::test_support::awaitCondition("scheduler quiescent after shutdown",
+                                               [&] { return scheduler.isQuiescent(); }),
+           "the scheduler reaches quiescence");
 }
 
 void testCacheGpuLimitsAreAdditive() {
@@ -496,10 +497,9 @@ void testBootstrapCachesOnlyReadyCapability() {
     expect(!bootstrap.clientAvailable(), "Ready availability without a client is still not usable");
 
     scheduler.beginShutdown();
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!scheduler.isQuiescent() && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::yield();
-    }
+    expect(bloom::test_support::awaitCondition("scheduler quiescent after shutdown",
+                                               [&] { return scheduler.isQuiescent(); }),
+           "the scheduler reaches quiescence");
 }
 
 } // namespace
@@ -518,8 +518,9 @@ int main(int argc, char** argv) {
     testRefreshingStageIsConstructible();
     testBootstrapCachesOnlyReadyCapability();
 
-    if (failures != 0) {
-        std::cerr << "FAIL: " << failures << " GPU viewer bootstrap expectation(s) failed\n";
+    if (failures + bloom::test_support::awaitFailureCount() != 0) {
+        std::cerr << "FAIL: " << failures + bloom::test_support::awaitFailureCount()
+                  << " GPU viewer bootstrap expectation(s) failed\n";
         return 1;
     }
     std::cout << "PASS: GPU viewer bootstrap helpers\n";

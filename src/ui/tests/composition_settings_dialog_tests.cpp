@@ -4,6 +4,7 @@
 // With BLOOM_SCREENSHOT_DIR set, the test also writes review screenshots of create mode, settings
 // mode, the open preset dropdown, the Advanced tab and an inline validation error.
 
+#include "await_qt.hpp"
 #include "composition_settings_dialog.hpp"
 #include <bloom/ui/kit/tab_bar.hpp>
 
@@ -31,7 +32,6 @@
 #include <QApplication>
 #include <QDialog>
 #include <QDir>
-#include <QElapsedTimer>
 #include <QFile>
 #include <QImage>
 #include <QLabel>
@@ -107,12 +107,12 @@ template <typename T> T* child(QWidget& parent, const char* name) {
     return -1;
 }
 
-void settle(const int milliseconds = 0) {
-    QElapsedTimer timer;
-    timer.start();
-    do
+// Delivers everything already queued (layout, polish, deferred updates) until it is quiet.
+void settle() {
+    for (int pass = 0; pass < 3; ++pass) {
+        QCoreApplication::sendPostedEvents();
         QApplication::processEvents(QEventLoop::AllEvents, 20);
-    while (timer.elapsed() < milliseconds);
+    }
 }
 
 void testTimecodeLabels() {
@@ -389,19 +389,20 @@ void testDialogPresentation() {
     edit.show();
     auto* editTabs = child<ui::kit::KTabs>(edit, "compositionSettingsTabs");
     editTabs->setCurrentIndex(0);
-    settle(50);
+    settle();
     const int basicHeight = edit.height();
     const int nameX = child<QWidget>(edit, "compositionSettingsName")->mapTo(&edit, QPoint{}).x();
     editTabs->setCurrentIndex(1);
-    settle(50);
+    settle();
     expect(nameX ==
                child<QWidget>(edit, "compositionSettingsWorkingSpace")->mapTo(&edit, QPoint{}).x(),
            "Basic and Advanced share one label column");
     expect(edit.height() == basicHeight, "switching tabs never resizes the dialog");
     expect(!grid->isVisible(), "the resize anchor waits for a size change");
     child<ui::kit::KValueField>(edit, "compositionSettingsWidth")->setValue(1280);
-    settle(50);
-    expect(grid->isVisible(), "a size change in settings mode offers the resize anchor");
+    expect(bloom::test_support::awaitQtCondition("resize anchor appears after a size change",
+                                                 [&] { return grid->isVisible(); }),
+           "a size change in settings mode offers the resize anchor");
     // Ctrl+Tab steps the tabs from inside a field.
     editTabs->setCurrentIndex(0);
     QTest::keyClick(child<QWidget>(edit, "compositionSettingsName"), Qt::Key_Tab,
@@ -413,7 +414,7 @@ void testDialogPresentation() {
     edit.hide();
     create.show();
     child<ui::kit::KTabs>(create, "compositionSettingsTabs")->setCurrentIndex(1);
-    settle(50);
+    settle();
     expect(!child<QWidget>(create, "compositionSettingsAnchor")->isVisible(),
            "create mode has no layers to anchor");
     create.hide();
@@ -424,7 +425,8 @@ void testDialogPresentation() {
 // client area is grabbed. A headless Weston has no input seat, so it dismisses an xdg_popup at
 // once; an open dropdown's popup is laid out all the same and is drawn at its placed geometry.
 void screenshot(QWidget& window, const QString& path, ui::kit::KDropdown* open = nullptr) {
-    settle(600);
+    expect(QTest::qWaitForWindowExposed(&window), "the window to capture is exposed");
+    settle();
     const auto client = window.grab().toImage();
     QImage image = client;
     QPoint clientOrigin;
@@ -434,8 +436,12 @@ void screenshot(QWidget& window, const QString& path, ui::kit::KDropdown* open =
         QImage output;
         // A just-resized window may reach the compositor a frame late: capture until it has.
         for (int attempt = 0; attempt < 5; ++attempt) {
-            if (attempt > 0)
-                settle(300);
+            if (attempt > 0) {
+                // The compositor is another process with nothing observable from here: give it
+                // real time to receive the resized window before capturing again.
+                QTest::qWait(300);
+                settle();
+            }
             if (QProcess::execute(command, {full}) != 0 || !output.load(full))
                 break;
             const auto background = output.pixel(0, 0);
@@ -487,13 +493,13 @@ void writeScreenshots(const QString& directory) {
         screenshot(dialog, directory + QStringLiteral("/composition-create.png"));
         auto* preset = child<ui::kit::KDropdown>(dialog, "compositionSettingsPreset");
         preset->showPopup();
-        settle(400);
+        settle();
         expect(preset->popupView()->model()->rowCount() == preset->count(),
                "the preset dropdown lists every preset");
         screenshot(dialog, directory + QStringLiteral("/composition-preset-dropdown.png"), preset);
         preset->hidePopup();
     }
-    settle(200);
+    settle();
     {
         auto edit = settings;
         edit.timecode = {core::RationalTime::fromInteger(3600), true};
@@ -515,18 +521,18 @@ void writeScreenshots(const QString& directory) {
         child<QLineEdit>(dialog, "compositionSettingsRate")->setText(QStringLiteral("0"));
         screenshot(dialog, directory + QStringLiteral("/composition-validation-error.png"));
     }
-    settle(200);
+    settle();
     {
         // The wider dialog with Advanced open, resized past its minimum.
         CompositionSettingsDialog dialog(CompositionSettingsDialog::Mode::Edit, settings, spaces(),
                                          owner());
         dialog.show();
         child<ui::kit::KTabs>(dialog, "compositionSettingsTabs")->setCurrentIndex(1);
-        settle(200);
+        settle();
         dialog.resize(ui::kit::px(ui::kit::Size::DialogWideWidth) + 200, dialog.height());
         screenshot(dialog, directory + QStringLiteral("/composition-advanced-wide.png"));
     }
-    settle(200);
+    settle();
     {
         // Properties > Transform with a Position Y longer than its compact cell (owner report).
         auto project = document::makeNewProject("Properties", "Composition",
@@ -545,7 +551,7 @@ void writeScreenshots(const QString& directory) {
         ui::EditorArea area(registry, "bloom.properties");
         area.resize(360, 520);
         area.show();
-        settle(400);
+        settle();
         auto* y = area.findChild<ui::kit::KValueField*>(QStringLiteral("positionYEditor"));
         expect(y != nullptr && y->paintedText().startsWith(QStringLiteral("540")),
                "Position Y paints its leading digits");
@@ -576,5 +582,5 @@ int main(int argc, char** argv) {
         writeScreenshots(screenshots);
     if (failures == 0)
         std::cout << "composition settings PASS\n";
-    return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    return failures + bloom::test_support::awaitFailureCount() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

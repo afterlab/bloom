@@ -13,6 +13,7 @@
 // into a failure. The Viewer here publishes GPU-prepared packed frames: the native-resident Viewer
 // product needs a real window system and is not available to this offscreen test.
 
+#include "await_qt.hpp"
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
@@ -113,21 +114,6 @@ constexpr std::size_t kRounds = 6;
 constexpr std::size_t kEditsPerRound = 5;
 constexpr std::uint64_t kFirstExported = 10;
 constexpr std::uint64_t kLastExported = 13;
-
-template <typename Predicate>
-bool waitUntil(Predicate predicate, const std::chrono::milliseconds limit = 30s) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < limit.count()) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (predicate()) {
-            return true;
-        }
-        std::this_thread::sleep_for(1ms);
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return predicate();
-}
 
 struct Pixels final {
     bool ok = false;
@@ -362,13 +348,15 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
             rig.scheduler, gpuStage,
             ui::makeCompositionPreviewCpuStage(*rig.compiler, rig.evaluator, rig.qualified),
             ui::makeCompositionPreviewCpuDisplayFallback(rig.displayPreparer), options);
-        waitUntil(
+        const bool initialized = bloom::test_support::awaitQtCondition(
+            "the GPU preview service leaves Initializing",
             [&] {
                 return service->status().state !=
                        runtime::GpuPreviewDisplayServiceState::Initializing;
             },
             90s);
-        if (service->status().state != runtime::GpuPreviewDisplayServiceState::Ready) {
+        if (!initialized ||
+            service->status().state != runtime::GpuPreviewDisplayServiceState::Ready) {
             std::cout << "NotRun: " << route.name << " preview: no qualified device ("
                       << service->status().residentDetail << ")\n";
             checks.expect(!gRequireDevice, prefix + "--require-device needs a GPU device");
@@ -409,13 +397,14 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
         controller.requestRefresh();
         const auto before =
             index == 0 ? ui::PreparedPreviewFrameHandle{} : viewer.displayedFrameForTest();
-        const bool ready = waitUntil([&] {
-            const auto displayed = viewer.displayedFrameForTest();
-            return controller.state().activity == ui::PreviewActivity::Ready &&
-                   displayed != nullptr && (index == 0 || displayed != before || index == 3) &&
-                   displayed->provenance().provider == expectedProvider &&
-                   viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
-        });
+        const bool ready = bloom::test_support::awaitQtCondition(
+            "Viewer displays a current frame from the expected route", [&] {
+                const auto displayed = viewer.displayedFrameForTest();
+                return controller.state().activity == ui::PreviewActivity::Ready &&
+                       displayed != nullptr && (index == 0 || displayed != before || index == 3) &&
+                       displayed->provenance().provider == expectedProvider &&
+                       viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
+            });
         checks.expect(ready, label + "the Viewer displays a current frame from the expected route");
         shown.at(index) = pixelsOf(viewer.displayedFrameForTest());
         checks.expect(shown.at(index).ok && shown.at(index).width == kWidth &&
@@ -506,19 +495,24 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
             checks.expect(edited || (step % 2 == 1 && layer == 0), label + "a small edit applies");
             const auto before = viewer.displayedFrameForTest();
             controller.requestRefresh();
-            checks.expect(waitUntil([&] {
-                              const auto displayed = viewer.displayedFrameForTest();
-                              return controller.state().activity == ui::PreviewActivity::Ready &&
-                                     displayed != nullptr && (!edited || displayed != before) &&
-                                     displayed->provenance().provider == expectedProvider &&
-                                     viewer.displayedPreviewState().freshness ==
-                                         ui::FrameFreshness::Current;
-                          }),
+            checks.expect(bloom::test_support::awaitQtCondition(
+                              "Viewer shows the edited revision from the expected route",
+                              [&] {
+                                  const auto displayed = viewer.displayedFrameForTest();
+                                  return controller.state().activity ==
+                                             ui::PreviewActivity::Ready &&
+                                         displayed != nullptr && (!edited || displayed != before) &&
+                                         displayed->provenance().provider == expectedProvider &&
+                                         viewer.displayedPreviewState().freshness ==
+                                             ui::FrameFreshness::Current;
+                              }),
                           label + "the Viewer shows the edited revision from the expected route");
         }
         // The RAM preview holds this revision's frames while the exports run.
         ram.start();
-        checks.expect(waitUntil([&] { return !ram.isCaching(); }, 180s) &&
+        checks.expect(bloom::test_support::awaitQtCondition(
+                          "RAM preview at Half retains every frame",
+                          [&] { return !ram.isCaching(); }, 180s) &&
                           ram.cachedFrameCount() == kSessionFrames,
                       label + "the RAM preview at Half retains every frame");
 
@@ -564,9 +558,10 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     ram.beginShutdown();
     // Nothing of the exports stays admitted on the export provider's processing root.
     if (const auto policy = provider->processingPhasePolicy()) {
-        checks.expect(
-            waitUntil([&] { return policy->snapshot().reservations.admittedPhases == 0; }, 10s),
-            prefix + "no export phase stays admitted after the last export");
+        checks.expect(bloom::test_support::awaitQtCondition(
+                          "no export phase stays admitted after the last export",
+                          [&] { return policy->snapshot().reservations.admittedPhases == 0; }),
+                      prefix + "no export phase stays admitted after the last export");
     }
     checks.expect(provider->shutdownAndWait(10s), prefix + "the export provider retires");
     if (reference != provider) {
@@ -575,13 +570,20 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
 
     controller.beginShutdown();
     rig.bridge->beginShutdown();
-    (void)waitUntil([&] { return rig.scheduler.isQuiescent(); }, 10s);
+    checks.expect(
+        bloom::test_support::awaitQtCondition("the rig scheduler reaches quiescence",
+                                              [&] { return rig.scheduler.isQuiescent(); }),
+        "the rig scheduler reaches quiescence");
 #if defined(BLOOM_UI_EXPORT_REVISIONS_GPU)
     if (service != nullptr) {
         service->beginShutdown();
-        (void)waitUntil([&] {
-            return service->status().state == runtime::GpuPreviewDisplayServiceState::Stopped;
-        });
+        checks.expect(bloom::test_support::awaitQtCondition(
+                          "the GPU preview service stops",
+                          [&] {
+                              return service->status().state ==
+                                     runtime::GpuPreviewDisplayServiceState::Stopped;
+                          }),
+                      "the GPU preview service stops");
     }
 #endif
 }
@@ -626,7 +628,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     checks.expect(!gRequireDevice, "--require-device needs a Vulkan build");
 #endif
 
-    if (checks.failures() != 0) {
+    if (checks.failures() + bloom::test_support::awaitFailureCount() != 0) {
         std::cerr << "viewer/export revisions: " << checks.failures() << " failure(s)\n";
         return 1;
     }

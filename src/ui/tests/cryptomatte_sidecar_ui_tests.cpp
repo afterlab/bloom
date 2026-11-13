@@ -22,7 +22,6 @@
 #include <ImfOutputFile.h>
 
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QTest>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -463,10 +462,9 @@ int main(int argc, char** argv) {
         preview.beginShutdown();
         bridge.beginShutdown();
         scheduler.beginShutdown();
-        QElapsedTimer timer;
-        timer.start();
-        while (!scheduler.isQuiescent() && timer.elapsed() < 5000)
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        expect(bloom::test_support::awaitQtCondition("scheduler quiescent after shutdown",
+                                                     [&] { return scheduler.isQuiescent(); }),
+               "the scheduler reaches quiescence");
         std::error_code error;
         std::filesystem::remove_all(folder, error);
     } catch (const std::exception& error) {

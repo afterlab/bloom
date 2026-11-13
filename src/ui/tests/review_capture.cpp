@@ -27,9 +27,9 @@ QString gDirectory;
 QString gSuffix;
 int gFailures = 0;
 
-void settle(const int milliseconds = 60) {
-    QApplication::processEvents();
-    QTest::qWait(milliseconds);
+// Delivers the queued events (layout, repaint requests); a grab renders synchronously after this.
+void settle() {
+    QCoreApplication::sendPostedEvents();
     QApplication::processEvents();
 }
 
@@ -75,7 +75,7 @@ void captureFontDropdown(test::WindowFixture& fixture) {
         return;
     }
     font->showPopup();
-    settle(150);
+    settle();
     if (auto* popup = popupOf(*font))
         save(popup->grab().toImage(), QStringLiteral("review-font-dropdown"));
     else
@@ -101,7 +101,7 @@ void captureFlippedDropdown() {
     host.show();
     settle();
     dropdown->showPopup();
-    settle(150);
+    settle();
     if (auto* popup = popupOf(*dropdown)) {
         const bool above =
             popup->mapToGlobal(QPoint(0, 0)).y() < dropdown->mapToGlobal(QPoint(0, 0)).y();
@@ -182,7 +182,7 @@ int main(int argc, char** argv) {
     try {
         test::WindowFixture fixture;
         fixture.clearInteraction();
-        settle(200);
+        settle();
         captureTimeline(fixture);
         captureTools(fixture);
         captureFontDropdown(fixture);

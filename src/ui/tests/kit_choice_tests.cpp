@@ -1,10 +1,11 @@
+#include "await_qt.hpp"
+
 #include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QImage>
 #include <QKeyEvent>
@@ -43,17 +44,7 @@ class Expectations final {
 
 using namespace bloom::ui;
 
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 2'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate)) {
-            return true;
-        }
-    }
-    return std::invoke(predicate);
-}
+using bloom::test_support::awaitQtCondition;
 
 void clickAt(QWidget& widget, const QPoint& point) {
     QMouseEvent press(QEvent::MouseButtonPress, QPointF(point), widget.mapToGlobal(QPointF(point)),
@@ -226,11 +217,13 @@ void testTheSwitchThumbTravelsWithTheFastMotion(Expectations& expectations) {
     toggle.setChecked(true);
     expectations.expect(toggle.visualState() == kit::State::Selected,
                         "a checked switch reads as selected immediately, before the thumb arrives");
-    expectations.expect(waitUntil([&toggle] { return toggle.thumbPosition() >= 1.0; }),
+    expectations.expect(awaitQtCondition("the thumb travels all the way to the on end",
+                                         [&toggle] { return toggle.thumbPosition() >= 1.0; }),
                         "the thumb travels all the way to the on end");
 
     toggle.setChecked(false);
-    expectations.expect(waitUntil([&toggle] { return toggle.thumbPosition() <= 0.0; }),
+    expectations.expect(awaitQtCondition("and all the way back",
+                                         [&toggle] { return toggle.thumbPosition() <= 0.0; }),
                         "and all the way back");
 }
 
@@ -290,5 +283,5 @@ int main(int argc, char** argv) {
     testTheSwitchThumbTravelsWithTheFastMotion(expectations);
     testTheSwitchHonoursReducedMotion(expectations);
     testTheSwitchStateMachineAndDisabled(expectations);
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }
