@@ -233,6 +233,7 @@ target_sources(
         scope_frame_measure.cpp
         scope_measure.cpp
         scope_trace_map.cpp
+        scope_graticule.cpp
         statistics_image_effect.cpp
         audio_analysis.cpp
         audio_mix_render.cpp

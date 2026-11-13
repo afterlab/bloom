@@ -3,9 +3,12 @@
 // #724 Scopes: one scope of the Scopes panel. It paints the graticule and labels as vector drawing
 // (one device pixel lines at every scale and device pixel ratio) over the trace image a worker
 // mapped from the count tables (scopes_trace_renderer.hpp), and answers the hover readout. It
-// measures nothing and maps nothing itself.
+// measures nothing and maps nothing itself, and it computes no geometry: what it draws besides the
+// trace is the graticule plan of runtime/scope_picture.hpp, the same plan the headless scope image
+// draws, so the two cannot drift.
 
 #include <bloom/runtime/scope_frame_measure.hpp>
+#include <bloom/runtime/scope_picture.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/scopes_drawing.hpp>
 #include <bloom/ui/scopes_trace_renderer.hpp>
@@ -19,6 +22,12 @@
 #include <memory>
 
 namespace bloom::ui {
+
+// The color roles and the spacing the panel draws with, from the interface tokens. The headless
+// scope image uses runtime::scopes::defaultScopePalette() and ScopeMetrics{} (the same values,
+// which bloom.ui.scopes-picture proves).
+[[nodiscard]] runtime::scopes::ScopePalette scopePanelPalette();
+[[nodiscard]] runtime::scopes::ScopeMetrics scopePanelMetrics();
 
 // What a scope shows: the tables of one measured frame and how its signal is labeled.
 struct ScopeViewData final {
@@ -54,6 +63,8 @@ class ScopeView final : public QWidget {
     [[nodiscard]] QString readoutAt(const QPointF& position) const;
     // The plot rectangle in widget coordinates (the pane that holds the trace and its graticule).
     [[nodiscard]] QRectF plotRect() const;
+    // The graticule plan this scope paints now at its size, clip markers included.
+    [[nodiscard]] runtime::scopes::ScopeGraticule graticule() const;
     // The last finished image this scope paints (null before the first).
     [[nodiscard]] const QImage& traceImage() const noexcept { return trace_; }
     [[nodiscard]] const scopes::ClipSummary& clipSummary() const noexcept { return clip_; }
@@ -78,22 +89,15 @@ class ScopeView final : public QWidget {
     void leaveEvent(QEvent* event) override;
 
   private:
-    struct Geometry final {
-        QRectF plot;
-        // Where the trace image goes inside the plot.
-        QRectF image;
-        qreal rowHeight = 0.0;
-        int rows = 0;
-    };
-    [[nodiscard]] Geometry geometry(int width, int height) const;
-    [[nodiscard]] QSize traceSizeFor(const Geometry& geometry) const;
+    [[nodiscard]] runtime::scopes::GraticuleRequest planRequest(int width, int height,
+                                                                bool withClip) const;
+    [[nodiscard]] runtime::scopes::ScopeGraticule plan(int width, int height,
+                                                       bool withClip = false) const;
     [[nodiscard]] bool measured() const;
     void requestTrace();
     void adoptFinished();
-    void paintWaveform(QPainter& painter, const Geometry& geometry) const;
-    void paintVectorscope(QPainter& painter, const Geometry& geometry) const;
-    void paintHistogram(QPainter& painter, const Geometry& geometry) const;
-    void paintChromaticity(QPainter& painter, const Geometry& geometry) const;
+    void paintPlan(QPainter& painter, const runtime::scopes::ScopeGraticule& plan,
+                   const runtime::scopes::ScopePalette& palette) const;
     void paintTrace(QPainter& painter, const QRectF& target, bool additive) const;
     [[nodiscard]] QString axisLabel(int code) const;
 
