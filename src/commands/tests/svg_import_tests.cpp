@@ -3,6 +3,7 @@
 #include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/commands/data_block_operations.hpp>
 #include <bloom/commands/layer_drop_operations.hpp>
+#include <bloom/commands/layer_stack_operations.hpp>
 #include <bloom/commands/node_editor_operations.hpp>
 #include <bloom/commands/project_item_operations.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
@@ -966,6 +967,42 @@ void reAddingInTheNodeEditorAndANewComposition(TestContext& test) {
     }
 }
 
+// ---- #714: deleting an imported SVG's layer deletes the nodes that build it ----
+
+void deletingAnSvgLayerDeletesItsNodes(TestContext& test) {
+    for (const auto mode : {SvgImportMode::Shapes, SvgImportMode::Layer}) {
+        const std::string label = mode == SvgImportMode::Shapes ? "editable shapes: " : "one layer: ";
+        const auto path = writeFile("delete-layer", kLayerArtwork);
+        Session session;
+        const auto before = signature(session.document, session.composition);
+        const auto imported = session.import(path, mode);
+        const auto layer = outputOf<LayerId>(imported, "layer");
+        test.expect(imported.succeeded() && layer.has_value(), label + "the file imports");
+        if (!layer)
+            continue;
+        const auto withArtwork = signature(session.document, session.composition);
+        test.expect(std::get<0>(withArtwork) > std::get<0>(before), label + "the import adds nodes");
+        if (mode == SvgImportMode::Shapes)
+            test.expect(countNodes(session.main(), document::kPathValueNodeType) >= 3 &&
+                            countNodes(session.main(), document::kLinearGradientNodeType) >= 1 &&
+                            countNodes(session.main(), document::kLayerStackNodeType) >= 2,
+                        label + "the artwork is paths, a gradient and nested merges");
+
+        Transaction transaction("Delete Layer", session.document.snapshot().revision());
+        transaction.emplace<DeleteLayers>(session.composition, std::vector<LayerId>{*layer});
+        test.expect(session.stack.execute(std::move(transaction)).succeeded(),
+                    label + "the layer deletes");
+        test.expect(signature(session.document, session.composition) == before,
+                    label + "no node, layer or parameter of the artwork is left");
+        test.expect(session.project().validate().ok(), label + "the project validates");
+        test.expect(session.stack.undo().changed() &&
+                        signature(session.document, session.composition) == withArtwork &&
+                        session.main().graph().findLayer(*layer) != nullptr,
+                    label + "one undo brings the layer and every node back");
+        std::filesystem::remove(path);
+    }
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
@@ -988,5 +1025,6 @@ int main() {
     bloom::commands::test::anImageLayerRefusesAnSvgAsset(test);
     bloom::commands::test::reAddingPlacesTheLayerLikeFootage(test);
     bloom::commands::test::reAddingInTheNodeEditorAndANewComposition(test);
+    bloom::commands::test::deletingAnSvgLayerDeletesItsNodes(test);
     return test.failures() == 0 ? 0 : 1;
 }

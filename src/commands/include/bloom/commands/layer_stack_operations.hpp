@@ -12,8 +12,12 @@
 
 namespace bloom::commands {
 
-// Deletes each layer: removes its Layer Output boundary node, which drops its stack slot, its
-// masks and its links, exactly as Delete in the Timeline does. Source nodes upstream stay.
+// Deletes each layer, exactly as Delete in the Timeline does: its stack slot, its masks and its
+// links go (for a layer with a Layer Output boundary node, that node), and so does every node
+// only the deleted layers use (#714): the sources a layer brought with it, such as an imported
+// SVG's paths, shapes, gradients and merges. A node anything else still reads stays, as does
+// what that node reads; so a source shared with another layer is kept. One operation, one undo
+// step.
 class DeleteLayers final : public Operation {
   public:
     DeleteLayers(document::CompositionId composition, std::vector<document::LayerId> layers)

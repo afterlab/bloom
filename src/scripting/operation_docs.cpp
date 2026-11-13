@@ -980,7 +980,9 @@ constexpr std::array kSideEffects{
         "repeated ids).\n"
         "The copies take new ids and a new stack slot directly below the original."},
     SideEffectNote{"bloom.layer.delete",
-        "The layer's source nodes stay in the graph; only the layer is removed."},
+        "Every node only the deleted layers use is removed with them (the sources a layer "
+        "brought, such as an imported SVG's paths, gradients and merges). A node anything else "
+        "still reads stays."},
     SideEffectNote{"bloom.parameter.set-source",
         "Setting a constant, a driver or another curve on an animated parameter retires its "
         "animation curve and every key on it; undo restores them. (bloom.animation."

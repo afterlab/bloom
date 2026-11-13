@@ -1,14 +1,19 @@
 #include <bloom/commands/layer_stack_operations.hpp>
 
 #include <bloom/commands/node_operations.hpp>
+#include <bloom/document/layer_masks.hpp>
 #include <bloom/document/project.hpp>
 
 #include "entry_layer_support.hpp"
+#include "node_operation_support.hpp"
 
 #include <algorithm>
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
+#include <variant>
+#include <vector>
 
 namespace bloom::commands {
 namespace {
@@ -44,6 +49,118 @@ boundaryNodes(const document::Draft& draft, const document::CompositionId compos
     return std::nullopt;
 }
 
+// One "reads from" relation of the graph: `reader` uses what `source` makes.
+struct NodeUse final {
+    document::NodeId reader;
+    document::NodeId source;
+};
+
+// #714: the nodes only the deleted layers use. A layer brings its own source nodes (an imported
+// SVG's paths, shapes, gradients and merges; a footage layer's Media node; a Solid's source), and
+// deleting the layer used to leave them in the graph, linked to nothing.
+//
+// The candidates are everything upstream of the deleted layers: what links into their slots (or,
+// for a layer with a boundary node, into that node), what drives their parameters, their matte
+// nodes, and so on up the graph. A candidate stays when anything that is not itself going reads
+// it: another layer, a node outside the set, a parameter it drives elsewhere. So a source shared
+// with another layer stays, and so does everything it reads in turn. A node Delete refuses (a
+// locked layer's) stays as well.
+[[nodiscard]] std::set<document::NodeId>
+ownedSourceNodes(const document::Composition& composition,
+                 const std::vector<document::LayerId>& layers,
+                 const std::set<document::NodeId>& boundaryNodes) {
+    const auto& graph = composition.graph();
+    std::set<document::LayerId> deleted(layers.begin(), layers.end());
+    // The slots that go with the deleted entry layers: a link into one of them is the deleted
+    // layer reading its source, not the Merge's other layers reading it.
+    std::set<std::pair<document::NodeId, document::LayerSlotId>> deletedSlots;
+    for (const auto& layer : graph.layerOutputs())
+        if (deleted.contains(layer.layerId) && layer.entryOwned())
+            deletedSlots.emplace(layer.nodeId, *layer.entrySlot);
+
+    // Every use that survives the deletion, and the seeds: what the deleted layers read.
+    std::vector<NodeUse> uses;
+    std::vector<document::NodeId> pending;
+    for (const auto& edge : graph.edges()) {
+        if (const auto* slot = std::get_if<document::LayerStackInputRef>(&edge.destination);
+            slot != nullptr && deletedSlots.contains({slot->stackNodeId, slot->slotId})) {
+            pending.push_back(edge.source.nodeId);
+            continue;
+        }
+        uses.push_back({detail::destinationNode(edge.destination), edge.source.nodeId});
+    }
+    const auto driverOf = [&](const document::ParameterId id) -> std::optional<document::NodeId> {
+        const auto* parameter = composition.parameters().find(id);
+        const auto* driver =
+            parameter ? std::get_if<document::DriverBindingSource>(&parameter->source) : nullptr;
+        return driver != nullptr ? std::optional(driver->sourceNodeId) : std::nullopt;
+    };
+    for (const auto& node : graph.nodes())
+        for (const auto& binding : node.parameters)
+            if (const auto source = driverOf(binding.parameterId))
+                uses.push_back({node.id, *source});
+    for (const auto& layer : graph.layerOutputs()) {
+        const bool going = deleted.contains(layer.layerId);
+        const auto read = [&](const document::NodeId source) {
+            if (going)
+                pending.push_back(source);
+            else
+                uses.push_back({layer.nodeId, source});
+        };
+        for (const auto& binding : layer.parameters)
+            if (const auto source = driverOf(binding.parameterId))
+                read(*source);
+        if (layer.trackMatte && layer.trackMatte->node)
+            read(layer.trackMatte->node->nodeId);
+        for (const auto& mask : layer.masks) {
+            if (mask.matte)
+                read(mask.matte->nodeId);
+            for (const auto& [parameterId, schemaKey] : document::layerMaskParameters(mask)) {
+                (void)schemaKey;
+                if (const auto source = driverOf(parameterId))
+                    read(*source);
+            }
+        }
+    }
+    for (const auto node : boundaryNodes)
+        pending.push_back(node);
+
+    // Upstream closure of the seeds.
+    std::multimap<document::NodeId, document::NodeId> sourcesOf;
+    for (const auto& use : uses)
+        sourcesOf.emplace(use.reader, use.source);
+    std::set<document::NodeId> owned;
+    while (!pending.empty()) {
+        const auto id = pending.back();
+        pending.pop_back();
+        if (graph.findNode(id) == nullptr || !owned.insert(id).second)
+            continue;
+        const auto [first, last] = sourcesOf.equal_range(id);
+        for (auto source = first; source != last; ++source)
+            pending.push_back(source->second);
+    }
+    // A boundary node goes whatever reads it; it is the layer. Everything else must be deletable
+    // and read by nothing that stays.
+    for (auto candidate = owned.begin(); candidate != owned.end();)
+        if (!boundaryNodes.contains(*candidate) &&
+            nodeRemovalRefusal(composition, *candidate) != NodeRemovalRefusal::None)
+            candidate = owned.erase(candidate);
+        else
+            ++candidate;
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (const auto& use : uses)
+            if (owned.contains(use.source) && !owned.contains(use.reader) &&
+                !boundaryNodes.contains(use.source)) {
+                owned.erase(use.source);
+                changed = true;
+            }
+    }
+    for (const auto node : boundaryNodes)
+        owned.erase(node);
+    return owned;
+}
+
 } // namespace
 
 OperationResult DeleteLayers::apply(document::Draft& draft) const {
@@ -51,7 +168,14 @@ OperationResult DeleteLayers::apply(document::Draft& draft) const {
     std::vector<document::LayerId> entryLayers;
     if (auto failure = boundaryNodes(draft, composition_, layers_, nodes, &entryLayers))
         return std::move(*failure);
-    // An entry layer leaves with its slot; its Merge and the slot's sources stay.
+    // #714: the layers' own source nodes go with them, in the same operation (one undo step).
+    // Read from the graph as it is before anything is removed.
+    {
+        auto owned = ownedSourceNodes(*draft.project().findComposition(composition_), layers_, nodes);
+        nodes.merge(owned);
+    }
+    // An entry layer leaves with its slot; its Merge stays, and the sources only it used go
+    // with the nodes below.
     for (const auto layer : entryLayers)
         if (auto failure =
                 detail::deleteEntryLayer(*draft.project().findComposition(composition_), layer))

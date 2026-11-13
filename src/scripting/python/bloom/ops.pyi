@@ -5376,11 +5376,12 @@ class LayerOps:
     def delete(self, *, composition: int | Proxy = ..., layers: tuple = ...) -> Mapping[str, Any] | None:
         """bloom.layer.delete  (operation, layer)
         Deletes layers, as Delete in the Timeline or Delete Layer in the Viewer's context menu does:
-        each layer's Layer Output node is removed with its stack slot, masks, track-matte and parent
-        links. Upstream source nodes are left in the graph, as in the UI. Outputs: none. Errors: "Layer
-        N is not in the composition" - a stale or foreign layer id, re-read the layers; "No layers were
-        named" - an empty array with no selected layers. Undo: one step; undo restores the layers with
-        their ids. MCP example: {"op":"bloom.layer.delete","args":{"layers":[2]}}.
+        each layer is removed with its stack slot, masks, track-matte and parent links, and so is every
+        node only the deleted layers use (their own sources, such as an imported SVG's paths, gradients
+        and merges). A node anything else still reads stays. Outputs: none. Errors: "Layer N is not in
+        the composition" - a stale or foreign layer id, re-read the layers; "No layers were named" - an
+        empty array with no selected layers. Undo: one step; undo restores the layers with their ids.
+        MCP example: {"op":"bloom.layer.delete","args":{"layers":[2]}}.
 
         Arguments:
           composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
@@ -5395,7 +5396,9 @@ class LayerOps:
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
         Side effects:
-          - The layer's source nodes stay in the graph; only the layer is removed.
+          - Every node only the deleted layers use is removed with them (the sources a layer brought,
+          such as an imported SVG's paths, gradients and merges). A node anything else still reads
+          stays.
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.

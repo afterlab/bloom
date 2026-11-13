@@ -622,7 +622,82 @@ void reconcileSkipsParameterOnlyEdits() {
 
 } // namespace
 
+// #714: deleting a layer deletes every node only that layer uses, as one undo step; a node
+// another layer (or anything else that stays) still reads is kept.
+void deletingALayerTakesItsOwnSourcesAndKeepsSharedOnes() {
+    Fixture fixture;
+    const auto main = fixture.mainMerge();
+    // Layer A: Solid -> Grade -> slot. Both nodes are its own.
+    const auto ownSolid = fixture.addSolid();
+    const auto ownGrade = fixture.addNode(kGradeNodeType);
+    fixture.link(ownSolid, ownGrade, "input");
+    const auto slotA = fixture.connect(ownGrade, main);
+    // Layers B and C read one Solid.
+    const auto sharedSolid = fixture.addSolid();
+    const auto slotB = fixture.connect(sharedSolid, main);
+    const auto slotC = fixture.connect(sharedSolid, main);
+    // Layer D reads a Grade of its own that reads the shared Solid.
+    const auto gradeD = fixture.addNode(kGradeNodeType);
+    fixture.link(sharedSolid, gradeD, "input");
+    const auto slotD = fixture.connect(gradeD, main);
+    // A node nothing reads: it was never a layer's, so no layer's deletion takes it.
+    const auto loose = fixture.addSolid();
+    const auto layerOf = [&](const LayerSlotId slot) {
+        const auto layer = fixture.must<EnsureEntryLayer>(fixture.composition, main, slot)
+                               .outputId<LayerId>(kEntryLayerOutput);
+        if (!layer)
+            throw std::runtime_error("fixture entry layer");
+        return *layer;
+    };
+    const auto a = layerOf(slotA);
+    const auto b = layerOf(slotB);
+    const auto c = layerOf(slotC);
+    const auto d = layerOf(slotD);
+    const auto has = [&](const NodeId id) { return fixture.comp().graph().findNode(id) != nullptr; };
+
+    auto before = fixture.document.snapshot();
+    fixture.must<DeleteLayers>(fixture.composition, std::vector<LayerId>{a});
+    expect(fixture.comp().graph().findLayer(a) == nullptr && !has(ownSolid) && !has(ownGrade),
+           "deleting a layer deletes the nodes only it uses, the whole chain");
+    expect(has(sharedSolid) && has(gradeD) && has(loose) && has(main),
+           "nodes the layer did not use stay");
+    expect(noOrphanParameters(fixture.comp()) &&
+               fixture.document.snapshot().project().validate().ok(),
+           "the delete leaves no parameter behind and validates");
+    expectExactUndoRedo(fixture, before, "delete a layer with its own sources");
+
+    before = fixture.document.snapshot();
+    fixture.must<DeleteLayers>(fixture.composition, std::vector<LayerId>{d});
+    expect(!has(gradeD) && has(sharedSolid),
+           "a layer's own node goes, the shared source it read stays");
+    expectExactUndoRedo(fixture, before, "delete a layer reading a shared source");
+
+    before = fixture.document.snapshot();
+    fixture.must<DeleteLayers>(fixture.composition, std::vector<LayerId>{b});
+    expect(fixture.comp().graph().findLayer(b) == nullptr && has(sharedSolid),
+           "a source another layer still reads stays");
+    expectExactUndoRedo(fixture, before, "delete one of two layers sharing a source");
+
+    before = fixture.document.snapshot();
+    fixture.must<DeleteLayers>(fixture.composition, std::vector<LayerId>{c});
+    expect(!has(sharedSolid) && has(loose),
+           "the source goes with the last layer that read it");
+    expect(fixture.stack.undo().changed() && has(sharedSolid) &&
+               sameContent(fixture.comp(), *before.project().findComposition(fixture.composition)),
+           "one undo brings the layer and its node back");
+
+    // Two layers sharing a source, deleted together: the source is theirs alone and goes.
+    expect(fixture.stack.undo().changed() && fixture.comp().graph().findLayer(b) != nullptr,
+           "the fixture has both sharing layers again");
+    before = fixture.document.snapshot();
+    fixture.must<DeleteLayers>(fixture.composition, std::vector<LayerId>{b, c});
+    expect(!has(sharedSolid) && has(loose) && has(main),
+           "a source only the deleted layers share goes with them");
+    expectExactUndoRedo(fixture, before, "delete two layers sharing a source");
+}
+
 int main() try {
+    deletingALayerTakesItsOwnSourcesAndKeepsSharedOnes();
     firstEditCreatesTheEntryLayerInOneStep();
     ensureReportsALayerNodeEntry();
     timeRemapBindsOnTheEntryLayer();

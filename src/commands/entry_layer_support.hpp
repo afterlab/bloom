@@ -145,7 +145,7 @@ duplicateEntryLayer(document::Draft& draft, document::CompositionId composition,
 
 // Deletes an entry layer: its slot and the slot's edges, its record, its parameters (with their
 // curves) and its masks', and every parent or matte reference to it. The Merge and the slot's
-// sources stay.
+// sources stay here; DeleteLayers removes the sources only the deleted layers use (#714).
 [[nodiscard]] std::optional<OperationResult> deleteEntryLayer(document::Composition& composition,
                                                               document::LayerId layer);
 

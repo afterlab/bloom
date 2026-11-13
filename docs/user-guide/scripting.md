@@ -85,8 +85,9 @@ Every layer and node edit of the Timeline, Viewer and Node editor menus and drop
 built on the same command as the UI action, so it validates, labels and undoes the same way:
 
 - `bloom.layer.delete` and `bloom.layer.duplicate` take `layers` (layer ids, not node ids) and
-  default to the selected layers. Delete removes each layer's Layer Output node, as Delete in the
-  Timeline does; duplicate copies it in place directly below the original and outputs one `layer`
+  default to the selected layers. Delete removes each layer as Delete in the Timeline does,
+  together with every node only the deleted layers use (a source another layer still reads
+  stays); duplicate copies it in place directly below the original and outputs one `layer`
   per copy.
 - `bloom.layer.add-from-assets` is an asset drop on the Timeline or Viewer
   ([ADR 0030](../decisions/0030-layer-drops.md)): `assets` (image, image sequence, video or audio)

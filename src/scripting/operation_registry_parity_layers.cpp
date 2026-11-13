@@ -58,8 +58,9 @@ const std::string kAddFromAssets =
 
 const std::string kDelete =
     R"(Deletes layers, as Delete in the Timeline or Delete Layer in the Viewer's context menu )"
-    R"(does: each layer's Layer Output node is removed with its stack slot, masks, track-matte )"
-    R"(and parent links. Upstream source nodes are left in the graph, as in the UI. )"
+    R"(does: each layer is removed with its stack slot, masks, track-matte and parent links, )"
+    R"(and so is every node only the deleted layers use (their own sources, such as an imported )"
+    R"(SVG's paths, gradients and merges). A node anything else still reads stays. )"
     R"(Outputs: none. )"
     R"(Errors: "Layer N is not in the composition" - a stale or foreign layer id, re-read the )"
     R"(layers; "No layers were named" - an empty array with no selected layers. )"
