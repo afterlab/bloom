@@ -358,6 +358,28 @@ and return between bounded slices. Complete persistent edits on the authoring th
 retrieving the result. An in-process native extension that hangs cannot be forcibly cancelled
 safely. Shutdown stops queued work and waits for running trusted work to finish.
 
+## Scopes
+
+```python
+summary = bloom.scopes.read(24, result="summary")
+red = summary["frames"][0]["summary"]["channels"]["red"]
+tables = bloom.scopes.read(0, last_frame=11, scopes=["histogram"], encoding="sparse")
+bloom.scopes.image("scopes.png", 24, image="all", width=800)
+```
+
+`bloom.scopes.read` measures the frames of a composition exactly as the Scopes panel does and
+returns the same members as the MCP `query` kind `scopes`, in snake_case: `settings`, `luma`,
+`primaries` and `frames`, where each frame has `route` (`"gpu"` or `"cpu"`, with `route_note` saying
+why the CPU reference counted it), `counted`, `measured_area` and its `tables` or `summary`. Pass a
+`frame` number or a `time`, `last_frame` for a range (at most 1000 frames), `scopes`, `signal`
+(`"display"` or `"working"`, with `axis_maximum`), `region`, `ignore_transparent`, `resolution`,
+`display` and `view`, and `encoding="sparse"` to list only the non-zero cells of each table.
+`bloom.scopes.image` draws one scope or `image="all"` into a PNG at `out`; a range writes one
+numbered file per frame and an existing file is only replaced with `replace=True`. A read ignores
+the Viewer's exposure, gamma, channel and isolation. Inside `bloom.tasks.submit` it reports progress
+per frame and stops with `bloom.CancelledError` when the task is cancelled. A bad argument raises
+`ValueError` saying what to use instead.
+
 ## Events
 
 ```python

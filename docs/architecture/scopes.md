@@ -170,6 +170,21 @@ only this: the count tables of one scope measure, read back once per measure.
 The entry is the decision O1 of the Scopes specification of issue #724. Like
 `prep.statistics.result_readback` it needs the owner's approval; it lands only with that approval.
 
+## Reading scopes from MCP and Python
+
+`scripting/scope_read.hpp` is the one Qt-free read behind MCP's `query` kind `scopes` and Python's
+`bloom.scopes`. It validates the request on the calling thread, then runs one task on the caller's
+scheduler that resolves the color configuration, chooses the display and view (the configuration's
+own defaults, never the Viewer's inspection settings), compiles the plan once and measures each frame
+through `measureScopeFrame` on the same routes and with the same CPU/GPU parity as the panel. A
+frame whose tables the desktop application's preview cache already holds under the same frame
+identity and the same measure settings is taken from that sidecar instead of measured (the
+`McpLiveUiBinding` port answers only for a Viewer state of no region of interest, isolation or
+channel view). The caller's cancellation is polled while the task runs and reaches inside a frame.
+Tables are described as flat arrays (dense, or the non-zero cells as index and count pairs), a summary
+is `summarizeScopes` of the tables, and a picture is `renderScopePicture` or `renderAllScopesPicture`
+encoded with `encodeScopePng`, so a picture equals what the panel draws.
+
 ## Budget, cancellation and retirement
 
 The measure is part of its frame's request. The tables, their staging copy and their host copy are
@@ -190,5 +205,8 @@ other stages' are. The measure holds no state between frames.
 | `bloom.ui.scopes-picture` | The panel and the picture agree: palette and metrics equal the interface tokens, an offscreen grab and the picture agree on the trace rectangle of each scope, and the plan's hairlines are where the grab has graticule pixels |
 | `bloom.color.scope-colorimetry` | The XYZ transform, the luma coefficients and the primaries of the built-in configs |
 | `bloom.runtime.scope_frame_measure_native` | A frame through the production device route against the CPU reference: exact for the Working signal, within one cell through the OCIO steps, one table readback and no picture readback, the route named |
+| `bloom.scripting.scope-read` | The headless read: tables equal the CPU reference cell for cell for both signals, counters, luma and primaries, sums, sparse equal to dense, the summary, pictures, a range with progress and a deterministic cancel, the warm-sidecar port, region, transparency, resolution, display and view, and every refusal with its remedy |
+| `bloom.mcp.scope-query` | `query` kind `scopes` on the shared core: the tables equal the read's, sparse, summary, image and range answers, and the refusals |
+| `bloom.scripting.python-scopes` | `bloom.scopes.read` and `image` from Python: a flat color's tables, sparse equal to dense, summary, range and time, written and replaced files, argument errors |
 
 The device tests skip without a device and fail under `--require-device`.

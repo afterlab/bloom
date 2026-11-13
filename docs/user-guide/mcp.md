@@ -588,6 +588,29 @@ through the same route (`help` lists them with their arguments):
   is cancelled. `colorSpace` names the space of the values: they are scene-linear in the project's
   working space, with no display transform and no clamping, and red, green and blue are
   premultiplied by alpha. The answer also reports the route that rendered the frame (see below).
+- `kind:"scopes"` measures a frame (or `frame` to `lastFrame`, at most 1000 frames) exactly as the
+  Scopes panel does and returns the count tables, a summary computed from them, or a PNG of the
+  scope. `composition` and `frame` (a whole frame number) or `time` choose the frame; `scopes` lists
+  any of `waveform`, `parade`, `vectorscope`, `histogram` and `chromaticity` (default all). `signal`
+  is `display` (through the configuration's default display and view unless `display` and `view`
+  name another pair) or `working` (with `axisMaximum` 1, 2, 4, 8 or 16). `region` is
+  `[x, y, width, height]` in composition pixels, `ignoreTransparent` leaves out pixels whose alpha
+  is 0, and `resolution` is `full`, `half` or `quarter`. A read never uses the Viewer's exposure,
+  gamma, channel, isolation or region of interest. `result` is `tables` (the default), `summary`
+  (per channel min, max, mean, p1, p50 and p99 code values and clipped counts, with the
+  vectorscope's mean saturation and hue) or `image` (`image` is one scope or `all`, `width` and
+  `height` 128 to 2048 pixels, plus `waveformChannels`, `histogramChannels`, `histogramScale` and
+  `brightness`; the picture is returned like a `capture`, inline when small and as a resource link
+  otherwise, and a range of images is limited to 16 frames). Tables are flat arrays: each has
+  `shape`, `order` and `values`, and the histogram and waveform also `under` and `over`;
+  `encoding:"sparse"` lists only the non-zero cells as `[index, count]` pairs. The answer reports
+  `settings` as measured, the `luma` coefficients, the colorimetric `primaries`, and per frame the
+  `route` (`gpu` or `cpu`) with a `routeNote` saying why the CPU reference counted it,
+  `fromCache` (the application's warm RAM preview supplied the tables), `measuredArea`, `counted`
+  and the counters of pixels not finite, without chromaticity or outside a plot. An answer too
+  large for one response is refused with the ways to make it smaller. In the desktop application a
+  frame whose tables the preview cache already holds under the same settings is returned without
+  measuring. The same read is `bloom.scopes.read` and `bloom.scopes.image` in Python.
 - `kind:"render-route"` says which route produced the Viewer's displayed frame: `scene` and
   `display` are each `gpu` or `cpu` as the frame itself recorded, `provider` names the display
   arm, `why` is the reason the frame recorded for running part of it on the CPU, and
