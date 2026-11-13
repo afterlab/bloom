@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -1045,9 +1046,132 @@ void testRendersReadSlowSourcesOnce() {
     expect(mirror->statistics().diskHits > hitsBefore,
            "a later session is served from the local copy");
 }
+
+// #570: the headless render route normalizes loudness. A session with one audio layer (a
+// 0.25-amplitude 440 Hz stereo tone, about -12.7 LUFS) renders to WAV and to a ProRes movie with
+// a -23 LUFS target; each result carries the measured and the delivered level, and a render
+// without a target carries none.
+void testLoudnessOnTheHeadlessRoute() {
+    const auto root = std::filesystem::temp_directory_path() / "bloom-render-loudness";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+    {
+        // One second of 16-bit PCM stereo at 48 kHz.
+        std::vector<char> data;
+        for (int frame = 0; frame < 48000; ++frame) {
+            const auto sample = static_cast<std::int16_t>(std::lround(
+                0.25 * 32767.0 * std::sin(2.0 * 3.141592653589793 * 440.0 * frame / 48000.0)));
+            for (int channel = 0; channel < 2; ++channel) {
+                data.push_back(static_cast<char>(sample & 0xFF));
+                data.push_back(static_cast<char>((sample >> 8) & 0xFF));
+            }
+        }
+        const auto u32 = [](std::ofstream& out, const std::uint32_t value) {
+            for (int byte = 0; byte < 4; ++byte)
+                out.put(static_cast<char>((value >> (8 * byte)) & 0xFFU));
+        };
+        const auto u16 = [](std::ofstream& out, const std::uint32_t value) {
+            out.put(static_cast<char>(value & 0xFFU));
+            out.put(static_cast<char>((value >> 8) & 0xFFU));
+        };
+        std::ofstream out(root / "tone.wav", std::ios::binary);
+        out.write("RIFF", 4);
+        u32(out, static_cast<std::uint32_t>(36 + data.size()));
+        out.write("WAVEfmt ", 8);
+        u32(out, 16);
+        u16(out, 1);
+        u16(out, 2);
+        u32(out, 48000);
+        u32(out, 48000 * 4);
+        u16(out, 4);
+        u16(out, 16);
+        out.write("data", 4);
+        u32(out, static_cast<std::uint32_t>(data.size()));
+        out.write(data.data(), static_cast<std::streamsize>(data.size()));
+    }
+    auto config = runtime::TaskSchedulerConfig::defaults();
+    config.rowBandWorkerCount = runtime::kSerialRowBandWorkers;
+    runtime::TaskScheduler scheduler(config);
+    runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    runtime::GpuProcessFrameEvaluatorOptions options;
+    options.enabled = false;
+    const auto provider = host::GpuExportProvider::create(options);
+    auto created = Session::createNew("Loudness", "Composition", core::RationalTime::fromInteger(1));
+    expect(static_cast<bool>(created), "loudness session");
+    if (!created)
+        return;
+    auto session = std::move(created).takeSession();
+    const auto apply = [&](const std::string& json, const std::string& what) {
+        const auto script = parseScriptJson(json);
+        expect(static_cast<bool>(script), what + " parses");
+        if (!script)
+            return false;
+        bool ok = true;
+        for (const auto& transaction : script.transactions())
+            ok = session->executeJsonOperation(transaction.operation, transaction.arguments)
+                     .succeeded() &&
+                 ok;
+        expect(ok, what);
+        return ok;
+    };
+    if (!apply(R"([{"op":"bloom.composition.add","args":{"name":"Small","width":256,"height":128,"duration":[1,1]}},)"
+               R"({"op":"bloom.asset.import","args":{"paths":[")" +
+                   (root / "tone.wav").generic_string() + R"("]}}])",
+               "the composition and the tone are added"))
+        return;
+    const auto snapshot = session->snapshot();
+    expect(snapshot.project().compositions().size() == 2 && snapshot.project().assets().size() == 1,
+           "one small composition and one audio asset");
+    if (snapshot.project().compositions().size() != 2 || snapshot.project().assets().size() != 1)
+        return;
+    const auto composition = snapshot.project().compositions().back().id();
+    if (!apply(R"([{"op":"bloom.layer.add-audio","args":{"composition":)" +
+                   std::to_string(composition.value()) + R"(,"asset":)" +
+                   std::to_string(snapshot.project().assets().front().id.value()) + "}}]",
+               "the tone becomes an audio layer"))
+        return;
+    const auto render = [&](const output::OutputPresetV1 preset, const std::string& file,
+                            const std::optional<document::ExportLoudness> loudness) {
+        return Render::run(*session, scheduler, compiler,
+                           RenderRequest{.composition = composition,
+                                         .frame = std::nullopt,
+                                         .range = std::pair<std::uint64_t, std::uint64_t>{0, 23},
+                                         .preset = preset,
+                                         .destination = root / file,
+                                         .loudness = loudness},
+                           root / ("scratch-" + file), provider);
+    };
+    const document::ExportLoudness target{-23.0, -1.0};
+    for (const auto& [preset, file] :
+         {std::pair{output::OutputPresetV1::PcmWavV1, std::string("normalized.wav")},
+          std::pair{output::OutputPresetV1::ProResMovV1, std::string("normalized.mov")}}) {
+        const auto result = render(preset, file, target);
+        expect(result.succeeded && std::filesystem::exists(root / file),
+               file + " renders: " + result.diagnostic);
+        expect(result.loudness.has_value(), file + ": the result carries a loudness report");
+        if (!result.loudness)
+            continue;
+        const auto& report = *result.loudness;
+        expect(report.measured && std::abs(report.measuredLufs - -12.7) < 0.6,
+               file + ": the tone measures near -12.7 LUFS (got " +
+                   std::to_string(report.measuredLufs) + ")");
+        expect(report.finalMeasured && std::abs(report.finalLufs - -23.0) < 0.2,
+               file + ": the delivered loudness is the target (got " +
+                   std::to_string(report.finalLufs) + ")");
+        expect(report.targetLufs == -23.0 && report.truePeakLimitDbtp == -1.0 &&
+                   std::abs(report.gainDb - (-23.0 - report.measuredLufs)) < 1e-6,
+               file + ": the report states the target, the ceiling and the gain");
+    }
+    const auto plain = render(output::OutputPresetV1::PcmWavV1, "plain.wav", std::nullopt);
+    expect(plain.succeeded && !plain.loudness.has_value(),
+           "a render without a target reports no loudness: " + plain.diagnostic);
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+}
 } // namespace bloom::scripting
 
 int main() {
+    bloom::scripting::testLoudnessOnTheHeadlessRoute();
     bloom::scripting::testRendersReadSlowSourcesOnce();
     bloom::scripting::testParity();
     bloom::scripting::testDesktopQueueMatchesHeadless();

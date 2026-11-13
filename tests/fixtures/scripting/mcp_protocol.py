@@ -3,14 +3,17 @@ import base64
 import hashlib
 import os
 import json
+import math
 import pathlib
 import queue
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
+import wave
 
 MCP, CLI = sys.argv[1:3]
 del sys.argv[1:3]
@@ -597,6 +600,72 @@ class Protocol(unittest.TestCase):
                           content['preservationReport'])
             self.assertEqual(content['files'][0]['digest'],
                              'sha256:' + hashlib.sha256(destination.read_bytes()).hexdigest())
+
+    def test_export_normalizes_loudness(self):
+        # Issue #570 through the server's own export run (no stand-in runner): a 0.25-amplitude
+        # 440 Hz stereo tone measures about -12.7 LUFS; a WAV and a movie exported with a -23 LUFS
+        # target report the measured and the delivered level, and an export without one reports
+        # none.
+        with tempfile.TemporaryDirectory(prefix='bloom-mcp-loudness-') as directory:
+            root = pathlib.Path(directory)
+            tone = root / 'tone.wav'
+            with wave.open(str(tone), 'wb') as file:
+                file.setnchannels(2)
+                file.setsampwidth(2)
+                file.setframerate(48000)
+                file.writeframes(b''.join(
+                    struct.pack('<hh', *(2 * [round(0.25 * 32767 * math.sin(
+                        2 * math.pi * 440 * frame / 48000))])) for frame in range(48000)))
+            process = subprocess.Popen([MCP], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE)
+            try:
+                def call(line, answered=True):
+                    process.stdin.write((line + '\n').encode())
+                    process.stdin.flush()
+                    return json.loads(process.stdout.readline()) if answered else None
+
+                self.assertEqual(call(INIT)['id'], 1)
+                call(READY, answered=False)
+                added = call(tool(2, 'transact', {'expectedRevision': 0, 'operations': [
+                    {'op': 'bloom.composition.add', 'args': {
+                        'name': 'Export', 'width': 256, 'height': 128, 'duration': [1, 1]}},
+                    {'op': 'bloom.asset.import', 'args': {
+                        'paths': [str(tone)], 'projectDirectory': directory}}]}))
+                content = added['result']['structuredContent']
+                self.assertTrue(content['succeeded'], added)
+                asset = [output['id'] for output in content['outputs']
+                         if output['name'] == 'asset'][0]
+                layered = call(tool(3, 'transact', {'expectedRevision': content['revision'],
+                    'operations': [{'op': 'bloom.layer.add-audio', 'args': {
+                        'composition': 2, 'asset': asset}}]}))
+                self.assertTrue(layered['result']['structuredContent']['succeeded'], layered)
+
+                def export(id, preset, name, **extra):
+                    response = call(tool(id, 'export', {
+                        'composition': 2, 'first': 0, 'last': 23, 'preset': preset,
+                        'audio': True, 'destination': str(root / name), **extra}))
+                    self.assertFalse(response['result']['isError'], response)
+                    self.assertTrue((root / name).is_file(), name)
+                    return response['result']['structuredContent']
+
+                for id, preset, name in ((4, 'PcmWavV1', 'normalized.wav'),
+                                         (5, 'ProResMovV1', 'normalized.mov')):
+                    loudness = export(id, preset, name, loudnessLufs=-23,
+                                      truePeakDbtp=-1)['loudness']
+                    self.assertEqual((loudness['targetLufs'], loudness['truePeakLimitDbtp']),
+                                     (-23, -1), loudness)
+                    self.assertTrue(loudness['measured'] and loudness['finalMeasured'], loudness)
+                    self.assertAlmostEqual(loudness['measuredLufs'], -12.7, delta=0.6)
+                    self.assertAlmostEqual(loudness['finalLufs'], -23, delta=0.2)
+                    self.assertAlmostEqual(loudness['gainDb'], -23 - loudness['measuredLufs'],
+                                           delta=0.01)
+                self.assertNotIn('loudness', export(6, 'PcmWavV1', 'plain.wav'))
+                _, diagnostic = process.communicate()
+                self.assertEqual(process.returncode, 0, diagnostic.decode(errors='replace'))
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
 
     def test_export_encoder_choice(self):
         # encoder=software makes the same movie with Bloom's FFmpeg encoder on every platform,
