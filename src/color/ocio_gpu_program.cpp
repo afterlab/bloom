@@ -5,6 +5,7 @@
 #include "ocio_gpu_program_serialize.hpp"
 #include "ocio_gpu_program_worker.hpp"
 #include "ocio_internal.hpp"
+#include "ocio_scope_xyz.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -277,6 +278,53 @@ buildOcioGpuProgramForCst(const ResolvedBloomNeutralConfig& resolved, const std:
         appendText(semanticBytes, toId);
         return extract(processor, render::OcioGpuProgramStage::ProcessEffect,
                        kOcioGpuCstSemanticsId, std::move(semanticBytes),
+                       resolved.expectedRevision(), limits);
+    } catch (const std::exception&) {
+        return render::OcioGpuProgramResult::failure(
+            render::OcioGpuProgramError::TransformBuildFailed);
+    }
+}
+
+render::OcioGpuProgramResult
+buildOcioGpuProgramForScopeXyz(const ResolvedBloomNeutralConfig& resolved,
+                               const std::string_view colorSpaceId,
+                               const render::OcioGpuProgramLimits& limits) noexcept {
+    if (!validId(colorSpaceId)) {
+        return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
+    }
+    try {
+        std::vector<std::byte> semanticBytes;
+        appendText(semanticBytes, colorSpaceId);
+        appendText(semanticBytes, detail::scopeXyzDefinitionIdentity());
+        if (const auto& remote = resolved.impl().remote()) {
+            // The helper answers UnsupportedColorSpace for a missing, data or unroutable space.
+            return extractRemote(*remote, detail::ConfigProcessorKind::ScopeXyz, colorSpaceId, {},
+                                 render::OcioGpuProgramStage::ProcessEffect,
+                                 kOcioGpuScopeXyzSemanticsId, std::move(semanticBytes),
+                                 resolved.expectedRevision(), limits);
+        }
+        const auto built =
+            detail::buildScopeXyzProcessor(resolved.impl().config(),
+                                           detail::isBloomNeutralConfig(resolved), colorSpaceId,
+                                           OCIO::Context::Create());
+        switch (built.error) {
+        case detail::ScopeXyzBuildError::None:
+            break;
+        case detail::ScopeXyzBuildError::MissingSource:
+        case detail::ScopeXyzBuildError::SourceIsData:
+            return render::OcioGpuProgramResult::failure(
+                render::OcioGpuProgramError::UnsupportedColorSpace);
+        case detail::ScopeXyzBuildError::NoInterchange:
+        case detail::ScopeXyzBuildError::BuildFailed:
+            return render::OcioGpuProgramResult::failure(
+                render::OcioGpuProgramError::TransformBuildFailed);
+        }
+        if (built.processor->isNoOp()) {
+            return render::OcioGpuProgramResult::failure(
+                render::OcioGpuProgramError::IdentityTransform);
+        }
+        return extract(built.processor, render::OcioGpuProgramStage::ProcessEffect,
+                       kOcioGpuScopeXyzSemanticsId, std::move(semanticBytes),
                        resolved.expectedRevision(), limits);
     } catch (const std::exception&) {
         return render::OcioGpuProgramResult::failure(

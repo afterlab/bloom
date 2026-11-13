@@ -164,6 +164,10 @@ target_sources(
     PRIVATE
         ocio_builtin_registry.cpp
         ocio_camera_log_inputs.cpp
+        ocio_scope_xyz.cpp
+        ocio_scope_xyz.hpp
+        scope_colorimetry.cpp
+        cie_spectral_locus.cpp
         ocio_cpu_color_space_processor.cpp
         ocio_cpu_file_transform_processor.cpp
         lut_file.cpp
@@ -200,6 +204,7 @@ target_sources(
             include/bloom/color/ocio_cpu_input_processor.hpp
             include/bloom/color/ocio_cpu_display_frame.hpp
             include/bloom/color/ocio_gpu_program.hpp
+            include/bloom/color/scope_colorimetry.hpp
 )
 
 target_compile_features(bloom_color_ocio PUBLIC cxx_std_20)
@@ -300,6 +305,15 @@ if(BUILD_TESTING)
         LABELS unit color ocio
     )
 
+    add_executable(bloom_color_scope_colorimetry_test tests/scope_colorimetry_tests.cpp)
+    target_link_libraries(bloom_color_scope_colorimetry_test PRIVATE bloom_color_ocio)
+    bloom_enable_warnings(bloom_color_scope_colorimetry_test)
+    bloom_add_test(
+        NAME bloom.color.scope-colorimetry
+        COMMAND bloom_color_scope_colorimetry_test
+        LABELS unit color ocio
+    )
+
     add_executable(
         bloom_color_ocio_cpu_display_frame_test
         tests/ocio_cpu_display_frame_tests.cpp
@@ -330,7 +344,7 @@ add_executable(bloom-color-worker lut_worker.cpp lut_file.cpp ocio_gpu_program_e
     ocio_config_worker.cpp ocio_config_worker.hpp ocio_config_protocol.hpp
     # An archive is read from memory into the same table a loose config is served from.
     ocio_config_archive.cpp ocio_config_archive.hpp
-    ocio_builtin_registry.cpp ocio_camera_log_inputs.cpp)
+    ocio_builtin_registry.cpp ocio_camera_log_inputs.cpp ocio_scope_xyz.cpp)
 bloom_find_dependency(ZLIB)
 target_link_libraries(bloom-color-worker PRIVATE bloom_core bloom_color bloom_platform_process OpenColorIO::OpenColorIO ZLIB::ZLIBSTATIC)
 target_include_directories(bloom-color-worker PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}/../render/include"

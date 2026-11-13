@@ -62,6 +62,8 @@ enum class ConfigProcessorKind : std::uint32_t {
     ColorSpace = 3,
     // The resolved display and view inverted to the working space, as CpuInputProcessor uses.
     InputInverseDisplay = 4,
+    // a = source space: the space to linear CIE XYZ with a D65 white, for the scopes (b unused).
+    ScopeXyz = 5,
 };
 
 enum class ConfigProcessorError : std::uint32_t {
@@ -75,6 +77,9 @@ enum class ConfigProcessorError : std::uint32_t {
     CpuUnavailable = 7,
     TooManyProcessors = 8,
     MemoryLimit = 9,
+    // The config names neither the CIE XYZ D65 nor the ACES interchange role, so the scope XYZ
+    // transform has no route.
+    NoXyzInterchange = 10,
 };
 
 // How a slab is applied, so the helper runs the exact call the in-process path of the same
@@ -497,7 +502,7 @@ decodeConfigProcessorReply(const std::span<const std::byte> bytes) {
         return std::nullopt;
     ConfigProcessorReply value;
     const auto error = reader.u32();
-    if (error > static_cast<std::uint32_t>(ConfigProcessorError::MemoryLimit))
+    if (error > static_cast<std::uint32_t>(ConfigProcessorError::NoXyzInterchange))
         return std::nullopt;
     value.error = static_cast<ConfigProcessorError>(error);
     value.token = reader.u64();

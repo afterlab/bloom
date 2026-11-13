@@ -6,10 +6,15 @@
 
 #include "ocio_internal.hpp"
 
+#include <array>
 #include <string>
 #include <string_view>
 
 namespace bloom::color::detail {
+
+// Rec.709 (D65) linear RGB to CIE XYZ (SMPTE RP 177) as a row-major 4x4 matrix, the same matrix the
+// synthesized spaces above use.
+[[nodiscard]] std::array<double, 16> rec709ToXyzMatrix();
 
 // The config with every camera log space it does not already name added (S-Log3, LogC3, LogC4,
 // V-Log, Log3G10, REDLogFilm, C-Log2, C-Log3, Apple Log). Each is OCIO's "<camera>_to_ACES2065-1"

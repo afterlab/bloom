@@ -6,6 +6,7 @@
 #include "ocio_gpu_program_extract.hpp"
 #include "ocio_gpu_program_serialize.hpp"
 #include "ocio_internal.hpp"
+#include "ocio_scope_xyz.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -282,6 +283,26 @@ struct ConfigWorker::State final {
                 return {};
             }
             return config->getProcessor(context, recipe.a.c_str(), recipe.b.c_str());
+        }
+        case ConfigProcessorKind::ScopeXyz: {
+            const auto built =
+                buildScopeXyzProcessor(config, isBloomNeutralConfig(*resolved), recipe.a, context);
+            switch (built.error) {
+            case ScopeXyzBuildError::None:
+                return built.processor;
+            case ScopeXyzBuildError::MissingSource:
+                error = ConfigProcessorError::MissingSource;
+                break;
+            case ScopeXyzBuildError::SourceIsData:
+                error = ConfigProcessorError::SourceIsData;
+                break;
+            case ScopeXyzBuildError::NoInterchange:
+                error = ConfigProcessorError::NoXyzInterchange;
+                break;
+            case ScopeXyzBuildError::BuildFailed:
+                break;
+            }
+            return {};
         }
         case ConfigProcessorKind::InputInverseDisplay:
             return config->getProcessor(

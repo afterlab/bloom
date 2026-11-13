@@ -263,3 +263,17 @@ intersection, exclusive-or and offsetting. It is not a superbuild dependency and
 `src/runtime/third_party/clipper2/LICENSE`, byte-identical to the upstream file at the pinned commit,
 and again under `dependencies/licenses/clipper2/`, with the acquisition provenance, license review, and
 security review. The library only transforms polygons Bloom has already built; it reads no files.
+
+## Embedded reference data
+
+### CIE 1931 standard colorimetric observer
+
+Bloom embeds the color matching functions of the CIE 1931 2-degree standard colorimetric observer
+(x-bar, y-bar, z-bar) for the CIE chromaticity scope's spectral locus, at 5 nm steps from 380 nm to
+780 nm (81 rows, six decimals), in `src/color/cie_spectral_locus.cpp`. The values are the tabulated
+data of the CIE 1931 standard observer as published by the International Commission on
+Illumination (CIE) in the CIE 15 technical report, "Colorimetry" (also distributed as ISO/CIE
+11664-1, "Colorimetry - Part 1: CIE standard colorimetric observers"). The table is numerical
+reference data, not code; it is used only to draw the spectral locus graticule and is never an
+input to any measurement. Its sums over 380 nm to 780 nm are checked in
+`src/color/tests/scope_colorimetry_tests.cpp` against the published equal-energy normalization.

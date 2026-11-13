@@ -92,6 +92,10 @@ constexpr std::array<CameraLogSpace, 11> kCameraLogSpaces{{
 }
 } // namespace
 
+std::array<double, 16> rec709ToXyzMatrix() {
+    return rec709ToXyz();
+}
+
 OCIO::ConstConfigRcPtr withBloomCameraLogInputs(const OCIO::ConstConfigRcPtr& config,
                                                 const bool isNeutral) {
     OCIO::ConfigRcPtr editable;

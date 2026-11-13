@@ -26,6 +26,9 @@ inline constexpr std::string_view kOcioGpuCstSemanticsId = "bloom.color.ocio-pro
 // media delivery that quantizes beyond 8 bits at the codec boundary.
 inline constexpr std::string_view kOcioGpuDisplayEffectSemanticsId =
     "bloom.color.ocio-display-effect-gpu.v1";
+// The scopes' transform from a color space to CIE XYZ with a D65 white (scope_colorimetry.hpp).
+inline constexpr std::string_view kOcioGpuScopeXyzSemanticsId =
+    "bloom.color.ocio-process-scope-xyz.v1";
 inline constexpr std::string_view kOcioGpuFileTransformSemanticsId =
     "bloom.color.ocio-process-file-transform.v1";
 inline constexpr std::string_view kOcioGpuExposureContrastSemanticsId =
@@ -110,6 +113,17 @@ buildOcioGpuProgramForDisplayEffect(const ResolvedBloomNeutralConfig& resolved,
 buildOcioGpuProgramForCst(const ResolvedBloomNeutralConfig& resolved, std::string_view fromId,
                           std::string_view toId,
                           const render::OcioGpuProgramLimits& limits = {}) noexcept;
+
+// The scopes' transform from `colorSpaceId` (a display color space for the Display signal, the
+// working space for the Working signal) to CIE XYZ D65, as a ProcessEffect program: the same OCIO
+// processor ScopeXyzProcessor::prepare runs on the CPU. The wrapper un-associates alpha around the
+// body, so the caller feeds alpha 1 with the signal already taken over black. A missing or data
+// space is UnsupportedColorSpace, a config without an XYZ route TransformBuildFailed, and a space
+// that already is the XYZ interchange IdentityTransform.
+[[nodiscard]] render::OcioGpuProgramResult
+buildOcioGpuProgramForScopeXyz(const ResolvedBloomNeutralConfig& resolved,
+                               std::string_view colorSpaceId,
+                               const render::OcioGpuProgramLimits& limits = {}) noexcept;
 
 // Exact scene-linear RGB scale and offset, extracted from OCIO MatrixTransform. Alpha remains
 // unchanged by the production ProcessEffect wrapper, including transparent pixels.
