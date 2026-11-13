@@ -26,8 +26,8 @@ enum class VariableFontInstanceStatus : std::uint8_t {
     NotVariable,
     // The bytes were rewritten as a static font at the requested coordinates.
     Instanced,
-    // A variable font this reader cannot instantiate (outlines stored as compact font format
-    // data, a font collection, or damaged tables): the default instance is drawn.
+    // A variable font this reader cannot instantiate (damaged tables, or a collection that has
+    // no such font): the default instance is drawn.
     Unsupported,
 };
 
@@ -39,17 +39,26 @@ struct VariableFontInstance final {
     std::string detail;
 };
 
-// The axes of a variable TrueType font; empty for a static font or one that cannot be read.
-[[nodiscard]] std::vector<VariableFontAxis> variableFontAxes(std::span<const std::uint8_t> font);
+// The axes of a variable font; empty for a static font or one that cannot be read.
+// `collectionIndex` is the font within a collection file (0 for a single-font file).
+[[nodiscard]] std::vector<VariableFontAxis> variableFontAxes(std::span<const std::uint8_t> font,
+                                                             std::uint32_t collectionIndex = 0);
 
-// Rewrites a variable TrueType font (glyf outlines with `gvar` deltas) as a static font at one
-// point of its design space: the axes start at their defaults, `namedInstance` (1-based, 0 for none)
-// moves them to that named instance, and `settings` then override single axes (clamped to the
-// axis range; tags the font does not have are ignored). Outlines, composite offsets, advance widths
-// (`HVAR`, else the `gvar` phantom points) and glyph bounds follow the coordinates. Hinting
-// instructions are dropped, which the unhinted rasterizer never reads.
+// Rewrites a variable font as a static single-font file at one point of its design space: the
+// axes start at their defaults, `namedInstance` (1-based, 0 for none) moves them to that named
+// instance, and `settings` then override single axes (clamped to the axis range; tags the font
+// does not have are ignored). `collectionIndex` is the font within a collection file (0 for a
+// single-font file); the result is that one font.
+//
+// TrueType outlines (`glyf` with `gvar` deltas): outlines, composite offsets, advance widths
+// (`HVAR`, else the `gvar` phantom points) and glyph bounds follow the coordinates, and hinting is
+// kept: glyph programs, `fpgm` and `prep` are carried and the control values follow `cvar`.
+// Compact font format outlines (`CFF2`): every charstring is run at the coordinates and written
+// as a static `CFF ` table in whole units, with advances from `HVAR`; hint operators, whose stems
+// would move with the outline, are not carried.
 [[nodiscard]] VariableFontInstance
-instantiateVariableFont(std::span<const std::uint8_t> font, std::uint32_t namedInstance,
+instantiateVariableFont(std::span<const std::uint8_t> font, std::uint32_t collectionIndex,
+                        std::uint32_t namedInstance,
                         std::span<const VariableFontAxisSetting> settings);
 
 } // namespace bloom::runtime::fonts

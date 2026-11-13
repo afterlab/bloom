@@ -468,7 +468,7 @@ void systemVariableFontAppliesInstanceAndAxes() {
     document::FontId id{document::FontSource::System, "Inter Variable", "Bold", 700, false, {},
                         "InterVariable-Bold", {}};
     const auto plain = resolver.resolve(id, FontFetch::CachedOnly);
-    const auto expectedBold = instantiateVariableFont(variableBytes, 7, {});
+    const auto expectedBold = instantiateVariableFont(variableBytes, 0, 7, {});
     expect(plain.kind == FontResolutionKind::System && plain.faceIndex == 0 && plain.bytes != nullptr &&
                *plain.bytes == expectedBold.bytes,
            "a named instance of an installed variable font resolves to that instance");
@@ -476,7 +476,7 @@ void systemVariableFontAppliesInstanceAndAxes() {
     id.axes = {{"opsz", 32.0}};
     const std::vector<VariableFontAxisSetting> settings{{"opsz", 32.0}};
     const auto withAxis = resolver.resolve(id, FontFetch::CachedOnly);
-    const auto expectedAxis = instantiateVariableFont(variableBytes, 7, settings);
+    const auto expectedAxis = instantiateVariableFont(variableBytes, 0, 7, settings);
     expect(withAxis.kind == FontResolutionKind::System && withAxis.bytes != nullptr &&
                *withAxis.bytes == expectedAxis.bytes && !(withAxis.digest == plain.digest),
            "the recorded axis values change the resolved font and its identity");

@@ -46,8 +46,25 @@ are applied by writing a static instance of the font (`variable_font_instance.cp
 with `gvar` deltas, `avar`, composite offsets, advance widths from `HVAR` (else the `gvar` phantom
 points) and glyph bounds follow the coordinates, an axis value outside the font's range is clamped,
 and a tag the font does not have is ignored. The file digest of the instance is the font's identity in
-plan and cache keys. A variable font that stores compact (CFF2) outlines is drawn at its default
-instance; hinting instructions are dropped.
+plan and cache keys.
+
+Three cases of that (#489):
+
+- **A font inside a collection** (a `.ttc` or `.otc` file) is read through the collection's
+  directory at the face's place in the file (the low 16 bits of the face index), and its instance
+  is written as a single-font file.
+- **Compact font format outlines** (`CFF2`, `variable_font_cff2.cpp`): every glyph's charstring is
+  run at the coordinates, with its `blend` operators applied from the font's variation store and
+  its subroutines, hint and flex operators followed, and the outline is written into a static
+  `CFF ` table as moves, lines and curves in whole font units; advances follow `HVAR`. The table is
+  CID-keyed with one font dictionary. Hint operators are not carried, because the stems they name
+  move with the outline.
+- **Hinting is kept** for TrueType outlines: each glyph's program (a composite's after its last
+  component), `fpgm` and `prep` are carried as they are, and the control values (`cvt`) follow the
+  coordinates through `cvar`, so the instance is the hinted font a static release of that weight
+  would be. Bloom's own rasterizer draws unhinted; the instance is still a faithful font file.
+
+A variable font whose tables are damaged is drawn at its default instance.
 
 A `system` ID whose font is not installed but whose family exists on Google Fonts is fetched from
 Google Fonts, with a status-bar notice. When the cached or downloaded family version differs from the

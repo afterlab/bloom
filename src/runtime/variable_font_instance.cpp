@@ -1,5 +1,7 @@
 #include <bloom/runtime/variable_font_instance.hpp>
 
+#include "variable_font_tables.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -15,98 +17,19 @@
 // as a static sfnt, which the unhinted glyph source then reads like any other font file. The
 // formats are the public OpenType tables: fvar, avar, gvar (with intermediate regions, shared and
 // private point numbers and interpolation of untouched points), HVAR (an item variation store and
-// delta-set index maps), glyf, loca, hmtx.
+// delta-set index maps), glyf, loca, hmtx, and cvar. Hinting is kept: the glyphs' programs and
+// `fpgm` and `prep` are carried as they are and the control values follow the location (#489).
+// A font inside a collection is read through the collection's directory, and a font with CFF2
+// outlines goes to variable_font_cff2.cpp.
 
 namespace bloom::runtime::fonts {
 
 namespace {
 
+using namespace detail;
+
 constexpr std::size_t kMaximumGlyphs = 65535;
 constexpr int kMaximumComponentDepth = 8;
-
-// A bounds-checked big-endian reader over a span. Reads past the end set `failed` and return zero,
-// so a damaged table ends in one check rather than in an out-of-range read.
-class Reader final {
-  public:
-    Reader(std::span<const std::uint8_t> data, const std::size_t offset = 0)
-        : data_(data), position_(offset) {}
-
-    [[nodiscard]] bool failed() const noexcept { return failed_; }
-    [[nodiscard]] std::size_t position() const noexcept { return position_; }
-    void seek(const std::size_t offset) noexcept { position_ = offset; }
-    void skip(const std::size_t count) noexcept { position_ += count; }
-
-    [[nodiscard]] std::uint8_t u8() noexcept {
-        if (position_ >= data_.size()) {
-            failed_ = true;
-            return 0;
-        }
-        return data_[position_++];
-    }
-    [[nodiscard]] std::uint16_t u16() noexcept {
-        const auto high = u8();
-        return static_cast<std::uint16_t>((high << 8U) | u8());
-    }
-    [[nodiscard]] std::int16_t i16() noexcept { return static_cast<std::int16_t>(u16()); }
-    [[nodiscard]] std::uint32_t u32() noexcept {
-        const auto high = u16();
-        return (static_cast<std::uint32_t>(high) << 16U) | u16();
-    }
-    [[nodiscard]] std::int32_t i32() noexcept { return static_cast<std::int32_t>(u32()); }
-    [[nodiscard]] std::int8_t i8() noexcept { return static_cast<std::int8_t>(u8()); }
-    // 2.14 and 16.16 fixed point.
-    [[nodiscard]] double f2dot14() noexcept { return static_cast<double>(i16()) / 16384.0; }
-    [[nodiscard]] double fixed() noexcept { return static_cast<double>(i32()) / 65536.0; }
-
-  private:
-    std::span<const std::uint8_t> data_;
-    std::size_t position_ = 0;
-    bool failed_ = false;
-};
-
-[[nodiscard]] std::string tagString(const std::uint32_t tag) {
-    std::string out(4, ' ');
-    for (std::size_t i = 0; i < 4; ++i)
-        out[i] = static_cast<char>((tag >> (24U - 8U * i)) & 0xFFU);
-    return out;
-}
-
-constexpr std::uint32_t makeTag(const char (&text)[5]) {
-    return (static_cast<std::uint32_t>(static_cast<unsigned char>(text[0])) << 24U) |
-           (static_cast<std::uint32_t>(static_cast<unsigned char>(text[1])) << 16U) |
-           (static_cast<std::uint32_t>(static_cast<unsigned char>(text[2])) << 8U) |
-           static_cast<std::uint32_t>(static_cast<unsigned char>(text[3]));
-}
-
-struct Sfnt final {
-    std::map<std::uint32_t, std::span<const std::uint8_t>> tables;
-    std::uint32_t version = 0;
-    [[nodiscard]] std::span<const std::uint8_t> table(const std::uint32_t tag) const {
-        const auto found = tables.find(tag);
-        return found == tables.end() ? std::span<const std::uint8_t>{} : found->second;
-    }
-};
-
-// A single-font sfnt (a collection has no single directory). Null when it does not parse.
-[[nodiscard]] std::optional<Sfnt> parseSfnt(const std::span<const std::uint8_t> font) {
-    Reader reader(font);
-    Sfnt sfnt;
-    sfnt.version = reader.u32();
-    if (reader.failed() || sfnt.version == makeTag("ttcf"))
-        return std::nullopt;
-    const auto count = reader.u16();
-    reader.skip(6);
-    for (std::uint16_t i = 0; i < count; ++i) {
-        const auto tag = reader.u32();
-        reader.skip(4);
-        const auto offset = reader.u32();
-        const auto length = reader.u32();
-        if (reader.failed() || offset > font.size() || length > font.size() - offset)
-            return std::nullopt;
-        sfnt.tables[tag] = font.subspan(offset, length);
-    }
-    return sfnt;
-}
 
 struct Axis final {
     std::uint32_t tag = 0;
@@ -220,118 +143,6 @@ using SegmentMap = std::vector<std::pair<double, double>>;
         out[i] = n;
     }
     return out;
-}
-
-// How much of a region a normalized location is inside, 0 to 1.
-[[nodiscard]] double regionScalar(const std::vector<double>& location,
-                                  const std::vector<double>& start,
-                                  const std::vector<double>& peak,
-                                  const std::vector<double>& end) {
-    double scalar = 1.0;
-    for (std::size_t i = 0; i < peak.size(); ++i) {
-        const auto p = peak[i];
-        const auto lower = start[i];
-        const auto upper = end[i];
-        if (p == 0.0 || lower > p || p > upper || (lower < 0.0 && upper > 0.0))
-            continue;
-        const auto v = location[i];
-        if (v == p)
-            continue;
-        if (v <= lower || upper <= v)
-            return 0.0;
-        scalar *= v < p ? (v - lower) / (p - lower) : (v - upper) / (p - upper);
-    }
-    return scalar;
-}
-
-// ---- HVAR -------------------------------------------------------------------------------------
-
-struct Hvar final {
-    std::span<const std::uint8_t> table;
-    std::size_t storeOffset = 0;
-    std::size_t advanceMapOffset = 0;
-};
-
-// The advance-width delta for `glyph` at `location`, or nullopt when the table is damaged.
-[[nodiscard]] std::optional<double> hvarAdvanceDelta(const Hvar& hvar, const std::uint32_t glyph,
-                                                     const std::vector<double>& location) {
-    const auto table = hvar.table;
-    std::uint32_t outer = 0;
-    std::uint32_t inner = glyph;
-    if (hvar.advanceMapOffset != 0) {
-        Reader map(table, hvar.advanceMapOffset);
-        const auto format = map.u8();
-        const auto entryFormat = map.u8();
-        const std::uint32_t count = format == 0 ? map.u16() : map.u32();
-        const auto innerBits = static_cast<std::uint32_t>((entryFormat & 0x0FU) + 1U);
-        const auto entrySize = static_cast<std::uint32_t>(((entryFormat & 0x30U) >> 4U) + 1U);
-        if (map.failed() || count == 0)
-            return std::nullopt;
-        const auto index = std::min(glyph, count - 1U);
-        map.seek(map.position() + static_cast<std::size_t>(index) * entrySize);
-        std::uint32_t entry = 0;
-        for (std::uint32_t i = 0; i < entrySize; ++i)
-            entry = (entry << 8U) | map.u8();
-        if (map.failed())
-            return std::nullopt;
-        outer = entry >> innerBits;
-        inner = entry & ((1U << innerBits) - 1U);
-    }
-    Reader store(table, hvar.storeOffset);
-    store.skip(2);
-    const auto regionListOffset = store.u32();
-    const auto dataCount = store.u16();
-    if (store.failed() || outer >= dataCount)
-        return std::nullopt;
-    store.seek(hvar.storeOffset + 8 + static_cast<std::size_t>(outer) * 4);
-    const auto dataOffset = store.u32();
-
-    Reader regions(table, hvar.storeOffset + regionListOffset);
-    const auto axisCount = regions.u16();
-    const auto regionCount = regions.u16();
-    if (regions.failed())
-        return std::nullopt;
-
-    Reader data(table, hvar.storeOffset + dataOffset);
-    const auto itemCount = data.u16();
-    const auto wordCountField = data.u16();
-    const auto regionIndexCount = data.u16();
-    if (data.failed() || inner >= itemCount)
-        return std::nullopt;
-    const bool longWords = (wordCountField & 0x8000U) != 0;
-    const auto wordCount = static_cast<std::size_t>(wordCountField & 0x7FFFU);
-    if (wordCount > regionIndexCount || axisCount != location.size())
-        return std::nullopt;
-    std::vector<std::uint16_t> regionIndexes;
-    for (std::uint16_t i = 0; i < regionIndexCount; ++i)
-        regionIndexes.push_back(data.u16());
-    const auto wordSize = longWords ? 4U : 2U;
-    const auto rowSize = wordCount * wordSize + (regionIndexCount - wordCount) * (wordSize / 2U);
-    data.skip(static_cast<std::size_t>(inner) * rowSize);
-    double total = 0.0;
-    for (std::uint16_t i = 0; i < regionIndexCount; ++i) {
-        double delta = 0.0;
-        if (i < wordCount)
-            delta = longWords ? static_cast<double>(data.i32()) : static_cast<double>(data.i16());
-        else
-            delta = longWords ? static_cast<double>(data.i16()) : static_cast<double>(data.i8());
-        if (data.failed() || regionIndexes[i] >= regionCount)
-            return std::nullopt;
-        Reader region(table, hvar.storeOffset + regionListOffset + 4 +
-                                 static_cast<std::size_t>(regionIndexes[i]) * axisCount * 6U);
-        std::vector<double> start(axisCount);
-        std::vector<double> peak(axisCount);
-        std::vector<double> end(axisCount);
-        for (std::uint16_t a = 0; a < axisCount; ++a) {
-            start[a] = region.f2dot14();
-            peak[a] = region.f2dot14();
-            end[a] = region.f2dot14();
-        }
-        if (region.failed())
-            return std::nullopt;
-        total += delta * regionScalar(location, start, peak, end);
-    }
-    return total;
 }
 
 // ---- gvar -------------------------------------------------------------------------------------
@@ -514,6 +325,8 @@ struct Glyph final {
         double d = 1.0;
     };
     std::vector<Component> components;
+    // The glyph's hinting program, carried into the instance as it is.
+    std::vector<std::uint8_t> instructions;
     int xMin = 0;
     int yMin = 0;
     int xMax = 0;
@@ -544,6 +357,11 @@ constexpr std::uint16_t kHaveInstructions = 0x0100;
         for (std::int16_t i = 0; i < contours; ++i)
             glyph.contourEnds.push_back(reader.u16());
         const auto instructionLength = reader.u16();
+        if (reader.failed() || instructionLength > data.size() - reader.position())
+            return std::nullopt;
+        glyph.instructions.assign(
+            data.begin() + static_cast<std::ptrdiff_t>(reader.position()),
+            data.begin() + static_cast<std::ptrdiff_t>(reader.position() + instructionLength));
         reader.skip(instructionLength);
         const std::size_t count = contours == 0 ? 0 : static_cast<std::size_t>(glyph.contourEnds.back()) + 1U;
         if (reader.failed() || count > kMaximumGlyphs)
@@ -618,9 +436,20 @@ constexpr std::uint16_t kHaveInstructions = 0x0100;
         component.transform.assign(data.begin() + static_cast<std::ptrdiff_t>(transformStart),
                                    data.begin() + static_cast<std::ptrdiff_t>(reader.position()));
         const auto more = (component.flags & kMoreComponents) != 0;
+        const bool instructed = (component.flags & kHaveInstructions) != 0;
         glyph.components.push_back(std::move(component));
-        if (!more)
+        if (!more) {
+            // A composite's hinting program follows its last component.
+            if (instructed) {
+                const auto length = reader.u16();
+                if (reader.failed() || length > data.size() - reader.position())
+                    return std::nullopt;
+                glyph.instructions.assign(
+                    data.begin() + static_cast<std::ptrdiff_t>(reader.position()),
+                    data.begin() + static_cast<std::ptrdiff_t>(reader.position() + length));
+            }
             break;
+        }
         if (glyph.components.size() > 256)
             return std::nullopt;
     }
@@ -642,17 +471,96 @@ struct Output final {
     bool empty = true;
 };
 
-void put16(std::vector<std::uint8_t>& out, const std::uint32_t value) {
-    out.push_back(static_cast<std::uint8_t>((value >> 8U) & 0xFFU));
-    out.push_back(static_cast<std::uint8_t>(value & 0xFFU));
-}
-void put32(std::vector<std::uint8_t>& out, const std::uint32_t value) {
-    put16(out, value >> 16U);
-    put16(out, value & 0xFFFFU);
-}
-void putS16(std::vector<std::uint8_t>& out, const int value) {
-    put16(out, static_cast<std::uint32_t>(static_cast<std::uint16_t>(static_cast<std::int16_t>(
-                   std::clamp(value, -32768, 32767)))));
+// ---- cvar -------------------------------------------------------------------------------------
+
+// The control values (`cvt`) at a location: every tuple of `cvar` in effect adds its scaled deltas
+// to the values it lists, so the hinting programs that read them fit the instance. Null when the
+// table is damaged.
+[[nodiscard]] std::optional<std::vector<std::uint8_t>>
+variedControlValues(const std::span<const std::uint8_t> cvt, const std::span<const std::uint8_t> cvar,
+                    const std::size_t axisCount, const std::vector<double>& location) {
+    const std::size_t total = cvt.size() / 2U;
+    Reader reader(cvar);
+    reader.skip(4);
+    const auto countField = reader.u16();
+    const auto dataOffset = reader.u16();
+    const auto tupleCount = static_cast<std::size_t>(countField & 0x0FFFU);
+    if (reader.failed() || dataOffset > cvar.size())
+        return std::nullopt;
+    struct Header final {
+        std::size_t size = 0;
+        std::uint16_t index = 0;
+        std::vector<double> start;
+        std::vector<double> peak;
+        std::vector<double> end;
+    };
+    std::vector<Header> headers;
+    for (std::size_t t = 0; t < tupleCount; ++t) {
+        Header header;
+        header.size = reader.u16();
+        header.index = reader.u16();
+        // A control value tuple carries its own peak: the table has no shared tuples.
+        if ((header.index & 0x8000U) == 0)
+            return std::nullopt;
+        for (std::size_t a = 0; a < axisCount; ++a)
+            header.peak.push_back(reader.f2dot14());
+        if ((header.index & 0x4000U) != 0) {
+            for (std::size_t a = 0; a < axisCount; ++a)
+                header.start.push_back(reader.f2dot14());
+            for (std::size_t a = 0; a < axisCount; ++a)
+                header.end.push_back(reader.f2dot14());
+        } else {
+            for (std::size_t a = 0; a < axisCount; ++a) {
+                header.start.push_back(std::min(0.0, header.peak[a]));
+                header.end.push_back(std::max(0.0, header.peak[a]));
+            }
+        }
+        if (reader.failed())
+            return std::nullopt;
+        headers.push_back(std::move(header));
+    }
+    Reader serialized(cvar, dataOffset);
+    std::vector<std::uint32_t> shared;
+    bool sharedAll = true;
+    if ((countField & 0x8000U) != 0) {
+        auto points = packedPointNumbers(serialized, total);
+        if (!points)
+            return std::nullopt;
+        shared = std::move(*points);
+        sharedAll = shared.empty();
+    }
+    std::vector<double> deltas(total, 0.0);
+    for (const auto& header : headers) {
+        const auto scalar = regionScalar(location, header.start, header.peak, header.end);
+        Reader tuple(cvar, serialized.position());
+        const auto next = serialized.position() + header.size;
+        if (next > cvar.size())
+            return std::nullopt;
+        std::vector<std::uint32_t> points = shared;
+        bool all = sharedAll;
+        if ((header.index & 0x2000U) != 0) {
+            auto own = packedPointNumbers(tuple, total);
+            if (!own)
+                return std::nullopt;
+            points = std::move(*own);
+            all = points.empty();
+        }
+        serialized.seek(next);
+        if (scalar == 0.0)
+            continue;
+        const auto listed = all ? total : points.size();
+        const auto values = packedDeltas(tuple, listed);
+        if (!values)
+            return std::nullopt;
+        for (std::size_t i = 0; i < listed; ++i)
+            deltas[all ? i : points[i]] += (*values)[i] * scalar;
+    }
+    std::vector<std::uint8_t> varied;
+    varied.reserve(cvt.size());
+    Reader values(cvt);
+    for (std::size_t i = 0; i < total; ++i)
+        putS16(varied, values.i16() + static_cast<int>(std::lround(deltas[i])));
+    return varied;
 }
 
 class Instancer final {
@@ -916,7 +824,9 @@ class Instancer final {
             putS16(out.data, out.yMax);
             for (const auto end : parsed->contourEnds)
                 put16(out.data, end);
-            put16(out.data, 0); // No instructions.
+            put16(out.data, static_cast<std::uint32_t>(parsed->instructions.size()));
+            out.data.insert(out.data.end(), parsed->instructions.begin(),
+                            parsed->instructions.end());
             for (std::size_t i = 0; i < parsed->points.size(); ++i)
                 out.data.push_back(parsed->onCurve[i] ? 1 : 0);
             int previous = 0;
@@ -962,7 +872,10 @@ class Instancer final {
                         out.yMax = std::max(out.yMax, y);
                     }
                 }
+                // The instruction flag is on the last component alone, where the program follows.
                 auto flags = static_cast<std::uint16_t>(component.flags & ~kHaveInstructions);
+                if (i + 1 == parsed->components.size() && !parsed->instructions.empty())
+                    flags = static_cast<std::uint16_t>(flags | kHaveInstructions);
                 if (offsets)
                     flags = static_cast<std::uint16_t>(flags | kArgsAreWords);
                 put16(body, flags);
@@ -986,22 +899,16 @@ class Instancer final {
             putS16(out.data, out.xMax);
             putS16(out.data, out.yMax);
             out.data.insert(out.data.end(), body.begin(), body.end());
+            if (!parsed->instructions.empty()) {
+                put16(out.data, static_cast<std::uint32_t>(parsed->instructions.size()));
+                out.data.insert(out.data.end(), parsed->instructions.begin(),
+                                parsed->instructions.end());
+            }
         }
         while (out.data.size() % 4 != 0)
             out.data.push_back(0);
         outputs_[glyphIndex] = std::move(out);
         return true;
-    }
-
-    [[nodiscard]] static std::uint32_t checksum(const std::vector<std::uint8_t>& data) {
-        std::uint32_t sum = 0;
-        for (std::size_t i = 0; i < data.size(); i += 4) {
-            std::uint32_t word = 0;
-            for (std::size_t b = 0; b < 4; ++b)
-                word = (word << 8U) | (i + b < data.size() ? data[i + b] : 0U);
-            sum += word;
-        }
-        return sum;
     }
 
     [[nodiscard]] std::vector<std::uint8_t> rebuild() const {
@@ -1025,51 +932,25 @@ class Instancer final {
                 continue;
             tables[tag].assign(span.begin(), span.end());
         }
+        // The control values follow the location, so the hinting programs (`fpgm`, `prep` and the
+        // glyphs' own, all carried as they are) fit the instance. A damaged `cvar` leaves the
+        // default control values.
+        if (const auto cvar = sfnt_.table(makeTag("cvar")); !cvar.empty())
+            if (const auto cvt = tables.find(makeTag("cvt ")); cvt != tables.end())
+                if (auto varied = variedControlValues(sfnt_.table(makeTag("cvt ")), cvar,
+                                                      location_.size(), location_))
+                    cvt->second = std::move(*varied);
         tables[makeTag("glyf")] = std::move(glyf);
         tables[makeTag("loca")] = std::move(loca);
         tables[makeTag("hmtx")] = std::move(hmtx);
         auto& head = tables[makeTag("head")];
-        head[8] = head[9] = head[10] = head[11] = 0; // checkSumAdjustment, set below.
         head[50] = 0;
         head[51] = 1; // Long loca offsets.
         auto& hhea = tables[makeTag("hhea")];
         hhea[34] = static_cast<std::uint8_t>((glyphCount_ >> 8U) & 0xFFU);
         hhea[35] = static_cast<std::uint8_t>(glyphCount_ & 0xFFU);
 
-        const auto count = static_cast<std::uint16_t>(tables.size());
-        std::uint16_t searchRange = 1;
-        std::uint16_t entrySelector = 0;
-        while (static_cast<std::uint32_t>(searchRange) * 2U <= count) {
-            searchRange = static_cast<std::uint16_t>(searchRange * 2U);
-            ++entrySelector;
-        }
-        searchRange = static_cast<std::uint16_t>(searchRange * 16U);
-        std::vector<std::uint8_t> file;
-        put32(file, 0x00010000);
-        put16(file, count);
-        put16(file, searchRange);
-        put16(file, entrySelector);
-        put16(file, static_cast<std::uint32_t>(count * 16U - searchRange));
-        auto offset = static_cast<std::uint32_t>(12U + count * 16U);
-        for (const auto& [tag, data] : tables) {
-            put32(file, tag);
-            put32(file, checksum(data));
-            put32(file, offset);
-            put32(file, static_cast<std::uint32_t>(data.size()));
-            offset += static_cast<std::uint32_t>((data.size() + 3U) & ~static_cast<std::size_t>(3U));
-        }
-        std::size_t headPosition = 0;
-        for (const auto& [tag, data] : tables) {
-            if (tag == makeTag("head"))
-                headPosition = file.size();
-            file.insert(file.end(), data.begin(), data.end());
-            while (file.size() % 4 != 0)
-                file.push_back(0);
-        }
-        const auto adjustment = 0xB1B0AFBAU - checksum(file);
-        for (std::size_t i = 0; i < 4; ++i)
-            file[headPosition + 8 + i] = static_cast<std::uint8_t>((adjustment >> (24U - 8U * i)) & 0xFFU);
-        return file;
+        return writeSfnt(0x00010000, std::move(tables));
     }
 
     const Sfnt& sfnt_;
@@ -1087,9 +968,10 @@ class Instancer final {
 
 } // namespace
 
-std::vector<VariableFontAxis> variableFontAxes(const std::span<const std::uint8_t> font) {
+std::vector<VariableFontAxis> variableFontAxes(const std::span<const std::uint8_t> font,
+                                               const std::uint32_t collectionIndex) {
     std::vector<VariableFontAxis> axes;
-    const auto sfnt = parseSfnt(font);
+    const auto sfnt = parseSfnt(font, collectionIndex);
     if (!sfnt)
         return axes;
     const auto fvar = parseFvar(sfnt->table(makeTag("fvar")));
@@ -1101,13 +983,14 @@ std::vector<VariableFontAxis> variableFontAxes(const std::span<const std::uint8_
 }
 
 VariableFontInstance instantiateVariableFont(const std::span<const std::uint8_t> font,
+                                             const std::uint32_t collectionIndex,
                                              const std::uint32_t namedInstance,
                                              const std::span<const VariableFontAxisSetting> settings) {
     VariableFontInstance result;
-    const auto sfnt = parseSfnt(font);
+    const auto sfnt = parseSfnt(font, collectionIndex);
     if (!sfnt) {
         result.status = VariableFontInstanceStatus::Unsupported;
-        result.detail = "a font collection or an unreadable file";
+        result.detail = "an unreadable file, or a collection without that font";
         return result;
     }
     if (sfnt->table(makeTag("fvar")).empty())
@@ -1118,8 +1001,10 @@ VariableFontInstance instantiateVariableFont(const std::span<const std::uint8_t>
         result.detail = "damaged variation axes";
         return result;
     }
-    if (sfnt->table(makeTag("gvar")).empty() || sfnt->table(makeTag("glyf")).empty()) {
-        result.detail = "outlines are not TrueType glyph data with variations";
+    const bool compact = !sfnt->table(makeTag("CFF2")).empty();
+    if (!compact &&
+        (sfnt->table(makeTag("gvar")).empty() || sfnt->table(makeTag("glyf")).empty())) {
+        result.detail = "outlines are neither TrueType glyph data with variations nor CFF2";
         return result;
     }
     std::vector<double> user;
@@ -1133,10 +1018,16 @@ VariableFontInstance instantiateVariableFont(const std::span<const std::uint8_t>
                 user[i] = setting.value;
     const auto avar = parseAvar(sfnt->table(makeTag("avar")), fvar->axes.size());
     auto location = normalize(*fvar, user, avar);
-    Instancer instancer(*sfnt, std::move(location));
-    auto bytes = instancer.run(*fvar);
+    std::optional<std::vector<std::uint8_t>> bytes;
+    if (compact) {
+        bytes = instantiateCff2(*sfnt, location);
+    } else {
+        Instancer instancer(*sfnt, std::move(location));
+        bytes = instancer.run(*fvar);
+    }
     if (!bytes) {
-        result.detail = "damaged variation tables";
+        result.detail = compact ? "damaged CFF2 outlines or variation data"
+                                : "damaged variation tables";
         return result;
     }
     result.status = VariableFontInstanceStatus::Instanced;

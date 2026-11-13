@@ -65,6 +65,7 @@ target_sources(
         google_fonts.cpp
         headless_font_transport.cpp
         system_font_index.cpp
+        variable_font_cff2.cpp
         variable_font_instance.cpp
     PUBLIC
         FILE_SET HEADERS

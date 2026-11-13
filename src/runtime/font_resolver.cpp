@@ -425,7 +425,7 @@ FontResolver::loadSystemFace(const platform::FontFace& face,
         settings.reserve(axes.size());
         for (const auto& axis : axes)
             settings.push_back({axis.tag, axis.value});
-        auto made = instantiateVariableFont(*bytes, instance, settings);
+        auto made = instantiateVariableFont(*bytes, collectionIndex, instance, settings);
         if (made.status == VariableFontInstanceStatus::Instanced) {
             bytes = std::make_shared<const std::vector<std::uint8_t>>(std::move(made.bytes));
             loaded.faceIndex = 0;

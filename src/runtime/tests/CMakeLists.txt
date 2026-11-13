@@ -27,6 +27,13 @@ bloom_enable_warnings(bloom_runtime_variable_font_test)
 bloom_add_test(NAME bloom.runtime.variable_font COMMAND bloom_runtime_variable_font_test
     LABELS runtime unit text TIMEOUT 60)
 
+# #489: a variable font with CFF2 outlines, built table by table, instanced and drawn.
+add_executable(bloom_runtime_variable_font_cff2_test ${PROJECT_SOURCE_DIR}/tests/integration/variable_font_cff2_tests.cpp)
+target_link_libraries(bloom_runtime_variable_font_cff2_test PRIVATE bloom_runtime_fonts bloom_render)
+bloom_enable_warnings(bloom_runtime_variable_font_cff2_test)
+bloom_add_test(NAME bloom.runtime.variable_font_cff2 COMMAND bloom_runtime_variable_font_cff2_test
+    LABELS runtime unit text TIMEOUT 60)
+
 add_executable(bloom_runtime_missing_font_layers_test missing_font_layers_tests.cpp)
 target_link_libraries(bloom_runtime_missing_font_layers_test PRIVATE bloom_runtime_compiler)
 bloom_enable_warnings(bloom_runtime_missing_font_layers_test)
