@@ -234,6 +234,8 @@ target_sources(
         scope_measure.cpp
         scope_trace_map.cpp
         scope_graticule.cpp
+        scope_picture.cpp
+        scope_png.cpp
         statistics_image_effect.cpp
         audio_analysis.cpp
         audio_mix_render.cpp
@@ -413,6 +415,10 @@ target_link_libraries(bloom_runtime_evaluator PUBLIC bloom_runtime_compiler bloo
                                                      bloom_color_ocio bloom_media_image
                                                      bloom_media_cache bloom_media_video bloom_color_video)
 target_link_libraries(bloom_runtime_evaluator PRIVATE bloom_color_gpu_shader)
+# The scope picture's PNG encoder (scope_png.cpp) deflates through the qualified zlib, like the
+# export PNG writer and the media image decoder.
+bloom_find_dependency(ZLIB)
+target_link_libraries(bloom_runtime_evaluator PRIVATE ZLIB::ZLIBSTATIC)
 
 # The vendored polygon library behind Boolean Paths, Merge Paths and Offset Path (#344, #530). It is
 # compiled as one private object library without the project's warning set; its headers are system

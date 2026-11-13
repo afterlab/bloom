@@ -193,14 +193,18 @@ scopes_rt::GraticuleRequest ScopeView::planRequest(const int width, const int he
     if (withClip)
         request.clip = &clip_;
     request.metrics = scopePanelMetrics();
-    request.measure = [numeric = QFontMetricsF(labelFont()), name = QFontMetricsF(nameFont())](
-                          const std::string_view text, const scopes_rt::LabelFont font) {
+    request.measure = textMeasure();
+    return request;
+}
+
+scopes_rt::MeasureText ScopeView::textMeasure() {
+    return [numeric = QFontMetricsF(labelFont()), name = QFontMetricsF(nameFont())](
+               const std::string_view text, const scopes_rt::LabelFont font) {
         const auto& metrics = font == scopes_rt::LabelFont::Numeric ? numeric : name;
         return scopes_rt::TextSize{metrics.horizontalAdvance(QString::fromUtf8(
                                        text.data(), static_cast<qsizetype>(text.size()))),
                                    metrics.height()};
     };
-    return request;
 }
 
 scopes_rt::ScopeGraticule ScopeView::plan(const int width, const int height,

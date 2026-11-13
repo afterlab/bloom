@@ -63,6 +63,8 @@ class ScopeView final : public QWidget {
     [[nodiscard]] QString readoutAt(const QPointF& position) const;
     // The plot rectangle in widget coordinates (the pane that holds the trace and its graticule).
     [[nodiscard]] QRectF plotRect() const;
+    // The text measure of the panel's fonts that the plan's geometry reads.
+    [[nodiscard]] static runtime::scopes::MeasureText textMeasure();
     // The graticule plan this scope paints now at its size, clip markers included.
     [[nodiscard]] runtime::scopes::ScopeGraticule graticule() const;
     // The last finished image this scope paints (null before the first).

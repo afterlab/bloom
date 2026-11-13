@@ -199,7 +199,8 @@ enum class ColorRole : std::uint8_t {
     Luma,
 };
 
-// The color roles of a scope as 0xAARRGGBB with full alpha.
+// The color roles of a scope as straight 0xAARRGGBB. The panel's roles are opaque; a role whose
+// alpha is 0 is not drawn (a test uses that to isolate the trace).
 struct ScopePalette final {
     std::uint32_t canvas = 0;
     std::uint32_t quiet = 0;
@@ -428,6 +429,11 @@ struct PictureOptions final {
     double devicePixelRatio = 1.0;
     ScopePalette palette = defaultScopePalette();
     ScopeMetrics metrics;
+    // The text measure the plan's geometry reads. Empty selects embeddedTextMeasure(
+    // devicePixelRatio), the face the picture rasterizes. A caller that needs the geometry of
+    // another renderer (a test comparing the panel's trace rectangle with the picture's) passes
+    // that renderer's own measure.
+    MeasureText measure;
 };
 
 // One scope drawn into `pixelWidth` x `pixelHeight` pixels: canvas, graticule, trace (additive for
