@@ -1,9 +1,9 @@
 #include <bloom/scripting/render.hpp>
 
-#include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/core/file_uri.hpp>
 #include <bloom/host/export_job_runner.hpp>
 #include <bloom/host/export_presets.hpp>
+#include <bloom/host/project_color_choice.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
@@ -134,14 +134,9 @@ missingEffectColorSpaces(const SessionRenderSourceSnapshot& source,
     const auto intent = captureRenderColorIntent(source, composition);
     if (!intent)
         return warnings;
-    // Never waits: a built-in configuration resolves at once, an external one only when it is
-    // already held. An unreadable configuration says nothing about a single space.
-    auto resolution = color::resolveOcioConfigIfKept(
+    const auto known = host::keptConfigColorSpaceIds(
         intent->ocioConfigUri, intent->ocioConfigRevision, intent->workingColorSpaceId);
-    if (!resolution.ready())
-        return warnings;
-    const auto config = std::move(resolution).takeResolved();
-    if (!config)
+    if (!known)
         return warnings;
     for (const auto& node : composition.graph().nodes()) {
         const bool lut = node.typeId == "bloom.ocio-file-transform";
@@ -161,8 +156,7 @@ missingEffectColorSpaces(const SessionRenderSourceSnapshot& source,
                     : nullptr;
             const auto* id = constant != nullptr ? std::get_if<std::string>(&constant->value) : nullptr;
             if (id == nullptr || id->empty() ||
-                std::ranges::any_of(config->colorSpaces(),
-                                    [&](const auto& space) { return space.id == *id; }))
+                std::ranges::find(*known, *id) != known->end())
                 continue;
             warnings.push_back(
                 {node.id, binding.parameterId,

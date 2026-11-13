@@ -94,4 +94,11 @@ struct ProjectColorConfigDescription final {
 [[nodiscard]] ProjectColorConfigDescription
 describeProjectColorConfig(const document::ColorSettings& settings);
 
+// #610: the ids of the color spaces the configuration at `ocioConfigLocation` has, without waiting:
+// a built-in configuration answers at once, an external one only when it is already held. Nullopt
+// when the configuration cannot be read here, which says nothing about any single space.
+[[nodiscard]] std::optional<std::vector<std::string>>
+keptConfigColorSpaceIds(std::string_view ocioConfigLocation, const core::Sha256Digest& revision,
+                        std::string_view workingColorSpaceId);
+
 } // namespace bloom::host

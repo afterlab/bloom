@@ -283,4 +283,22 @@ ProjectColorConfigDescription describeProjectColorConfig(const document::ColorSe
     return description;
 }
 
+std::optional<std::vector<std::string>>
+keptConfigColorSpaceIds(const std::string_view ocioConfigLocation,
+                        const core::Sha256Digest& revision,
+                        const std::string_view workingColorSpaceId) {
+    auto resolution =
+        color::resolveOcioConfigIfKept(ocioConfigLocation, revision, workingColorSpaceId);
+    if (!resolution.ready())
+        return std::nullopt;
+    const auto config = std::move(resolution).takeResolved();
+    if (!config)
+        return std::nullopt;
+    std::vector<std::string> ids;
+    ids.reserve(config->colorSpaces().size());
+    for (const auto& space : config->colorSpaces())
+        ids.push_back(space.id);
+    return ids;
+}
+
 } // namespace bloom::host
