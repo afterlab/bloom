@@ -102,13 +102,16 @@ for a stylesheet, 32 MiB for a font file), with or without an announced length, 
 uncompressed response, and stops a download that stalls for 20 seconds or lasts longer than two
 minutes. A server that sends too much cannot make Bloom hold it in memory, and the user is told
 that the server sent too much. The command-line tools, the MCP server and Python install a headless one
-(`makeHeadlessFontTransport`, `src/runtime/headless_font_transport_curl.cpp`) at start-up: a blocking,
-cancellable HTTPS GET with a size cap and a stall timeout, run on the same font worker and writing the
-same per-user cache. It speaks through the system's own HTTP client library, loaded when first needed,
-so no network library is linked and none is bundled. Where that library is absent, and on Windows and
-macOS (where this transport has not been written or run), the headless programs report "is not
-installed and cannot be downloaded here" for a font that is not already installed or cached, as
-before. Offline still ends in the fallback face with the usual diagnostic. Tests use a fake transport.
+(`makeHeadlessFontTransport`) at start-up: a blocking, cancellable HTTPS GET with a size cap and
+stage timeouts, run on the same font worker and writing the same per-user cache. It speaks through
+the system's own HTTP client, so no network library is bundled: libcurl loaded when first needed on
+Linux and macOS (`src/runtime/headless_font_transport_curl.cpp`), WinHTTP on Windows
+(`src/runtime/headless_font_transport_winhttp.cpp`, where a cancellation is seen between the
+stages of a transfer and between the pieces of its body). Where libcurl is absent the headless
+programs report "is not installed and cannot be downloaded here" for a font that is not already
+installed or cached. Offline still ends in the fallback face with the usual diagnostic. Tests use a
+fake transport, and one test asks each platform's real transport for an address that refuses
+connections.
 
 ## Fallback table
 

@@ -410,7 +410,6 @@ void previewSubsetIsFetchedOnlyOnRequest() {
 // here reaches the network: the address refuses connections.
 void headlessTransportFailsOfflineAndCancels() {
     const auto transport = makeHeadlessFontTransport();
-#if defined(__linux__) || defined(__APPLE__)
     if (!transport) {
         std::cerr << "SKIP: the system HTTP client is not installed here\n";
         return;
@@ -436,9 +435,6 @@ void headlessTransportFailsOfflineAndCancels() {
     expect(!std::filesystem::exists(resolver.cachePathFor(googleId("Test Family", 700, "v7"))),
            "nothing is cached for a failed download");
     std::filesystem::remove_all(root);
-#else
-    expect(!transport, "where no system client is wired the transport is absent");
-#endif
 }
 
 // An installed variable font: the named instance in the face index and the font ID's recorded axis

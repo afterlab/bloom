@@ -82,13 +82,13 @@ target_sources(
 )
 
 # The headless transport (command-line tools, MCP, Python) speaks through the system's HTTP client
-# library, loaded at run time on Linux and macOS; elsewhere it reports that downloads are not
-# available.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
+# library: libcurl loaded at run time on Linux and macOS, WinHTTP on Windows.
+if(WIN32)
+    target_sources(bloom_runtime_fonts PRIVATE headless_font_transport_winhttp.cpp)
+    target_link_libraries(bloom_runtime_fonts PRIVATE winhttp)
+else()
     target_sources(bloom_runtime_fonts PRIVATE headless_font_transport_curl.cpp)
     target_link_libraries(bloom_runtime_fonts PRIVATE ${CMAKE_DL_LIBS})
-else()
-    target_sources(bloom_runtime_fonts PRIVATE headless_font_transport_unavailable.cpp)
 endif()
 
 target_compile_features(bloom_runtime_fonts PUBLIC cxx_std_20)
