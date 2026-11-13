@@ -886,6 +886,14 @@ with a closed set (an enum, a choice presentation, the audio stream) must never 
 | Text source | Overflow (Clip, Grow) | enum (int) | value field | dropdown |
 | Channel Shuffle | Mode (Auto, Color, Raw; #480 adds Auto) | enum (int) | value field | dropdown |
 
+Color space dropdowns (Apply LUT's Process Space, Color Space Transform's From and To, a source's
+input color space) name each space as an artist reads it (`colourSpaceDisplayName`: "sRGB",
+"Rec.709 video", "Linear Rec.709 (sRGB)"), prefixed by the config's family when it has one; the
+OCIO id is the item's tooltip and never its label. A stored space the project's color
+configuration lacks is one extra item, "<id> (not in this project's color configuration)", drawn
+in `Error` in the closed field; the node card adds a `Warn` warning badge to its header with the
+reason in its tooltip (#610).
+
 Every other parameter already used the Properties control (enums as dropdowns, bools as switches,
 colors as chips, numbers as value fields, free text as text fields).
 

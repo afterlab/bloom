@@ -1,3 +1,4 @@
+#include "colour_space_names.hpp"
 #include "composition_editor_support.hpp"
 #include "node_editor_items.hpp"
 #include "properties_registry_row.hpp"
@@ -769,6 +770,42 @@ inputColorConfig(const CompositionSession& session) {
 
 } // namespace
 
+namespace {
+// The ids this selector shows as missing from the configuration, so the closed field can say so.
+constexpr auto kMissingColorSpacesProperty = "bloomMissingColorSpaces";
+
+// #610: one item for a stored space the project's configuration does not have, named by its id.
+int addMissingColorSpace(kit::KDropdown& selector, const QString& id, const bool effect,
+                         const bool configKnown) {
+    const auto index = selector.addItem(
+        configKnown ? QObject::tr("%1 (not in this project's color configuration)").arg(id) : id,
+        id);
+    selector.setItemToolTip(
+        index, !configKnown
+                   ? QObject::tr("OCIO color space id: %1").arg(id)
+                   : effect ? QObject::tr("%1 is not a color space of this project's color "
+                                          "configuration, so this node leaves the image "
+                                          "unchanged. Choose a space from the list.")
+                                  .arg(id)
+                            : QObject::tr("%1 is not a color space of this project's color "
+                                          "configuration. Choose a space from the list.")
+                                  .arg(id));
+    if (configKnown) {
+        auto missing = selector.property(kMissingColorSpacesProperty).toStringList();
+        missing << id;
+        selector.setProperty(kMissingColorSpacesProperty, missing);
+    }
+    return index;
+}
+
+// The closed field is drawn in Error while it holds a space the configuration lacks.
+void showColorSpaceTone(kit::KDropdown& selector, const QString& stored) {
+    const bool missing = !stored.isEmpty() &&
+                         selector.property(kMissingColorSpacesProperty).toStringList().contains(stored);
+    selector.setValueTone(missing ? std::optional{kit::Color::Error} : std::nullopt);
+}
+} // namespace
+
 void populateColorSpaceSelector(kit::KDropdown& selector, const CompositionSession& session,
                                 const std::string_view schemaKey, const QString& current) {
     const QSignalBlocker blocker(selector);
@@ -798,17 +835,21 @@ void populateColorSpaceSelector(kit::KDropdown& selector, const CompositionSessi
         for (const auto& space : spaces) {
             const auto family = QString::fromStdString(space.family);
             const auto name = QString::fromStdString(space.id);
-            const auto label = family.isEmpty() ? name : family + QStringLiteral(" / ") + name;
+            // #610: the name an artist reads ("sRGB", "Rec.709 video"), never a raw interchange
+            // id such as srgb_rec709_display; the id stays in the tooltip.
+            const auto readable = colourSpaceDisplayName(space.id);
+            const auto label =
+                family.isEmpty() ? readable : family + QStringLiteral(" / ") + readable;
             const auto index = selector.addItem(label, name);
             selector.setItemToolTip(index, QObject::tr("OCIO color space id: %1").arg(name));
         }
     }
+    selector.setProperty(kMissingColorSpacesProperty, QStringList{});
     auto index = selector.findData(current);
-    if (index < 0 && !current.isEmpty()) {
-        index = selector.addItem(QObject::tr("Missing config space"), current);
-        selector.setItemToolTip(index, current);
-    }
+    if (index < 0 && !current.isEmpty())
+        index = addMissingColorSpace(selector, current, effect, config.has_value());
     selector.setCurrentIndex(index < 0 ? automatic : index);
+    showColorSpaceTone(selector, current);
     selector.setWidthFloor(kit::px(kit::Size::PropertiesDropdownWidth));
 }
 
@@ -844,8 +885,44 @@ void refreshColorSpaceSelector(kit::KDropdown& selector, const CompositionSessio
                                                        "choose a color space to replace it"));
         }
     }
+    // #610: a stored space the list does not have (set through MCP or a script, or left by a
+    // change of the project's color configuration) is shown as what it is. Leaving the previous
+    // choice on screen would say the node uses a space it does not.
+    if (index < 0 && !stored.isEmpty() && !stored.startsWith(QChar(0x0001)))
+        index = addMissingColorSpace(selector, stored, effect,
+                                     inputColorConfig(session).has_value());
     if (index >= 0)
         selector.setCurrentIndex(index);
+    showColorSpaceTone(selector, stored);
+}
+
+QString effectColorSpaceProblem(const CompositionSession& session,
+                                const document::NodeRecord& node) {
+    if (node.typeId != "bloom.ocio-file-transform" &&
+        node.typeId != "bloom.ocio-colour-space-transform")
+        return {};
+    const auto config = inputColorConfig(session);
+    // Without a resolved configuration nothing can be said about a single space.
+    if (!config)
+        return {};
+    QStringList missing;
+    for (const auto& binding : node.parameters) {
+        if (binding.role != "processSpace" && binding.role != "from" && binding.role != "to")
+            continue;
+        const auto stored = session.constantStringValue(binding.parameterId);
+        if (!stored || stored->isEmpty())
+            continue;
+        const auto id = stored->toStdString();
+        if (std::ranges::none_of(config->colorSpaces(),
+                                 [&](const auto& space) { return space.id == id; }))
+            missing << *stored;
+    }
+    if (missing.isEmpty())
+        return {};
+    missing.removeDuplicates();
+    return QObject::tr("%1 is not a color space of this project's color configuration, so this "
+                       "node leaves the image unchanged. Choose a space from the list.")
+        .arg(missing.join(QStringLiteral(", ")));
 }
 
 bool commitSourceInputColorSpace(CompositionSession& session, const document::NodeId nodeId,

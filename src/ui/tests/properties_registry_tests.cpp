@@ -470,6 +470,39 @@ void colourEffectRows() {
                    "LUT selection publishes an integer asset reference through a command");
         }
     expect(session.undo(), "LUT choice is undoable");
+    // #610: Properties names the Process Space choices as an artist reads them, and a stored space
+    // the project's color configuration lacks is shown as missing, in Error.
+    {
+        ui::kit::KDropdown* process = nullptr;
+        for (auto* candidate :
+             properties.findChildren<ui::kit::KDropdown*>("propertiesEffectColorSpace"))
+            if (candidate->isVisibleTo(&properties))
+                process = candidate;
+        expect(process != nullptr, "Apply LUT has a Process Space row");
+        if (process != nullptr) {
+            const int video = process->findData(QStringLiteral("Rec.709 Camera (Bloom)"));
+            const int display = process->findData(QStringLiteral("srgb_rec709_display"));
+            expect(video >= 0 && process->itemText(video).endsWith(QStringLiteral("Rec.709 video")) &&
+                       display >= 0 && process->itemText(display).endsWith(QStringLiteral("sRGB")) &&
+                       !process->itemText(display).contains(QStringLiteral("srgb_rec709_display")) &&
+                       process->findData(QStringLiteral("S-Log3 SGamut3 (Bloom)")) >= 0,
+                   "Process Space lists Rec.709 video, sRGB and the log spaces by readable names");
+            commands::Transaction missing("Set Process Space", session.snapshot().revision());
+            missing.emplace<commands::SetNodeParameterValue>(
+                session.compositionId(), file, "processSpace",
+                document::ParameterValue{std::string("ACEScct")});
+            expect(session.executeNodeTransaction(std::move(missing)).succeeded(),
+                   "a space the configuration lacks can be stored");
+            QCoreApplication::processEvents();
+            expect(process->currentText() ==
+                       QStringLiteral("ACEScct (not in this project's color configuration)"),
+                   "Properties names the missing space and says it is missing");
+            expect(session.undo(), "the stored space is undoable");
+            QCoreApplication::processEvents();
+            expect(process->currentText() == QStringLiteral("Working space"),
+                   "back on the working space the row reads Working space");
+        }
+    }
     const auto* definition =
         document::builtInNodeDefinitions().find("bloom.ocio-file-transform", 1);
     expect(definition && definition->category == document::NodeCategory::Color &&

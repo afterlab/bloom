@@ -562,6 +562,9 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
     // #598: the value evaluation refused this node's inputs (its reason is the card's tooltip).
     if (!valueProblem_.isEmpty())
         drawBadge(kit::iconPixmap(kit::IconId::Warning, kit::Size::IconSmall, kit::Color::Warn));
+    // #610: a color space the project's configuration lacks (the reason is in the tooltip).
+    if (!colorSpaceProblem_.isEmpty())
+        drawBadge(kit::iconPixmap(kit::IconId::Warning, kit::Size::IconSmall, kit::Color::Warn));
     if (layout_.collapsed) {
         selectionOutline();
         return;

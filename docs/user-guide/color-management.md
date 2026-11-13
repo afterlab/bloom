@@ -137,6 +137,33 @@ refused LUT leaves the image unchanged and reports why; use Assets → Replace F
 file. LUT files are capped at 64 MiB with 3D edges no larger than 129. LUT import and Apply LUT
 run on Linux, macOS and Windows, in a build that carries the qualified helper.
 
+### Which Process Space to use for a LUT
+
+Apply LUT converts the image from the working space to the **Process Space**, applies the LUT, and
+converts back. Choose the space the LUT was made for. The list shows the project's color spaces by
+name; hover a choice for its OCIO id.
+
+| The LUT expects | Process Space |
+| --- | --- |
+| Scene-linear values (a technical or exposure LUT made for linear) | **Working space** (the default) |
+| Rec.709 video (most "Rec.709" look and viewing LUTs for video) | **Rec.709 video** |
+| sRGB-encoded values (a LUT made on sRGB stills or graphics) | **sRGB** |
+| Camera log (a look LUT made for S-Log3, LogC3, LogC4, V-Log, Log3G10, C-Log2, C-Log3 or Apple Log footage) | The matching camera space, for example **S-Log3 SGamut3 (Bloom)** or **LogC3 AWG3 (Bloom)** |
+| Film-scan log (Cineon) | **Cineon Log (Bloom)** |
+| ACEScct or ACEScc (a show LUT from an ACES pipeline) | **ACEScct** or **ACEScc**, in a project on the ACES 1.3 CG configuration |
+
+A new project (Bloom Neutral v1) lists Linear Rec.709 (sRGB), sRGB, Rec.709 video, the Rec.2100
+HLG and PQ spaces, the camera log spaces and Cineon Log. ACEScct and ACEScc are spaces of the ACES
+configuration only.
+
+If the Process Space holds a space the project's color configuration does not have (for example
+ACEScct in a Bloom Neutral project, set by a script or left by a change of configuration), the LUT
+is not applied and the image passes through unchanged. Bloom says so in three places: the Process
+Space field reads "ACEScct (not in this project's color configuration)" in the error color, the
+node card shows a warning badge with the reason in its tooltip, and the render reports
+`bloom.runtime.evaluation.color-space-missing`. Choose a space from the list to clear it. Color
+Space Transform reports a missing From or To space the same way.
+
 **Color Space Transform** offers explicit **From** and **To** selectors from the project
 config. Empty selectors mean the composition working space. For an explicit graph with CSTs on
 either side of a LUT, set the LUT's Process Space to the working space so it processes the values

@@ -1520,6 +1520,78 @@ void autoExposureCard() {
 
 // #481, #349 and #341: each new Channels, analysis and Math node is a plain card that paints inside itself with no
 // label cut short. With BLOOM_GRAMMAR_ARTIFACT_DIR set, each is written beside its group's neighbors.
+// #610: Apply LUT's Process Space on the card. The dropdown names the config's spaces as an artist
+// reads them, lists the spaces a Rec.709 video LUT and a log LUT need in a default project, and a
+// space the project's color configuration lacks is said on the card: in the closed field, by a
+// warning badge on the header and in the tooltip. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the card is
+// written in both states.
+void applyLutProcessSpaceCard() {
+    CardFixture fixture("bloom.ocio-file-transform");
+    expect(fixture.item != nullptr, "Apply LUT draws a card");
+    if (fixture.item == nullptr)
+        return;
+    const auto card = [&] {
+        return ui::node_editor::nodeItemAncestor(
+            fixture.editor->graphScene()->findNodeItem(fixture.node));
+    };
+    const auto processSpace = [&]() -> ui::kit::KDropdown* {
+        return qobject_cast<ui::kit::KDropdown*>(fixture.editor->graphScene()->nodeFieldForTest(
+            fixture.node, QStringLiteral("nodeOperandColorSpace")));
+    };
+    auto* dropdown = processSpace();
+    expect(dropdown != nullptr, "the card has the Process Space dropdown");
+    if (dropdown == nullptr)
+        return;
+    QStringList labels;
+    for (int index = 0; index < dropdown->count(); ++index)
+        labels << dropdown->itemText(index);
+    const auto listed = [&](const char* id, const char* name) {
+        const int index = dropdown->findData(QString::fromLatin1(id));
+        return index >= 0 && dropdown->itemText(index).endsWith(QLatin1String(name));
+    };
+    expect(dropdown->currentText() == QStringLiteral("Working space"),
+           "Process Space starts on the working space");
+    expect(listed("srgb_rec709_display", "sRGB") &&
+               listed("lin_rec709_scene", "Linear Rec.709 (sRGB)") &&
+               listed("Rec.709 Camera (Bloom)", "Rec.709 video") &&
+               listed("S-Log3 SGamut3 (Bloom)", "S-Log3 SGamut3 (Bloom)") &&
+               listed("Cineon Log (Bloom)", "Cineon Log (Bloom)"),
+           "a default project lists sRGB, Rec.709 video and the log spaces by readable names");
+    expect(labels.filter(QStringLiteral("srgb_rec709_display")).isEmpty() &&
+               labels.filter(QStringLiteral("lin_rec709_scene")).isEmpty(),
+           "no Process Space is named by a raw id");
+    expect(card()->colorSpaceProblem().isEmpty(), "a card with a listed space has no warning");
+    capture(fixture, QStringLiteral("610-apply-lut"));
+
+    // A space the configuration lacks, as a script or an older project would leave it.
+    const auto set = [&](const char* space) {
+        commands::Transaction transaction("Set Process Space", fixture.session.snapshot().revision());
+        transaction.emplace<commands::SetNodeParameterValue>(
+            fixture.session.compositionId(), fixture.node, "processSpace",
+            document::ParameterValue{std::string(space)});
+        const bool done = fixture.session.executeNodeTransaction(std::move(transaction)).succeeded();
+        QApplication::processEvents();
+        fixture.item = card();
+        return done;
+    };
+    expect(set("ACEScct"), "a script can store a space the configuration lacks");
+    dropdown = processSpace();
+    expect(dropdown != nullptr &&
+               dropdown->currentText() ==
+                   QStringLiteral("ACEScct (not in this project's color configuration)"),
+           "the closed field names the missing space and says it is missing");
+    expect(fixture.item != nullptr && fixture.item->colorSpaceProblem().contains(
+                                          QStringLiteral("ACEScct")) &&
+               fixture.item->toolTip().contains(fixture.item->colorSpaceProblem()),
+           "the card warns that the space is missing, with the reason in its tooltip");
+    capture(fixture, QStringLiteral("610-apply-lut-missing-space"));
+    expect(set("Rec.709 Camera (Bloom)"), "a listed space can be stored");
+    dropdown = processSpace();
+    expect(dropdown != nullptr && dropdown->currentText().endsWith(QStringLiteral("Rec.709 video")) &&
+               fixture.item != nullptr && fixture.item->colorSpaceProblem().isEmpty(),
+           "choosing a listed space clears the warning");
+}
+
 void pixelAndMotionCards() {
     struct Spec final {
         const char* type;
@@ -3885,6 +3957,13 @@ int main(int argc, char** argv) {
         std::cout << "PASS: Procedural Warp cards\n";
         return 0;
     }
+    if (qEnvironmentVariable("BLOOM_GRADING_CARDS_ONLY") == QStringLiteral("apply-lut")) {
+        applyLutProcessSpaceCard();
+        if (failures != 0)
+            return 1;
+        std::cout << "PASS: Apply LUT card\n";
+        return 0;
+    }
     if (qEnvironmentVariable("BLOOM_GRADING_CARDS_ONLY") == QStringLiteral("widget-rule")) {
         widgetRuleCards();
         if (failures != 0)
@@ -3912,6 +3991,7 @@ int main(int argc, char** argv) {
     sharpenCard();
     codecDegradeCard();
     autoExposureCard();
+    applyLutProcessSpaceCard();
     pixelAndMotionCards();
     audioEffectCards();
     lensDistortionCard();

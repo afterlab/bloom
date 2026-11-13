@@ -431,6 +431,8 @@ class NodeItem final : public QGraphicsObject {
             const auto text = warning ? QString::fromStdString(*warning) : QString{};
             svgFootageWarning_ = text;
         }
+        // #610: a color space this project's configuration lacks is said on the header.
+        colorSpaceProblem_ = session_ ? effectColorSpaceProblem(*session_, node) : QString{};
         reroute_ = document::isRerouteNodeType(node.typeId);
         // #490: an Image Preview card draws its input below its rows, at the composition's
         // aspect.
@@ -475,6 +477,8 @@ class NodeItem final : public QGraphicsObject {
             // #646: the warning is named in the tooltip, under the node's own lines.
             if (!svgFootageWarning_.isEmpty())
                 setToolTip(toolTip() + QLatin1Char('\n') + svgFootageWarning_);
+            if (!colorSpaceProblem_.isEmpty())
+                setToolTip(toolTip() + QLatin1Char('\n') + colorSpaceProblem_);
         }
         ensureFields(node, registry);
         // A card that shows readouts follows the resolver's answers (and so the playhead) as a card
@@ -552,7 +556,8 @@ class NodeItem final : public QGraphicsObject {
         const auto categoryWidth = metrics.horizontalAdvance(eyebrow_);
         const qreal badge = kit::px(kit::Size::IconSmall) + kCardPadding;
         const auto right = width_ - kCardPadding - (layout_.muted ? badge : 0.0) -
-                           (assetProblem() ? badge : 0.0) - (valueProblem_.isEmpty() ? 0.0 : badge);
+                           (assetProblem() ? badge : 0.0) - (valueProblem_.isEmpty() ? 0.0 : badge) -
+                           (colorSpaceProblem_.isEmpty() ? 0.0 : badge);
         const qreal header = headerHeight();
         const QRectF category(right - categoryWidth, 0, categoryWidth, header);
         const qreal left = collapseToggleRect().right() + kit::px(kit::Spacing::XS);
@@ -589,6 +594,9 @@ class NodeItem final : public QGraphicsObject {
     // #598: what the value evaluation said about this node (empty when nothing): a warning badge on
     // the header, the text on hover.
     [[nodiscard]] const QString& valueProblem() const noexcept { return valueProblem_; }
+    // #610: the color space this node holds that the project's configuration lacks (empty when
+    // none): a warning badge on the header, the text in the tooltip.
+    [[nodiscard]] const QString& colorSpaceProblem() const noexcept { return colorSpaceProblem_; }
     [[nodiscard]] qreal parameterRowHeight() const { return rowHeight_; }
     void setPrimary(bool primary) {
         primary_ = primary;
@@ -2581,6 +2589,7 @@ class NodeItem final : public QGraphicsObject {
     bool timeVarying_ = false;
     bool timeStale_ = false;
     QString valueProblem_;
+    QString colorSpaceProblem_;
     QString svgFootageWarning_;
     std::vector<SocketItem*> sockets_;
     std::set<QString> linkedInputs_;

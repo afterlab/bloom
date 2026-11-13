@@ -1773,6 +1773,106 @@ void testFileTransform() {
 #endif
 }
 
+// #610: in a default project (Bloom Neutral v1, working space linear Rec.709) a LUT gets the input
+// its Process Space names. An inverting LUT (out = 1 - in) over 18% gray gives, for each space, the
+// value its published transfer function predicts; a space the config lacks leaves the image
+// unchanged and says so.
+void testFileTransformProcessSpaces() {
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+    const auto directory = std::filesystem::current_path() / "color610-process-space-fixtures";
+    std::filesystem::create_directories(directory);
+    struct Cleanup final {
+        std::filesystem::path directory;
+        ~Cleanup() { std::filesystem::remove_all(directory); }
+    } cleanup{directory};
+    const auto path = directory / "invert.cube";
+    {
+        std::ofstream output(path);
+        output << "LUT_3D_SIZE 2\n";
+        for (int b = 0; b < 2; ++b)
+            for (int g = 0; g < 2; ++g)
+                for (int r = 0; r < 2; ++r)
+                    output << 1 - r << ' ' << 1 - g << ' ' << 1 - b << '\n';
+    }
+    const auto kernelFor = [&path](const std::string& processSpace) {
+        const auto resource = color::readLutFile(path);
+        document::AssetRecord asset;
+        asset.id = document::AssetId::fromRaw(78);
+        asset.kind = document::AssetKind::Lut;
+        asset.name = "Invert";
+        asset.locator = {"file", "project-relative", "invert.cube",
+                         bloom::core::fileUriFromAbsolutePath(path).value()};
+        asset.contentDigest = resource.digest;
+        return runtime::FileTransformKernel{asset.id, 0, 0, processSpace, asset};
+    };
+    const auto neutralRequest = [](const runtime::CompiledCompositionPlan& plan) {
+        auto request = requestFor(plan);
+        const auto revision = color::ocioBuiltInContentRevision(
+            color::OcioConfigLocatorKind::BloomBuiltIn, color::kBloomNeutralV1ConfigUri);
+        if (!revision)
+            throw std::logic_error("Bloom Neutral config is unavailable");
+        request.colorIntent = {"lin_rec709_scene", *revision, color::kBloomNeutralV1ConfigUri};
+        return request;
+    };
+    constexpr double gray = 0.18;
+    const core::Color4d sample{gray, gray, gray, 1.0};
+    runtime::CpuCompositionEvaluator evaluator;
+    const auto grayAfter = [&](const std::string& processSpace, bool& clean) {
+        const auto plan = planWith({kernelFor(processSpace)}, sample);
+        const auto result = evaluator.evaluate(plan, neutralRequest(*plan), {});
+        clean = result.frame() != nullptr && result.diagnostics().empty();
+        return result.frame() ? static_cast<double>(
+                                    result.frame()->processImage().pixels().front().green())
+                              : -1.0;
+    };
+    bool clean = false;
+
+    // Working space (the default): the LUT sees the linear value.
+    expect(std::abs(grayAfter("", clean) - (1.0 - gray)) < 1e-4 && clean,
+           "the default Process Space applies the LUT to linear values");
+
+    // sRGB (IEC 61966-2-1): encode, invert, decode.
+    {
+        const double encoded = 1.055 * std::pow(gray, 1.0 / 2.4) - 0.055;
+        const double decoded = std::pow((1.0 - encoded + 0.055) / 1.055, 2.4);
+        expect(std::abs(grayAfter("srgb_rec709_display", clean) - decoded) < 1e-4 && clean,
+               "sRGB applies the LUT to sRGB-encoded values");
+    }
+    // Rec.709 video (ITU-R BT.709 OETF and its inverse).
+    {
+        const double encoded = 1.099 * std::pow(gray, 0.45) - 0.099;
+        const double decoded = std::pow((1.0 - encoded + 0.099) / 1.099, 1.0 / 0.45);
+        const double measured =
+            grayAfter(std::string(color::kBloomRec709CameraColorSpaceId), clean);
+        expect(std::abs(measured - decoded) < 1e-4 && clean,
+               "Rec.709 video applies the LUT to BT.709-encoded values");
+        std::cout << "Apply LUT Rec.709 video reference " << decoded << ", measured " << measured
+                  << '\n';
+    }
+    // S-Log3 (Sony's published curve; a neutral gray is the same value in S-Gamut3).
+    {
+        const double encoded = (420.0 + std::log10((gray + 0.01) / (0.18 + 0.01)) * 261.5) / 1023.0;
+        const double decoded =
+            std::pow(10.0, ((1.0 - encoded) * 1023.0 - 420.0) / 261.5) * (0.18 + 0.01) - 0.01;
+        const double measured = grayAfter("S-Log3 SGamut3 (Bloom)", clean);
+        expect(std::abs(measured - decoded) < 2e-3 && clean,
+               "S-Log3 applies the LUT to S-Log3-encoded values");
+        std::cout << "Apply LUT S-Log3 reference " << decoded << ", measured " << measured << '\n';
+    }
+    // ACEScct is not a space of Bloom Neutral: unchanged, with the reason.
+    {
+        const auto plan = planWith({kernelFor("ACEScct")}, sample);
+        const auto result = evaluator.evaluate(plan, neutralRequest(*plan), {});
+        const auto source = planWith({}, sample);
+        const auto baseline = evaluator.evaluate(source, neutralRequest(*source), {});
+        expect(samePixels(result, baseline) && result.diagnostics().size() == 1 &&
+                   result.diagnostics()[0].code ==
+                       runtime::EvaluationDiagnosticCode::ColorSpaceMissing,
+               "a Process Space the config lacks leaves the image unchanged and reports it");
+    }
+#endif
+}
+
 void testMultiplyAndInvert() {
     using runtime::CompiledScalarParameter;
     using runtime::PointwiseImageEffect;
@@ -2127,6 +2227,7 @@ int main(const int argc, char** argv) {
         testAliasedBlurBudgets();
         testLookBypass();
         testFileTransform();
+    testFileTransformProcessSpaces();
         testMultiplyAndInvert();
         testPointwiseFailureAndTimeDependence();
         testPointwiseAnimatedPreflight();

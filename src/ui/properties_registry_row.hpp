@@ -44,6 +44,11 @@ void populateColorSpaceSelector(kit::KDropdown& selector, const CompositionSessi
 void refreshColorSpaceSelector(kit::KDropdown& selector, const CompositionSession& session,
                                const document::NodeRecord* node, std::string_view schemaKey,
                                const QString& stored);
+// #610: what to tell the artist when Apply LUT's Process Space, or a Color Space Transform's From
+// or To, holds a space the project's color configuration does not have (the node then leaves the
+// image unchanged). Empty when every stored space is in the configuration, or none is known.
+[[nodiscard]] QString effectColorSpaceProblem(const CompositionSession& session,
+                                              const document::NodeRecord& node);
 void refreshLutSelector(kit::KDropdown& selector, const CompositionSession& session,
                         std::int64_t current);
 // ADR 0026 / #364: the Image source's Part and Layer and the Cryptomatte's Layer, offered only as
