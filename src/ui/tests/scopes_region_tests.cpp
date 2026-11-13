@@ -11,7 +11,8 @@
 //     move), and the region of interest tool and its rectangle are untouched by scope edits;
 //   * a region belongs to its composition; two Viewers of one composition both draw it; with no
 //     visible Scopes panel nothing is drawn and no input is taken;
-//   * the region is no project state: no revision, no undo step, no new frame.
+//   * the region is no project state: no revision, no undo step, no new frame, and a project saved
+//     with a region set is the very file a save without one gives.
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -26,6 +27,7 @@
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/scripting/session.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -49,7 +51,10 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <source_location>
@@ -204,6 +209,71 @@ struct Fixture final {
         return {session.snapshot().project().id(), session.compositionId()};
     }
 };
+
+// A real project session with the same rig: the project can be saved to a file.
+struct SavedFixture final {
+    std::unique_ptr<bloom::scripting::Session> scripting;
+    document::CompositionId composition;
+    std::unique_ptr<ui::CompositionSession> session;
+    runtime::TaskScheduler scheduler;
+    ui::TaskUiBridge bridge;
+    PipelineFixture pipeline;
+    std::unique_ptr<ui::CompositionPreviewController> controller;
+    ui::ScopesRegionStore store;
+    std::unique_ptr<ui::ViewerEditor> viewer;
+    std::unique_ptr<ui::ScopesEditor> panel;
+
+    SavedFixture()
+        : scheduler(runtime::TaskSchedulerConfig{.cpuWorkerCount = 1,
+                                                 .blockingIoWorkerCount = 1,
+                                                 .cpuQueueCapacity = 16,
+                                                 .blockingIoQueueCapacity = 4,
+                                                 .terminalHistoryCapacity = 32,
+                                                 .diagnosticsPerTask = 8,
+                                                 .groupRegistryCapacity = 8}),
+          bridge(scheduler, nullptr, 1ms) {
+        auto created = bloom::scripting::Session::createNew(
+            "Scope region", "Main", bloom::core::RationalTime::fromInteger(10), format());
+        if (!created)
+            std::abort();
+        scripting = std::move(created).takeSession();
+        composition = scripting->snapshot().project().compositions().front().id();
+        session = std::make_unique<ui::CompositionSession>(*scripting->document(),
+                                                           *scripting->commandStack(), composition);
+        controller = std::make_unique<ui::CompositionPreviewController>(*session, scheduler, bridge,
+                                                                        pipeline.pipeline);
+        viewer = std::make_unique<ui::ViewerEditor>(*session, *controller);
+        viewer->setScopesRegionStore(&store);
+        viewer->resize(400, 300);
+        viewer->show();
+        ui::ScopesServices services;
+        services.regions = &store;
+        panel = std::make_unique<ui::ScopesEditor>(services);
+        panel->show();
+        panel->followViewer(viewer.get());
+    }
+
+    ~SavedFixture() {
+        panel.reset();
+        viewer.reset();
+        controller->beginShutdown();
+        bridge.beginShutdown();
+        (void)waitUntil([&] { return scheduler.isQuiescent(); });
+    }
+
+    [[nodiscard]] bool ready() {
+        return waitUntil([&] {
+            const auto& frame = controller->state().frame;
+            return frame && controller->state().activity == ui::PreviewActivity::Ready &&
+                   viewer->mappingForTest().has_value();
+        });
+    }
+};
+
+[[nodiscard]] std::string fileBytes(const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+}
 
 // Pointer input in composition pixels, through the Viewer's own event handlers.
 QPointF screen(ui::ViewerEditor& viewer, const QPointF compositionPoint) {
@@ -570,6 +640,35 @@ void testNotProjectState(Expectations& e) {
     e.expect(f.store.region(f.key()) == Region{1, 1, 5, 5}, "undo leaves the region as it was");
 }
 
+// The region is not saved: a project saved with a region set is byte for byte the project saved
+// without one. (Two saves of one unchanged project are byte-stable, which the first check proves,
+// so the comparison is exact rather than a search for region data inside a compressed archive.)
+void testRegionIsNotSaved(Expectations& e) {
+    SavedFixture f;
+    e.expect(f.ready(), "the preview is ready");
+    QTemporaryDir directory;
+    e.expect(directory.isValid(), "a temporary directory exists");
+    const std::filesystem::path folder = directory.path().toStdString();
+    const auto none = folder / "none.bloom";
+    const auto again = folder / "again.bloom";
+    const auto withRegion = folder / "region.bloom";
+
+    e.expect(f.scripting->saveAs(none).succeeded(), "the project saves with no region");
+    e.expect(f.scripting->saveAs(again).succeeded(), "the unchanged project saves again");
+    const auto bytesNone = fileBytes(none);
+    e.expect(!bytesNone.empty() && bytesNone == fileBytes(again),
+             "two saves of the unchanged project are byte-identical");
+
+    f.panel->setRegionArmed(true);
+    drag(*f.viewer, {10.4, 12.7}, {30.3, 40.4});
+    e.expect(f.store.region({f.session->snapshot().project().id(), f.session->compositionId()}) ==
+                 Region{10, 12, 21, 29},
+             "a region is set");
+    e.expect(f.scripting->saveAs(withRegion).succeeded(), "the project saves with a region set");
+    e.expect(fileBytes(withRegion) == bytesNone,
+             "the file saved with a region set equals the file saved without one");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -587,6 +686,7 @@ int main(int argc, char** argv) {
     testOtherGestures(e);
     testPerCompositionAndVisibility(e);
     testNotProjectState(e);
+    testRegionIsNotSaved(e);
     if (e.failures() != 0) {
         std::cerr << e.failures() << " scope region check(s) failed\n";
         return 1;
