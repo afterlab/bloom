@@ -459,6 +459,13 @@ void testChromaticityPlan(Expectations& e) {
         }
         e.expect(findLabel(plan, "0.1") == nullptr && findLabel(plan, "0.3") == nullptr,
                  "only every 0.2 is labelled");
+        // The axis names x and y sit between the labels of 0.8 and 1.0, never on top of one.
+        const auto* xName = findLabel(plan, "x");
+        const auto* yName = findLabel(plan, "y");
+        e.expect(xName != nullptr && yName != nullptr &&
+                     near(xName->anchor.x, plan.plot.left() + side * 0.9) &&
+                     near(yName->anchor.y, plan.plot.bottom() - side * 0.9),
+                 "the axis names are between the labels of 0.8 and 1.0");
         // The gamut triangle, the white point and the printed lines.
         const auto map = [&](const double x, const double y) {
             return scopes::Point{plan.plot.left() + x * side, plan.plot.bottom() - y * side};

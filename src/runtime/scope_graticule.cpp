@@ -466,10 +466,12 @@ class Builder final {
                 label(text, {plot.left() - m.small, y}, HorizontalAlign::Right,
                       VerticalAlign::Middle, LabelFont::Numeric, ColorRole::Label);
         }
-        label("x", {plot.right(), plot.bottom() + m.tiny + labelHeight / 2}, HorizontalAlign::Right,
+        // The names sit between the labels of 0.8 and 1.0, on the same row and column, so they
+        // never share a place with a numeral.
+        label("x", {plot.left() + side * 0.9, plot.bottom() + m.tiny + labelHeight / 2},
+              HorizontalAlign::Center, VerticalAlign::Middle, LabelFont::Name, ColorRole::Label);
+        label("y", {plot.left() - m.small, plot.bottom() - side * 0.9}, HorizontalAlign::Right,
               VerticalAlign::Middle, LabelFont::Name, ColorRole::Label);
-        label("y", {plot.left() - m.small, plot.top() - m.tiny}, HorizontalAlign::Right,
-              VerticalAlign::Top, LabelFont::Name, ColorRole::Label);
     }
 
     const GraticuleRequest& request_;
