@@ -1833,6 +1833,101 @@ When a composition cannot compile, the status bar keeps its one-sentence headlin
 Properties and Nodes have no per-parameter invalid state outside text entry, so they show no
 marker of their own; Select moves their selection to the subject.
 
+## Scopes panel
+
+Editor `bloom.scopes`, "Scopes" ([what is measured](../architecture/scopes.md)). It follows the active
+Viewer (the most recently focused one), asks its `ScopesController` for that frame's count tables,
+and draws five scopes. Measuring runs on task workers behind the controller and the count-to-image
+mapping on task workers behind the trace renderer; the panel only lays out, labels and paints. It
+has no frame of its own: with no Viewer, or a Viewer with no frame, each open section shows an
+empty graticule and the status line says why.
+
+Header controls, top to bottom, on the `Background` surface at `Spacing::XS` gaps:
+
+| Control | Behavior |
+| --- | --- |
+| Signal (`KDropdown`) | Display (default) or Working space. Changing it measures again |
+| Axis maximum (`KDropdown`) | 1, 2, 4, 8 or 16; shown only for Working space. Changing it measures again |
+| Region (toggle `KButton`) | Arms a rectangle drag in the active Viewer; the toggle is the panel's `regionArmed()` |
+| Clear Region (`KButton`) | Removes the region; disabled while there is none |
+| Ignore Transparent Pixels (`KCheckBox`) | Off by default; a pixel with alpha 0 is not counted. Measures again |
+| Brightness (`KSlider`, 0.25 to 4, default 1) | Trace gain. Maps again and does not measure again |
+
+Under the header is the status line, always visible (outside the scroll area), in `UiSmall`:
+
+- the measurement in `Muted`: composition and frame time, display and view (or the working space),
+  resolution (Full, Half, Quarter), the measured rectangle when a region or the Viewer's region of
+  interest applies, the route (GPU or CPU, with the reason when the CPU counted a device frame), and
+  the pixels counted;
+- in `Warn`, one entry per Viewer setting that makes the picture differ from the export: exposure or
+  gamma that is not neutral, a look that is off (Display signal), a channel shown, isolation;
+- in `Warn`, "Behind: these scopes are of <composition>, frame <n>" while the tables on show are
+  another frame's than the Viewer's. A scope painting another frame's image is dimmed and carries
+  the word "Behind" in its corner; data of another frame is never shown without that label;
+- instead of the measurement, the reason nothing is shown: no Viewer, no frame, hidden panel, every
+  section collapsed, a measure in flight, a failure, a region outside the picture.
+
+Below it, a scroll area holds five collapsible `KSection`s in this order, open by default, each
+persisting its state per panel area under `scopes/<area>/sections/<id>/collapsed`. A collapsed
+section's scope is not measured (Waveform and Parade share one table, so it is measured while either
+is open), and a hidden panel measures nothing. Each scope fills its section's width at its own aspect
+and has a minimum height, so the panel scrolls when the open sections do not fit.
+
+| Section (id) | Header choice | Scope |
+| --- | --- | --- |
+| Waveform (`waveform`) | RGB or Luma | Codes 0 to 1023 up the left, channels added in their colors |
+| Parade (`parade`) | none | Red, green and blue panes, each a third of the width, from the Waveform table |
+| Vectorscope (`vectorscope`) | "Linear values" note for the Working signal | Cb right, Cr up, circle of radius 0.5 |
+| Histogram (`histogram`) | RGB, Luma or RGB and Luma; Linear or Logarithmic | One row per channel on one scale |
+| CIE Chromaticity (`chromaticity`) | none | CIE 1931 xy, axes 0 to 1 |
+
+Drawing rules (no literal colors; every color is a `kit::Color` token, every size a `kit::Size` or
+`kit::Spacing` step):
+
+- **Canvas and graticule.** Each scope paints on `Canvas`. Graticule lines are one device pixel
+  (`snappedHairlineWidth`, positions snapped to device pixel centers) in `Border`, with `BorderHover`
+  for frames and minor tick marks (`Size::MinorTick`; longer `Size::MajorTick` at labelled steps).
+  Labels are the `Value` type role in `Muted`, in the gutter beside the plot, so they never overlap
+  the trace.
+- **Channel colors.** Red, green and blue are `ComponentX`, `ComponentY` and `ComponentZ`, luma is
+  `Foreground` (gray when scaled by a count). The Waveform and Parade add their channels
+  (`CompositionMode_Plus`), so overlaps brighten toward white. A cell with a count is never drawn
+  below a visible floor; brightness is `log2(1 + n) / log2(1 + m)` times Brightness.
+- **Waveform and Parade.** A line and a label at 0, 128, 256, 384, 512, 640, 768, 896 and 1023
+  (linear values for the Working signal), minor ticks on the left edge every 32 codes and along the
+  bottom in sixteenths of each pane. A column with an under or over count draws a `Warn` tick at the
+  bottom or top edge. The Parade has a 4 px gap between panes and a channel letter in each.
+- **Histogram.** One row of 56 px per channel, each a filled area in a dark tint of its channel color
+  with a one-pixel outline along the top of the curve; code labels across the top with vertical
+  lines through all rows; a `Warn` marker at either end of a row whose channel has an under or over
+  count, with the count in its tooltip.
+- **Vectorscope.** The circle in `BorderHover`, cross hairs, ticks inward from the ring every 10
+  degrees (longer every 30), the skin tone line dashed in `Faint` at 123 degrees, and each of the
+  six targets (R, Mg, B, Cy, G, Yl) as four corner brackets with its letter beside it, placed from
+  the signal's own luma coefficients at 75% color bars. Cells take their chroma at a fixed luma and
+  brighten toward white where counts are dense.
+- **CIE Chromaticity.** Grid every 0.1 with labels every 0.2 and the axis names x and y; the
+  spectral locus as a thin `Foreground` curve with a tick every 10 nm from 460 to 620; the signal's
+  gamut triangle in `Muted` with the space's name at its green corner; the white point as a small
+  ring; the space's name with R, G, B and W xy to four decimals in the top-right corner.
+- **Hover.** The tooltip reads the value under the pointer in the scope's units (column and code;
+  channel and code; cb, cr, angle and saturation; x and y) and the count of that cell.
+
+The scope region is the panel's seam for the Viewer: `ScopesEditor::setRegion` and `clearRegion`,
+`regionArmed`, and the `regionChanged` and `regionArmedChanged` signals. It is session state of the
+panel, never project state, and not undoable.
+
+| Object name | Part |
+| --- | --- |
+| `scopesEditor`, `scopesHeader`, `scopesScroll`, `scopesContent` | the panel, header, scroll area and body |
+| `scopesSignal`, `scopesAxisMaximum`, `scopesAxisMaximumLabel`, `scopesRegion`, `scopesClearRegion`, `scopesIgnoreTransparent`, `scopesBrightness` | header controls |
+| `scopesStatusLine`, `scopesStatusWarnings`, `scopesStatusBehind` | status line, warnings, "Behind" |
+| `scopesSection_waveform`, `_parade`, `_vectorscope`, `_histogram`, `_chromaticity` | `KSection`s |
+| `scopesWaveform`, `scopesParade`, `scopesVectorscope`, `scopesHistogram`, `scopesChromaticity` | the scope widgets |
+| `scopesWaveformChannels`, `scopesHistogramChannels`, `scopesHistogramScale`, `scopesLinearNote` | section header choices and note |
+
+The panel-switcher glyph is `IconId::GraphEditor` (Phosphor `chart-line`).
+
 ## Text fields
 
 `KTextField` is the kit's one text field: a `Field` well in the control body with `Spacing::S`
