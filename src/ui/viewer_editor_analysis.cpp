@@ -125,6 +125,26 @@ PreparedPreviewFrameHandle ViewerEditor::displayedFrame() const {
 
 PreparedPreviewFrameHandle ViewerEditor::appliedDisplayFrame() const { return displayedFrame(); }
 
+ViewerEditor::ScopesSource ViewerEditor::scopesSource() const {
+    const auto shown = displayedFrame();
+    if (!shown)
+        return {};
+    const auto adjust = shown->desiredIdentity().viewAdjust;
+    if (adjust.neutral())
+        return {shown, adjust};
+    // The adjusted picture the Viewer derives is never cached: measure the neutral frame it was
+    // derived from, which is the preview controller's frame while it is the same one.
+    const auto base = previewController_->state().frame;
+    if (!frameInCurrentDomain(base))
+        return {};
+    auto neutral = shown->desiredIdentity();
+    neutral.viewAdjust = {};
+    if (PreviewFrameCacheKey::forIdentity(base->desiredIdentity()) !=
+        PreviewFrameCacheKey::forIdentity(neutral))
+        return {};
+    return {base, adjust};
+}
+
 CompositionPreviewState ViewerEditor::displayedPreviewState() const {
     auto state = previewController_->state();
     state.viewerDisplayState = true;

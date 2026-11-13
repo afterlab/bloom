@@ -71,6 +71,7 @@
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/qualified_display_processor_bootstrap.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
+#include <bloom/ui/scopes_editor.hpp>
 #include <bloom/ui/system_notifier.hpp>
 #include <bloom/ui/task_monitor_model.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -829,11 +830,54 @@ int main(int argc, char* argv[]) try {
     mcpAdapter.startWaiter();
     QObject::connect(&projectHost, &bloom::ui::ProjectHost::exportQueueReplaced, &mcpAdapter,
                      [&mcpService] { mcpService.exportQueueReplaced(); });
+    // #724 Scopes: every Scopes panel measures the frame its Viewer shows on the application's
+    // final-render device when that device is available (the provider's evaluator, read on the
+    // worker), with the shared OCIO context resolved on the worker the way the preview resolves it,
+    // and with the CPU reference evaluator otherwise.
+    bloom::ui::ScopesServices scopesServices;
+    {
+        bloom::runtime::ScopeFrameRoutes routes;
+        routes.device = [statisticsDeviceSource] {
+            std::shared_ptr<bloom::host::GpuExportProvider> provider;
+            {
+                const std::scoped_lock lock(statisticsDeviceSource->mutex);
+                provider = statisticsDeviceSource->provider.lock();
+            }
+            return provider != nullptr ? provider->evaluator() : nullptr;
+        };
+        routes.ocio = [gpuOcioContextResolver] {
+            if (gpuOcioContextResolver == nullptr)
+                return std::shared_ptr<const bloom::runtime::GpuSceneOcioContext>{};
+            auto resolved = gpuOcioContextResolver->resolve();
+            // A cold first resolve qualifies the tools on a machine that may be busy: a time-out or
+            // an I/O failure says nothing about the tools and is not remembered, so try once more.
+            if (!resolved.hasValue() &&
+                (resolved.error == bloom::runtime::GpuOcioContextError::Timeout ||
+                 resolved.error == bloom::runtime::GpuOcioContextError::IoFailure))
+                resolved = gpuOcioContextResolver->resolve();
+            return resolved.context;
+        };
+        routes.evaluateCpu =
+            [&cpuEvaluator](std::shared_ptr<const bloom::runtime::CompiledCompositionPlan> plan,
+                            const bloom::runtime::EvaluationRequest& request,
+                            const bloom::runtime::CancellationToken& cancellation) {
+                return cpuEvaluator.evaluate(std::move(plan), request, cancellation);
+            };
+        scopesServices.scheduler = &taskScheduler;
+        scopesServices.bridge = &taskUiBridge;
+        scopesServices.cache = previewFrameCache;
+        scopesServices.measure = bloom::ui::makeScopesMeasure(
+            std::move(routes),
+            [&cpuEvaluator]() -> std::optional<std::filesystem::path> {
+                return cpuEvaluator.assetBaseDirectory();
+            },
+            previewController.effectivePixelStorageByteLimit());
+    }
     std::shared_ptr<bloom::ui::ScriptPanelRuntime> scriptRuntime;
     const bool editorsRegistered = bloom::ui::registerFoundationEditors(
         editorRegistry, compositionSession, previewController, &ramPreviewController, &projectHost,
         &viewerGpuDependencies, gpuExportProvider, &exportQueueAdapter, &liveSessionHost,
-        &mcpAdapter, profilerFeed.get(), &viewerPreviews, &scriptRuntime);
+        &mcpAdapter, profilerFeed.get(), &viewerPreviews, &scriptRuntime, &scopesServices);
     // script.run (#603) runs through the Script editor's runtime; null without embedded Python.
     // The binding holds it weakly; the Script editors' factory keeps it alive.
     mcpLiveUi.setScriptRuntime(scriptRuntime);

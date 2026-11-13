@@ -2309,6 +2309,28 @@ bloom_add_test(
     TIMEOUT 120
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
+# #724 Scopes: the count-to-image mapping and the status line as pure functions (no widget).
+add_executable(bloom_ui_scopes_drawing_test scopes_drawing_tests.cpp)
+target_link_libraries(bloom_ui_scopes_drawing_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_scopes_drawing_test)
+bloom_add_test(
+    NAME bloom.ui.scopes-drawing
+    COMMAND bloom_ui_scopes_drawing_test
+    LABELS ui unit
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+# #724 Scopes: the Scopes panel over genuine CPU reference frames; no device and no Viewer.
+add_executable(bloom_ui_scopes_panel_test scopes_panel_tests.cpp)
+target_link_libraries(bloom_ui_scopes_panel_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_scopes_panel_test)
+bloom_add_test(
+    NAME bloom.ui.scopes-panel
+    COMMAND bloom_ui_scopes_panel_test
+    LABELS ui unit cache
+    TIMEOUT 180
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+)
 add_executable(bloom_ui_preview_frame_cache_cpu_edge_test preview_frame_cache_cpu_edge_tests.cpp)
 add_executable(bloom_ui_preview_frame_trace_test preview_frame_trace_tests.cpp)
 target_link_libraries(bloom_ui_preview_frame_trace_test PRIVATE bloom_ui)

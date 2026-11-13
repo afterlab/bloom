@@ -1,6 +1,7 @@
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/mcp_server_editor.hpp>
 #include <bloom/ui/profiler_editor.hpp>
+#include <bloom/ui/scopes_editor.hpp>
 
 #include <bloom/ui/composition_editors.hpp>
 #include <bloom/ui/export_editor.hpp>
@@ -63,10 +64,10 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
                                std::shared_ptr<host::GpuExportProvider> gpuExportProvider,
                                ExportQueueAdapter* const exportQueue,
                                scripting::LiveSessionHost* const liveSession,
-                               McpServerAdapter* const mcpServer,
-                               ProfilerFeed* const profilerFeed,
+                               McpServerAdapter* const mcpServer, ProfilerFeed* const profilerFeed,
                                ViewerPreviewPool* const viewerPreviews,
-                               std::shared_ptr<ScriptPanelRuntime>* const scriptRuntime) {
+                               std::shared_ptr<ScriptPanelRuntime>* const scriptRuntime,
+                               const ScopesServices* const scopes) {
     std::shared_ptr<ScriptPanelRuntime> script;
 #ifdef BLOOM_BUILD_PYTHON
     if (projectHost) {
@@ -94,6 +95,17 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
         return registry.registerEditor(
             {.id = std::move(id), .displayName = std::move(name), .create = std::move(factory)});
     };
+
+    ScopesServices scopesServices = scopes != nullptr ? *scopes : ScopesServices{};
+    if (!scopesServices.compositionName)
+        scopesServices.compositionName = [&session](const document::ProjectId project,
+                                                    const document::CompositionId composition) {
+            const auto& snapshot = session.snapshot();
+            if (snapshot.project().id() != project)
+                return QString{};
+            const auto* record = snapshot.project().findComposition(composition);
+            return record != nullptr ? QString::fromStdString(record->name()) : QString{};
+        };
 
     return addEditor(
                "bloom.viewer", "Viewer",
@@ -128,7 +140,8 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
                      [script](QWidget* parent) { return new ScriptPanel(script, parent); }) &&
            registerExportEditor(registry, session, exportQueue) &&
            registerMcpServerEditor(registry, mcpServer) &&
-           registerProfilerEditor(registry, profilerFeed);
+           registerProfilerEditor(registry, profilerFeed) &&
+           registerScopesEditor(registry, scopesServices, ramPreview);
 }
 
 } // namespace bloom::ui

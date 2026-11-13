@@ -88,6 +88,10 @@ constexpr auto kHeaderIconRole = kit::IconRole::Chrome;
     if (editorId == "bloom.profiler") {
         return kit::IconId::Profiler;
     }
+    // Scopes reuse the chart glyph: a scope is a plot of the picture.
+    if (editorId == "bloom.scopes") {
+        return kit::IconId::GraphEditor;
+    }
     return std::nullopt;
 }
 

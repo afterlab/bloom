@@ -30,6 +30,7 @@ class McpServerAdapter;
 class ProfilerFeed;
 class RamPreviewController;
 class ScriptPanelRuntime;
+struct ScopesServices;
 class CompositionSession;
 class ProjectHost;
 class ViewerPreviewPool;
@@ -90,6 +91,10 @@ class EditorRegistry final {
 //
 // `scriptRuntime` receives the Script editor's runtime (null in a build without embedded Python),
 // so the in-app MCP server's script.run (#603) runs through the same interpreter and queue.
+//
+// `scopes` (#724) is what the Scopes panel measures with: the task scheduler and bridge, the
+// preview frame cache, and the measure over the application's device, OCIO and CPU routes. Null
+// registers the panel in its "not available" form. The pointee is copied.
 [[nodiscard]] bool registerFoundationEditors(
     EditorRegistry& registry, CompositionSession& session,
     CompositionPreviewController& previewController, RamPreviewController* ramPreview = nullptr,
@@ -98,6 +103,7 @@ class EditorRegistry final {
     ExportQueueAdapter* exportQueue = nullptr, scripting::LiveSessionHost* liveSession = nullptr,
     McpServerAdapter* mcpServer = nullptr, ProfilerFeed* profilerFeed = nullptr,
     ViewerPreviewPool* viewerPreviews = nullptr,
-    std::shared_ptr<ScriptPanelRuntime>* scriptRuntime = nullptr);
+    std::shared_ptr<ScriptPanelRuntime>* scriptRuntime = nullptr,
+    const ScopesServices* scopes = nullptr);
 
 } // namespace bloom::ui

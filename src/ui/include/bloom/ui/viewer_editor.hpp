@@ -270,6 +270,19 @@ class ViewerEditor final : public QWidget,
     ~ViewerEditor() override;
     [[nodiscard]] CompositionPreviewState displayedPreviewState() const;
 
+    // #724 Scopes: the exposure and gamma the Viewer applies to the picture it shows.
+    [[nodiscard]] const runtime::ViewAdjust& viewAdjust() const noexcept { return viewAdjust_; }
+    // What the Scopes panel measures: the NEUTRAL frame behind the picture the Viewer shows (the
+    // frame whose identity carries no exposure or gamma, which is the only kind the preview cache
+    // holds) and the exposure and gamma applied to it. Null when the Viewer shows no frame, or when
+    // it shows an adjusted picture whose neutral frame is no longer the preview controller's, so
+    // the panel never measures a frame the Viewer is not showing.
+    struct ScopesSource final {
+        PreparedPreviewFrameHandle frame;
+        runtime::ViewAdjust viewAdjust{};
+    };
+    [[nodiscard]] ScopesSource scopesSource() const;
+
     // --- #536: pin/follow and the Viewer's own preview --------------------------------------
     // Where a Viewer gets a preview controller of its own. Without one the Viewer can only follow
     // and share the application's controller. Borrowed; must outlive the Viewer.
