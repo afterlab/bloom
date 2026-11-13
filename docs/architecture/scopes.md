@@ -106,6 +106,51 @@ The device route measures the picture the final-render evaluator computes, not a
 Viewer's own device picture: the scene of a measured frame therefore runs on that evaluator's
 device as well as on the Viewer's.
 
+## The scope picture
+
+A scope has one Qt-free definition of what it looks like, in `bloom/runtime/scope_picture.hpp`. The
+Scopes panel and the headless scope image (MCP and scripting sessions have no Qt) both draw from it,
+so they cannot drift.
+
+Shared by the panel and the headless image:
+
+- **The trace mapping.** Count tables to a premultiplied 8-bit image for the Waveform, Parade,
+  Vectorscope, Histogram (linear and logarithmic) and CIE chromaticity: the brightness
+  `log2(1 + n) / log2(1 + m)` with `core::specifiedLog2`, the visible floor, the clip summary and
+  the cancellation checks. The panel wraps the buffer in a `QImage` and maps on a task worker; the
+  headless image maps in place.
+- **The graticule plan.** From the scope kind, a logical size, a device pixel ratio, the settings
+  that affect drawing (signal, axis maximum, channels, scale), the luma coefficients, the
+  colorimetry and a text-measuring callback, one function returns everything a scope shows besides
+  its trace, in logical coordinates: the plot and trace rectangles, hairlines, polylines (the
+  spectral locus, the gamut triangle), circles (the Vectorscope ring, the white point), filled clip
+  markers and labels, each with a color role and, for a primitive, whether it sits under or over the
+  trace. The geometry is the panel's own; the panel computes none of it.
+- **The palette.** The color roles a scope uses: canvas, graticule quiet, stronger and strongest,
+  label, faint, warning and the four channel colors. The panel fills it from the interface tokens.
+  The headless image uses `defaultScopePalette()`, whose values `bloom.ui.scopes-picture` ties to
+  those tokens one by one. The spacing and tick sizes the geometry uses (`ScopeMetrics`) are tied
+  the same way.
+
+What differs:
+
+- The panel paints the plan as vector drawing with `QPainter` and the interface fonts, crisp at
+  every scale. The headless image rasterizes it: lines are one device pixel, antialiased where the
+  plan says so, and labels are rasterized with the embedded Inter Medium face (the embedded faces
+  have no monospaced one, so numbers use the same face as names), by `renderScopePicture` for one
+  scope and `renderAllScopesPicture` for the five stacked in the panel's order, each as tall as the
+  panel's `heightForWidth` gives for that width.
+- The panel's geometry reads its own font metrics; the headless image's reads the embedded face's.
+  A label may therefore sit a pixel or two differently, and the plot may be a few pixels wider or
+  narrower. A caller that needs the panel's geometry in a headless picture passes the panel's text
+  measure in `PictureOptions`.
+- The panel dims and marks a scope "Behind" while it shows another frame's tables; a picture always
+  shows the tables it is given.
+
+`encodeScopePng` turns the buffer into PNG bytes (8-bit RGBA, an sRGB chunk, one IDAT stream,
+straight alpha) with the qualified zlib, independent of any project or export job. Every picture
+call takes a cancellation token and a byte limit and returns an error value, never an exception.
+
 ## The table readback
 
 `prep.scopes.result_readback` is a named, bounded readback in the audited host-preparation list of
@@ -141,6 +186,8 @@ other stages' are. The measure holds no state between frames.
 | `bloom.runtime.scope_measure` | The CPU reference: known answers for every table, the counters, areas, columns, the axis maximum, the packed form, the summary and the measured area |
 | `bloom.render.gpu_scope_tables` | The kernel on a real device: every count against a host count of the same pictures, and its refusals (no XYZ picture, a budget below the tables) |
 | `bloom.runtime.scope_measure_gpu_parity` | CPU and device tables equal for the same float pictures, cell edges included |
+| `bloom.runtime.scope_picture` | The Qt-free picture: the plan's facts for each scope (Waveform codes, Vectorscope ticks, targets and skin line, CIE grid, labels, triangle and printed lines, Parade panes, Histogram rows and clip markers), trace pixels equal to the mapping over the canvas, the visible floor, Histogram heights, the picture of all five, PNG bytes decoded back, and the cancelled, byte-limit and size refusals |
+| `bloom.ui.scopes-picture` | The panel and the picture agree: palette and metrics equal the interface tokens, an offscreen grab and the picture agree on the trace rectangle of each scope, and the plan's hairlines are where the grab has graticule pixels |
 | `bloom.color.scope-colorimetry` | The XYZ transform, the luma coefficients and the primaries of the built-in configs |
 | `bloom.runtime.scope_frame_measure_native` | A frame through the production device route against the CPU reference: exact for the Working signal, within one cell through the OCIO steps, one table readback and no picture readback, the route named |
 
