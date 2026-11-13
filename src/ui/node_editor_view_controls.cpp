@@ -1,5 +1,5 @@
-// #695: the node editor's view controls -- the footer's zoom out / zoom value / zoom in group, the
-// minimap overlay, and the two Preferences that switch them. The canvas's own zoom and pan live in
+// #695, #721: the node editor's view controls -- the footer's zoom preset dropdown, the minimap
+// overlay with its zoom row, and the two Preferences that switch them. The canvas's own zoom and pan live in
 // node_editor_canvas.cpp; everything here goes through that view's functions, so the buttons, the
 // value, the minimap, the wheel and the View menu can never disagree about a limit.
 #include "node_editor_minimap.hpp"
@@ -8,8 +8,8 @@
 #include <QSettings>
 #include <QSignalBlocker>
 #include <algorithm>
-#include <bloom/ui/kit/controls.hpp>
-#include <bloom/ui/kit/value_field.hpp>
+#include <array>
+#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 #include <cmath>
@@ -46,61 +46,35 @@ void NodeGraphicsView::centerOnScenePoint(const QPointF scenePoint) {
 
 // --- NodeGraphEditor ---------------------------------------------------------------------------
 
+namespace {
+// #721: the footer's zoom dropdown, as before #695: Fit and these presets, largest first.
+constexpr std::array<int, 4> kZoomPresets{100, 75, 50, 25};
+constexpr int kFixedZoomItems = static_cast<int>(kZoomPresets.size()) + 1;
+} // namespace
+
 void NodeGraphEditor::buildViewControls() {
-    constexpr std::array<int, 5> kZoomPresets{25, 50, 100, 200, 400};
-    const auto button = [this](const kit::IconId icon, const QString& name, const QString& text) {
-        auto* control = new kit::KIconButton(this);
-        control->setObjectName(name);
-        control->setIcon(kit::icon(icon, kit::IconRole::Chrome));
-        control->setToolTip(text);
-        control->setAccessibleName(text);
-        return control;
-    };
-
-    footerZoomOutButton_ = button(kit::IconId::Subtract, QStringLiteral("nodeZoomOutButton"),
-                                  tr("Zoom Out"));
-    connect(footerZoomOutButton_, &QAbstractButton::clicked, this, [this] { view_->zoomStep(-1); });
-
-    // The value: a kit value field that scrubs along the vertical axis (drag up to zoom in), takes
-    // a typed percentage, and resets to 100%. Fit and the presets are its context menu.
-    footerZoomValue_ = new kit::KValueField(this);
-    auto* field = footerZoomValue_;
-    field->setObjectName(QStringLiteral("nodeZoomValue"));
-    field->setAccessibleName(tr("Zoom"));
-    field->setToolTip(tr("Zoom. Drag up or down, or type a percentage."));
-    field->setCompact(true);
-    field->setOutlinedAtRest(true);
-    field->setScrubAxis(kit::KValueField::ScrubAxis::Vertical);
-    field->setRange(ViewTransform::kMinZoom * kPercent, ViewTransform::kMaxZoom * kPercent);
-    field->setSingleStep(1.0);
-    field->setDecimals(0);
-    field->setUnit(QStringLiteral("%"));
-    field->setDefaultValue(kPercent);
-    field->setResetText(tr("Actual Size"));
-    field->setFixedWidth(kit::px(kit::Size::ViewerZoomWidth));
-    connect(field, &kit::KValueField::valueChanged, this, [this](const double percent) {
-        if (!zoomSyncing_)
-            view_->zoomToFactor(percent / kPercent);
+    footerZoomDropdown_ = new kit::KDropdown(this);
+    footerZoomDropdown_->setObjectName(QStringLiteral("nodeZoomDropdown"));
+    footerZoomDropdown_->setAccessibleName(tr("Zoom"));
+    footerZoomDropdown_->setToolTip(tr("Zoom: Fit or a preset"));
+    footerZoomDropdown_->setControlSize(kit::KDropdown::ControlSize::Dense);
+    footerZoomDropdown_->setWidthFloor(kit::px(kit::Size::ViewerZoomWidth));
+    footerZoomDropdown_->addItem(tr("Fit"), 0);
+    for (const int percent : kZoomPresets)
+        footerZoomDropdown_->addItem(tr("%1%").arg(percent), percent);
+    // activated(), not currentIndexChanged(): only the artist's choice zooms; showing the current
+    // zoom after a wheel step or Fit never writes back to the view.
+    connect(footerZoomDropdown_, &kit::KDropdown::activated, this, [this](const int index) {
+        if (index <= 0)
+            view_->frameGraph();
+        else
+            view_->zoomToPercent(index < kFixedZoomItems
+                                     ? footerZoomDropdown_->itemData(index).toInt()
+                                     : footerCustomZoomPercent_);
+        // Fit holds no zoom of its own: the field goes back to the zoom the view ended at.
+        refreshZoomControls();
     });
-    auto* fit = new QAction(tr("Fit"), field);
-    fit->setObjectName(QStringLiteral("nodeZoomFitPresetAction"));
-    connect(fit, &QAction::triggered, this, [this] { view_->frameGraph(); });
-    field->addAction(fit);
-    for (const int percent : kZoomPresets) {
-        auto* preset = new QAction(tr("%1%").arg(percent), field);
-        preset->setObjectName(QStringLiteral("nodeZoomPreset%1Action").arg(percent));
-        connect(preset, &QAction::triggered, this,
-                [this, percent] { view_->zoomToPercent(percent); });
-        field->addAction(preset);
-    }
-
-    footerZoomInButton_ =
-        button(kit::IconId::Add, QStringLiteral("nodeZoomInButton"), tr("Zoom In"));
-    connect(footerZoomInButton_, &QAbstractButton::clicked, this, [this] { view_->zoomStep(1); });
-
-    chrome_.footer.addWidget(footerZoomOutButton_);
-    chrome_.footer.addWidget(footerZoomValue_);
-    chrome_.footer.addWidget(footerZoomInButton_);
+    chrome_.footer.addWidget(footerZoomDropdown_);
 
     minimap_ = new NodeMinimap(*view_);
     connect(view_, &NodeGraphicsView::viewChanged, this, &NodeGraphEditor::refreshZoomControls);
@@ -112,26 +86,38 @@ void NodeGraphEditor::buildViewControls() {
 }
 
 void NodeGraphEditor::refreshZoomControls() {
-    if (footerZoomValue_ == nullptr)
+    if (footerZoomDropdown_ == nullptr)
         return;
-    const double zoom = view_->zoomFactor();
-    zoomSyncing_ = true;
-    // A projection, never an edit: a field with a live scrub keeps the value it is scrubbing.
-    footerZoomValue_->setValue(zoom * kPercent);
-    zoomSyncing_ = false;
-    footerZoomOutButton_->setEnabled(zoom > ViewTransform::kMinZoom * (1.0 + 1e-9));
-    footerZoomInButton_->setEnabled(zoom < ViewTransform::kMaxZoom * (1.0 - 1e-9));
+    // The closed field always shows the current zoom: a preset when the view sits on one, and
+    // otherwise one trailing item carrying the current percentage, renamed in place.
+    const int percent = static_cast<int>(std::lround(view_->zoomFactor() * kPercent));
+    int target = -1;
+    for (int index = 1; index < kFixedZoomItems; ++index)
+        if (footerZoomDropdown_->itemData(index).toInt() == percent)
+            target = index;
+    const QSignalBlocker blocker(footerZoomDropdown_);
+    if (target < 0) {
+        const QString label = tr("%1%").arg(percent);
+        if (footerZoomDropdown_->count() > kFixedZoomItems) {
+            footerZoomDropdown_->setItemText(kFixedZoomItems, label);
+        } else {
+            footerZoomDropdown_->addItem(label, percent);
+        }
+        footerCustomZoomPercent_ = percent;
+        target = kFixedZoomItems;
+    }
+    if (footerZoomDropdown_->currentIndex() != target)
+        footerZoomDropdown_->setCurrentIndex(target);
+    footerZoomDropdown_->update();
 }
 
 void NodeGraphEditor::applyViewControls(const bool zoomControls, const bool minimap) {
-    // The footer row owns visibility: a suppressed control leaves the row and the rest re-flows.
-    for (QWidget* control : {static_cast<QWidget*>(footerZoomOutButton_),
-                             static_cast<QWidget*>(footerZoomValue_),
-                             static_cast<QWidget*>(footerZoomInButton_)})
-        if (control != nullptr && control->property("chromeSuppressed").toBool() == zoomControls)
-            control->setProperty("chromeSuppressed", !zoomControls);
-    if (minimap_ != nullptr)
+    // #721: the minimap preference switches the minimap together with its zoom row; the zoom
+    // controls preference switches the zoom row alone.
+    if (minimap_ != nullptr) {
+        minimap_->setZoomRowEnabledByPreference(zoomControls);
         minimap_->setEnabledByPreference(minimap);
+    }
 }
 
 NodeMinimap* NodeGraphEditor::minimapForTest() const noexcept { return minimap_; }

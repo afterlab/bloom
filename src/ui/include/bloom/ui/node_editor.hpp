@@ -130,6 +130,9 @@ class NodeGraphicsScene final : public QGraphicsScene {
                             std::optional<document::OutputPortRef> output);
     // Shift + right drag crossed a link and asks for a reroute at that point (task FIX1, item I).
     void rerouteRequested(document::InputPortRef input, QPointF scenePosition);
+    // #721: the scene now shows a new document state (cards added, removed, moved or resized by
+    // a projection). What QGraphicsScene::changed would say, without its cost: see NodeMinimap.
+    void projected();
     // #720: a projection that waited for a gesture to end is due now (see setProjection).
     void projectionDue();
 
@@ -482,7 +485,8 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider, publi
     // --- Task NODES-1: the persistent header menus (deliverable 1) and their live state. ---
     void buildHeaderMenus();
     void buildFooter();
-    // #695: the footer's zoom controls, the minimap and the two Preferences that switch them.
+    // #695, #721: the footer's zoom dropdown, the minimap with its zoom row and the two
+    // Preferences that switch them.
     void buildViewControls();
     void refreshZoomControls();
     void applyViewControls(bool zoomControls, bool minimap);
@@ -562,10 +566,10 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider, publi
     // are: the zoom dropdown and selection readout both need to react to session/view state that
     // outlives any one popup.
     QWidget* footerWidget_ = nullptr;
-    kit::KIconButton* footerZoomOutButton_ = nullptr;
-    kit::KValueField* footerZoomValue_ = nullptr;
-    kit::KIconButton* footerZoomInButton_ = nullptr;
-    bool zoomSyncing_ = false;
+    kit::KDropdown* footerZoomDropdown_ = nullptr;
+    // The zoom the dropdown's trailing "current zoom" item stands for when the view is off the
+    // presets.
+    int footerCustomZoomPercent_ = 100;
     NodeMinimap* minimap_ = nullptr;
     kit::KSwitch* footerSnapSwitch_ = nullptr;
     kit::KDropdown* footerLinkStyleDropdown_ = nullptr;

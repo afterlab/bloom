@@ -85,15 +85,31 @@ NodeGraphicsScene::NodeGraphicsScene(QObject* parent)
 
 void NodeGraphicsScene::setSession(CompositionSession* session) { session_ = session; }
 
-void NodeGraphicsScene::drawBackground(QPainter* painter, const QRectF& rect) {
+void NodeGraphicsScene::drawBackground(QPainter* painter, const QRectF& exposed) {
     // The canvas surface itself stays the scene's own Background brush; the grid is drawn on top of
     // it, one step up the surface ladder, so it reads as texture rather than as a second color.
-    QGraphicsScene::drawBackground(painter, rect);
-
+    //
+    // #721: `exposed` is the repainted area in scene units, and at a fractional display scale its
+    // edges fall inside device pixels. The view erases those pixels to the widget's base color
+    // first, so an antialiased fill that stops at the fractional edge leaves a blended line along
+    // the bottom and right of every partial repaint. The surface is therefore filled without
+    // antialiasing and past the edge; the painter's clip is the exact device area being repainted.
     const qreal scale = painter->worldTransform().m11();
-    if (!(scale > 0.0) || gridSize_ * scale < kGridMinimumDeviceSpacing) {
+    if (!(scale > 0.0)) {
+        QGraphicsScene::drawBackground(painter, exposed);
         return;
     }
+    const qreal overhang = 2.0 / scale;
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing, false);
+    painter->fillRect(exposed.adjusted(-overhang, -overhang, overhang, overhang), backgroundBrush());
+    painter->restore();
+    if (gridSize_ * scale < kGridMinimumDeviceSpacing) {
+        return;
+    }
+    // A dot whose center lies just outside the repainted area still reaches into it.
+    const QRectF rect =
+        exposed.adjusted(-kGridDotRadius, -kGridDotRadius, kGridDotRadius, kGridDotRadius);
     // Integer step counts, not a floating-point loop variable: repeatedly adding a pitch to a
     // double accumulates error across a wide exposed rectangle, and the dots would slowly drift off
     // the lattice the far side of the canvas is drawn on.

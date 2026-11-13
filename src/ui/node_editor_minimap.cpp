@@ -7,9 +7,13 @@
 #include <QPainter>
 #include <QWheelEvent>
 #include <algorithm>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/painting.hpp>
+#include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/node_editor.hpp>
+#include <bloom/ui/viewer_editor.hpp>
+#include <cmath>
 
 namespace bloom::ui {
 
@@ -18,12 +22,21 @@ NodeMinimap::NodeMinimap(NodeGraphicsView& view) : QWidget(view.viewport()), vie
     setAccessibleName(tr("Node graph minimap"));
     setAccessibleDescription(
         tr("Shows the whole graph and the part the canvas shows. Drag to move the view."));
-    setFixedSize(kit::px(kit::Size::NodeMinimapWidth), kit::px(kit::Size::NodeMinimapHeight));
     setCursor(Qt::PointingHandCursor);
+    buildZoomRow();
+    layoutZoomRow();
     view_.viewport()->installEventFilter(this);
     connect(&view_, &NodeGraphicsView::viewChanged, this, qOverload<>(&QWidget::update));
-    if (auto* scene = view_.scene())
-        connect(scene, &QGraphicsScene::changed, this, [this] { refreshCards(); });
+    connect(&view_, &NodeGraphicsView::viewChanged, this, &NodeMinimap::refreshZoomRow);
+    refreshZoomRow();
+    // #721: never QGraphicsScene::changed. Connecting anything to that signal switches the scene
+    // to its compatibility update path for every view (Qt keeps it for code written before 4.5):
+    // items stop sending their repaints straight to the view, and an item that is removed or
+    // shrinks leaves its old pixels on the canvas until something else repaints the area. The
+    // cards are re-read when the canvas repaints (a card that moves, grows or goes is drawn
+    // again) and when the scene has projected a new document.
+    if (auto* scene = qobject_cast<NodeGraphicsScene*>(view_.scene()))
+        connect(scene, &NodeGraphicsScene::projected, this, &NodeMinimap::scheduleRefresh);
     refreshCards();
     place();
 }
@@ -62,7 +75,8 @@ void NodeMinimap::updateVisibility() {
     const QSize port = view_.viewport()->size();
     // Leave room around it: a canvas smaller than twice the minimap in either direction would be
     // mostly covered by it.
-    const bool roomy = port.width() >= 2 * width() && port.height() >= 2 * height();
+    const QSizeF map = plate().size();
+    const bool roomy = port.width() / 2.0 >= map.width() && port.height() / 2.0 >= map.height();
     const bool shown = enabled_ && !cards_.empty() && roomy;
     if (shown) {
         place();
@@ -82,10 +96,106 @@ bool NodeMinimap::eventFilter(QObject* watched, QEvent* event) {
         place();
         updateVisibility();
     }
+    // The canvas drew: whatever moved on it may have moved a card.
+    if (watched == view_.viewport() && event->type() == QEvent::Paint)
+        scheduleRefresh();
     return QWidget::eventFilter(watched, event);
 }
 
-QRectF NodeMinimap::plate() const { return QRectF(rect()); }
+void NodeMinimap::scheduleRefresh() {
+    // After the paint or the projection has finished, once for any number of them.
+    if (refreshPending_)
+        return;
+    refreshPending_ = true;
+    QMetaObject::invokeMethod(
+        this,
+        [this] {
+            refreshPending_ = false;
+            refreshCards();
+        },
+        Qt::QueuedConnection);
+}
+
+// --- The zoom row (#721) ------------------------------------------------------------------------
+
+void NodeMinimap::buildZoomRow() {
+    const auto button = [this](const kit::IconId icon, const QString& name, const QString& text) {
+        auto* control = new kit::KIconButton(this);
+        control->setObjectName(name);
+        control->setIcon(kit::icon(icon, kit::IconRole::Chrome));
+        control->setToolTip(text);
+        control->setAccessibleName(text);
+        control->setCursor(Qt::ArrowCursor);
+        return control;
+    };
+    zoomOut_ = button(kit::IconId::Subtract, QStringLiteral("nodeZoomOutButton"), tr("Zoom Out"));
+    connect(zoomOut_, &QAbstractButton::clicked, this, [this] { view_.zoomStep(-1); });
+    zoomIn_ = button(kit::IconId::Add, QStringLiteral("nodeZoomInButton"), tr("Zoom In"));
+    connect(zoomIn_, &QAbstractButton::clicked, this, [this] { view_.zoomStep(1); });
+
+    // Logarithmic: the slider's value is log2 of the zoom, so the middle of a 1/16..16 range is
+    // 100% and equal travel is an equal zoom ratio anywhere along it.
+    zoomSlider_ = new kit::KSlider(this);
+    zoomSlider_->setObjectName(QStringLiteral("nodeZoomSlider"));
+    zoomSlider_->setAccessibleName(tr("Zoom"));
+    zoomSlider_->setToolTip(tr("Zoom. Drag to zoom about the center of the view."));
+    zoomSlider_->setRange(std::log2(ViewTransform::kMinZoom), std::log2(ViewTransform::kMaxZoom));
+    zoomSlider_->setDefaultValue(0.0);
+    zoomSlider_->setResetText(tr("Actual Size"));
+    connect(zoomSlider_, &kit::KSlider::valueChanged, this, [this](const double exponent) {
+        if (!zoomSyncing_)
+            view_.zoomToFactor(std::exp2(exponent));
+    });
+}
+
+void NodeMinimap::layoutZoomRow() {
+    const int mapWidth = kit::px(kit::Size::NodeMinimapWidth);
+    const int mapHeight = kit::px(kit::Size::NodeMinimapHeight);
+    const int rowHeight = kit::px(kit::Size::Control);
+    const int gap = kit::px(kit::Spacing::XS);
+    for (QWidget* control : {static_cast<QWidget*>(zoomOut_), static_cast<QWidget*>(zoomSlider_),
+                             static_cast<QWidget*>(zoomIn_)})
+        control->setVisible(zoomRowEnabled_);
+    if (!zoomRowEnabled_) {
+        setFixedSize(mapWidth, mapHeight);
+        return;
+    }
+    setFixedSize(mapWidth, mapHeight + gap + rowHeight);
+    const int top = mapHeight + gap;
+    zoomOut_->setGeometry(0, top, rowHeight, rowHeight);
+    zoomIn_->setGeometry(mapWidth - rowHeight, top, rowHeight, rowHeight);
+    const int inset = rowHeight + gap;
+    zoomSlider_->setGeometry(inset, top, mapWidth - inset - inset, rowHeight);
+}
+
+void NodeMinimap::refreshZoomRow() {
+    if (zoomSlider_ == nullptr)
+        return;
+    const double zoom = view_.zoomFactor();
+    if (!(zoom > 0.0))
+        return;
+    // A projection of the view, never an edit; a slider being dragged keeps its own value.
+    zoomSyncing_ = true;
+    zoomSlider_->setValue(std::log2(zoom));
+    zoomSyncing_ = false;
+    zoomOut_->setEnabled(zoom > ViewTransform::kMinZoom * (1.0 + 1e-9));
+    zoomIn_->setEnabled(zoom < ViewTransform::kMaxZoom * (1.0 - 1e-9));
+}
+
+void NodeMinimap::setZoomRowEnabledByPreference(const bool enabled) {
+    if (zoomRowEnabled_ == enabled)
+        return;
+    zoomRowEnabled_ = enabled;
+    layoutZoomRow();
+    updateVisibility();
+    update();
+}
+
+// The map's plate: the widget's top, above the zoom row.
+QRectF NodeMinimap::plate() const {
+    return QRectF(0.0, 0.0, kit::px(kit::Size::NodeMinimapWidth),
+                  kit::px(kit::Size::NodeMinimapHeight));
+}
 
 QRectF NodeMinimap::inner() const {
     const qreal inset = kit::px(kit::Spacing::S);
@@ -134,6 +244,13 @@ void NodeMinimap::paintEvent(QPaintEvent*) {
     painter.setRenderHint(QPainter::Antialiasing, true);
     kit::fillRoundedSurface(painter, plate(), kit::color(kit::Color::Surface),
                             kit::color(kit::Color::Border), kit::Radius::Small);
+    if (zoomRowEnabled_) {
+        // The zoom row sits on a plate of its own so it reads over any graph beneath it.
+        const QRectF row(0.0, plate().bottom() + kit::px(kit::Spacing::XS), width(),
+                         kit::px(kit::Size::Control));
+        kit::fillRoundedSurface(painter, row, kit::color(kit::Color::Surface),
+                                kit::color(kit::Color::Border), kit::Radius::Small);
+    }
     painter.setClipRect(inner().adjusted(-1.0, -1.0, 1.0, 1.0));
 
     const qreal least = kit::px(kit::Size::Hairline);
@@ -168,7 +285,8 @@ void NodeMinimap::panTo(const QPointF& minimapPoint) {
 
 void NodeMinimap::mousePressEvent(QMouseEvent* event) {
     event->accept();
-    if (event->button() != Qt::LeftButton)
+    // Only the map pans; the strip around the zoom row does nothing.
+    if (event->button() != Qt::LeftButton || !plate().contains(event->position()))
         return;
     // One continuous pan: the mapping stays where it was at the press for the whole drag, so the
     // viewport rectangle can follow the pointer instead of the picture rescaling under it.

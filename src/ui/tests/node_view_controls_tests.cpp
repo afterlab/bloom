@@ -1,15 +1,15 @@
-// #695: the node editor's view controls. The footer's zoom out / zoom value / zoom in, the minimap
-// overlay in the canvas corner, and the two Preferences that switch them. Zooming and panning are
-// driven through the controls themselves (clicks, a drag on the value, a press and drag in the
-// minimap), never through the view's own functions.
+// #695, #721: the node editor's view controls. The footer's zoom preset dropdown, the minimap
+// overlay in the canvas corner with the zoom row under it, the two Preferences that switch them,
+// and the footer's selection count. Zooming and panning are driven through the controls themselves
+// (a chosen preset, clicks, a drag on the slider, a press and drag in the minimap).
 
 #include "node_editor_minimap.hpp"
 #include "node_interaction_test_support.hpp"
 
-#include <QLineEdit>
 #include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/kit/controls.hpp>
-#include <bloom/ui/kit/value_field.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/slider.hpp>
 #include <cmath>
 
 namespace bloom::ui::test {
@@ -26,115 +26,168 @@ void sendMouse(QWidget& target, const QEvent::Type type, const QPointF local,
     QCoreApplication::sendEvent(&target, &event);
 }
 
-struct Controls final {
+struct ZoomRow final {
     kit::KIconButton* out = nullptr;
-    kit::KValueField* value = nullptr;
+    kit::KSlider* slider = nullptr;
     kit::KIconButton* in = nullptr;
 };
 
-Controls findControls(QWidget& footer) {
-    return {footer.findChild<kit::KIconButton*>(QStringLiteral("nodeZoomOutButton")),
-            footer.findChild<kit::KValueField*>(QStringLiteral("nodeZoomValue")),
-            footer.findChild<kit::KIconButton*>(QStringLiteral("nodeZoomInButton"))};
+ZoomRow findZoomRow(QWidget& minimap) {
+    return {minimap.findChild<kit::KIconButton*>(QStringLiteral("nodeZoomOutButton")),
+            minimap.findChild<kit::KSlider*>(QStringLiteral("nodeZoomSlider")),
+            minimap.findChild<kit::KIconButton*>(QStringLiteral("nodeZoomInButton"))};
+}
+
+QString percentText(const NodeGraphicsView& view) {
+    return QStringLiteral("%1%").arg(std::lround(view.zoomFactor() * 100.0));
 }
 
 QPointF visibleCenter(NodeGraphicsView& view) {
     return view.mapToScene(view.viewport()->rect()).boundingRect().center();
 }
 
-void testZoomControls() {
+// #721: the footer's zoom preset dropdown is back, and always shows the current zoom.
+void testZoomDropdown() {
     Fixture f;
     auto* footer = f.editor.footerWidgetForTest();
     footer->resize(700, 40);
     footer->show();
     QCoreApplication::processEvents();
-    const auto controls = findControls(*footer);
-    expect(controls.out && controls.value && controls.in, "the footer carries the zoom group");
-    if (!controls.out || !controls.value || !controls.in)
+    auto* dropdown = footer->findChild<kit::KDropdown*>(QStringLiteral("nodeZoomDropdown"));
+    expect(dropdown != nullptr, "the footer carries the zoom dropdown");
+    if (dropdown == nullptr)
         return;
-    expect(footer->findChild<QWidget*>(QStringLiteral("nodeZoomDropdown")) == nullptr,
-           "the zoom dropdown is gone");
-    expect(controls.out->height() == kit::px(kit::Size::Control) &&
-               controls.in->height() == kit::px(kit::Size::Control) &&
-               controls.value->height() == kit::px(kit::Size::Control),
-           "the zoom controls are Size::Control tall");
+    expect(footer->findChild<QWidget*>(QStringLiteral("nodeZoomValue")) == nullptr &&
+               footer->findChild<QWidget*>(QStringLiteral("nodeZoomOutButton")) == nullptr &&
+               footer->findChild<QWidget*>(QStringLiteral("nodeZoomInButton")) == nullptr &&
+               footer->findChild<QWidget*>(QStringLiteral("nodeZoomSlider")) == nullptr,
+           "the footer has no zoom buttons, value or slider");
+    QStringList presets;
+    for (int index = 0; index < 5 && index < dropdown->count(); ++index)
+        presets << dropdown->itemText(index);
+    expect(presets == QStringList{QStringLiteral("Fit"), QStringLiteral("100%"),
+                                  QStringLiteral("75%"), QStringLiteral("50%"),
+                                  QStringLiteral("25%")},
+           "the dropdown lists Fit, 100%, 75%, 50% and 25%");
     auto& view = *f.view();
 
-    // The buttons: exactly one canvas step each way.
-    const double base = view.zoomFactor();
-    controls.in->click();
-    expect(near(view.zoomFactor(), base * kZoomStepFactor), "Zoom In steps by kZoomStepFactor");
-    expect(near(controls.value->value(), view.zoomFactor() * 100.0) &&
-               controls.value->displayedValue() ==
-                   QString::number(std::lround(view.zoomFactor() * 100.0)),
-           "the value follows the button");
-    controls.out->click();
-    expect(near(view.zoomFactor(), base), "Zoom Out steps back by exactly one step");
-    controls.out->click();
-    expect(near(view.zoomFactor(), base / kZoomStepFactor), "Zoom Out steps by kZoomStepFactor");
-    controls.in->click();
+    dropdown->chooseIndex(3);
+    expect(near(view.zoomFactor(), 0.5) && dropdown->currentText() == QStringLiteral("50%"),
+           "choosing 50% zooms to 50% and shows it");
+    dropdown->chooseIndex(2);
+    expect(near(view.zoomFactor(), 0.75) && dropdown->currentText() == QStringLiteral("75%"),
+           "choosing 75% zooms to 75% and shows it");
+    // A zoom that is not a preset is shown too, as one trailing item.
+    view.zoomStep(1);
+    expect(dropdown->currentText() == percentText(view) && dropdown->count() == 6,
+           "a wheel step shows the current zoom in the closed field");
+    view.zoomStep(1);
+    expect(dropdown->currentText() == percentText(view) && dropdown->count() == 6,
+           "a later zoom renames that item instead of adding another");
+    view.zoomToPercent(100);
+    expect(dropdown->currentText() == QStringLiteral("100%"), "a zoom on a preset shows the preset");
+    // Fit frames the graph and then shows the zoom the view ended at.
+    view.zoomToPercent(25);
+    dropdown->chooseIndex(0);
+    expect(!view.viewAdjusted(), "Fit frames the graph");
+    expect(dropdown->currentText() == percentText(view), "after Fit the field shows the zoom");
+}
 
-    // Dragging the value up zooms in continuously; dragging down zooms out; the view's center
-    // stays put.
+// #721: the zoom row under the minimap -- zoom out, a slider over the whole zoom range, zoom in.
+void testMinimapZoomRow() {
+    Fixture f;
+    f.add(document::kSolidSourceNodeType, {0, 100});
+    f.add(document::kSolidSourceNodeType, {900, 600});
+    QCoreApplication::processEvents();
+    auto& view = *f.view();
+    auto* minimap = f.editor.minimapForTest();
+    if (minimap == nullptr)
+        return expect(false, "the minimap exists");
+    const auto row = findZoomRow(*minimap);
+    expect(row.out && row.slider && row.in, "the minimap carries the zoom row");
+    if (!row.out || !row.slider || !row.in)
+        return;
+    expect(row.out->isVisible() && row.slider->isVisible() && row.in->isVisible(),
+           "the zoom row shows with the minimap");
+    const qreal mapBottom = minimap->mapRect().bottom();
+    expect(row.out->geometry().top() >= mapBottom && row.slider->geometry().top() >= mapBottom &&
+               row.in->geometry().top() >= mapBottom &&
+               row.out->geometry().right() < row.slider->geometry().left() &&
+               row.slider->geometry().right() < row.in->geometry().left() &&
+               row.in->geometry().right() < minimap->width(),
+           "zoom out, the slider and zoom in sit in one row under the map");
+    expect(near(std::exp2(row.slider->minimum()), ViewTransform::kMinZoom) &&
+               near(std::exp2(row.slider->maximum()), ViewTransform::kMaxZoom),
+           "the slider covers the canvas's zoom range");
+
+    // The slider follows every zoom change: a preset, a wheel step, Fit.
+    const auto follows = [&] { return near(std::exp2(row.slider->value()), view.zoomFactor()); };
+    view.zoomToPercent(100);
+    expect(follows() && near(row.slider->normalizedValue(), 0.5),
+           "at 100% the slider sits in the middle");
+    view.zoomToPercent(25);
+    expect(follows(), "the slider follows a preset");
+    view.zoomStep(2);
+    expect(follows(), "the slider follows a wheel step");
+    view.frameGraph();
+    expect(follows(), "the slider follows Fit");
+
+    // The buttons step like the Zoom In and Zoom Out commands.
+    view.zoomToPercent(100);
+    row.in->click();
+    expect(near(view.zoomFactor(), kZoomStepFactor) && follows(),
+           "Zoom In steps by one canvas step and the slider follows");
+    row.out->click();
+    row.out->click();
+    expect(near(view.zoomFactor(), 1.0 / kZoomStepFactor) && follows(),
+           "Zoom Out steps by one canvas step and the slider follows");
+
+    // Dragging the slider zooms about the view's center.
     view.zoomToPercent(100);
     QCoreApplication::processEvents();
     const QPointF center = visibleCenter(view);
-    const double threshold = QApplication::startDragDistance();
-    const QPointF start(controls.value->width() / 2.0, controls.value->height() / 2.0);
-    sendMouse(*controls.value, QEvent::MouseButtonPress, start, Qt::LeftButton);
-    double previous = view.zoomFactor();
-    bool monotonic = true;
-    for (int step = 1; step <= 6; ++step) {
-        sendMouse(*controls.value, QEvent::MouseMove, start - QPointF(0, step * 6.0),
-                  Qt::LeftButton);
-        monotonic = monotonic && view.zoomFactor() >= previous;
-        previous = view.zoomFactor();
-    }
-    expect(monotonic && view.zoomFactor() > 1.0, "dragging the value up zooms in continuously");
-    expect(near(view.zoomFactor(), (100.0 + 36.0 - threshold) / 100.0, 1e-6),
-           "one percent per pixel past the drag threshold");
-    expect(near(controls.value->value(), view.zoomFactor() * 100.0),
-           "the value shows the zoom while it is dragged");
-    sendMouse(*controls.value, QEvent::MouseMove, start + QPointF(0, 20.0), Qt::LeftButton);
-    expect(near(view.zoomFactor(), (100.0 - (20.0 - threshold)) / 100.0, 1e-6),
-           "dragging the value down zooms out");
-    sendMouse(*controls.value, QEvent::MouseButtonRelease, start + QPointF(0, 20.0), Qt::NoButton);
+    const double middle = row.slider->height() / 2.0;
+    const QPointF grip = row.slider->handleRect().center();
+    sendMouse(*row.slider, QEvent::MouseButtonPress, grip, Qt::LeftButton);
+    sendMouse(*row.slider, QEvent::MouseMove, QPointF(row.slider->positionOf(1.5), middle),
+              Qt::LeftButton);
+    expect(view.zoomFactor() > 2.0 && near(std::exp2(row.slider->value()), view.zoomFactor()),
+           "dragging the slider right zooms in");
+    sendMouse(*row.slider, QEvent::MouseMove, QPointF(row.slider->positionOf(-1.5), middle),
+              Qt::LeftButton);
+    expect(view.zoomFactor() < 0.5 && near(std::exp2(row.slider->value()), view.zoomFactor()),
+           "dragging the slider left zooms out");
+    sendMouse(*row.slider, QEvent::MouseButtonRelease, QPointF(row.slider->positionOf(-1.5), middle),
+              Qt::NoButton);
     expect(near(visibleCenter(view).x(), center.x(), 1e-6) &&
                near(visibleCenter(view).y(), center.y(), 1e-6),
-           "zooming by the value holds the view center");
-
-    // Typing a value.
-    sendMouse(*controls.value, QEvent::MouseButtonPress, start, Qt::LeftButton);
-    sendMouse(*controls.value, QEvent::MouseButtonRelease, start, Qt::NoButton);
-    expect(controls.value->isEditing(), "a click on the value opens it for typing");
-    if (controls.value->lineEdit() != nullptr) {
-        controls.value->lineEdit()->setText(QStringLiteral("250"));
-        QTest::keyClick(controls.value->lineEdit(), Qt::Key_Return);
-    }
-    expect(near(view.zoomFactor(), 2.5), "a typed value sets the zoom");
-
-    // Presets live in the value's actions.
-    auto* preset = controls.value->findChild<QAction*>(QStringLiteral("nodeZoomPreset50Action"));
-    expect(preset != nullptr, "the value offers the zoom presets");
-    if (preset != nullptr) {
-        preset->trigger();
-        expect(near(view.zoomFactor(), 0.5), "a preset sets the zoom");
-    }
-    auto* fit = controls.value->findChild<QAction*>(QStringLiteral("nodeZoomFitPresetAction"));
-    expect(fit != nullptr, "the value offers Fit");
-    if (fit != nullptr) {
-        fit->trigger();
-        expect(!view.viewAdjusted(), "Fit keeps framing the graph");
-    }
+           "zooming by the slider holds the view center");
 
     // The limits are the canvas's own.
-    controls.value->setValue(controls.value->maximum());
     view.zoomToFactor(1000.0);
-    expect(near(view.zoomFactor(), ViewTransform::kMaxZoom) && !controls.in->isEnabled(),
+    expect(near(view.zoomFactor(), ViewTransform::kMaxZoom) && !row.in->isEnabled() &&
+               near(row.slider->normalizedValue(), 1.0),
            "Zoom In stops at the canvas maximum");
     view.zoomToFactor(0.0001);
-    expect(near(view.zoomFactor(), ViewTransform::kMinZoom) && !controls.out->isEnabled(),
+    expect(near(view.zoomFactor(), ViewTransform::kMinZoom) && !row.out->isEnabled() &&
+               near(row.slider->normalizedValue(), 0.0),
            "Zoom Out stops at the canvas minimum");
+}
+
+// #721: one selected node reads "1 node".
+void testSelectionCount() {
+    Fixture f;
+    const auto first = f.add(document::kSolidSourceNodeType, {0, 0});
+    const auto second = f.add(document::kSolidSourceNodeType, {400, 0});
+    auto* readout = f.editor.findChild<kit::KLabel*>(QStringLiteral("nodeSelectionReadout"));
+    if (readout == nullptr)
+        return expect(false, "the footer has the selection count");
+    f.session.selectNodes({first}, first);
+    QCoreApplication::processEvents();
+    expect(readout->text() == QStringLiteral("1 node"), "one selected node reads \"1 node\"");
+    f.session.selectNodes({first, second}, second);
+    QCoreApplication::processEvents();
+    expect(readout->text() == QStringLiteral("2 nodes"), "two selected nodes read \"2 nodes\"");
 }
 
 void testMinimapPan() {
@@ -155,8 +208,10 @@ void testMinimapPan() {
     expect(!minimap->isHidden(), "the minimap shows for a non-empty graph");
     expect(minimap->cardRects().size() >= 3, "the minimap caches every card");
     expect(minimap->width() == kit::px(kit::Size::NodeMinimapWidth) &&
-               minimap->height() == kit::px(kit::Size::NodeMinimapHeight),
-           "the minimap takes its size from the tokens");
+               minimap->mapRect().height() == kit::px(kit::Size::NodeMinimapHeight) &&
+               minimap->height() == kit::px(kit::Size::NodeMinimapHeight) +
+                                        kit::px(kit::Spacing::XS) + kit::px(kit::Size::Control),
+           "the map and the zoom row under it take their sizes from the tokens");
     const QRect corner = minimap->geometry();
     expect(corner.right() < view.viewport()->width() &&
                corner.bottom() < view.viewport()->height() &&
@@ -184,15 +239,16 @@ void testMinimapPan() {
     // A press and drag pans the view so the rectangle follows the pointer.
     const auto revision = f.session.snapshot().revision();
     const double zoom = view.zoomFactor();
-    const QPointF first(minimap->width() * 0.25, minimap->height() * 0.30);
+    const QRectF map = minimap->mapRect();
+    const QPointF first(map.width() * 0.25, map.height() * 0.30);
     const QPointF wanted = minimap->toScene(first);
     sendMouse(*minimap, QEvent::MouseButtonPress, first, Qt::LeftButton);
     expect(near(visibleCenter(view).x(), wanted.x(), 1e-3) &&
                near(visibleCenter(view).y(), wanted.y(), 1e-3),
            "pressing centers the view on the scene point under the pointer");
-    const QPointF second(minimap->width() * 0.70, minimap->height() * 0.65);
+    const QPointF second(map.width() * 0.70, map.height() * 0.65);
     const QPointF wantedSecond = minimap->toScene(second);
-    sendMouse(*minimap, QEvent::MouseMove, QPointF(minimap->width() * 0.5, minimap->height() * 0.5),
+    sendMouse(*minimap, QEvent::MouseMove, QPointF(map.width() * 0.5, map.height() * 0.5),
               Qt::LeftButton);
     sendMouse(*minimap, QEvent::MouseMove, second, Qt::LeftButton);
     expect(near(visibleCenter(view).x(), wantedSecond.x(), 1e-3) &&
@@ -245,35 +301,44 @@ void testMinimapStates() {
 void testPreferences() {
     Fixture f;
     f.add(document::kSolidSourceNodeType, {0, 0});
-    auto* footer = f.editor.footerWidgetForTest();
-    footer->resize(700, 40);
-    footer->show();
     QCoreApplication::processEvents();
-    const auto controls = findControls(*footer);
     auto* minimap = f.editor.minimapForTest();
-    if (!controls.out || !controls.value || !controls.in || !minimap)
-        return expect(false, "the controls exist");
-    expect(!controls.value->isHidden() && !minimap->isHidden(), "both are on by default");
+    if (minimap == nullptr)
+        return expect(false, "the minimap exists");
+    const auto row = findZoomRow(*minimap);
+    if (!row.out || !row.slider || !row.in)
+        return expect(false, "the zoom row exists");
+    const auto rowShown = [&] {
+        return row.out->isVisible() && row.slider->isVisible() && row.in->isVisible();
+    };
+    const auto rowHidden = [&] {
+        return !row.out->isVisible() && !row.slider->isVisible() && !row.in->isVisible();
+    };
+    expect(minimap->isVisible() && rowShown(), "the minimap and its zoom row are on by default");
     ApplicationPreferences preferences;
     expect(preferences.nodeShowZoomControls && preferences.nodeShowMinimap,
            "both preferences default to on");
-    preferences.nodeShowZoomControls = false;
-    f.editor.applyApplicationPreferences(preferences);
-    QCoreApplication::processEvents();
-    expect(controls.out->isHidden() && controls.value->isHidden() && controls.in->isHidden(),
-           "turning Show zoom controls off hides the buttons and the value");
-    expect(!minimap->isHidden(), "the minimap is independent of the zoom controls");
-    preferences.nodeShowZoomControls = true;
+    // Show minimap switches the map and the zoom row together.
     preferences.nodeShowMinimap = false;
     f.editor.applyApplicationPreferences(preferences);
     QCoreApplication::processEvents();
-    expect(!controls.out->isHidden() && !controls.value->isHidden() && !controls.in->isHidden(),
-           "turning Show zoom controls on brings them back");
-    expect(minimap->isHidden(), "turning Show minimap off hides the minimap");
+    expect(!minimap->isVisible() && rowHidden(),
+           "turning Show minimap off hides the minimap and its zoom row");
     preferences.nodeShowMinimap = true;
     f.editor.applyApplicationPreferences(preferences);
     QCoreApplication::processEvents();
-    expect(!minimap->isHidden(), "turning Show minimap on brings it back");
+    expect(minimap->isVisible() && rowShown(), "turning Show minimap on brings both back");
+    // Show zoom controls switches the zoom row alone.
+    preferences.nodeShowZoomControls = false;
+    f.editor.applyApplicationPreferences(preferences);
+    QCoreApplication::processEvents();
+    expect(minimap->isVisible() && rowHidden() &&
+               minimap->height() == kit::px(kit::Size::NodeMinimapHeight),
+           "turning Show zoom controls off leaves the map alone, without the row");
+    preferences.nodeShowZoomControls = true;
+    f.editor.applyApplicationPreferences(preferences);
+    QCoreApplication::processEvents();
+    expect(minimap->isVisible() && rowShown(), "turning Show zoom controls on brings the row back");
 }
 } // namespace
 } // namespace bloom::ui::test
@@ -281,7 +346,9 @@ void testPreferences() {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
-        bloom::ui::test::testZoomControls();
+        bloom::ui::test::testZoomDropdown();
+        bloom::ui::test::testMinimapZoomRow();
+        bloom::ui::test::testSelectionCount();
         bloom::ui::test::testMinimapPan();
         bloom::ui::test::testMinimapStates();
         bloom::ui::test::testPreferences();

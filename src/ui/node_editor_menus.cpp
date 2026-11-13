@@ -1502,7 +1502,12 @@ void NodeGraphEditor::refreshSelectionReadout() {
     // The footer row owns visibility (it hides the readout when the row runs out of room);
     // showing it from here would fight the row and re-arrange it on every notification.
     const bool empty = session_.selectedNodes().empty();
-    const auto text = empty ? QString{} : tr("%1 nodes").arg(session_.selectedNodes().size());
+    // #721: Qt's %n plural form. Without a loaded translation each form is its own source text,
+    // so one node reads "1 node" (the rule project_item_delete.cpp follows).
+    const auto count = static_cast<int>(session_.selectedNodes().size());
+    const auto text = empty        ? QString{}
+                      : count == 1 ? tr("%n node", nullptr, 1)
+                                   : tr("%n nodes", nullptr, count);
     if (footerSelectionLabel_->text() != text)
         footerSelectionLabel_->setText(text);
     if (footerSelectionLabel_->property("chromeSuppressed").toBool() != empty)
@@ -1512,8 +1517,8 @@ void NodeGraphEditor::refreshSelectionReadout() {
 void NodeGraphEditor::buildFooter() {
     auto* layout = &chrome_.footer;
     layout->objectName = "nodeFooter";
-    // #695: zoom out, the draggable zoom value and zoom in lead the row; the minimap overlay is
-    // built with them (node_editor_view_controls.cpp).
+    // #721: the zoom preset dropdown leads the row; the minimap overlay and its zoom row are built
+    // with it (node_editor_view_controls.cpp).
     buildViewControls();
 
     auto* snapSwitch = new kit::KSwitch(this);

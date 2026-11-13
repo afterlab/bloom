@@ -121,6 +121,7 @@ void NodeGraphicsScene::setProjection(const document::Snapshot& snapshot,
         index_->clear();
         clear();
         setSceneRect({});
+        emit projected();
         return;
     }
     auto inputs = projectionInputs(snapshot, *composition, session_);
@@ -237,6 +238,7 @@ void NodeGraphicsScene::setProjection(const document::Snapshot& snapshot,
                                            (kNodeSceneMargin + kNodeSceneMargin))
                                   : bounds.adjusted(-kNodeSceneMargin, -kNodeSceneMargin,
                                                     kNodeSceneMargin, kNodeSceneMargin));
+    emit projected();
 }
 
 std::vector<NodeItem*> NodeGraphicsScene::nodeItems() const {

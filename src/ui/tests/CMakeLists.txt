@@ -1065,6 +1065,16 @@ target_link_libraries(bloom_node_view_controls_test PRIVATE bloom_ui bloom_proje
 bloom_enable_warnings(bloom_node_view_controls_test)
 bloom_add_test(NAME bloom.ui.node-view-controls COMMAND bloom_node_view_controls_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# #721: the canvas leaves no stale pixels (a marquee that grows and shrinks; a placed node undone
+# over a card), at display scales 1, 1.5 and 2.
+add_executable(bloom_node_canvas_repaint_test node_canvas_repaint_tests.cpp)
+target_include_directories(bloom_node_canvas_repaint_test PRIVATE .. ${PROJECT_SOURCE_DIR}/src/ui)
+target_link_libraries(bloom_node_canvas_repaint_test PRIVATE bloom_ui bloom_project Qt6::Test)
+bloom_enable_warnings(bloom_node_canvas_repaint_test)
+bloom_add_test(NAME bloom.ui.node-canvas-repaint COMMAND bloom_node_canvas_repaint_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+bloom_add_test(NAME bloom.ui.node-canvas-repaint-scale-1.5 COMMAND bloom_node_canvas_repaint_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1;QT_SCALE_FACTOR=1.5")
+bloom_add_test(NAME bloom.ui.node-canvas-repaint-scale-2 COMMAND bloom_node_canvas_repaint_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1;QT_SCALE_FACTOR=2")
+
 add_executable(bloom_node_layout_arrange_test node_layout_arrange_tests.cpp)
 target_include_directories(bloom_node_layout_arrange_test PRIVATE ..)
 target_link_libraries(bloom_node_layout_arrange_test PRIVATE bloom_ui)
@@ -1624,7 +1634,7 @@ target_compile_definitions(bloom_node_placement_capture PRIVATE
 bloom_enable_warnings(bloom_node_placement_capture)
 
 # #695 review captures of the node editor's view controls (a tool, not a test):
-# bloom_node_view_controls_capture <directory> <1|1.5> <before|after>.
+# bloom_node_view_controls_capture <directory> <1|1.5> <label>.
 add_executable(bloom_node_view_controls_capture node_view_controls_capture.cpp)
 target_include_directories(bloom_node_view_controls_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_node_view_controls_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)

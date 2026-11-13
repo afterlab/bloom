@@ -1,15 +1,15 @@
-// Review captures of the node editor's view controls (#695): the footer and the minimap.
+// Review captures of the node editor's view controls (#695, #721): the footer with its zoom
+// dropdown and selection count, and the minimap corner with its zoom row.
 // A tool, not a test:
-//   bloom_node_view_controls_capture <directory> <1|1.5> <before|after>
-// `before` reconstructs the footer the controls replaced (the zoom dropdown with Fit and the
-// presets) over the same editor, so the two states can be compared; `after` is the real footer.
+//   bloom_node_view_controls_capture <directory> <1|1.5> <label>
+// writes <label>-editor-, <label>-minimap- and <label>-footer-<dpr1|dpr15>.png.
 #include "window_fixture.hpp"
 
 #include <QDir>
 #include <QImage>
 #include <bloom/commands/operations.hpp>
 #include <bloom/ui/editor_area.hpp>
-#include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/application_preferences.hpp>
@@ -44,7 +44,7 @@ int capture(int argc, char** argv) {
     const QString ratio = QString::fromLatin1(argv[2]) == QStringLiteral("1")
                               ? QStringLiteral("dpr1")
                               : QStringLiteral("dpr15");
-    const bool before = QString::fromLatin1(argv[3]) == QStringLiteral("before");
+    const QString label = QString::fromLocal8Bit(argv[3]);
     QDir().mkpath(directory);
     test::WindowFixture fixture;
     auto& session = fixture.session;
@@ -72,36 +72,30 @@ int capture(int argc, char** argv) {
     view->frameGraph();
     settle();
     bool ok = true;
-    if (before) {
-        ApplicationPreferences preferences;
-        preferences.nodeShowZoomControls = false;
-        preferences.nodeShowMinimap = false;
-        editor->applyApplicationPreferences(preferences);
-        settle();
-        auto* host = editor->footerWidgetForTest();
-        auto* dropdown = new kit::KDropdown(host);
-        dropdown->setControlSize(kit::KDropdown::ControlSize::Dense);
-        dropdown->addItem(QStringLiteral("Fit"), 0);
-        for (const int percent : {25, 50, 100, 200, 400})
-            dropdown->addItem(QStringLiteral("%1%").arg(percent), percent);
-        dropdown->move(kit::px(kit::Spacing::ChromePadding), kit::px(kit::Spacing::ChromePadding));
-        dropdown->show();
-        settle();
-        ok = save(area->grab().toImage(), directory + QStringLiteral("/695-before-footer-") + ratio + QStringLiteral(".png"));
-        return ok ? 0 : 1;
-    }
-    ok = save(area->grab().toImage(), directory + QStringLiteral("/695-after-footer-full-") + ratio +
-                                          QStringLiteral(".png")) && ok;
-    // Zoomed in so the viewport rectangle is smaller than the graph.
+    const QString stem = directory + QLatin1Char('/') + label;
+    // Zoomed in so the viewport rectangle is smaller than the graph, with one node selected so the
+    // footer shows its count.
     view->zoomToPercent(200);
+    if (const auto* shown = session.composition();
+        shown != nullptr && !shown->graph().nodes().empty()) {
+        const auto node = shown->graph().nodes().front().id;
+        session.selectNodes({node}, node);
+    }
     settle();
-    ok = save(area->grab().toImage(),
-              directory + QStringLiteral("/695-after-minimap-") + ratio + QStringLiteral(".png")) &&
+    const QImage whole = area->grab().toImage();
+    ok = save(whole, stem + QStringLiteral("-editor-") + ratio + QStringLiteral(".png")) && ok;
+    // The minimap corner, cropped from the same picture.
+    const qreal scale = whole.devicePixelRatio();
+    const QSize corner(static_cast<int>(2 * kit::px(kit::Size::NodeMinimapWidth) * scale),
+                       static_cast<int>(2 * kit::px(kit::Size::NodeMinimapHeight) * scale));
+    ok = save(whole.copy(whole.width() - corner.width(), whole.height() - corner.height(),
+                         corner.width(), corner.height()),
+              stem + QStringLiteral("-minimap-") + ratio + QStringLiteral(".png")) &&
          ok;
-    // The footer alone, cropped.
+    // The footer alone.
     if (auto* footer = editor->footerWidgetForTest())
-        ok = save(footer->grab().toImage(), directory + QStringLiteral("/695-after-footer-") +
-                                                ratio + QStringLiteral(".png")) &&
+        ok = save(footer->grab().toImage(),
+                  stem + QStringLiteral("-footer-") + ratio + QStringLiteral(".png")) &&
              ok;
     return ok ? 0 : 1;
 }
@@ -109,7 +103,7 @@ int capture(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        std::cerr << "Usage: bloom_node_view_controls_capture <directory> <1|1.5> <before|after>\n";
+        std::cerr << "Usage: bloom_node_view_controls_capture <directory> <1|1.5> <label>\n";
         return 2;
     }
     qputenv("QT_SCALE_FACTOR", argv[2]);

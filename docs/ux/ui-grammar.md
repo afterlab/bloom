@@ -195,26 +195,38 @@ editor), the Hue/Saturation hue strip (`HueShiftStrip`) and the Colorize gradien
 stops (`ColorizeRampBar`). Every other grading control is a kit
 widget: a value field, or `KSlider`'s grading variant. Other surfaces compose kit widgets.
 
-### Node editor view controls (#695)
+### Node editor view controls (#695, #721)
 
-The node editor footer leads with three kit controls at `Size::Control`: a zoom-out `KIconButton`
-(`nodeZoomOutButton`, `Subtract`), the zoom value (`nodeZoomValue`, a `KValueField` at
-`Size::ViewerZoomWidth`, outlined at rest, with the `%` unit) and a zoom-in `KIconButton`
-(`nodeZoomInButton`, `Add`). The value scrubs along the vertical axis
-(`KValueField::setScrubAxis`): drag up to zoom in, one percent per pixel, with the field's own
-modifiers. A click types a percentage; Reset and the context menu offer Actual Size, Fit and the
-25, 50, 100, 200 and 400 percent presets. A button disables at the canvas's zoom limit.
+The node editor footer leads with the zoom dropdown (`nodeZoomDropdown`, a dense `KDropdown` with a
+`Size::ViewerZoomWidth` floor): Fit, 100%, 75%, 50% and 25%. The closed field always shows the
+current zoom: a preset when the view sits on one, otherwise one trailing item carrying the current
+percentage. The footer has no zoom buttons and no zoom value. The selection count beside it uses
+Qt's plural form: "1 node", "2 nodes".
 
 The minimap (`nodeMinimap`, `NodeMinimap`) is the one painted overlay of the node editor: a child of
-the canvas viewport in its bottom-right corner, `Size::NodeMinimapWidth` by
-`Size::NodeMinimapHeight`, inset by `Spacing::S` from the corner. It paints a `Surface` plate with a
+the canvas viewport in its bottom-right corner, inset by `Spacing::S` from the corner. The map is
+`Size::NodeMinimapWidth` by `Size::NodeMinimapHeight`. It paints a `Surface` plate with a
 `Border` hairline at `Radius::Small`; every card as a `Field` rectangle and every group frame as a
 `BorderHover` hairline outline, scaled to fit the graph together with the visible area; and the
 visible area as an `Accent` hairline rectangle under the selection wash (`kSelectionWashOpacity`).
-Hairlines snap to device pixels. It hides for an empty graph and for a canvas smaller than twice its
-size in either direction.
+Hairlines snap to device pixels. It hides for an empty graph and for a canvas smaller than twice the
+map in either direction.
 
-Both are switched by Preferences (Node Graph: Show zoom controls, Show minimap), on by default.
+Directly under the map, `Spacing::XS` below it and as wide as it, sits the zoom row on a plate of
+the same kind, `Size::Control` tall: a zoom-out `KIconButton` (`nodeZoomOutButton`, `Subtract`), a
+`KSlider` (`nodeZoomSlider`) and a zoom-in `KIconButton` (`nodeZoomInButton`, `Add`). The slider
+covers the canvas's whole zoom range on a logarithmic scale, so 100% is its middle; it follows every
+zoom change (wheel, pinch, presets, Fit, the buttons) and dragging it zooms about the view center.
+The buttons step like Zoom In and Zoom Out and disable at the canvas's zoom limit.
+
+Preferences (Node Graph), both on by default: Show minimap switches the map and its zoom row
+together; Show zoom controls switches the zoom row alone.
+
+The canvas repaints only what changed, so every scene item paints inside its bounding rectangle,
+and the canvas background is filled without antialiasing past the repainted area's edge (at a
+fractional display scale that edge falls inside a device pixel). Nothing connects to
+`QGraphicsScene::changed`: that signal switches the scene to Qt's compatibility update path, where
+a removed or shrunken item leaves its old pixels behind (#721).
 
 ## Export panel
 
