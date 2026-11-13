@@ -2,8 +2,13 @@
 #include <array>
 #include <bloom/media/provider/protocol.hpp>
 #include <chrono>
+#include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <cstdlib>
 #include <iostream>
+#include <utility>
+#include <vector>
 #if defined(__linux__) || defined(__APPLE__)
 #include <cerrno>
 #include <poll.h>
@@ -95,6 +100,78 @@ read(std::chrono::milliseconds idleTimeout = std::chrono::milliseconds{0}) {
         return provider::Unavailable{provider::Error::Truncated, "Worker input truncated"};
     return provider::decodeMessage(bytes);
 }
+inline bool write(const provider::Message& message);
+// #718: the worker's side of a progressive source. A read of the snapshot comes here first
+// (platform::WorkerSnapshotInput's range gate): a range the host has said is local is read at
+// once; any other is asked for with NeedRange and read when RangeReady arrives. Outside a call
+// nobody is listening, so an unknown range is refused there.
+class SourceRanges final {
+  public:
+    // A call begins: `progressive` is the request's flag for the snapshot this process holds.
+    void beginCall(const std::uint64_t session, const std::uint64_t sequence,
+                   const bool progressive) {
+        session_ = session;
+        sequence_ = sequence;
+        progressive_ = progressive;
+        inCall_ = true;
+    }
+    void endCall() { inCall_ = false; }
+    // True when every range is local (or the source is an ordinary snapshot or a path).
+    [[nodiscard]] bool whole() const { return !progressive_ || complete_; }
+    [[nodiscard]] bool ready(const std::uint64_t offset, const std::uint64_t length) {
+        if (whole() || covered(offset, length))
+            return true;
+        if (!inCall_)
+            return false;
+        // Ask for a little more than the read: demuxers read forward in small steps.
+        constexpr std::uint64_t kAskBytes = 4ULL * 1024 * 1024;
+        if (!write({provider::MessageKind::NeedRange, session_, sequence_,
+                    provider::SourceRangeV1{offset, std::max(length, kAskBytes), false}}))
+            return false;
+        auto incoming = read();
+        const auto* message = std::get_if<provider::Message>(&incoming);
+        if (message == nullptr || message->session != session_)
+            return false;
+        if (message->kind == provider::MessageKind::Cancel ||
+            message->kind == provider::MessageKind::Shutdown) {
+            // The host gave the call up while the range was awaited: acknowledge and end, as the
+            // worker's main loop does for the same message.
+            static_cast<void>(write({provider::MessageKind::Ack, message->session,
+                                     message->sequence, std::monostate{}}));
+            std::_Exit(0);
+        }
+        const auto* range = std::get_if<provider::SourceRangeV1>(&message->payload);
+        if (message->kind != provider::MessageKind::RangeReady || message->sequence != sequence_ ||
+            range == nullptr)
+            return false;
+        complete_ = range->complete;
+        add(range->offset, range->offset + range->length);
+        return whole() || covered(offset, length);
+    }
+
+  private:
+    [[nodiscard]] bool covered(const std::uint64_t offset, const std::uint64_t length) const {
+        for (const auto& [begin, end] : ready_)
+            if (offset >= begin && offset + length <= end)
+                return true;
+        return false;
+    }
+    void add(std::uint64_t begin, std::uint64_t end) {
+        // Merge with every range it touches; the list stays short (ranges grow into each other).
+        for (auto it = ready_.begin(); it != ready_.end();)
+            if (it->first <= end && begin <= it->second) {
+                begin = std::min(begin, it->first);
+                end = std::max(end, it->second);
+                it = ready_.erase(it);
+            } else {
+                ++it;
+            }
+        ready_.emplace_back(begin, end);
+    }
+    std::uint64_t session_ = 0, sequence_ = 0;
+    bool progressive_ = false, complete_ = false, inCall_ = false;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> ready_;
+};
 inline bool write(const provider::Message& message) {
     const auto encoded = provider::encodeMessage(message);
     const auto* bytes = std::get_if<provider::Bytes>(&encoded);

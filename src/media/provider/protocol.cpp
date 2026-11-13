@@ -83,6 +83,26 @@ void call(Writer& w, const CallRequest& c) {
     w.hash(c.sourceDigest);
     require(c.snapshotBytes <= Limits::sourceBytes);
     w.number(c.snapshotBytes);
+    // Only a host-owned snapshot can fill by range.
+    require(!c.progressiveSnapshot || c.snapshotBytes != 0);
+    w.number<std::uint8_t>(c.progressiveSnapshot ? 1 : 0);
+}
+void range(Writer& w, const SourceRangeV1& v) {
+    require(v.offset <= Limits::sourceBytes && v.length <= Limits::sourceBytes - v.offset);
+    w.number(v.offset);
+    w.number(v.length);
+    w.number<std::uint8_t>(v.complete ? 1 : 0);
+}
+SourceRangeV1 range(Reader& r) {
+    SourceRangeV1 v;
+    v.offset = r.number<std::uint64_t>();
+    v.length = r.number<std::uint64_t>();
+    const auto complete = r.number<std::uint8_t>();
+    require(complete <= 1);
+    v.complete = complete == 1;
+    Writer validation;
+    range(validation, v);
+    return v;
 }
 CallRequest call(Reader& r) {
     CallRequest c;
@@ -95,6 +115,9 @@ CallRequest call(Reader& r) {
     c.samples = r.number<std::uint32_t>();
     c.sourceDigest = r.hash();
     c.snapshotBytes = r.number<std::uint64_t>();
+    const auto progressive = r.number<std::uint8_t>();
+    require(progressive <= 1);
+    c.progressiveSnapshot = progressive == 1;
     Writer validation;
     call(validation, c);
     return c;
@@ -396,7 +419,7 @@ Result<Bytes> encodeMessage(const Message& m) {
         w.number(magic);
         w.number(kProtocolVersion);
         w.number(kSchemaVersion);
-        w.enumeration(m.kind, 1, 16);
+        w.enumeration(m.kind, 1, 18);
         w.number(m.session);
         w.number(m.sequence);
         switch (m.kind) {
@@ -426,6 +449,10 @@ Result<Bytes> encodeMessage(const Message& m) {
             break;
         case MessageKind::EncodeRead:
             w.number(std::get<std::uint64_t>(m.payload));
+            break;
+        case MessageKind::NeedRange:
+        case MessageKind::RangeReady:
+            range(w, std::get<SourceRangeV1>(m.payload));
             break;
         case MessageKind::EncodedChunk: {
             const auto& chunk = std::get<EncodedChunkV1>(m.payload);
@@ -490,7 +517,7 @@ Result<Message> decodeMessage(std::span<const std::byte> bytes) {
         const auto schema = r.number<std::uint16_t>();
         require(protocol == kProtocolVersion && schema == kSchemaVersion, Error::VersionMismatch);
         Message m;
-        m.kind = r.enumeration<MessageKind>(1, 16);
+        m.kind = r.enumeration<MessageKind>(1, 18);
         m.session = r.number<std::uint64_t>();
         m.sequence = r.number<std::uint64_t>();
         require(m.session != 0 && m.sequence != 0);
@@ -521,6 +548,10 @@ Result<Message> decodeMessage(std::span<const std::byte> bytes) {
             break;
         case MessageKind::EncodeRead:
             m.payload = r.number<std::uint64_t>();
+            break;
+        case MessageKind::NeedRange:
+        case MessageKind::RangeReady:
+            m.payload = range(r);
             break;
         case MessageKind::EncodedChunk: {
             EncodedChunkV1 chunk;

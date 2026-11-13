@@ -17,6 +17,7 @@
 #include <io.h>
 #endif
 #include "worker_io.hpp"
+#include <bloom/platform/file_snapshot.hpp>
 #include <bloom/platform/process_supervisor.hpp>
 #include <bloom/platform/shared_frame_arena.hpp>
 #include <chrono>
@@ -159,6 +160,12 @@ int main(int argc, char** argv) {
     if (retainedVideo)
         decoder = std::make_unique<ffmpeg::DecodeSession>(hardwareDecode, decodeDevice, generation);
 #endif
+    // #718: reads of a progressive source wait here for their byte range.
+    worker::SourceRanges sourceRanges;
+    bloom::platform::WorkerSnapshotInput::setRangeGate(
+        [&sourceRanges](const std::uint64_t offset, const std::uint64_t length) {
+            return sourceRanges.ready(offset, length);
+        });
     try {
         std::uint64_t session = 0, sequence = 0;
         bool ready = false;
@@ -199,6 +206,9 @@ int main(int argc, char** argv) {
                 message->kind != provider::MessageKind::EncodeFinish &&
                 message->kind != provider::MessageKind::EncodeRead)
                 return 8;
+            if (const auto* request = std::get_if<provider::CallRequest>(&message->payload);
+                message->kind == provider::MessageKind::Call && request != nullptr)
+                sourceRanges.beginCall(session, sequence, request->progressiveSnapshot);
 #ifdef BLOOM_FAKE_WORKER
             if (message->kind != provider::MessageKind::Call)
                 return 8;
@@ -216,6 +226,7 @@ int main(int argc, char** argv) {
                                               hardware, generation))
                     : encoder.call(message->kind, message->payload);
 #endif
+            sourceRanges.endCall();
             auto kind = provider::MessageKind::Failure;
             if (std::holds_alternative<provider::ProbeResult>(payload))
                 kind = provider::MessageKind::Probe;
@@ -242,7 +253,9 @@ int main(int argc, char** argv) {
             if (!worker::write({kind, session, sequence, std::move(payload)}))
                 return 9;
 #if !defined(BLOOM_FAKE_WORKER) && !defined(BLOOM_VIDEOTOOLBOX_WORKER)
-            if (decoder &&
+            // Decoding ahead reads the source with nobody to ask for a range: only a source that
+            // is wholly local is decoded ahead (#718).
+            if (decoder && sourceRanges.whole() &&
                 (kind == provider::MessageKind::Frame || kind == provider::MessageKind::ArenaFrame))
                 decoder->decodeAhead();
 #endif

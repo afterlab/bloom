@@ -586,6 +586,148 @@ void sequentialAudioIsLinear(const std::filesystem::path& directory) {
 // track's edit (2112 sample frames, the last 64 of them inside the first packet of the edit). The
 // reader follows the edit list as FFmpeg's demuxer and decoder do: sample 0 of the stream is the
 // first sample of the edit, a block from sample 0 decodes, and the stream is as long as the edit.
+// #718: a progressive source. The worker asks the host for the byte ranges it reads, so the
+// first block decodes while most of the file is not local, later blocks decode as their ranges
+// arrive, and the file verifies once everything has been read.
+void progressiveSourceDecodesBeforeItIsWhole(const std::filesystem::path& directory) {
+    constexpr std::uint32_t block = 65536, blocks = 256;
+    constexpr std::uint64_t samples = std::uint64_t{block} * blocks;
+    const auto path = directory / "progressive-audio.wav";
+    {
+        // The same mono 16-bit ramp sequentialAudioIsLinear() writes: 32 MiB of samples.
+        std::ofstream wav(path, std::ios::binary | std::ios::trunc);
+        const auto u32 = [&](std::uint32_t v) {
+            for (unsigned i = 0; i < 4; ++i)
+                wav.put(static_cast<char>((v >> (8U * i)) & 255U));
+        };
+        const auto u16 = [&](std::uint16_t v) {
+            wav.put(static_cast<char>(v & 255U));
+            wav.put(static_cast<char>(v >> 8U));
+        };
+        const auto data = static_cast<std::uint32_t>(samples * 2U);
+        wav.write("RIFF", 4);
+        u32(36U + data);
+        wav.write("WAVEfmt ", 8);
+        u32(16);
+        u16(1);
+        u16(1);
+        u32(48000);
+        u32(48000 * 2U);
+        u16(2);
+        u16(16);
+        wav.write("data", 4);
+        u32(data);
+        std::vector<char> pcm(samples * 2U);
+        for (std::uint64_t n = 0; n < samples; ++n) {
+            const auto value = static_cast<std::uint16_t>(
+                static_cast<std::int16_t>((static_cast<int>(n % 997) - 498) * 32));
+            pcm[n * 2] = static_cast<char>(value & 255U);
+            pcm[n * 2 + 1] = static_cast<char>(value >> 8U);
+        }
+        wav.write(pcm.data(), static_cast<std::streamsize>(pcm.size()));
+        test::check(wav.good(), "write the progressive fixture");
+    }
+    std::vector<std::byte> bytes(std::filesystem::file_size(path));
+    {
+        std::ifstream wav(path, std::ios::binary);
+        wav.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        test::check(wav.good(), "read the progressive fixture");
+    }
+    const auto digest = *bloom::core::Sha256Hasher::hash(bytes);
+    bloom::platform::ProgressiveSnapshotRequest progressive;
+    progressive.source = path;
+    progressive.spoolDirectory = directory;
+    progressive.quota = std::make_shared<bloom::platform::FileSnapshotQuota>(1ULL << 36U, 2);
+    progressive.sourceLimit = Limits::sourceBytes;
+    progressive.claimed = digest;
+    progressive.backgroundFill = false; // only what the worker asks for
+    auto captured = bloom::platform::ReadOnlyFileSnapshot::captureProgressive(progressive);
+    auto* owned = std::get_if<std::unique_ptr<bloom::platform::ReadOnlyFileSnapshot>>(&captured);
+    test::check(owned != nullptr, "progressive snapshot");
+    const std::shared_ptr<const bloom::platform::ReadOnlyFileSnapshot> snapshot(std::move(*owned));
+    const auto hello = ffmpegHandshake();
+    CapabilityRegistry registry;
+    for (const auto& d : hello.declarations) {
+        (void)registry.registerProvider(d);
+        (void)registry.qualifyPipeline(ffmpegPipeline(d));
+    }
+    WorkerPoolOptions options;
+    options.process.executable = BLOOM_FFMPEG_WORKER;
+    options.expected = hello;
+    options.capacity = 1;
+    options.timeout = std::chrono::seconds(30);
+    options.retainedVideo = true;
+    std::atomic<int> launches{0};
+    options.launched = [&launches](std::int64_t) { ++launches; };
+    MediaWorkerPool pool(options);
+    const auto declaration = [&](Role role, std::string_view codec) {
+        const auto found = std::ranges::find_if(hello.declarations, [&](const auto& d) {
+            return d.capability.role == role && d.capability.purpose == Purpose::Preview &&
+                   (codec.empty() || d.capability.codec == codec);
+        });
+        test::check(found != hello.declarations.end(), "declared progressive capability");
+        return *found;
+    };
+    const auto probeDeclaration = declaration(Role::Probe, {});
+    CallRequest probeRequest;
+    probeRequest.capability = probeDeclaration.capability;
+    probeRequest.source = path.string();
+    const auto probed =
+        pool.call(std::get<MediaAttempt>(registry.begin(ffmpegPipeline(probeDeclaration))), 0,
+                  probeRequest, snapshot, {}, true);
+    const auto* probe = std::get_if<ProbeResult>(&probed);
+    test::check(probe != nullptr && probe->streams.size() == 1 &&
+                    probe->sourceDigest == digest,
+                "a progressive source probes under its claimed digest");
+    const auto afterProbe = snapshot->localBytes();
+    test::check(afterProbe > 0 && afterProbe < bytes.size() / 2,
+                "the probe brought in a small part of the file");
+    const auto audioDeclaration = declaration(Role::AudioDecode, "pcm_s16le");
+    const auto decode = [&](const std::uint64_t first, const char* what) {
+        CallRequest request;
+        request.capability = audioDeclaration.capability;
+        request.source = path.string();
+        request.sourceDigest = digest;
+        request.frame = first;
+        request.samples = block;
+        const auto reply =
+            pool.call(std::get<MediaAttempt>(registry.begin(ffmpegPipeline(audioDeclaration))), 0,
+                      std::move(request), snapshot, {}, true);
+        const auto* audio = std::get_if<AudioBlock>(&reply);
+        test::check(audio != nullptr && audio->channels.size() == 1 &&
+                        audio->channels[0].size() == block,
+                    what);
+        for (const auto i : {0U, 1U, block / 2U, block - 1U}) {
+            const auto n = first + i;
+            test::check(audio->channels[0][i] ==
+                            static_cast<float>(static_cast<int>(n % 997) - 498) / 1024.0F,
+                        what);
+        }
+    };
+    decode(0, "the first block decodes before the file is whole");
+    const auto afterFirst = snapshot->localBytes();
+    std::cout << "progressive source: " << afterProbe << " bytes after probe, " << afterFirst
+              << " after the first block, of " << bytes.size() << '\n';
+    test::check(afterFirst < bytes.size() / 2 &&
+                    snapshot->verification() == bloom::platform::SnapshotVerification::Pending,
+                "the first block needed a small part of the file");
+    // The audio decoder reads forward to a later position, so the rest arrives as it is read.
+    for (std::uint32_t b = 1; b < blocks; ++b)
+        decode(std::uint64_t{b} * block, "every block decodes exactly as its range arrives");
+    test::check(snapshot->localBytes() == bytes.size(), "reading everything made the file whole");
+    const auto verified = snapshot->waitVerified();
+    const auto* state = std::get_if<bloom::platform::SnapshotVerification>(&verified);
+    test::check(state != nullptr && *state == bloom::platform::SnapshotVerification::Verified,
+                "the whole file hashes to the claimed digest");
+    decode(samples / 2, "a whole progressive source decodes without asking");
+    // The worker that asked for ranges is the one retained throughout, bar the reopen a jump
+    // back or forward needs.
+    std::cout << "progressive source: " << launches.load() << " worker launches\n";
+    test::check(launches.load() >= 1 && launches.load() <= 4,
+                "range requests keep the retained worker");    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+}
+
 void appleWrittenAac(const std::filesystem::path& data) {
     for (const auto& [name, track, length] :
          {std::tuple{"apple-aac.mp4", 0U, 48000U}, std::tuple{"apple-h264-aac.mp4", 1U, 96000U}}) {
@@ -615,6 +757,7 @@ int main(int argc, char** argv) {
         test::check(argc == 2, "fixture directory");
         run(argv[1]);
         sequentialAudioIsLinear(argv[1]);
+        progressiveSourceDecodesBeforeItIsWhole(argv[1]);
         appleWrittenAac(BLOOM_MEDIA_CODEC_FIXTURES);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

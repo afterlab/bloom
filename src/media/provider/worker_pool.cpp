@@ -62,9 +62,12 @@ std::string diagnosticCode(Error e) {
 }
 class Connection final {
   public:
+    // `snapshot` is the source the worker was given, for the byte ranges it asks for (#718).
     Connection(platform::ProcessSupervisor& process, platform::ProcessDeadline deadline,
-               platform::ProcessCancellation cancel)
-        : process_(process), deadline_(deadline), cancel_(std::move(cancel)) {}
+               platform::ProcessCancellation cancel,
+               const platform::ReadOnlyFileSnapshot* snapshot = nullptr)
+        : process_(process), deadline_(deadline), cancel_(std::move(cancel)),
+          snapshot_(snapshot) {}
     Result<Message> exchange(const Message& message, HostProtocol& host, MessageKind expected) {
         auto encoded = encodeMessage(message);
         const auto* bytes = std::get_if<Bytes>(&encoded);
@@ -73,31 +76,74 @@ class Connection final {
         auto written = process_.write(*bytes, deadline_, cancel_);
         if (const auto* e = std::get_if<platform::ProcessFailure>(&written))
             return failure(*e, process_);
-        std::array<std::byte, 4> prefix{};
-        auto read = process_.read(prefix, deadline_, cancel_);
-        if (const auto* e = std::get_if<platform::ProcessFailure>(&read))
-            return failure(*e, process_);
-        const auto size = messageLength(prefix);
-        if (const auto* e = std::get_if<Unavailable>(&size))
-            return *e;
-        Bytes response(prefix.begin(), prefix.end());
-        response.resize(4U + std::get<std::uint32_t>(size));
-        read = process_.read(std::span(response).subspan(4), deadline_, cancel_);
-        if (const auto* e = std::get_if<platform::ProcessFailure>(&read)) {
-            if (e->code == platform::ProcessError::Crashed) {
-                auto error = failure(*e, process_);
-                error.reason = Error::Truncated;
-                return error;
+        while (true) {
+            std::array<std::byte, 4> prefix{};
+            auto read = process_.read(prefix, deadline_, cancel_);
+            if (const auto* e = std::get_if<platform::ProcessFailure>(&read))
+                return failure(*e, process_);
+            const auto size = messageLength(prefix);
+            if (const auto* e = std::get_if<Unavailable>(&size))
+                return *e;
+            Bytes response(prefix.begin(), prefix.end());
+            response.resize(4U + std::get<std::uint32_t>(size));
+            read = process_.read(std::span(response).subspan(4), deadline_, cancel_);
+            if (const auto* e = std::get_if<platform::ProcessFailure>(&read)) {
+                if (e->code == platform::ProcessError::Crashed) {
+                    auto error = failure(*e, process_);
+                    error.reason = Error::Truncated;
+                    return error;
+                }
+                return failure(*e, process_);
             }
-            return failure(*e, process_);
+            // #718: a worker reading a progressive source asks for a byte range in the middle of
+            // its call. The range is made local here and the worker told; the reply to the call
+            // follows. Only a snapshot this host installed can be asked about.
+            if (snapshot_ != nullptr && snapshot_->progressive() &&
+                response.size() <= 4U + kEnvelopeBytes + 32U) {
+                const auto decoded = decodeMessage(response);
+                const auto* asked = std::get_if<Message>(&decoded);
+                if (asked != nullptr && host.isRangeRequest(*asked)) {
+                    const auto answered = answerRange(*asked);
+                    if (answered)
+                        return *answered;
+                    continue;
+                }
+            }
+            return host.receive(response, expected);
         }
-        return host.receive(response, expected);
     }
 
   private:
+    // Makes the asked range local and tells the worker. The time the source takes is not the
+    // worker's: the call's deadline moves by it. Empty on success; the call's failure otherwise.
+    std::optional<Unavailable> answerRange(const Message& asked) {
+        const auto& wanted = std::get<SourceRangeV1>(asked.payload);
+        const auto began = std::chrono::steady_clock::now();
+        const auto made = snapshot_->ensureRange(wanted.offset, wanted.length, cancel_);
+        deadline_ += std::chrono::steady_clock::now() - began;
+        const auto* range = std::get_if<platform::SnapshotRange>(&made);
+        if (range == nullptr) {
+            const auto& refused = std::get<platform::ProcessFailure>(made);
+            return Unavailable{refused.code == platform::ProcessError::Cancelled ? Error::Cancelled
+                                                                                 : Error::Io,
+                               "Video source could not be read; check the drive or relink the "
+                               "asset in Assets"};
+        }
+        const auto encoded =
+            encodeMessage({MessageKind::RangeReady, asked.session, asked.sequence,
+                           SourceRangeV1{range->begin, range->end - range->begin, range->complete}});
+        const auto* bytes = std::get_if<Bytes>(&encoded);
+        if (bytes == nullptr)
+            return std::get<Unavailable>(encoded);
+        const auto written = process_.write(*bytes, deadline_, cancel_);
+        if (const auto* e = std::get_if<platform::ProcessFailure>(&written))
+            return failure(*e, process_);
+        return std::nullopt;
+    }
     platform::ProcessSupervisor& process_;
     platform::ProcessDeadline deadline_;
     platform::ProcessCancellation cancel_;
+    const platform::ReadOnlyFileSnapshot* snapshot_ = nullptr;
 };
 
 [[nodiscard]] std::uint64_t newSessionId() {
@@ -176,7 +222,7 @@ WorkerReply execute(const WorkerPoolOptions& options, const CallRequest& request
                                                             kMediaWorkerName, owner);
     const std::uint64_t session = newSessionId();
     HostProtocol host(session, options.expected);
-    Connection connection(**process, deadline, cancel);
+    Connection connection(**process, deadline, cancel, snapshot.get());
     auto stop = [&] {
         const auto message = encodeMessage({MessageKind::Cancel, session, 3, std::monostate{}});
         if (const auto* bytes = std::get_if<Bytes>(&message))
@@ -351,6 +397,7 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
                                "Snapshot does not match the requested source revision"};
         request.sourceDigest = snapshot->digest();
         request.snapshotBytes = snapshot->size();
+        request.progressiveSnapshot = snapshot->progressive();
     }
     if (state_->stopping.load())
         return Unavailable{Error::Shutdown, "Worker pool is shutting down"};
@@ -481,7 +528,8 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
         }
         auto& retained = *state_->retained;
         const auto sequence = ++retained.sequence;
-        Connection connection(*retained.process, Clock::now() + state_->options.timeout, cancelled);
+        Connection connection(*retained.process, Clock::now() + state_->options.timeout, cancelled,
+                              retained.snapshot.get());
         auto response =
             connection.exchange({MessageKind::Call, retained.session, sequence, request},
                                 retained.host, expectedProductKind(request));
@@ -551,6 +599,7 @@ MediaWorkerPool::submit(runtime::TaskScheduler& scheduler, runtime::TaskOwner ow
         }
         request.sourceDigest = snapshot->digest();
         request.snapshotBytes = snapshot->size();
+        request.progressiveSnapshot = snapshot->progressive();
     }
     if (state_->stopping.load()) {
         reject({Error::Shutdown, "Worker pool is shutting down"});
