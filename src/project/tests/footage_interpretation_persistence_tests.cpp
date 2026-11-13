@@ -190,6 +190,24 @@ void sequenceMembers() {
            "missing frames is written");
     expect(decodeText(text).front().interpretation == asset.interpretation,
            "a sequence interpretation round-trips");
+    // #718: the local-copy override is written only when it is set, for any footage kind.
+    expect(text.find("\"localCopies\"") == std::string::npos,
+           "automatic local copies write no member");
+    for (const auto& [value, word] :
+         {std::pair{bloom::document::AssetLocalCopies::Always, "always"},
+          std::pair{bloom::document::AssetLocalCopies::Never, "never"}}) {
+        auto local = makeNewProject("Local", "Main", core::RationalTime::fromInteger(2));
+        auto copied = asset;
+        copied.interpretation.localCopies = value;
+        if (!local.project.addAsset(copied))
+            throw std::logic_error("local copies asset");
+        const auto written = encode(Document{std::move(local.project)});
+        expect(written.find(std::string("\"localCopies\": \"") + word + "\"") !=
+                   std::string::npos,
+               "a local-copy override is written");
+        expect(decodeText(written).front().interpretation == copied.interpretation,
+               "a local-copy override round-trips");
+    }
     auto still = asset;
     still.kind = AssetKind::Image;
     expect(!still.validate().ok(), "a still cannot carry a frame rate or missing frames");

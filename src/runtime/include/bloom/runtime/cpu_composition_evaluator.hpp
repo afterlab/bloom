@@ -11,10 +11,6 @@
 #include <mutex>
 #include <optional>
 
-namespace bloom::media::cache {
-class MediaDiskCache;
-} // namespace bloom::media::cache
-
 namespace bloom::runtime {
 // Pixel-free preflight result. This is the live-image minimum checked before evaluation, including
 // nested plans. Transforms and media may need more storage when their actual bounds are resolved
@@ -131,17 +127,11 @@ class CpuCompositionEvaluator final {
         std::lock_guard lock(assetContext_->mutex);
         return assetContext_->directory;
     }
-    // Owned by the host application (media-io.md "Disk cache"): a shared, bounded, on-disk store
-    // of decoded image frames. Null (the default) disables the disk-cache stage entirely --
-    // evaluateImageSource() falls back to memory-cache-or-decode exactly as before this store
-    // existed. Never consulted or written for an interactive/overridden request (see evaluate()).
-    void setMediaDiskCache(std::shared_ptr<media::cache::MediaDiskCache> diskCache) const {
-        std::lock_guard lock(assetContext_->mutex);
-        assetContext_->diskCache = std::move(diskCache);
-    }
-    [[nodiscard]] std::shared_ptr<media::cache::MediaDiskCache> mediaDiskCache() const {
-        std::lock_guard lock(assetContext_->mutex);
-        return assetContext_->diskCache;
+    // #718: the host's local mirror of source media on slow storage (media-io.md "Disk cache").
+    // It sits behind the operation cache's source revisions: memory, then the mirror, then the
+    // source. Null (the default) reads sources directly.
+    void setSourceStore(std::shared_ptr<platform::SourceStore> store) const {
+        cache_->setSourceStore(std::move(store));
     }
     [[nodiscard]] const std::shared_ptr<OperationCache>& operationCache() const { return cache_; }
     // The image-sequence read-ahead feeding this evaluator's operation cache; preview, playback and
@@ -175,7 +165,6 @@ class CpuCompositionEvaluator final {
     struct AssetContext {
         std::mutex mutex;
         std::filesystem::path directory;
-        std::shared_ptr<media::cache::MediaDiskCache> diskCache;
         std::shared_ptr<detail::VideoSourceContext> video;
         std::shared_ptr<detail::ImageEffectContext> effects;
     };

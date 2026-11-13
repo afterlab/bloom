@@ -27,6 +27,7 @@
 // preferences directly.
 
 #include <bloom/core/rational_time.hpp>
+#include <bloom/media/cache/source_mirror.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
@@ -88,6 +89,10 @@ struct ApplicationPreferences final {
     bool mediaDiskCacheEnabled = true;
     std::string mediaDiskCacheDirectory;
     std::uint64_t mediaDiskCacheBudgetBytes = 0;
+    // Keep local copies of source media (#718): Automatic copies media on slow storage; the
+    // folder rules override it for everything under a folder (the longest folder wins). Read at
+    // startup with the rest of the disk cache settings.
+    media::cache::LocalCopyPolicy mediaLocalCopies;
     // Export workers (#581). Opt-in limits on the media worker processes an export launches: the
     // most memory one may hold (0 = no limit) and its encoder threads (0 = automatic). Applied to
     // every export that starts after the change; no restart.

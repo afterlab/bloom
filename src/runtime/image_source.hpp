@@ -14,10 +14,6 @@
 #include <utility>
 #include <vector>
 
-namespace bloom::media::cache {
-class MediaDiskCache;
-} // namespace bloom::media::cache
-
 namespace bloom::runtime {
 class ImageSequenceReadAhead;
 } // namespace bloom::runtime
@@ -50,11 +46,6 @@ struct ImageSourceSelection {
     // GPU media colour split keys its raw upload cache on this identity, so a changed working space
     // or display reuses the decoded upload while a changed frame is a miss.
     std::string decodeKey;
-    // The disk cache's own content-addressed key (asset digest + member frame + interpretation +
-    // input/working colour-space ids + config revision + decoder identity/version -- see
-    // media-io.md "Disk cache").
-    // Empty when the selection has no resolvable asset; the disk cache is never consulted then.
-    std::string diskCacheKey;
     std::string warning;
     bool available = false;
     bool cancelled = false;
@@ -102,7 +93,12 @@ struct ImageSourceReadAheadTarget final {
     // The digest the project records for the member (absent while it is pending).
     std::optional<core::Sha256Digest> recordedDigest;
     std::string revisionKey;
+    // #718: the asset's override of local copies, for the capture's mirror lookup.
+    platform::LocalCopyOverride localCopies = platform::LocalCopyOverride::Inherit;
 };
+// The asset's "Keep local copies" choice as the source store's override.
+[[nodiscard]] platform::LocalCopyOverride
+localCopyOverride(const document::AssetInterpretation& interpretation) noexcept;
 // The decode-only identity of a selected image: its content digest, the stored samples (a footage
 // pass) or the alpha association it decodes with, and its part and resolved colour layer. Colour
 // interpretation, proxy and path fields are deliberately absent.
@@ -124,6 +120,10 @@ struct ImageSourceReadAheadTarget final {
 imageSequenceReadAheadTargets(const CompiledImageSource& source, core::RationalTime time,
                               document::FrameRate rate, const std::filesystem::path& base,
                               std::size_t frames);
+// `allowRevisionInsertion` lets a source read land in `revisionCache` as a source revision (the
+// file's encoded bytes under its own key). The bytes of a file do not depend on any parameter, so
+// an interactive override keeps them too (#718): a drag reads each source once, not once per
+// step. Decoded frames keep their own gesture rule (ImageSourceMemoryCacheAccess).
 [[nodiscard]] ImageSourceSelection selectImageSource(
     const CompiledImageSource& source, core::RationalTime time, document::FrameRate rate,
     const std::filesystem::path& base, const CancellationToken& cancel,
@@ -151,18 +151,13 @@ enum class ImageSourceMemoryCacheAccess : std::uint8_t {
 };
 // `memoryCache` is the evaluator's shared memory cache and `memoryAccess` says whether this call
 // may read it, read-and-write it, or ignore it entirely.
-// `diskCache` is the memory-cache-miss fallback (docs/architecture/media-io.md "Disk cache":
-// memory -> disk -> decode). Null disables it -- callers pass null for interactive/overridden
-// requests, which must never populate or read the disk cache. It is consulted and written only
-// under ReadWrite; a ReadOnly interactive miss decodes directly with no disk read or write. A
-// decoded disk miss is written back off the calling thread via the disk cache's own background
-// writer, so evaluation never waits on the write.
+// A memory miss decodes the selection's source revision; decoded frames have no disk tier (#718:
+// the disk tier holds the encoded source bytes behind the revision).
 [[nodiscard]] media::ImageResult<render::Rgba32fImage>
 evaluateImageSource(const ImageSourceSelection& selection,
                     render::Rgba32fImageDescriptor composition, double horizontalScale,
                     double verticalScale, std::size_t budget, OperationCache* memoryCache,
                     ImageSourceMemoryCacheAccess memoryAccess, const CancellationToken& cancel,
-                    media::cache::MediaDiskCache* diskCache = nullptr,
                     media::ImageDecodeStatistics* decodeStatistics = nullptr,
                     LinearPassRetention* linearPass = nullptr);
 

@@ -621,6 +621,14 @@ void OperationCache::invalidateSourceRevisions() {
     if (video)
         video->invalidateSources();
 }
+void OperationCache::setSourceStore(std::shared_ptr<platform::SourceStore> store) {
+    const std::lock_guard lock(sourceStoreMutex_);
+    sourceStore_ = std::move(store);
+}
+std::shared_ptr<platform::SourceStore> OperationCache::sourceStore() const {
+    const std::lock_guard lock(sourceStoreMutex_);
+    return sourceStore_;
+}
 std::uint64_t OperationCache::decodedMediaGeneration() const {
     const std::lock_guard lock(accounting_->mutex);
     return accounting_->decodedMediaGeneration;

@@ -132,6 +132,8 @@ std::string_view footageInterpretationIssue(const AssetInterpretation& value) {
         return "Invalid field order";
     if (value.missingFrames > AssetMissingFrames::Skip)
         return "Invalid missing-frame interpretation";
+    if (value.localCopies > AssetLocalCopies::Never)
+        return "Invalid local copies choice";
     if (value.stillDuration &&
         (*value.stillDuration <= core::RationalTime{} ||
          *value.stillDuration > core::RationalTime::fromInteger(kMaxAssetStillDurationSeconds)))
@@ -160,6 +162,8 @@ std::string_view footageInterpretationKindIssue(const AssetKind kind,
         return "Only an image sequence has missing frames";
     if (kind != AssetKind::Image && value.stillDuration)
         return "Only a still has a still duration";
+    if (!visual(kind) && value.localCopies != neutral.localCopies)
+        return "Only an image, a sequence or a video keeps local copies of its source";
     if (!timed(kind) && (value.fieldOrder != neutral.fieldOrder || value.deinterlace))
         return "Only a video or an image sequence has fields";
     if (!visual(kind) && (value.alphaMode != neutral.alphaMode || value.invertAlpha ||

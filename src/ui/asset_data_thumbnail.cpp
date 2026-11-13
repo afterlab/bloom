@@ -12,13 +12,9 @@
 
 namespace bloom::ui::detail {
 
-QImage dataChannelThumbnail(const std::filesystem::path& path, const core::Sha256Digest& digest,
-                            const std::string& part, const std::function<bool()>& cancel) {
-    const auto revision =
-        media::captureImageSourceRevision(path, media::kMaxImageStorageBytes, cancel, digest);
-    if (!revision.value || !*revision.value)
-        return {};
-    const auto* info = (*revision.value)->probe().findPart(part);
+QImage dataChannelThumbnail(const media::ImageSourceRevision& revision, const std::string& part,
+                            const std::function<bool()>& cancel) {
+    const auto* info = revision.probe().findPart(part);
     if (info == nullptr || info->channels.empty())
         return {};
     std::vector<std::string> names;
@@ -27,11 +23,11 @@ QImage dataChannelThumbnail(const std::filesystem::path& path, const core::Sha25
     const auto types = runtime::cryptomatteTypes(names);
     media::ImageChannelSelection request;
     request.part = part;
-    request.channels = types.empty() ? std::vector<std::string>{names.front()}
-                                     : std::vector<std::string>{types.front().id,
-                                                                types.front().coverage};
-    const auto decoded = media::decodeImageChannels(**revision.value, request, cancel, {},
-                                                    media::kMaxImageStorageBytes);
+    request.channels = types.empty()
+                           ? std::vector<std::string>{names.front()}
+                           : std::vector<std::string>{types.front().id, types.front().coverage};
+    const auto decoded =
+        media::decodeImageChannels(revision, request, cancel, {}, media::kMaxImageStorageBytes);
     if (!decoded.value || !*decoded.value)
         return {};
     const auto& set = **decoded.value;
@@ -52,7 +48,8 @@ QImage dataChannelThumbnail(const std::filesystem::path& path, const core::Sha25
     for (int y = 0; y < thumbHeight; ++y) {
         auto* row = image.scanLine(y);
         for (int x = 0; x < thumbWidth; ++x) {
-            const auto sx = static_cast<std::size_t>(x) * width / static_cast<std::size_t>(thumbWidth);
+            const auto sx =
+                static_cast<std::size_t>(x) * width / static_cast<std::size_t>(thumbWidth);
             const auto sy =
                 static_cast<std::size_t>(y) * height / static_cast<std::size_t>(thumbHeight);
             const auto index = sy * width + sx;

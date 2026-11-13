@@ -11,7 +11,7 @@
 #include <optional>
 
 namespace bloom::media::cache {
-class MediaDiskCache;
+class SourceMirror;
 } // namespace bloom::media::cache
 
 namespace bloom::runtime {
@@ -53,7 +53,7 @@ class CachePurgeController final : public QObject {
     // `bridge` is borrowed and must outlive this controller; it owns the poll that observes the
     // purge task, and `scheduler` must be the one it wraps.
     CachePurgeController(runtime::TaskScheduler& scheduler, TaskUiBridge& bridge,
-                         media::cache::MediaDiskCache* diskCache,
+                         media::cache::SourceMirror* diskCache,
                          runtime::OperationCache* operationCache,
                          runtime::GpuSceneCoverageCache* coverageCache,
                          std::function<void()> clearDecodedVideoMemory = {},
@@ -93,7 +93,7 @@ class CachePurgeController final : public QObject {
 
     runtime::TaskScheduler& scheduler_;
     TaskUiBridge& bridge_;
-    media::cache::MediaDiskCache* diskCache_ = nullptr;
+    media::cache::SourceMirror* diskCache_ = nullptr;
     runtime::OperationCache* operationCache_ = nullptr;
     runtime::GpuSceneCoverageCache* coverageCache_ = nullptr;
     std::function<void()> clearDecodedVideoMemory_;

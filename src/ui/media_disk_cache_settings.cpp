@@ -1,11 +1,11 @@
 #include <bloom/ui/media_disk_cache_settings.hpp>
 
-#include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/platform/cache_directory.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 
 #include <QSettings>
 #include <QString>
+#include <QStringList>
 
 namespace bloom::ui {
 
@@ -13,6 +13,8 @@ namespace {
 constexpr auto kEnabledKey = "media/disk-cache-enabled";
 constexpr auto kDirectoryKey = "media/disk-cache-directory";
 constexpr auto kBudgetBytesKey = "media/disk-cache-budget-bytes";
+constexpr auto kLocalCopiesKey = "media/local-copies";
+constexpr auto kLocalCopiesFoldersKey = "media/local-copies-folders";
 
 [[nodiscard]] std::filesystem::path nativePathFromSettingsString(const QString& text) {
 #if defined(_WIN32)
@@ -44,31 +46,74 @@ std::uint64_t mediaDiskCacheByteBudgetFromSettings(const QSettings& settings,
     return static_cast<std::uint64_t>(value);
 }
 
-std::unique_ptr<media::cache::MediaDiskCache>
-makeMediaDiskCacheFromSettings(const QSettings& settings) {
-    if (!mediaDiskCacheEnabledFromSettings(settings))
-        return nullptr;
-    auto directory = mediaDiskCacheDirectoryFromSettings(settings);
-    if (directory.empty()) {
-        const auto platformDefault = platform::userCacheDirectory("bloom");
-        if (!platformDefault.has_value())
-            return nullptr;
-        directory = *platformDefault / "media";
+media::cache::LocalCopyPolicy localCopyPolicyFromSettings(const QSettings& settings) {
+    media::cache::LocalCopyPolicy policy;
+    const auto preference = settings.value(QLatin1String(kLocalCopiesKey)).toString();
+    policy.preference =
+        preference == QLatin1String("always")  ? media::cache::LocalCopyPreference::Always
+        : preference == QLatin1String("never") ? media::cache::LocalCopyPreference::Never
+                                               : media::cache::LocalCopyPreference::Automatic;
+    const auto folders = settings.value(QLatin1String(kLocalCopiesFoldersKey)).toStringList();
+    for (const auto& entry : folders) {
+        const bool keep = entry.startsWith(QLatin1String("keep:"));
+        if (!keep && !entry.startsWith(QLatin1String("skip:")))
+            continue;
+        const auto folder = nativePathFromSettingsString(entry.mid(5));
+        if (folder.is_absolute())
+            policy.folders.push_back({folder, keep});
     }
-    media::cache::MediaDiskCacheConfig config;
-    config.rootDirectory = directory;
-    config.byteBudget = mediaDiskCacheByteBudgetFromSettings(
-        settings, media::cache::defaultMediaDiskCacheByteBudget(directory));
-    config.enabled = true;
-    return std::make_unique<media::cache::MediaDiskCache>(config);
+    return policy;
 }
 
-bool purgeMediaCaches(media::cache::MediaDiskCache* const cache,
+void writeLocalCopyPolicy(QSettings& settings, const media::cache::LocalCopyPolicy& policy) {
+    switch (policy.preference) {
+    case media::cache::LocalCopyPreference::Always:
+        settings.setValue(QLatin1String(kLocalCopiesKey), QStringLiteral("always"));
+        break;
+    case media::cache::LocalCopyPreference::Never:
+        settings.setValue(QLatin1String(kLocalCopiesKey), QStringLiteral("never"));
+        break;
+    case media::cache::LocalCopyPreference::Automatic:
+        settings.remove(QLatin1String(kLocalCopiesKey));
+        break;
+    }
+    QStringList folders;
+    for (const auto& rule : policy.folders) {
+#if defined(_WIN32)
+        const auto text = QString::fromStdWString(rule.folder.wstring());
+#else
+        const auto text = QString::fromStdString(rule.folder.string());
+#endif
+        folders.push_back((rule.keep ? QStringLiteral("keep:") : QStringLiteral("skip:")) + text);
+    }
+    if (folders.isEmpty())
+        settings.remove(QLatin1String(kLocalCopiesFoldersKey));
+    else
+        settings.setValue(QLatin1String(kLocalCopiesFoldersKey), folders);
+}
+
+media::cache::SourceMirrorUserSettings sourceMirrorSettingsFromSettings(const QSettings& settings) {
+    media::cache::SourceMirrorUserSettings result;
+    result.enabled = mediaDiskCacheEnabledFromSettings(settings);
+    result.directory = mediaDiskCacheDirectoryFromSettings(settings);
+    result.byteBudget = mediaDiskCacheByteBudgetFromSettings(settings, 0);
+    result.policy = localCopyPolicyFromSettings(settings);
+    return result;
+}
+
+std::shared_ptr<media::cache::SourceMirror>
+makeMediaDiskCacheFromSettings(const QSettings& settings) {
+    const auto mirrorSettings = sourceMirrorSettingsFromSettings(settings);
+    // The headless tools read this copy; a platform without a cache folder publishes nothing.
+    static_cast<void>(media::cache::publishSourceMirrorSettings(mirrorSettings));
+    return media::cache::makeSourceMirror(mirrorSettings);
+}
+
+bool purgeMediaCaches(media::cache::SourceMirror* const cache,
                       runtime::OperationCache* const operationCache) {
     bool cleared = false;
     if (cache != nullptr) {
-        // Removes every on-disk entry and resets the disk cache statistics. No source file is
-        // consulted: the store is content-addressed and holds decoded pixels only.
+        // Removes every local copy and resets the statistics. No source file is consulted.
         cache->clear();
         cleared = true;
     }

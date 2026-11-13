@@ -7,14 +7,14 @@
 #include <bloom/core/telemetry_counters.hpp>
 #include <bloom/core/worker_thread.hpp>
 #include <bloom/host/export_presets.hpp>
-#include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/gpu_export_tool_package.hpp>
 #include <bloom/mcp/server_service.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
-#include <bloom/media/cache/media_disk_cache.hpp>
+#include <bloom/media/cache/source_mirror.hpp>
 #include <bloom/media/video/session.hpp>
+#include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/platform/cache_directory.hpp>
 #include <bloom/platform/user_data_directory.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
@@ -24,8 +24,8 @@
 #include <bloom/runtime/gpu_process_frame.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
-#include <bloom/runtime/profiler_sampler.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/runtime/profiler_sampler.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
@@ -49,7 +49,6 @@
 #include <bloom/ui/composition_thumbnail_controller.hpp>
 #include <bloom/ui/cryptomatte_controller.hpp>
 #include <bloom/ui/editor_registry.hpp>
-#include <bloom/ui/track_controller.hpp>
 #include <bloom/ui/export_queue_adapter.hpp>
 #include <bloom/ui/export_queue_edits.hpp>
 #include <bloom/ui/export_queue_service_port.hpp>
@@ -57,7 +56,6 @@
 #include <bloom/ui/image_preview_controller.hpp>
 #include <bloom/ui/interaction_sounds.hpp>
 #include <bloom/ui/jobs_editor.hpp>
-#include <bloom/ui/viewer_preview_pool.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/live_session_adapter.hpp>
 #include <bloom/ui/main_window.hpp>
@@ -76,9 +74,11 @@
 #include <bloom/ui/system_notifier.hpp>
 #include <bloom/ui/task_monitor_model.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/track_controller.hpp>
 #include <bloom/ui/ui_feedback.hpp>
 #include <bloom/ui/ui_sound_engine.hpp>
 #include <bloom/ui/viewer_editor.hpp>
+#include <bloom/ui/viewer_preview_pool.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
@@ -90,9 +90,9 @@
 #include <QGuiApplication>
 #include <QPointer>
 #include <QScreen>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QThreadPool>
-#include <QSettings>
 #include <QTimer>
 
 #include <chrono>
@@ -190,30 +190,32 @@ int main(int argc, char* argv[]) try {
     nodeDefinitions.freeze();
     bloom::runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
     bloom::runtime::CpuCompositionEvaluator cpuEvaluator;
-    QObject::connect(
-        &projectHost, &bloom::ui::ProjectHost::sessionReplaced, &compositionSession,
-        [&projectHost, &compositionSession, &cpuEvaluator] {
-            const auto path = projectHost.displayPath();
-            cpuEvaluator.setAssetBaseDirectory(path ? path->parent_path()
-                                                    : std::filesystem::path{});
-            // Invalidate source authority before rebind emits any new preview request. Even an
-            // identical reopened document must verify its sources in the new session. Rooted
-            // tickets/sessions retire on their worker; this boundary performs no source I/O.
-            cpuEvaluator.operationCache()->invalidateSourceRevisions();
-            auto [document, commandStack] = projectHost.liveDocumentAndStack();
-            if (document == nullptr || commandStack == nullptr) {
-                return;
-            }
-            compositionSession.projectViewMemory().beginProject(path);
-            compositionSession.setProjectDirectory(path ? path->parent_path()
-                                                        : std::filesystem::path{});
-            // #550: reopen on the composition last viewed in this project, if it still exists.
-            compositionSession.rebindToRememberedComposition(*document, *commandStack,
-                                                             projectHost.lowestCompositionId());
-            if (const auto* settings = projectHost.colorSettings(); settings != nullptr) {
-                compositionSession.setColorSettings(*settings);
-            }
-        });
+    QObject::connect(&projectHost, &bloom::ui::ProjectHost::sessionReplaced, &compositionSession,
+                     [&projectHost, &compositionSession, &cpuEvaluator] {
+                         const auto path = projectHost.displayPath();
+                         cpuEvaluator.setAssetBaseDirectory(path ? path->parent_path()
+                                                                 : std::filesystem::path{});
+                         // Invalidate source authority before rebind emits any new preview request.
+                         // Even an identical reopened document must verify its sources in the new
+                         // session. Rooted tickets/sessions retire on their worker; this boundary
+                         // performs no source I/O.
+                         cpuEvaluator.operationCache()->invalidateSourceRevisions();
+                         auto [document, commandStack] = projectHost.liveDocumentAndStack();
+                         if (document == nullptr || commandStack == nullptr) {
+                             return;
+                         }
+                         compositionSession.projectViewMemory().beginProject(path);
+                         compositionSession.setProjectDirectory(path ? path->parent_path()
+                                                                     : std::filesystem::path{});
+                         // #550: reopen on the composition last viewed in this project, if it still
+                         // exists.
+                         compositionSession.rebindToRememberedComposition(
+                             *document, *commandStack, projectHost.lowestCompositionId());
+                         if (const auto* settings = projectHost.colorSettings();
+                             settings != nullptr) {
+                             compositionSession.setColorSettings(*settings);
+                         }
+                     });
     const QSettings playbackSettings;
     const auto cacheBudgets = bloom::ui::cacheMemoryBudgetsFromSettings(playbackSettings);
     // Decoded-video retention: `playback/decoded-video-cache-bytes` selects an exact target; a
@@ -232,11 +234,17 @@ int main(int argc, char* argv[]) try {
     // and the Asset Controller's proxy/thumbnail decodes below -- "the same store". Built from
     // settings alongside the operation cache's own settings-derived budget just above; null when
     // disabled in settings or no cache directory can be resolved at all (never a startup failure).
-    const std::shared_ptr<bloom::media::cache::MediaDiskCache> mediaDiskCache = [] {
+    const std::shared_ptr<bloom::media::cache::SourceMirror> mediaDiskCache = [] {
         const QSettings mediaDiskCacheSettings;
         return bloom::ui::makeMediaDiskCacheFromSettings(mediaDiskCacheSettings);
     }();
-    cpuEvaluator.setMediaDiskCache(mediaDiskCache);
+    // #718: memory, then the local mirror, then the source, for every route this evaluator's
+    // cache serves (Viewer, RAM Preview, exports, thumbnails share the one mirror).
+    cpuEvaluator.setSourceStore(mediaDiskCache);
+    // The panels that evaluate on their own workers (anchor grid, driven values) share this
+    // evaluator's cache and store: a copy is a handle onto the same state.
+    compositionSession.setSharedEvaluator(
+        std::make_shared<const bloom::runtime::CpuCompositionEvaluator>(cpuEvaluator));
     bloom::runtime::CpuReferenceDisplayPreparer referenceDisplayPreparer;
     // Issue #97 (task C3): resolved and built once, on the shared TaskScheduler's blocking-I/O
     // lane, at this same session/pipeline-construction point (design decision 3). Declared before
@@ -489,11 +497,12 @@ int main(int argc, char* argv[]) try {
                 cpuEvaluator.assetBaseDirectory(), time, colorIntent, cancellation);
         };
     previewController.setChannelListingProvider(channelListingProvider);
-    // #645: Viewer picks compile through the preview's compiler and shared plan cache, so a revision
-    // the Viewer already shows is not compiled again.
+    // #645: Viewer picks compile through the preview's compiler and shared plan cache, so a
+    // revision the Viewer already shows is not compiled again.
     const auto viewerPicker = std::make_shared<bloom::runtime::ViewerPicker>(
-        [&snapshotCompiler, compiledPlanCache](const bloom::runtime::SnapshotCompileRequest& request,
-                                               const bloom::runtime::CancellationToken& cancellation) {
+        [&snapshotCompiler,
+         compiledPlanCache](const bloom::runtime::SnapshotCompileRequest& request,
+                            const bloom::runtime::CancellationToken& cancellation) {
             return compiledPlanCache->compile(snapshotCompiler, request, cancellation);
         });
     previewController.setViewerPicker(viewerPicker);
@@ -509,12 +518,11 @@ int main(int argc, char* argv[]) try {
                                                   .viewName = {},
                                                   .showLook = true,
                                                   .scopesCacheRetention = false},
-            previewFrameCache, nullptr, gpuPreviewDisplaySubmitter, nullptr,
-            processingPhasePolicy);
+            previewFrameCache, nullptr, gpuPreviewDisplaySubmitter, nullptr, processingPhasePolicy);
         controller->setChannelListingProvider(channelListingProvider);
         controller->setViewerPicker(viewerPicker);
-        QObject::connect(&memoryBudgetController,
-                         &bloom::ui::MemoryBudgetController::sampleApplied, controller.get(),
+        QObject::connect(&memoryBudgetController, &bloom::ui::MemoryBudgetController::sampleApplied,
+                         controller.get(),
                          &bloom::ui::CompositionPreviewController::notifyProcessingCapacityChanged);
         return controller;
     });
@@ -675,16 +683,18 @@ int main(int argc, char* argv[]) try {
     bloom::host::ExportEncoderStatus initialEncoders;
 #if defined(__linux__)
 #endif
-    const auto presetDirectory = std::filesystem::path(
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation).toStdString()) /
-                                 "export-presets";
+    const auto presetDirectory =
+        std::filesystem::path(
+            QStandardPaths::writableLocation(QStandardPaths::AppDataLocation).toStdString()) /
+        "export-presets";
     auto exportPresets = bloom::host::ExportPresetCatalogue::create(
         {.userDataDirectory = presetDirectory, .initialEncoders = initialEncoders});
     exportPresets->refreshEncoders(taskScheduler);
     exportPresets->loadUserPresets(taskScheduler);
-    const auto exportScratch = std::filesystem::path(
-        QStandardPaths::writableLocation(QStandardPaths::CacheLocation).toStdString()) /
-                               "export-scratch";
+    const auto exportScratch =
+        std::filesystem::path(
+            QStandardPaths::writableLocation(QStandardPaths::CacheLocation).toStdString()) /
+        "export-scratch";
     std::error_code exportScratchError;
     std::filesystem::create_directories(exportScratch, exportScratchError);
     projectHost.configureExportQueue(
@@ -697,8 +707,8 @@ int main(int argc, char* argv[]) try {
          .displayProcessor = &qualifiedDisplayProcessorProvider,
          .scratchDirectory = exportScratch,
          .backend = nullptr});
-    const auto choiceFor = [&exportPresets](const std::string& id)
-        -> std::optional<bloom::ui::ExportPresetChoice> {
+    const auto choiceFor =
+        [&exportPresets](const std::string& id) -> std::optional<bloom::ui::ExportPresetChoice> {
         const auto catalogue = exportPresets->snapshot();
         for (const auto& preset : catalogue->presets)
             if (preset.id == id)
@@ -706,9 +716,7 @@ int main(int argc, char* argv[]) try {
         return std::nullopt;
     };
     bloom::ui::ExportQueueEdits exportEdits(
-        compositionSession,
-        [&exportPresets] { return exportPresets->defaultPreset(); },
-        choiceFor);
+        compositionSession, [&exportPresets] { return exportPresets->defaultPreset(); }, choiceFor);
     exportEdits.setProjectFolder([&projectHost]() -> std::optional<std::filesystem::path> {
         const auto path = projectHost.displayPath();
         return path ? std::optional(path->parent_path()) : std::nullopt;
@@ -922,9 +930,9 @@ int main(int argc, char* argv[]) try {
     // Native (server-side) window chrome only (task C1): MainWindow no longer takes a chrome mode
     // at all -- there is nothing left for main() to read from settings before constructing it.
     bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost,
-                                 &ramPreviewController, &previewController,
-                                 nullptr, &playback, cpuEvaluator.operationCache().get(),
-                                 mediaDiskCache.get(), &accelerationStatus, &cachePurgeController);
+                                 &ramPreviewController, &previewController, nullptr, &playback,
+                                 cpuEvaluator.operationCache().get(), mediaDiskCache.get(),
+                                 &accelerationStatus, &cachePurgeController);
     // A project the operating system asks Bloom to open (macOS: double-clicked, dropped on the
     // Dock icon, Open With), at launch and while running, opens as it does through File, Open.
     const bloom::ui::ProjectFileOpenEvents projectFileOpenEvents(projectHost);
@@ -952,10 +960,8 @@ int main(int argc, char* argv[]) try {
     // UI sound feedback and render notifications (docs/architecture/ui-feedback.md). The sound
     // engine decodes and opens its own output device on a worker thread; nothing here blocks.
     auto uiSoundEngine = std::make_unique<bloom::ui::UiSoundEngine>(
-        bloom::media::audio::playback::makeMiniaudioBackend(),
-        bloom::ui::bundledFeedbackSoundBytes, [](const std::string& message) {
-            std::cerr << "Bloom: " << message << '\n';
-        });
+        bloom::media::audio::playback::makeMiniaudioBackend(), bloom::ui::bundledFeedbackSoundBytes,
+        [](const std::string& message) { std::cerr << "Bloom: " << message << '\n'; });
     uiSoundEngine->start();
     bloom::ui::UiFeedback uiFeedback(std::move(uiSoundEngine),
                                      bloom::ui::makeSystemNotifier(&application));
@@ -999,8 +1005,8 @@ int main(int argc, char* argv[]) try {
                          // The Viewer has strict priority: export takes only spare GPU time
                          // while the artist plays back.
                          if (auto* queue = projectHost.exportQueue())
-                             queue->setInteractiveGestureActive(
-                                 state == bloom::ui::PlaybackState::Playing);
+                             queue->setInteractiveGestureActive(state ==
+                                                                bloom::ui::PlaybackState::Playing);
                      });
     QObject::connect(&playback, &bloom::ui::PlaybackController::stateChanged, &window,
                      [&uiFeedback](const bloom::ui::PlaybackState state) {
@@ -1022,8 +1028,7 @@ int main(int argc, char* argv[]) try {
     // The shutdown contract's second half: the workspace enumerates every live editor native
     // surface so the coordinator can require genuine retirement before Qt teardown. A CPU-only
     // workspace yields no surfaces and shutdown behavior is exactly as before.
-    shutdownCoordinator.setNativeSurfaceSource(
-        [&window] { return window.liveNativeSurfaces(); });
+    shutdownCoordinator.setNativeSurfaceSource([&window] { return window.liveNativeSurfaces(); });
     // Re-publish a changed presentation capability into already-live ViewerEditors: a newly Ready
     // client is handed over, and a later loss is handed over as a null client so those viewers drop
     // back to their own CPU paint path. The factory seam covers every editor created later; this
@@ -1044,26 +1049,26 @@ int main(int argc, char* argv[]) try {
                              playback.pause();
                          }
                      });
-    QObject::connect(&ramPreviewController, &bloom::ui::RamPreviewController::cachingFinished,
-                     &playback, [&](const bloom::ui::RamPreviewController::Completion outcome) {
-                         // Partial retention has no ephemeral transport range: manual playback
-                         // remains available, but only a still-current fully retained range
-                         // autoplays.
-                         if (outcome == bloom::ui::RamPreviewController::Completion::Complete &&
-                             ramPreviewController.canAutoPlay()) {
-                             static_cast<void>(compositionSession.setCurrentTime(
-                                 ramPreviewController.playableSpan()->start));
-                             playback.play();
-                         } else if (outcome == bloom::ui::RamPreviewController::Completion::
-                                                  PartialBudget &&
-                                    ramPreviewController.canPlayPartial()) {
-                             // The range outgrew memory: play it anyway. Play renders ahead of
-                             // the playhead and the cache evicts the oldest frames; never a stall.
-                             static_cast<void>(
-                                 compositionSession.setCurrentTime(compositionSession.workArea().start));
-                             playback.play();
-                         }
-                     });
+    QObject::connect(
+        &ramPreviewController, &bloom::ui::RamPreviewController::cachingFinished, &playback,
+        [&](const bloom::ui::RamPreviewController::Completion outcome) {
+            // Partial retention has no ephemeral transport range: manual playback
+            // remains available, but only a still-current fully retained range
+            // autoplays.
+            if (outcome == bloom::ui::RamPreviewController::Completion::Complete &&
+                ramPreviewController.canAutoPlay()) {
+                static_cast<void>(
+                    compositionSession.setCurrentTime(ramPreviewController.playableSpan()->start));
+                playback.play();
+            } else if (outcome == bloom::ui::RamPreviewController::Completion::PartialBudget &&
+                       ramPreviewController.canPlayPartial()) {
+                // The range outgrew memory: play it anyway. Play renders ahead of
+                // the playhead and the cache evicts the oldest frames; never a stall.
+                static_cast<void>(
+                    compositionSession.setCurrentTime(compositionSession.workArea().start));
+                playback.play();
+            }
+        });
     (void)window.restoreApplicationState(settings);
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted, &window,
@@ -1156,8 +1161,8 @@ int main(int argc, char* argv[]) try {
     const auto applyExportWorkerLimits = [&projectHost] {
         const QSettings exportSettings;
         const auto preferences = bloom::ui::loadApplicationPreferences(exportSettings);
-        projectHost.setExportWorkerLimits({preferences.exportWorkerMemoryCapBytes,
-                                           preferences.exportWorkerThreads});
+        projectHost.setExportWorkerLimits(
+            {preferences.exportWorkerMemoryCapBytes, preferences.exportWorkerThreads});
     };
     applyExportWorkerLimits();
     QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &window,

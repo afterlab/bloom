@@ -442,7 +442,8 @@ void testShutdownAndCancellation() {
     expect(mirror.statistics().refusedForDiskSpace == 1 &&
                !mirror.find(first.path, first.identity, {}).has_value(),
            "a write is skipped while the cache volume is short of free space");
-    expect(mirror.underPressure(), "a cache volume short of space asks background fills to wait");
+    expect(mirror.statistics().diskPressure && !mirror.underPressure(),
+           "a cache volume short of space is reported, and is not a write backlog");
 }
 
 void testLegacyEntriesRemoved() {

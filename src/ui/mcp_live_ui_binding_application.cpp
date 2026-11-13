@@ -192,6 +192,67 @@ const std::vector<PreferenceKey>& preferenceKeys() {
         list.push_back(bytesKey("mediaDiskCacheBudgetBytes",
                                 &ApplicationPreferences::mediaDiskCacheBudgetBytes,
                                 std::uint64_t{1} << 50U));
+        list.push_back(
+            {"mediaLocalCopies",
+             [](const ApplicationPreferences& p) {
+                 using media::cache::LocalCopyPreference;
+                 const auto value = p.mediaLocalCopies.preference;
+                 return Value(std::string(value == LocalCopyPreference::Always  ? "always"
+                                          : value == LocalCopyPreference::Never ? "never"
+                                                                                : "automatic"));
+             },
+             [](ApplicationPreferences& p, const Value& value) {
+                 using media::cache::LocalCopyPreference;
+                 const auto* text = std::get_if<std::string>(&value);
+                 if (text != nullptr && *text == "automatic")
+                     p.mediaLocalCopies.preference = LocalCopyPreference::Automatic;
+                 else if (text != nullptr && *text == "always")
+                     p.mediaLocalCopies.preference = LocalCopyPreference::Always;
+                 else if (text != nullptr && *text == "never")
+                     p.mediaLocalCopies.preference = LocalCopyPreference::Never;
+                 else
+                     return std::optional(QObject::tr("is one of automatic, always, never"));
+                 return std::optional<QString>{};
+             }});
+        // One line per folder rule: "keep:<absolute folder>" or "skip:<absolute folder>".
+        list.push_back(
+            {"mediaLocalCopyFolders",
+             [](const ApplicationPreferences& p) {
+                 std::string rules;
+                 for (const auto& rule : p.mediaLocalCopies.folders) {
+                     if (!rules.empty())
+                         rules += '\n';
+                     rules += (rule.keep ? "keep:" : "skip:") + rule.folder.generic_string();
+                 }
+                 return Value(std::move(rules));
+             },
+             [](ApplicationPreferences& p, const Value& value) {
+                 const auto refusal = std::optional(QObject::tr(
+                     "is up to 256 lines, each keep:<absolute folder> or skip:<absolute folder>, "
+                     "or empty for no folder rule"));
+                 const auto* text = std::get_if<std::string>(&value);
+                 if (text == nullptr)
+                     return refusal;
+                 std::vector<media::cache::LocalCopyFolderRule> folders;
+                 std::string_view rest(*text);
+                 while (!rest.empty()) {
+                     const auto end = rest.find('\n');
+                     const auto line = rest.substr(0, end);
+                     rest = end == std::string_view::npos ? std::string_view{}
+                                                          : rest.substr(end + 1);
+                     if (line.empty())
+                         continue;
+                     const bool keep = line.starts_with("keep:");
+                     if ((!keep && !line.starts_with("skip:")) || folders.size() == 256)
+                         return refusal;
+                     const std::filesystem::path folder(line.substr(5));
+                     if (!folder.is_absolute())
+                         return refusal;
+                     folders.push_back({folder.lexically_normal(), keep});
+                 }
+                 p.mediaLocalCopies.folders = std::move(folders);
+                 return std::optional<QString>{};
+             }});
         list.push_back(choiceKey("timelineTimeFormat", &ApplicationPreferences::timelineTimeFormat,
                                  std::array<std::string_view, 2>{"frames", "timecode"}));
         list.push_back(flagKey("timelineSnapping", &ApplicationPreferences::timelineSnapping));

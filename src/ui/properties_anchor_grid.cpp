@@ -13,13 +13,27 @@
 #include <thread>
 
 namespace bloom::ui {
+namespace {
+// How long the playhead must stand still before the bounds are resolved for the new time.
+constexpr int kSettleMilliseconds = 150;
+} // namespace
 PropertiesAnchorGrid::PropertiesAnchorGrid(CompositionSession& session, QWidget* parent)
-    : kit::KAnchorGrid(parent), session_(session), timer_(new QTimer(this)) {
+    : kit::KAnchorGrid(parent), session_(session), timer_(new QTimer(this)), settle_(new QTimer(this)) {
     setObjectName("propertiesAnchorGrid");
     setAccessibleName(tr("Anchor Point"));
     setFocusPolicy(Qt::StrongFocus);
     timer_->setInterval(16);
     connect(timer_, &QTimer::timeout, this, [this] { poll(); });
+    settle_->setSingleShot(true);
+    settle_->setInterval(kSettleMilliseconds);
+    connect(settle_, &QTimer::timeout, this, [this] {
+        ++generation_;
+        refining_ = true;
+        if (active_)
+            task_.cancel();
+        else
+            start();
+    });
 }
 PropertiesAnchorGrid::~PropertiesAnchorGrid() {
     if (scheduler_) {
@@ -66,15 +80,20 @@ void PropertiesAnchorGrid::refresh() {
     const bool timeOnly = structural == structuralIdentity_ && bounds_.has_value();
     identity_ = identity;
     structuralIdentity_ = structural;
-    ++generation_;
-    refining_ = timeOnly;
-    if (!timeOnly) {
-        bounds_.reset();
-        setEnabled(false);
-        setToolTip(layer_ ? tr("Resolving local bounds…") : tr("Select a layer to set its anchor"));
-        shownPoint_ = -1;
-        update();
+    if (timeOnly) {
+        // #718: a moving playhead evaluates nothing here. The bounds are resolved once the time
+        // has stood still, so playback and a scrub cost this grid no evaluation per frame.
+        settle_->start();
+        return;
     }
+    settle_->stop();
+    ++generation_;
+    refining_ = false;
+    bounds_.reset();
+    setEnabled(false);
+    setToolTip(layer_ ? tr("Resolving local bounds…") : tr("Select a layer to set its anchor"));
+    shownPoint_ = -1;
+    update();
     if (active_)
         task_.cancel();
     else
@@ -113,7 +132,8 @@ void PropertiesAnchorGrid::start() {
             "Resolve Anchor Bounds",
             {runtime::TaskOwnerKind::Application, runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Interactive},
-        [snapshot, compositionId, time, layer](runtime::TaskContext& context) {
+        [snapshot, compositionId, time, layer,
+         shared = session_.sharedEvaluator()](runtime::TaskContext& context) {
             auto result = std::make_shared<Result>();
             const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
             const auto compiled =
@@ -122,7 +142,10 @@ void PropertiesAnchorGrid::start() {
                 // Proxy evaluation retains full-resolution local geometry. No display conversion
                 // or full-size image is needed for this read-only inspection.
                 const auto extent = render::ImageExtent::create(64, 64);
-                const runtime::CpuCompositionEvaluator evaluator;
+                // #718: through the application's evaluator when there is one, so a source the
+                // Viewer already holds is not read again.
+                const runtime::CpuCompositionEvaluator own;
+                const auto& evaluator = shared ? *shared : own;
                 const auto evaluated =
                     evaluator.evaluate(compiled.plan,
                                        {.time = time,

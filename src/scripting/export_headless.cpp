@@ -44,7 +44,8 @@ struct HeadlessExportQueue::State {
 
 HeadlessExportQueue::HeadlessExportQueue(
     Session& session, std::shared_ptr<runtime::GpuOcioContextResolver> ocioResolver,
-    std::filesystem::path vulkanLoader, std::shared_ptr<std::timed_mutex> bootstrapGate)
+    std::filesystem::path vulkanLoader, std::shared_ptr<std::timed_mutex> bootstrapGate,
+    std::shared_ptr<platform::SourceStore> sourceStore)
     : state_(std::make_unique<State>()) {
     auto& s = *state_;
     // Scratch files are opened by path and truncated, so they live in a fresh owner-only directory
@@ -59,6 +60,8 @@ HeadlessExportQueue::HeadlessExportQueue(
                                    : std::filesystem::absolute(session.displayPath()).parent_path();
     if (!projectFolder.empty())
         s.media.setAssetBaseDirectory(projectFolder);
+    // #718: the headless export queue reads slow sources through the executable's local mirror.
+    s.media.setSourceStore(std::move(sourceStore));
     runtime::GpuProcessFrameEvaluatorOptions gpuOptions;
     // The packaging definitions live on the executable, not on this library: a resolver made here
     // would always be null and leave every display-referred output on the CPU reference path.

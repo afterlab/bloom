@@ -2,6 +2,7 @@
 
 #include <bloom/core/sha256.hpp>
 #include <bloom/media/image.hpp>
+#include <bloom/platform/source_store.hpp>
 #include <bloom/runtime/source_working_set.hpp>
 
 #include <cstddef>
@@ -38,6 +39,12 @@ class ImageSequenceReadAhead final {
         std::optional<core::Sha256Digest> recordedDigest;
         std::string revisionKey;
         std::size_t byteBudget = 0;
+        // #718: the asset's override of local copies. A capture asks the cache's source store
+        // (the local mirror) before the source, and so fills the mirror ahead of the playhead.
+        platform::LocalCopyOverride localCopies = platform::LocalCopyOverride::Inherit;
+        // The volume id of the sequence's files when the frame that asks already observed one
+        // (FileIdentity::volume): the storage class is then known without touching the volume.
+        std::optional<std::uint64_t> volume{};
         // The composition frame the capture is for (ADR 0037): its entry is tagged with it, so it
         // stays while that frame is in the playback window.
         SourceUse use{};

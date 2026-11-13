@@ -2,6 +2,7 @@
 
 #include <bloom/document/asset.hpp>
 #include <bloom/host/export_worker_limits.hpp>
+#include <bloom/ui/media_disk_cache_settings.hpp>
 
 #include <QSettings>
 #include <QString>
@@ -214,6 +215,7 @@ ApplicationPreferences loadApplicationPreferences(const QSettings& settings) {
     preferences.mediaDiskCacheDirectory = absoluteDirectoryFromSettings(settings);
     preferences.mediaDiskCacheBudgetBytes =
         byteBudgetFromSettings(settings, kMediaDiskCacheBudgetKey);
+    preferences.mediaLocalCopies = localCopyPolicyFromSettings(settings);
     // Zero (missing, unreadable or above the largest accepted cap) is "no cap".
     if (const auto cap = byteBudgetFromSettings(settings, kExportWorkerMemoryCapKey);
         cap <= host::kMaximumExportWorkerMemoryCapBytes)
@@ -326,6 +328,7 @@ void saveApplicationPreferences(QSettings& settings, const ApplicationPreference
     else
         settings.setValue(QLatin1String(kMediaDiskCacheDirectoryKey), directoryText);
     writeByteBudget(settings, kMediaDiskCacheBudgetKey, preferences.mediaDiskCacheBudgetBytes);
+    writeLocalCopyPolicy(settings, preferences.mediaLocalCopies);
     writeByteBudget(settings, kExportWorkerMemoryCapKey,
                     std::min(preferences.exportWorkerMemoryCapBytes,
                              host::kMaximumExportWorkerMemoryCapBytes));

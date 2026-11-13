@@ -7,6 +7,7 @@
 #include <bloom/host/gpu_export_tool_package.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/mcp/server_core.hpp>
+#include <bloom/media/cache/source_mirror_settings.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/platform/cache_directory.hpp>
 #include <bloom/platform/owner_only_secret.hpp>
@@ -55,6 +56,9 @@ int serve(scripting::Session& session) {
     // media context follows the opened project's asset base. A device or tool refusal keeps the
     // CPU reference path. The evaluator is declared first so it outlives the provider.
     runtime::CpuCompositionEvaluator mediaEvaluator;
+    // #718: the server's renders read slow sources through the user's local mirror, with the
+    // "Keep local copies" choice the application published (null: disabled or no cache folder).
+    mediaEvaluator.setSourceStore(media::cache::openUserSourceMirror());
     if (!session.displayPath().empty())
         mediaEvaluator.setAssetBaseDirectory(session.displayPath().parent_path());
     runtime::GpuProcessFrameEvaluatorOptions gpuOptions;

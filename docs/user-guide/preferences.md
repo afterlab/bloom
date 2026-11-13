@@ -27,14 +27,22 @@ or create, is refused under the field and OK waits.
 | Viewer | Resolution, the background around the composition frame (Solid, Gray, Black, White), the transparency grid inside it, and the safe-areas, center-cross, thirds, rulers and pixel-grid overlays | Immediately |
 | Timeline | Time format, snapping, keyframes, graph editor, layer column width | Immediately |
 | Node Graph | Link style, snap to grid, grid size, **Show minimap** (the overview in the canvas corner, with its zoom row) and **Show zoom controls** (the zoom buttons and slider under the minimap); both on by default | Immediately |
-| Memory & Caches | RAM and VRAM headroom, **Worker memory cap** and **Worker threads** for export workers, media disk cache enable/directory/budget | Headroom on Apply or OK; worker limits on the next export you start; disk cache after restart |
+| Memory & Caches | RAM and VRAM headroom, **Worker memory cap** and **Worker threads** for export workers, media disk cache enable/directory/budget, **Keep local copies of source media** and its folder rules | Headroom on Apply or OK; worker limits on the next export you start; disk cache after restart |
 | Performance | Read-only acceleration status | Not a preference |
 
 Immediate changes reach every open panel: the window hands the committed value to each editor,
 which applies it through the same setters its own menus use. Headroom reaches the engine on Apply or OK. Values marked **Restart** (the disk
-cache enable, location and disk-space budget, marked once in the Media disk cache header) are read
+cache enable, location, disk-space budget and local-copy settings, marked once in the Media disk cache header) are read
 when Bloom starts. Leave the cache directory empty for the default location; **Browse…** picks a
 folder and the reset button beside it returns to the default.
+
+**Keep local copies of source media** decides which footage the disk cache mirrors. **Automatic**
+keeps a copy of media on network drives and other slow storage (USB and rotational disks, memory
+cards) so each file is read from there once, and reads media on fast local drives where it is.
+**Always** copies everything; **Never** copies nothing. **Add Folder…** adds a folder rule, **Keep
+copies** or **No copies**, for everything inside that folder; the longest matching folder wins and
+a rule beats the setting above it. One asset can be set apart in
+[Interpret Footage](interpret-footage.md), which comes before both.
 
 ## Crash recovery
 

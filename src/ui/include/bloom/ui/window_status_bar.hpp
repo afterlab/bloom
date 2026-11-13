@@ -24,8 +24,8 @@ class QTimer;
 class QToolButton;
 
 namespace bloom::media::cache {
-class MediaDiskCache;
-struct MediaDiskCacheStatistics;
+class SourceMirror;
+struct SourceMirrorStatistics;
 } // namespace bloom::media::cache
 
 namespace bloom::ui::kit {
@@ -33,7 +33,7 @@ class KButton;
 class KLabel;
 class KProgressBar;
 class KPopupWindow;
-}
+} // namespace bloom::ui::kit
 
 namespace bloom::ui::statusbar {
 class Segment;
@@ -92,12 +92,17 @@ struct PreviewColorState final {
 [[nodiscard]] QString previewCacheText(const CompositionPreviewController& previewController);
 [[nodiscard]] QString operationCacheText(const runtime::OperationCache& operationCache);
 
-// The disk cache's own cell (task CACHE-2, docs/architecture/media-io.md "Disk cache"), separate
-// from `previewCacheText()`'s in-memory RAM preview account above: "Disk 73% hit · 4.2 GB" once
-// it has served at least one lookup, "Disk cache off" when disabled, and empty (nothing to report
-// yet) before the first lookup. A hit rate is never invented from zero lookups.
-[[nodiscard]] QString mediaDiskCacheStatusText(const media::cache::MediaDiskCacheStatistics& stats,
+// The disk cache's own cell (#718, docs/architecture/media-io.md "Disk cache"), separate from
+// `previewCacheText()`'s in-memory RAM preview account above. It states what is true now, with or
+// without a lookup: "Disk cache off" when disabled, "Disk cache starting" until the index has
+// been read (off the UI thread), "Disk empty", or "Disk 4.2 GB cached".
+[[nodiscard]] QString mediaDiskCacheStatusText(const media::cache::SourceMirrorStatistics& stats,
                                                bool enabled);
+// The tooltip's tier line: "RAM hits 12 · Disk hits 340 · Network reads 8". RAM hits are source
+// revisions reused from memory, disk hits are sources served by their local copy, and network
+// reads are whole reads of a source on a network volume.
+[[nodiscard]] QString mediaDiskCacheTierText(const media::cache::SourceMirrorStatistics& stats,
+                                             std::uint64_t memoryHits);
 
 class WindowStatusBar final : public kit::KSurface {
     Q_OBJECT
@@ -110,7 +115,7 @@ class WindowStatusBar final : public kit::KSurface {
     // `operationCache` may also be null: the combined cache cell then shows only the RAM preview
     // account, with no operation-cache statistics appended.
     WindowStatusBar(CompositionSession& session, CompositionPreviewController* previewController,
-                    media::cache::MediaDiskCache* mediaDiskCache = nullptr,
+                    media::cache::SourceMirror* mediaDiskCache = nullptr,
                     runtime::OperationCache* operationCache = nullptr, QWidget* parent = nullptr,
                     runtime::MemoryBudgetLedger& ledger = runtime::processMemoryBudgetLedger());
 
@@ -135,8 +140,8 @@ class WindowStatusBar final : public kit::KSurface {
         return memoryReserveBytes_;
     }
 
-    // The MCP indicator (ADR 0034): shown only while the server runs or has failed, and a click asks
-    // the adapter to reveal the MCP Server panel. Null removes it.
+    // The MCP indicator (ADR 0034): shown only while the server runs or has failed, and a click
+    // asks the adapter to reveal the MCP Server panel. Null removes it.
     void setMcpServer(McpServerAdapter* adapter);
     // The compile-failure disclosure (docs/ux/ui-grammar.md, "Compile failure details"): a small
     // button after the preview state, shown only while the preview failed to compile. It opens a
@@ -227,7 +232,7 @@ class WindowStatusBar final : public kit::KSurface {
     QMetaObject::Connection displayedViewerProbeConnection_;
     QMetaObject::Connection displayedViewerDestroyedConnection_;
     runtime::OperationCache* operationCache_ = nullptr;
-    media::cache::MediaDiskCache* mediaDiskCache_ = nullptr;
+    media::cache::SourceMirror* mediaDiskCache_ = nullptr;
     // Segments, left to right: Viewer | Activity | Pixel | Memory | Disk cache | MCP | Version.
     statusbar::Segment* viewerSegment_ = nullptr;
     statusbar::Segment* activitySegment_ = nullptr;

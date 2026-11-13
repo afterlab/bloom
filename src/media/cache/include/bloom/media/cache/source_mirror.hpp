@@ -45,7 +45,7 @@ inline constexpr std::chrono::milliseconds kSourceMirrorIndexFlushIdle{2000};
 // "Keep local copies of source media": the user's preference, and the override a folder rule or
 // an asset's interpretation carries.
 enum class LocalCopyPreference : std::uint8_t { Automatic, Always, Never };
-enum class LocalCopyOverride : std::uint8_t { Inherit, Always, Never };
+using platform::LocalCopyOverride;
 struct LocalCopyFolderRule final {
     // An absolute folder; the rule covers every source under it. The longest matching folder wins.
     std::filesystem::path folder;
@@ -98,6 +98,8 @@ struct SourceMirrorStatistics final {
     std::uint64_t entryCount = 0, storedBytes = 0;
     // False until the index has been read at startup (on the mirror's own thread).
     bool indexLoaded = false;
+    // The last write was skipped because the cache volume is short of free space.
+    bool diskPressure = false;
 };
 
 enum class LocalCopyState : std::uint8_t {
@@ -126,8 +128,12 @@ class SourceMirror final : public platform::SourceStore {
                                                          runtime::processMemoryBudgetLedger());
     ~SourceMirror() override;
 
-    // platform::SourceStore. find() reads and verifies the local file on the calling thread;
-    // keep() queues the write. A disabled mirror misses and keeps nothing.
+    // platform::SourceStore. keeps() is keepsLocalCopy() for the identity's volume. find() reads
+    // and verifies the local file on the calling thread; keep() queues the write. A disabled mirror
+    // misses and keeps nothing.
+    [[nodiscard]] bool keeps(const std::filesystem::path& source,
+                             const platform::FileIdentity& identity,
+                             LocalCopyOverride asset) const override;
     [[nodiscard]] std::optional<platform::StoredSourceBytes>
     find(const std::filesystem::path& source, const platform::FileIdentity& identity,
          const std::function<bool()>& cancel) override;
@@ -151,11 +157,16 @@ class SourceMirror final : public platform::SourceStore {
     // Blocks until the index is loaded and every write requested so far has been applied or
     // dropped, and the index file is current. Tests and shutdown paths only.
     void flush();
-    // True while the mirror wants background fills (the read-ahead) to hold off: the write queue
-    // is more than half full or the cache volume is short of space.
-    [[nodiscard]] bool underPressure() const;
+    // True while the write queue is more than half full: background fills (the read-ahead) hold
+    // off until the writer catches up. A cache volume short of space is not a backlog: writes
+    // are then skipped (SourceMirrorStatistics::diskPressure) and reads go on from the source.
+    [[nodiscard]] bool underPressure() const override;
 
     [[nodiscard]] SourceMirrorStatistics statistics() const;
+    // The write queue's byte capacity as it stands (memory pressure lowers it).
+    [[nodiscard]] std::uint64_t writeQueueByteCapacity() const noexcept {
+        return writeQueueByteCapacity_.load(std::memory_order_relaxed);
+    }
     void setByteBudget(std::uint64_t bytes);
     [[nodiscard]] std::uint64_t byteBudget() const;
     [[nodiscard]] bool enabled() const noexcept { return enabled_.load(std::memory_order_acquire); }

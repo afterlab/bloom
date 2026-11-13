@@ -81,6 +81,10 @@ emitFootageInterpretation(EmitState& state,
                                 !emitRational(state, value.stillDuration->numerator(),
                                               value.stillDuration->denominator())))
         return false;
+    // #718: the asset's override of "Keep local copies of source media"; absent is Automatic.
+    if (value.localCopies != AssetLocalCopies::Automatic &&
+        !token("localCopies", value.localCopies == AssetLocalCopies::Always ? "always" : "never"))
+        return false;
     return true;
 }
 [[nodiscard]] bool emitAssets(EmitState& state) noexcept {

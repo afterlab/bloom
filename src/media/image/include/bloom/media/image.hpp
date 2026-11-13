@@ -5,6 +5,7 @@
 #include <bloom/core/sha256.hpp>
 #include <bloom/media/dpx_header.hpp>
 #include <bloom/platform/source_identity.hpp>
+#include <bloom/platform/source_store.hpp>
 #include <bloom/render/channel_set_image.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/render/native_samples.hpp>
@@ -247,7 +248,8 @@ class ImageSourceRevision final {
           sourceIdentity_(identity), contentVerified_(verified) {}
     friend ImageResult<std::shared_ptr<const ImageSourceRevision>>
     captureImageSourceRevision(const std::filesystem::path&, std::size_t, const CancelImageWork&,
-                               std::optional<core::Sha256Digest>, std::optional<ImageSourceStamp>);
+                               std::optional<core::Sha256Digest>, std::optional<ImageSourceStamp>,
+                               const platform::SourceStoreAccess&);
     std::vector<std::byte> bytes_;
     ImageProbe probe_;
     ImageSourceCaptureStatistics captureStatistics_;
@@ -261,11 +263,18 @@ class ImageSourceRevision final {
 // `expectedStamp` is hashed and admitted only when its bytes hash to it. `expectedStamp` (#473)
 // alone admits the bytes only when the file's stamp before and after the read is that stamp
 // (DigestMismatch otherwise): a sequence member pending its digest.
+// `store` (#718) is the local mirror of slow sources. When it keeps this source, one identity
+// observation of the original is compared with the mirror's entry: a match builds the revision
+// from the local bytes (the same bytes, so the same decode) under the digest the mirror verified,
+// and the source is not read; otherwise the source is read once, as above, and the bytes that read
+// brought are handed to the mirror, which writes them in the background. Nothing waits for that
+// write.
 [[nodiscard]] ImageResult<std::shared_ptr<const ImageSourceRevision>>
 captureImageSourceRevision(const std::filesystem::path& path, std::size_t hostByteBudget,
                            const CancelImageWork& cancel = {},
                            std::optional<core::Sha256Digest> expectedDigest = {},
-                           std::optional<ImageSourceStamp> expectedStamp = {});
+                           std::optional<ImageSourceStamp> expectedStamp = {},
+                           const platform::SourceStoreAccess& store = {});
 
 // #549: channels of the decoded colour layer's part read in the same pass over the file. OpenEXR
 // compresses every channel of a chunk together, so decoding a frame's colour layer and then its

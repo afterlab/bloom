@@ -65,10 +65,6 @@ class ChannelSetImage;
 class NativeSampleImage;
 } // namespace bloom::render
 
-namespace bloom::media::cache {
-class MediaDiskCache;
-} // namespace bloom::media::cache
-
 namespace bloom::runtime {
 
 class OperationCache;
@@ -674,7 +670,6 @@ struct GpuSceneMediaContext final {
     std::shared_ptr<OperationCache> operationCache;
     std::shared_ptr<detail::VideoSourceContext> videoContext;
     std::filesystem::path assetBaseDirectory;
-    std::shared_ptr<media::cache::MediaDiskCache> mediaDiskCache;
     // Captures upcoming image-sequence files into `operationCache` ahead of need (null disables).
     std::shared_ptr<ImageSequenceReadAhead> sequenceReadAhead;
     // Set by the builder for the duration of one build only: identical uploads inside that build

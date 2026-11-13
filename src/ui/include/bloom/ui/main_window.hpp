@@ -28,7 +28,7 @@ class OperationCache;
 }
 
 namespace bloom::media::cache {
-class MediaDiskCache;
+class SourceMirror;
 } // namespace bloom::media::cache
 
 namespace bloom::ui {
@@ -101,7 +101,7 @@ class MainWindow final : public QMainWindow {
                CompositionPreviewController* previewController = nullptr, QWidget* parent = nullptr,
                PlaybackController* playbackController = nullptr,
                runtime::OperationCache* operationCache = nullptr,
-               media::cache::MediaDiskCache* mediaDiskCache = nullptr,
+               media::cache::SourceMirror* mediaDiskCache = nullptr,
                const AccelerationStatusProvider* accelerationStatus = nullptr,
                CachePurgeController* cachePurgeController = nullptr);
     ~MainWindow() override;
@@ -252,7 +252,7 @@ class MainWindow final : public QMainWindow {
     // Borrowed, may be null; owned by the application composition root.
     runtime::OperationCache* operationCache_ = nullptr;
     // Borrowed, may be null; owned by the application composition root.
-    media::cache::MediaDiskCache* mediaDiskCache_ = nullptr;
+    media::cache::SourceMirror* mediaDiskCache_ = nullptr;
     // Borrowed, may be null; owned by the application composition root.
     CachePurgeController* cachePurgeController_ = nullptr;
     // Borrowed, may be null; null means the Performance page reports the CPU-only truth.

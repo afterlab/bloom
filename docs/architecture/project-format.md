@@ -1694,6 +1694,7 @@ default, so an asset the artist never interpreted carries none of them:
 | `pixelAspect` | `{numerator, denominator}` in [1/100, 100] | the file's ratio |
 | `loopCount` | integer 2 to 1000: the footage plays this many times end to end | 1 |
 | `missingFrames` | `nothing`: a frame the sequence manifest lacks shows nothing; `skip`: the sequence plays the frames it has back to back, so it is as long as its members | hold the previous frame |
+| `localCopies` | `always` or `never`: whether Bloom keeps a local copy of this asset's source media in its disk cache, whatever the Preferences say; it changes no pixel and keys no cache | automatic: the Preferences and the storage the file is on decide |
 | `stillDuration` | rational time, more than 0 and at most 24 hours: a still's length, from the Import preference **Still duration**; a layer made from the still ends there and New Composition from it is that long | the composition's length |
 
 A sequence's `manifest` has an optional trailing `range` (`{first, last}`, signed decimal

@@ -25,6 +25,7 @@
 #include <QSettings>
 #include <QTest>
 
+#include <filesystem>
 #include <algorithm>
 #include <cstdio>
 #include <optional>
@@ -166,6 +167,37 @@ void preferences(const mcp::McpLiveUiPort& port) {
     result = port.setPreferences({{.key = "mediaDiskCacheDirectory",
                                    .value = std::string("relative/cache")}});
     expect(result.refusal == McpUiRefusal::InvalidArgument, "a relative cache folder is refused");
+
+    // #718: the local-copy mode and its folder rules are preferences too.
+    values = port.preferences();
+    expect(preference(values, "mediaLocalCopies") ==
+                   mcp::McpPreferenceValue(std::string("automatic")) &&
+               preference(values, "mediaLocalCopyFolders") ==
+                   mcp::McpPreferenceValue(std::string{}),
+           "local copies are automatic with no folder rule by default");
+    const auto shots = (std::filesystem::temp_directory_path() / "bloom-shots").generic_string();
+    const auto rules = "keep:" + shots + "\nskip:" + shots + "/local";
+    result = port.setPreferences({{.key = "mediaLocalCopies", .value = std::string("never")},
+                                  {.key = "mediaLocalCopyFolders", .value = rules}});
+    const auto copies = ui::loadApplicationPreferences(QSettings{}).mediaLocalCopies;
+    expect(result.ok() && copies.preference == bloom::media::cache::LocalCopyPreference::Never &&
+               copies.folders.size() == 2 && copies.folders[0].keep && !copies.folders[1].keep,
+           "preferences.set saves the local-copy mode and folder rules");
+    expect(preference(port.preferences(), "mediaLocalCopyFolders") ==
+               mcp::McpPreferenceValue(rules),
+           "preferences.get reads the folder rules back");
+    result = port.setPreferences({{.key = "mediaLocalCopies", .value = std::string("sometimes")}});
+    expect(result.refusal == McpUiRefusal::InvalidArgument, "an unknown local-copy mode is refused");
+    result = port.setPreferences(
+        {{.key = "mediaLocalCopyFolders", .value = std::string("keep:relative/folder")}});
+    expect(result.refusal == McpUiRefusal::InvalidArgument &&
+               ui::loadApplicationPreferences(QSettings{}).mediaLocalCopies.folders.size() == 2,
+           "a relative folder rule is refused and changes nothing");
+    result = port.setPreferences({{.key = "mediaLocalCopies", .value = std::string("automatic")},
+                                  {.key = "mediaLocalCopyFolders", .value = std::string{}}});
+    expect(result.ok() && ui::loadApplicationPreferences(QSettings{}).mediaLocalCopies ==
+                              bloom::media::cache::LocalCopyPolicy{},
+           "automatic and an empty text restore the defaults");
 }
 
 // #579 and #603: the two opt-in agent routes are off by default, preferences.set cannot turn them

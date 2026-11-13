@@ -27,6 +27,8 @@ struct AssetInterpretationChange final {
     std::optional<std::optional<core::PixelAspectRatio>> pixelAspect;
     std::optional<std::uint32_t> loopCount;
     std::optional<document::AssetMissingFrames> missingFrames;
+    // #718: the asset's override of "Keep local copies of source media".
+    std::optional<document::AssetLocalCopies> localCopies;
     // A still's duration (absent inside: the composition's length).
     std::optional<std::optional<core::RationalTime>> stillDuration;
     // Input color: the legacy choice and the exact OCIO id, with SetAssetInputColor's rule (an id

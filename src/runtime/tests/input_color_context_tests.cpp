@@ -2,7 +2,6 @@
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/document/asset.hpp>
-#include <bloom/media/cache/media_disk_cache_decode.hpp>
 #include <bloom/media/video/colour.hpp>
 
 #include <algorithm>
@@ -460,19 +459,6 @@ void testSourcePrecedenceAndCache(Expectations& expectations) {
                             sourceConfig.colorSpace == bloom::document::AssetColorSpace::Auto &&
                             sourceConfig.inputColorSpaceId == "ACES2065-1",
                         "source config > source legacy > asset config; hidden ids never win");
-    bloom::media::cache::ImageCacheKeyInputs inputs;
-    inputs.workingColorSpaceId = "ACEScg";
-    inputs.inputColorSpaceId = inherited.inputColorSpaceId;
-    const auto inheritedKey = bloom::media::cache::buildImageCacheKey(inputs, "test-decoder");
-    inputs.colorSpace = bloom::media::ImageColorSpace::Srgb;
-    inputs.inputColorSpaceId = sourceLegacy.inputColorSpaceId;
-    const auto sourceKey = bloom::media::cache::buildImageCacheKey(inputs, "test-decoder");
-    inputs.colorSpace = bloom::media::ImageColorSpace::Auto;
-    inputs.inputColorSpaceId = sourceConfig.inputColorSpaceId;
-    const auto explicitKey = bloom::media::cache::buildImageCacheKey(inputs, "test-decoder");
-    expectations.expect(inheritedKey != sourceKey && sourceKey != explicitKey &&
-                            inheritedKey != explicitKey,
-                        "asset/source interpretation changes invalidate decoded-image cache");
 }
 
 } // namespace

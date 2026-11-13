@@ -211,9 +211,9 @@ bool trueFlag(const JsonValue& node, DecodeState& state, const std::string& path
 }
 // #381: the optional Interpret Footage members after alphaAssociation, each present
 // only when it differs from its default and always in this order.
-constexpr std::array<std::string_view, 11> kFootageInterpretationKeys{
-    "frameRate",   "startTimecode", "alphaMode", "invertAlpha",   "matteColor",   "fieldOrder",
-    "deinterlace", "pixelAspect",   "loopCount", "missingFrames", "stillDuration"};
+constexpr std::array<std::string_view, 12> kFootageInterpretationKeys{
+    "frameRate",   "startTimecode", "alphaMode", "invertAlpha",   "matteColor",    "fieldOrder",
+    "deinterlace", "pixelAspect",   "loopCount", "missingFrames", "stillDuration", "localCopies"};
 bool footageInterpretation(const JsonValue& node, const std::span<const JsonValue* const> values,
                            const std::span<const std::string_view> keys, DecodeState& state,
                            const std::string& path, document::AssetInterpretation& out) {
@@ -300,6 +300,12 @@ bool footageInterpretation(const JsonValue& node, const std::span<const JsonValu
             if (!decodeRationalTimeValue(value, state, path, duration))
                 return false;
             out.stillDuration = duration;
+        } else if (key == "localCopies") {
+            // #718: absent is Automatic; the member is written only for Always and Never.
+            const auto copies = choice({"always", "never"});
+            if (copies < 0)
+                return false;
+            out.localCopies = static_cast<AssetLocalCopies>(copies);
         }
     }
     (void)node;

@@ -8,12 +8,15 @@
 #include "assets_editor_internal.hpp"
 #include <QAbstractItemView>
 #include <QEvent>
+#include <QHelpEvent>
 #include <QHeaderView>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QTreeView>
 #include <algorithm>
+#include <bloom/ui/asset_controller.hpp>
+#include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/painting.hpp>
@@ -169,6 +172,23 @@ bool AssetTree::viewportEvent(QEvent* event) {
     case QEvent::Leave:
         setHoverRow({});
         break;
+    case QEvent::ToolTip: {
+        // #718: the cached state changes while the row stands still, so the storage line is
+        // read when the tooltip is about to show (an in-memory lookup).
+        auto* item = itemAt(static_cast<QHelpEvent*>(event)->pos());
+        const auto* controller = session_.assetController();
+        if (item != nullptr && controller != nullptr && item->data(0, kAssetRole).isValid() &&
+            item->data(0, kBaseToolTipRole).isValid()) {
+            auto text = item->data(0, kBaseToolTipRole).toString();
+            const auto storage = controller->sourceStorageText(
+                document::AssetId::fromRaw(item->data(0, kAssetRole).toULongLong()));
+            if (!storage.isEmpty())
+                text += QStringLiteral("\n") + tr("Storage: %1").arg(storage);
+            if (item->toolTip(NameColumn) != text)
+                item->setToolTip(NameColumn, text);
+        }
+        break;
+    }
     default:
         break;
     }

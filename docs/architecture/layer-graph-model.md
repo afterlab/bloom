@@ -1479,8 +1479,10 @@ the card and in Properties, without evaluation.
 Source cards carry no preview (task N1): the AssetController prepares only the Assets panel's
 per-asset proxies, so neither a snapshot change nor a playhead move decodes a frame for a node
 card. The playhead is not connected to the controller at all: playback ticks and scrubs start no
-job, probe no file and hash nothing (bug #401); source freshness is checked on every snapshot and
-composition change instead. The Node editor follows the playhead the same way: a time change
+job, probe no file and hash nothing (bug #401). The proxy job runs again only when the asset set,
+an interpretation, the color setup or the frame rate changes, and after a footage verification
+pass; any other edit starts no job and looks at no file (#718). A run checks its in-memory proxy
+first and probes each file by metadata, reading only a file whose identity changed. The Node editor follows the playhead the same way: a time change
 reaches only the cards with an animated, driven or otherwise non-constant parameter, only where a
 view shows them (an off-screen card catches up when the view reaches it), coalesced into one
 refresh per display frame, never while the panel is hidden, and never rebuilding a selector's

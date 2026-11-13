@@ -1,6 +1,7 @@
 #include "asset_data_thumbnail.hpp"
 #include "asset_thumbnail_display.hpp"
 #include "asset_thumbnail_interpretation.hpp"
+#include "asset_thumbnail_probe_memo.hpp"
 #include "colour_space_names.hpp"
 #include "footage_verification.hpp"
 #include "import_options_pane.hpp"
@@ -13,19 +14,23 @@
 #include <QUrl>
 #include <QUuid>
 #include <algorithm>
-#include <cctype>
 #include <array>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
+#include <bloom/commands/layer_drop_operations.hpp>
+#include <bloom/commands/node_editor_operations.hpp>
 #include <bloom/commands/project_item_operations.hpp>
+#include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/file_uri.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/media/audio/audio.hpp>
-#include <bloom/media/cache/media_disk_cache_decode.hpp>
+#include <bloom/media/cache/source_mirror.hpp>
 #include <bloom/media/image.hpp>
+#include <bloom/media/svg_scene.hpp>
 #include <bloom/media/video/audio.hpp>
 #include <bloom/media/video/colour.hpp>
 #include <bloom/media/video/session.hpp>
@@ -41,17 +46,12 @@
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <bloom/runtime/video_asset.hpp>
 #include <bloom/ui/application_preferences.hpp>
-#include <bloom/commands/svg_import_operations.hpp>
-#include <bloom/document/vector_artwork_nodes.hpp>
-#include <bloom/commands/node_editor_operations.hpp>
-#include <bloom/commands/project_item_operations.hpp>
-#include <bloom/commands/layer_drop_operations.hpp>
-#include <bloom/media/svg_scene.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/file_chooser.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -65,14 +65,16 @@ namespace {
 // The media formats Import and Relink offer.
 [[nodiscard]] QString mediaFileFilter() {
     return QObject::tr(
-        "Media (*.cube *.clf *.spi1d *.spi3d *.svg *.SVG *.png *.jpg *.jpeg *.exr *.tif *.tiff *.dpx *.wav "
+        "Media (*.cube *.clf *.spi1d *.spi3d *.svg *.SVG *.png *.jpg *.jpeg *.exr *.tif *.tiff "
+        "*.dpx *.wav "
         "*.mp3 *.mp4 *.mov *.mkv *.webm *.mxf *.m4v *.mts *.m2ts *.ts *.PNG *.JPG *.JPEG *.EXR "
         "*.TIF *.TIFF *.DPX *.WAV *.MP3 *.MP4 *.MOV *.MKV *.WEBM *.MXF)");
 }
 [[nodiscard]] bool isSvgFile(const std::filesystem::path& path) {
     auto extension = path.extension().string();
-    std::ranges::transform(extension, extension.begin(),
-                           [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::ranges::transform(extension, extension.begin(), [](const unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
     return extension == ".svg";
 }
 // CACHEFIX-1 proxy/audio caps. The proxy cache keeps its historic 512-entry bound and adds the
@@ -154,9 +156,9 @@ struct AudioStorageClaim final {
     std::uint64_t scratchBytes = 0;
 };
 
-[[nodiscard]] std::optional<AudioStorageClaim>
-windowedAudioStorageClaim(const media::audio::AudioProbe& probe,
-                          const std::size_t window = media::audio::AudioStream::kWindowFrames) noexcept {
+[[nodiscard]] std::optional<AudioStorageClaim> windowedAudioStorageClaim(
+    const media::audio::AudioProbe& probe,
+    const std::size_t window = media::audio::AudioStream::kWindowFrames) noexcept {
     constexpr std::uint64_t decoderAllowance = 256U * 1024U;
     const auto channels = static_cast<std::uint64_t>(probe.channels);
     if (probe.frames == 0 || channels == 0 ||
@@ -246,8 +248,16 @@ struct ThumbnailSelection {
     std::filesystem::path path;
     // The source identity the keys are made from (a stamped member's provisional identity, #473).
     core::Sha256Digest digest;
-    // The SHA-256 of the bytes the probe verified, which every decode below must read again.
+    // The digest of the probed revision (the recorded digest while only its identity vouches).
     core::Sha256Digest fileDigest;
+    // #718: the source revision this run read (through the local mirror), when it read one. A
+    // run that finds the probe in its memo and the thumbnail in memory reads nothing.
+    std::shared_ptr<const media::ImageSourceRevision> revision;
+    // What a capture of the source is checked against: the recorded digest and, for a member
+    // import stamped without reading it (#473), its stamp.
+    std::optional<core::Sha256Digest> recordedDigest;
+    std::optional<media::ImageSourceStamp> stamp;
+    platform::SourceStoreAccess store{};
     media::ImageInterpretation interpretation;
     std::shared_ptr<const color::CpuColorSpaceProcessor> inputProcessor;
     std::string inputColorSpaceName;
@@ -256,11 +266,6 @@ struct ThumbnailSelection {
     core::Sha256Digest configRevision;
     bool inputColorSpaceAutomatic = false;
     std::string cacheKey;
-    // The same disk-cache key format image_source.cpp's selectImageSource() builds (see
-    // media::cache::buildImageCacheKey()): asset digest + member frame + interpretation + input/
-    // working colour-space ids + config revision + decoder identity, so a proxy decode here and a
-    // full evaluator decode of the same source share one disk entry.
-    std::string diskCacheKey;
     bool available = false;
     // The verified source bytes are present (a false `available` beside it is a colour or
     // configuration refusal, not a missing file).
@@ -302,19 +307,75 @@ struct ThumbnailSelection {
     return total;
 }
 
+// #718: every file of a source resolved to its path, and the storage that holds the first. One
+// blocking look at the volume the first time it is seen; the worker's job.
+struct SourceFiles final {
+    std::optional<platform::StorageVolume> storage;
+    std::shared_ptr<const std::vector<std::filesystem::path>> paths;
+};
+[[nodiscard]] SourceFiles sourceFiles(const document::AssetRecord& asset,
+                                      const std::filesystem::path& directory,
+                                      const runtime::TaskContext& context) {
+    auto paths = std::make_shared<std::vector<std::filesystem::path>>();
+    const auto add = [&](const document::AssetLocator& locator) {
+        if (locator.kind == "file" && !locator.path.empty() && locator.portability != "builtin")
+            paths->push_back(media::resolveImagePath(locator.path, locator.relinkHint, directory));
+    };
+    if (asset.kind != document::AssetKind::Sequence || asset.manifest.members.empty())
+        add(asset.locator);
+    else
+        for (const auto& member : asset.manifest.members) {
+            if (context.isCancellationRequested())
+                return {};
+            add(member.locator);
+        }
+    if (paths->empty())
+        return {};
+    const auto storage = platform::storageVolume(paths->front());
+    return {storage.volume ? std::optional(storage) : std::nullopt, std::move(paths)};
+}
+
+// The asset's "Keep local copies" choice as the source store's override.
+platform::LocalCopyOverride localCopyOverride(const document::AssetInterpretation& value) {
+    return value.localCopies == document::AssetLocalCopies::Always
+               ? platform::LocalCopyOverride::Always
+           : value.localCopies == document::AssetLocalCopies::Never
+               ? platform::LocalCopyOverride::Never
+               : platform::LocalCopyOverride::Inherit;
+}
+
+// Reads the selection's source into a revision once, through the local mirror: the mirror's
+// bytes when it holds the file under its current identity, else the source itself, which the
+// mirror then keeps in the background (#718).
+const media::ImageSourceRevision* thumbnailRevision(ThumbnailSelection& selected,
+                                                    const std::function<bool()>& cancel) {
+    if (!selected.revision) {
+        auto captured = media::captureImageSourceRevision(
+            selected.path, media::kMaxImageStorageBytes, cancel, selected.recordedDigest,
+            selected.stamp, selected.store);
+        if (captured.value && *captured.value)
+            selected.revision = std::move(*captured.value);
+    }
+    return selected.revision.get();
+}
+
 // UI-only frame projection of the Image source contract. Use the public exact frame mapping;
 // runtime implementation headers are deliberately outside this module's boundary.
 ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
                                    core::RationalTime time, document::FrameRate rate,
                                    const std::filesystem::path& directory,
                                    const runtime::CancellationToken& cancel,
-                                   const runtime::EvaluationColorIntent& colorIntent) {
+                                   const runtime::EvaluationColorIntent& colorIntent,
+                                   platform::SourceStore* const store,
+                                   detail::ThumbnailProbeMemo& probes) {
     ThumbnailSelection selected;
     if (!source.asset)
         return selected;
     const auto& asset = *source.asset;
     const auto* locator = &asset.locator;
     selected.digest = asset.contentDigest;
+    selected.recordedDigest = asset.contentDigest;
+    selected.store = {store, localCopyOverride(asset.interpretation)};
     std::int64_t memberFrame = 0;
     std::optional<media::ImageSourceStamp> stamp;
     if (asset.kind == document::AssetKind::Sequence) {
@@ -334,6 +395,7 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
         }
         locator = &frame.member->locator;
         selected.digest = document::sequenceMemberIdentity(*frame.member);
+        selected.recordedDigest = frame.member->contentDigest;
         if (frame.member->stamp)
             stamp = media::ImageSourceStamp{frame.member->stamp->size,
                                             frame.member->stamp->modifiedNanoseconds};
@@ -352,15 +414,29 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
         : mode != document::AssetAlphaMode::Guess ? media::ImageAlphaAssociation::Straight
         : source.premultiply                      ? media::ImageAlphaAssociation::Straight
                                                   : media::ImageAlphaAssociation::Premultiplied;
-    // #473: a member import stamped without reading it is read here first, and only while its
-    // file keeps the stamp import listed, before and after the probe.
-    const auto stampedBefore = stamp ? media::observeImageSourceStamp(selected.path) : std::nullopt;
-    const auto probe =
-        media::probeImage(selected.path, [&] { return cancel.isCancellationRequested(); });
-    selected.available =
-        probe.value &&
-        (stamp ? stampedBefore == stamp && media::observeImageSourceStamp(selected.path) == stamp
-               : probe.value->contentDigest == selected.digest);
+    // #718: the probe is by metadata. One identity observation of the file finds the header
+    // probe this worker made when it last read the file; only a file it has not seen under its
+    // current identity is read, once, through the local mirror, and that read is the revision the
+    // thumbnail is then decoded from. A stamped member (#473) is accepted only while its file
+    // carries the stamp import listed; any other file must hold the recorded digest, which the
+    // capture checks as the renderer's does.
+    selected.stamp = stamp;
+    const auto cancelled = [&] { return cancel.isCancellationRequested(); };
+    const auto identity = platform::observeFileIdentity(selected.path);
+    struct Probed final {
+        std::optional<media::ImageProbe> value;
+    } probe;
+    if (identity && (!stamp || media::ImageSourceStamp{identity->size,
+                                                       identity->modifiedNanoseconds} == *stamp))
+        probe.value = probes.find(selected.path, *identity);
+    if (!probe.value && identity) {
+        if (const auto* revision = thumbnailRevision(selected, cancelled)) {
+            probe.value = revision->probe();
+            if (revision->sourceIdentity())
+                probes.record(selected.path, *revision->sourceIdentity(), revision->probe());
+        }
+    }
+    selected.available = probe.value && (stamp || probe.value->contentDigest == selected.digest);
     if (selected.available)
         selected.fileDigest = probe.value->contentDigest;
     selected.sourcePresent = selected.available;
@@ -419,26 +495,16 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
     selected.cacheKey += ":" + synthesized;
     if (!selected.footagePass.empty())
         selected.cacheKey += ":pass:" + selected.footagePass;
-    media::cache::ImageCacheKeyInputs diskInputs;
-    diskInputs.contentDigest = selected.digest;
-    diskInputs.memberFrame = memberFrame;
-    diskInputs.colorSpace = selected.interpretation.colorSpace;
-    diskInputs.inputColorSpaceId = selected.interpretation.inputColorSpaceId;
-    diskInputs.workingColorSpaceId = selected.workingColorSpaceId;
-    diskInputs.alphaAssociation = selected.interpretation.alphaAssociation;
-    diskInputs.configDigest = selected.configRevision;
-    diskInputs.synthesizedColorSpaceIdentity = synthesized;
-    selected.diskCacheKey =
-        media::cache::buildImageCacheKey(diskInputs, media::cache::kImageDecoderIdentity);
     return selected;
 }
 } // namespace
 AssetController::AssetController(CompositionSession& session, ProjectHost& host,
                                  runtime::TaskScheduler& scheduler, TaskUiBridge& bridge,
-                                 media::cache::MediaDiskCache* mediaDiskCache, QObject* parent,
+                                 media::cache::SourceMirror* mediaDiskCache, QObject* parent,
                                  AudioProcessingAdmission audioAdmission)
     : QObject(parent), session_(session), host_(host), scheduler_(scheduler), bridge_(bridge),
-      mediaDiskCache_(mediaDiskCache), audioAdmission_(std::move(audioAdmission)) {
+      mediaDiskCache_(mediaDiskCache), audioAdmission_(std::move(audioAdmission)),
+      thumbnailProbes_(std::make_shared<detail::ThumbnailProbeMemo>()) {
     auto& ledger = runtime::processMemoryBudgetLedger();
     ledger.registerCache(
         &proxyCacheBytes_, kProxyCacheByteCapacity, [this] { return proxyCacheBytes_; },
@@ -491,9 +557,8 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
     connect(&bridge_, &TaskUiBridge::resultsAvailable, this, &AssetController::poll);
     connect(&session_, &CompositionSession::snapshotChanged, this, &AssetController::refresh);
     // The playhead is deliberately not connected (task N1, item 2; bug #401). Source cards carry
-    // no per-node preview, and source freshness is checked on every snapshot and composition
-    // change (refresh()), so a playback tick or a scrub starts no job, probes no file and hashes
-    // nothing here.
+    // no per-node preview, so a playback tick or a scrub starts no job, probes no file and hashes
+    // nothing here. refresh() itself starts a job only when the thumbnail inputs changed (#718).
     connect(&session_, &CompositionSession::compositionChanged, this, &AssetController::refresh);
     connect(&host_, &ProjectHost::sessionReplaced, this, [this] {
         dragToken_ = QUuid::createUuid().toByteArray();
@@ -563,6 +628,8 @@ void AssetController::setCachePurgeGate(const bool gated) {
         return;
     cachePurgeGate_ = gated;
     if (gated) {
+        // A purge forgets what the thumbnail worker learned, so the next run reads again.
+        thumbnailProbes_->clear();
         ++contentGeneration_;
         assetsDirty_ = true;
         previewDirty_ = true;
@@ -687,9 +754,8 @@ void AssetController::requestImageParts(const document::AssetId id) {
                 return Result::cancelled();
             const auto path = media::resolveImagePath(locator.path, locator.relinkHint, base);
             const auto stampedBefore = stamp ? media::observeImageSourceStamp(path) : std::nullopt;
-            auto probe = media::probeImage(path, [&context] {
-                return context.isCancellationRequested();
-            });
+            auto probe =
+                media::probeImage(path, [&context] { return context.isCancellationRequested(); });
             if (context.isCancellationRequested())
                 return Result::cancelled();
             auto result = std::make_shared<ImageParts>();
@@ -734,6 +800,75 @@ std::optional<std::uint64_t> AssetController::fileSize(const document::AssetId i
     const auto found = previews_.find(id);
     return found == previews_.end() || found->second.missing ? std::nullopt
                                                              : found->second.fileBytes;
+}
+QString AssetController::sourceStorageText(const document::AssetId id) const {
+    const auto found = previews_.find(id);
+    if (found == previews_.end() || found->second.missing || !found->second.storage ||
+        !found->second.storage->volume || !found->second.sourcePaths ||
+        found->second.sourcePaths->empty())
+        return {};
+    QString place;
+    switch (found->second.storage->storageClass) {
+    case platform::StorageClass::Network:
+        place = tr("Network");
+        break;
+    case platform::StorageClass::SlowAttached:
+        place = tr("Slow attached");
+        break;
+    case platform::StorageClass::FastLocal:
+        place = tr("Fast local");
+        break;
+    case platform::StorageClass::Unknown:
+        place = tr("Unknown storage");
+        break;
+    }
+    if (mediaDiskCache_ == nullptr || !mediaDiskCache_->enabled())
+        return tr("%1 · disk cache off").arg(place);
+    const auto& paths = *found->second.sourcePaths;
+    std::size_t cached = 0;
+    for (const auto& path : paths)
+        switch (mediaDiskCache_->localCopyState(path)) {
+        case media::cache::LocalCopyState::Unknown:
+            return tr("%1 · disk cache starting").arg(place);
+        case media::cache::LocalCopyState::Cached:
+        case media::cache::LocalCopyState::Partial:
+            ++cached;
+            break;
+        case media::cache::LocalCopyState::NotCached:
+            break;
+        }
+    if (cached == paths.size())
+        return tr("%1 · local copy kept").arg(place);
+    if (cached != 0)
+        return tr("%1 · %2 of %3 files copied locally")
+            .arg(place)
+            .arg(cached)
+            .arg(paths.size());
+    const auto* asset = session_.snapshot().project().findAsset(id);
+    const bool keeps =
+        asset != nullptr &&
+        mediaDiskCache_->keepsLocalCopy(paths.front(), *found->second.storage->volume,
+                                        localCopyOverride(asset->interpretation));
+    return keeps ? tr("%1 · no local copy yet").arg(place) : tr("%1 · read where it is").arg(place);
+}
+QStringList AssetController::sourceStorageSummary(const int limit) const {
+    QStringList lines;
+    int more = 0;
+    for (const auto& asset : session_.snapshot().project().assets()) {
+        if (lines.size() < limit) {
+            if (const auto text = sourceStorageText(asset.id); !text.isEmpty())
+                lines.push_back(tr("%1: %2").arg(QString::fromStdString(asset.name), text));
+            continue;
+        }
+        // Past the limit only the count matters: no cache lookup.
+        const auto found = previews_.find(asset.id);
+        if (found != previews_.end() && !found->second.missing && found->second.storage &&
+            found->second.sourcePaths && !found->second.sourcePaths->empty())
+            ++more;
+    }
+    if (more != 0)
+        lines.push_back(tr("and %1 more").arg(more));
+    return lines;
 }
 bool AssetController::dataOnly(document::AssetId id) const {
     const auto found = previews_.find(id);
@@ -930,7 +1065,8 @@ void AssetController::importFiles(const QStringList& paths,
     }
     // #642: the batch's SVG files import after its media, in the mode the artist chooses once.
     if (!svg.empty())
-        chooseSvgImportMode(svg.size(), [this, svg, svgPlacement](const std::optional<commands::SvgImportMode> mode) {
+        chooseSvgImportMode(svg.size(), [this, svg, svgPlacement](
+                                            const std::optional<commands::SvgImportMode> mode) {
             if (!mode)
                 return;
             for (const auto& path : svg)
@@ -945,7 +1081,8 @@ void AssetController::startNextSvg() {
         return;
     const auto next = pendingSvg_.front();
     pendingSvg_.erase(pendingSvg_.begin());
-    prepare({QString::fromStdU16String(next.path.u16string())}, {}, {}, {}, next.mode, next.placement);
+    prepare({QString::fromStdU16String(next.path.u16string())}, {}, {}, {}, next.mode,
+            next.placement);
 }
 void AssetController::chooseSvgImportMode(
     const std::size_t count, std::function<void(std::optional<commands::SvgImportMode>)> done) {
@@ -977,16 +1114,17 @@ void AssetController::chooseSvgImportMode(
         if (dialog->remember()) {
             QSettings settings;
             auto preferences = loadApplicationPreferences(settings);
-            preferences.importSvgMode = mode == commands::SvgImportMode::Shapes ? SvgImportChoice::Shapes
-                                                                                 : SvgImportChoice::Layer;
+            preferences.importSvgMode = mode == commands::SvgImportMode::Shapes
+                                            ? SvgImportChoice::Shapes
+                                            : SvgImportChoice::Layer;
             saveApplicationPreferences(settings, preferences);
         }
         done(mode);
     });
 }
-void AssetController::addToComposition(std::vector<commands::LayerDropItem> items,
-                                        commands::LayerDropPlacement placement,
-                                        std::function<void(const commands::CommandResult&)> committed) {
+void AssetController::addToComposition(
+    std::vector<commands::LayerDropItem> items, commands::LayerDropPlacement placement,
+    std::function<void(const commands::CommandResult&)> committed) {
     if (items.empty() || session_.composition() == nullptr)
         return;
     const auto composition = session_.compositionId();
@@ -1008,13 +1146,14 @@ void AssetController::addToComposition(std::vector<commands::LayerDropItem> item
             committed(result);
         return;
     }
-    startSvgPlacement(label, std::move(svg),
-                      [composition, items = std::move(items), placement](commands::SvgAssetSources&& sources) {
-                          auto drop = std::make_unique<commands::AddDroppedLayers>(composition, items, placement);
-                          drop->withSvgSources(std::move(sources));
-                          return std::unique_ptr<commands::Operation>(std::move(drop));
-                      },
-                      std::move(committed));
+    startSvgPlacement(
+        label, std::move(svg),
+        [composition, items = std::move(items), placement](commands::SvgAssetSources&& sources) {
+            auto drop = std::make_unique<commands::AddDroppedLayers>(composition, items, placement);
+            drop->withSvgSources(std::move(sources));
+            return std::unique_ptr<commands::Operation>(std::move(drop));
+        },
+        std::move(committed));
 }
 void AssetController::addAssetNode(const document::AssetId asset, const document::Vec2d position,
                                    std::function<void(const commands::CommandResult&)> committed) {
@@ -1036,19 +1175,21 @@ void AssetController::addAssetNode(const document::AssetId asset, const document
             committed(result);
         return;
     }
-    startSvgPlacement(label, {asset},
-                      [composition, asset, position](commands::SvgAssetSources&& sources) {
-                          auto node = std::make_unique<commands::AddAssetSourceNode>(composition, asset, position);
-                          node->withSvgSources(std::move(sources));
-                          return std::unique_ptr<commands::Operation>(std::move(node));
-                      },
-                      std::move(committed));
+    startSvgPlacement(
+        label, {asset},
+        [composition, asset, position](commands::SvgAssetSources&& sources) {
+            auto node =
+                std::make_unique<commands::AddAssetSourceNode>(composition, asset, position);
+            node->withSvgSources(std::move(sources));
+            return std::unique_ptr<commands::Operation>(std::move(node));
+        },
+        std::move(committed));
 }
-void AssetController::createCompositionFromAssets(std::vector<document::AssetId> assets,
-                                                  std::optional<document::CompositionId> templateComposition,
-                                                  std::string fallbackName,
-                                                  std::optional<document::AssetFolderId> folder,
-                                                  std::function<void(const commands::CommandResult&)> committed) {
+void AssetController::createCompositionFromAssets(
+    std::vector<document::AssetId> assets,
+    std::optional<document::CompositionId> templateComposition, std::string fallbackName,
+    std::optional<document::AssetFolderId> folder,
+    std::function<void(const commands::CommandResult&)> committed) {
     if (assets.empty())
         return;
     std::vector<document::AssetId> svg;
@@ -1057,27 +1198,29 @@ void AssetController::createCompositionFromAssets(std::vector<document::AssetId>
             record != nullptr && document::isSvgSourceAsset(*record))
             svg.push_back(id);
     if (svg.empty()) {
-        commands::Transaction transaction("New Composition from Selection", session_.snapshot().revision());
-        transaction.emplace<commands::AddCompositionFromFootage>(std::move(assets), templateComposition,
-                                                                 std::move(fallbackName), folder);
+        commands::Transaction transaction("New Composition from Selection",
+                                          session_.snapshot().revision());
+        transaction.emplace<commands::AddCompositionFromFootage>(
+            std::move(assets), templateComposition, std::move(fallbackName), folder);
         const auto result = session_.executeTransaction(std::move(transaction));
         if (result.succeeded() && committed)
             committed(result);
         return;
     }
-    startSvgPlacement("New Composition from Selection", std::move(svg),
-                      [assets = std::move(assets), templateComposition, fallbackName = std::move(fallbackName),
-                       folder](commands::SvgAssetSources&& sources) {
-                          auto footage = std::make_unique<commands::AddCompositionFromFootage>(
-                              assets, templateComposition, fallbackName, folder);
-                          footage->withSvgSources(std::move(sources));
-                          return std::unique_ptr<commands::Operation>(std::move(footage));
-                      },
-                      std::move(committed));
+    startSvgPlacement(
+        "New Composition from Selection", std::move(svg),
+        [assets = std::move(assets), templateComposition, fallbackName = std::move(fallbackName),
+         folder](commands::SvgAssetSources&& sources) {
+            auto footage = std::make_unique<commands::AddCompositionFromFootage>(
+                assets, templateComposition, fallbackName, folder);
+            footage->withSvgSources(std::move(sources));
+            return std::unique_ptr<commands::Operation>(std::move(footage));
+        },
+        std::move(committed));
 }
-void AssetController::startSvgPlacement(std::string label, std::vector<document::AssetId> svgAssets,
-                                        SvgOperationBuilder build,
-                                        std::function<void(const commands::CommandResult&)> committed) {
+void AssetController::startSvgPlacement(
+    std::string label, std::vector<document::AssetId> svgAssets, SvgOperationBuilder build,
+    std::function<void(const commands::CommandResult&)> committed) {
     if (!host_.canSave()) {
         emit diagnostic(tr("Adding requires an idle, editable project"));
         return;
@@ -1089,75 +1232,76 @@ void AssetController::startSvgPlacement(std::string label, std::vector<document:
     // One question for the whole batch: the remembered answer, or the chooser. The count is read
     // before the list moves into the callback: the order of the two arguments is the compiler's.
     const auto svgAssetCount = svgAssets.size();
-    chooseSvgImportMode(svgAssetCount, [this, label = std::move(label),
-                                        svgAssets = std::move(svgAssets), build = std::move(build),
-                                        committed = std::move(committed)](
-                                           const std::optional<commands::SvgImportMode>
-                                               mode) mutable {
-        if (!mode)
-            return;
-        if (busy_ || !host_.canSave()) {
-            emit diagnostic(tr("Another import is still running; add these when it finishes"));
-            return;
-        }
-        base_ = session_.snapshot();
-        auto submission = scheduler_.submit<OperationHandle>(
-            runtime::TaskRequest(
-                "Add SVG to composition",
-                {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
-                runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
-            [snapshot = *base_, svgAssets, mode = *mode, build = std::move(build),
-             directory = baseDirectory()](runtime::TaskContext& context) {
-                commands::SvgAssetSources sources;
-                sources.mode = mode;
-                sources.projectDirectory = directory;
-                std::vector<runtime::TaskDiagnostic> refusals;
-                const auto cancel = [&context] { return context.isCancellationRequested(); };
-                for (const auto id : svgAssets) {
-                    const auto* record = snapshot.project().findAsset(id);
-                    const auto name = record != nullptr ? record->name : std::string{};
-                    context.reportProgress({.phase = "Reading SVG",
-                                            .subphase = name,
-                                            .completed = 0,
-                                            .total = std::nullopt});
-                    auto prepared = commands::prepareSvgAssetSource(
-                        snapshot.project(), id, directory, cancel, [&](const commands::SvgPreparePhase phase) {
-                            if (phase == commands::SvgPreparePhase::FindingFonts)
-                                context.reportProgress({.phase = "Finding fonts",
-                                                        .subphase = name,
-                                                        .completed = 0,
-                                                        .total = std::nullopt});
-                        });
-                    if (prepared.cancelled || context.isCancellationRequested())
-                        return runtime::TaskResult<OperationHandle>::cancelled();
-                    if (!prepared.source) {
-                        refusals.push_back({.code = "bloom.svg.add-refused",
-                                            .severity = runtime::DiagnosticSeverity::Error,
-                                            .summary = prepared.refusal,
-                                            .detail = prepared.refusal,
-                                            .suggestedAction = "Nothing was added."});
-                        continue;
+    chooseSvgImportMode(
+        svgAssetCount, [this, label = std::move(label), svgAssets = std::move(svgAssets),
+                        build = std::move(build), committed = std::move(committed)](
+                           const std::optional<commands::SvgImportMode> mode) mutable {
+            if (!mode)
+                return;
+            if (busy_ || !host_.canSave()) {
+                emit diagnostic(tr("Another import is still running; add these when it finishes"));
+                return;
+            }
+            base_ = session_.snapshot();
+            auto submission = scheduler_.submit<OperationHandle>(
+                runtime::TaskRequest("Add SVG to composition",
+                                     {.kind = runtime::TaskOwnerKind::Application,
+                                      .id = runtime::TaskOwnerId::fromRaw(1)},
+                                     runtime::TaskPriority::Foreground,
+                                     runtime::TaskExecutor::BlockingIo),
+                [snapshot = *base_, svgAssets, mode = *mode, build = std::move(build),
+                 directory = baseDirectory()](runtime::TaskContext& context) {
+                    commands::SvgAssetSources sources;
+                    sources.mode = mode;
+                    sources.projectDirectory = directory;
+                    std::vector<runtime::TaskDiagnostic> refusals;
+                    const auto cancel = [&context] { return context.isCancellationRequested(); };
+                    for (const auto id : svgAssets) {
+                        const auto* record = snapshot.project().findAsset(id);
+                        const auto name = record != nullptr ? record->name : std::string{};
+                        context.reportProgress({.phase = "Reading SVG",
+                                                .subphase = name,
+                                                .completed = 0,
+                                                .total = std::nullopt});
+                        auto prepared = commands::prepareSvgAssetSource(
+                            snapshot.project(), id, directory, cancel,
+                            [&](const commands::SvgPreparePhase phase) {
+                                if (phase == commands::SvgPreparePhase::FindingFonts)
+                                    context.reportProgress({.phase = "Finding fonts",
+                                                            .subphase = name,
+                                                            .completed = 0,
+                                                            .total = std::nullopt});
+                            });
+                        if (prepared.cancelled || context.isCancellationRequested())
+                            return runtime::TaskResult<OperationHandle>::cancelled();
+                        if (!prepared.source) {
+                            refusals.push_back({.code = "bloom.svg.add-refused",
+                                                .severity = runtime::DiagnosticSeverity::Error,
+                                                .summary = prepared.refusal,
+                                                .detail = prepared.refusal,
+                                                .suggestedAction = "Nothing was added."});
+                            continue;
+                        }
+                        sources.sources.emplace(id, std::move(prepared.source));
                     }
-                    sources.sources.emplace(id, std::move(prepared.source));
-                }
-                // One missing SVG refuses the whole add: nothing is added.
-                if (!refusals.empty())
-                    return runtime::TaskResult<OperationHandle>::failed(std::move(refusals));
-                auto result = std::make_shared<std::unique_ptr<commands::Operation>>();
-                *result = build(std::move(sources));
-                return runtime::TaskResult<OperationHandle>::succeeded(std::move(result), {});
-            });
-        if (!submission.accepted()) {
-            base_.reset();
-            emit diagnostic(tr("Adding could not be scheduled"));
-            return;
-        }
-        import_ = std::move(submission.handle);
-        svgPlacement_ = SvgPlacementJob{std::move(label), std::move(committed)};
-        busy_ = true;
-        bridge_.wake();
-        emit activityChanged();
-    });
+                    // One missing SVG refuses the whole add: nothing is added.
+                    if (!refusals.empty())
+                        return runtime::TaskResult<OperationHandle>::failed(std::move(refusals));
+                    auto result = std::make_shared<std::unique_ptr<commands::Operation>>();
+                    *result = build(std::move(sources));
+                    return runtime::TaskResult<OperationHandle>::succeeded(std::move(result), {});
+                });
+            if (!submission.accepted()) {
+                base_.reset();
+                emit diagnostic(tr("Adding could not be scheduled"));
+                return;
+            }
+            import_ = std::move(submission.handle);
+            svgPlacement_ = SvgPlacementJob{std::move(label), std::move(committed)};
+            busy_ = true;
+            bridge_.wake();
+            emit activityChanged();
+        });
 }
 void AssetController::finishSvgPlacement(runtime::TaskResult<OperationHandle>& result) {
     const auto job = std::exchange(svgPlacement_, std::nullopt);
@@ -1169,13 +1313,15 @@ void AssetController::finishSvgPlacement(runtime::TaskResult<OperationHandle>& r
             emit diagnostic(QString::fromStdString(issue.summary));
         return;
     }
-    if (result.state() != runtime::TaskState::Succeeded || !result.value().has_value() || !*result.value())
+    if (result.state() != runtime::TaskState::Succeeded || !result.value().has_value() ||
+        !*result.value())
         return;
     if (!host_.liveDocumentAndStack().first || !base_ ||
         base_->project().id() != session_.snapshot().project().id() ||
         base_->revision() != session_.snapshot().revision()) {
-        emit diagnostic(tr("The project changed while the SVG was being read, so nothing was added. "
-                           "Add it again."));
+        emit diagnostic(
+            tr("The project changed while the SVG was being read, so nothing was added. "
+               "Add it again."));
         return;
     }
     commands::Transaction transaction(job->label, base_->revision());
@@ -1187,7 +1333,8 @@ void AssetController::finishSvgPlacement(runtime::TaskResult<OperationHandle>& r
                             .arg(QString::fromStdString(job->label),
                                  executed.operationFailures.empty()
                                      ? QString{}
-                                     : QString::fromStdString(executed.operationFailures.front().issue.message)));
+                                     : QString::fromStdString(
+                                           executed.operationFailures.front().issue.message)));
         return;
     }
     constexpr std::size_t kListed = 12;
@@ -1199,7 +1346,8 @@ void AssetController::finishSvgPlacement(runtime::TaskResult<OperationHandle>& r
     if (job->committed)
         job->committed(executed);
 }
-void AssetController::breakApartSvg(const document::CompositionId composition, const document::LayerId layer) {
+void AssetController::breakApartSvg(const document::CompositionId composition,
+                                    const document::LayerId layer) {
     breakApartSvg(composition, std::vector<document::LayerId>{layer});
 }
 void AssetController::breakApartSvg(const document::CompositionId composition,
@@ -1209,7 +1357,8 @@ void AssetController::breakApartSvg(const document::CompositionId composition,
         return;
     }
     if (busy_) {
-        emit diagnostic(tr("Another import is still running; break the SVG apart when it finishes"));
+        emit diagnostic(
+            tr("Another import is still running; break the SVG apart when it finishes"));
         return;
     }
     const auto* held = session_.snapshot().project().findComposition(composition);
@@ -1217,7 +1366,8 @@ void AssetController::breakApartSvg(const document::CompositionId composition,
         return held == nullptr || commands::findLayerVectorArtwork(*held, layer) == nullptr;
     });
     if (layers.empty()) {
-        emit diagnostic(tr("This layer does not hold an SVG as one layer, so there is nothing to break apart"));
+        emit diagnostic(
+            tr("This layer does not hold an SVG as one layer, so there is nothing to break apart"));
         return;
     }
     base_ = session_.snapshot();
@@ -1254,29 +1404,37 @@ void AssetController::breakApartSvg(const document::CompositionId composition,
                           .summary = "The SVG could not be broken apart: " + diagnostic,
                           .detail = diagnostic,
                           .suggestedAction = "Nothing was changed."}});
-                auto operation = std::make_unique<commands::BreakApartSvgArtwork>(composition, layer);
+                auto operation =
+                    std::make_unique<commands::BreakApartSvgArtwork>(composition, layer);
                 operation->withPrepared(std::move(prepared));
                 each.push_back(std::move(operation));
-                // #642: one layer draws sharp at any scale; the shapes are resampled like any group.
+                // #642: one layer draws sharp at any scale; the shapes are resampled like any
+                // group.
                 const auto* found = snapshot.project().findComposition(composition);
                 if (found != nullptr && commands::breakApartMayResample(*found, layer)) {
                     const auto* boundary = found->graph().findLayer(layer);
-                    const auto name = boundary != nullptr ? boundary->name : std::string("The layer");
-                    notes.push_back({.code = "bloom.svg.break-apart-resampled",
-                                     .severity = runtime::DiagnosticSeverity::Warning,
-                                     .summary = "'" + name +
-                                                "' is scaled up or turned: as editable shapes it is resampled "
-                                                "like any group and may look softer than the one-layer SVG",
-                                     .detail = "A one-layer SVG draws from its vector geometry at any scale and "
-                                               "rotation. Broken apart, its group is resampled when the layer is "
-                                               "scaled past 100% or turned.",
-                                     .suggestedAction = "Undo to get the sharp one-layer SVG back."});
+                    const auto name =
+                        boundary != nullptr ? boundary->name : std::string("The layer");
+                    notes.push_back(
+                        {.code = "bloom.svg.break-apart-resampled",
+                         .severity = runtime::DiagnosticSeverity::Warning,
+                         .summary = "'" + name +
+                                    "' is scaled up or turned: as editable shapes it is resampled "
+                                    "like any group and may look softer than the one-layer SVG",
+                         .detail =
+                             "A one-layer SVG draws from its vector geometry at any scale and "
+                             "rotation. Broken apart, its group is resampled when the layer is "
+                             "scaled past 100% or turned.",
+                         .suggestedAction = "Undo to get the sharp one-layer SVG back."});
                 }
             }
             auto result = std::make_shared<std::unique_ptr<commands::Operation>>();
-            *result = each.size() == 1 ? std::unique_ptr<commands::Operation>(std::move(each.front()))
-                                       : std::make_unique<commands::BreakApartSvgArtworks>(composition, std::move(each));
-            return runtime::TaskResult<OperationHandle>::succeeded(std::move(result), std::move(notes));
+            *result = each.size() == 1
+                          ? std::unique_ptr<commands::Operation>(std::move(each.front()))
+                          : std::make_unique<commands::BreakApartSvgArtworks>(composition,
+                                                                              std::move(each));
+            return runtime::TaskResult<OperationHandle>::succeeded(std::move(result),
+                                                                   std::move(notes));
         });
     if (!submission.accepted()) {
         base_.reset();
@@ -1314,21 +1472,23 @@ void AssetController::finishBreakApart(runtime::TaskResult<OperationHandle>& res
         emitImportFailures(result.diagnostics());
         return;
     }
-    if (result.state() != runtime::TaskState::Succeeded || !result.value().has_value() || !*result.value())
+    if (result.state() != runtime::TaskState::Succeeded || !result.value().has_value() ||
+        !*result.value())
         return;
     if (!host_.liveDocumentAndStack().first || !base_ ||
         base_->project().id() != session_.snapshot().project().id() ||
         base_->revision() != session_.snapshot().revision()) {
-        emit diagnostic(tr("The project changed while the SVG was being read, so nothing was changed. "
-                           "Break it apart again."));
+        emit diagnostic(
+            tr("The project changed while the SVG was being read, so nothing was changed. "
+               "Break it apart again."));
         return;
     }
     commands::Transaction transaction("Break Apart SVG", base_->revision());
     if (!transaction.add(std::move(**result.value())))
         return;
     const auto executed = session_.executeTransaction(std::move(transaction));
-    // The job's own notes (a layer scaled up or turned is resampled) join the status line and stay in
-    // the job log; none of them stops the edit or asks anything.
+    // The job's own notes (a layer scaled up or turned is resampled) join the status line and stay
+    // in the job log; none of them stops the edit or asks anything.
     if (executed.succeeded())
         for (const auto& note : result.diagnostics())
             emit diagnostic(QString::fromStdString(note.summary));
@@ -1336,7 +1496,8 @@ void AssetController::finishBreakApart(runtime::TaskResult<OperationHandle>& res
         emit diagnostic(tr("Break Apart failed: %1")
                             .arg(executed.operationFailures.empty()
                                      ? QString{}
-                                     : QString::fromStdString(executed.operationFailures.front().issue.message)));
+                                     : QString::fromStdString(
+                                           executed.operationFailures.front().issue.message)));
         return;
     }
     constexpr std::size_t kListed = 12;
@@ -1396,7 +1557,8 @@ void AssetController::remove(document::AssetId id) {
 }
 void AssetController::prepare(const QStringList& paths, document::AssetId relinkId,
                               const std::optional<document::AssetFolderId> folder,
-                              commands::ImportOptions options, const commands::SvgImportMode svgMode,
+                              commands::ImportOptions options,
+                              const commands::SvgImportMode svgMode,
                               const std::optional<commands::LayerDropPlacement> svgPlacement) {
     if (!host_.canSave()) {
         emit diagnostic(tr("Media import requires an idle, editable project"));
@@ -1426,8 +1588,9 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
             "Import media",
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
-        [files = std::move(files), directory, relinkId, folder, shared, options, svgMode, svgPlacement,
-         compositionId = session_.compositionId(), hook = importProgressHook_](runtime::TaskContext& context) {
+        [files = std::move(files), directory, relinkId, folder, shared, options, svgMode,
+         svgPlacement, compositionId = session_.compositionId(),
+         hook = importProgressHook_](runtime::TaskContext& context) {
             auto result = std::make_shared<std::unique_ptr<commands::Operation>>();
             std::vector<runtime::TaskDiagnostic> warnings;
             auto cancel = [&] { return context.isCancellationRequested(); };
@@ -1470,10 +1633,11 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
                 auto read = commands::prepareSvgSource(
                     files.front(), stop, [&](const commands::SvgPreparePhase phase) {
                         if (phase == commands::SvgPreparePhase::FindingFonts)
-                            context.reportProgress({.phase = "Finding fonts",
-                                                    .subphase = std::string(name.begin(), name.end()),
-                                                    .completed = 0,
-                                                    .total = std::nullopt});
+                            context.reportProgress(
+                                {.phase = "Finding fonts",
+                                 .subphase = std::string(name.begin(), name.end()),
+                                 .completed = 0,
+                                 .total = std::nullopt});
                     });
                 if (read.cancelled() || context.isCancellationRequested() || stop())
                     return runtime::TaskResult<OperationHandle>::cancelled();
@@ -1489,8 +1653,8 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
                           .detail = read.diagnostic,
                           .suggestedAction = "Check the file; nothing was added."}});
                 }
-                // What the artwork keeps as it is, and what it cannot hold or approximates (a filter
-                // that is not applied, a dash pattern), stays listed by name on the job.
+                // What the artwork keeps as it is, and what it cannot hold or approximates (a
+                // filter that is not applied, a dash pattern), stays listed by name on the job.
                 for (const auto& warning : read.source->warnings)
                     warnings.push_back({.code = warning.code,
                                         .severity = runtime::DiagnosticSeverity::Warning,
@@ -1500,7 +1664,8 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
                 const auto stem = files.front().stem().u8string();
                 // #642: the mode the artist chose for this batch (or the remembered one).
                 auto artwork = std::make_unique<commands::AddSvgArtwork>(
-                    compositionId, read.source, std::string(stem.begin(), stem.end()), svgMode, true);
+                    compositionId, read.source, std::string(stem.begin(), stem.end()), svgMode,
+                    true);
                 artwork->withProjectDirectory(directory);
                 if (svgPlacement)
                     artwork->withPlacement(*svgPlacement);
@@ -1636,6 +1801,31 @@ void AssetController::refresh() {
             emit changed();
         }
     }
+    // #718: the thumbnail job depends on the asset set, the interpretations and the color setup
+    // only. An edit that leaves them alone (a layer move, a node change, a keyframe) starts no
+    // job, observes no file and reads nothing. A document shares its asset list between
+    // revisions that do not touch it, so the usual comparison is two pointers.
+    {
+        const auto& snapshot = session_.snapshot();
+        const auto assets = snapshot.project().assets();
+        const auto color = runtime::captureEvaluationColorIntent(session_.colorIntent());
+        const auto* composition = session_.composition();
+        const auto rate = composition ? composition->format().frameRate()
+                                      : document::FrameRate::framesPerSecond24();
+        auto directory = baseDirectory();
+        const bool sameAssets =
+            thumbnailInputs_ && ((thumbnailInputs_->assets.data() == assets.data() &&
+                                  thumbnailInputs_->assets.size() == assets.size()) ||
+                                 std::ranges::equal(thumbnailInputs_->assets, assets));
+        if (sameAssets && color && thumbnailInputs_->color == *color &&
+            thumbnailInputs_->rate == rate && thumbnailInputs_->directory == directory)
+            return;
+        if (color)
+            thumbnailInputs_ =
+                ThumbnailInputs{snapshot, assets, *color, rate, std::move(directory)};
+        else
+            thumbnailInputs_.reset();
+    }
     ++contentGeneration_;
     assetsDirty_ = true;
     previewDirty_ = true;
@@ -1690,7 +1880,9 @@ void AssetController::startThumbnails() {
              return buffers;
          }() : AudioBuffers{},
          cachedWaveforms = includeAssets ? waveforms_ : Waveforms{},
-         cachedPreviews = includeAssets ? previews_ : Previews{}, diskCache = mediaDiskCache_,
+         cachedPreviews = includeAssets ? previews_ : Previews{},
+         sourceStore = static_cast<platform::SourceStore*>(mediaDiskCache_),
+         probes = thumbnailProbes_,
          proxyOwner = &proxyCacheBytes_,
          audioOwner = &decodedAudioBytes_, proxyCounters = proxyCounters_,
          audioCounters = audioCounters_,
@@ -1751,8 +1943,10 @@ void AssetController::startThumbnails() {
             const auto decode = [&](const runtime::CompiledImageSource& source,
                                     const core::RationalTime sampleTime) {
                 Preview preview;
-                const auto selected = selectThumbnail(source, sampleTime, rate, directory,
-                                                      context.cancellation(), colorIntent);
+                auto selected = selectThumbnail(source, sampleTime, rate, directory,
+                                                context.cancellation(), colorIntent, sourceStore,
+                                                *probes);
+                const auto cancelled = [&] { return context.isCancellationRequested(); };
                 const auto aspect =
                     source.asset ? detail::thumbnailPixelAspectScale(*source.asset) : 1.0;
                 preview.key = selected.cacheKey + ':' + thumbnailDisplayIdentity + ":par:" +
@@ -1776,9 +1970,9 @@ void AssetController::startThumbnails() {
                         return preview;
                     }
                     proxyCounters->miss();
-                    preview.image = detail::dataChannelThumbnail(
-                        selected.path, selected.fileDigest, selected.part,
-                        [&] { return context.isCancellationRequested(); });
+                    if (const auto* revision = thumbnailRevision(selected, cancelled))
+                        preview.image =
+                            detail::dataChannelThumbnail(*revision, selected.part, cancelled);
                     if (!preview.image.isNull())
                         keepProxy(preview.key, preview.image);
                     return preview;
@@ -1800,23 +1994,22 @@ void AssetController::startThumbnails() {
                     return preview;
                 }
                 proxyCounters->miss();
-                // The same disk cache the evaluator writes to (media-io.md "Disk cache"): this
-                // whole lambda already runs on a BlockingIo worker thread, so a disk-cache write
-                // here is synchronous (writeAsync = false) -- there is no evaluation thread to
-                // avoid blocking.
-                // Interpret Footage's alpha reads the stored samples through the footage pass;
-                // the disk cache holds ordinary decodes only, as in the renderer.
-                const auto cancelled = [&] { return context.isCancellationRequested(); };
-                auto decoded =
-                    selected.footagePass.empty()
-                        ? media::cache::decodeThroughDiskCache(
-                              selected.path, selected.interpretation, selected.fileDigest,
-                              selected.diskCacheKey, diskCache, /*writeAsync=*/false, cancelled, {},
-                              media::kMaxImageStorageBytes, selected.inputProcessor)
-                        : detail::decodeInterpretedThumbnail(
-                              *source.asset, selected.path, selected.interpretation,
-                              selected.fileDigest, selected.firstRow, selected.inputProcessor.get(),
-                              cancelled);
+                // A thumbnail not in memory is decoded from the source revision: the one this
+                // run already read, or one read now through the local mirror (#718). Interpret
+                // Footage's alpha reads the stored samples through the footage pass.
+                const auto* revision = thumbnailRevision(selected, cancelled);
+                if (revision == nullptr) {
+                    preview.problem = "The image could not be read";
+                    return preview;
+                }
+                auto decoded = selected.footagePass.empty()
+                                   ? media::decodeImage(*revision, selected.interpretation,
+                                                        selected.inputProcessor, cancelled, {},
+                                                        media::kMaxImageStorageBytes)
+                                   : detail::decodeInterpretedThumbnail(
+                                         *source.asset, *revision, selected.interpretation,
+                                         selected.firstRow, selected.inputProcessor.get(),
+                                         cancelled);
                 if (!decoded.value.has_value())
                     preview.problem = decoded.diagnostic.empty() ? "The image could not be decoded"
                                                                  : decoded.diagnostic;
@@ -2345,6 +2538,12 @@ void AssetController::startThumbnails() {
                     if (const auto found = results->assets.find(asset.id);
                         found != results->assets.end() && !found->second.missing)
                         found->second.fileBytes = sourceFileBytes(asset, directory, context);
+                    if (const auto found = results->assets.find(asset.id);
+                        found != results->assets.end() && !found->second.missing) {
+                        auto files = sourceFiles(asset, directory, context);
+                        found->second.storage = files.storage;
+                        found->second.sourcePaths = std::move(files.paths);
+                    }
                     results->proxyBytes = trimProxyStorage(results->cache, results->assets,
                                                            proxyLimit(), *proxyCounters);
                     progress();
@@ -2414,7 +2613,8 @@ void AssetController::finishImport(runtime::TaskResult<OperationHandle>& result)
             }
             // Successful files commit as one undoable transaction; every skipped file is
             // reported with its own diagnostic.
-            const auto* svgImport = dynamic_cast<const commands::AddSvgArtwork*>((*result.value())->get());
+            const auto* svgImport =
+                dynamic_cast<const commands::AddSvgArtwork*>((*result.value())->get());
             const bool svgArtwork = svgImport != nullptr;
             const bool placedSvg = svgImport != nullptr && svgImport->placed();
             commands::Transaction transaction(svgArtwork ? "Import SVG" : "Import Assets",
@@ -2438,15 +2638,19 @@ void AssetController::finishImport(runtime::TaskResult<OperationHandle>& result)
                 if (placedSvg && executed.succeeded())
                     for (const auto& output : executed.outputs)
                         if (output.output.name == "layer")
-                            if (const auto* layer = std::get_if<document::LayerId>(&output.output.id))
+                            if (const auto* layer =
+                                    std::get_if<document::LayerId>(&output.output.id))
                                 session_.selectLayer(*layer, false);
                 if (svgArtwork) {
                     constexpr std::size_t kListed = 12;
-                    for (std::size_t index = 0; index < executed.warnings.size() && index < kListed; ++index)
-                        emit diagnostic(QString::fromStdString(executed.warnings[index].issue.message));
+                    for (std::size_t index = 0; index < executed.warnings.size() && index < kListed;
+                         ++index)
+                        emit diagnostic(
+                            QString::fromStdString(executed.warnings[index].issue.message));
                     if (executed.warnings.size() > kListed)
-                        emit diagnostic(tr("%1 more notes about this SVG are in the operation's warnings")
-                                            .arg(executed.warnings.size() - kListed));
+                        emit diagnostic(
+                            tr("%1 more notes about this SVG are in the operation's warnings")
+                                .arg(executed.warnings.size() - kListed));
                 }
                 // A file the project already holds (same file, same bytes) is not added twice.
                 for (std::size_t index = 0; index < preparedPaths.size(); ++index)
@@ -2482,7 +2686,6 @@ void AssetController::finishImport(runtime::TaskResult<OperationHandle>& result)
         report.followUp = followUp(report.assets);
     if (shared)
         emit importFinished(report);
-
 }
 struct AssetController::FootageVerificationResult final {
     FootageVerificationReport report;
@@ -2556,6 +2759,11 @@ void AssetController::finishFootageVerification() {
     const auto& report = (*result->value())->report;
     lastVerification_ = FootageVerificationSummary{
         .files = report.files, .hashed = report.hashed, .changed = report.changed};
+    // #718: an edit that leaves the assets alone no longer looks at the files, so a finished
+    // verification pass is what notices a file that went missing or was replaced: the thumbnail
+    // job runs once more (one metadata probe per asset; only a changed file is read).
+    thumbnailInputs_.reset();
+    refresh();
     // Changed bytes: nothing rendered from them may stay cached. The memo now holds their actual
     // digest, so the next decode reports the relink diagnostic.
     if (report.changed > 0)
@@ -2568,8 +2776,7 @@ void AssetController::poll() {
             ++task;
             continue;
         }
-        if (result->state() == runtime::TaskState::Succeeded && result->value() &&
-            *result->value())
+        if (result->state() == runtime::TaskState::Succeeded && result->value() && *result->value())
             imageParts_[task->first] = std::move(**result->value());
         task = imagePartTasks_.erase(task);
         emit changed();
@@ -2643,7 +2850,12 @@ void AssetController::poll() {
                                right.second.inputColorSpaceAutomatic &&
                            left.second.inputColorSpaceAssumed ==
                                right.second.inputColorSpaceAssumed &&
-                           left.second.fileBytes == right.second.fileBytes;
+                           left.second.fileBytes == right.second.fileBytes &&
+                           left.second.storage.has_value() == right.second.storage.has_value() &&
+                           (!left.second.storage ||
+                            (left.second.storage->storageClass ==
+                                 right.second.storage->storageClass &&
+                             left.second.storage->volume == right.second.storage->volume));
                 };
                 const auto& prepared = **result->value();
                 const bool assetsChanged =

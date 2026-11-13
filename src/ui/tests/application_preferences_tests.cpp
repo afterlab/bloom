@@ -5,6 +5,7 @@
 #include <QString>
 #include <QTemporaryDir>
 
+#include <filesystem>
 #include <array>
 #include <cmath>
 #include <iostream>
@@ -63,6 +64,12 @@ void testFullRoundTrip(Expectations& check) {
     prefs.mediaDiskCacheEnabled = false;
     prefs.mediaDiskCacheDirectory = directory.filePath(QStringLiteral("media-cache")).toStdString();
     prefs.mediaDiskCacheBudgetBytes = 2ULL * 1024 * 1024 * 1024;
+    // #718: the local-copy mode and its folder rules.
+    prefs.mediaLocalCopies.preference = bloom::media::cache::LocalCopyPreference::Never;
+    prefs.mediaLocalCopies.folders = {
+        {std::filesystem::path(directory.filePath(QStringLiteral("shots")).toStdString()), true},
+        {std::filesystem::path(directory.filePath(QStringLiteral("shots/local")).toStdString()),
+         false}};
     prefs.exportWorkerMemoryCapBytes = 3ULL * 1024 * 1024 * 1024;
     prefs.exportWorkerThreads = 8;
     prefs.timelineTimeFormat = ui::TimelineTimeFormat::Timecode;

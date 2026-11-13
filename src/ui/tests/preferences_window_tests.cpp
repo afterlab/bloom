@@ -597,6 +597,63 @@ void testLargeBudgetPreferencesRemainExactOnApply(Expectations& check) {
                  "an unrelated Apply preserves large saved byte counts exactly");
 }
 
+// #718: Keep local copies of source media, and its folder rules.
+void testLocalCopyPreferences(Expectations& check) {
+    using bloom::media::cache::LocalCopyPreference;
+    ui::PreferencesWindow window(owner(), samplePreferences());
+    auto* mode = window.findChild<ui::kit::KDropdown*>(
+        QStringLiteral("preferencesMediaLocalCopiesDropdown"));
+    auto* list = window.findChild<QWidget*>(QStringLiteral("preferencesMediaLocalCopyFolders"));
+    check.expect(mode && mode->count() == 3 && mode->currentText() == QStringLiteral("Automatic") &&
+                     mode->accessibleName() == QStringLiteral("Keep local copies of source media"),
+                 "local copies offer Automatic, Always and Never, Automatic by default");
+    check.expect(list && !list->isVisibleTo(&window) && window.findChild<QAbstractButton*>(
+                             QStringLiteral("preferencesMediaLocalCopyFolderAdd")) &&
+                     !window.findChild<QWidget*>(
+                         QStringLiteral("preferencesMediaLocalCopyFolderRow0")),
+                 "the folder list starts empty beside its Add Folder button");
+    if (!mode || !list)
+        return;
+    mode->chooseIndex(mode->findData(static_cast<int>(LocalCopyPreference::Never)));
+    const auto shots = QDir::temp().filePath(QStringLiteral("bloom-preferences-shots"));
+    window.addLocalCopyFolder(shots);
+    window.addLocalCopyFolder(shots);
+    window.addLocalCopyFolder(QStringLiteral("relative/folder"));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    auto draft = window.preferences();
+    check.expect(draft.mediaLocalCopies.preference == LocalCopyPreference::Never &&
+                     draft.mediaLocalCopies.folders.size() == 1 &&
+                     draft.mediaLocalCopies.folders.front().keep,
+                 "a chosen folder is added once as a keep rule; a relative folder is not");
+    auto* rule = window.findChild<ui::kit::KDropdown*>(
+        QStringLiteral("preferencesMediaLocalCopyFolderRule0"));
+    const auto* path =
+        window.findChild<QLabel*>(QStringLiteral("preferencesMediaLocalCopyFolderPath0"));
+    check.expect(rule && path && path->text() == QDir::toNativeSeparators(shots) &&
+                     rule->currentText() == QStringLiteral("Keep copies"),
+                 "the rule row shows its folder and its choice");
+    if (!rule)
+        return;
+    rule->chooseIndex(1);
+    check.expect(!window.preferences().mediaLocalCopies.folders.front().keep,
+                 "a rule can be switched to no copies");
+    ui::ApplicationPreferences applied;
+    QObject::connect(&window, &ui::PreferencesWindow::preferencesApplied, &window,
+                     [&](const auto& value) { applied = value; });
+    window.findChild<QAbstractButton*>(QStringLiteral("preferencesApplyButton"))->click();
+    check.expect(applied.mediaLocalCopies == window.preferences().mediaLocalCopies &&
+                     applied.mediaLocalCopies.folders.size() == 1,
+                 "Apply commits the mode and the folder rules");
+    window.findChild<QAbstractButton*>(QStringLiteral("preferencesMediaLocalCopyFolderRemove0"))
+        ->click();
+    QCoreApplication::processEvents();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    check.expect(window.preferences().mediaLocalCopies.folders.empty() &&
+                     !window.findChild<QWidget*>(
+                         QStringLiteral("preferencesMediaLocalCopyFolderRow0")),
+                 "Remove deletes the rule and its row");
+}
+
 void testPreferenceLabelsRemainReadable(Expectations& check) {
     ui::PreferencesWindow window(owner(), samplePreferences());
     window.show();
@@ -887,6 +944,18 @@ void testCaptureGeneralPage(Expectations&) {
                 .arg(window.devicePixelRatioF() > 1.0 ? QStringLiteral("dpr15")
                                                       : QStringLiteral("dpr1"))));
     }
+    // #718: the Memory & Caches page with a local-copy folder rule.
+    auto* rail = window.findChild<QListWidget*>(QStringLiteral("preferencesCategoryRail"));
+    for (int row = 0; rail != nullptr && row < rail->count(); ++row)
+        if (rail->item(row)->text().contains(QStringLiteral("Memory")))
+            rail->setCurrentRow(row);
+    window.addLocalCopyFolder(QDir::rootPath() + QStringLiteral("projects/shots"));
+    window.resize(900, window.height());
+    QTest::qWait(100);
+    (void)window.grab().save(QDir(directory).filePath(
+        QStringLiteral("preferences-memory-%1.png")
+            .arg(window.devicePixelRatioF() > 1.0 ? QStringLiteral("dpr15")
+                                                  : QStringLiteral("dpr1"))));
 }
 
 int main(int argc, char** argv) {
@@ -909,6 +978,7 @@ int main(int argc, char** argv) {
     testHeadroomFields(check);
     testExportWorkerFields(check);
     testLargeBudgetPreferencesRemainExactOnApply(check);
+    testLocalCopyPreferences(check);
     testPreferenceLabelsRemainReadable(check);
     testWindowFitsItsContent(check);
     testSectionResetRestoresItsDefaults(check);

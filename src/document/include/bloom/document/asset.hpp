@@ -32,6 +32,9 @@ enum class AssetMissingFrames : std::uint8_t { HoldPrevious, Nothing, Skip };
 inline constexpr std::uint32_t kMaxAssetLoopCount = 1000;
 // The longest still duration an import gives a still: 24 hours.
 inline constexpr std::int64_t kMaxAssetStillDurationSeconds = 86400;
+// #718: whether Bloom keeps a local copy of the asset's source media. Automatic follows the
+// user's folder rules and preference and then the storage the source is on.
+enum class AssetLocalCopies : std::uint8_t { Automatic, Always, Never };
 struct AssetInterpretation {
     AssetColorSpace colorSpace = AssetColorSpace::Auto;
     // Empty means Auto. Non-empty values are exact ids from the qualified project OCIO config.
@@ -57,6 +60,8 @@ struct AssetInterpretation {
     // A still's length, from the Import preference "Still duration" (absent: the composition's
     // length, how Bloom has always placed a still). A layer made from the still ends there.
     std::optional<core::RationalTime> stillDuration;
+    // #718: this asset's override of "Keep local copies of source media".
+    AssetLocalCopies localCopies = AssetLocalCopies::Automatic;
     friend bool operator==(const AssetInterpretation&, const AssetInterpretation&) = default;
 };
 // The validation of the 1.34 Interpret Footage members, shared by AssetRecord::validate() and the

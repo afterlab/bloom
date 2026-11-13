@@ -17,7 +17,7 @@
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/media/audio/audio.hpp>
-#include <bloom/media/cache/media_disk_cache.hpp>
+#include <bloom/media/cache/source_mirror.hpp>
 #include <bloom/media/video/session.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/render/image_types.hpp>
@@ -163,8 +163,24 @@ memorySample(const std::optional<std::size_t> limit,
     return std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
 }
 
+// #718: what a frame's first read hands the disk cache is the ENCODED source it just read, which
+// the queue shares until the background write lands. One mebibyte stands for an encoded frame.
+constexpr std::size_t kEncodedBytes = kMebibyte;
+void keepEncodedSource(cache::SourceMirror& mirror, const int index) {
+    auto bytes = std::make_shared<std::vector<std::byte>>(
+        kEncodedBytes, static_cast<std::byte>(static_cast<unsigned>(index) & 0xFFU));
+    bloom::platform::FileIdentity identity;
+    identity.size = bytes->size();
+    identity.modifiedNanoseconds = 1;
+    identity.fileIdLow = static_cast<std::uint64_t>(index) + 1;
+    const std::span<const std::byte> view(*bytes);
+    mirror.keep(std::filesystem::temp_directory_path() / "bloom-cache-accounting" /
+                    ("frame." + std::to_string(index) + ".exr"),
+                identity, std::move(bytes), view);
+}
+
 [[nodiscard]] std::string keyFor(const int index) {
-    // 64 hex characters, the shape MediaDiskCache sharding expects, without depending on a hasher.
+    // 64 hex characters, a stable distinct key per index without depending on a hasher.
     std::string key(64, '0');
     auto value = static_cast<unsigned>(index) + 1U;
     for (std::size_t digit = 0; digit < 8 && value != 0; ++digit, value /= 16U)
@@ -204,11 +220,11 @@ void testTwoHundredUhdImportsStayInsideEveryBudget(Expectations& check) {
     constexpr std::size_t kAsyncQueueCapacity = 8 * kMebibyte;
     constexpr std::size_t kSlack = 256 * kMebibyte;
 
-    cache::MediaDiskCacheConfig config;
+    cache::SourceMirrorConfig config;
     config.rootDirectory = scratch.path();
     config.byteBudget = 64 * kMebibyte;
-    config.asyncQueueByteCapacity = kAsyncQueueCapacity;
-    cache::MediaDiskCache diskCache(config);
+    config.writeQueueByteCapacity = kAsyncQueueCapacity;
+    cache::SourceMirror diskCache(config);
     runtime::OperationCache operationCache(kOperationBudget);
     ProxyCache proxies;
 
@@ -216,10 +232,10 @@ void testTwoHundredUhdImportsStayInsideEveryBudget(Expectations& check) {
     std::size_t peakResident = baseline;
     for (int index = 0; index < kImportedImages; ++index) {
         auto image = makeUhdImage(static_cast<float>(index % 97) / 97.0F);
-        // What an import does with a decoded frame: hand it to the disk cache to persist off the
-        // calling thread, keep it in the evaluator's decoded-media cache, and scale a proxy for the
-        // Assets panel.
-        diskCache.storeAsync(keyFor(index), image);
+        // What an import does with a frame: hand the encoded source it read to the disk cache to
+        // persist off the calling thread, keep the decoded frame in the evaluator's decoded-media
+        // cache, and scale a proxy for the Assets panel.
+        keepEncodedSource(diskCache, index);
         operationCache.store("decoded:" + keyFor(index), bloom::document::Revision{},
                              {.image = image, .values = {}, .bounds = {}},
                              runtime::OperationCacheEntryKind::DecodedMedia);
@@ -235,7 +251,7 @@ void testTwoHundredUhdImportsStayInsideEveryBudget(Expectations& check) {
             check.expect(false, "the operation cache stayed inside its budget at every step");
             break;
         }
-        if (diskCache.statistics().asyncQueueBytes > kAsyncQueueCapacity) {
+        if (diskCache.statistics().pendingWriteBytes > kAsyncQueueCapacity) {
             check.expect(false, "the pending-write queue stayed inside its capacity at every step");
             break;
         }
@@ -249,10 +265,16 @@ void testTwoHundredUhdImportsStayInsideEveryBudget(Expectations& check) {
                  "every byte the operation cache holds is accounted to decoded media");
     check.expect(operationCache.retainedBytes() >= kUhdBytes,
                  "the operation cache did hold real 4K frames rather than refusing everything");
-    check.expect(stats.peakAsyncQueueBytes <= kAsyncQueueCapacity,
+    check.expect(stats.peakPendingWriteBytes <= kAsyncQueueCapacity,
                  "the disk cache's pending-write queue never passed its byte capacity");
-    check.expect(stats.droppedAsyncWrites == static_cast<std::uint64_t>(kImportedImages),
-                 "a 4K write larger than the queue capacity is refused rather than staged");
+    diskCache.flush();
+    const auto settled = diskCache.statistics();
+    check.expect(settled.writes + settled.droppedWrites ==
+                     static_cast<std::uint64_t>(kImportedImages) &&
+                     settled.writes > 0,
+                 "every source offered was either written or dropped by a full queue");
+    check.expect(settled.storedBytes <= config.byteBudget,
+                 "the disk cache stayed inside its byte budget");
     check.expect(proxies.bytes <= ProxyCache::kByteCapacity &&
                      proxies.entries.size() <= ProxyCache::kEntryLimit,
                  "the proxy cache honors both its entry limit and its byte capacity");
@@ -287,17 +309,17 @@ void testContentionDuringTwoHundredImports(Expectations& check) {
     runtime::OperationCache operations(operationBudget, ledger);
     bloom::media::video::DecodedVideoCache video(videoBudget, ledger);
     ScratchDirectory scratch("cachefix2-contention");
-    cache::MediaDiskCacheConfig config;
+    cache::SourceMirrorConfig config;
     config.rootDirectory = scratch.path();
-    config.asyncQueueByteCapacity = queueBudget;
-    cache::MediaDiskCache disk(config, ledger);
+    config.writeQueueByteCapacity = queueBudget;
+    cache::SourceMirror disk(config, ledger);
     const auto baseline = residentBytes();
     auto peak = baseline;
     std::size_t before = 0, first = 0, second = 0;
     std::size_t operationBytesBeforeLimit = 0;
     const auto tracked = [&] {
         return operations.retainedBytes() + video.residentBytes() +
-               disk.statistics().asyncQueueBytes;
+               disk.statistics().pendingWriteBytes;
     };
     for (int index = 0; index < kImportedImages; ++index) {
         auto image = makeUhdImage(static_cast<float>(index % 97) / 97.0F);
@@ -305,7 +327,7 @@ void testContentionDuringTwoHundredImports(Expectations& check) {
                          {.image = image, .values = {}, .bounds = {}},
                          index % 2 == 0 ? runtime::OperationCacheEntryKind::DecodedMedia
                                         : runtime::OperationCacheEntryKind::Operation);
-        disk.storeAsync(keyFor(index), image);
+        keepEncodedSource(disk, index);
         auto frame = std::make_shared<bloom::media::provider::FrameProduct>();
         frame->format = bloom::media::provider::PixelFormat::Rgba8;
         frame->colour = {1, 1, 1, 1};
@@ -329,7 +351,7 @@ void testContentionDuringTwoHundredImports(Expectations& check) {
             check.expect(state.retentionPercent == 100 && !state.memoryPressure &&
                              first == before && operations.byteBudget() == operationBudget &&
                              video.byteBudget() == videoBudget &&
-                             disk.asyncQueueByteCapacity() == queueBudget,
+                             disk.writeQueueByteCapacity() == queueBudget,
                          "host contention preserves real retained frames and exact owner targets");
             operationBytesBeforeLimit = operations.retainedBytes();
         }
@@ -342,7 +364,7 @@ void testContentionDuringTwoHundredImports(Expectations& check) {
                 state.retentionPercent == 100 &&
                     state.processCacheCeilingBytes == trackedBudget / 10 &&
                     second <= trackedBudget / 10 &&
-                    operations.byteBudget() + video.byteBudget() + disk.asyncQueueByteCapacity() <=
+                    operations.byteBudget() + video.byteBudget() + disk.writeQueueByteCapacity() <=
                         trackedBudget / 10,
                 "an actual finite OS limit reduces all shared owner budgets and retained bytes");
             check.expect(
@@ -353,7 +375,7 @@ void testContentionDuringTwoHundredImports(Expectations& check) {
             check.expect(tracked() <= trackedBudget / 10,
                          "continuing imports cannot refill beyond the actual shared OS limit");
     }
-    check.expect(disk.asyncQueueByteCapacity() <= queueBudget / 10,
+    check.expect(disk.writeQueueByteCapacity() <= queueBudget / 10,
                  "disk queue admission follows the same ledger callback");
     if (baseline != 0 && peak != 0)
         check.expect(peak - baseline <= trackedBudget + slack,
@@ -427,17 +449,29 @@ void testHeadroomCachesFillTogetherAndShrink(Expectations& check) {
 
 void testUnboundedAsyncQueueWouldHaveHeldGigabytes(Expectations& check) {
     ScratchDirectory scratch("cachefix1-queue-bound");
-    cache::MediaDiskCacheConfig config;
+    cache::SourceMirrorConfig config;
     config.rootDirectory = scratch.path();
     config.byteBudget = 16 * kMebibyte;
-    cache::MediaDiskCache diskCache(config);
-    check.expect(diskCache.asyncQueueByteCapacity() == cache::kMediaDiskCacheAsyncQueueByteCapacity,
+    cache::SourceMirror diskCache(config);
+    check.expect(diskCache.writeQueueByteCapacity() == cache::kSourceMirrorWriteQueueByteCapacity,
                  "the default pending-write queue capacity is the shipped 256 MiB");
-    const auto entryBoundOnly = cache::kMediaDiskCacheAsyncQueueCapacity * kUhdBytes;
-    check.expect(entryBoundOnly > std::size_t{7} * 1024U * kMebibyte,
-                 "64 pending 4K frames would have been more than 7 GiB under the entry bound");
-    check.expect(cache::kMediaDiskCacheAsyncQueueByteCapacity < entryBoundOnly / 20,
-                 "the byte bound is the binding one for frames this size");
+    // The queue is bounded in bytes, not entries: 64 pending 4K frames' worth of data would be
+    // more than 7 GiB.
+    const auto sixtyFourFrames = std::size_t{64} * kUhdBytes;
+    check.expect(sixtyFourFrames > std::size_t{7} * 1024U * kMebibyte &&
+                     cache::kSourceMirrorWriteQueueByteCapacity < sixtyFourFrames / 20,
+                 "the byte bound is far below what an entry-count bound would have admitted");
+    // A source larger than the whole capacity is taken only while the queue holds nothing.
+    config.writeQueueByteCapacity = kEncodedBytes / 2;
+    cache::SourceMirror small(config);
+    small.flush();
+    small.setWriterPausedForTest(true);
+    keepEncodedSource(small, 0);
+    keepEncodedSource(small, 1);
+    check.expect(small.statistics().pendingWrites == 1 && small.statistics().droppedWrites == 1,
+                 "a second oversized source is dropped while one is pending");
+    small.setWriterPausedForTest(false);
+    small.flush();
 }
 
 // CACHEFIX-1 deliverable 3: a cache insert is an optimization. std::bad_alloc raised while

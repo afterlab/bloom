@@ -57,6 +57,10 @@ struct ParameterRecord;
 struct Vec2d;
 } // namespace bloom::document
 
+namespace bloom::runtime {
+class CpuCompositionEvaluator;
+}
+
 namespace bloom::ui {
 class AssetController;
 class TrackController;
@@ -243,6 +247,16 @@ class CompositionSession final : public QObject {
 
     void setAssetController(AssetController* controller) noexcept { assetController_ = controller; }
     [[nodiscard]] AssetController* assetController() const noexcept { return assetController_; }
+    // #718: the application's evaluator (a handle onto its operation cache, source store and
+    // asset folder), for panels that evaluate on their own workers: they read sources through the
+    // shared cache instead of reading the files again. Null in a session built without one.
+    void setSharedEvaluator(std::shared_ptr<const runtime::CpuCompositionEvaluator> evaluator) {
+        sharedEvaluator_ = std::move(evaluator);
+    }
+    [[nodiscard]] const std::shared_ptr<const runtime::CpuCompositionEvaluator>&
+    sharedEvaluator() const noexcept {
+        return sharedEvaluator_;
+    }
     // #513: the tracking job runner a Stabilize node starts its track with; null when none runs.
     void setTrackController(TrackController* controller) noexcept { trackController_ = controller; }
     [[nodiscard]] TrackController* trackController() const noexcept { return trackController_; }
@@ -994,6 +1008,7 @@ class CompositionSession final : public QObject {
     std::optional<document::NodeId> focusPickNode_;
 
     AssetController* assetController_ = nullptr;
+    std::shared_ptr<const runtime::CpuCompositionEvaluator> sharedEvaluator_;
     TrackController* trackController_ = nullptr;
     CryptomatteController* cryptomatteController_ = nullptr;
     ChannelSetController* channelSetController_ = nullptr;

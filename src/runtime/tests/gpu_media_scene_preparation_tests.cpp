@@ -2,7 +2,7 @@
 #include "gpu_media_scene_preparation_test_support.hpp"
 #include "gpu_process_frame_preparation_private.hpp"
 
-#include <bloom/media/cache/media_disk_cache.hpp>
+#include <bloom/media/cache/source_mirror.hpp>
 #include <bloom/platform/source_identity.hpp>
 #include <bloom/platform/storage_class.hpp>
 #include <bloom/runtime/gpu_memory_budget.hpp>
@@ -73,7 +73,7 @@ int main() {
         testChangedColourInterpretation(expectations, evaluator, fixture);
         testSourceKeyExcludesIdsAndRevision(expectations, evaluator, fixture);
         testPerRequestStatisticsAreLocal(expectations, evaluator, fixture);
-        testGestureCacheNeverTouchesDisk(expectations, evaluator, fixture);
+        testSourceMirrorServesScenePreparation(expectations, fixture);
         testAffineAndBlendMedia(expectations, evaluator, fixture);
         testBudgetRefusal(expectations, fixture);
         testSharedSourceBackingCharge(expectations, evaluator, fixture);

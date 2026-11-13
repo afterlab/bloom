@@ -3,6 +3,7 @@
 #include <bloom/platform/source_identity.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -17,6 +18,10 @@ struct StoredSourceBytes final {
     std::vector<std::byte> bytes;
     core::Sha256Digest digest;
 };
+// What one asset says about keeping a local copy of its source (#718): nothing (the folder
+// rules, the preference and the automatic rule decide), always, or never.
+enum class LocalCopyOverride : std::uint8_t { Inherit, Always, Never };
+
 // A local store of source files' encoded bytes, consulted before a source is read (#718). The
 // media readers take one through this interface so they do not depend on the cache module that
 // implements it (`bloom::media::cache::SourceMirror`). Both calls are worker-thread calls.
@@ -26,6 +31,12 @@ class SourceStore {
     SourceStore(const SourceStore&) = delete;
     SourceStore& operator=(const SourceStore&) = delete;
     virtual ~SourceStore() = default;
+    // Whether this store keeps a local copy of `source` at all: the asset's override, then the
+    // user's folder rules and preference, then the automatic rule for the volume the identity
+    // names. A reader consults it once and then neither looks up nor keeps a source it refuses.
+    [[nodiscard]] virtual bool keeps(const std::filesystem::path& source,
+                                     const FileIdentity& identity,
+                                     LocalCopyOverride asset) const = 0;
     // The stored bytes of `source` when the store holds them for exactly this identity (size,
     // modification time and file id); nullopt otherwise. Never reads the source.
     [[nodiscard]] virtual std::optional<StoredSourceBytes>
@@ -36,5 +47,24 @@ class SourceStore {
     // `owner` keeps `bytes` alive until then.
     virtual void keep(const std::filesystem::path& source, const FileIdentity& identity,
                       std::shared_ptr<const void> owner, std::span<const std::byte> bytes) = 0;
+    // True while the store has a backlog of writes: a background fill (the read-ahead) holds off
+    // until it clears, so the copy never competes with the frames being shown or exported.
+    [[nodiscard]] virtual bool underPressure() const = 0;
 };
+// How one read may use a store: which store (none: read the source directly) and what the asset
+// being read says about local copies.
+struct SourceStoreAccess final {
+    SourceStore* store = nullptr;
+    LocalCopyOverride asset = LocalCopyOverride::Inherit;
+};
+// Process-wide counters of where source bytes came from, for the status bar and for tests that
+// prove a source is read once: reuses of a revision still held in memory, reads served by a
+// local store, and (in sourceReadWork()) whole reads of the source itself. Counters saturate.
+struct SourceTierWork final {
+    std::uint64_t memoryHits = 0;
+    std::uint64_t storeHits = 0, storeHitBytes = 0;
+};
+[[nodiscard]] SourceTierWork sourceTierWork() noexcept;
+void recordSourceMemoryHit() noexcept;
+void recordSourceStoreHit(std::uint64_t bytes) noexcept;
 } // namespace bloom::platform

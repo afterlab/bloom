@@ -2184,6 +2184,12 @@
                 },
                 "stillDuration": {
                     "$ref": "#/$defs/rationalTime"
+                },
+                "localCopies": {
+                    "enum": [
+                        "always",
+                        "never"
+                    ]
                 }
             },
             "unevaluatedProperties": false

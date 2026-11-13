@@ -1,14 +1,12 @@
 #pragma once
 
+#include <bloom/media/cache/source_mirror_settings.hpp>
+
 #include <cstdint>
 #include <filesystem>
 #include <memory>
 
 class QSettings;
-
-namespace bloom::media::cache {
-class MediaDiskCache;
-} // namespace bloom::media::cache
 
 namespace bloom::runtime {
 class OperationCache;
@@ -31,23 +29,35 @@ namespace bloom::ui {
 
 // "media/disk-cache-budget-bytes": missing, zero, unparseable, or negative reads as `fallback`
 // (the caller resolves that from physical disk free space via
-// media::cache::defaultMediaDiskCacheByteBudget()).
+// media::cache::defaultSourceMirrorByteBudget()).
 [[nodiscard]] std::uint64_t mediaDiskCacheByteBudgetFromSettings(const QSettings& settings,
                                                                  std::uint64_t fallback);
 
-// Builds a MediaDiskCache from the current settings and the platform cache directory. Returns
-// nullptr when the cache is disabled in settings OR no directory can be resolved at all (no
-// override and no platform default) -- both are "disk cache unavailable this session", never a
-// startup failure (derived caches are optional runtime state per media-io.md).
-[[nodiscard]] std::unique_ptr<media::cache::MediaDiskCache>
+// "media/local-copies" ("automatic", "always" or "never"; anything else reads as automatic) and
+// "media/local-copies-folders" (a list of "keep:<absolute folder>" and "skip:<absolute folder>"):
+// the preference "Keep local copies of source media" and its per-folder overrides (#718).
+[[nodiscard]] media::cache::LocalCopyPolicy localCopyPolicyFromSettings(const QSettings& settings);
+void writeLocalCopyPolicy(QSettings& settings, const media::cache::LocalCopyPolicy& policy);
+
+// Every disk-cache setting as the Qt-free record the cache module and the headless tools use.
+[[nodiscard]] media::cache::SourceMirrorUserSettings
+sourceMirrorSettingsFromSettings(const QSettings& settings);
+
+// Builds the disk cache (the local mirror of source media on slow storage) from the current
+// settings and the platform cache directory, and publishes the settings for the tools that have
+// no settings store of their own (`bloom-cli`, `bloom-mcp`, Python). Returns nullptr when the
+// cache is disabled in settings OR no directory can be resolved at all (no override and no
+// platform default) -- both are "disk cache unavailable this session", never a startup failure
+// (derived caches are optional runtime state per media-io.md).
+[[nodiscard]] std::shared_ptr<media::cache::SourceMirror>
 makeMediaDiskCacheFromSettings(const QSettings& settings);
 
-// The "Purge media cache" effect: clears every entry of the on-disk decoded store AND the
-// evaluator's in-memory decoded-media entries. This is the owning API the purge worker calls; it
-// must never run on the UI thread because MediaDiskCache::clear() flushes the pending writer and
-// removes entries from disk. Source files are never opened, read, or changed -- only derived
-// decoded data is dropped, so zeroed caches simply decode again on next use. Either pointer may be
-// null. Returns true when at least one store was present and cleared.
-bool purgeMediaCaches(media::cache::MediaDiskCache* cache, runtime::OperationCache* operationCache);
+// The "Purge media cache" effect: clears every local copy of source media AND the evaluator's
+// in-memory decoded-media entries. This is the owning API the purge worker calls; it must never
+// run on the UI thread because SourceMirror::clear() removes the entries from disk. Source files
+// are never opened, read, or changed -- only derived data is dropped, so a purged source is
+// simply read again on next use. Either pointer may be null. Returns true when at least one
+// store was present and cleared.
+bool purgeMediaCaches(media::cache::SourceMirror* cache, runtime::OperationCache* operationCache);
 
 } // namespace bloom::ui

@@ -173,75 +173,64 @@ void testPerRequestStatisticsAreLocal(Expectations& expectations,
                         "the second result reports only its own work, not a running total");
 }
 
-// Explicit bypass and the interactive (overridden) plan bypass must not touch the real disk cache.
-void testGestureCacheNeverTouchesDisk(Expectations& expectations,
-                                      const CpuCompositionEvaluator& evaluator,
-                                      const MediaFixture& fixture) {
-    const auto diskRoot = fixture.directory / "gesture_disk_cache";
-    auto disk = std::make_shared<bloom::media::cache::MediaDiskCache>(
-        bloom::media::cache::MediaDiskCacheConfig{.rootDirectory = diskRoot,
-                                                  .byteBudget = std::size_t{1} << 24U});
-    evaluator.setMediaDiskCache(disk);
-    auto context = deterministicMediaContext(evaluator);
-    const CpuGpuSceneBuilder builder(nullptr, context);
+// #718: GPU scene preparation reads source bytes through the local mirror. A first build reads
+// the source once and hands the bytes to the mirror; an evaluator whose memory is cold then
+// prepares the same frame from the mirror and does not read the source at all.
+void testSourceMirrorServesScenePreparation(Expectations& expectations,
+                                            const MediaFixture& fixture) {
+    using bloom::media::cache::SourceMirror;
+    bloom::media::cache::SourceMirrorConfig config;
+    config.rootDirectory = fixture.directory / "source_mirror";
+    // The fixture sits on local storage, which Automatic never copies.
+    config.policy.preference = bloom::media::cache::LocalCopyPreference::Always;
+    const auto mirror = std::make_shared<SourceMirror>(config);
     const auto plan = mediaPlan(format(8, 8), fixture.asset,
                                 LayerValues{.position = {4.3, 3.1}, .opacity = 0.9}, 3100);
-    const auto warm = builder.build(plan, requestFor(*plan));
-    expectations.expect(warm.hasValue(), "the disk-cache warm build prepares");
-    disk->flush();
-    const auto before = disk->statistics();
-
-    auto interactiveDefinition = plan->copyDefinition();
-    interactiveDefinition.bypassOperationCache = true;
-    const auto interactive = publish(std::move(interactiveDefinition));
-    const auto gestureHit = builder.build(interactive, requestFor(*interactive));
-    disk->flush();
-    const auto afterHit = disk->statistics();
-    expectations.expect(gestureHit.hasValue() &&
-                            gestureHit.scene->mediaStatistics().imageConversions == 1,
-                        "a gesture build of a decoded source converts directly");
-    expectations.expect(afterHit.hits == before.hits && afterHit.misses == before.misses &&
-                            afterHit.entryCount == before.entryCount &&
-                            afterHit.storedBytes == before.storedBytes,
-                        "a gesture hit never reads or writes the disk cache");
-
-    auto secondPixels = signedHdrPixels();
-    secondPixels.front().red += 0.75F;
-    const auto secondPath = fixture.directory / "gesture_second.exr";
-    writeExrRgba(secondPath, 3, 2, secondPixels);
-    const auto secondAsset = imageAsset(secondPath, "gesture_second", 904);
-    const auto missPlan =
-        mediaPlan(format(8, 8), secondAsset, LayerValues{.position = {4.3, 3.1}}, 3200);
-    auto missDefinition = missPlan->copyDefinition();
-    missDefinition.bypassOperationCache = true;
-    const auto missInteractive = publish(std::move(missDefinition));
-    const auto beforeMiss = disk->statistics();
-    const auto gestureMiss = builder.build(missInteractive, requestFor(*missInteractive));
-    disk->flush();
-    const auto afterMiss = disk->statistics();
-    expectations.expect(gestureMiss.hasValue() &&
-                            gestureMiss.scene->mediaStatistics().imageConversions == 1,
-                        "a gesture miss converts directly and is not inserted");
-    expectations.expect(afterMiss.hits == beforeMiss.hits &&
-                            afterMiss.misses == beforeMiss.misses &&
-                            afterMiss.entryCount == beforeMiss.entryCount &&
-                            afterMiss.storedBytes == beforeMiss.storedBytes,
-                        "a gesture miss never reads or writes the disk cache");
-
-    auto explicitRequest = requestFor(*plan);
-    explicitRequest.bypassOperationCache = true;
-    const auto beforeExplicit = disk->statistics();
-    const auto explicitBuild = builder.build(plan, explicitRequest);
-    disk->flush();
-    const auto afterExplicit = disk->statistics();
-    expectations.expect(explicitBuild.hasValue() &&
-                            explicitBuild.scene->mediaStatistics().imageConversions == 1,
-                        "an explicit bypass reconverts");
-    expectations.expect(afterExplicit.hits == beforeExplicit.hits &&
-                            afterExplicit.misses == beforeExplicit.misses &&
-                            afterExplicit.entryCount == beforeExplicit.entryCount &&
-                            afterExplicit.storedBytes == beforeExplicit.storedBytes,
-                        "an explicit bypass never reads or writes the disk cache either");
+    const auto fullReads = [] { return bloom::platform::sourceReadWork().fullReads; };
+    {
+        CpuCompositionEvaluator writer;
+        writer.setAssetBaseDirectory(fixture.directory);
+        writer.setSourceStore(mirror);
+        auto context = deterministicMediaContext(writer);
+        const CpuGpuSceneBuilder builder(nullptr, context);
+        const auto before = fullReads();
+        const auto cold = builder.build(plan, requestFor(*plan));
+        expectations.expect(cold.hasValue(), "the first build prepares from the source");
+        expectations.expect(fullReads() == before + 1, "the first build reads the source once");
+        const auto again = builder.build(plan, requestFor(*plan));
+        expectations.expect(again.hasValue() && fullReads() == before + 1,
+                            "a second build in the same evaluator reads nothing");
+        mirror->flush();
+        const auto statistics = mirror->statistics();
+        expectations.expect(statistics.writes == 1 && statistics.entryCount == 1,
+                            "the bytes the first build read are kept by the mirror");
+    }
+    {
+        CpuCompositionEvaluator reader;
+        reader.setAssetBaseDirectory(fixture.directory);
+        reader.setSourceStore(mirror);
+        auto context = deterministicMediaContext(reader);
+        const CpuGpuSceneBuilder builder(nullptr, context);
+        const auto before = fullReads();
+        const auto hitsBefore = mirror->statistics().diskHits;
+        const auto warm = builder.build(plan, requestFor(*plan));
+        expectations.expect(warm.hasValue(), "a cold evaluator prepares the frame from the mirror");
+        expectations.expect(fullReads() == before,
+                            "a frame served from the mirror does not read the source");
+        expectations.expect(mirror->statistics().diskHits == hitsBefore + 1,
+                            "the mirror served the source bytes");
+        // A gesture build and an explicit bypass still prepare; the gesture reuses the revision
+        // the evaluator holds, and neither writes anything new to the mirror.
+        auto interactiveDefinition = plan->copyDefinition();
+        interactiveDefinition.bypassOperationCache = true;
+        const auto interactive = publish(std::move(interactiveDefinition));
+        const auto gesture = builder.build(interactive, requestFor(*interactive));
+        expectations.expect(gesture.hasValue() && fullReads() == before,
+                            "a gesture build does not read the source again");
+        mirror->flush();
+        expectations.expect(mirror->statistics().entryCount == 1,
+                            "the mirror still holds exactly the one source");
+    }
 }
 
 void testImmutableSourceRevisionReuse(Expectations& expectations, const MediaFixture& fixture) {
@@ -483,13 +472,22 @@ void testGestureSourceRevisionIsReadOnly(Expectations& checks, const MediaFixtur
     auto request = requestFor(*gesture);
     request.mediaSourceRevisionPolicy = bloom::runtime::MediaSourceRevisionPolicy::Retained;
     const auto prepared = builder.build(gesture, request);
+    // #718: a gesture keeps the source revision it read (the file's encoded bytes, which no
+    // override changes) and nothing decoded or derived.
     checks.expect(prepared.hasValue() &&
                       prepared.scene->mediaStatistics().sourceRevisionCaptures == 1 &&
-                      context.operationCache->retainedBytes() == 0,
-                  "cold GPU gesture captures transient source without inserting a ticket");
+                      context.operationCache->retainedBytes() != 0,
+                  "cold GPU gesture captures the source once and retains its revision");
+    const auto sourceOnlyBytes = context.operationCache->retainedBytes();
+    const auto again = builder.build(gesture, request);
+    checks.expect(again.hasValue() &&
+                      again.scene->mediaStatistics().sourceRevisionCaptures == 0 &&
+                      again.scene->mediaStatistics().sourceRevisionCacheHits == 1,
+                  "the next gesture step reads the retained source, not the file");
     const auto cpu = evaluator.evaluate(gesture, request, {});
-    checks.expect(cpu.frame() != nullptr && context.operationCache->retainedBytes() == 0,
-                  "cold CPU gesture inserts neither source revision nor decoded/derived pixels");
+    checks.expect(cpu.frame() != nullptr &&
+                      context.operationCache->retainedBytes() == sourceOnlyBytes,
+                  "a CPU gesture inserts no decoded or derived pixels beside the source revision");
     auto ordinaryRequest = requestFor(*ordinary);
     ordinaryRequest.mediaSourceRevisionPolicy = bloom::runtime::MediaSourceRevisionPolicy::Retained;
     const auto warmed = builder.build(ordinary, ordinaryRequest);

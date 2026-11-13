@@ -111,7 +111,7 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                        CompositionPreviewController* const previewController, QWidget* parent,
                        PlaybackController* const playbackController,
                        runtime::OperationCache* const operationCache,
-                       media::cache::MediaDiskCache* const mediaDiskCache,
+                       media::cache::SourceMirror* const mediaDiskCache,
                        const AccelerationStatusProvider* const accelerationStatus,
                        CachePurgeController* const cachePurgeController)
     : QMainWindow(parent), editorRegistry_(editorRegistry),

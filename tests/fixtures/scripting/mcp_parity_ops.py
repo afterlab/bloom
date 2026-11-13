@@ -165,6 +165,17 @@ class ParityOperations(unittest.TestCase):
         interpretation = assets()[0]['interpretation']
         self.assertEqual((interpretation['missingFrames'], interpretation['frameRate']),
                          ('skip', '24000/1001'))
+        # #718: the local-copy override is set, reported and reset through the same operation.
+        self.assertEqual(interpretation['localCopies'], 'automatic')
+        asset_id = assets()[0]['id']
+        for value in ('never', 'always', 'automatic'):
+            changed = self.server.transact([{'op': 'bloom.asset.set-interpretation', 'args': {
+                'assets': [asset_id], 'localCopies': value}}])
+            self.assertTrue(changed['succeeded'], changed)
+            self.assertEqual(assets()[0]['interpretation']['localCopies'], value)
+        refused = self.server.transact([{'op': 'bloom.asset.set-interpretation', 'args': {
+            'assets': [asset_id], 'localCopies': 'sometimes'}}])
+        self.assertFalse(refused['succeeded'], 'an unknown local-copy value is refused')
         refused = self.server.transact([{'op': 'bloom.asset.import', 'args': {
             'paths': [str(root / 'shot.0001.png')], 'projectDirectory': str(root),
             'firstFrame': 2}}])

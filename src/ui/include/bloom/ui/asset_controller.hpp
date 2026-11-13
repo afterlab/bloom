@@ -13,28 +13,34 @@
 #include <bloom/document/document.hpp>
 #include <bloom/media/audio/audio.hpp>
 #include <bloom/media/image.hpp>
+#include <bloom/platform/storage_class.hpp>
 #include <bloom/runtime/audio_stream_key.hpp>
+#include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/memory_pool_counters.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <filesystem>
 #include <optional>
-#include <vector>
+#include <span>
 #include <thread>
+#include <vector>
 
 class QWidget;
 namespace bloom::media::cache {
-class MediaDiskCache;
+class SourceMirror;
 } // namespace bloom::media::cache
 namespace bloom::runtime {
 class GpuProcessingPhasePolicy;
 }
+namespace bloom::ui::detail {
+class ThumbnailProbeMemo;
+} // namespace bloom::ui::detail
 namespace bloom::ui {
 class CompositionSession;
 class ProjectHost;
@@ -102,8 +108,7 @@ class AssetController final : public QObject {
     // changes either way.
     AssetController(CompositionSession& session, ProjectHost& host,
                     runtime::TaskScheduler& scheduler, TaskUiBridge& bridge,
-                    media::cache::MediaDiskCache* mediaDiskCache = nullptr,
-                    QObject* parent = nullptr,
+                    media::cache::SourceMirror* mediaDiskCache = nullptr, QObject* parent = nullptr,
                     AudioProcessingAdmission audioAdmission = AudioProcessingAdmission{});
     ~AssetController() override;
     // The Import Media dialog, with its import options (#381): sequences or single images, a frame
@@ -125,10 +130,10 @@ class AssetController final : public QObject {
                      ImportFollowUp followUp = {}, commands::ImportOptions options = {},
                      std::optional<commands::LayerDropPlacement> svgPlacement = std::nullopt);
     // #642: how the SVG files of one import or drop batch import. Asks once for the batch: the
-    // remembered answer (Preferences > Import) is used without a prompt; otherwise the chooser opens
-    // over the active window with As one layer selected and a "Remember my choice" check. `done`
-    // runs once, with the mode, or nullopt when the artist cancelled; it runs at once when no
-    // prompt is needed or no window can show one (the default, As one layer, then applies). The
+    // remembered answer (Preferences > Import) is used without a prompt; otherwise the chooser
+    // opens over the active window with As one layer selected and a "Remember my choice" check.
+    // `done` runs once, with the mode, or nullopt when the artist cancelled; it runs at once when
+    // no prompt is needed or no window can show one (the default, As one layer, then applies). The
     // drop routes and Add to Composition share this one call.
     void chooseSvgImportMode(std::size_t count,
                              std::function<void(std::optional<commands::SvgImportMode>)> done);
@@ -145,7 +150,8 @@ class AssetController final : public QObject {
     // stored copy (read on the import worker). Everything is one undo step. A batch with no SVG
     // commits at once. `committed` runs with the result of a successful commit. A missing SVG is
     // refused by name and nothing is added.
-    void addToComposition(std::vector<commands::LayerDropItem> items, commands::LayerDropPlacement placement,
+    void addToComposition(std::vector<commands::LayerDropItem> items,
+                          commands::LayerDropPlacement placement,
                           std::function<void(const commands::CommandResult&)> committed = {});
     // #646: the node editor's route: an SVG asset dropped at `position` becomes unconnected artwork
     // nodes (a Vector Artwork node, or the artwork's group), other footage its source node.
@@ -153,13 +159,15 @@ class AssetController final : public QObject {
                       std::function<void(const commands::CommandResult&)> committed = {});
     // #646: New Composition from Selection for `assets`, SVG assets included (their artwork).
     // `committed` runs with the result of a successful commit.
-    void createCompositionFromAssets(std::vector<document::AssetId> assets,
-                                     std::optional<document::CompositionId> templateComposition,
-                                     std::string fallbackName, std::optional<document::AssetFolderId> folder,
-                                     std::function<void(const commands::CommandResult&)> committed = {});
-    // #642 Break Apart: turns the Vector Artwork `layer` holds into editable shapes in place, as one
-    // undo step. The held SVG is parsed (and fonts matched) on the blocking-I/O worker; the edit
-    // commits when it is ready. Refused, with a diagnostic, while another import runs.
+    void
+    createCompositionFromAssets(std::vector<document::AssetId> assets,
+                                std::optional<document::CompositionId> templateComposition,
+                                std::string fallbackName,
+                                std::optional<document::AssetFolderId> folder,
+                                std::function<void(const commands::CommandResult&)> committed = {});
+    // #642 Break Apart: turns the Vector Artwork `layer` holds into editable shapes in place, as
+    // one undo step. The held SVG is parsed (and fonts matched) on the blocking-I/O worker; the
+    // edit commits when it is ready. Refused, with a diagnostic, while another import runs.
     void breakApartSvg(document::CompositionId composition, document::LayerId layer);
     // The same for several layers: all of them, in one undo step. A layer that is scaled past 100%
     // or turned is named in the job log: the editable shapes are resampled and may look softer.
@@ -209,6 +217,14 @@ class AssetController final : public QObject {
     // The source's bytes on disk (a sequence's members summed), measured by the thumbnail worker;
     // empty until it has run, for a missing source, or for a locator that names no file.
     [[nodiscard]] std::optional<std::uint64_t> fileSize(document::AssetId id) const;
+    // #718: where the source lives and what the disk cache holds of it, as one phrase ("Network ·
+    // local copy kept"); empty until the thumbnail worker has classified the file, for a missing
+    // source, or for a locator that names no file. The storage class was read on the worker; the
+    // cached state is read now (an in-memory index lookup), so it is always current.
+    [[nodiscard]] QString sourceStorageText(document::AssetId id) const;
+    // One line per file-backed asset, "<name>: <sourceStorageText>", in project order: at most
+    // `limit` of them, then one "and N more" line.
+    [[nodiscard]] QStringList sourceStorageSummary(int limit) const;
     [[nodiscard]] QString audioDiagnostic(document::AssetId id) const;
     [[nodiscard]] QImage thumbnail(document::AssetId id) const;
     [[nodiscard]] QString inputColorSpaceDisplay(document::AssetId id) const;
@@ -315,6 +331,10 @@ class AssetController final : public QObject {
         bool dataOnly = false;
         // The source's bytes on disk, measured on the worker (see fileSize()).
         std::optional<std::uint64_t> fileBytes;
+        // #718: the storage class and volume of the source's first file, and every file of the
+        // source resolved to its path (a sequence's members), all found on the worker.
+        std::optional<platform::StorageVolume> storage;
+        std::shared_ptr<const std::vector<std::filesystem::path>> sourcePaths;
     };
     using Previews = std::map<document::AssetId, Preview>;
     using Waveforms =
@@ -375,13 +395,15 @@ class AssetController final : public QObject {
     };
     std::optional<BreakApartJob> breakApart_;
     // #646: an add of SVG assets running on the import worker, committed by finishSvgPlacement.
-    using SvgOperationBuilder = std::function<std::unique_ptr<commands::Operation>(commands::SvgAssetSources&&)>;
+    using SvgOperationBuilder =
+        std::function<std::unique_ptr<commands::Operation>(commands::SvgAssetSources&&)>;
     struct SvgPlacementJob final {
         std::string label;
         std::function<void(const commands::CommandResult&)> committed;
     };
     std::optional<SvgPlacementJob> svgPlacement_;
-    void startSvgPlacement(std::string label, std::vector<document::AssetId> svgAssets, SvgOperationBuilder build,
+    void startSvgPlacement(std::string label, std::vector<document::AssetId> svgAssets,
+                           SvgOperationBuilder build,
                            std::function<void(const commands::CommandResult&)> committed);
     void finishSvgPlacement(runtime::TaskResult<OperationHandle>& result);
     void finishBreakApart(runtime::TaskResult<OperationHandle>& result);
@@ -389,7 +411,7 @@ class AssetController final : public QObject {
     ProjectHost& host_;
     runtime::TaskScheduler& scheduler_;
     TaskUiBridge& bridge_;
-    media::cache::MediaDiskCache* mediaDiskCache_ = nullptr;
+    media::cache::SourceMirror* mediaDiskCache_ = nullptr;
     AudioProcessingAdmission audioAdmission_;
     runtime::TaskHandle<OperationHandle> import_;
     struct FootageVerificationResult;
@@ -413,6 +435,17 @@ class AssetController final : public QObject {
     std::optional<document::Snapshot> base_;
     Previews previews_;
     std::map<std::string, QImage> thumbnailCache_;
+    // #718: what the thumbnail worker learned about each source file, kept between its runs, and
+    // the inputs of the run last started (a document edit that changes none of them starts none).
+    std::shared_ptr<detail::ThumbnailProbeMemo> thumbnailProbes_;
+    struct ThumbnailInputs final {
+        document::Snapshot snapshot; // keeps `assets` alive
+        std::span<const document::AssetRecord> assets;
+        runtime::EvaluationColorIntent color;
+        document::FrameRate rate;
+        std::filesystem::path directory;
+    };
+    std::optional<ThumbnailInputs> thumbnailInputs_;
     Waveforms waveforms_;
     AudioBuffers audioBuffers_;
     AudioBuffers audioDeliveryBuffers_;

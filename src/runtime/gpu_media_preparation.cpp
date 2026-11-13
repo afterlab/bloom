@@ -34,7 +34,6 @@ GpuSceneMediaContext GpuSceneMediaContext::fromEvaluator(const CpuCompositionEva
     context.operationCache = evaluator.operationCache();
     context.videoContext = evaluator.videoContext();
     context.assetBaseDirectory = evaluator.assetBaseDirectory();
-    context.mediaDiskCache = evaluator.mediaDiskCache();
     context.sequenceReadAhead = evaluator.sequenceReadAhead();
     return context;
 }
@@ -467,15 +466,15 @@ readColourWithChannels(const GpuSceneMediaContext& context, const std::string& p
 [[nodiscard]] ImageSourceSelection
 selectImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest& request,
                      const CompiledCompositionPlan& plan, const GpuSceneMediaContext& context,
-                     const bool explicitBypass, const bool planBypass,
-                     const CancellationToken& cancellation) {
+                     const bool explicitBypass, const CancellationToken& cancellation) {
     return selectImageSource(
         source, request.time, plan.format().frameRate(), context.assetBaseDirectory, cancellation,
         request.colorIntent, explicitBypass ? nullptr : context.operationCache.get(),
         (explicitBypass || request.requireVerifiedMediaSources)
             ? MediaSourceRevisionPolicy::Revalidate
             : request.mediaSourceRevisionPolicy,
-        byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get(),
+        byteBudget(request.pixelStorageByteLimit), /*allowRevisionInsertion=*/true,
+        request.linearPass.get(),
         context.buildUploads ? &context.buildUploads->revisions() : nullptr,
         explicitBypass || request.linearPass ? nullptr : context.sequenceReadAhead.get());
 }
@@ -485,14 +484,15 @@ selectImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest&
 selectShuffleLeaf(const CompiledChannelShuffle& shuffle, const EvaluationRequest& request,
                   const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
                   const GpuSceneMediaContext& context, const bool explicitBypass,
-                  const bool planBypass, const CancellationToken& cancellation) {
+                  const CancellationToken& cancellation) {
     return selectChannelShuffle(shuffle, request.time, plan.format().frameRate(),
                                 context.assetBaseDirectory, cancellation, request.colorIntent,
                                 explicitBypass ? nullptr : context.operationCache.get(),
                                 (explicitBypass || request.requireVerifiedMediaSources)
                                     ? MediaSourceRevisionPolicy::Revalidate
                                     : request.mediaSourceRevisionPolicy,
-                                byteBudget(request.pixelStorageByteLimit), !planBypass,
+                                byteBudget(request.pixelStorageByteLimit),
+                                /*allowRevisionInsertion=*/true,
                                 request.linearPass.get(), ChannelSourceClock{&plan, &resolved});
 }
 
@@ -500,14 +500,15 @@ selectShuffleLeaf(const CompiledChannelShuffle& shuffle, const EvaluationRequest
 selectCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationRequest& request,
                       const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
                       const GpuSceneMediaContext& context, const bool explicitBypass,
-                      const bool planBypass, const CancellationToken& cancellation) {
+                      const CancellationToken& cancellation) {
     return selectCryptomatte(cryptomatte, request.time, plan.format().frameRate(),
                              context.assetBaseDirectory, cancellation, request.colorIntent,
                              explicitBypass ? nullptr : context.operationCache.get(),
                              (explicitBypass || request.requireVerifiedMediaSources)
                                  ? MediaSourceRevisionPolicy::Revalidate
                                  : request.mediaSourceRevisionPolicy,
-                             byteBudget(request.pixelStorageByteLimit), !planBypass,
+                             byteBudget(request.pixelStorageByteLimit),
+                                /*allowRevisionInsertion=*/true,
                              request.linearPass.get(), ChannelSourceClock{&plan, &resolved});
 }
 
@@ -534,6 +535,11 @@ void requestSequenceReadAhead(const CompiledImageSource& source, const Evaluatio
                                       context.assetBaseDirectory, kSequenceReadAheadFrames);
     std::vector<ImageSequenceReadAhead::Request> requests;
     requests.reserve(targets.size());
+    // #718: this frame's own member was just observed, so its volume id is known and the
+    // read-ahead's storage classification asks the volume nothing.
+    std::optional<std::uint64_t> volume;
+    if (selection.sourceRevision && selection.sourceRevision->sourceIdentity())
+        volume = selection.sourceRevision->sourceIdentity()->volume;
     // #386: a GPU colour leaf uploads native samples, so the members are decoded ahead too, with
     // the raw interpretation decodeRawImageSamples() uses (the requested layer is resolved per
     // member).
@@ -557,6 +563,8 @@ void requestSequenceReadAhead(const CompiledImageSource& source, const Evaluatio
                             .recordedDigest = target.recordedDigest,
                             .revisionKey = std::move(target.revisionKey),
                             .byteBudget = byteBudget(request.pixelStorageByteLimit),
+                            .localCopies = target.localCopies,
+                            .volume = volume,
                             .use = use,
                             .decode = decode,
                             .channels = decode ? channels : std::vector<std::string>{}});
@@ -677,12 +685,11 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
                                   ? ImageSourceMemoryCacheAccess::Disabled
                                   : (planBypass ? ImageSourceMemoryCacheAccess::ReadOnly
                                                 : ImageSourceMemoryCacheAccess::ReadWrite);
-    auto* const diskCache = (explicitBypass || planBypass) ? nullptr : context.mediaDiskCache.get();
     media::ImageDecodeStatistics decodeStatistics;
     auto image =
         evaluateImageSource(selection, resolved.imageDescriptor, resolved.horizontalScale,
                             resolved.verticalScale, byteBudget(pixelBudget), memoryCache,
-                            memoryAccess, cancellation, diskCache, &decodeStatistics, linearPass);
+                            memoryAccess, cancellation, &decodeStatistics, linearPass);
     addMediaWork(statistics.imageDecodeNanoseconds, decodeStatistics.decodeNanoseconds);
     addMediaWork(statistics.imageRepairedPixels, image.repairedPixels);
     ++statistics.imageConversions;
@@ -868,7 +875,8 @@ prepareImageUpload(const CompiledImageSource& source, const EvaluationRequest& r
         (explicitBypass || request.requireVerifiedMediaSources)
             ? MediaSourceRevisionPolicy::Revalidate
             : request.mediaSourceRevisionPolicy,
-        byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get(),
+        byteBudget(request.pixelStorageByteLimit), /*allowRevisionInsertion=*/true,
+        request.linearPass.get(),
         context.buildUploads ? &context.buildUploads->revisions() : nullptr,
         explicitBypass || request.linearPass ? nullptr : context.sequenceReadAhead.get());
     recordSourceRevisionWork(selection, statistics);
@@ -939,8 +947,7 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
         outcome.failure = "Image source context is unavailable";
         return outcome;
     }
-    const auto selection = selectImageColorLeaf(source, request, plan, context, explicitBypass,
-                                                planBypass, cancellation);
+    const auto selection = selectImageColorLeaf(source, request, plan, context, explicitBypass, cancellation);
     recordSourceRevisionWork(selection, statistics);
     // #549: the channels this build's channel reads take from the selected part; the read-ahead
     // decodes them with each later member's samples.
@@ -1006,13 +1013,12 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
     ++statistics.uploadKeyConstructions;
     outcome.samples = findSharedSamples(context, samplesKey);
     // #386: a sequence member the read-ahead decoded before this frame needed it.
-    if (outcome.samples == nullptr && !selection.missingFrame && !explicitBypass &&
-        !planBypass && !request.linearPass && context.sequenceReadAhead &&
-        selection.sourceRevision != nullptr && source.asset &&
-        source.asset->kind == document::AssetKind::Sequence)
-        if (auto cached = context.operationCache->find(
-                decodedImageSamplesKey(selection.decodeKey), document::Revision{},
-                OperationCacheEntryKind::DecodedMedia);
+    if (outcome.samples == nullptr && !selection.missingFrame && !explicitBypass && !planBypass &&
+        !request.linearPass && context.sequenceReadAhead && selection.sourceRevision != nullptr &&
+        source.asset && source.asset->kind == document::AssetKind::Sequence)
+        if (auto cached = context.operationCache->find(decodedImageSamplesKey(selection.decodeKey),
+                                                       document::Revision{},
+                                                       OperationCacheEntryKind::DecodedMedia);
             cached && cached->samples) {
             ++statistics.imageDecodedAhead;
             outcome.samples = std::move(cached->samples);
@@ -1195,7 +1201,7 @@ MediaUploadOutcome prepareChannelShuffleColorLeaf(
         return outcome;
     }
     const auto selection = selectShuffleLeaf(shuffle, request, plan, resolved, context,
-                                             explicitBypass, planBypass, cancellation);
+                                             explicitBypass, cancellation);
     for (const auto& source : selection.sources)
         recordSourceRevisionWork(source, statistics);
     if (selection.cancelled) {
@@ -1337,7 +1343,7 @@ prepareCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationR
         return outcome;
     }
     const auto selection = selectCryptomatteLeaf(cryptomatte, request, plan, resolved, context,
-                                                 explicitBypass, planBypass, cancellation);
+                                                 explicitBypass, cancellation);
     for (const auto& source : selection.channels.sources)
         recordSourceRevisionWork(source, statistics);
     if (selection.cancelled) {
@@ -1387,8 +1393,9 @@ prepareCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationR
     const auto layerDescriptor = render::Rgba32fImageDescriptor::create(
         first.dataWindow(), first.displayWindow(), first.pixelAspect());
     const auto uploadDescriptor =
-        layerDescriptor ? rawUploadDescriptor(*layerDescriptor.value(), resolved.imageDescriptor, true)
-                        : std::nullopt;
+        layerDescriptor
+            ? rawUploadDescriptor(*layerDescriptor.value(), resolved.imageDescriptor, true)
+            : std::nullopt;
     if (!uploadDescriptor || gather->rankCount == 0) {
         outcome.failure = "Cryptomatte rank upload descriptor is invalid";
         return outcome;
@@ -1400,16 +1407,17 @@ prepareCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationR
         layerKey.add(static_cast<std::uint64_t>(index));
         const auto backingKey = rawDecodeUploadKey("cryptomatte-rank-layer", layerKey.digest());
         ++statistics.uploadKeyConstructions;
-        layers.push_back({gather->layers[index], rawUploadCommandKey(backingKey, *uploadDescriptor)});
+        layers.push_back(
+            {gather->layers[index], rawUploadCommandKey(backingKey, *uploadDescriptor)});
     }
     outcome.uploadDescriptor = *uploadDescriptor;
     outcome.uploadSemanticKey = layers.front().uploadSemanticKey;
     outcome.semanticKey = outcome.uploadSemanticKey;
     outcome.converted = true;
-    outcome.cryptomatte = MediaCryptomattePlan{*uploadDescriptor, gather->rankCount,
-                                               resolveCryptomatteIds(selection.mattes,
-                                                                     gather->manifest),
-                                               cryptomatte.preview, std::move(layers)};
+    outcome.cryptomatte =
+        MediaCryptomattePlan{*uploadDescriptor, gather->rankCount,
+                             resolveCryptomatteIds(selection.mattes, gather->manifest),
+                             cryptomatte.preview, std::move(layers)};
     if (!resolvedProxyIsUnit(resolved)) {
         const auto proxyDescriptor = proxyOutputDescriptor(*uploadDescriptor, resolved);
         if (!proxyDescriptor.has_value()) {
@@ -1587,7 +1595,7 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
 void registerChannelReads(const CompiledOperation& operation, const EvaluationRequest& request,
                           const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
                           const GpuSceneMediaContext& context, const bool explicitBypass,
-                          const bool planBypass, const CancellationToken& cancellation) {
+                          const bool /*planBypass*/, const CancellationToken& cancellation) {
     if (!context.buildUploads || !context.operationCache)
         return;
     const auto want = [&context](const std::vector<ImageSourceSelection>& sources,
@@ -1604,12 +1612,12 @@ void registerChannelReads(const CompiledOperation& operation, const EvaluationRe
     };
     if (const auto* cryptomatte = std::get_if<CompiledCryptomatte>(&operation)) {
         const auto selection = selectCryptomatteLeaf(*cryptomatte, request, plan, resolved, context,
-                                                     explicitBypass, planBypass, cancellation);
+                                                     explicitBypass, cancellation);
         if (selection.available)
             want(selection.channels.sources, selection.rankChannels);
     } else if (const auto* shuffle = std::get_if<CompiledChannelShuffle>(&operation)) {
         const auto selection = selectShuffleLeaf(*shuffle, request, plan, resolved, context,
-                                                 explicitBypass, planBypass, cancellation);
+                                                 explicitBypass, cancellation);
         if (selection.available)
             want(selection.sources, selection.mapping);
     }
@@ -1617,12 +1625,11 @@ void registerChannelReads(const CompiledOperation& operation, const EvaluationRe
 
 void registerColourRead(const CompiledImageSource& source, const EvaluationRequest& request,
                         const CompiledCompositionPlan& plan, const GpuSceneMediaContext& context,
-                        const bool explicitBypass, const bool planBypass,
+                        const bool explicitBypass, const bool /*planBypass*/,
                         const CancellationToken& cancellation) {
     if (!context.buildUploads || !context.operationCache)
         return;
-    auto selection = selectImageColorLeaf(source, request, plan, context, explicitBypass,
-                                          planBypass, cancellation);
+    auto selection = selectImageColorLeaf(source, request, plan, context, explicitBypass, cancellation);
     if (!selection.available || selection.missingFrame || !selection.sourceRevision)
         return;
     const auto part = sourcePartKey(selection.digest, selection.interpretation.part);

@@ -6,6 +6,7 @@
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/gpu_export_tool_package.hpp>
+#include <bloom/media/cache/source_mirror_settings.hpp>
 #include <bloom/output/output_analysis.hpp>
 #include <bloom/platform/cache_directory.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -31,6 +32,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -204,8 +206,10 @@ frameRange(std::string_view value) {
     for (const auto& transaction : parsed.transactions()) {
         if (scripting::isExportCall(transaction.operation)) {
             if (!exports)
-                exports = std::make_unique<scripting::HeadlessExportQueue>(*session,
-                                                                           packagedOcioResolver());
+                exports = std::make_unique<scripting::HeadlessExportQueue>(
+                    *session, packagedOcioResolver(), std::filesystem::path{},
+                    std::shared_ptr<std::timed_mutex>{},
+                    bloom::media::cache::openUserSourceMirror());
             const auto answer =
                 exports->calls().call(transaction.operation, transaction.arguments, true);
             if (!answer.ok) {
@@ -231,8 +235,8 @@ frameRange(std::string_view value) {
             if (result.command.has_value())
                 for (const auto& diagnostic : scripting::commandDiagnostics(*result.command))
                     if (diagnostic.severity == "error") {
-                        std::cerr << "error[bloom-cli.command-rejected] " << transaction.operation << ": "
-                                  << diagnostic.message << '\n';
+                        std::cerr << "error[bloom-cli.command-rejected] " << transaction.operation
+                                  << ": " << diagnostic.message << '\n';
                         reason = true;
                     }
             if (!reason)
@@ -244,8 +248,10 @@ frameRange(std::string_view value) {
                       << warning.issue.message << '\n';
         if (const auto job = result.command->outputId<document::ExportJobId>("exportJob")) {
             if (!exports)
-                exports = std::make_unique<scripting::HeadlessExportQueue>(*session,
-                                                                           packagedOcioResolver());
+                exports = std::make_unique<scripting::HeadlessExportQueue>(
+                    *session, packagedOcioResolver(), std::filesystem::path{},
+                    std::shared_ptr<std::timed_mutex>{},
+                    bloom::media::cache::openUserSourceMirror());
             exports->calls().noteAddedJob(*job);
         }
     }
@@ -314,7 +320,10 @@ frameRange(std::string_view value) {
     }
     int status = 0;
     {
-        scripting::HeadlessExportQueue exports(*session, packagedOcioResolver());
+        scripting::HeadlessExportQueue exports(*session, packagedOcioResolver(),
+                                               std::filesystem::path{},
+                                               std::shared_ptr<std::timed_mutex>{},
+                                               bloom::media::cache::openUserSourceMirror());
         auto& service = exports.service();
         if (all)
             for (const auto& job : session->snapshot().project().exportJobs())
@@ -464,6 +473,9 @@ frameRange(std::string_view value) {
     // project's asset base directory so real media/effect scenes run through the production GPU
     // paths; a device/tool refusal keeps the unchanged CPU reference path.
     runtime::CpuCompositionEvaluator gpuMediaEvaluator;
+    // #718: headless renders read slow sources through the user's local mirror, with the "Keep
+    // local copies" choice the application published (null: disabled or no cache folder).
+    gpuMediaEvaluator.setSourceStore(bloom::media::cache::openUserSourceMirror());
     if (project.has_value()) {
         gpuMediaEvaluator.setAssetBaseDirectory(project->parent_path());
     }

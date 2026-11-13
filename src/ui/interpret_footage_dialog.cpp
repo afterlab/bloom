@@ -342,6 +342,20 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
     setColorChoices(std::move(colors), {});
     watch(color_);
 
+    // Local copies (#718): this asset's own answer, ahead of the Preferences.
+    localCopies_ = dropdown(body, "interpretFootageLocalCopies", tr("Local Copies"));
+    localCopies_->addItem(tr("Automatic"), static_cast<int>(document::AssetLocalCopies::Automatic));
+    localCopies_->addItem(tr("Always keep a copy"),
+                          static_cast<int>(document::AssetLocalCopies::Always));
+    localCopies_->addItem(tr("Never keep a copy"),
+                          static_cast<int>(document::AssetLocalCopies::Never));
+    localCopies_->setToolTip(
+        tr("Whether Bloom keeps a local copy of this file in its disk cache. Automatic follows "
+           "the Preferences and the storage the file is on"));
+    select(*localCopies_, static_cast<int>(value.localCopies));
+    form->addRow(tr("Local Copies"), localCopies_);
+    watch(localCopies_);
+
     buttonBox()->setObjectName(QStringLiteral("interpretFootageButtons"));
     addButton(Role::Accept, tr("OK"));
     addButton(Role::Reject, tr("Cancel"));
@@ -458,6 +472,8 @@ std::optional<document::AssetInterpretation> InterpretFootageDialog::interpretat
     if (missing_ != nullptr)
         value.missingFrames =
             static_cast<document::AssetMissingFrames>(missing_->currentData().toInt());
+    value.localCopies =
+        static_cast<document::AssetLocalCopies>(localCopies_->currentData().toInt());
     const auto color = color_->currentData().toString();
     value.inputColorSpaceId.clear();
     value.colorSpace = color == QStringLiteral("raw")      ? document::AssetColorSpace::Raw
@@ -499,6 +515,8 @@ std::optional<commands::AssetInterpretationChange> InterpretFootageDialog::chang
         change.loopCount = value->loopCount;
     if (value->missingFrames != before.missingFrames)
         change.missingFrames = value->missingFrames;
+    if (value->localCopies != before.localCopies)
+        change.localCopies = value->localCopies;
     if (value->colorSpace != before.colorSpace ||
         value->inputColorSpaceId != before.inputColorSpaceId)
         change.inputColor = std::pair{value->colorSpace, value->inputColorSpaceId};

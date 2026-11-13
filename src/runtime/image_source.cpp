@@ -4,8 +4,8 @@
 #include "operation_key.hpp"
 #include <algorithm>
 #include <bloom/color/ocio_builtin_registry.hpp>
-#include <bloom/media/cache/media_disk_cache_decode.hpp>
 #include <bloom/platform/source_identity.hpp>
+#include <bloom/platform/source_store.hpp>
 #include <bloom/render/gpu_point_resample.hpp>
 #include <bloom/runtime/footage_time.hpp>
 #include <bloom/runtime/image_sequence_read_ahead.hpp>
@@ -206,9 +206,23 @@ imageSequenceReadAheadTargets(const CompiledImageSource& source, const core::Rat
                                           member->stamp->size, member->stamp->modifiedNanoseconds})
                                     : std::nullopt,
              .recordedDigest = member->contentDigest,
-             .revisionKey = std::move(key)});
+             .revisionKey = std::move(key),
+             .localCopies = localCopyOverride(source.asset->interpretation)});
     }
     return targets;
+}
+
+platform::LocalCopyOverride
+localCopyOverride(const document::AssetInterpretation& interpretation) noexcept {
+    switch (interpretation.localCopies) {
+    case document::AssetLocalCopies::Always:
+        return platform::LocalCopyOverride::Always;
+    case document::AssetLocalCopies::Never:
+        return platform::LocalCopyOverride::Never;
+    case document::AssetLocalCopies::Automatic:
+        break;
+    }
+    return platform::LocalCopyOverride::Inherit;
 }
 
 std::shared_ptr<const media::ImageSourceRevision>
@@ -328,6 +342,7 @@ ImageSourceSelection selectImageSource(
                     if (revisionPolicy == MediaSourceRevisionPolicy::Retained) {
                         selected.sourceRevision = cached->sourceRevision;
                         selected.retainedRevision = true;
+                        platform::recordSourceMemoryHit();
                     } else {
                         // Revalidate: the retained bytes stand for the original while no full hash
                         // in the process memo refutes the recorded digest and either a cheap
@@ -359,6 +374,7 @@ ImageSourceSelection selectImageSource(
                         if (current) {
                             selected.sourceRevision = cached->sourceRevision;
                             selected.retainedRevision = true;
+                            platform::recordSourceMemoryHit();
                         }
                     }
                 }
@@ -376,9 +392,14 @@ ImageSourceSelection selectImageSource(
             // #477: this frame's own read goes first; the read-ahead starts no capture meanwhile.
             const auto foreground = readAhead != nullptr ? readAhead->foregroundRead()
                                                          : ImageSequenceReadAhead::ForegroundRead{};
+            // #718: memory missed, so the local mirror is asked before the source is read, and
+            // is handed what a source read brings. The store outlives the capture: the cache
+            // holds it, and the mirror's own writer keeps the revision it is writing.
+            const auto sourceStore = revisionCache ? revisionCache->sourceStore() : nullptr;
             capture = media::captureImageSourceRevision(
                 selected.path, hostByteBudget, [&] { return cancel.isCancellationRequested(); },
-                selected.recordedDigest, selected.expectedStamp);
+                selected.recordedDigest, selected.expectedStamp,
+                {sourceStore.get(), localCopyOverride(asset.interpretation)});
             selected.sourceRevision = capture.value ? *capture.value : nullptr;
             selected.cancelled = capture.cancelled;
             selected.budgetExceeded =
@@ -533,34 +554,16 @@ ImageSourceSelection selectImageSource(
     // association. Colour interpretation, input/working colour space, config revision, proxy and
     // path/relink fields are deliberately absent, so a changed working space or display keeps the
     // same decoded upload while a changed frame or alpha association is a miss.
-    selected.decodeKey = imageDecodeKey(selected.digest, selected.footagePass.has_value(),
-                                        selected.interpretation.alphaAssociation,
-                                        selected.interpretation.part,
-                                        selected.interpretation.layer);
-    // Content-addressed and restart-stable (docs/architecture/media-io.md "Disk cache"): asset
-    // digest + member frame + interpretation + Bloom Neutral config digest + decoder identity, so
-    // it deliberately omits `path`/`relinkHint`/`available` -- a relink of the same content should
-    // still hit the disk cache, and an unavailable selection never reaches evaluateImageSource().
-    media::cache::ImageCacheKeyInputs diskInputs;
-    diskInputs.contentDigest = selected.digest;
-    diskInputs.memberFrame = memberFrame;
-    diskInputs.colorSpace = selected.interpretation.colorSpace;
-    diskInputs.inputColorSpaceId = selected.interpretation.inputColorSpaceId;
-    diskInputs.workingColorSpaceId = selected.workingColorSpaceId;
-    diskInputs.alphaAssociation = selected.interpretation.alphaAssociation;
-    diskInputs.configDigest = selected.configRevision;
-    diskInputs.synthesizedColorSpaceIdentity = synthesized;
-    diskInputs.part = selected.interpretation.part;
-    diskInputs.layer = selected.interpretation.layer;
-    selected.diskCacheKey =
-        media::cache::buildImageCacheKey(diskInputs, media::cache::kImageDecoderIdentity);
+    selected.decodeKey = imageDecodeKey(
+        selected.digest, selected.footagePass.has_value(), selected.interpretation.alphaAssociation,
+        selected.interpretation.part, selected.interpretation.layer);
     return selected;
 }
 media::ImageResult<render::Rgba32fImage> evaluateImageSource(
     const ImageSourceSelection& selected, render::Rgba32fImageDescriptor composition,
     double horizontalScale, double verticalScale, std::size_t budget, OperationCache* memoryCache,
     ImageSourceMemoryCacheAccess memoryAccess, const CancellationToken& cancel,
-    media::cache::MediaDiskCache* diskCache, media::ImageDecodeStatistics* decodeStatistics,
+    media::ImageDecodeStatistics* decodeStatistics,
     LinearPassRetention* const linearPass) {
     if (decodeStatistics)
         *decodeStatistics = {};
@@ -616,22 +619,26 @@ media::ImageResult<render::Rgba32fImage> evaluateImageSource(
             image = cached->image;
     }
     if (!image) {
-        // Memory -> disk -> decode, but only an ordinary ReadWrite request may touch the disk
-        // cache. A ReadOnly interactive miss decodes directly (null disk cache) and stores nothing,
-        // and an explicit Disabled bypass decodes without consulting either cache.
-        auto* const decodeDiskCache =
-            memoryAccess == ImageSourceMemoryCacheAccess::ReadWrite ? diskCache : nullptr;
+        // Memory, then decode. The decoder input is the selection's immutable source revision,
+        // which came from memory, the local mirror or the source in that order (#718); decoded
+        // frames have no disk tier of their own.
         // `budget` is the already-validated caller request allowance (the evaluator and the media
         // split both pass a budget derived from `request.pixelStorageByteLimit`). It is honored as
         // given so a large real source can use the caller's real budget instead of being clamped to
         // the 256 MiB default; the decoder still enforces its own structural ceilings. No
         // artificial min() is applied here.
-        auto decoded = media::cache::decodeThroughDiskCache(
-            selected.path, selected.interpretation,
-            selected.expectedStamp ? std::nullopt : std::optional(selected.digest),
-            selected.diskCacheKey, decodeDiskCache, /*writeAsync=*/true,
-            [&] { return cancel.isCancellationRequested(); }, {}, budget, selected.inputProcessor,
-            selected.sourceRevision, decodeStatistics);
+        if (decodeStatistics)
+            *decodeStatistics = {};
+        const auto cancelled = [&] { return cancel.isCancellationRequested(); };
+        auto decoded =
+            selected.sourceRevision
+                ? media::decodeImage(*selected.sourceRevision, selected.interpretation,
+                                     selected.inputProcessor, cancelled, {}, budget,
+                                     decodeStatistics)
+                : media::decodeImage(selected.path, selected.interpretation,
+                                     selected.inputProcessor, cancelled, {}, budget,
+                                     selected.expectedStamp ? std::nullopt
+                                                            : std::optional(selected.digest));
         if (!decoded.value.has_value())
             return {{}, decoded.diagnostic, decoded.cancelled, decoded.code};
         image = std::move(*decoded.value);

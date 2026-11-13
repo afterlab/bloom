@@ -2491,11 +2491,6 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
     const bool explicitBypass = request.bypassOperationCache;
     const bool planBypass = plan != nullptr && plan->bypassOperationCache();
     auto* cache = (explicitBypass || planBypass) ? nullptr : cache_.get();
-    // Same gate as `cache` above: an interactive/overridden request's pixels belong to a gesture,
-    // not to a revision, so they are never written to or read from the disk cache either (media-
-    // io.md "Disk cache": "Never cache overridden/interactive frames").
-    const auto diskCacheHandle = mediaDiskCache();
-    auto* const diskCache = cache != nullptr ? diskCacheHandle.get() : nullptr;
     // The native decoded still-image memory entry is a distinct seam from derived operation
     // memoization. Only the explicit evaluation bypass turns it off; an interactive plan gets a
     // read-only view of it.
@@ -3298,7 +3293,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     (explicitBypass || request.requireVerifiedMediaSources)
                         ? MediaSourceRevisionPolicy::Revalidate
                         : request.mediaSourceRevisionPolicy,
-                    remainingPixelBudget(), !planBypass, request.linearPass.get());
+                    remainingPixelBudget(), /*allowRevisionInsertion=*/true, request.linearPass.get());
                 if (selectedImage->cancelled)
                     return EvaluationResult::cancelled();
                 if (request.requireVerifiedMediaSources && !selectedImage->available)
@@ -3323,7 +3318,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     (explicitBypass || request.requireVerifiedMediaSources)
                         ? MediaSourceRevisionPolicy::Revalidate
                         : request.mediaSourceRevisionPolicy,
-                    remainingPixelBudget(), !planBypass, request.linearPass.get(),
+                    remainingPixelBudget(), /*allowRevisionInsertion=*/true, request.linearPass.get(),
                     detail::ChannelSourceClock{plan.get(), &resolved});
                 if (selectedShuffle->cancelled)
                     return EvaluationResult::cancelled();
@@ -3351,7 +3346,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     (explicitBypass || request.requireVerifiedMediaSources)
                         ? MediaSourceRevisionPolicy::Revalidate
                         : request.mediaSourceRevisionPolicy,
-                    remainingPixelBudget(), !planBypass, request.linearPass.get(),
+                    remainingPixelBudget(), /*allowRevisionInsertion=*/true, request.linearPass.get(),
                     detail::ChannelSourceClock{plan.get(), &resolved});
                 if (selectedCryptomatte->cancelled)
                     return EvaluationResult::cancelled();
@@ -4533,7 +4528,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             auto image = detail::evaluateImageSource(
                                 *selectedImage, resolved.imageDescriptor, resolved.horizontalScale,
                                 resolved.verticalScale, remainingPixelBudget(), imageMemoryCache,
-                                imageMemoryAccess, cancellation, diskCache, nullptr,
+                                imageMemoryAccess, cancellation, nullptr,
                                 request.linearPass.get());
                             if (image.cancelled) {
                                 operationCancelled = true;

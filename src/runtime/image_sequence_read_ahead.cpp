@@ -113,10 +113,16 @@ struct ImageSequenceReadAheadState final {
         if (error || size > job.request.byteBudget ||
             cache->retainedBytes() + size > cache->byteBudget())
             return nullptr;
+        // #718: the read-ahead fills the local mirror. It is a background fill, so it holds
+        // off while the mirror has a backlog of writes; the frame that needs the member reads it
+        // itself then.
+        const auto store = cache->sourceStore();
+        if (store && store->underPressure())
+            return nullptr;
         const auto generation = cache->decodedMediaGeneration();
         auto revision = media::captureImageSourceRevision(
             job.request.path, job.request.byteBudget, [this] { return stopping.load(); },
-            job.request.recordedDigest, job.request.stamp);
+            job.request.recordedDigest, job.request.stamp, {store.get(), job.request.localCopies});
         if (!revision.value || !*revision.value ||
             (!job.request.stamp && (*revision.value)->probe().contentDigest != job.request.digest))
             return nullptr;
@@ -257,8 +263,10 @@ void ImageSequenceReadAhead::request(const std::shared_ptr<OperationCache>& cach
         return;
     // Classified before the lock: the first look at a folder may touch the volume, and the answer
     // is remembered for the folder afterwards.
+    const auto& first = requests.front();
     if (state_->localStorage.load() == LocalStorage::Skip &&
-        !platform::isSlowStorage(platform::storageClass(requests.front().path))) {
+        !platform::isSlowStorage(first.volume ? platform::storageClass(first.path, *first.volume)
+                                              : platform::storageClass(first.path))) {
         const std::lock_guard lock(state_->mutex);
         state_->statistics.localSkipped += requests.size();
         return;

@@ -1096,62 +1096,77 @@ that is not memoized across frames (its key would not carry the source).
 
 ## Disk cache
 
-Task CACHE-2 adds `src/media/cache` (Qt-free): a bounded, content-addressed, on-disk store of
-decoded `Rgba32fImage` frames that persists across restarts, complementing the two v0 in-process
-caches above (the evaluator's memory-only decoded-image LRU and the UI's memory-only 512-entry
-thumbnail cache). It is the same store both consult: `decodeThroughDiskCache()`
-(`bloom::media::cache`) is the one decode-through-caches entry point `evaluateImageSource()`
-(`src/runtime/image_source.cpp`) and the Asset Controller's proxy/thumbnail decode
-(`src/ui/asset_controller.cpp`) both call, so a frame decoded by one is a disk hit for the other.
+`src/media/cache` (Qt-free) holds the **source mirror** (#718): a bounded on-disk store of the
+ENCODED bytes of source media that sits on slow storage. A source on a network share or a slow
+attached disk is read from there once; every later read of it, by any route and after a restart,
+comes from the local copy. Fast local media is read where it is. The store holds source bytes,
+never decoded pixels: a decoded Float32 frame is many times the size of the file it came from and
+depends on the interpretation and the color setup, while the file's own bytes serve every
+interpretation, every color setup and both evaluators. The earlier store of decoded frames
+(task CACHE-2) is retired; its entries and index are removed from the cache directory at startup. The
+decision is recorded in [ADR 0040](../decisions/0040-source-mirror-disk-cache.md).
 
-**Location.** The platform cache directory (`bloom::platform::userCacheDirectory()`, Linux
-`$XDG_CACHE_HOME/bloom` or `$HOME/.cache/bloom`) plus a `media` leaf, or a `media/disk-cache-directory`
-QSettings override (an absolute path; anything else falls back to the platform default). The
-enable flag, directory, and byte budget are edited under **Edit → Preferences… → Memory & Caches**
-(the disk cache can also be purged at any time from **Edit → Purge… → Purge media cache**); the
-operation-cache and RAM-preview budgets share that page. These values are read once at startup, so a change takes effect after
-restart. The owning reader is `bloom::ui::media_disk_cache_settings` for the disk cache and
-`preview_frame_cache.hpp`'s `ramPreviewByteBudgetFromSettings()`/`operationCacheByteBudgetFromSettings()`
-for the two memory ceilings.
+**One choke point.** `media::captureImageSourceRevision()` is the only place a still image or an
+image-sequence frame is read. Given a `platform::SourceStoreAccess` it asks the store first and
+reads the source only on a miss, then hands the bytes it read to the store. Everything that
+decodes a still goes through it with the process's one store: the CPU evaluator
+(`evaluateImageSource()`), GPU scene preparation and its fallback, image-sequence read-ahead
+(which fills the store ahead of the playhead), the Assets thumbnails, RAM Preview, still,
+sequence and video export, and headless and scripted renders (`bloom-cli`, `bloom-mcp`). The
+interface lives in `bloom/platform/source_store.hpp` so the media and runtime modules do not
+depend on the cache module.
 
-**Cache key.** Content-addressed and restart-stable, deliberately narrower than the evaluator's
-in-process operation-cache key: asset content digest, member/frame, legacy interpretation, resolved
-input color-space id, effective working-space id, exact OCIO config revision, alpha association,
-the synthesized-space identity of a Bloom-synthesized input space (Rec.2100 HLG: its definition and
-OCIO version; empty, and absent from the key bytes, for ordinary config spaces), and a decoder
-identity/version string (`bloom::media::cache::kImageDecoderIdentity`) bumped
-whenever the decode or config-managed conversion pipeline could change decoded pixels for the same
-source bytes. The key omits the resolved path/relink hint and availability that the memory-cache key
-includes, so a relink of identical content still hits the disk entry. Changing the input id,
-working id, or config revision necessarily misses both decoded image and video-frame caches.
+**Which sources get a copy.** `keepsLocalCopy()` decides, in this order: the asset's own
+`localCopies` interpretation (`always` or `never`); the longest matching folder rule from the
+Preferences; the Preferences mode (**Automatic**, **Always** or **Never**); and under Automatic,
+the storage class of the volume that holds the file (`platform::storageClass()`): Network, Slow
+attached and Unknown are copied, Fast local is not. A source that is already on the cache's own
+volume is never copied under Automatic.
 
-**Format (v0).** Uncompressed Float32 RGBA, matching the process image exactly: a small fixed
-header (data/display window, pixel aspect, payload byte count) plus the raw pixel payload, and a
-SHA-256 digest of the payload bytes stored alongside it and revalidated on every read. Any
-structural or digest mismatch (truncation, a flipped bit, an unrelated file) is treated as an
-ordinary miss and the entry is removed -- corruption never reaches a caller as pixels. A future
-task may add a lossless codec (LZ4/zstd) through the dependency intake; v0 deliberately does not,
-per the CACHE-2 task package.
+**Location and settings.** The platform cache directory (`bloom::platform::userCacheDirectory()`)
+plus a `media` leaf, or a `media/disk-cache-directory` override (an absolute path; anything else
+falls back to the platform default). The enable flag, directory, byte budget and the local-copy
+mode with its folder rules are edited under **Edit → Preferences… → Memory & Caches** and read
+once at startup, so a change takes effect after restart; **Edit → Purge… → Purge media cache**
+empties the store at any time. The application publishes the values it started with to
+`settings.v1` beside the cache root (`publishSourceMirrorSettings()`), which is what the
+Qt-free hosts (`bloom-cli`, `bloom-mcp`, headless export) read, so every process of one user
+shares one store with one policy.
 
-**Writes.** Atomic: a temp file in the entry's own shard directory, fsync'd where the platform
-supports it (Linux), then renamed over the target -- a reader never observes a torn file. An
-index file (`index.v1`, itself rewritten atomically) records each entry's byte size and last-use
-time so a restart rebuilds LRU order without re-stat'ing or re-hashing every entry. `store()`
-writes synchronously on the calling thread; `storeAsync()` -- what `evaluateImageSource()` uses on
-a disk miss -- hands the write to the cache's own single background writer thread and returns
-immediately, so evaluation never waits on the write. A full write queue drops the newest write
-(counted, never blocks): losing one write only means the next read decodes again.
+**Entries.** `sources/<aa>/<sha256 of the source path>.src`: an 80-byte header (the source's
+identity when it was read: size, modification time and file id; and the SHA-256 of the payload)
+followed by the source bytes exactly as read. A lookup observes the source's current identity (one
+metadata query, no read) and serves the entry only when it matches; a changed source drops the
+entry. The payload digest is verified on every read, outside the store's lock, so a truncated or
+damaged entry is an ordinary miss and is removed: corruption never reaches a caller. The verified
+digest is the same source digest a direct read would have computed, so cache keys and relink
+detection do not change with the route.
 
-**Budget and eviction.** LRU under a byte budget (default `min(10% of the cache volume's free
-space, 32 GiB)`, `media/disk-cache-budget-bytes` overrides it) and, independently, a bounded entry
-count (`kDefaultMediaDiskCacheMaxEntries`, 200,000) so a cache of many tiny images cannot grow the
-index and directory-entry count without limit either. Both are enforced on every write.
+**Writes.** Write-through and never in the frame's way: the read that missed returns its bytes to
+the caller at once and shares them with one background writer thread at idle priority. An entry
+is written to a temporary file in its own directory and renamed over the target, so a reader
+never sees a torn file. The pending-write queue is bounded in bytes
+(`kSourceMirrorWriteQueueByteCapacity`, 256 MiB, lowered under memory pressure): a full queue
+drops its oldest pending write, and a source larger than the whole capacity is taken only while
+the queue is empty. A dropped write only means that source is read once more later. The index
+(`index.v2`) is rewritten in batches and on idle; the index is read, and anything left by the
+retired store removed, on the writer thread, so startup never waits on the cache directory.
 
-**Never cached.** An interactive or overridden evaluation request's pixels belong to a gesture,
-not to a revision (see `animation-and-time.md`'s "Direct Manipulation And Preview Overrides"); the
-same condition that already excludes such a request from the evaluator's derived operation cache
-(`request.bypassOperationCache` / `plan->bypassOperationCache()`) also passes a null disk cache
-into `evaluateImageSource()`, so an override is never read from or written to disk either.
+**Budget and eviction.** Least recently used first, under a byte budget (default `min(10% of the
+cache volume's free space, 32 GiB)`, `media/disk-cache-budget-bytes` overrides it) and a bounded
+entry count (`kDefaultSourceMirrorMaxEntries`, 200,000). A write that would leave the cache
+volume with less than `kSourceMirrorFreeSpaceReserveBytes` (1 GiB) free is skipped and reported
+as disk pressure.
+
+**Reporting.** The status bar's Disk cell shows how much the store holds; its tooltip counts RAM
+hits (a decoded frame served from memory), disk hits (a source served from its local copy) and
+network reads (a source read from a network volume), plus reads of other slow storage when there
+are any.
+
+**Gestures.** A source's bytes do not depend on a parameter override, so a plan compiled for an
+interactive override reads through the store like any other; only the decoded-frame memory
+entries below keep their gesture rules. An explicit evaluation bypass
+(`request.bypassOperationCache`) reads the source directly and touches no cache.
 
 **Read-only decoded-image exception (CACHE-1).** The evaluator's memory cache now distinguishes the
 two bypasses that used to share one switch. An explicit evaluation bypass
@@ -1163,9 +1178,10 @@ color-processor caches. A plan compiled for an interactive parameter override
 already-verified, immutable native decoded STILL-IMAGE entry under its EXISTING content-addressed
 memory source key (`selected.cacheKey`: asset digest, member/frame, interpretation, alpha, input
 processor/color-space id, OCIO identity, plus the resolved path/relink/availability that key already
-carried). It never inserts a source entry on a gesture miss, so gesture data cannot land under an
-unchanged source key, and the disk cache stays null: an interactive miss decodes directly and
-uncached. Source verification follows the immutable revision contracts below. Motion video uses
+carried). It never inserts a DECODED entry on a gesture miss, so gesture data cannot land under an
+unchanged source key. The source revision (the file's encoded bytes, which no parameter changes)
+is retained on a gesture miss like on any other (#718), and is read through the disk cache, so an
+interactive miss decodes again but does not read the file again. Source verification follows the immutable revision contracts below. Motion video uses
 its own decoded-frame cache and disk-backed source revision, with the same read-only gesture and
 explicit bypass lookup/insertion gates. Nested
 compositions remain conservatively fully bypassed on an override (no read-only reuse in the child)

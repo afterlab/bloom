@@ -50,6 +50,9 @@ class PreferencesWindow final : public kit::KDialog {
     // Pushes a value into every control. Signals are blocked while refreshing, so this never
     // writes back into the draft as a side effect.
     void setPreferences(const ApplicationPreferences& preferences);
+    // Adds a "keep copies" rule for an absolute folder to the edited values (#718): what the
+    // Add Folder button does with the folder the artist chose.
+    void addLocalCopyFolder(const QString& folder);
 
   signals:
     // Emitted when Apply or OK commits the edited value. Apply keeps the window open; OK accepts
@@ -137,6 +140,7 @@ class PreferencesWindow final : public kit::KDialog {
     QListWidget* categoryRail_ = nullptr;
     kit::KButton* applyButton_ = nullptr;
     QWidget* cacheDirectoryField_ = nullptr;
+    QWidget* folderRulesRow_ = nullptr; // the local-copy folder rules, shown while there are any
     QString cacheDirectoryIssue_;
     std::vector<std::function<void()>> refreshCallbacks_;
     // Run after the refresh callbacks: mode controls that follow a refreshed value.

@@ -1,7 +1,7 @@
+#include "dpx_decoder.hpp"
 #include "exr_backend.hpp"
 #include "image_budget.hpp"
 #include "image_work_statistics.hpp"
-#include "dpx_decoder.hpp"
 #include "stb_image_adapter.hpp"
 #include "tiff_decoder.hpp"
 #include <algorithm>
@@ -217,11 +217,10 @@ std::optional<ImageSourceStamp> observeImageSourceStamp(const std::filesystem::p
         return std::nullopt;
     return ImageSourceStamp{identity->size, identity->modifiedNanoseconds};
 }
-ImageResult<std::shared_ptr<const ImageSourceRevision>>
-captureImageSourceRevision(const std::filesystem::path& path, const std::size_t hostByteBudget,
-                           const CancelImageWork& cancel,
-                           const std::optional<core::Sha256Digest> expectedDigest,
-                           const std::optional<ImageSourceStamp> expectedStamp) {
+ImageResult<std::shared_ptr<const ImageSourceRevision>> captureImageSourceRevision(
+    const std::filesystem::path& path, const std::size_t hostByteBudget,
+    const CancelImageWork& cancel, const std::optional<core::Sha256Digest> expectedDigest,
+    const std::optional<ImageSourceStamp> expectedStamp, const platform::SourceStoreAccess& store) {
     try {
         if (cancelled(cancel))
             return {{}, {}, true, ImageDiagnosticCode::Cancelled};
@@ -246,57 +245,87 @@ captureImageSourceRevision(const std::filesystem::path& path, const std::size_t 
             expectedStamp && observedBefore && stampOf(*observedBefore) != *expectedStamp;
         if (stampChanged && !expectedDigest)
             return changedSinceImport();
-        std::ifstream input(path, std::ios::binary | std::ios::ate);
-        if (!input)
-            return {{},
-                    "Image file is missing or unreadable",
-                    false,
-                    ImageDiagnosticCode::FileUnavailable};
-        const auto length = input.tellg();
-        detail::addImageWork(statistics.ioNanoseconds, detail::imageWorkNanoseconds(ioStart));
-        if (length < 0)
-            return {{}, "Image size could not be read", false, ImageDiagnosticCode::FileReadFailed};
-        // File size admits a capture, never proves an unchanged revision. Decode reads only these
-        // owned bytes, even if the path is concurrently replaced: old and new bytes never mix.
-        constexpr auto overhead = sizeof(ImageSourceRevision) + std::size_t{512};
-        const auto lengthBytes = static_cast<std::uint64_t>(length);
-        if (hostByteBudget < overhead || lengthBytes > hostByteBudget - overhead)
-            return {{},
-                    "Image source capture exceeds the host byte budget",
-                    false,
-                    ImageDiagnosticCode::PixelBudgetExceeded};
-        std::vector<std::byte> bytes(static_cast<std::size_t>(lengthBytes));
-        ioStart = detail::ImageWorkClock::now();
-        input.seekg(0);
-        detail::addImageWork(statistics.ioNanoseconds, detail::imageWorkNanoseconds(ioStart));
-        for (std::size_t offset = 0; offset < bytes.size();) {
-            if (cancelled(cancel))
+        // #718: the local mirror of slow sources is consulted before the source is read. One
+        // identity observation of the original (above) stands against the mirror's entry; a match
+        // yields the very bytes the source held under that identity, with the digest the mirror
+        // just verified them against, and the source is not read at all.
+        std::vector<std::byte> bytes;
+        std::optional<platform::FileIdentity> observedAfter;
+        std::optional<core::Sha256Digest> storedDigest;
+        const bool mirrored = store.store != nullptr && observedBefore &&
+                              store.store->keeps(path, *observedBefore, store.asset);
+        if (mirrored && !stampChanged) {
+            if (auto stored = store.store->find(path, *observedBefore, cancel)) {
+                constexpr auto storedOverhead = sizeof(ImageSourceRevision) + std::size_t{512};
+                if (hostByteBudget < storedOverhead ||
+                    stored->bytes.size() > hostByteBudget - storedOverhead)
+                    return {{},
+                            "Image source capture exceeds the host byte budget",
+                            false,
+                            ImageDiagnosticCode::PixelBudgetExceeded};
+                bytes = std::move(stored->bytes);
+                storedDigest = stored->digest;
+                observedAfter = observedBefore;
+            } else if (cancelled(cancel)) {
                 return {{}, {}, true, ImageDiagnosticCode::Cancelled};
-            const auto count = std::min(kHashChunkBytes, bytes.size() - offset);
-            ioStart = detail::ImageWorkClock::now();
-            input.read(reinterpret_cast<char*>(bytes.data() + offset),
-                       static_cast<std::streamsize>(count));
-            detail::addImageWork(statistics.ioNanoseconds, detail::imageWorkNanoseconds(ioStart));
-            if (input.gcount() != static_cast<std::streamsize>(count))
+            }
+        }
+        if (!storedDigest) {
+            std::ifstream input(path, std::ios::binary | std::ios::ate);
+            if (!input)
                 return {{},
-                        "Image source changed or failed during capture",
+                        "Image file is missing or unreadable",
+                        false,
+                        ImageDiagnosticCode::FileUnavailable};
+            const auto length = input.tellg();
+            detail::addImageWork(statistics.ioNanoseconds, detail::imageWorkNanoseconds(ioStart));
+            if (length < 0)
+                return {
+                    {}, "Image size could not be read", false, ImageDiagnosticCode::FileReadFailed};
+            // File size admits a capture, never proves an unchanged revision. Decode reads only
+            // these owned bytes, even if the path is concurrently replaced: old and new bytes never
+            // mix.
+            constexpr auto overhead = sizeof(ImageSourceRevision) + std::size_t{512};
+            const auto lengthBytes = static_cast<std::uint64_t>(length);
+            if (hostByteBudget < overhead || lengthBytes > hostByteBudget - overhead)
+                return {{},
+                        "Image source capture exceeds the host byte budget",
+                        false,
+                        ImageDiagnosticCode::PixelBudgetExceeded};
+            bytes.resize(static_cast<std::size_t>(lengthBytes));
+            ioStart = detail::ImageWorkClock::now();
+            input.seekg(0);
+            detail::addImageWork(statistics.ioNanoseconds, detail::imageWorkNanoseconds(ioStart));
+            for (std::size_t offset = 0; offset < bytes.size();) {
+                if (cancelled(cancel))
+                    return {{}, {}, true, ImageDiagnosticCode::Cancelled};
+                const auto count = std::min(kHashChunkBytes, bytes.size() - offset);
+                ioStart = detail::ImageWorkClock::now();
+                input.read(reinterpret_cast<char*>(bytes.data() + offset),
+                           static_cast<std::streamsize>(count));
+                detail::addImageWork(statistics.ioNanoseconds,
+                                     detail::imageWorkNanoseconds(ioStart));
+                if (input.gcount() != static_cast<std::streamsize>(count))
+                    return {{},
+                            "Image source changed or failed during capture",
+                            false,
+                            ImageDiagnosticCode::FileReadFailed};
+                detail::addImageWork(statistics.bytesRead, count);
+                offset += count;
+            }
+            ioStart = detail::ImageWorkClock::now();
+            const auto trailing = input.peek();
+            detail::addImageWork(statistics.ioNanoseconds, detail::imageWorkNanoseconds(ioStart));
+            if (trailing != std::char_traits<char>::eof() || input.bad())
+                return {{},
+                        "Image source changed during capture",
                         false,
                         ImageDiagnosticCode::FileReadFailed};
-            detail::addImageWork(statistics.bytesRead, count);
-            offset += count;
+            if (cancelled(cancel))
+                return {{}, {}, true, ImageDiagnosticCode::Cancelled};
+            platform::recordFullSourceRead(bytes.size());
+            observedAfter = platform::observeFileIdentity(path);
         }
-        ioStart = detail::ImageWorkClock::now();
-        const auto trailing = input.peek();
-        detail::addImageWork(statistics.ioNanoseconds, detail::imageWorkNanoseconds(ioStart));
-        if (trailing != std::char_traits<char>::eof() || input.bad())
-            return {{},
-                    "Image source changed during capture",
-                    false,
-                    ImageDiagnosticCode::FileReadFailed};
-        if (cancelled(cancel))
-            return {{}, {}, true, ImageDiagnosticCode::Cancelled};
-        platform::recordFullSourceRead(bytes.size());
-        const auto observedAfter = platform::observeFileIdentity(path);
         const bool unchanged = observedBefore && observedAfter &&
                                *observedBefore == *observedAfter &&
                                observedAfter->size == bytes.size();
@@ -326,7 +355,14 @@ captureImageSourceRevision(const std::filesystem::path& path, const std::size_t 
         const auto known =
             unchanged ? platform::verifiedSourceDigests().knownIdentity(path) : std::nullopt;
         const bool identityChanged = known && *known != *observedAfter;
-        if (unchanged && !stampChanged)
+        if (storedDigest) {
+            // The mirror hashed these bytes on this read: they are verified content, and the
+            // identity that found them now vouches for that digest in the process memo.
+            digest = storedDigest;
+            verified = true;
+            platform::verifiedSourceDigests().record(path, *observedAfter, *storedDigest);
+        }
+        if (!digest && unchanged && !stampChanged)
             if (const auto memo = platform::verifiedSourceDigests().find(path, *observedAfter)) {
                 digest = *memo;
                 verified = true;
@@ -371,6 +407,12 @@ captureImageSourceRevision(const std::filesystem::path& path, const std::size_t 
                     "Image source metadata exceeds the host byte budget",
                     false,
                     ImageDiagnosticCode::PixelBudgetExceeded};
+        // Write-through (#718): the bytes this read brought from the source are already on
+        // their way to the decoder; the mirror keeps the same bytes in the background. Only a
+        // read whose identity held across it is kept, so the copy is the file under that
+        // identity.
+        if (mirrored && !storedDigest && unchanged)
+            store.store->keep(path, *observedAfter, revision, revision->bytes());
         return {std::move(revision), {}};
     } catch (const std::bad_alloc&) {
         return {{},

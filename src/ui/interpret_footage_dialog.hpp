@@ -65,6 +65,7 @@ class InterpretFootageDialog final : public kit::KDialog {
     [[nodiscard]] kit::KValueField* loop() const noexcept { return loop_; }
     [[nodiscard]] kit::KDropdown* missingFrames() const noexcept { return missing_; }
     [[nodiscard]] kit::KDropdown* color() const noexcept { return color_; }
+    [[nodiscard]] kit::KDropdown* localCopies() const noexcept { return localCopies_; }
 
   private:
     [[nodiscard]] std::optional<document::FrameRate> parsedRate() const;
@@ -88,6 +89,7 @@ class InterpretFootageDialog final : public kit::KDialog {
     kit::KValueField* loop_ = nullptr;
     kit::KDropdown* missing_ = nullptr;
     kit::KDropdown* color_ = nullptr;
+    kit::KDropdown* localCopies_ = nullptr;
     kit::KLabel* colorStatus_ = nullptr;
     kit::KLabel* rateUnit_ = nullptr;
     QWidget* rateRow_ = nullptr;

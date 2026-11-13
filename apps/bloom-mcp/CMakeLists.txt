@@ -1,6 +1,6 @@
 # ADR 0034: a thin composition root over the shared server core in src/mcp.
 add_executable(bloom-mcp main.cpp)
-target_link_libraries(bloom-mcp PRIVATE bloom_mcp)
+target_link_libraries(bloom-mcp PRIVATE bloom_mcp bloom_media_cache)
 target_compile_definitions(bloom-mcp PRIVATE BLOOM_VERSION="${PROJECT_VERSION}")
 if(TARGET bloom-media-worker)
     add_dependencies(bloom-mcp bloom-media-worker)

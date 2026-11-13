@@ -341,6 +341,7 @@ SourceMirror::find(const std::filesystem::path& source, const platform::FileIden
         return drop(true);
     result.digest = header->digest;
     noteUse(key, kHeaderBytes + result.bytes.size());
+    platform::recordSourceStoreHit(result.bytes.size());
     {
         const std::lock_guard lock(mutex_);
         ++statistics_.diskHits;
@@ -375,13 +376,22 @@ void SourceMirror::keep(const std::filesystem::path& source, const platform::Fil
                                 [&](const PendingWrite& pending) { return pending.key == key; }))
             return;
         // A full queue drops its oldest pending write (never the frame's own read, which already
-        // returned): the source it belonged to is simply read once more later.
+        // returned): the source it belonged to is simply read once more later. A write in flight
+        // cannot be dropped, and a source larger than the whole capacity is taken only while the
+        // queue holds nothing at all, so the queue never keeps more than its capacity or one
+        // such source alive.
         const auto capacity = writeQueueByteCapacity_.load(std::memory_order_relaxed);
-        while (!queue_.empty() && queuedBytes_ + bytes.size() > capacity) {
-            queuedBytes_ -= queue_.front().bytes.size();
-            queue_.pop_front();
+        if (bytes.size() <= capacity)
+            while (!queue_.empty() && queuedBytes_ + bytes.size() > capacity) {
+                queuedBytes_ -= queue_.front().bytes.size();
+                queue_.pop_front();
+                ++droppedWrites_;
+                counters_.refused();
+            }
+        if (queuedBytes_ != 0 && queuedBytes_ + bytes.size() > capacity) {
             ++droppedWrites_;
             counters_.refused();
+            return;
         }
         queue_.push_back({std::move(key), identity, std::move(owner), bytes, generation});
         queuedBytes_ += bytes.size();
@@ -401,6 +411,11 @@ bool SourceMirror::keepsLocalCopy(const std::filesystem::path& source, const std
                                cacheVolume_.load(std::memory_order_relaxed) == volume;
     return cache::keepsLocalCopy(policy, asset, source, platform::storageClass(source, volume),
                                  onCacheVolume);
+}
+bool SourceMirror::keeps(const std::filesystem::path& source,
+                         const platform::FileIdentity& identity,
+                         const LocalCopyOverride asset) const {
+    return enabled() && !root_.empty() && keepsLocalCopy(source, identity.volume, asset);
 }
 void SourceMirror::setPolicy(LocalCopyPolicy policy) {
     const std::lock_guard lock(mutex_);
@@ -469,8 +484,6 @@ void SourceMirror::setWriterPausedForTest(const bool paused) {
 }
 
 bool SourceMirror::underPressure() const {
-    if (diskPressure_.load(std::memory_order_relaxed))
-        return true;
     const std::lock_guard lock(queueMutex_);
     return queuedBytes_ * 2 > writeQueueByteCapacity_.load(std::memory_order_relaxed);
 }
@@ -483,6 +496,7 @@ SourceMirrorStatistics SourceMirror::statistics() const {
         result.entryCount = index_.size();
         result.storedBytes = storedBytes_;
         result.indexLoaded = indexLoaded_;
+        result.diskPressure = diskPressure_.load(std::memory_order_relaxed);
     }
     const std::lock_guard lock(queueMutex_);
     result.droppedWrites = droppedWrites_;

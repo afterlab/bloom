@@ -1,6 +1,6 @@
 add_executable(bloom-cli main.cpp)
 
-target_link_libraries(bloom-cli PRIVATE bloom_scripting)
+target_link_libraries(bloom-cli PRIVATE bloom_scripting bloom_media_cache)
 bloom_enable_warnings(bloom-cli)
 
 # A package keeps the tool beside the application (cmake/BloomPackageLayout.cmake). The macOS

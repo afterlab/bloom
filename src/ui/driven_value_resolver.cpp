@@ -226,7 +226,7 @@ void DrivenValueResolver::start() {
             {runtime::TaskOwnerKind::Application, runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Interactive},
         [snapshot, compositionId, time, parameters, readoutNodes, cache = probeCache_,
-         work = work_](runtime::TaskContext& context) {
+         work = work_, shared = session_.sharedEvaluator()](runtime::TaskContext& context) {
             auto values = std::make_shared<Values>();
             for (auto parameter : parameters)
                 values->parameters[parameter] = QObject::tr("Unavailable");
@@ -279,7 +279,10 @@ void DrivenValueResolver::start() {
                         return operation.requiresPostImage;
                     });
                 if (hasPostImageValues) {
-                    runtime::CpuCompositionEvaluator evaluator;
+                    // #718: through the application's evaluator when there is one, so a source
+                    // the Viewer already holds is not read again.
+                    const runtime::CpuCompositionEvaluator own;
+                    const auto& evaluator = shared ? *shared : own;
                     const auto evaluation = evaluator.evaluate(
                         compiled.plan,
                         {.time = time,

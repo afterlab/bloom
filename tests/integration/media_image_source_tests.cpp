@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
-#include <bloom/media/cache/media_disk_cache.hpp>
+#include <bloom/media/cache/source_mirror.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <chrono>
@@ -462,32 +462,38 @@ int main(int argc, char* argv[]) {
                             result.frame()->processImage().pixels()))
         return 51;
 
-    // CACHE-2 (docs/architecture/media-io.md "Disk cache"): two INDEPENDENT evaluator instances
-    // sharing one disk cache -- a fresh evaluator's own in-process memory cache is cold, so a
-    // decode served to it without touching `frame.0001.jpg` again proves the disk path rather than
-    // the memory one. Deliberately not reusing `evaluator` above: its memory cache already holds
-    // this frame from the very first evaluate() call, which would hide the disk cache entirely.
+    // #718 (docs/architecture/media-io.md "Disk cache"): two INDEPENDENT evaluator instances
+    // sharing one local mirror. A fresh evaluator's own memory is cold, so a frame it renders
+    // without reading `frame.0001.jpg` again proves the mirror served the source bytes. The
+    // fixture is on local storage, which Automatic never copies, so the mirror is set to Always.
     namespace cache = bloom::media::cache;
-    cache::MediaDiskCacheConfig diskCacheConfig;
-    diskCacheConfig.rootDirectory = folder / "disk-cache";
-    auto diskCache = std::make_shared<cache::MediaDiskCache>(diskCacheConfig);
-    runtime::CpuCompositionEvaluator diskWriter;
-    diskWriter.setAssetBaseDirectory(folder);
-    diskWriter.setMediaDiskCache(diskCache);
-    const auto written = diskWriter.evaluate(compiled.plan, request, {});
+    cache::SourceMirrorConfig mirrorConfig;
+    mirrorConfig.rootDirectory = folder / "source-mirror";
+    mirrorConfig.policy.preference = cache::LocalCopyPreference::Always;
+    const auto mirror = std::make_shared<cache::SourceMirror>(mirrorConfig);
+    runtime::CpuCompositionEvaluator mirrorWriter;
+    mirrorWriter.setAssetBaseDirectory(folder);
+    mirrorWriter.setSourceStore(mirror);
+    const auto written = mirrorWriter.evaluate(compiled.plan, request, {});
     if (!written.frame() || written.diagnostics().empty())
         return 11;
-    diskCache->flush();
-    if (diskCache->statistics().entryCount == 0)
+    mirror->flush();
+    if (mirror->statistics().entryCount == 0)
         return 12;
-    runtime::CpuCompositionEvaluator diskReader;
-    diskReader.setAssetBaseDirectory(folder);
-    diskReader.setMediaDiskCache(diskCache);
-    const auto read = diskReader.evaluate(compiled.plan, request, {});
+    runtime::CpuCompositionEvaluator mirrorReader;
+    mirrorReader.setAssetBaseDirectory(folder);
+    mirrorReader.setSourceStore(mirror);
+    const auto readsBefore = bloom::platform::sourceReadWork().fullReads;
+    const auto read = mirrorReader.evaluate(compiled.plan, request, {});
     if (!read.frame() || read.diagnostics().empty())
         return 13;
-    if (diskCache->statistics().hits == 0)
+    if (mirror->statistics().diskHits == 0 ||
+        bloom::platform::sourceReadWork().fullReads != readsBefore)
         return 14;
+    // The CPU reference decodes the same bytes either way: the two frames are identical.
+    if (!std::ranges::equal(read.frame()->processImage().pixels(),
+                            written.frame()->processImage().pixels()))
+        return 114;
 
     // A parent's cached source must include its child's resolved media dependencies. Removing
     // an external file does not change the project revision or either compiled plan.

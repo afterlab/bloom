@@ -5,6 +5,8 @@
 
 #include <chrono>
 #include <filesystem>
+#include <bloom/platform/source_store.hpp>
+
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -62,12 +64,15 @@ class Session;
 // output colour (display/view for ProRes, DNxHR, H.264, PNG) has no GPU preparation.
 // `vulkanLoader` overrides the platform Vulkan loader (tests name the qualified prefix's loader);
 // `bootstrapGate` is the provider's shared native-bootstrap gate (GpuExportProvider::create).
+// `sourceStore` is the executable's local mirror of source media on slow storage (#718), null to
+// read every source where it is.
 class HeadlessExportQueue final {
   public:
     HeadlessExportQueue(Session& session,
                         std::shared_ptr<runtime::GpuOcioContextResolver> ocioResolver,
                         std::filesystem::path vulkanLoader = {},
-                        std::shared_ptr<std::timed_mutex> bootstrapGate = {});
+                        std::shared_ptr<std::timed_mutex> bootstrapGate = {},
+                        std::shared_ptr<platform::SourceStore> sourceStore = {});
     ~HeadlessExportQueue();
     HeadlessExportQueue(const HeadlessExportQueue&) = delete;
     HeadlessExportQueue& operator=(const HeadlessExportQueue&) = delete;

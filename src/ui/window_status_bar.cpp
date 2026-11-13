@@ -2,23 +2,25 @@
 
 #include "window_status_bar_segments.hpp"
 
-#include <bloom/ui/kit/button.hpp>
-#include <bloom/ui/kit/progress_bar.hpp>
-#include <bloom/ui/kit/controls.hpp>
-#include <bloom/ui/kit/popup_window.hpp>
-#include <bloom/ui/compile_failure.hpp>
-#include <bloom/ui/mcp_server_adapter.hpp>
-#include <bloom/ui/window_status_bar.hpp>
 #include <algorithm>
 #include <array>
+#include <bloom/ui/compile_failure.hpp>
+#include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/popup_window.hpp>
+#include <bloom/ui/kit/progress_bar.hpp>
+#include <bloom/ui/mcp_server_adapter.hpp>
+#include <bloom/ui/window_status_bar.hpp>
 #include <cmath>
 #include <memory>
 
 #include <bloom/host/project_color_choice.hpp>
-#include <bloom/media/cache/media_disk_cache.hpp>
+#include <bloom/media/cache/source_mirror.hpp>
+#include <bloom/platform/source_store.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
+#include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
@@ -51,7 +53,7 @@ constexpr int kRenderingNoticeDelayMs = 300;
 
 WindowStatusBar::WindowStatusBar(CompositionSession& session,
                                  CompositionPreviewController* const previewController,
-                                 media::cache::MediaDiskCache* const mediaDiskCache,
+                                 media::cache::SourceMirror* const mediaDiskCache,
                                  runtime::OperationCache* const operationCache, QWidget* parent,
                                  runtime::MemoryBudgetLedger& ledger)
     : kit::KSurface(parent), memoryLedger_(ledger), session_(session),
@@ -181,7 +183,8 @@ void WindowStatusBar::buildSegments() {
     layout->addWidget(viewerSegment_);
     separator();
 
-    // Activity: the current job or progress, or idle. The compile-failure Details button lives here.
+    // Activity: the current job or progress, or idle. The compile-failure Details button lives
+    // here.
     activitySegment_ = new Segment(QStringLiteral("windowStatusBarActivity"), this);
     activitySegment_->addLabel(tr("Activity"));
     activityText_ = new kit::KLabel(QString{}, this, kit::TypeRole::UiSmall);
@@ -222,25 +225,25 @@ void WindowStatusBar::buildSegments() {
     // RAM: what the caches hold, against what they may hold; the frame count of the preview cache.
     memorySegment_ = new Segment(QStringLiteral("windowStatusBarMemory"), this);
     memorySegment_->addLabel(tr("RAM"));
-    memory_ = new ValueLabel(QStringLiteral("windowStatusBarCache"),
-                             QStringLiteral("000.0/000.0 GB"), kit::Color::Foreground,
-                             memorySegment_);
+    memory_ =
+        new ValueLabel(QStringLiteral("windowStatusBarCache"), QStringLiteral("000.0/000.0 GB"),
+                       kit::Color::Foreground, memorySegment_);
     memory_->setAccessibleName(tr("Cache statistics"));
     memorySegment_->add(memory_);
     memorySegment_->addGap();
     memorySegment_->addLabel(tr("Cache"));
-    memoryFrames_ = new ValueLabel(QStringLiteral("windowStatusBarCacheFrames"),
-                                   QStringLiteral("00000 f"), kit::Color::Foreground,
-                                   memorySegment_);
+    memoryFrames_ =
+        new ValueLabel(QStringLiteral("windowStatusBarCacheFrames"), QStringLiteral("00000 f"),
+                       kit::Color::Foreground, memorySegment_);
     memorySegment_->add(memoryFrames_);
     layout->addWidget(memorySegment_);
     separator();
 
     diskSegment_ = new Segment(QStringLiteral("windowStatusBarDisk"), this);
     diskSegment_->addLabel(tr("Disk cache"));
-    mediaDiskCacheCell_ = new ValueLabel(QStringLiteral("windowStatusBarMediaDiskCache"),
-                                         QStringLiteral("000% hit · 0000.0 MB"),
-                                         kit::Color::Foreground, diskSegment_);
+    mediaDiskCacheCell_ =
+        new ValueLabel(QStringLiteral("windowStatusBarMediaDiskCache"),
+                       QStringLiteral("0000.0 MB cached"), kit::Color::Foreground, diskSegment_);
     diskSegment_->add(mediaDiskCacheCell_);
     layout->addWidget(diskSegment_);
 
@@ -269,13 +272,11 @@ void WindowStatusBar::buildSegments() {
     layout->addSpacing(kit::px(kit::Spacing::S));
     layout->addWidget(versionSegment_);
 
-    diskSegment_->setSegmentToolTip(tr("The on-disk cache of decoded frames."));
+    diskSegment_->setSegmentToolTip(tr("Local copies of source media that sits on slow storage."));
     memorySegment_->setSegmentToolTip(tr("The memory the caches hold."));
 }
 
-QSize WindowStatusBar::minimumSizeHint() const {
-    return {0, kit::px(kit::Size::Control)};
-}
+QSize WindowStatusBar::minimumSizeHint() const { return {0, kit::px(kit::Size::Control)}; }
 
 void WindowStatusBar::resizeEvent(QResizeEvent* event) {
     KSurface::resizeEvent(event);
@@ -452,8 +453,8 @@ void WindowStatusBar::refreshVideoCell() {
                 const auto raw = stored ? stored->toULongLong(&numeric) : 0;
                 if (!numeric)
                     continue;
-                const auto* asset = project.findAsset(
-                    document::AssetId::fromRaw(static_cast<std::uint64_t>(raw)));
+                const auto* asset =
+                    project.findAsset(document::AssetId::fromRaw(static_cast<std::uint64_t>(raw)));
                 if (asset == nullptr)
                     continue;
                 const auto digest = asset->contentDigest.toLowercaseHex();
@@ -466,8 +467,8 @@ void WindowStatusBar::refreshVideoCell() {
     QString note;
     QStringList lines;
     for (const auto& report : reports) {
-        const auto found = std::ranges::find(sources, report.assetDigest,
-                                             &std::pair<std::string, QString>::first);
+        const auto found =
+            std::ranges::find(sources, report.assetDigest, &std::pair<std::string, QString>::first);
         if (found == sources.end())
             continue;
         const auto decode = QString::fromStdString(report.decode);
@@ -495,7 +496,8 @@ void WindowStatusBar::refreshVideoCell() {
 }
 
 bool WindowStatusBar::renderingNoticeHeld() const {
-    return holdRenderingNotice_ && renderingSince_.isValid() && renderingSince_.elapsed() < kRenderingNoticeDelayMs;
+    return holdRenderingNotice_ && renderingSince_.isValid() &&
+           renderingSince_.elapsed() < kRenderingNoticeDelayMs;
 }
 
 void WindowStatusBar::setPreviewNotice(const CompositionPreviewState& preview) {
@@ -525,7 +527,8 @@ void WindowStatusBar::setPreviewNotice(const CompositionPreviewState& preview) {
                                          static_cast<int>(renderingSince_.elapsed()));
             break;
         }
-        previewNotice_ = stale ? tr("Rendering frame · previous frame shown") : tr("Rendering frame");
+        previewNotice_ =
+            stale ? tr("Rendering frame · previous frame shown") : tr("Rendering frame");
         previewNoticeTone_ = kit::Color::Accent;
         break;
     case PreviewActivity::Failed:
@@ -550,7 +553,8 @@ void WindowStatusBar::setViewerCells(const PreviewColorState& state,
     renderPath_->setText(state.pathLabel.isEmpty() ? tr("—") : state.pathLabel);
     renderPath_->setTone(state.colorToken);
     renderPath_->setAccessibleName(state.text);
-    statusbar::setToolTipIfChanged(renderPath_, tr("Render: how the shown frame was produced. %1.").arg(state.text));
+    statusbar::setToolTipIfChanged(
+        renderPath_, tr("Render: how the shown frame was produced. %1.").arg(state.text));
     const bool shown = preview != nullptr && preview->viewerReadout.valid;
     // #685: the readouts dim when the shown display is behind the request, but only once it has
     // stayed behind for the delay; during playback every frame is briefly behind.
@@ -560,7 +564,8 @@ void WindowStatusBar::setViewerCells(const PreviewColorState& state,
     } else if (!behindSince_.isValid()) {
         behindSince_.start();
     }
-    const bool dimHeld = behind && holdRenderingNotice_ && behindSince_.elapsed() < kRenderingNoticeDelayMs;
+    const bool dimHeld =
+        behind && holdRenderingNotice_ && behindSince_.elapsed() < kRenderingNoticeDelayMs;
     if (dimHeld) {
         if (renderingNoticeTimer_ == nullptr) {
             renderingNoticeTimer_ = new QTimer(this);
@@ -576,13 +581,15 @@ void WindowStatusBar::setViewerCells(const PreviewColorState& state,
                                                                           : kit::Color::Muted;
     exposure_->setText(shown ? QString::number(preview->viewerReadout.exposure, 'f', 2) : tr("—"));
     exposure_->setTone(dim);
-    statusbar::setToolTipIfChanged(exposure_, 
+    statusbar::setToolTipIfChanged(
+        exposure_,
         shown ? tr("Exposure: the view adjustment the Viewer shows, in stops. %1")
                     .arg(previewStateText_)
               : tr("Exposure: the view adjustment the Viewer shows, in stops. No frame is shown."));
     channel_->setText(shown ? preview->viewerReadout.channel : tr("—"));
     channel_->setTone(dim);
-    statusbar::setToolTipIfChanged(channel_, tr("Channel: which channels of the frame the Viewer shows."));
+    statusbar::setToolTipIfChanged(channel_,
+                                   tr("Channel: which channels of the frame the Viewer shows."));
 }
 
 void WindowStatusBar::refreshActivity() {
@@ -674,19 +681,20 @@ void WindowStatusBar::refreshPreviewCells() {
         droppedFrames_->setTone(counting && previewController_->droppedFrameCount() != 0
                                     ? kit::Color::Warn
                                     : kit::Color::Muted);
-        statusbar::setToolTipIfChanged(droppedFrames_, 
+        statusbar::setToolTipIfChanged(
+            droppedFrames_,
             tr("Dropped: frames playback skipped to keep up. A dash means no playback is being "
                "measured."));
     };
     if (previewController_ == nullptr || session_.composition() == nullptr) {
         // No preview pipeline or no active composition: there is no colour or preview truth to
-        // report, and the ordinary "Reference (unqualified)" / "Preview unsupported" cells would read
-        // as a failure of a project that simply has not been authored yet.
-        setViewerCells(previewController_ == nullptr
-                           ? PreviewColorState{tr("Color state unavailable"), kit::Color::Warn,
-                                               tr("None")}
-                           : PreviewColorState{tr("No composition"), kit::Color::Muted, tr("None")},
-                       nullptr);
+        // report, and the ordinary "Reference (unqualified)" / "Preview unsupported" cells would
+        // read as a failure of a project that simply has not been authored yet.
+        setViewerCells(
+            previewController_ == nullptr
+                ? PreviewColorState{tr("Color state unavailable"), kit::Color::Warn, tr("None")}
+                : PreviewColorState{tr("No composition"), kit::Color::Muted, tr("None")},
+            nullptr);
         previewStateText_.clear();
         previewNotice_.clear();
         applyCompileFailure(std::nullopt);
@@ -778,28 +786,35 @@ void WindowStatusBar::setDisplayedViewer(ViewerEditor* viewer) {
 // preview pipeline and stays live even in a window built without one (previewController_ null).
 void WindowStatusBar::refreshMediaDiskCacheCell() {
     const auto stats = mediaDiskCache_ != nullptr ? mediaDiskCache_->statistics()
-                                                  : media::cache::MediaDiskCacheStatistics{};
+                                                  : media::cache::SourceMirrorStatistics{};
     const bool enabled = mediaDiskCache_ != nullptr && mediaDiskCache_->enabled();
     diskStatusText_ = mediaDiskCacheStatusText(stats, enabled);
-    QString value = tr("—");
-    QString detail = tr("The disk cache has not served a lookup yet.");
+    QString value = tr("starting");
+    QString detail = tr("The disk cache is reading its index.");
     if (!enabled) {
         value = tr("off");
         detail = tr("The disk cache is switched off in Preferences.");
-    } else if (!diskStatusText_.isEmpty()) {
-        value = tr("%1% hit · %2")
-                    .arg(static_cast<int>(std::lround(stats.hitRate() * 100.0)))
-                    .arg(formatBytes(stats.storedBytes));
-        detail = tr("%1 hits · %2 misses · %3 entries · %4 stored")
-                     .arg(stats.hits)
-                     .arg(stats.misses)
+    } else if (stats.indexLoaded) {
+        value = stats.entryCount == 0 ? tr("empty")
+                                      : tr("%1 cached").arg(formatBytes(stats.storedBytes));
+        detail = tr("%1\n%2 sources · %3 stored")
+                     .arg(mediaDiskCacheTierText(stats, platform::sourceTierWork().memoryHits))
                      .arg(stats.entryCount)
                      .arg(formatBytes(stats.storedBytes));
+        if (stats.pendingWrites != 0)
+            detail += tr(" · %1 being copied").arg(stats.pendingWrites);
+        if (stats.diskPressure)
+            detail += tr("\nThe cache drive is short of free space; new copies are skipped.");
     }
+    // #718: each source's storage class and cached state, the first few by name.
+    if (const auto* assets = session_.assetController())
+        if (const auto sources = assets->sourceStorageSummary(12); !sources.isEmpty())
+            detail += QStringLiteral("\n") + sources.join(QLatin1Char('\n'));
     mediaDiskCacheCell_->setText(value);
-    diskSegment_->setSegmentToolTip(tr("The on-disk cache of decoded frames: how often a lookup "
-                                       "found its frame, and how much it stores.\n%1")
-                                        .arg(detail));
+    diskSegment_->setSegmentToolTip(
+        tr("Local copies of source media that sits on slow storage (network shares, removable "
+           "and rotational disks): where frames came from, and how much is kept.\n%1")
+            .arg(detail));
     statusbar::setToolTipIfChanged(mediaDiskCacheCell_, diskSegment_->toolTip());
 }
 
@@ -828,9 +843,7 @@ void WindowStatusBar::setPersistentMessage(const QString& message) {
     refreshMessage();
 }
 
-void WindowStatusBar::refreshMessage() {
-    refreshActivity();
-}
+void WindowStatusBar::refreshMessage() { refreshActivity(); }
 
 // The full colour-state sentence ("Qualified · Bloom Neutral", "GPU render"): the bar shows a
 // plain GPU or CPU, and this is the detail its tooltip and accessible name carry.
@@ -1043,18 +1056,21 @@ void WindowStatusBar::refreshMcpIndicator() {
     const bool failed = snapshot && !running && snapshot->failure.has_value();
     mcpWanted_ = running || failed;
     if (running) {
-        const auto port = snapshot->endpoint ? snapshot->endpoint->port : snapshot->preferences.port;
+        const auto port =
+            snapshot->endpoint ? snapshot->endpoint->port : snapshot->preferences.port;
         mcpIndicator_->setText(tr(":%1").arg(port));
         mcpIndicator_->setTone(kit::Color::Muted);
-        statusbar::setToolTipIfChanged(mcpIndicator_, tr("MCP: the server is running; click to open the MCP Server "
-                                     "panel.\n%1")
-                                      .arg(mcppanel::statusText(*snapshot)));
+        statusbar::setToolTipIfChanged(
+            mcpIndicator_, tr("MCP: the server is running; click to open the MCP Server "
+                              "panel.\n%1")
+                               .arg(mcppanel::statusText(*snapshot)));
     } else if (failed) {
         mcpIndicator_->setText(tr("failed"));
         mcpIndicator_->setTone(kit::Color::Error);
-        statusbar::setToolTipIfChanged(mcpIndicator_, tr("MCP: the server stopped; click to open the MCP Server "
-                                     "panel.\n%1")
-                                      .arg(mcppanel::statusText(*snapshot)));
+        statusbar::setToolTipIfChanged(mcpIndicator_,
+                                       tr("MCP: the server stopped; click to open the MCP Server "
+                                          "panel.\n%1")
+                                           .arg(mcppanel::statusText(*snapshot)));
     }
     mcpSegment_->setVisible(mcpWanted_);
     applyNarrowLayout();

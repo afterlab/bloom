@@ -177,6 +177,16 @@ void dialogRows() {
     sequenceDialog.missingFrames()->setCurrentIndex(sequenceDialog.missingFrames()->findData(
         static_cast<int>(document::AssetMissingFrames::Skip)));
     change = sequenceDialog.change();
+    // #718: every footage kind offers the local-copy override, Automatic until it is set.
+    expect(sequenceDialog.localCopies() != nullptr && sequenceDialog.localCopies()->count() == 3 &&
+               sequenceDialog.localCopies()->currentData().toInt() ==
+                   static_cast<int>(document::AssetLocalCopies::Automatic),
+           "Local Copies offers Automatic, Always and Never, Automatic by default");
+    sequenceDialog.localCopies()->setCurrentIndex(sequenceDialog.localCopies()->findData(
+        static_cast<int>(document::AssetLocalCopies::Never)));
+    expect(sequenceDialog.change() &&
+               sequenceDialog.change()->localCopies == document::AssetLocalCopies::Never,
+           "choosing Never is part of the change");
     expect(change && change->missingFrames == document::AssetMissingFrames::Skip,
            "Skip them is reported");
     sequenceDialog.rateMode()->setCurrentIndex(1);

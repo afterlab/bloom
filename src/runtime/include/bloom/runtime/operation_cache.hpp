@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/platform/source_store.hpp>
 #include <bloom/render/channel_set_image.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/render/native_samples.hpp>
@@ -153,6 +154,12 @@ class OperationCache final {
     // Source capture records this before I/O and passes it to store(). A concurrent refresh may
     // leave the in-flight immutable snapshot valid, but prevents it repopulating source authority.
     [[nodiscard]] std::uint64_t decodedMediaGeneration() const;
+    // #718: the local store of source bytes behind this cache's source revisions. The tiers are
+    // this cache (memory), the store (local disk) and then the source: a capture that misses here
+    // asks the store before it reads the source, and hands the store what a source read brought.
+    // Null (the default) reads sources directly. Set once by the host that owns the evaluator.
+    void setSourceStore(std::shared_ptr<platform::SourceStore> store);
+    [[nodiscard]] std::shared_ptr<platform::SourceStore> sourceStore() const;
     [[nodiscard]] OperationCacheAccessStatistics statistics() const;
 
     // Roots this pool on an explicit host retirement owner: evicted entries are freed by its
@@ -178,6 +185,8 @@ class OperationCache final {
     void releaseSourcesOutsideWindow();
 
   private:
+    mutable std::mutex sourceStoreMutex_;
+    std::shared_ptr<platform::SourceStore> sourceStore_;
     static constexpr std::uint64_t kDecodedMediaGraceAccesses = 8;
     struct Accounting;
     struct Key {

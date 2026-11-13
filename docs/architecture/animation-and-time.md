@@ -713,8 +713,10 @@ snapshot and whose identity cannot say so, and an explicit refresh, which asks f
 re-derived precisely because something the key does not cover may have changed. CACHE-1 narrows
 this for one derived input: an interactive override plan may still READ an already-verified,
 immutable native decoded still-image entry out of the evaluator's memory cache instead of
-re-decoding it, but never inserts a source entry on a miss, and derived operation results,
-overridden plans, gesture frame-cache insertion, and disk-cache reads and writes stay bypassed. An
+re-decoding it, but never inserts a decoded entry on a miss (the source's encoded bytes are
+retained, #718: a drag reads each file once), and derived operation results,
+overridden plans and gesture frame-cache insertion stay bypassed. The disk cache holds source
+bytes, which no override changes, so a gesture reads a slow source from its local copy (#718). An
 explicit evaluation bypass (`request.bypassOperationCache`, distinct from the preview frame-cache
 refresh described here) disables even that read-only reuse.
 
@@ -1437,17 +1439,15 @@ retention never changes the pixel reference or semantic identity versions. See [
 memoization](evaluation-primitives.md#operation-memoization)
 for the complete key, ownership, concurrency and budget contract.
 
-### Media disk cache (task CACHE-2)
+### Media disk cache
 
 Distinct from the operation cache above and from the RAM-preview frame cache: a THIRD, disk-backed
-cache of decoded source images sits beneath `evaluateImageSource()`'s own lookup into the shared
-memory `OperationCache` above (its `OperationCacheEntryKind::DecodedMedia` entries;
-`src/runtime/image_source.cpp`, `src/media/cache`). A memory miss consults it before decoding; a
-decode-on-disk-miss writes back off the calling thread so scrubbing never waits on the write.
-Unlike the memory caches, it persists across restarts, which is what makes a second RAM Preview
-run or a reopened project's second scrub pass over the same footage a disk read rather than a
-re-decode. It follows the same "never cache overridden/interactive frames" rule as the operation
-cache above, gated by the identical `bypassOperationCache` condition. See [`media-io.md`'s "Disk
+store sits beneath `evaluateImageSource()`'s lookup into the shared memory `OperationCache` above
+(its `OperationCacheEntryKind::DecodedMedia` entries; `src/runtime/image_source.cpp`,
+`src/media/cache`). It holds the encoded bytes of source media that sits on slow storage (#718),
+not decoded frames: a memory miss reads the source through it, so a network source is read from
+the network once and from the local copy afterwards, across restarts and on every route. The
+write happens off the calling thread, so scrubbing never waits on it. See [`media-io.md`'s "Disk
 cache"](media-io.md#disk-cache) for the complete key, format, eviction, and settings contract.
 
 ## Animated Parent Transforms And Bounds

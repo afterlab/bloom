@@ -29,6 +29,8 @@ const std::string kSetInterpretation =
     R"(invertAlpha, deinterlace: true or false. fieldOrder: "file", "progressive", "upper" or )"
     R"("lower". pixelAspect: "n/d" (for example "10/11", "2/1") or "file". loop: 1-1000 passes. )"
     R"(missingFrames: "hold", "nothing" or "skip" (play the frames that exist back to back). )"
+    R"(localCopies: "automatic", "always" or "never" (whether Bloom keeps a local copy of the )"
+    R"(source media; automatic follows Preferences and the storage the file is on). )"
     R"(stillDuration: a still's length as an exact time (seconds, or [numerator, denominator]); )"
     R"(compositionLength: true restores the composition's length. legacy and inputColorSpaceId: the input color as )"
     R"(bloom.asset.set-input-color takes it ("raw" is Preserve RGB, "linear" Interpret as Linear). )"
@@ -70,6 +72,7 @@ void addFootageOperations(std::vector<OperationDescriptor>& descriptors) {
          maybe("loop", ValueKind::Integer, std::int64_t{1},
                "Integer 1-1000. Passes of the footage."),
          maybe("missingFrames", ValueKind::String, "hold", "hold, nothing or skip."),
+         maybe("localCopies", ValueKind::String, "automatic", "automatic, always or never."),
          maybe("stillDuration", ValueKind::Integer, std::int64_t{5},
                "Exact time. A still's length (5 is five seconds)."),
          maybe("compositionLength", ValueKind::Boolean, true,
@@ -92,6 +95,7 @@ void addFootageOperations(std::vector<OperationDescriptor>& descriptors) {
             const auto aspect = read.text("pixelAspect");
             const auto loop = read.integer("loop");
             const auto missing = read.text("missingFrames");
+            const auto localCopies = read.text("localCopies");
             const auto stillDuration = read.time("stillDuration");
             const auto compositionLength = read.boolean("compositionLength");
             const auto legacy = read.text("legacy");
@@ -173,6 +177,17 @@ void addFootageOperations(std::vector<OperationDescriptor>& descriptors) {
                     change.missingFrames = document::AssetMissingFrames::Skip;
                 else
                     return argumentFailure(op, "missingFrames", "expects hold, nothing or skip");
+            }
+            if (localCopies) {
+                if (*localCopies == "automatic")
+                    change.localCopies = document::AssetLocalCopies::Automatic;
+                else if (*localCopies == "always")
+                    change.localCopies = document::AssetLocalCopies::Always;
+                else if (*localCopies == "never")
+                    change.localCopies = document::AssetLocalCopies::Never;
+                else
+                    return argumentFailure(op, "localCopies",
+                                           "expects automatic, always or never");
             }
             if (compositionLength == true) {
                 change.stillDuration = std::optional<core::RationalTime>{};

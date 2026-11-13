@@ -340,8 +340,9 @@ segments:
   preview cache's frame count ("385 f"). The tooltip keeps the budget explanation (the caches use
   usable memory, measured RAM minus the RAM headroom) and the hit and miss counters of each cache; it explains where a number came
   from and never becomes a second place to read the numbers themselves.
-- **Disk cache**: "12% hit · 536.3 MB", "off", or a dash before the first lookup; hits, misses and
-  entries in the tooltip.
+- **Disk cache**: what the store of local copies holds, "Disk 536.3 MB cached", or "Disk empty",
+  "Disk cache starting" while its index loads, "Disk cache off". The tooltip counts RAM hits,
+  disk hits and network reads (#718).
 - **MCP**: a small text segment, "MCP :6767" in the mono face and Muted ink, only while the server
   runs ("MCP failed" in Error ink after a failure); there is no button. Clicking it, or Return or
   Space with it focused, opens the MCP Server panel. Nothing shows while the server is stopped.
@@ -1403,8 +1404,9 @@ this frame rate for a sequence, with an exact rate field), Start Timecode (the s
 override), Alpha (Guess from the file, Ignore, Straight, Premultiplied with a Matte Color chip shown
 only for Premultiplied, and an Invert alpha check), Fields (the file's order or an override, and
 Deinterlace), Pixel Aspect Ratio (the file's or Composition Settings' list), Loop (times), Missing
-Frames (sequences) and Input Color (Auto with the resolved space named, Preserve RGB, Interpret as
-Linear, legacy sRGB and every space of the project configuration, camera log spaces included). Rows
+Frames (sequences), Input Color (Auto with the resolved space named, Preserve RGB, Interpret as
+Linear, legacy sRGB and every space of the project configuration, camera log spaces included) and
+Local Copies (Automatic, Always keep a copy, Never keep a copy; #718). Rows
 a selected kind does not have are absent; the title names a multi-selection ("Interpret Footage —
 3 items"), whose OK changes only what the artist changed, on every item, as one undo entry. The
 selection header shows an Interpret Footage icon button at the end of its facts line while footage

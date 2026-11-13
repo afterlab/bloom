@@ -4,7 +4,7 @@
 
 #include "window_status_bar_segments.hpp"
 
-#include <bloom/media/cache/media_disk_cache.hpp>
+#include <bloom/media/cache/source_mirror.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
@@ -157,22 +157,30 @@ QString operationCacheText(const runtime::OperationCache& operationCache) {
         .arg(formatBytes(operationCache.retainedBytes()), formatBytes(operationCache.byteBudget()));
 }
 
-// CACHE-2 (docs/architecture/media-io.md "Disk cache"): kept as its own free function, separate
-// hunk and separate cell from previewCacheText() above -- the RAM preview cell reports the
-// in-memory frame cache, this one the on-disk decoded-frame store, and the two are independent
-// budgets an artist can reason about separately.
-QString mediaDiskCacheStatusText(const media::cache::MediaDiskCacheStatistics& stats,
+// #718 (docs/architecture/media-io.md "Disk cache"): the disk cell reports the state of the
+// local copies of source media, which is true whether or not a lookup has happened: off, still
+// reading its index, empty, or how much it holds. It is its own cell beside the RAM preview
+// account because the two are independent budgets an artist reasons about separately.
+QString mediaDiskCacheStatusText(const media::cache::SourceMirrorStatistics& stats,
                                  const bool enabled) {
-    if (!enabled) {
+    if (!enabled)
         return WindowStatusBar::tr("Disk cache off");
-    }
-    const auto total = stats.hits + stats.misses;
-    if (total == 0 && stats.entryCount == 0) {
-        return {};
-    }
-    return WindowStatusBar::tr("Disk %1% hit · %2")
-        .arg(static_cast<int>(std::lround(stats.hitRate() * 100.0)))
-        .arg(formatBytes(stats.storedBytes));
+    if (!stats.indexLoaded)
+        return WindowStatusBar::tr("Disk cache starting");
+    if (stats.entryCount == 0)
+        return WindowStatusBar::tr("Disk empty");
+    return WindowStatusBar::tr("Disk %1 cached").arg(formatBytes(stats.storedBytes));
+}
+
+QString mediaDiskCacheTierText(const media::cache::SourceMirrorStatistics& stats,
+                               const std::uint64_t memoryHits) {
+    auto text = WindowStatusBar::tr("RAM hits %1 · Disk hits %2 · Network reads %3")
+                    .arg(memoryHits)
+                    .arg(stats.diskHits)
+                    .arg(stats.networkReads);
+    if (stats.otherSourceReads != 0)
+        text += WindowStatusBar::tr(" · Other slow reads %1").arg(stats.otherSourceReads);
+    return text;
 }
 
 } // namespace bloom::ui

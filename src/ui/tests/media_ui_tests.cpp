@@ -17,7 +17,9 @@
 #include <QTest>
 #include <QTreeWidget>
 #include <QUrl>
+#include <filesystem>
 #include <atomic>
+#include <bloom/media/cache/source_mirror.hpp>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/asset_operations.hpp>
@@ -613,11 +615,15 @@ void run() {
     cardAsset->chooseIndex(cardAsset->findData(QString::number(still.value())));
     waitThumbnail();
     require(QFile::remove(directory.filePath("still.png")), "remove fixture media file");
-    // Freshness follows document changes, never the playhead (bug #401): an edit refreshes.
+    // Freshness never follows the playhead (bug #401), and an edit that leaves the assets alone
+    // looks at no file either (#718): Verify footage is what notices the missing file.
     setSource("loopMode", std::int64_t{1});
-    require(awaitQtCondition("the removed source is reported missing",
-                             [&] { return controller.missing(still); }),
-            "the removed source is reported missing");
+    QTest::qWait(200);
+    require(!controller.missing(still), "an unrelated edit probes no source file");
+    controller.verifyFootage();
+    timer.restart();
+    while (!controller.missing(still) && timer.elapsed() < 15000)
+        QTest::qWait(10);
     require(controller.missing(still) && controller.thumbnail(still).isNull(),
             "unreadable asset never reuses a stale decoded proxy");
     require(card->assetProblem() && warningBadge(renderCard()) > 5,
@@ -658,7 +664,13 @@ void playbackStartsNoMediaJobs() {
         require(id.has_value() && session.setComposition(*id), "playback composition seed");
     }
     ui::TaskUiBridge bridge(scheduler);
-    ui::AssetController controller(session, host, scheduler, bridge);
+    // #718: a disk cache that copies every source, so the thumbnails' reads land in it.
+    media::cache::SourceMirrorConfig mirrorConfig;
+    mirrorConfig.rootDirectory =
+        std::filesystem::path(directory.filePath("disk-cache").toStdString());
+    mirrorConfig.policy.preference = media::cache::LocalCopyPreference::Always;
+    media::cache::SourceMirror mirror(mirrorConfig);
+    ui::AssetController controller(session, host, scheduler, bridge, &mirror);
     controller.importFiles(firsts, std::nullopt);
     require(awaitQtCondition("the 25 sequences import",
                              [&] {
@@ -671,9 +683,43 @@ void playbackStartsNoMediaJobs() {
     for (const auto& asset : session.snapshot().project().assets())
         layers.emplace<commands::AddImageLayer>(session.compositionId(), asset.id);
     require(session.executeTransaction(std::move(layers)).succeeded(), "25 sequence layers");
-    require(awaitQtCondition("the media worker settles before playback",
-                             [&] { return !controller.busy() && !controller.thumbnailsPending(); }),
-            "the media worker settles before playback");
+    timer.restart();
+    while ((controller.busy() || controller.thumbnailsPending()) && timer.elapsed() < 30000)
+        QTest::qWait(10);
+    require(!controller.thumbnailsPending(), "the media worker settles before playback");
+    // #718: the Assets panel says where each source lives and what the disk cache holds of it.
+    // A thumbnail reads a sequence's first member, so one file of each is copied.
+    mirror.flush();
+    for (const auto& asset : session.snapshot().project().assets()) {
+        const auto text = controller.sourceStorageText(asset.id);
+        const auto members = asset.manifest.members.size();
+        require(text.endsWith(QStringLiteral("1 of %1 files copied locally").arg(members)) &&
+                    text.contains(QStringLiteral(" · ")),
+                "a source reports its storage class and how much of it is copied locally");
+    }
+    const auto summary = controller.sourceStorageSummary(12);
+    require(summary.size() == 13 && summary.back() == QStringLiteral("and 13 more") &&
+                summary.front().startsWith(QString::fromStdString(
+                    session.snapshot().project().assets().front().name + ": ")),
+            "the status bar summary names the first sources and counts the rest");
+    // An edit that leaves the assets alone starts no thumbnail job and looks at no file.
+    {
+        const auto edit = platform::sourceReadWork();
+        commands::Transaction more("Add Layer", session.snapshot().revision());
+        more.emplace<commands::AddImageLayer>(session.compositionId(),
+                                              session.snapshot().project().assets().front().id);
+        require(session.executeTransaction(std::move(more)).succeeded(), "one more layer");
+        bool job = false;
+        timer.restart();
+        while (timer.elapsed() < 600) {
+            QTest::qWait(20);
+            job = job || controller.thumbnailsPending();
+        }
+        const auto settled = platform::sourceReadWork();
+        require(!job && settled.fullReads == edit.fullReads &&
+                    settled.identityChecks == edit.identityChecks,
+                "an edit that leaves the assets alone starts no thumbnail job (#718)");
+    }
     const auto before = platform::sourceReadWork();
     int started = 0;
     for (int tick = 0; tick < 120; ++tick) {

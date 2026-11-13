@@ -112,6 +112,7 @@ AssetInterpretationChange::everything(const document::AssetInterpretation& value
     change.pixelAspect = value.pixelAspect;
     change.loopCount = value.loopCount;
     change.missingFrames = value.missingFrames;
+    change.localCopies = value.localCopies;
     change.stillDuration = value.stillDuration;
     change.inputColor = std::pair{value.colorSpace, value.inputColorSpaceId};
     return change;
@@ -142,6 +143,8 @@ AssetInterpretationChange::appliedTo(const AssetKind kind,
         value.missingFrames = *missingFrames;
     if (kind == AssetKind::Image && stillDuration)
         value.stillDuration = *stillDuration;
+    if (localCopies)
+        value.localCopies = *localCopies;
     if (alphaMode)
         value.alphaMode = *alphaMode;
     if (invertAlpha)

@@ -39,6 +39,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <filesystem>
 #include <limits>
 #include <utility>
 
@@ -698,6 +700,7 @@ QWidget* PreferencesWindow::buildMemoryPage() {
         draft.mediaDiskCacheEnabled = base.mediaDiskCacheEnabled;
         draft.mediaDiskCacheDirectory = base.mediaDiskCacheDirectory;
         draft.mediaDiskCacheBudgetBytes = base.mediaDiskCacheBudgetBytes;
+        draft.mediaLocalCopies = base.mediaLocalCopies;
     });
     auto* diskRows = disk->bodyLayout();
     // Every disk cache value is read at startup: the section says so once, in its header.
@@ -787,8 +790,136 @@ QWidget* PreferencesWindow::buildMemoryPage() {
     budgetHint->setObjectName(QStringLiteral("preferencesMediaDiskCacheBudgetHint"));
     addHelperRow(diskRows, content, budgetHint);
 
+    // #718: which source media gets a local copy in the disk cache.
+    using media::cache::LocalCopyPreference;
+    auto* copies =
+        addDropdownRow(diskRows, content, QStringLiteral("preferencesMediaLocalCopiesDropdown"),
+                       tr("Keep local copies of source media"));
+    copies->addItem(tr("Automatic"), static_cast<int>(LocalCopyPreference::Automatic));
+    copies->addItem(tr("Always"), static_cast<int>(LocalCopyPreference::Always));
+    copies->addItem(tr("Never"), static_cast<int>(LocalCopyPreference::Never));
+    const auto showCopies = [this, copies] {
+        const QSignalBlocker blocker(copies);
+        copies->setCurrentIndex(
+            copies->findData(static_cast<int>(draft_.mediaLocalCopies.preference)));
+    };
+    showCopies();
+    connect(copies, &kit::KDropdown::currentIndexChanged, this, [this, copies](int) {
+        draft_.mediaLocalCopies.preference =
+            static_cast<LocalCopyPreference>(copies->currentData().toInt());
+        updateApplyEnabled();
+    });
+    refreshCallbacks_.push_back(showCopies);
+    // Folder rules: everything under a folder follows its rule; the longest folder wins.
+    auto* folders = new QWidget(content);
+    folders->setObjectName(QStringLiteral("preferencesMediaLocalCopyFolders"));
+    auto* folderLayout = new QVBoxLayout(folders);
+    folderLayout->setContentsMargins(0, 0, 0, 0);
+    folderLayout->setSpacing(kit::px(kit::Spacing::XS));
+    const auto showFolders = [this, folders, folderLayout] {
+        while (auto* item = folderLayout->takeAt(0)) {
+            if (auto* widget = item->widget())
+                widget->deleteLater();
+            delete item;
+        }
+        const auto& rules = draft_.mediaLocalCopies.folders;
+        if (folderRulesRow_ != nullptr)
+            folderRulesRow_->setVisible(!rules.empty());
+        for (std::size_t index = 0; index < rules.size(); ++index) {
+            const auto number = QString::number(index);
+            auto* row = new QWidget(folders);
+            row->setObjectName(QStringLiteral("preferencesMediaLocalCopyFolderRow") + number);
+            auto* rowLayout = new QHBoxLayout(row);
+            rowLayout->setContentsMargins(0, 0, 0, 0);
+            rowLayout->setSpacing(kit::px(kit::Spacing::XS));
+            auto* rule = new kit::KDropdown(row);
+            rule->setObjectName(QStringLiteral("preferencesMediaLocalCopyFolderRule") + number);
+            rule->setAccessibleName(tr("Folder rule"));
+            rule->addItem(tr("Keep copies"), true);
+            rule->addItem(tr("No copies"), false);
+            rule->setCurrentIndex(rules[index].keep ? 0 : 1);
+            connect(rule, &kit::KDropdown::currentIndexChanged, this, [this, rule, index](int) {
+                if (index < draft_.mediaLocalCopies.folders.size())
+                    draft_.mediaLocalCopies.folders[index].keep = rule->currentData().toBool();
+                updateApplyEnabled();
+            });
+#if defined(_WIN32)
+            const auto text = QString::fromStdWString(rules[index].folder.wstring());
+#else
+            const auto text = QString::fromStdString(rules[index].folder.string());
+#endif
+            auto* path = new kit::KLabel(text, row, kit::TypeRole::UiSmall);
+            path->setObjectName(QStringLiteral("preferencesMediaLocalCopyFolderPath") + number);
+            path->setToolTip(text);
+            path->setMinimumWidth(0);
+            path->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+            auto* remove = new kit::KIconButton(row);
+            remove->setObjectName(QStringLiteral("preferencesMediaLocalCopyFolderRemove") +
+                                  number);
+            remove->setIcon(kit::icon(kit::IconId::Close, kit::IconRole::Chrome));
+            remove->setToolTip(tr("Remove this folder rule"));
+            remove->setAccessibleName(tr("Remove this folder rule"));
+            // Queued: the rows are rebuilt, and this button with them.
+            connect(
+                remove, &QAbstractButton::clicked, this,
+                [this, index] {
+                    auto& list = draft_.mediaLocalCopies.folders;
+                    if (index < list.size())
+                        list.erase(list.begin() + static_cast<std::ptrdiff_t>(index));
+                    refreshControls();
+                    updateApplyEnabled();
+                },
+                Qt::QueuedConnection);
+            rowLayout->addWidget(rule);
+            rowLayout->addWidget(path, 1);
+            rowLayout->addWidget(remove);
+            folderLayout->addWidget(row);
+        }
+    };
+    auto* addFolder = new kit::KButton(tr("Add Folder…"), content);
+    addFolder->setObjectName(QStringLiteral("preferencesMediaLocalCopyFolderAdd"));
+    addFolder->setFixedWidth(addFolder->sizeHint().width());
+    connect(addFolder, &QAbstractButton::clicked, this, [this] {
+        const auto picked = kit::chooseFile(*this, {.mode = kit::KFileRequest::Mode::Directory,
+                                                    .title = tr("Choose a Media Folder"),
+                                                    .kind = QStringLiteral("local-copy-folder"),
+                                                    .nameFilters = {},
+                                                    .defaultSuffix = {},
+                                                    .startPath = {}});
+        if (picked)
+            addLocalCopyFolder(*picked);
+    });
+    (void)addPreferencesRow(diskRows, content, tr("Folder rules"), {addFolder});
+    // The rules sit under the button in the value column; the row is absent while there are none.
+    folderRulesRow_ = addPreferencesRow(diskRows, content, QString{}, {folders});
+    auto* copiesHint = new kit::KLabel(
+        tr("Automatic keeps a local copy of media on network drives and other slow storage, so "
+           "each file is read from there once. A folder rule covers everything inside the "
+           "folder; an asset's own choice in Interpret Footage comes first."),
+        content);
+    copiesHint->setObjectName(QStringLiteral("preferencesMediaLocalCopiesHint"));
+    addHelperRow(diskRows, content, copiesHint);
+    showFolders();
+    refreshCallbacks_.push_back(showFolders);
+
     layout->addStretch(1);
     return wrapPage(content, QStringLiteral("preferencesMemoryPage"));
+}
+
+void PreferencesWindow::addLocalCopyFolder(const QString& folder) {
+#if defined(_WIN32)
+    const auto path = std::filesystem::path(folder.toStdWString()).lexically_normal();
+#else
+    const auto path = std::filesystem::path(folder.toStdString()).lexically_normal();
+#endif
+    if (!path.is_absolute())
+        return;
+    auto& rules = draft_.mediaLocalCopies.folders;
+    // One rule per folder: choosing a folder again keeps its rule.
+    if (std::ranges::none_of(rules, [&](const auto& rule) { return rule.folder == path; }))
+        rules.push_back({path, true});
+    refreshControls();
+    updateApplyEnabled();
 }
 
 QWidget* PreferencesWindow::buildTimelinePage() {

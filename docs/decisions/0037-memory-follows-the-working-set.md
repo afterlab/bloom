@@ -151,7 +151,7 @@ names the measurement that shows a later read of the retained bytes.
 | GPU scene cache (`GpuSceneCache`) | device images | device memory only | cache | an unchanged warm rebuild dispatches nothing (native tests) | 919d5f55b (#299); 1/8 share 04ca9ef2d | kept; the host-derived 1/8 share removed, device plan sizes it |
 | Proxies (asset thumbnails) | packed thumbnails | thumbnail-sized | cache | thumbnail redisplay; not exercised by the playback bench | 8e2e3d952 | kept; absolute 8 MiB/512-entry cap, no fraction |
 | Decoded audio (`AssetController`) | PCM | not a frame store | cache | audio playback; not exercised by the video bench | 8e2e3d952 | kept; absolute cap, no fraction |
-| Media disk cache write queue | decoded image awaiting its write | one frame per queued write | scratch queue | not a reuse store | c6c3ff961 (#234) | kept; 64 entries and 256 MiB |
+| Media disk cache write queue | encoded source bytes awaiting their write (#718) | one source file per queued write | scratch queue | not a reuse store | c6c3ff961 (#234) | kept; 256 MiB, oldest dropped first |
 
 ## Measurements
 

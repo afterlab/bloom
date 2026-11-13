@@ -97,10 +97,20 @@ still even when its file is numbered.
 The Assets thumbnails show the interpretation: **Ignore** and **Invert alpha** (and a premultiplied
 matte color) the way a layer renders them, and the pixel aspect ratio as the thumbnail's shape.
 
+## Local copies
+
+Bloom keeps a local copy of source media that sits on slow storage (a network share, a USB or
+rotational disk), so playback, scrubbing and export read each file from the network once. The
+**Local Copies** row overrides that for one asset: **Always keep a copy** copies the file even
+when it is on fast local storage, **Never keep a copy** reads the file where it is every time,
+and **Automatic** (the default) follows **Edit → Preferences… → Memory & Caches** and the storage
+the file is on. It changes how the file is read, never what it looks like. From an agent or a
+script the member is `localCopies` (`automatic`, `always` or `never`).
+
 ## From an agent or a script
 
 `bloom.asset.set-interpretation` sets the same members (see [Using Bloom from an agent](mcp.md)),
-including `missingFrames` `skip` and a still's `stillDuration` (`compositionLength: true` restores
+including `missingFrames` `skip`, `localCopies` and a still's `stillDuration` (`compositionLength: true` restores
 the composition's length), and `query` with `kind=assets` returns each footage asset's
 interpretation. `bloom.asset.import` takes the import options as `asSequence`, `firstFrame` with
 `lastFrame` and `skipMissingFrames`, and the preferences as `sequenceFrameRate` (omit it to match

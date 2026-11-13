@@ -4,7 +4,7 @@
 // Cryptomatte type, or its first data channel as grey. Worker-only; decodes two channels at most.
 
 #include <QImage>
-#include <bloom/core/sha256.hpp>
+#include <bloom/media/image.hpp>
 
 #include <filesystem>
 #include <functional>
@@ -12,8 +12,8 @@
 
 namespace bloom::ui::detail {
 
-[[nodiscard]] QImage dataChannelThumbnail(const std::filesystem::path& path,
-                                          const core::Sha256Digest& digest, const std::string& part,
+[[nodiscard]] QImage dataChannelThumbnail(const media::ImageSourceRevision& revision,
+                                          const std::string& part,
                                           const std::function<bool()>& cancel);
 
 } // namespace bloom::ui::detail

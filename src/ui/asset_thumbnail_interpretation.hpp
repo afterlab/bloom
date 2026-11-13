@@ -26,9 +26,9 @@ namespace bloom::ui::detail {
 // A still or sequence frame decoded as its stored samples and interpreted by the footage pass,
 // then `processor` (null: no conversion): the image the renderer's CPU reference makes.
 [[nodiscard]] media::ImageResult<std::shared_ptr<const render::Rgba32fImage>>
-decodeInterpretedThumbnail(const document::AssetRecord& asset, const std::filesystem::path& path,
-                           const media::ImageInterpretation& interpretation,
-                           const core::Sha256Digest& digest, std::int64_t firstRow,
+decodeInterpretedThumbnail(const document::AssetRecord& asset,
+                           const media::ImageSourceRevision& revision,
+                           const media::ImageInterpretation& interpretation, std::int64_t firstRow,
                            const color::CpuColorSpaceProcessor* processor,
                            const std::function<bool()>& cancel);
 

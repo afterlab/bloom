@@ -44,6 +44,8 @@ inline constexpr int kSortRole = Qt::UserRole + 7;
 // The row's status for tests and accessibility: "missing" (the warning glyph), "colourNote" (the
 // assumed-colour Info glyph) or empty.
 inline constexpr int kStateRole = Qt::UserRole + 8;
+// The Name tooltip without its storage line (#718), which is added fresh whenever it is shown.
+inline constexpr int kBaseToolTipRole = Qt::UserRole + 20;
 // The Name cell's glyph as an int(kit::IconId), painted by AssetRowDelegate in the row's ink.
 inline constexpr int kGlyphRole = Qt::UserRole + 9;
 // An int(kit::Color) when the glyph carries state (Warn for a missing source); absent otherwise,

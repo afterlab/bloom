@@ -1,5 +1,5 @@
 #include <bloom/core/pixel_aspect_ratio.hpp>
-#include <bloom/media/cache/media_disk_cache.hpp>
+#include <bloom/media/cache/source_mirror.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/render/path_raster.hpp>
@@ -129,25 +129,52 @@ void testMakeMediaDiskCacheFromSettings(Expectations& check) {
 // mediaDiskCacheStatusText() (window_status_bar.hpp) is the free function the status bar's cell
 // calls; tested directly here since it needs only a statistics value, not a live cache or widget.
 void testMediaDiskCacheStatusText(Expectations& check) {
-    cache::MediaDiskCacheStatistics empty;
+    cache::SourceMirrorStatistics empty;
     check.expect(ui::mediaDiskCacheStatusText(empty, /*enabled=*/false) ==
                      QStringLiteral("Disk cache off"),
                  "a disabled cache always reports 'Disk cache off', regardless of statistics");
-    check.expect(ui::mediaDiskCacheStatusText(empty, /*enabled=*/true).isEmpty(),
-                 "an enabled cache with no lookups yet and no resident entries reports nothing");
+    check.expect(ui::mediaDiskCacheStatusText(empty, /*enabled=*/true) ==
+                     QStringLiteral("Disk cache starting"),
+                 "an enabled cache whose index is still being read says so");
+    empty.indexLoaded = true;
+    check.expect(ui::mediaDiskCacheStatusText(empty, /*enabled=*/true) ==
+                     QStringLiteral("Disk empty"),
+                 "a loaded cache with no entries reports empty, with or without lookups");
 
-    cache::MediaDiskCacheStatistics warm;
-    warm.hits = 3;
-    warm.misses = 1;
+    cache::SourceMirrorStatistics warm;
+    warm.indexLoaded = true;
+    warm.diskHits = 3;
+    warm.networkReads = 1;
     warm.storedBytes = 2ULL * 1024 * 1024;
     warm.entryCount = 4;
     const auto text = ui::mediaDiskCacheStatusText(warm, /*enabled=*/true);
-    check.expect(text.contains(QStringLiteral("75")),
-                 "3 hits of 4 lookups is reported as a 75% hit rate");
-    check.expect(text.contains(QStringLiteral("MB")),
-                 "resident bytes are reported with a readable unit");
+    check.expect(text.contains(QStringLiteral("MB")) && text.contains(QStringLiteral("cached")),
+                 "resident bytes are reported with a readable unit, before any lookup too");
+    const auto tiers = ui::mediaDiskCacheTierText(warm, 7);
+    check.expect(tiers == QStringLiteral("RAM hits 7 · Disk hits 3 · Network reads 1"),
+                 "the tooltip reports RAM hits, disk hits and network reads");
+    warm.otherSourceReads = 2;
+    check.expect(ui::mediaDiskCacheTierText(warm, 7).endsWith(
+                     QStringLiteral("Other slow reads 2")),
+                 "reads of other slow storage are reported when there are any");
 }
 
+// One mirrored source: enough for the disk store to hold one real entry.
+void mirrorOneSource(cache::SourceMirror& mirror, const char tag) {
+    auto bytes = std::make_shared<std::vector<std::byte>>(64, static_cast<std::byte>(tag));
+    bloom::platform::FileIdentity identity;
+    identity.size = bytes->size();
+    identity.modifiedNanoseconds = 1;
+    identity.fileIdLow = static_cast<std::uint64_t>(tag);
+    const std::span<const std::byte> view(*bytes);
+    mirror.keep(std::filesystem::temp_directory_path() / "bloom-disk-cache-settings" /
+                    (std::string(1, tag) + ".exr"),
+                identity, std::move(bytes), view);
+    mirror.flush();
+}
+
+// A tiny image for the in-memory decoded-media entries, cheap enough that the purge assertions
+// are about cache effects rather than pixel work.
 // A tiny decodable image: enough for the disk store to write one real entry, cheap enough that the
 // purge assertions are about cache effects rather than pixel work.
 [[nodiscard]] std::shared_ptr<const bloom::render::Rgba32fImage> makeTestImage() {
@@ -175,14 +202,13 @@ void testPurgeMediaCachesClearsDiskAndDecodedMemory(Expectations& check) {
         return;
     }
 
-    cache::MediaDiskCacheConfig config;
+    cache::SourceMirrorConfig config;
     config.rootDirectory = std::filesystem::path(directory.filePath("media-cache").toStdString());
     config.byteBudget = 4ULL * 1024ULL * 1024ULL;
-    cache::MediaDiskCache diskCache(config);
+    cache::SourceMirror diskCache(config);
 
     const auto image = makeTestImage();
-    const std::string key(64, 'a');
-    diskCache.store(key, image);
+    mirrorOneSource(diskCache, 'a');
     check.expect(diskCache.statistics().entryCount == 1 && diskCache.statistics().storedBytes > 0,
                  "purge media: the disk cache holds one real entry before the purge");
 
@@ -239,15 +265,15 @@ void testCachePurgeControllerClearsApplicableStores(Expectations& check) {
     runtime::TaskScheduler scheduler;
     ui::TaskUiBridge bridge(scheduler, nullptr, std::chrono::milliseconds{1});
 
-    cache::MediaDiskCacheConfig config;
+    cache::SourceMirrorConfig config;
     config.rootDirectory = std::filesystem::path(directory.filePath("media").toStdString());
     config.byteBudget = 4ULL * 1024ULL * 1024ULL;
-    cache::MediaDiskCache disk(config);
+    cache::SourceMirror disk(config);
     runtime::OperationCache operationCache(std::size_t{1} << 20U);
     runtime::GpuSceneCoverageCache coverage;
 
     const auto image = makeTestImage();
-    disk.store(std::string(64, 'b'), image);
+    mirrorOneSource(disk, 'b');
     operationCache.store("op", bloom::document::Revision::fromRaw(1),
                          {.image = {}, .values = {}, .bounds = {}});
     operationCache.store("decoded", bloom::document::Revision::fromRaw(1),
@@ -414,10 +440,10 @@ void testCachePurgeProceedsWhileSaveIsHeld(Expectations& check) {
     runtime::TaskScheduler scheduler;
     ui::TaskUiBridge bridge(scheduler, nullptr, std::chrono::milliseconds{1});
     runtime::OperationCache operationCache(std::size_t{1} << 20U);
-    cache::MediaDiskCache disk({.rootDirectory =
+    cache::SourceMirror disk({.rootDirectory =
                                    std::filesystem::path(directory.filePath("media").toStdString()),
                                .byteBudget = 4ULL * 1024ULL * 1024ULL});
-    disk.store(std::string(64, 'c'), makeTestImage());
+    mirrorOneSource(disk, 'c');
     operationCache.store("old", bloom::document::Revision::fromRaw(1),
                          {.image = {}, .values = {}, .bounds = {}});
     ProducerGate saveGate;

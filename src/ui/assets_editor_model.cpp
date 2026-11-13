@@ -450,6 +450,12 @@ void AssetsEditor::rebuild() {
             }))
             tooltip +=
                 QStringLiteral("\n") + QString::fromUtf8(media::provider::kProResPreviewNote);
+        // #718: where the source lives and what the disk cache holds of it. The base text is
+        // kept so the tree can bring the line up to date when the tooltip is shown.
+        item->setData(0, kBaseToolTipRole, tooltip);
+        if (const auto storage = controller ? controller->sourceStorageText(asset.id) : QString{};
+            !storage.isEmpty())
+            tooltip += QStringLiteral("\n") + tr("Storage: %1").arg(storage);
         item->setToolTip(NameColumn, tooltip);
         // The Name glyph is the kind in its label colour, or the row's state: a warning for a
         // missing or unshowable source, an Info note for a colour assumption (untagged video).

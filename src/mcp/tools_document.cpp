@@ -67,6 +67,8 @@ template <typename Out>
     constexpr std::array<const char*, 3> missing{"hold", "nothing", "skip"};
     out.set(record, "missingFrames",
             out.text(missing[static_cast<std::size_t>(value.missingFrames)]));
+    constexpr std::array<const char*, 3> copies{"automatic", "always", "never"};
+    out.set(record, "localCopies", out.text(copies[static_cast<std::size_t>(value.localCopies)]));
     if (value.stillDuration) {
         auto* still = out.array();
         out.append(still, out.number(static_cast<std::uint64_t>(value.stillDuration->numerator())));

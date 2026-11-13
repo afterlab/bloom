@@ -2410,7 +2410,7 @@ class AssetOps:
         Related: query:assets, transact
         """
         ...
-    def set_interpretation(self, assets: tuple, frameRate: str = ..., startTime: int = ..., dropFrame: bool = ..., sourceTimecode: bool = ..., alpha: str = ..., invertAlpha: bool = ..., matteColor: tuple = ..., fieldOrder: str = ..., deinterlace: bool = ..., pixelAspect: str = ..., loop: int = ..., missingFrames: str = ..., stillDuration: int = ..., compositionLength: bool = ..., legacy: str = ..., inputColorSpaceId: str = ...) -> Mapping[str, Any] | None:
+    def set_interpretation(self, assets: tuple, frameRate: str = ..., startTime: int = ..., dropFrame: bool = ..., sourceTimecode: bool = ..., alpha: str = ..., invertAlpha: bool = ..., matteColor: tuple = ..., fieldOrder: str = ..., deinterlace: bool = ..., pixelAspect: str = ..., loop: int = ..., missingFrames: str = ..., localCopies: str = ..., stillDuration: int = ..., compositionLength: bool = ..., legacy: str = ..., inputColorSpaceId: str = ...) -> Mapping[str, Any] | None:
         """bloom.asset.set-interpretation  (operation, asset)
         Sets how footage is interpreted, as OK in the Assets panel's Interpret Footage dialog does: only
         the members given change, on every listed image, sequence or video, in ONE undo step. A member a
@@ -2423,13 +2423,15 @@ class AssetOps:
         "premultiplied" (matted with matteColor, three numbers 0-1 in the file's encoding). invertAlpha,
         deinterlace: true or false. fieldOrder: "file", "progressive", "upper" or "lower". pixelAspect:
         "n/d" (for example "10/11", "2/1") or "file". loop: 1-1000 passes. missingFrames: "hold",
-        "nothing" or "skip" (play the frames that exist back to back). stillDuration: a still's length
-        as an exact time (seconds, or [numerator, denominator]); compositionLength: true restores the
-        composition's length. legacy and inputColorSpaceId: the input color as
-        bloom.asset.set-input-color takes it ("raw" is Preserve RGB, "linear" Interpret as Linear). A
-        layer whose out point ended with its footage follows the new length. Errors: "Asset does not
-        exist"; "Interpret Footage applies to images, sequences and videos" when no listed asset is
-        footage; a value out of range names its member. Undo: one step. MCP example:
+        "nothing" or "skip" (play the frames that exist back to back). localCopies: "automatic",
+        "always" or "never" (whether Bloom keeps a local copy of the source media; automatic follows
+        Preferences and the storage the file is on). stillDuration: a still's length as an exact time
+        (seconds, or [numerator, denominator]); compositionLength: true restores the composition's
+        length. legacy and inputColorSpaceId: the input color as bloom.asset.set-input-color takes it
+        ("raw" is Preserve RGB, "linear" Interpret as Linear). A layer whose out point ended with its
+        footage follows the new length. Errors: "Asset does not exist"; "Interpret Footage applies to
+        images, sequences and videos" when no listed asset is footage; a value out of range names its
+        member. Undo: one step. MCP example:
         {"op":"bloom.asset.set-interpretation","args":{"assets":[3],"frameRate":"23.976","loop":2,"startTime":3600}}.
 
         Arguments:
@@ -2459,6 +2461,8 @@ class AssetOps:
               Integer 1-1000. Passes of the footage.
           missingFrames  str  optional
               hold, nothing or skip.
+          localCopies  str  optional
+              automatic, always or never.
           stillDuration  int  optional
               Exact time. A still's length (5 is five seconds).
           compositionLength  bool  optional

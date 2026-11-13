@@ -13,19 +13,16 @@ namespace {
 constexpr double kThumbnailEdge = 64.0;
 } // namespace
 
-media::ImageResult<std::shared_ptr<const render::Rgba32fImage>>
-decodeInterpretedThumbnail(const document::AssetRecord& asset, const std::filesystem::path& path,
-                           const media::ImageInterpretation& interpretation,
-                           const core::Sha256Digest& digest, const std::int64_t firstRow,
-                           const color::CpuColorSpaceProcessor* processor,
-                           const std::function<bool()>& cancel) {
+media::ImageResult<std::shared_ptr<const render::Rgba32fImage>> decodeInterpretedThumbnail(
+    const document::AssetRecord& asset, const media::ImageSourceRevision& revision,
+    const media::ImageInterpretation& interpretation, const std::int64_t firstRow,
+    const color::CpuColorSpaceProcessor* processor, const std::function<bool()>& cancel) {
     // The renderer's order: stored samples, the footage pass, then the input color transform.
     auto raw = interpretation;
     raw.colorSpace = media::ImageColorSpace::Raw;
     raw.inputColorSpaceId.clear();
     raw.storedSamples = true;
-    auto stored =
-        media::decodeImage(path, raw, {}, cancel, {}, media::kMaxImageStorageBytes, digest);
+    auto stored = media::decodeImage(revision, raw, {}, cancel, {}, media::kMaxImageStorageBytes);
     if (!stored.value.has_value())
         return stored;
     auto interpreted = runtime::interpretFootageProxy(asset, interpretation.alphaAssociation,

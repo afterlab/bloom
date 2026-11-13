@@ -24,7 +24,7 @@ constexpr auto kGpuPurgeTimeout = std::chrono::seconds(2);
 
 CachePurgeController::CachePurgeController(
     runtime::TaskScheduler& scheduler, TaskUiBridge& bridge,
-    media::cache::MediaDiskCache* const diskCache, runtime::OperationCache* const operationCache,
+    media::cache::SourceMirror* const diskCache, runtime::OperationCache* const operationCache,
     runtime::GpuSceneCoverageCache* const coverageCache,
     std::function<void()> clearDecodedVideoMemory, std::function<void(bool)> setProducerGate,
     std::function<std::optional<std::uint64_t>(std::chrono::milliseconds)> purgeGpuRetainedCaches,

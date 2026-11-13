@@ -102,6 +102,7 @@ void testMultiSelection(TestContext& test) {
     change.frameRate = document::FrameRate::create(12, 1);
     change.alphaMode = document::AssetAlphaMode::Ignore;
     change.missingFrames = document::AssetMissingFrames::Nothing;
+    change.localCopies = document::AssetLocalCopies::Always;
     test.expect(apply(document, stack, {clip, shot, logo}, change).changed(),
                 "one change applies to a mixed selection");
     test.expect(stack.size() == before + 1, "the whole selection is one undo entry");
@@ -118,6 +119,10 @@ void testMultiSelection(TestContext& test) {
                 "the sequence takes the rate and the missing-frame behavior");
     test.expect(!logoValue.frameRate && logoValue.alphaMode == document::AssetAlphaMode::Ignore,
                 "the still takes only the alpha");
+    test.expect(clipValue.localCopies == document::AssetLocalCopies::Always &&
+                    shotValue.localCopies == document::AssetLocalCopies::Always &&
+                    logoValue.localCopies == document::AssetLocalCopies::Always,
+                "every footage kind takes the local-copy override (#718)");
     test.expect(layerOut() == core::RationalTime::fromInteger(4),
                 "a layer that ended with its footage follows the conformed (longer) length");
     test.expect(stack.undo().changed() &&

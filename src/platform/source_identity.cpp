@@ -2,6 +2,7 @@
 #include <array>
 #include <atomic>
 #include <bloom/platform/source_identity.hpp>
+#include <bloom/platform/source_store.hpp>
 #include <fstream>
 #include <limits>
 #include <map>
@@ -56,6 +57,7 @@ void saturatingAdd(std::atomic<std::uint64_t>& counter, const std::uint64_t amou
 }
 struct Counters final {
     std::atomic<std::uint64_t> fullReads{0}, fullReadBytes{0}, identityChecks{0}, identityHits{0};
+    std::atomic<std::uint64_t> memoryHits{0}, storeHits{0}, storeHitBytes{0};
 };
 Counters& counters() noexcept {
     static Counters value;
@@ -182,6 +184,17 @@ SourceReadWork sourceReadWork() noexcept {
 void recordFullSourceRead(const std::uint64_t bytes) noexcept {
     saturatingAdd(counters().fullReads, 1);
     saturatingAdd(counters().fullReadBytes, bytes);
+}
+SourceTierWork sourceTierWork() noexcept {
+    auto& value = counters();
+    return {value.memoryHits.load(std::memory_order_relaxed),
+            value.storeHits.load(std::memory_order_relaxed),
+            value.storeHitBytes.load(std::memory_order_relaxed)};
+}
+void recordSourceMemoryHit() noexcept { saturatingAdd(counters().memoryHits, 1); }
+void recordSourceStoreHit(const std::uint64_t bytes) noexcept {
+    saturatingAdd(counters().storeHits, 1);
+    saturatingAdd(counters().storeHitBytes, bytes);
 }
 
 std::optional<core::Sha256Digest> VerifiedSourceDigests::find(const std::filesystem::path& path,

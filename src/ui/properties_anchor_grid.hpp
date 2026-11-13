@@ -43,6 +43,8 @@ class PropertiesAnchorGrid final : public kit::KAnchorGrid {
     std::shared_ptr<std::atomic_bool> retire_;
     runtime::TaskHandle<std::shared_ptr<Result>> task_;
     QTimer* timer_;
+    // Restarted by every time-only change; the bounds are resolved when it runs out (#718).
+    QTimer* settle_;
     bool active_ = false;
 };
 } // namespace bloom::ui
