@@ -223,6 +223,12 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_platform_storage_class_test)
     bloom_add_test(NAME bloom.platform.storage-class
                    COMMAND bloom_platform_storage_class_test LABELS unit platform media)
+    # #718: a source snapshot that fills by byte range (video on slow storage).
+    add_executable(bloom_platform_progressive_snapshot_test tests/progressive_snapshot_tests.cpp)
+    target_link_libraries(bloom_platform_progressive_snapshot_test PRIVATE bloom_platform_process)
+    bloom_enable_warnings(bloom_platform_progressive_snapshot_test)
+    bloom_add_test(NAME bloom.platform.progressive-snapshot
+                   COMMAND bloom_platform_progressive_snapshot_test LABELS unit platform media)
 endif()
 
 if(BUILD_TESTING AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE))
