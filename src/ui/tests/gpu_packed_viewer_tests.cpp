@@ -1,5 +1,6 @@
 // Production offscreen GPU preparation -> one packed transfer -> ordinary EditorArea/Viewer.
 // All observation windows run only under the caller's private compositor.
+#include "fixed_memory_budget.hpp"
 #include "gpu_service_chain_fixture.hpp"
 #include "image_source.hpp"
 #include "packed_host_retirement_private.hpp"
@@ -198,6 +199,14 @@ bool gAppScheduler = false;
 // #682: model a card with this much device-local memory (0: the whole device), so the RAM fill is
 // planned for a small card on any machine.
 std::uint64_t gDeviceMemoryLimit = 0;
+// The cache fill's sequence: how many distinct frames, and their size (also the composition's).
+// The default suite fills a few small frames; the 100-frame 1080p fill is a stress run.
+std::size_t gCacheFrames = 100;
+std::uint32_t gCacheWidth = 1920;
+std::uint32_t gCacheHeight = 1080;
+// The fill is admitted against a fixed host reading and a card of a stated size
+// (fixed_memory_budget.hpp), never against what this machine has free right now.
+bool gFixedBudget = false;
 } // namespace
 // Cache qualification reuses the explicit retirement teardown guard above.
 #include "gpu_packed_cache100_proof.ipp"
@@ -245,6 +254,24 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                 return 2;
             gDeviceMemoryLimit = static_cast<std::uint64_t>(std::max(1, std::atoi(argv[index])))
                                  << 30U;
+        } else if (argument == "--frames") {
+            if (++index >= argc)
+                return 2;
+            gCacheFrames = static_cast<std::size_t>(std::max(1, std::atoi(argv[index])));
+        } else if (argument == "--extent") {
+            // WIDTHxHEIGHT of the generated sequence and its composition.
+            if (++index >= argc)
+                return 2;
+            const std::string_view extent = argv[index];
+            const auto separator = extent.find('x');
+            if (separator == std::string_view::npos)
+                return 2;
+            gCacheWidth = static_cast<std::uint32_t>(
+                std::max(1, std::atoi(std::string(extent.substr(0, separator)).c_str())));
+            gCacheHeight = static_cast<std::uint32_t>(
+                std::max(1, std::atoi(std::string(extent.substr(separator + 1)).c_str())));
+        } else if (argument == "--fixed-budget") {
+            gFixedBudget = true;
         } else if (argument == "--bench-project") {
             if (++index >= argc)
                 return 2;

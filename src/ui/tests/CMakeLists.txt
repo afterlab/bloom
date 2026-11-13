@@ -2546,7 +2546,8 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
 
     add_executable(bloom_ui_gpu_packed_viewer_test gpu_packed_viewer_tests.cpp)
     target_include_directories(bloom_ui_gpu_packed_viewer_test
-        PRIVATE "${PROJECT_SOURCE_DIR}/src/render" "${PROJECT_SOURCE_DIR}/src/runtime" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/render" "${PROJECT_SOURCE_DIR}/src/runtime" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS}
+                "${PROJECT_SOURCE_DIR}/tests/support")
     target_link_libraries(bloom_ui_gpu_packed_viewer_test
         PRIVATE bloom_ui bloom_host bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
     bloom_package_gpu_shader_tools(bloom_ui_gpu_packed_viewer_test)
@@ -2585,18 +2586,27 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     else()
         set(bloom_ui_gpu_viewer_service_chain_loader_args)
     endif()
-    foreach(packed_case IN ITEMS paused playing animated half100 full100 partial host_ownership host_retirement
+    # The RAM fill proofs (full, half, partial) run on a few small frames against a fixed budget:
+    # retention, cache identity, CPU parity on every frame and replay do not depend on the frame
+    # count or size. The 100-frame 1080p fills against the real machine are stress runs.
+    set(packed_small --extent 320x180 --fixed-budget)
+    foreach(packed_case IN ITEMS paused playing animated half full partial half100 full100
+                                 host_ownership host_retirement
                                  full100_12gib full100_8gib full100_6gib)
         if(packed_case STREQUAL "playing")
             set(packed_args --playing)
         elseif(packed_case STREQUAL "animated")
             set(packed_args --animated-drag)
+        elseif(packed_case STREQUAL "half")
+            set(packed_args --cache100-half --frames 4 ${packed_small})
+        elseif(packed_case STREQUAL "full")
+            set(packed_args --cache100-full --frames 8 ${packed_small})
+        elseif(packed_case STREQUAL "partial")
+            set(packed_args --cache100-full --partial --frames 8 ${packed_small})
         elseif(packed_case STREQUAL "half100")
             set(packed_args --cache100-half)
         elseif(packed_case STREQUAL "full100")
             set(packed_args --cache100-full)
-        elseif(packed_case STREQUAL "partial")
-            set(packed_args --cache100-full --partial)
         elseif(packed_case MATCHES "^full100_([0-9]+)gib$")
             # #682: the 100-frame fill planned for a 12, 8 and 6 GiB card on any machine.
             set(packed_args --cache100-full --device-memory-gib ${CMAKE_MATCH_1})
@@ -2613,7 +2623,9 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             # A real 100-frame fill is a stress run; the small-card plan itself is proven without a
             # device in bloom.runtime.gpu_processing_phase_policy.
             set(packed_kind STRESS RUN_SERIAL)
-        elseif(packed_case MATCHES "100|partial")
+        elseif(packed_case MATCHES "100$")
+            set(packed_kind STRESS)
+        elseif(packed_case MATCHES "^(half|full|partial)$")
             set(packed_kind)
         else()
             # Presentation cases need a private compositor session.

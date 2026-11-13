@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <deque>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -1002,6 +1003,123 @@ void previewWidthFollowsMeasuredRoom() {
             "it runs once the room comes back");
 }
 
+// #682 #719: a RAM fill planned for a small card (6, 8 and 12 GiB), with no device and no frames.
+// Every frame leaves a cached image on the device, as the scene cache does, so the card fills.
+// What a fill must hold on any card: admission never claims more than the card has and never owns
+// more than it; a frame that finds the card full waits (it is not refused), asks the caches for
+// exactly its shortfall, and is admitted once they gave it back; and when the owner keeps the next
+// frame's need free (deviceWorkReserveShortfall), no frame waits at all. How often a frame waits
+// in a real fill depends on when the owner thread runs, which is not a property to test.
+void smallCardFillStaysInsideTheCard() {
+    constexpr std::uint64_t pixels = 1920ULL * 1080;
+    constexpr std::uint64_t imageBytes = 256 * kMiB;
+    constexpr int frames = 100;
+    std::size_t previousWidth = 0;
+    for (const std::uint64_t card : {6 * kGiB, 8 * kGiB, 12 * kGiB}) {
+        for (const bool ownerKeepsReserve : {false, true}) {
+            GpuProcessingPhasePolicy policy(4);
+            policy.setHeadroom({.ramBytes = 0, .vramBytes = 0});
+            deliverHost(policy, 8 * kGiB, 1);
+            std::deque<NativeImageStorageToken> cache;
+            const auto owned = [&] { return static_cast<std::uint64_t>(cache.size()) * imageBytes; };
+            // The modelled card: its size is the ceiling, and the driver's live budget is what the
+            // cached images leave of it.
+            const auto report = [&] {
+                require(policy.reportDevice(1, {.source = GpuAllocationBudgetSource::MemoryBudget,
+                                                .device_local_bytes = card,
+                                                .available_bytes = card - owned()}),
+                        "the modelled card reports");
+            };
+            const auto evict = [&](const std::uint64_t bytes) {
+                std::uint64_t freed = 0;
+                while (freed < bytes && !cache.empty()) {
+                    cache.pop_front();
+                    freed += imageBytes;
+                }
+                report();
+                return freed;
+            };
+            report();
+            require(policy.snapshot().reservations.deviceCapacityBytes == card &&
+                        policy.snapshot().reservations.deviceCeilingBytes == card,
+                    "a modelled card's capacity and ceiling are the card");
+            auto request = std::make_shared<GpuDeviceReclaimRequest>();
+            registerDeviceReclaim(policy, request);
+            auto envelope = frame(832 * kMiB);
+            envelope.output = GpuProcessingPhaseOutput::PackedPreview;
+            envelope.pixels = pixels;
+            envelope.minimumSourceBytes = pixels * 16;
+            envelope.minimumExecutorBytes = pixels * 16;
+            const NativeImageStorageIdentity local{
+                .allocatorGeneration = 7, .memoryType = 2, .heap = 1};
+            int waited = 0;
+            for (int index = 0; index < frames; ++index) {
+                auto grant = policy.reserve(envelope);
+                if (grant.status == GpuProcessingPhaseAdmission::AwaitingCapacity) {
+                    ++waited;
+                    require(grant.domain == GpuProcessingPhaseDomain::Device && request->pending(),
+                            "a frame that finds the card full waits and asks the device caches");
+                    const auto need = policy.lastAwaitingNeed();
+                    const auto wanted =
+                        deviceReclaimBytes(*request,
+                                           {.source = GpuAllocationBudgetSource::MemoryBudget,
+                                            .device_local_bytes = card,
+                                            .available_bytes = card - owned()},
+                                           0);
+                    require(need && wanted == need->shortfallBytes && wanted != 0,
+                            "the owner is asked for exactly the waiting frame's shortfall");
+                    require(evict(wanted) >= wanted, "the caches hold what the frame lacks");
+                    grant = policy.reserve(envelope);
+                }
+                require(grant.status == GpuProcessingPhaseAdmission::Accepted && grant.lease,
+                        "a waiting frame is admitted once the caches gave its shortfall back");
+                auto image = NativeImageStorageToken::reserve(grant.lease, imageBytes, local,
+                                                              Clock::now());
+                require(image.token.has_value(), "the frame's device stage allocates its image");
+                const auto during = policy.snapshot().reservations;
+                require(during.totalDeviceClaimBytes <= card && during.deviceCapacityBytes == card,
+                        "admission never claims more than the card has");
+                policy.noteDeviceWorkNeed(grant.lease->deviceNeedBytes());
+                require(image.token->promote(), "the finished image is published to the cache");
+                cache.push_back(std::move(*image.token));
+                grant.lease.reset();
+                report();
+                if (ownerKeepsReserve) {
+                    // The owner's pass after a frame: give back what the next frame of the same
+                    // work lacks, before it asks.
+                    const auto shortfall = deviceWorkReserveShortfall(policy);
+                    if (shortfall != 0)
+                        require(evict(shortfall) >= shortfall, "the caches cover the reserve");
+                    require(deviceWorkReserveShortfall(policy) == 0,
+                            "the next frame's need is free after the owner's pass");
+                }
+            }
+            const auto filled = policy.snapshot().reservations;
+            require(filled.peakOwnedNativeBytes != 0 && filled.peakOwnedNativeBytes <= card &&
+                        filled.peakTotalDeviceClaimBytes <= card,
+                    "a whole fill never owns or claims more device memory than the card has");
+            require(owned() + imageBytes > card - 2 * 832 * kMiB,
+                    "the fill really filled the modelled card");
+            if (ownerKeepsReserve)
+                require(waited == 0, "no frame waits when the owner keeps the next need free");
+            else
+                require(waited != 0, "without the owner's pass the full card makes frames wait");
+            if (ownerKeepsReserve) {
+                // Frames in flight shrink to fit: as many measured frames as the card's usable
+                // memory holds, never more, and no fewer on a larger card.
+                const auto width = previewFramesThatFit(policy, pixels, 832 * kMiB);
+                const auto perFrame = 832 * kMiB + filled.recentPhaseDevicePeakBytes;
+                require(width >= 1 && width * perFrame <= std::max(card, perFrame) &&
+                            width >= previousWidth,
+                        "frames in flight fit the card and shrink with it");
+                previousWidth = width;
+            }
+            cache.clear();
+            require(policy.usableCapacity().deviceClaimBytes == 0, "every device claim returns");
+        }
+    }
+}
+
 int main() {
     try {
         headroomIsTheOnlyMargin();
@@ -1023,6 +1141,7 @@ int main() {
         hostClaimsTrackOneSourcesScratch();
         previewWidthFollowsMeasuredRoom();
         pendingClaimsExcludeAllocatedBacking();
+        smallCardFillStaysInsideTheCard();
     } catch (const std::exception& error) {
         std::cerr << "admission pressure: " << error.what() << '\n';
         return EXIT_FAILURE;
