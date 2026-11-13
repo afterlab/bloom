@@ -1,3 +1,6 @@
+# Every UI test may use the shared wait helpers (tests/support/await_qt.hpp).
+include_directories("${PROJECT_SOURCE_DIR}/tests/support")
+
 add_executable(bloom_editor_area_chrome_test
     editor_area_chrome_tests.cpp
 )
