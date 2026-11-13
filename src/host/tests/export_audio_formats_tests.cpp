@@ -6,12 +6,15 @@
 // provenance instead of counting every frame as CPU reference. Issue #450: a 5.1 source exports
 // to stereo through the ITU-R BS.775 downmix instead of losing every channel past the second.
 // Issue #459: an automated level exports as a continuous ramp, not a step every mix block.
+// Issue #569: an audio effect chain exports the samples the playback mixer plays.
 #include "fixed_memory_budget.hpp"
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/export_queue_operations.hpp>
 #include <bloom/commands/layer_drop_operations.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/document/audio_effect_nodes.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/host/export_presets.hpp>
@@ -20,10 +23,12 @@
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
+#include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/output/export_audio_sources.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/platform/staged_artifact.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -500,6 +505,135 @@ void testLevelAutomationRampsWithinBlocks() {
                std::to_string(samples[12000 * 2]) + ")");
 }
 
+// #569: the export queue's own mix (`CompositionOutputStream`) runs a layer's effect chain and
+// writes the samples the playback mixer plays for the same chain. The reference is the mixer fed
+// once with the clips of the evaluated mix, as playback feeds it; the export re-evaluates the mix
+// and replaces its clips every block, and its file is 24-bit PCM, so the two agree to within the
+// quantization step.
+void testEffectChainExportsAsPlayback() {
+    Fixture f("effects", WavEncoding::Float32);
+    const auto graphOf = [&](const document::Snapshot& snapshot) -> const document::CanonicalGraph& {
+        return snapshot.project().findComposition(f.composition())->graph();
+    };
+    const auto run = [&](commands::Transaction transaction, const std::string& what) {
+        expect(f.session.execute(std::move(transaction)).changed(), "effects: " + what);
+    };
+    // Wires a new effect between the layer and whatever fed its audio input.
+    const auto addEffect = [&](const std::string_view type) {
+        commands::Transaction add("Add effect");
+        add.emplace<commands::AddNode>(f.composition(), std::string(type),
+                                       document::Vec2d{0.0, 0.0});
+        run(std::move(add), "the effect node is added");
+        const auto snapshot = currentSnapshot(f.session);
+        const auto& graph = graphOf(snapshot);
+        document::NodeId effect, layer;
+        for (const auto& node : graph.nodes()) {
+            if (node.typeId == type)
+                effect = node.id;
+            if (node.typeId == document::kLayerOutputNodeType)
+                layer = node.id;
+        }
+        const document::InputPortRef layerAudio =
+            document::NodeInputRef{layer, std::string(document::kLayerOutputAudioInputPort)};
+        const auto fed = std::ranges::find_if(
+            graph.edges(), [&](const auto& edge) { return edge.destination == layerAudio; });
+        if (fed == graph.edges().end())
+            throw std::runtime_error("effects: the layer has no audio input");
+        const auto upstream = fed->source;
+        commands::Transaction wire("Wire effect");
+        wire.emplace<commands::DisconnectInput>(f.composition(), layerAudio);
+        wire.emplace<commands::ConnectPorts>(f.composition(), upstream,
+                                             document::NodeInputRef{effect, "audio"});
+        wire.emplace<commands::ConnectPorts>(f.composition(),
+                                             document::OutputPortRef{effect, "audio"}, layerAudio);
+        run(std::move(wire), "the effect is wired into the layer");
+        return effect;
+    };
+    const auto set = [&](const document::NodeId node, const std::string& role, const double value) {
+        commands::Transaction transaction("Set effect parameter");
+        transaction.emplace<commands::SetNodeParameterValue>(f.composition(), node, role,
+                                                             document::ParameterValue{value});
+        run(std::move(transaction), role + " is set");
+    };
+    const auto equalizer = addEffect(document::kAudioEqualizerNodeType);
+    set(equalizer, "highPass", 150.0);
+    set(equalizer, "midGain", 5.0);
+    const auto compressor = addEffect(document::kAudioCompressorNodeType);
+    set(compressor, "threshold", -20.0);
+    set(compressor, "ratio", 4.0);
+    const auto hiss = addEffect(document::kAudioHissNodeType);
+    set(hiss, "level", -45.0);
+
+    document::ExportOutputSettings settings;
+    settings.format = ExportFormat::Wav;
+    settings.codecProfile = "s24";
+    settings.includeAudio = true;
+    const std::string file = "Exports/effects.wav";
+    const auto finished = f.run(f.addJob(settings, file), "effects");
+    if (finished && finished->failure)
+        std::cerr << "  effects: " << finished->failure->reason << '\n';
+    expect(published(finished), "effects: exports and publishes");
+    const auto [channels, samples] = wavSamples(f.folder / file);
+    constexpr std::size_t frames = 48000;
+    expect(channels == 2 && samples.size() == 2 * frames,
+           "effects: a stereo WAV of the one-second programme (got " +
+               std::to_string(samples.size() / 2) + " frames)");
+    if (channels != 2 || samples.size() != 2 * frames)
+        return;
+
+    // The playback side: the source as the fixture wrote it, and the mix evaluated once.
+    std::vector<float> plane(frames);
+    for (std::size_t frame = 0; frame < frames; ++frame)
+        plane[frame] = static_cast<float>(
+            0.25 * std::sin(2.0 * 3.141592653589793 * 440.0 * static_cast<double>(frame) / 48000.0));
+    const auto buffer = std::make_shared<const media::audio::AudioBuffer>(
+        media::audio::AudioBuffer{48000, 2, frames, {plane, plane}});
+    const auto compiled = f.compiler.compile({currentSnapshot(f.session), f.composition()}, {});
+    expect(compiled.plan != nullptr, "effects: the composition compiles");
+    if (!compiled.plan)
+        return;
+    const auto mix =
+        runtime::CpuCompositionEvaluator{}.evaluateAudioMix(compiled.plan, core::RationalTime{});
+    expect(mix && mix->clips.size() == 1 && mix->clips.front().effects.size() == 3,
+           "effects: the mix carries the layer's three effects");
+    if (!mix || mix->clips.size() != 1)
+        return;
+    const auto& description = mix->clips.front();
+    media::audio::playback::AudioClip clip{.buffer = buffer,
+                                           .startTime = description.startTime,
+                                           .level = static_cast<float>(description.level),
+                                           .muted = description.muted,
+                                           .solo = description.solo,
+                                           .endTime = description.endTime,
+                                           .mapTime = {}};
+    clip.effectKey = 1;
+    for (const auto& effect : description.effects)
+        clip.effects.push_back(media::audio::effects::makeEffectSettings(
+            static_cast<media::audio::effects::EffectKind>(effect.kind), effect.values,
+            effect.values));
+    auto backend = std::make_unique<media::audio::playback::NullBackend>();
+    auto* sink = backend.get();
+    media::audio::playback::AudioEngine engine(std::move(backend), {48000, 2, 16384});
+    engine.replaceClips({std::move(clip)});
+    expect(!engine.play(core::RationalTime{}) && !engine.renderForTesting(frames),
+           "effects: the playback mixer renders the programme");
+    const auto played = sink->captured();
+    expect(played.size() == 2 * frames, "effects: the playback mixer gives every frame");
+    if (played.size() != 2 * frames)
+        return;
+    double worst = 0.0, changed = 0.0;
+    for (std::size_t index = 0; index < samples.size(); ++index) {
+        worst = std::max(worst, std::abs(samples[index] - static_cast<double>(played[index])));
+        changed = std::max(changed,
+                           std::abs(samples[index] - static_cast<double>(plane[index / 2])));
+    }
+    // One 24-bit step is 1.2e-7.
+    expect(worst < 2.5e-7, "effects: the export equals playback to the 24-bit step (worst " +
+                               std::to_string(worst * 1e6) + "e-6)");
+    expect(changed > 0.02, "effects: the chain changed the source (largest change " +
+                               std::to_string(changed) + ")");
+}
+
 // #450: the export mix downmixes a 5.1 source to its stereo output with ITU-R BS.775 levels
 // (centre and surrounds at -3 dB, LFE dropped), the same mix the playback engine applies.
 void testSurroundSourceDownmixesToStereo() {
@@ -947,6 +1081,7 @@ int main() {
         testUndecodableSourceIsRefusedBeforeRendering();
         testSurroundSourceDownmixesToStereo();
         testLevelAutomationRampsWithinBlocks();
+        testEffectChainExportsAsPlayback();
         testFailedRunKeepsFrameProvenance();
         testCompileFailureNamesItsSubject();
         testLoudnessNormalization();
