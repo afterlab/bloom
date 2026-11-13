@@ -367,6 +367,8 @@ if(BUILD_TESTING)
 
         add_executable(bloom_host_export_queue_service_test tests/export_queue_service_tests.cpp)
         target_link_libraries(bloom_host_export_queue_service_test PRIVATE bloom_host bloom_commands)
+        target_include_directories(bloom_host_export_queue_service_test
+                                   PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
         add_dependencies(bloom_host_export_queue_service_test bloom-media-worker)
         bloom_enable_warnings(bloom_host_export_queue_service_test)
         bloom_add_test(NAME bloom.host.export-queue-service

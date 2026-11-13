@@ -11,6 +11,7 @@
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <random>
@@ -614,6 +615,13 @@ struct ExportPresetCatalogue::State : std::enable_shared_from_this<State> {
     std::shared_ptr<const ExportPresetCatalogueSnapshot> published;
     runtime::TaskScheduler* scheduler = nullptr;
     std::uint64_t writeGeneration = 0;
+    // Store rewrites run one at a time and only the newest one writes. Each queued write holds
+    // this, so the order still holds for writes that outlive the catalogue.
+    struct StoreWrites {
+        std::mutex mutex;
+        std::atomic<std::uint64_t> newest{0};
+    };
+    std::shared_ptr<StoreWrites> storeWrites = std::make_shared<StoreWrites>();
 
     // Caller holds `mutex`.
     void publish() {
@@ -663,6 +671,7 @@ struct ExportPresetCatalogue::State : std::enable_shared_from_this<State> {
         if (!scheduler || !options.userDataDirectory)
             return;
         const auto generation = ++writeGeneration;
+        storeWrites->newest.store(generation, std::memory_order_release);
         auto records = user;
         auto path = *options.userDataDirectory / kExportPresetStoreFileName;
         [[maybe_unused]] auto submitted = scheduler->submit<void>(
@@ -670,16 +679,15 @@ struct ExportPresetCatalogue::State : std::enable_shared_from_this<State> {
                                  {runtime::TaskOwnerKind::Export, runtime::TaskOwnerId::fromRaw(1)},
                                  runtime::TaskPriority::Background,
                                  runtime::TaskExecutor::BlockingIo),
-            [weak = weak_from_this(), generation, records = std::move(records),
-             path = std::move(path)](runtime::TaskContext&) {
+            [weak = weak_from_this(), writes = storeWrites, generation,
+             records = std::move(records), path = std::move(path)](runtime::TaskContext&) {
                 // A newer write supersedes this one; a catalogue already gone still persists
-                // its last change.
+                // its last change. Two workers never write the file at once, and an older
+                // write never lands after a newer one.
+                std::scoped_lock order(writes->mutex);
+                if (generation != writes->newest.load(std::memory_order_acquire))
+                    return runtime::TaskResult<void>::succeeded();
                 const auto self = weak.lock();
-                if (self) {
-                    std::scoped_lock lock(self->mutex);
-                    if (generation != self->writeGeneration)
-                        return runtime::TaskResult<void>::succeeded();
-                }
                 if (!writeExportUserPresets(path, records) && self) {
                     std::scoped_lock lock(self->mutex);
                     self->storeFailed = true;

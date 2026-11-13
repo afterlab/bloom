@@ -63,8 +63,11 @@ class SweepError(Exception):
 
 class Session:
     def __init__(self, mcp, env, cwd):
+        # stderr goes to a file, never a pipe nobody reads: when the server dies, the failure says
+        # how it exited and what it last wrote.
+        self.errors = tempfile.TemporaryFile()
         self.process = subprocess.Popen([mcp], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.DEVNULL, env=env, cwd=cwd)
+                                        stderr=self.errors, env=env, cwd=cwd)
         # A thread reads the answers so a wait can time out on every platform.
         self.lines = queue.Queue()
         self.reader = threading.Thread(target=self.read, daemon=True)
@@ -84,7 +87,20 @@ class Session:
             self.process.stdin.write((json.dumps(message) + '\n').encode())
             self.process.stdin.flush()
         except OSError as error:
-            raise SweepError(f'bloom-mcp is gone ({error})') from error
+            raise SweepError(f'bloom-mcp is gone ({error}); {self.death()}') from error
+
+    def death(self):
+        """How a server that stopped answering exited, and the end of what it wrote to stderr."""
+        try:
+            status = self.process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            status = 'still running'
+        try:
+            self.errors.seek(0)
+            tail = self.errors.read()[-1500:].decode(errors='replace').strip()
+        except (OSError, ValueError):
+            tail = ''
+        return f'exit status {status}; stderr: {tail or "(empty)"}'
 
     def rpc(self, method, params, timeout=600):
         self.sequence += 1
@@ -96,7 +112,7 @@ class Session:
             except queue.Empty:
                 raise SweepError(f'{method} did not answer within {timeout} seconds') from None
             if line is None:
-                raise SweepError(f'bloom-mcp exited (status {self.process.poll()})')
+                raise SweepError(f'bloom-mcp exited; {self.death()}')
             message = json.loads(line)
             if message.get('id') == self.sequence:
                 return message
@@ -127,6 +143,7 @@ class Session:
         except Exception:  # pylint: disable=broad-except
             self.process.kill()
             self.process.wait()
+        self.errors.close()
 
 
 # --------------------------------------------------------------------------------------------

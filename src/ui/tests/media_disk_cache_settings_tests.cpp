@@ -13,6 +13,7 @@
 
 // Private service surface: the deterministic timeout/withdraw test drives the owner-thread purge
 // state machine directly, without a device.
+#include "await_qt.hpp"
 #include "gpu_preview_display_service_private.hpp"
 
 #include <QApplication>
@@ -282,11 +283,15 @@ void testCachePurgeControllerClearsApplicableStores(Expectations& check) {
         &controller, &ui::CachePurgeController::purgeFinished, &controller,
         [&finishedMessage](bool, const QString& message) { finishedMessage = message; });
     const auto drive = [&controller] {
-        for (int turn = 0; turn < 4000 && controller.isPurging(); ++turn) {
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-            controller.poll();
-        }
-        return !controller.isPurging();
+        // In wall time, not event-loop turns: processEvents returns at once when idle, so a turn
+        // count can expire before a loaded machine's worker has finished the purge.
+        return bloom::test_support::awaitQtCondition(
+            "the cache purge completes",
+            [&controller] {
+                controller.poll();
+                return !controller.isPurging();
+            },
+            std::chrono::seconds(30));
     };
 
     check.expect(controller.requestPreviewPurge(), "cache purge: a preview purge starts");
@@ -390,11 +395,14 @@ void testCachePurgeWaitsForInFlightProducerThenClears(Expectations& check) {
                  "cache purge wait: nothing is cleared before the producer retires");
 
     producerGate.release();
-    for (int turn = 0; turn < 4000 && controller.isPurging(); ++turn) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-        controller.poll();
-    }
-    check.expect(!controller.isPurging(), "cache purge wait: the purge completes after retirement");
+    check.expect(bloom::test_support::awaitQtCondition(
+                     "the cache purge completes after retirement",
+                     [&controller] {
+                         controller.poll();
+                         return !controller.isPurging();
+                     },
+                     std::chrono::seconds(30)),
+                 "cache purge wait: the purge completes after retirement");
     check.expect(operationCache.retainedBytes() == 0,
                  "cache purge wait: the producer's late store cannot repopulate the cache");
 }
@@ -438,11 +446,15 @@ void testCachePurgeProceedsWhileSaveIsHeld(Expectations& check) {
 
     ui::CachePurgeController controller(scheduler, bridge, &disk, &operationCache, nullptr);
     const auto drain = [&] {
-        for (int turn = 0; turn < 4000 && controller.isPurging(); ++turn) {
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-            controller.poll();
-        }
-        return !controller.isPurging();
+        // In wall time, not event-loop turns: processEvents returns at once when idle, so a turn
+        // count can expire before a loaded machine's worker has finished the purge.
+        return bloom::test_support::awaitQtCondition(
+            "the cache purge completes",
+            [&controller] {
+                controller.poll();
+                return !controller.isPurging();
+            },
+            std::chrono::seconds(30));
     };
     check.expect(controller.requestPreviewPurge(), "cache purge scope: preview purge starts");
     check.expect(drain() && !scheduler.isQuiescent() &&

@@ -26,6 +26,8 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
+#include "await.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -446,8 +448,15 @@ void testUserPresets() {
         expect(catalogue->deleteUserPreset("builtin:h264-mp4") ==
                    host::ExportUserPresetStatus::BuiltInReadOnly,
                "built-ins are read-only");
-        // Let the queued store writes land before the catalogue goes away.
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        // The rename is on disk before the scheduler shuts down.
+        expect(bloom::test_support::awaitCondition(
+                   "the preset store holds the rename",
+                   [&] {
+                       std::ifstream store(folder / "export-presets.json", std::ios::binary);
+                       const std::string text{std::istreambuf_iterator<char>(store), {}};
+                       return text.find("Alpha 4444") != std::string::npos;
+                   }),
+               "the renamed preset reaches the store");
     }
     scheduler.beginShutdown();
     while (!scheduler.isQuiescent())
