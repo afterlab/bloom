@@ -327,12 +327,16 @@ StorageClass classify(const std::filesystem::path& folder) {
                                      .internal = internal});
 }
 #elif defined(_WIN32)
+// A UNC path (\\server\share, \\?\UNC\server\share): a share whatever its root says.
+[[nodiscard]] bool uncPath(const std::filesystem::path& path) {
+    const auto& text = path.native();
+    return text.rfind(L"\\\\?\\UNC\\", 0) == 0 ||
+           (text.rfind(L"\\\\", 0) == 0 && text.rfind(L"\\\\?\\", 0) != 0);
+}
+
 StorageClass classify(const std::filesystem::path& folder) {
     WindowsVolumeFacts facts;
-    // A UNC path (\\server\share, \\?\UNC\server\share) is a share whatever its root says.
-    const auto text = folder.native();
-    if (text.rfind(L"\\\\?\\UNC\\", 0) == 0 ||
-        (text.rfind(L"\\\\", 0) == 0 && text.rfind(L"\\\\?\\", 0) != 0)) {
+    if (uncPath(folder)) {
         facts.uncPath = true;
         return storageClassForWindowsVolume(facts);
     }
@@ -540,6 +544,17 @@ StorageClass storageClassForMacVolume(const MacVolumeFacts& facts) noexcept {
 }
 
 StorageClass storageClass(const std::filesystem::path& path, const std::uint64_t volume) {
+#if defined(_WIN32)
+    // A share reached by its UNC name is Network whatever volume id its files report. That id is
+    // the server volume's serial number, which a disk of this computer can carry too (the
+    // computer's own share, a cloned disk), so the answer is neither looked up nor remembered
+    // under it: a share is never taken for the local disk, nor the disk for a share.
+    if (uncPath(path)) {
+        WindowsVolumeFacts facts;
+        facts.uncPath = true;
+        return storageClassForWindowsVolume(facts);
+    }
+#endif
     auto& memo = volumeMemo();
     {
         const std::lock_guard lock(memo.mutex);

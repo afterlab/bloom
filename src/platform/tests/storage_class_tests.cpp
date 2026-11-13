@@ -270,6 +270,37 @@ void testRealFolder() {
         expect(storageClass(std::filesystem::path{"bloom-no-such-folder"} / "file.exr",
                             identity->volume) == volume.storageClass,
                "a known volume id answers without looking at the path");
+#if defined(_WIN32)
+    // #718: a real share. The same folder reached through this computer's own drive share is a
+    // network location, although its files report the volume id the disk was just remembered
+    // under; and asking about the share does not change what the disk is.
+    {
+        const auto drive = folder.root_name().wstring();
+        std::filesystem::path share;
+        if (drive.size() == 2 && drive[1] == L':')
+            share = std::filesystem::path(std::wstring(L"\\\\localhost\\") + drive[0] + L"$") /
+                    folder.relative_path();
+        std::error_code error;
+        if (!share.empty() && std::filesystem::exists(share / "member.exr", error) && !error) {
+            expect(storageClass(share / "member.exr") == StorageClass::Network &&
+                       storageVolume(share).storageClass == StorageClass::Network,
+                   "a file reached through a share is on network storage");
+            expect(storageClass(share / "missing" / "file.exr") == StorageClass::Network,
+                   "a missing path on a share is on network storage too");
+            const auto shared = bloom::platform::observeFileIdentity(share / "member.exr");
+            if (shared)
+                expect(storageClass(share / "member.exr", shared->volume) == StorageClass::Network,
+                       "the share is network storage for a caller that brings the volume id");
+            expect(storageClass(member) == volume.storageClass &&
+                       storageClass(folder) == volume.storageClass,
+                   "the disk keeps its own class after its share was asked about");
+            std::cout << "QUALIFIED a share's storage class\n";
+        } else {
+            std::cout << "NOT RUN a share's storage class: this account cannot reach the "
+                         "computer's own drive share\n";
+        }
+    }
+#endif
     expect(storageVolume(std::filesystem::path{}).storageClass == StorageClass::Unknown &&
                !storageVolume(std::filesystem::path{}).volume,
            "an empty path is Unknown");
