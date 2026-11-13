@@ -380,6 +380,20 @@ if(BUILD_TESTING)
         TIMEOUT 180
         LABELS unit color ocio security)
 
+    # #724 Scopes: the XYZ transform and the luma coefficients of an external config, through the
+    # supervised helper.
+    add_executable(bloom_color_scope_colorimetry_external_test
+                   tests/scope_colorimetry_external_tests.cpp)
+    target_link_libraries(bloom_color_scope_colorimetry_external_test
+                          PRIVATE bloom_color_ocio OpenColorIO::OpenColorIO)
+    target_include_directories(bloom_color_scope_colorimetry_external_test
+                               PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    bloom_enable_warnings(bloom_color_scope_colorimetry_external_test)
+    bloom_add_test(NAME bloom.color.scope-colorimetry-external
+        COMMAND bloom_color_scope_colorimetry_external_test
+        TIMEOUT 180
+        LABELS unit color ocio security)
+
     find_program(bloom_ocio_gpu_glslang_validator
         NAMES glslangValidator
         HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
