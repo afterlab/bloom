@@ -154,6 +154,17 @@ std::optional<MappedTime> wrapToExtent(const RationalTime time, const TimeExtent
     return MappedTime{true, *mapped};
 }
 
+std::optional<MappedTime> wrapAudioToExtent(const RationalTime time, const TimeExtent& extent,
+                                            const document::LayerTimeMode before,
+                                            const document::LayerTimeMode after) {
+    const bool early = time < RationalTime{};
+    if ((early ? before : after) != document::LayerTimeMode::Hold)
+        return wrapToExtent(time, extent, before, after);
+    if (early || time >= extent.duration)
+        return MappedTime{false, {}};
+    return MappedTime{true, time};
+}
+
 std::optional<RationalTime> mapLayerTime(const RationalTime placementTime,
                                          const RationalTime startTime,
                                          const document::LayerSpeed speed) {
@@ -198,7 +209,8 @@ std::optional<core::RationalTime> mapCompositionTime(const core::RationalTime ti
                                                      const double offset, const double scale,
                                                      const core::RationalTime duration,
                                                      const document::FrameRate rate,
-                                                     const std::int64_t loopMode) {
+                                                     const std::int64_t loopMode,
+                                                     const bool sound) {
     const auto mapping =
         core::FrameTimeMapping::create(duration, rate.numerator(), rate.denominator());
     const auto offsetTime = scalar(offset);
@@ -215,9 +227,11 @@ std::optional<core::RationalTime> mapCompositionTime(const core::RationalTime ti
     // the first frame.
     constexpr std::array kAfter{document::LayerTimeMode::Hold, document::LayerTimeMode::Loop,
                                 document::LayerTimeMode::PingPong};
-    const auto wrapped = wrapToExtent(*mapped, {duration, rate}, document::LayerTimeMode::Hold,
-                                      kAfter[static_cast<std::size_t>(loopMode)]);
-    if (!wrapped)
+    const auto after = kAfter[static_cast<std::size_t>(loopMode)];
+    const auto wrapped =
+        sound ? wrapAudioToExtent(*mapped, {duration, rate}, document::LayerTimeMode::Hold, after)
+              : wrapToExtent(*mapped, {duration, rate}, document::LayerTimeMode::Hold, after);
+    if (!wrapped || !wrapped->present)
         return std::nullopt;
     return wrapped->time;
 }

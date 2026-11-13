@@ -2031,7 +2031,7 @@ namespace {
 // Remap at the layer time. nullopt is silence: absent content or an unrepresentable time.
 [[nodiscard]] std::optional<core::RationalTime>
 layerContentTime(const CompiledLayerTime& mapping, const CompiledCompositionPlan* plan,
-                 const core::RationalTime placement) {
+                 const core::RationalTime placement, const bool sound = false) {
     const auto tau = mapLayerTime(placement, mapping.startTime, mapping.speed);
     if (!tau)
         return std::nullopt;
@@ -2052,9 +2052,10 @@ layerContentTime(const CompiledLayerTime& mapping, const CompiledCompositionPlan
                                                                      : mapping.extentFrameRate);
     }
     if (mapping.extentDuration) {
+        const TimeExtent extent{*mapping.extentDuration, mapping.extentFrameRate};
         const auto wrapped =
-            wrapToExtent(content, {*mapping.extentDuration, mapping.extentFrameRate},
-                         mapping.beforeMode, mapping.afterMode);
+            sound ? wrapAudioToExtent(content, extent, mapping.beforeMode, mapping.afterMode)
+                  : wrapToExtent(content, extent, mapping.beforeMode, mapping.afterMode);
         if (!wrapped || !wrapped->present)
             return std::nullopt;
         content = wrapped->time;
@@ -2069,7 +2070,8 @@ std::optional<core::RationalTime> mapAudioClipTime(const AudioClipDescription& c
         if (time < mapping.inPoint || time >= mapping.outPoint)
             return std::nullopt;
         if (mapping.layerTime) {
-            const auto content = layerContentTime(*mapping.layerTime, mapping.plan.get(), time);
+            const auto content =
+                layerContentTime(*mapping.layerTime, mapping.plan.get(), time, true);
             if (!content)
                 return std::nullopt;
             time = *content;
@@ -2077,7 +2079,7 @@ std::optional<core::RationalTime> mapAudioClipTime(const AudioClipDescription& c
         }
         const auto mapped =
             mapCompositionTime(time, mapping.offset, mapping.scale, mapping.duration,
-                               mapping.frameRate, mapping.loopMode);
+                               mapping.frameRate, mapping.loopMode, true);
         if (!mapped)
             return std::nullopt;
         time = *mapped;

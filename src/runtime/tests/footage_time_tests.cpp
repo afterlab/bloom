@@ -115,8 +115,41 @@ void testHoldPastSourceEnd() {
     expect(none && !none->present, "None still shows nothing past the end");
 }
 
+// The same extent for sound. The picture holds its last frame from that frame's start; the sound
+// of that frame is still the source's own, and a held picture is silent, so the audio time passes
+// unchanged to the extent's end and is absent outside it (it used to stop at the last frame
+// start, which played one held sample for the last frame of every movie layer).
+void testAudioPlaysThroughTheLastFrame() {
+    const runtime::TimeExtent extent{core::RationalTime::fromInteger(2),
+                                     document::FrameRate::framesPerSecond24()};
+    using Mode = document::LayerTimeMode;
+    const auto inside = runtime::wrapAudioToExtent(at(95, 48), extent, Mode::Hold, Mode::Hold);
+    expect(inside && inside->present && inside->time == at(95, 48),
+           "inside the last frame the audio time is its own");
+    const auto picture = runtime::wrapToExtent(at(95, 48), extent, Mode::Hold, Mode::Hold);
+    expect(picture && picture->present && picture->time == at(47, 24),
+           "the picture at that time is the last frame");
+    const auto after = runtime::wrapAudioToExtent(at(2, 1), extent, Mode::Hold, Mode::Hold);
+    expect(after && !after->present, "a picture held past the end is silent");
+    const auto before = runtime::wrapAudioToExtent(at(-1, 24), extent, Mode::Hold, Mode::Hold);
+    expect(before && !before->present, "a picture held before the start is silent");
+    const auto looped = runtime::wrapAudioToExtent(at(5, 2), extent, Mode::Hold, Mode::Loop);
+    expect(looped == runtime::wrapToExtent(at(5, 2), extent, Mode::Hold, Mode::Loop) && looped &&
+               looped->time == at(1, 2),
+           "a looped extent wraps the audio as it wraps the picture");
+    // A composition source: the last frame of the nested composition sounds, then silence.
+    const auto rate = document::FrameRate::framesPerSecond24();
+    expect(runtime::mapCompositionTime(at(95, 48), 0.0, 1.0, extent.duration, rate, 0, true) ==
+                   at(95, 48) &&
+               !runtime::mapCompositionTime(at(2, 1), 0.0, 1.0, extent.duration, rate, 0, true) &&
+               runtime::mapCompositionTime(at(2, 1), 0.0, 1.0, extent.duration, rate, 0) ==
+                   at(47, 24),
+           "a nested composition's audio plays its last frame and then stops");
+}
+
 int main() {
     testHoldPastSourceEnd();
+    testAudioPlaysThroughTheLastFrame();
     testSequences();
     testVideo();
     testAudio();

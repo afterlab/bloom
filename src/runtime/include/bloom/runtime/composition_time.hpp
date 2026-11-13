@@ -35,6 +35,14 @@ struct MappedTime final {
                                                      document::LayerTimeMode before,
                                                      document::LayerTimeMode after);
 
+// The same wrap for sound. A held picture is silent, so Hold gives absent outside the extent,
+// and inside it the time passes unchanged: the sound of the last frame plays to the extent's end
+// instead of stopping at the last frame start. Loop and PingPong are wrapToExtent.
+[[nodiscard]] std::optional<MappedTime> wrapAudioToExtent(core::RationalTime time,
+                                                          const TimeExtent& extent,
+                                                          document::LayerTimeMode before,
+                                                          document::LayerTimeMode after);
+
 // Layer time tau = (placementTime - startTime) * speed.
 [[nodiscard]] std::optional<core::RationalTime>
 mapLayerTime(core::RationalTime placementTime, core::RationalTime startTime,
@@ -52,9 +60,11 @@ mapLayerTime(core::RationalTime placementTime, core::RationalTime startTime,
 // Source time is (parent time - offset) * scale. Negative times hold zero. Hold and
 // PingPong use the last frame start; Loop wraps at the half-open duration. This is wrapToExtent
 // with before = Hold and after = the stored loop mode.
+// `sound` maps an audio clip time: wrapAudioToExtent, where nullopt is also silence.
 [[nodiscard]] std::optional<core::RationalTime>
 mapCompositionTime(core::RationalTime time, double offset, double scale,
-                   core::RationalTime duration, document::FrameRate rate, std::int64_t loopMode);
+                   core::RationalTime duration, document::FrameRate rate, std::int64_t loopMode,
+                   bool sound = false);
 
 // #354: a media source's own loop mode applied to an audio clip time, so a video's embedded audio
 // follows its picture. `time` is the clip's content time and `start` where the source's first

@@ -410,6 +410,10 @@ void nestedAudio() {
 void mappedAudioSamples() {
     // At 8 Hz the two-second source has samples 0..15; its final frame starts at sample 12.
     // These indices are independent expected results, not calculated by the production mapper.
+    // -1 is silence. Under Hold the picture keeps its last frame from sample 12 on, but the sound
+    // of that frame is samples 12..15, and a held picture has none: the audio plays to the
+    // composition's end and stops. (The mapper used to stop at the last frame start and repeat
+    // sample 12, which cut the last frame of every nested composition's and movie's sound.)
     struct Case {
         double offset, scale;
         std::int64_t loop;
@@ -417,8 +421,9 @@ void mappedAudioSamples() {
         std::vector<std::int64_t> sourceFrames;
     };
     const std::array cases{Case{0, 1, 0, time(1, 2), {4, 5, 6, 7}},
-                           Case{0.25, 2, 0, time(3, 4), {8, 10, 12, 12, 12, 12}},
-                           Case{0, 1, 0, time(7), {12, 12, 12, 12}},
+                           Case{0.25, 2, 0, time(3, 4), {8, 10, 12, 14, -1, -1}},
+                           Case{0, 1, 0, time(3, 2), {12, 13, 14, 15, -1, -1}},
+                           Case{0, 1, 0, time(7), {-1, -1, -1, -1}},
                            Case{0, 1, 1, time(7, 4), {14, 15, 0, 1, 2, 3}},
                            Case{0.25, 2, 1, time(3, 4), {8, 10, 12, 14, 0, 2, 4, 6}},
                            Case{0, 0.5, 1, time(1, 2), {2, 2, 3, 3, 4, 4}},
@@ -426,7 +431,9 @@ void mappedAudioSamples() {
                            Case{0, 2, 2, time(5, 4), {4, 2, 0, 2, 4, 6}},
                            Case{1, -1, 0, time(1, 4), {6, 5, 4, 3}},
                            Case{0, 0, 1, time(4), {0, 0, 0, 0}},
-                           Case{1, 1, 1, time(3, 4), {0, 0, 0, 1}}};
+                           // Before a delayed composition starts its picture holds frame 0
+                           // and nothing sounds.
+                           Case{1, 1, 1, time(3, 4), {-1, -1, 0, 1}}};
     for (const auto& test : cases) {
         auto project = audioProject();
         auto* outer = project.findComposition(CompositionId::fromRaw(2));
@@ -440,6 +447,10 @@ void mappedAudioSamples() {
         AudioRenderer directRenderer;
         std::vector<float> expected;
         for (const auto frame : test.sourceFrames) {
+            if (frame < 0) {
+                expected.push_back(0.0F);
+                continue;
+            }
             const auto sourceTime = time(frame, 8);
             const auto direct = audioMix(document.snapshot(), 1, sourceTime);
             const auto sample = directRenderer.render(direct, sourceTime, 1).front();
@@ -447,7 +458,18 @@ void mappedAudioSamples() {
                     "direct source sample is audible and distinct");
             expected.push_back(sample);
         }
-        require(AudioRenderer{}.render(nested, test.parent, expected.size()) == expected,
+        const auto rendered = AudioRenderer{}.render(nested, test.parent, expected.size());
+        if (rendered != expected) {
+            std::cerr << "offset " << test.offset << " scale " << test.scale << " loop "
+                      << test.loop << " at " << test.parent.toSeconds() << ": rendered";
+            for (const auto sample : rendered)
+                std::cerr << ' ' << sample;
+            std::cerr << ", expected";
+            for (const auto sample : expected)
+                std::cerr << ' ' << sample;
+            std::cerr << '\n';
+        }
+        require(rendered == expected,
                 "nested playback equals direct composition samples at expected mapped times");
     }
 }

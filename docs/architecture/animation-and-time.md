@@ -1574,8 +1574,13 @@ Audio timing (#354):
   applied after every layer and composition mapping (`wrapSourceAudioTime`). Before its start frame
   the stream is silent, and Hold plays the stream once: a held picture frame has no sound. An audio
   source has no loop mode.
-- Layer modes, speed, remap and nested compositions map audio exactly as pictures (Hold repeats the
-  held sample, as for a nested composition). Export re-evaluates the mix per block and playback
+- Layer modes, speed, remap and nested compositions map audio as pictures, with one difference for
+  Hold (`wrapAudioToExtent`). The picture holds its last frame from that frame's start `L`; the
+  sound of that frame is still the content's own, so audio time passes unchanged up to the extent's
+  end `E`, and outside the extent a held picture is silent. Mapping audio through the picture's
+  Hold stopped it at `L`: the last frame of every movie layer and nested composition played one
+  repeated sample instead of its sound. Loop and PingPong wrap audio exactly as the picture.
+  Export re-evaluates the mix per block and playback
   per transport change through the same `mapAudioClipTime` and mixer, so they produce identical
   samples; the per-sample mapping allocates nothing on the mixer worker.
 - The audio mix lowers only audible layers (#431, #436). A layer is audible when its audio reaches
