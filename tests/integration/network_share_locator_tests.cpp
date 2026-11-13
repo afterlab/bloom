@@ -34,6 +34,7 @@
 #include <random>
 #include <span>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -87,6 +88,131 @@ class TestContext final {
   private:
     bool ok_ = true;
 };
+
+#if defined(_WIN32)
+// #329: the native Windows qualification. Media on another root than the project's (another drive
+// letter, or a share reached as \\server\share) has no relative path to it, so its locator is an
+// absolute file URI. Import, relink and a save and open are run against real roots of this
+// computer; `what` names the shape in the messages.
+void qualifyOtherRoot(TestContext& context, const std::filesystem::path& projectDirectory,
+                      const std::filesystem::path& mediaDirectory, const std::string& what,
+                      const std::string& uriPrefix) {
+    namespace commands = bloom::commands;
+    namespace document = bloom::document;
+    namespace media = bloom::media;
+    namespace project = bloom::project;
+    const auto say = [&what](const char* message) { return what + ": " + message; };
+    const auto check = [&](const bool condition, const char* message) {
+        context.expect(condition, say(message).c_str());
+        return condition;
+    };
+    std::error_code error;
+    std::filesystem::create_directories(projectDirectory, error);
+    std::filesystem::create_directories(mediaDirectory, error);
+    const auto sourcePath = mediaDirectory / "other-root.png";
+    const auto relinkPath = mediaDirectory / "other-root-relinked.png";
+    writeOnePixelPng(sourcePath);
+    writeOnePixelPng(relinkPath);
+    if (!check(std::filesystem::exists(sourcePath, error) && std::filesystem::exists(relinkPath, error),
+               "the media files are written"))
+        return;
+
+    commands::ImportAssets import({sourcePath}, projectDirectory);
+    if (!check(import.diagnostic().empty() && import.prepared().size() == 1, "the import succeeds"))
+        return;
+    const auto& prepared = import.prepared().front();
+    check(prepared.locator.portability == "external" &&
+              prepared.locator.path.starts_with(uriPrefix) &&
+              prepared.locator.path == prepared.locator.relinkHint,
+          "the locator is one absolute file URI of that root");
+    document::AssetRecord validated = prepared;
+    validated.id = document::AssetId::fromRaw(1);
+    check(validated.validate().ok(), "the asset record is valid project data");
+    const auto resolved = media::resolveImagePath(prepared.locator.path, prepared.locator.relinkHint,
+                                                  projectDirectory);
+    check(!resolved.empty() && std::filesystem::equivalent(resolved, sourcePath, error),
+          "the locator resolves to the file");
+    check(media::probeImage(resolved).value.has_value(), "the resolved file decodes");
+
+    auto seed = document::makeNewProject("Other root", "Main",
+                                         bloom::core::RationalTime::fromInteger(24));
+    document::Document doc(std::move(seed.project));
+    document::AssetId assetId;
+    {
+        auto snapshot = doc.snapshot();
+        auto draft = doc.draft(snapshot);
+        const auto applied = import.apply(draft);
+        if (!check(applied.status == commands::OperationStatus::Applied && applied.outputs.size() == 1,
+                   "the import applies"))
+            return;
+        const auto* id = std::get_if<document::AssetId>(&applied.outputs.front().id);
+        if (!check(id != nullptr && doc.commit(snapshot.revision(), std::move(draft)).committed(),
+                   "the import commits"))
+            return;
+        assetId = *id;
+    }
+    {
+        auto snapshot = doc.snapshot();
+        auto draft = doc.draft(snapshot);
+        commands::RelinkAsset relink(assetId, relinkPath, projectDirectory);
+        if (!check(relink.apply(draft).status == commands::OperationStatus::Applied &&
+                       doc.commit(snapshot.revision(), std::move(draft)).committed(),
+                   "the relink applies"))
+            return;
+    }
+    const auto* relinked = doc.snapshot().project().findAsset(assetId);
+    if (!check(relinked != nullptr, "the relinked asset is there"))
+        return;
+    check(relinked->locator.portability == "external" && relinked->locator.path.starts_with(uriPrefix),
+          "the relinked locator is an absolute file URI of that root");
+    const auto relinkedFile = media::resolveImagePath(relinked->locator.path,
+                                                      relinked->locator.relinkHint, projectDirectory);
+    check(!relinkedFile.empty() && std::filesystem::equivalent(relinkedFile, relinkPath, error),
+          "the relinked locator resolves to the new file");
+
+    // Save and open: the canonical document written, parsed, decoded and rebuilt.
+    const auto current = doc.snapshot();
+    const auto settings = document::makeBloomNeutralColorSettingsV1({});
+    std::array<std::size_t, 64> sorting{};
+    const project::CanonicalDocumentV1 request{&current, &settings, {}, sorting};
+    const auto size = project::canonicalDocumentSize(request);
+    if (!check(static_cast<bool>(size), "the document is sized"))
+        return;
+    std::vector<char> bytes(*size.value());
+    if (!check(static_cast<bool>(project::encodeCanonicalDocument(request, bytes)),
+               "the document is written"))
+        return;
+    auto memory = project::ProjectIoMemoryCoordinator::create();
+    if (!check(static_cast<bool>(memory), "project I/O memory is there"))
+        return;
+    auto operation = memory->createOperation();
+    if (!check(static_cast<bool>(operation), "project I/O operation memory is there"))
+        return;
+    const auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(bytes)), {}, *operation);
+    if (!check(static_cast<bool>(parsed), "the saved document parses"))
+        return;
+    const auto decoded = project::decodeDocumentEnvelope(parsed.document()->root());
+    if (!check(static_cast<bool>(decoded), "the saved document decodes"))
+        return;
+    const auto reopened = project::reconstructDocument(*decoded.value());
+    if (!check(static_cast<bool>(reopened), "the saved document is rebuilt"))
+        return;
+    const auto& assets = reopened.value()->document->snapshot().project().assets();
+    if (!check(assets.size() == 1, "the reopened project has its asset"))
+        return;
+    check(assets.front().locator.portability == "external" &&
+              assets.front().locator.path == relinked->locator.path &&
+              assets.front().locator.relinkHint == relinked->locator.relinkHint,
+          "the locator survives a save and open unchanged");
+    const auto reopenedFile = media::resolveImagePath(assets.front().locator.path,
+                                                      assets.front().locator.relinkHint,
+                                                      projectDirectory);
+    check(!reopenedFile.empty() && std::filesystem::equivalent(reopenedFile, relinkPath, error) &&
+              media::probeImage(reopenedFile).value.has_value(),
+          "the reopened locator resolves to the file and it decodes");
+    std::cout << "QUALIFIED " << what << '\n';
+}
+#endif
 
 } // namespace
 
@@ -314,6 +440,39 @@ int main() {
     const auto probeAfterReopen = media::probeImage(resolvedAfterReopen);
     context.expect(probeAfterReopen.value.has_value(),
                    "the reopened, relinked, resolved mounted file still decodes (thumbnails)");
+
+#if defined(_WIN32)
+    {
+        // Another drive: the scratch folder is on the temporary files' drive and the test runs
+        // from the build tree. When those are two drives, the project goes on one and the media
+        // on the other.
+        std::error_code rootError;
+        const auto here = std::filesystem::current_path(rootError);
+        const auto otherDriveProject =
+            here / ("bloom-other-drive-project-" + std::to_string(randomDevice()));
+        if (!rootError && here.has_root_name() && scratchRoot.has_root_name() &&
+            here.root_name() != scratchRoot.root_name()) {
+            qualifyOtherRoot(context, otherDriveProject, scratchRoot / "other-drive",
+                             "another drive", "file:///");
+            std::filesystem::remove_all(otherDriveProject, rootError);
+        } else {
+            std::cout << "NOT RUN another drive: the build tree and the temporary folder are on "
+                         "one drive\n";
+        }
+        // A share: this computer's own drive share, \\localhost\C$, when this account can reach it.
+        const auto drive = scratchRoot.root_name().wstring();
+        std::filesystem::path share;
+        if (drive.size() == 2 && drive[1] == L':')
+            share = std::filesystem::path(std::wstring(L"\\\\localhost\\") + drive[0] + L"$") /
+                    scratchRoot.relative_path() / "share";
+        std::filesystem::create_directories(scratchRoot / "share", rootError);
+        if (!share.empty() && std::filesystem::exists(share, rootError) && !rootError)
+            qualifyOtherRoot(context, projectDirectory, share, "a share", "file://localhost/");
+        else
+            std::cout << "NOT RUN a share: this account cannot reach the computer's own drive "
+                         "share\n";
+    }
+#endif
 
     std::error_code cleanupError;
     std::filesystem::remove_all(scratchRoot, cleanupError);
