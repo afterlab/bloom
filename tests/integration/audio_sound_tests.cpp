@@ -13,6 +13,7 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/media/audio/audio.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
+#include <bloom/media/audio/sound_table.hpp>
 #include <bloom/platform/private_temporary_directory.hpp>
 #include <bloom/runtime/audio_analysis.hpp>
 #include <bloom/runtime/audio_mix_render.hpp>
@@ -268,9 +269,12 @@ void layerSoundIsRendered() {
     expect(first.source && !first.source->bare, "a layer's sound is rendered");
     expect(near(first.value, kFirst), "the layer's sound reads " + text(first.value));
     auto statistics = runtime::audioSoundStatistics();
+    // Two seconds of stereo samples and their 201 table rows.
     expect(statistics.rendered == 1 && statistics.entries == 1 &&
-               statistics.scratchBytes == std::uint64_t{2} * runtime::kAudioSoundRate * 2U * 4U,
-           "the two seconds were rendered once into the scratch file");
+               statistics.scratchBytes ==
+                   std::uint64_t{2} * runtime::kAudioSoundRate * 2U * 4U +
+                       std::uint64_t{201} * media::audio::analysis::kTableRowFloats * 4U,
+           "the two seconds were rendered once into the scratch files");
     // Another frame of the same plan's sound, and the same document compiled again, read the
     // sound that is there.
     const auto second = read(fixture, node, at(3, 2));

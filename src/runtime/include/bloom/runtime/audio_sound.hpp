@@ -5,6 +5,7 @@
 // reads that sound as the export would write it: the whole sound is rendered once, offline, at
 // 48 kHz stereo through the code the export mixes with (audio_mix_render.hpp), into a scratch file
 // in the per-user cache folder. Windows of it are then read like any source's.
+// The same job then reduces the sound to its analysis table (#631), which the table nodes read.
 //
 // A rendered sound is kept under its identity: a digest of every source's content digest and of
 // the mix evaluated at each block boundary (levels, switches, effect parameters, timing), so an
@@ -24,6 +25,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace bloom::runtime {
@@ -35,12 +37,25 @@ inline constexpr std::uint32_t kAudioSoundBlockFrames = 512;
 // Rendered sounds kept at once; the least recently used retires with its scratch file.
 inline constexpr std::size_t kAudioSoundEntries = 4;
 
+// #631: the analysis table of a rendered sound (media/audio/sound_table.hpp): a row of
+// kTableRowFloats numbers every 10 ms, kept in a scratch file beside the samples.
+class AudioSoundTable {
+  public:
+    virtual ~AudioSoundTable() = default;
+    [[nodiscard]] virtual std::uint64_t rows() const noexcept = 0;
+    // The rows from `first`, as many as `values` holds. False when they are not all there or the
+    // file cannot be read. Blocking file work: call it on a worker.
+    [[nodiscard]] virtual bool read(std::uint64_t first, std::span<float> values) const = 0;
+};
+
 struct PreparedAudioSound final {
     std::string digest;
     // Stereo at kAudioSoundRate from the composition's start; `buffer->stream` reads the scratch
     // file, so only a window of it is in memory.
     std::uint64_t frames = 0;
     std::shared_ptr<const media::audio::AudioBuffer> buffer;
+    // #631: built by the same job, after the samples.
+    std::shared_ptr<const AudioSoundTable> table;
 };
 
 enum class AudioSoundOutcome : std::uint8_t { Ready, Cancelled, Unavailable };
@@ -64,7 +79,7 @@ findAudioSound(const AudioAnalysisSound& sound);
     const std::shared_ptr<const AudioAnalysisSound>& sound, const std::filesystem::path& assetBase,
     const CancellationToken& cancellation);
 
-enum class AudioSoundPhase : std::uint8_t { Idle, Identifying, Rendering };
+enum class AudioSoundPhase : std::uint8_t { Idle, Identifying, Rendering, Analyzing };
 struct AudioSoundActivity final {
     AudioSoundPhase phase = AudioSoundPhase::Idle;
     // Frames done and the frames of the whole sound, for the job that is running.

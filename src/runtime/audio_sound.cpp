@@ -3,6 +3,7 @@
 #include <bloom/core/sha256.hpp>
 #include <bloom/core/worker_thread.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
+#include <bloom/media/audio/sound_table.hpp>
 #include <bloom/platform/cache_directory.hpp>
 #include <bloom/platform/positional_file.hpp>
 #include <bloom/runtime/audio_mix_render.hpp>
@@ -102,6 +103,26 @@ class ScratchStream final : public media::audio::AudioStream {
         return probe;
     }
     std::shared_ptr<ScratchFile> scratch_;
+};
+
+class ScratchTable final : public AudioSoundTable {
+  public:
+    ScratchTable(std::shared_ptr<ScratchFile> scratch, const std::uint64_t rows)
+        : scratch_(std::move(scratch)), rows_(rows) {}
+    [[nodiscard]] std::uint64_t rows() const noexcept override { return rows_; }
+    [[nodiscard]] bool read(const std::uint64_t first, const std::span<float> values) const override {
+        const std::uint64_t count = values.size() / media::audio::analysis::kTableRowFloats;
+        if (values.size() % media::audio::analysis::kTableRowFloats != 0 || first > rows_ ||
+            count > rows_ - first)
+            return false;
+        return scratch_->file().readAt(
+            first * media::audio::analysis::kTableRowFloats * sizeof(float),
+            std::as_writable_bytes(values));
+    }
+
+  private:
+    std::shared_ptr<ScratchFile> scratch_;
+    std::uint64_t rows_ = 0;
 };
 
 // The bytes one block boundary adds to a sound's identity.
@@ -410,7 +431,44 @@ struct Failure final {
     }
     // The mixer keeps the source buffers; it retires before the sessions they decode through.
     mixer.clearClips();
+    // #631: the analysis table, from the samples just written.
+    namespace an = media::audio::analysis;
+    job.framesDone.store(0);
+    job.phase.store(AudioSoundPhase::Analyzing);
+    const auto tableScratch = ScratchFile::create(directory, name + ".table");
+    if (!tableScratch)
+        return Failure{false, "The audio analysis scratch file could not be made in the cache "
+                              "folder"};
+    const auto tableReader = [&](const std::int64_t first, const std::span<float> output) {
+        std::fill(output.begin(), output.end(), 0.0F);
+        const auto total = static_cast<std::int64_t>(job.framesTotal);
+        const auto count = static_cast<std::int64_t>(output.size() / kAudioSoundChannels);
+        const std::int64_t begin = std::max<std::int64_t>(first, 0);
+        const std::int64_t end = std::min<std::int64_t>(first + count, total);
+        if (end <= begin)
+            return true;
+        return scratch->file().readAt(
+            static_cast<std::uint64_t>(begin) * kAudioSoundChannels * sizeof(float),
+            std::as_writable_bytes(
+                output.subspan(static_cast<std::size_t>(begin - first) * kAudioSoundChannels,
+                               static_cast<std::size_t>(end - begin) * kAudioSoundChannels)));
+    };
+    const auto tableSink = [&](const std::uint64_t row, const std::span<const float> values) {
+        job.framesDone.store(std::min<std::uint64_t>(row * an::kTableHopFrames, job.framesTotal));
+        return tableScratch->file().writeAt(row * an::kTableRowFloats * sizeof(float),
+                                            std::as_bytes(values));
+    };
+    const auto rows = an::buildTable(job.framesTotal, tableReader, tableSink, cancelled);
+    if (!rows) {
+        if (rows.error()->code == media::audio::AudioErrorCode::Cancelled)
+            return Failure{true, {}};
+        return Failure{false, rows.error()->code == media::audio::AudioErrorCode::AllocationFailure
+                                  ? "There is not enough memory to analyze the audio"
+                                  : "The audio analysis scratch file could not be read or written "
+                                    "(the cache volume may be full)"};
+    }
     auto prepared = std::make_shared<PreparedAudioSound>();
+    prepared->table = std::make_shared<ScratchTable>(tableScratch, *rows.value());
     prepared->digest = digest;
     prepared->frames = job.framesTotal;
     auto buffer = std::make_shared<media::audio::AudioBuffer>();
@@ -437,7 +495,7 @@ void sweepStaleScratch(Store& s, const std::filesystem::path& directory) {
     for (std::filesystem::directory_iterator it(directory, error), end; !error && it != end;
          it.increment(error)) {
         const auto name = it->path().filename().string();
-        if (name.starts_with("sound-") && name.ends_with(".pcm")) {
+        if (name.starts_with("sound-") && (name.ends_with(".pcm") || name.ends_with(".table"))) {
             std::error_code ignored;
             std::filesystem::remove(it->path(), ignored);
         }
@@ -656,7 +714,11 @@ AudioSoundStatistics audioSoundStatistics() {
     copy.entries = s.ready.size();
     copy.scratchBytes = 0;
     for (const auto& [digest, entry] : s.ready)
-        copy.scratchBytes += entry.sound->frames * kAudioSoundChannels * sizeof(float);
+        copy.scratchBytes +=
+            entry.sound->frames * kAudioSoundChannels * sizeof(float) +
+            (entry.sound->table ? entry.sound->table->rows() *
+                                      media::audio::analysis::kTableRowFloats * sizeof(float)
+                                : 0U);
     return copy;
 }
 

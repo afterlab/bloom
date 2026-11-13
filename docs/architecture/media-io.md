@@ -1057,6 +1057,30 @@ and nothing is kept, so the next frame tries again. `audioSoundActivity()` gives
 phase and progress and the last failure. A wire that would make a sound depend on its own
 analysis closes a cycle in the graph and is refused when it is made.
 
+**The table (#631).** The job that renders a sound then reduces it to a table
+(`media/audio/sound_table.hpp`): one row every 480 frames (10 ms), kept in a second scratch file.
+A row holds, for the 2048 frames centred on its time through a periodic Hann window, the power of
+the left channel, of the right channel and their cross power in 64 bands spaced evenly in the
+logarithm of frequency from 20 Hz to 20 kHz; for the 10 ms that start at its time, the mean squares
+of left, right and their product and the two peaks; the spectral flux against the row before; and
+the power of each of the 12 pitch classes (the spectral peaks between 60 Hz and 5 kHz of an
+8192-frame transform of the mono sum, renewed every fourth row). Powers are scaled so a sine of
+amplitude 1 reads 1 (0 dB). A transform bin stands for the frequencies half a bin either side of its
+centre and a band takes the part of each bin inside it, so the bands hold all the power once,
+however narrow they are. One transform carries both channels (left in the real part, right in the
+imaginary), and the cross power gives the mid and side signals without a second pass.
+
+Every table node reads its numbers from the rows, so a frame's value is a function of the sound
+and the time only: the same in preview, on seek and in export, whichever frame was asked first,
+and whether or not anything has played. A value over time is computed for the whole sound at once
+and kept: band or level power per row becomes decibels and then 0 to 1 by one of four references
+(the level 95 in 100 rows stay under, which is the default; the loudest row; the loudest row of a
+rolling window before each row; or a manual floor and ceiling), with a range of 48 dB by default
+and a reference never taken below -72 dB, so silence reads 0. Attack and release are one-pole
+smoothing run from the first row, so they too depend on the sound alone. The channel is the mix
+(both channels' power averaged), left, right, mid or side. A time offset reads the curve earlier or
+later, so motion can anticipate a hit.
+
 **Time.** The snapshot compiler carries an `AudioAnalysisSource` (the asset record, the audio stream,
 the node's start frame, the composition rate and a video's loop and conform) in the plan. The source
 second read at composition time `t` is the one the mixer would play (`detail::footageAudioTime`,

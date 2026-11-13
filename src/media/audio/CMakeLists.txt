@@ -76,6 +76,7 @@ add_library(
     effects.cpp
     loudness.cpp
     playback/audio_engine.cpp
+    sound_table.cpp
 )
 target_sources(
     bloom_media_audio
@@ -88,6 +89,7 @@ target_sources(
             include/bloom/media/audio/channel_layout.hpp
             include/bloom/media/audio/effects.hpp
             include/bloom/media/audio/loudness.hpp
+            include/bloom/media/audio/sound_table.hpp
             playback/include/bloom/media/audio/playback/audio_engine.hpp
 )
 target_compile_features(bloom_media_audio PUBLIC cxx_std_20)
@@ -127,6 +129,16 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.media.audio-analysis
         COMMAND bloom_media_audio_analysis_test
+        LABELS unit media audio analysis
+        TIMEOUT 120
+    )
+    add_executable(bloom_media_sound_table_test tests/sound_table_tests.cpp)
+    target_link_libraries(bloom_media_sound_table_test PRIVATE bloom_media_audio)
+    bloom_enable_warnings(bloom_media_sound_table_test)
+    bloom_enable_strict_floating_point(bloom_media_sound_table_test)
+    bloom_add_test(
+        NAME bloom.media.sound-table
+        COMMAND bloom_media_sound_table_test
         LABELS unit media audio analysis
         TIMEOUT 120
     )
