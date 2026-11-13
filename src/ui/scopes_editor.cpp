@@ -152,9 +152,9 @@ QSize ScopesEditor::minimumSizeHint() const {
     // The scroll area clips what is wider than its viewport, so the body's own minimum width and
     // the vertical scroll bar beside it are part of the panel's.
     if (scroll_ != nullptr && scroll_->widget() != nullptr)
-        hint.setWidth(std::max(hint.width(), scroll_->widget()->minimumSizeHint().width() +
-                                                 scroll_->verticalScrollBar()->sizeHint().width() +
-                                                 2 * scroll_->frameWidth()));
+        hint.setWidth(std::max(hint.width(), scroll_->frameWidth() + scroll_->frameWidth() +
+                                                 scroll_->widget()->minimumSizeHint().width() +
+                                                 scroll_->verticalScrollBar()->sizeHint().width()));
     return hint;
 }
 

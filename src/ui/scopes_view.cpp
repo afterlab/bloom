@@ -276,7 +276,8 @@ QSize ScopeView::sizeHint() const {
 }
 
 QSize ScopeView::minimumSizeHint() const {
-    const int width = kit::px(kit::Size::PanelMinWidth) - 2 * kit::px(kit::Spacing::SectionPadding);
+    const int width = kit::px(kit::Size::PanelMinWidth) - kit::px(kit::Spacing::SectionPadding) -
+                      kit::px(kit::Spacing::SectionPadding);
     return {width, heightForWidth(width)};
 }
 
@@ -400,7 +401,7 @@ QString ScopeView::readoutAt(const QPointF& position) const {
             return {};
         const bool parade = kind_ == scopes::Kind::Parade;
         const qreal gap = scopes_rt::kParadeGap;
-        const qreal paneWidth = parade ? (plot.width() - 2 * gap) / 3 : plot.width();
+        const qreal paneWidth = parade ? (plot.width() - gap - gap) / 3 : plot.width();
         int pane = 0;
         qreal local = position.x() - plot.left();
         if (parade) {

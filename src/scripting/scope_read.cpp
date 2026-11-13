@@ -3,7 +3,6 @@
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/output/display_output.hpp>
-#include <bloom/render/image_types.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/input_color_context.hpp>
 #include <bloom/runtime/layer_bounds_query.hpp>
