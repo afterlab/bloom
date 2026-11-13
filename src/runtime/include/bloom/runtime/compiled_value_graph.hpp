@@ -467,6 +467,22 @@ struct CompiledValueAudioAmplitude final {
                            const CompiledValueAudioAmplitude&) noexcept;
 };
 
+// #632 to #635 the table nodes: Scalars and number lists read from the analysis table of the sound
+// the `audio` input carries (audio_table_analysis.hpp). The readings are prepared on a worker
+// before the frame is evaluated and read here from the analysis cache; a frame whose readings are
+// not prepared reads silence and says so. A null `source` is an input with no audio wired.
+// `operands` are the node's Scalar parameters and `choices` its choices, each in the order of
+// the node's definition.
+enum class AudioTableNode : std::uint8_t { Bands, Sample, Features, Beat, Pitch };
+struct CompiledValueAudioTable final {
+    std::shared_ptr<const AudioAnalysisSource> source;
+    AudioTableNode node = AudioTableNode::Bands;
+    std::vector<CompiledValueOperand> operands;
+    std::vector<std::int64_t> choices;
+    friend bool operator==(const CompiledValueAudioTable&,
+                           const CompiledValueAudioTable&) noexcept;
+};
+
 // #349 Image Statistics: the minimum, maximum, mean, standard deviation and count of one value of the
 // pixels of a picture, five Scalars. The picture is not part of the plan this kernel belongs to: it
 // has a plan of its own (`plan`, the picture followed by its reduction to two pixels), run for the
@@ -490,7 +506,8 @@ using CompiledValueKernel =
                  CompiledValueGradientSample, CompiledValueFieldSample, CompiledValueShake,
                  CompiledValuePathCurve, CompiledValueGroupBoundary, CompiledValueFunction,
                  CompiledValueFunctionPlot, CompiledValueAudioAmplitude,
-                 CompiledValueImageStatistics, CompiledValueWarpFunction>;
+                 CompiledValueImageStatistics, CompiledValueWarpFunction,
+                 CompiledValueAudioTable>;
 
 // Every operand one kernel reads, in declaration order. Written once, here beside the kernels, so a
 // caller that has to walk them -- the evaluator's preflight, which has to know which animation
@@ -514,6 +531,9 @@ template <typename Visit> void forEachValueOperand(const CompiledValueKernel& ke
             } else if constexpr (std::is_same_v<Step, CompiledValueAudioAmplitude>) {
                 visit(step.window);
                 visit(step.offset);
+            } else if constexpr (std::is_same_v<Step, CompiledValueAudioTable>) {
+                for (const auto& operand : step.operands)
+                    visit(operand);
             } else if constexpr (std::is_same_v<Step, CompiledValueImageStatistics>) {
                 // The statistics are of a picture: no operand of this plan.
             } else if constexpr (std::is_same_v<Step, CompiledValueShake>) {

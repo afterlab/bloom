@@ -683,6 +683,10 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
     if (definition.lowering == NodeLoweringKind::ValueAudioAmplitude)
         return definition.key.typeId == kAudioAmplitudeNodeType &&
                definition.category == NodeCategory::Values;
+    // #632 to #635 the table nodes: their shape is the audio analysis table's too.
+    if (definition.lowering == NodeLoweringKind::ValueAudioTable)
+        return isAudioTableNodeType(definition.key.typeId) &&
+               definition.category == NodeCategory::Values;
     // #349 Image Statistics: its shape is the image pixel table's too.
     if (definition.lowering == NodeLoweringKind::ValueImageStatistics)
         return definition.key.typeId == kImageStatisticsNodeType &&
@@ -882,6 +886,7 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
     case NodeLoweringKind::GroupBoundary:
     case NodeLoweringKind::ValueFunction:
     case NodeLoweringKind::ValueAudioAmplitude:
+    case NodeLoweringKind::ValueAudioTable:
     case NodeLoweringKind::ValueImageStatistics:
     case NodeLoweringKind::VectorArtwork:
         break;

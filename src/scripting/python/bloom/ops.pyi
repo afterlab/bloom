@@ -8058,6 +8058,67 @@ class NodeOps:
         Related: transact
         """
         ...
+    def bake_to_keyframes(self, node: int | Proxy, port: str = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.node.bake-to-keyframes  (operation, node)
+        Bakes a number output of a value node to keyframes: the node is read at every frame of the
+        composition, first to last, and the numbers are stored as keyframes on a new Number node
+        (bloom.value-scalar) beside it, one key a frame, linear between them. It is how an audio
+        analysis number (Audio Bands, Audio Features, Audio Beat, Audio Amplitude and the others)
+        becomes motion that can be tuned by hand. The node is read when the operation is created, off
+        the UI thread, and stops when the request is cancelled; an audio node renders and analyzes its
+        sound first, once. Nothing has to be connected to the node and its links never change. The keys
+        are ordinary keyframes and do not follow the source afterwards; bake again to refresh them.
+        `port` names the number output; the default is the node's first. Outputs: node (the Number node
+        the keys were written to). Errors: "Node N does not exist"; "Node N has no number output"; the
+        node's own diagnostic when it fails at a frame (a missing audio file); a composition of more
+        than 100000 frames; bloom.scripting.cancelled. Undo: one step removes the Number node and its
+        keys. MCP example: {"op":"bloom.node.bake-to-keyframes","args":{"node":12,"port":"level"}}.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          node  id  required
+              Id. The node whose number output is baked.
+              Unit: node id (query:nodes)
+              Range: >= 1
+          port  str  optional
+              The number output to bake. Defaults to the node's first number output.
+              Unit: port name (query:node-types lists each type's ports)
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.node.bake-to-keyframes","args":{"node":1}}]}}
+          Python:
+            bloom.ops.node.bake_to_keyframes(node=1)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.node.bake-to-keyframes","args":{"node":1}}]
+
+        Related: transact
+        """
+        ...
     def connect(self, sourceNode: int | Proxy, sourcePort: str, targetNode: int | Proxy, port: str = ..., role: str = ..., slot: int | Proxy = ..., insertBefore: int | Proxy = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.node.connect  (operation, node)
         Connects an output port to an input port, or writes a Merge layer-stack slot when `role` is

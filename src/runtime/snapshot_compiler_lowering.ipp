@@ -1661,6 +1661,7 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     case NodeLoweringKind::ValueUtility:
     case NodeLoweringKind::ValueFieldSample:
     case NodeLoweringKind::ValueAudioAmplitude:
+    case NodeLoweringKind::ValueAudioTable:
     case NodeLoweringKind::ValueImageStatistics:
     // #342: Group Input and Group Output are value-pass nodes. A Node Group the expansion could
     // not replace is reported by resolveDefinitions() and never reaches publication.

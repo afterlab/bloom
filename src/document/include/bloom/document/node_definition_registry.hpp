@@ -414,6 +414,9 @@ enum class NodeLoweringKind {
     // #347 Audio Amplitude: the level of a source's audio around the frame, a Scalar
     // (runtime::CompiledValueAudioAmplitude).
     ValueAudioAmplitude,
+    // #632 to #635 Audio Bands, Sample, Features, Beat and Pitch: Scalars and number lists read
+    // from a sound's analysis table (runtime::CompiledValueAudioTable).
+    ValueAudioTable,
     // #349 Image Statistics: five Scalars from the pixels of a picture (runtime::CompiledValueImageStatistics).
     ValueImageStatistics,
     // #587 Test Card: a source drawn procedurally by one field raster over a canvas the size of the
@@ -467,6 +470,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::GroupBoundary:
     case NodeLoweringKind::ValueFunction:
     case NodeLoweringKind::ValueAudioAmplitude:
+    case NodeLoweringKind::ValueAudioTable:
     case NodeLoweringKind::ValueImageStatistics:
         return true;
     case NodeLoweringKind::NodeGroup:

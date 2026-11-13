@@ -98,10 +98,31 @@ inline constexpr std::string_view kImageStatisticsNodeType = "bloom.image-statis
 inline constexpr std::string_view kAudioAmplitudeNodeType = "bloom.audio-amplitude";
 inline constexpr std::string_view kAudioWaveformNodeType = "bloom.audio-waveform";
 inline constexpr std::string_view kAudioSpectrumNodeType = "bloom.audio-spectrum";
+// #632 to #635: the nodes that read a sound's analysis table.
+inline constexpr std::string_view kAudioBandsNodeType = "bloom.audio-bands";
+inline constexpr std::string_view kAudioSampleNodeType = "bloom.audio-sample";
+inline constexpr std::string_view kAudioFeaturesNodeType = "bloom.audio-features";
+inline constexpr std::string_view kAudioBeatNodeType = "bloom.audio-beat";
+inline constexpr std::string_view kAudioPitchNodeType = "bloom.audio-pitch";
 inline constexpr std::uint32_t kImagePixelNodeSchemaVersion = 1;
 
 inline constexpr std::string_view kAudioAnalysisInputPort = "audio";
 inline constexpr std::string_view kAudioAmplitudeOutputPort = "amplitude";
+
+// The table nodes' outputs, in order. Audio Sample's `spectrum` and `waveform` and Audio Pitch's
+// `classes` are number lists; every other output is a Scalar.
+inline constexpr std::array<std::string_view, 1> kAudioBandsOutputPorts{"level"};
+inline constexpr std::array<std::string_view, 3> kAudioSampleOutputPorts{"value", "spectrum",
+                                                                         "waveform"};
+inline constexpr std::array<std::string_view, 8> kAudioFeaturesOutputPorts{
+    "hit", "sinceHit", "hitCount", "brightness", "noisiness", "pan", "width", "total"};
+inline constexpr std::array<std::string_view, 4> kAudioBeatOutputPorts{"phase", "pulse", "beat",
+                                                                       "tempo"};
+inline constexpr std::array<std::string_view, 3> kAudioPitchOutputPorts{"classes", "strongest",
+                                                                        "strength"};
+// The items of Audio Sample's lists.
+inline constexpr std::size_t kAudioSampleSpectrumItems = 64;
+inline constexpr std::size_t kAudioSampleWaveformItems = 256;
 
 // Image Statistics' outputs, in order.
 inline constexpr std::array<std::string_view, 5> kImageStatisticsOutputPorts{
@@ -207,6 +228,20 @@ inline constexpr std::array<std::string_view, 5> kStatisticsChannels{"Luminance"
 inline constexpr std::array<std::string_view, 2> kStatisticsPixels{"All pixels",
                                                                     "Pixels with alpha"};
 
+// Stored values of the table nodes' choices; they are the values of
+// media::audio::analysis::TableChannel and TableNormalize.
+inline constexpr std::int64_t kAudioChannelMix = 0;
+inline constexpr std::int64_t kAudioChannelSide = 4;
+inline constexpr std::int64_t kAudioNormalizePercentile = 0;
+inline constexpr std::int64_t kAudioNormalizeManual = 3;
+inline constexpr std::int64_t kAudioSampleSpectrum = 0;
+inline constexpr std::int64_t kAudioSampleWaveform = 1;
+inline constexpr std::array<std::string_view, 5> kAudioChannels{"Mix", "Left", "Right", "Mid",
+                                                                "Side"};
+inline constexpr std::array<std::string_view, 4> kAudioNormalizeModes{
+    "95th percentile", "Peak", "Rolling window", "Manual range"};
+inline constexpr std::array<std::string_view, 2> kAudioSampleReads{"Spectrum", "Waveform"};
+
 inline constexpr std::array<std::string_view, 2> kAudioMeasures{"Peak", "RMS"};
 inline constexpr std::array<std::string_view, 2> kAudioUnits{"Linear", "Decibels"};
 inline constexpr std::array<std::string_view, 2> kAudioWaveformChannels{"Mixed", "Separate lanes"};
@@ -300,12 +335,87 @@ inline constexpr std::array kAudioSpectrumParameters{
     color("background", {0.015, 0.015, 0.02, 1.0}, "Background"),
 };
 
+// #632 Audio Bands: the level of a range of frequencies, 0 to 1.
+inline constexpr std::array kAudioBandsParameters{
+    choice("channel", kAudioChannels, kAudioChannelMix, "Channel"),
+    scalar("lowFrequency", 20.0, 20.0, 20000.0, "Lowest frequency", 20.0, 2000.0, 1.0, 0, "Hz"),
+    scalar("highFrequency", 250.0, 20.0, 20000.0, "Highest frequency", 100.0, 20000.0, 10.0, 0,
+           "Hz"),
+    choice("normalize", kAudioNormalizeModes, kAudioNormalizePercentile, "Normalize"),
+    scalar("range", 48.0, 1.0, 120.0, "Range", 6.0, 96.0, 1.0, 0, "dB"),
+    scalar("floor", -48.0, -120.0, 24.0, "Manual floor", -96.0, 0.0, 1.0, 0, "dB"),
+    scalar("ceiling", 0.0, -120.0, 24.0, "Manual ceiling", -60.0, 12.0, 1.0, 0, "dB"),
+    scalar("rolling", 4.0, 0.1, 600.0, "Rolling window", 0.5, 30.0, 0.1, 1, "s"),
+    scalar("attack", 0.0, 0.0, 10000.0, "Attack", 0.0, 500.0, 1.0, 0, "ms"),
+    scalar("release", 0.0, 0.0, 10000.0, "Release", 0.0, 2000.0, 1.0, 0, "ms"),
+    scalar("offset", 0.0, -86400.0, 86400.0, "Time offset", -1.0, 1.0, 0.01, 3, "s"),
+};
+
+// #633 Audio Sample: the spectrum or the waveform at a position across it.
+inline constexpr std::array kAudioSampleParameters{
+    choice("read", kAudioSampleReads, kAudioSampleSpectrum, "Read"),
+    scalar("position", 0.5, 0.0, 1.0, "Position", 0.0, 1.0, 0.001, 3),
+    choice("channel", kAudioChannels, kAudioChannelMix, "Channel"),
+    scalar("floor", -72.0, -120.0, 24.0, "Floor", -96.0, 0.0, 1.0, 0, "dB"),
+    scalar("ceiling", 0.0, -120.0, 24.0, "Ceiling", -60.0, 12.0, 1.0, 0, "dB"),
+    scalar("window", 50.0, 1.0, 1000.0, "Waveform window", 5.0, 500.0, 1.0, 0, "ms"),
+    scalar("offset", 0.0, -86400.0, 86400.0, "Time offset", -1.0, 1.0, 0.01, 3, "s"),
+};
+
+// #634 Audio Features: hits, and where the sound sits in frequency and between the channels.
+inline constexpr std::array kAudioFeaturesParameters{
+    choice("channel", kAudioChannels, kAudioChannelMix, "Channel"),
+    scalar("sensitivity", 1.5, 1.0, 20.0, "Hit sensitivity", 1.0, 5.0, 0.05, 2),
+    scalar("gap", 80.0, 10.0, 5000.0, "Shortest gap between hits", 10.0, 1000.0, 1.0, 0, "ms"),
+    scalar("pulse", 100.0, 1.0, 10000.0, "Hit pulse length", 10.0, 1000.0, 1.0, 0, "ms"),
+    scalar("offset", 0.0, -86400.0, 86400.0, "Time offset", -1.0, 1.0, 0.01, 3, "s"),
+};
+
+// #635 Audio Beat: the beat the sound keeps.
+inline constexpr std::array kAudioBeatParameters{
+    scalar("slowest", 60.0, 20.0, 400.0, "Slowest tempo", 40.0, 200.0, 1.0, 0, "BPM"),
+    scalar("fastest", 180.0, 21.0, 480.0, "Fastest tempo", 60.0, 300.0, 1.0, 0, "BPM"),
+    scalar("offset", 0.0, -86400.0, 86400.0, "Time offset", -1.0, 1.0, 0.01, 3, "s"),
+};
+
+// #635 Audio Pitch: the share of each of the twelve pitch classes.
+inline constexpr std::array kAudioPitchParameters{
+    scalar("offset", 0.0, -86400.0, 86400.0, "Time offset", -1.0, 1.0, 0.01, 3, "s"),
+};
+
 } // namespace image_pixel_parameters
+
+// #632 to #635: the nodes that read a sound's analysis table.
+[[nodiscard]] constexpr bool isAudioTableNodeType(const std::string_view typeId) noexcept {
+    return typeId == kAudioBandsNodeType || typeId == kAudioSampleNodeType ||
+           typeId == kAudioFeaturesNodeType || typeId == kAudioBeatNodeType ||
+           typeId == kAudioPitchNodeType;
+}
 
 // The nodes that read a sound on their `audio` input (#347, #630).
 [[nodiscard]] constexpr bool isAudioAnalysisNodeType(const std::string_view typeId) noexcept {
     return typeId == kAudioAmplitudeNodeType || typeId == kAudioWaveformNodeType ||
-           typeId == kAudioSpectrumNodeType;
+           typeId == kAudioSpectrumNodeType || isAudioTableNodeType(typeId);
+}
+
+// A table node's outputs, in order, or an empty span.
+[[nodiscard]] constexpr std::span<const std::string_view>
+audioTableOutputPorts(const std::string_view typeId) noexcept {
+    if (typeId == kAudioBandsNodeType)
+        return kAudioBandsOutputPorts;
+    if (typeId == kAudioSampleNodeType)
+        return kAudioSampleOutputPorts;
+    if (typeId == kAudioFeaturesNodeType)
+        return kAudioFeaturesOutputPorts;
+    if (typeId == kAudioBeatNodeType)
+        return kAudioBeatOutputPorts;
+    if (typeId == kAudioPitchNodeType)
+        return kAudioPitchOutputPorts;
+    return {};
+}
+// Whether a table node's output is a number list rather than a Scalar.
+[[nodiscard]] constexpr bool isAudioTableListOutput(const std::string_view port) noexcept {
+    return port == "spectrum" || port == "waveform" || port == "classes";
 }
 
 [[nodiscard]] constexpr bool isImagePixelNodeType(const std::string_view typeId) noexcept {
@@ -313,7 +423,8 @@ inline constexpr std::array kAudioSpectrumParameters{
            typeId == kImageClampNodeType || typeId == kImageCompareNodeType ||
            typeId == kHistogramNodeType || typeId == kImageStatisticsNodeType ||
            typeId == kAudioAmplitudeNodeType ||
-           typeId == kAudioWaveformNodeType || typeId == kAudioSpectrumNodeType;
+           typeId == kAudioWaveformNodeType || typeId == kAudioSpectrumNodeType ||
+           isAudioTableNodeType(typeId);
 }
 
 // The parameters of an image pixel node in definition order, or an empty span.
@@ -337,6 +448,16 @@ imagePixelParameters(const std::string_view typeId) noexcept {
         return image_pixel_parameters::kAudioWaveformParameters;
     if (typeId == kAudioSpectrumNodeType)
         return image_pixel_parameters::kAudioSpectrumParameters;
+    if (typeId == kAudioBandsNodeType)
+        return image_pixel_parameters::kAudioBandsParameters;
+    if (typeId == kAudioSampleNodeType)
+        return image_pixel_parameters::kAudioSampleParameters;
+    if (typeId == kAudioFeaturesNodeType)
+        return image_pixel_parameters::kAudioFeaturesParameters;
+    if (typeId == kAudioBeatNodeType)
+        return image_pixel_parameters::kAudioBeatParameters;
+    if (typeId == kAudioPitchNodeType)
+        return image_pixel_parameters::kAudioPitchParameters;
     return {};
 }
 
@@ -346,7 +467,9 @@ imagePixelParameterSpec(const std::string_view schemaKey) noexcept {
     for (const auto type : {kImageMathNodeType, kImageMapRangeNodeType, kImageClampNodeType,
                             kImageCompareNodeType, kHistogramNodeType, kImageStatisticsNodeType,
                             kAudioAmplitudeNodeType,
-                            kAudioWaveformNodeType, kAudioSpectrumNodeType}) {
+                            kAudioWaveformNodeType, kAudioSpectrumNodeType, kAudioBandsNodeType,
+                            kAudioSampleNodeType, kAudioFeaturesNodeType, kAudioBeatNodeType,
+                            kAudioPitchNodeType}) {
         if (schemaKey.size() <= type.size() + 1 || !schemaKey.starts_with(type) ||
             schemaKey[type.size()] != '.')
             continue;

@@ -1287,6 +1287,38 @@ void testWindowStatusBarMessagesClearThemselves(Expectations& expectations) {
     strip->setPersistentMessage(QString{});
     expectations.expect(strip->messageTextForTest().isEmpty(),
                         "status bar messages: clearing the persistent message empties the cell");
+
+    // #630, #636: a sound being prepared for the audio analysis nodes and a bake read as progress.
+    using bloom::runtime::AudioSoundActivity;
+    using bloom::runtime::AudioSoundPhase;
+    const auto sound = [](const AudioSoundPhase phase, const std::uint64_t done,
+                          const std::uint64_t total, const std::size_t queued) {
+        AudioSoundActivity activity;
+        activity.phase = phase;
+        activity.framesDone = done;
+        activity.framesTotal = total;
+        activity.queued = queued;
+        return activity;
+    };
+    expectations.expect(backgroundWorkReadout({}, 0, 0).text.isEmpty(),
+                        "background work: nothing running reads nothing");
+    const auto identifying = backgroundWorkReadout(sound(AudioSoundPhase::Identifying, 0, 0, 0), 0, 0);
+    expectations.expect(identifying.text == QStringLiteral("Reading sound for analysis") &&
+                            identifying.total == 0,
+                        "background work: a sound being identified is busy, with no size yet");
+    const auto rendering =
+        backgroundWorkReadout(sound(AudioSoundPhase::Rendering, 12'000, 48'000, 0), 0, 0);
+    expectations.expect(rendering.text == QStringLiteral("Rendering sound for analysis · 25%") &&
+                            rendering.done == 12'000 && rendering.total == 48'000,
+                        "background work: a sound being rendered shows how far it is");
+    expectations.expect(
+        backgroundWorkReadout(sound(AudioSoundPhase::Analyzing, 24'000, 48'000, 2), 10, 96).text ==
+            QStringLiteral("Analyzing sound · 50% · 2 more waiting"),
+        "background work: the sound comes before a bake that waits for it, and names the queue");
+    const auto baking = backgroundWorkReadout({}, 24, 96);
+    expectations.expect(baking.text == QStringLiteral("Baking keyframes · 24 of 96") &&
+                            baking.done == 24 && baking.total == 96,
+                        "background work: a bake shows the frames it has read");
 }
 
 // A refused command reaches the strip as a notice. CompositionSession::commandRejected() is the one

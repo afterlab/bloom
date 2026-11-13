@@ -886,6 +886,36 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
         return runtime::CompiledValueKernel{
             runtime::CompiledValueImageStatistics{node.id, lowered.plan}};
     }
+    case runtime::NodeLoweringKind::ValueAudioTable: {
+        // #632 to #635: the sound the `audio` input ends in, the node's Scalar parameters as
+        // operands and its choices as constants, each in the definition's order.
+        runtime::CompiledValueAudioTable kernel;
+        const auto& type = node.typeId;
+        kernel.node = type == document::kAudioBandsNodeType      ? runtime::AudioTableNode::Bands
+                      : type == document::kAudioSampleNodeType   ? runtime::AudioTableNode::Sample
+                      : type == document::kAudioFeaturesNodeType ? runtime::AudioTableNode::Features
+                      : type == document::kAudioBeatNodeType     ? runtime::AudioTableNode::Beat
+                                                                 : runtime::AudioTableNode::Pitch;
+        for (const auto& parameter : document::imagePixelParameters(type)) {
+            if (parameter.kind == document::DepthParameterKind::Scalar) {
+                auto operand = operandOf(parameter.role);
+                if (!operand)
+                    return std::nullopt;
+                kernel.operands.push_back(*std::move(operand));
+            } else {
+                const auto* stored = parameterConstant<std::int64_t>(
+                    findParameterBinding(node, parameter.role));
+                if (stored == nullptr)
+                    return std::nullopt;
+                kernel.choices.push_back(*stored);
+            }
+        }
+        const auto lowered = lowerAudioAnalysisSource(node);
+        if (!lowered.ok)
+            return std::nullopt;
+        kernel.source = lowered.source;
+        return runtime::CompiledValueKernel{std::move(kernel)};
+    }
     case runtime::NodeLoweringKind::ValueAudioAmplitude: {
         // #347 Audio Amplitude: the source its `audio` input ends in and its window and offset.
         const auto* measure =

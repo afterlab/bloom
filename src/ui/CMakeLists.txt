@@ -680,6 +680,7 @@ target_sources(
         composition_parameter_vocabulary.cpp
         composition_driver_probe.cpp
         node_path_writer.cpp
+        node_keyframe_baker.cpp
         properties_anchor_grid.cpp
         properties_sections.cpp
         value_presentation.cpp

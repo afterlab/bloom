@@ -10,6 +10,7 @@
 #include <bloom/runtime/audio_sound.hpp>
 #include <bloom/runtime/footage_time.hpp>
 
+#include "audio_analysis_cache.hpp"
 #include "audio_source_open.hpp"
 
 #include <algorithm>
@@ -291,6 +292,62 @@ std::string audioAnalysisKey(const AudioAnalysisQuery& query) {
     return key;
 }
 
+namespace detail {
+
+std::shared_ptr<const AudioAnalysisResult> findAnalysisEntry(const std::string& key) {
+    auto& s = state();
+    std::scoped_lock lock(s.mutex);
+    const auto found = s.entries.find(key);
+    if (found == s.entries.end())
+        return nullptr;
+    found->second.used = ++s.tick;
+    ++s.statistics.hits;
+    return found->second.result;
+}
+
+bool hasAnalysisEntry(const std::string& key) {
+    auto& s = state();
+    std::scoped_lock lock(s.mutex);
+    return s.entries.contains(key);
+}
+
+void storeAnalysisEntry(const std::string& key, std::shared_ptr<const AudioAnalysisResult> result) {
+    auto& s = state();
+    const auto bytes = resultBytes(*result);
+    std::scoped_lock lock(s.mutex);
+    ++s.statistics.computed;
+    s.entries.insert_or_assign(key, Entry{std::move(result), bytes, ++s.tick});
+    s.bytes = 0;
+    for (const auto& [name, entry] : s.entries)
+        s.bytes += entry.bytes;
+    // Retire the least recently used entries beyond the budget; the one just prepared stays.
+    while (s.bytes > kAudioAnalysisCacheBytes && s.entries.size() > 1) {
+        auto oldest = s.entries.end();
+        for (auto it = s.entries.begin(); it != s.entries.end(); ++it)
+            if (it->first != key && (oldest == s.entries.end() || it->second.used < oldest->second.used))
+                oldest = it;
+        if (oldest == s.entries.end())
+            break;
+        s.bytes -= oldest->second.bytes;
+        s.entries.erase(oldest);
+        ++s.statistics.evicted;
+    }
+}
+
+void countAnalysisFailure() {
+    auto& s = state();
+    std::scoped_lock lock(s.mutex);
+    ++s.statistics.failed;
+}
+
+void countAnalysisCancelled() {
+    auto& s = state();
+    std::scoped_lock lock(s.mutex);
+    ++s.statistics.cancelled;
+}
+
+} // namespace detail
+
 std::shared_ptr<const AudioAnalysisResult> findAudioAnalysis(const AudioAnalysisQuery& query) {
     const auto key = audioAnalysisKey(query);
     if (key.empty())
@@ -438,25 +495,7 @@ AudioAnalysisStatus prepareAudioAnalysis(const AudioAnalysisQuery& query,
     }
     if (cancellation.isCancellationRequested())
         return cancel();
-    const auto bytes = resultBytes(*result);
-    std::scoped_lock lock(s.mutex);
-    ++s.statistics.computed;
-    s.entries.insert_or_assign(key, Entry{result, bytes, ++s.tick});
-    s.bytes = 0;
-    for (const auto& [name, entry] : s.entries)
-        s.bytes += entry.bytes;
-    // Retire the least recently used entries beyond the budget; the one just prepared stays.
-    while (s.bytes > kAudioAnalysisCacheBytes && s.entries.size() > 1) {
-        auto oldest = s.entries.end();
-        for (auto it = s.entries.begin(); it != s.entries.end(); ++it)
-            if (it->first != key && (oldest == s.entries.end() || it->second.used < oldest->second.used))
-                oldest = it;
-        if (oldest == s.entries.end())
-            break;
-        s.bytes -= oldest->second.bytes;
-        s.entries.erase(oldest);
-        ++s.statistics.evicted;
-    }
+    detail::storeAnalysisEntry(key, std::move(result));
     return {AudioAnalysisOutcome::Ready, {}};
 }
 
@@ -473,6 +512,16 @@ AudioAnalysisPreparation::AudioAnalysisPreparation(
 }
 
 AudioAnalysisPreparation::~AudioAnalysisPreparation() { currentPreparation = previous_; }
+
+std::optional<AudioAnalysisStatus> AudioAnalysisPreparation::prepareWith(
+    const std::function<AudioAnalysisStatus(const std::filesystem::path&, const CancellationToken&,
+                                            const std::shared_ptr<const CompiledCompositionPlan>&)>&
+        prepare) {
+    if (currentPreparation == nullptr)
+        return std::nullopt;
+    return prepare(currentPreparation->assetBase_, currentPreparation->cancellation_,
+                   currentPreparation->plan_);
+}
 
 const std::shared_ptr<const CompiledCompositionPlan>& AudioAnalysisPreparation::planHere() noexcept {
     static const std::shared_ptr<const CompiledCompositionPlan> none;

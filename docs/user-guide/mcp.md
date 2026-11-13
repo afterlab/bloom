@@ -460,7 +460,9 @@ takes the same mapping with `color_mode` and `hue_direction`, and reading a grad
 lists all three. A Number List parameter takes `{"values": [n, ...]}`, at most 65536 finite
 numbers (`docs/architecture/number-list.md`), and is read back in the same shape;
 `bloom.node.write-to-number-list` stores what a node's list output gives at a time in a Number List
-node, which is how a computed list is read. A value out of range is refused with what the parameter
+node, which is how a computed list is read, and `bloom.node.bake-to-keyframes` reads a number
+output at every frame of the composition and stores it as keyframes on a new Number node
+(`docs/user-guide/audio-analysis.md`, "Baking to keyframes"). A value out of range is refused with what the parameter
 accepts, for example "Parameter 31 (points of node 7, bloom.shape) cannot take 2; it takes a whole
 number in 3..64." A Boolean parameter such as a shape's `fillEnabled` or `strokeEnabled` can be
 driven by a Boolean value node: `{"driverNode": <id>, "driverPort": "result"}` with

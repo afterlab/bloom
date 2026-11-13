@@ -597,6 +597,25 @@ class PythonApi(unittest.TestCase):
             bloom.ops.node.write_to_number_list(scalar)
         self.assertIn('has no Number List output', str(refused.exception))
 
+        # #636: a number output is baked to keyframes on a new Number node, one key a frame.
+        value = bloom.data.nodes(composition).get(scalar).parameters['value']
+        self.assertTrue(bloom.ops.parameter.set_source(value, value=0.25)['succeeded'])
+        curves_before = len(bloom.data.curves(composition))
+        baked = bloom.ops.node.bake_to_keyframes(scalar)
+        self.assertTrue(baked['succeeded'])
+        number = next(o['id'] for o in baked['outputs'] if o['name'] == 'node')
+        self.assertNotEqual(number, scalar)
+        self.assertEqual(len(bloom.data.curves(composition)), curves_before + 1)
+        keys = bloom.data.curves(composition)[-1].components[0]
+        self.assertGreater(len(keys), 1)
+        self.assertEqual({row['value'] for row in keys}, {0.25})
+        with self.assertRaises(bloom.OperationError) as refused:
+            bloom.ops.node.bake_to_keyframes(scalar, port='nope')
+        self.assertIn('has no number output named', str(refused.exception))
+        with self.assertRaises(bloom.OperationError) as refused:
+            bloom.ops.node.bake_to_keyframes(node)
+        self.assertIn('has no number output', str(refused.exception))
+
         # The same edits as a bloom-cli script: a fresh project allocates the same ids.
         with tempfile.TemporaryDirectory(prefix='bloom-cli-list-') as directory:
             def run(name, edits):

@@ -697,7 +697,10 @@ void testSearchKeyboardAndMenus() {
                   "Procedural Warp", "Rolling Shutter", "ST Map"},
                  "Distort holds the lens warp, the colour fringe, the shutter skew and the pins "
                  "and maps");
-        hasGroup("Tracking & Analysis", {"Histogram", "Image Compare", "Image Statistics", "Audio Amplitude", "Audio Waveform", "Audio Spectrum"},
+        hasGroup("Tracking & Analysis",
+                 {"Histogram", "Image Compare", "Image Statistics", "Audio Amplitude",
+                  "Audio Waveform", "Audio Spectrum", "Audio Bands", "Audio Sample",
+                  "Audio Features", "Audio Beat", "Audio Pitch"},
                  "Tracking & Analysis holds the analysis nodes");
         // #702: every leaf of every menu that adds nodes (the canvas menu's Add Node submenu and
         // the header's Add menu) is a node (or preset) name; no row carries a descriptive

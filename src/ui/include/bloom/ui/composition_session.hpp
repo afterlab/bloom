@@ -238,6 +238,10 @@ class CompositionSession final : public QObject {
     // config archive is looked for. The intent's config location is built from it exactly as the
     // export queue builds its own, so a preview never resolves another config than an export.
     void setProjectDirectory(std::filesystem::path directory);
+    // The same folder, which is also where a relative asset locator is resolved from.
+    [[nodiscard]] const std::filesystem::path& projectDirectory() const noexcept {
+        return projectDirectory_;
+    }
     [[nodiscard]] bool setWorkingColorSpaceOverride(std::optional<std::string> colorSpaceId);
     // What the artist was looking at in this project (session state, never document truth): the
     // Viewer's Display / View, the last active composition and pinned Viewers' targets. The

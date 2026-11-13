@@ -9,6 +9,9 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 
+#include <QCoreApplication>
+
+#include <algorithm>
 #include <cmath>
 
 namespace bloom::ui {
@@ -73,6 +76,51 @@ PreviewColorState previewColorState(const CompositionPreviewState& preview) {
                           : WindowStatusBar::tr("No displayed frame"),
             kit::Color::Warn,
             preview.frame ? WindowStatusBar::tr("CPU") : WindowStatusBar::tr("None")};
+}
+
+BackgroundWorkReadout backgroundWorkReadout(const runtime::AudioSoundActivity& sound,
+                                            const std::uint64_t bakeFramesDone,
+                                            const std::uint64_t bakeFramesTotal) {
+    const auto percent = [](const std::uint64_t done, const std::uint64_t total) {
+        return total == 0 ? 0 : static_cast<int>(std::min(done, total) * 100 / total);
+    };
+    BackgroundWorkReadout readout;
+    switch (sound.phase) {
+    case runtime::AudioSoundPhase::Idle:
+        break;
+    case runtime::AudioSoundPhase::Identifying:
+        readout.text = QCoreApplication::translate("WindowStatusBar", "Reading sound for analysis");
+        break;
+    case runtime::AudioSoundPhase::Rendering:
+        readout.text = QCoreApplication::translate("WindowStatusBar",
+                                                   "Rendering sound for analysis · %1%")
+                           .arg(percent(sound.framesDone, sound.framesTotal));
+        readout.done = sound.framesDone;
+        readout.total = sound.framesTotal;
+        break;
+    case runtime::AudioSoundPhase::Analyzing:
+        readout.text = QCoreApplication::translate("WindowStatusBar", "Analyzing sound · %1%")
+                           .arg(percent(sound.framesDone, sound.framesTotal));
+        readout.done = sound.framesDone;
+        readout.total = sound.framesTotal;
+        break;
+    }
+    if (!readout.text.isEmpty()) {
+        if (sound.queued != 0)
+            readout.text += QCoreApplication::translate("WindowStatusBar", " · %n more waiting",
+                                                        nullptr, static_cast<int>(sound.queued));
+        return readout;
+    }
+    // A bake waits for its sound first, which the lines above report; then it reads its frames.
+    if (bakeFramesTotal != 0) {
+        readout.text = QCoreApplication::translate("WindowStatusBar",
+                                                   "Baking keyframes · %1 of %2")
+                           .arg(std::min(bakeFramesDone, bakeFramesTotal))
+                           .arg(bakeFramesTotal);
+        readout.done = bakeFramesDone;
+        readout.total = bakeFramesTotal;
+    }
+    return readout;
 }
 
 QString previewActivityText(const CompositionPreviewState& preview) {

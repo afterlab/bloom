@@ -1081,6 +1081,52 @@ smoothing run from the first row, so they too depend on the sound alone. The cha
 (both channels' power averaged), left, right, mid or side. A time offset reads the curve earlier or
 later, so motion can anticipate a hit.
 
+**The table nodes (#632 to #635).** Five value nodes read the table: `bloom.audio-bands` (the
+level of a frequency range), `bloom.audio-sample` (the spectrum or the waveform at a position, and
+both as number lists of 64 and 256 items), `bloom.audio-features` (hit pulse, time since the last
+hit, hit count, brightness, noisiness, pan, width and a running total), `bloom.audio-beat` (phase,
+pulse, beat count and tempo) and `bloom.audio-pitch` (the twelve pitch class shares, the strongest
+and its share). They lower to one kernel, `CompiledValueAudioTable`: the sound, the node's Scalar
+parameters as operands (so each can be driven or keyed) and its choices as constants. A table
+node always reads the rendered sound, a bare source included.
+
+What a node reads is a *reading* (`audio_table_analysis.hpp`): a whole-sound curve or list computed
+once from the table on the frame's worker and kept in the analysis cache under the sound's digest
+and the reading's own settings. An envelope is one value per row; the features are five values per
+row; hits are the rows where a sound starts (local peaks of the flux that stand above the mean of
+the fifth of a second around them by the sensitivity, and above a tenth of the largest flux); beats
+are a tempo and the beat times; the pitch reading is twelve shares per row. A node's value at a
+time is read between rows in a straight line. A driven parameter that changes from frame to
+frame makes a reading per value, which the cache's budget bounds.
+
+The beat is a reference method (Ellis, "Beat Tracking by Dynamic Programming", 2007): the onset
+strength is the flux above its local mean; the tempo is the lag at which that strength best
+correlates with itself between the slowest and fastest tempo, with a mild preference for 120 a
+minute; the beats are the evenly spaced times that best fall on onsets. A sound whose strength
+does not repeat (correlation under 0.1) has no beat. It follows a steady pulse; it may settle on
+half or double the felt tempo and does not follow a tempo that changes. The pitch classes are a
+chroma reading: each spectral peak's power goes to the pitch class of its frequency, so overtones
+count (a single note also shows some of the fifth above it) and unpitched sound spreads over all
+twelve. Both are tested against synthesized sounds with known answers; the repository holds no
+recorded music to measure them on.
+
+The scripted read of a node (`queryNodeNumberList`, `queryNodePath`, the bake) installs the same
+preparation a frame does, with the project's folder, so a list or a value is read without a
+frame being rendered.
+
+**Bake to keyframes (#636).** `queryNodeScalarKeys` (`scripting/node_path_query.hpp`) compiles the
+composition once with the node as a value readout and evaluates the value graph at every frame,
+first to last, on the calling worker, checking its cancellation between frames; the first frame
+waits for the sound and its table, the rest read the kept readings. It refuses a composition of
+more than 100,000 frames. The numbers become `commands::BakeValueToKeyframes`: one operation that
+adds a Number node (`bloom.value-scalar`) beside the source and writes its curve whole, one linear
+key a frame, so the bake is one undo step and the keys are ordinary keyframes that never read the
+sound again. The Node editor (`ui/node_keyframe_baker`) runs the read on its own worker and
+applies the command on the UI thread; MCP, Python and `bloom-cli run` create the same operation
+as `bloom.node.bake-to-keyframes`. While a sound is prepared or a bake reads its frames, the
+status bar's activity cell shows it with a progress bar (`backgroundWorkReadout`), read on a
+250 ms poll from `audioSoundActivity()` and `nodeBakeActivity()`, both lock-free readouts.
+
 **Time.** The snapshot compiler carries an `AudioAnalysisSource` (the asset record, the audio stream,
 the node's start frame, the composition rate and a video's loop and conform) in the plan. The source
 second read at composition time `t` is the one the mixer would play (`detail::footageAudioTime`,

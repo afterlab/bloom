@@ -7,6 +7,8 @@
 
 #include "field_raster.hpp"
 #include <bloom/runtime/audio_analysis.hpp>
+
+#include "audio_table_values.hpp"
 #include <bloom/runtime/image_statistics.hpp>
 #include "gradient_source.hpp"
 #include "operation_key.hpp"
@@ -291,6 +293,8 @@ class Evaluator final {
                 // #347: the level is read from the analysis cache under its own identity (source
                 // revision and exact time), which a memoized value's key would not carry.
                 !std::holds_alternative<runtime::CompiledValueAudioAmplitude>(operation.kernel) &&
+                // #632 to #635: so are the table readings, under the sound's digest.
+                !std::holds_alternative<runtime::CompiledValueAudioTable>(operation.kernel) &&
                 // #349: the statistics are read from their cache under the frame's own identity.
                 !std::holds_alternative<runtime::CompiledValueImageStatistics>(operation.kernel);
             const auto currentOperation = operationIndex++;
@@ -566,6 +570,8 @@ class Evaluator final {
                                 const runtime::CompiledValueAudioAmplitude& kernel);
     void evaluateImageStatistics(const runtime::CompiledValueOperation& operation,
                                  const runtime::CompiledValueImageStatistics& kernel);
+    void evaluateAudioTable(const runtime::CompiledValueOperation& operation,
+                            const runtime::CompiledValueAudioTable& kernel);
 
     core::RationalTime time_;
     document::FrameRate rate_;
@@ -637,6 +643,8 @@ void Evaluator::evaluateOperation(const runtime::CompiledValueOperation& operati
                 evaluateAudioAmplitude(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueImageStatistics>) {
                 evaluateImageStatistics(operation, kernel);
+            } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueAudioTable>) {
+                evaluateAudioTable(operation, kernel);
             } else {
                 evaluatePromotion(operation, kernel);
             }
@@ -648,6 +656,32 @@ void Evaluator::evaluateOperation(const runtime::CompiledValueOperation& operati
 // measurement was prepared on a worker; it is read from the cache here and never decoded, so a frame
 // evaluated on the interface thread never waits on a file. A frame whose analysis is not prepared
 // reads silence and says so.
+// #632 to #635: the node's Scalar parameters as this evaluation resolved them, then the readings.
+void Evaluator::evaluateAudioTable(const runtime::CompiledValueOperation& operation,
+                                   const runtime::CompiledValueAudioTable& kernel) {
+    std::vector<double> operands;
+    operands.reserve(kernel.operands.size());
+    bool valid = true;
+    for (const auto& operand : kernel.operands) {
+        const auto* value = asScalar(operandOf(operand));
+        valid = valid && value != nullptr;
+        operands.push_back(value != nullptr ? *value : 0.0);
+    }
+    if (!valid) {
+        fail(operation, {}, "Audio analysis operand has the wrong kind",
+             "Every value of the node must reach it as a Scalar.");
+        const auto silent = runtime::detail::silentAudioTableOutputs(kernel.node);
+        for (std::size_t slot = 0; slot < silent.size(); ++slot)
+            write(operation, slot, silent[slot]);
+        return;
+    }
+    auto values = runtime::detail::audioTableValues(kernel, operands, time_);
+    if (!values.summary.empty())
+        fail(operation, {}, std::move(values.summary), std::move(values.detail));
+    for (std::size_t slot = 0; slot < values.outputs.size(); ++slot)
+        write(operation, slot, values.outputs[slot]);
+}
+
 void Evaluator::evaluateAudioAmplitude(const runtime::CompiledValueOperation& operation,
                                        const runtime::CompiledValueAudioAmplitude& kernel) {
     constexpr double kSilenceDecibels = -120.0;

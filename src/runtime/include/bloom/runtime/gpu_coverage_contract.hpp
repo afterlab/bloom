@@ -704,6 +704,7 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     case NodeLoweringKind::GroupBoundary:
     case NodeLoweringKind::ValueFunction:
     case NodeLoweringKind::ValueAudioAmplitude:
+    case NodeLoweringKind::ValueAudioTable:
     case NodeLoweringKind::ValueImageStatistics:
         return false;
     }
@@ -776,6 +777,7 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     case NodeLoweringKind::GroupBoundary:
     case NodeLoweringKind::ValueFunction:
     case NodeLoweringKind::ValueAudioAmplitude:
+    case NodeLoweringKind::ValueAudioTable:
     case NodeLoweringKind::ValueImageStatistics:
         return "scope.value";
     case NodeLoweringKind::NodeGroup:

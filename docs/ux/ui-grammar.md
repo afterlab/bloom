@@ -332,7 +332,9 @@ segments:
   not set again, and a widget repaints at most once per presented frame and only when what it shows
   changed (#685).
 - **Activity**: the transient or persistent notice, else RAM-preview progress (a `KProgressBar` and
-  "Caching frames for RAM preview · 12 of 386"), else a preview that is rendering, failed,
+  "Caching frames for RAM preview · 12 of 386"), else background work with the same bar (a sound
+  prepared for the audio analysis nodes: "Rendering sound for analysis · 25%", "Analyzing sound ·
+  50%"; a bake: "Baking keyframes · 24 of 96"), else a preview that is rendering, failed,
   unsupported or cancelled, else the Faint placeholder "Idle". The compile-failure Details button
   is at the end of this segment. It takes the free width and elides.
 - **Pixel** (`windowStatusBarProbe`): the Viewer's probe readout; shown only while it has one.
@@ -1237,7 +1239,7 @@ group is waiting for:
 | Time | Echo, Frame Rate Hold, + Time Offset, + Frame Hold, + Time Remap, + Flow Retime |
 | Text & Paths | Text Source, the shape presets (Shape Source), + SVG Vector Source, + Text Layout, + Text Animator, + Text On Path, + Text To Shape, + Transform Path, + Trim Path, + Offset Path, + Boolean/Merge Paths, + Round Corners, + Resample Path, + Warp Path, + Warp Path (Function), + Shape Morph, + Path Stroke |
 | Instances & Particles | + Point, + Grid, + Scatter, + Points Along Path, + Shape To Points, + Text To Points, + Clone To Points, + Draw Instances, + Particle System |
-| Tracking & Analysis | Histogram, Image Compare, Audio Amplitude, Audio Waveform, Audio Spectrum, Image Statistics, + Tracker, + Stabilize |
+| Tracking & Analysis | Histogram, Image Compare, Audio Amplitude, Audio Waveform, Audio Spectrum, Audio Bands, Audio Sample, Audio Features, Audio Beat, Audio Pitch, Image Statistics, + Tracker, + Stabilize |
 | Fields | the 16 Field nodes |
 | Values (submenu) | Values, Math (+ Oscillator, + Wiggle, + Loop Value), Convert, String, Logic, Time Values, Color Values, Vector |
 | Utilities | Reroute, Separate/Combine XY and XYZ, + Group Input, + Group Output, + Node Group, + File Cache |

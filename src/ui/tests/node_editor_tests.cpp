@@ -15,6 +15,7 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/graph.hpp>
+#include <bloom/document/image_math_parameters.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
@@ -707,6 +708,82 @@ void testWriteToAPathIsOneUndoStep(Expectations& expectations) {
                         "ONE undo step removes the Path node it wrote");
 }
 
+// #636: the node menu of a node that gives a number offers Bake to Keyframes (a submenu naming
+// each output when there are several); it reads the frames off the UI thread, then stores them as
+// one command, so one undo step removes the Number node and its keys.
+void testBakeToKeyframesIsOneUndoStep(Expectations& expectations) {
+    GraphFixture fixture(makeProject("Bake To Keyframes Test"));
+    const auto addNode = [&](const std::string_view type) {
+        commands::Transaction add("Add", fixture.session.snapshot().revision());
+        add.emplace<commands::AddNode>(fixture.session.compositionId(), std::string(type),
+                                       document::Vec2d{});
+        return fixture.session.executeNodeTransaction(std::move(add))
+            .outputId<document::NodeId>(commands::kAddNodeOutput);
+    };
+    const auto menuActions = [&](const document::NodeId node) {
+        fixture.session.selectNode(node);
+        QCoreApplication::processEvents();
+        std::unique_ptr<QMenu> menu(fixture.editor.contextMenuForTest(true));
+        QStringList names;
+        if (menu)
+            for (const auto* action : menu->findChildren<QAction*>())
+                if (action->objectName().startsWith(QStringLiteral("nodeBakeToKeyframesAction")))
+                    names.push_back(action->objectName());
+        names.sort();
+        return names;
+    };
+    // An Audio Beat gives four numbers: the menu names each.
+    const auto beat = addNode(document::kAudioBeatNodeType);
+    expectations.expect(beat.has_value(), "an Audio Beat node is added");
+    if (!beat)
+        return;
+    expectations.expect(menuActions(*beat) ==
+                            QStringList{QStringLiteral("nodeBakeToKeyframesAction_beat"),
+                                        QStringLiteral("nodeBakeToKeyframesAction_phase"),
+                                        QStringLiteral("nodeBakeToKeyframesAction_pulse"),
+                                        QStringLiteral("nodeBakeToKeyframesAction_tempo")},
+                        "a node with several number outputs offers each to bake");
+    // A Path node gives no number: nothing to bake.
+    const auto path = addNode(document::kPathValueNodeType);
+    expectations.expect(path.has_value() && menuActions(*path).isEmpty(),
+                        "a node with no number output offers no bake");
+
+    const auto number = addNode(document::kScalarValueNodeType);
+    expectations.expect(number.has_value(), "a Number node is added");
+    if (!number)
+        return;
+    fixture.session.selectNode(*number);
+    QCoreApplication::processEvents();
+    std::unique_ptr<QMenu> menu(fixture.editor.contextMenuForTest(true));
+    QAction* bake = nullptr;
+    if (menu)
+        for (auto* action : menu->findChildren<QAction*>())
+            if (action->objectName() == QStringLiteral("nodeBakeToKeyframesAction"))
+                bake = action;
+    expectations.expect(bake != nullptr, "a node with one number output offers Bake to Keyframes");
+    if (bake == nullptr)
+        return;
+    const auto numberNodes = [&] {
+        std::size_t count = 0;
+        for (const auto& node : fixture.session.composition()->graph().nodes())
+            count += node.typeId == document::kScalarValueNodeType ? 1U : 0U;
+        return count;
+    };
+    const auto curves = [&] { return fixture.session.composition()->animationCurves().records().size(); };
+    const auto curvesBefore = curves();
+    bake->trigger();
+    QElapsedTimer timer;
+    timer.start();
+    while (numberNodes() == 1 && timer.elapsed() < 20000)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    expectations.expect(numberNodes() == 2 && curves() == curvesBefore + 1,
+                        "Bake to Keyframes adds one keyed Number node");
+    expectations.expect(fixture.session.undoLabel() == QStringLiteral("Bake to keyframes"),
+                        "the bake is named in Undo");
+    expectations.expect(fixture.session.undo() && numberNodes() == 1 && curves() == curvesBefore,
+                        "ONE undo step removes the Number node and its keys");
+}
+
 // --- Decision 5: in-node edits take the Properties panel's own path -----------------------------
 
 void testInNodeValueFieldsCommitThroughThePropertiesPath(Expectations& expectations) {
@@ -1173,6 +1250,7 @@ int runAll() {
     testShapeMenuAndVisibility(expectations);
     testAddFromTheCanvasIsOneUndoableCommand(expectations);
     testWriteToAPathIsOneUndoStep(expectations);
+    testBakeToKeyframesIsOneUndoStep(expectations);
     testInNodeValueFieldsCommitThroughThePropertiesPath(expectations);
     testInNodeTransformFieldsCommitThroughThePropertiesPath(expectations);
     testColorIsAReadOnlyChipAndParameterlessNodesStayClean(expectations);

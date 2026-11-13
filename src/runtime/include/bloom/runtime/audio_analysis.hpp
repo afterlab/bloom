@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -93,6 +94,12 @@ class AudioAnalysisPreparation final {
     AudioAnalysisPreparation& operator=(const AudioAnalysisPreparation&) = delete;
     // Prepares `query` under this thread's innermost preparation, or none when there is none.
     [[nodiscard]] static std::optional<AudioAnalysisStatus> prepareHere(const AudioAnalysisQuery& query);
+    // Runs `prepare` with this thread's innermost preparation (its asset base, cancellation and
+    // plan), or returns none when there is none.
+    [[nodiscard]] static std::optional<AudioAnalysisStatus> prepareWith(
+        const std::function<AudioAnalysisStatus(
+            const std::filesystem::path&, const CancellationToken&,
+            const std::shared_ptr<const CompiledCompositionPlan>&)>& prepare);
     // The plan of this thread's innermost preparation, or null when there is none.
     [[nodiscard]] static const std::shared_ptr<const CompiledCompositionPlan>& planHere() noexcept;
 

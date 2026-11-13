@@ -168,8 +168,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Color Matrix; #523 adds HSL Qualifier; #516 adds Edge Extend; #509 adds Mask Path, Text
     // Outline and Alpha Contour; #524 adds Four-Color Gradient; #514 adds Denoise & Smooth; #637
     // adds Resample Path; #598 adds Warp Path and Warp Path (Function); #597 adds Shape Morph; #511 adds Tile & Mirror; #528 adds Inner Shadow and Inner Glow; #519 adds Quantize; #527 adds Dither; #510 adds Procedural Warp; #642 adds Vector Artwork;
-    // #627 adds Number List.
-    expectations.expect(registry.definitions().size() == 254,
+    // #627 adds Number List; #632 to #635 add Audio Bands, Audio Sample, Audio Features, Audio
+    // Beat and Audio Pitch.
+    expectations.expect(registry.definitions().size() == 259,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",

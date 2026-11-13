@@ -37,6 +37,8 @@
 #include <QShowEvent>
 #include <QTimer>
 
+#include <bloom/scripting/node_path_query.hpp>
+
 namespace bloom::ui {
 namespace {
 
@@ -85,6 +87,19 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     connect(mediaDiskCacheTimer_, &QTimer::timeout, this, &WindowStatusBar::observeMemoryBudget);
     mediaDiskCacheTimer_->start();
     memoryReserveBytes_ = memoryLedger_.reserveByteBudget();
+
+    backgroundWorkTimer_ = new QTimer(this);
+    backgroundWorkTimer_->setInterval(250);
+    connect(backgroundWorkTimer_, &QTimer::timeout, this, [this] {
+        const auto bake = scripting::nodeBakeActivity();
+        auto readout =
+            backgroundWorkReadout(runtime::audioSoundActivity(), bake.framesDone, bake.framesTotal);
+        if (readout == backgroundWork_)
+            return;
+        backgroundWork_ = std::move(readout);
+        refreshActivity();
+    });
+    backgroundWorkTimer_->start();
 
     // A refused command is a notice, not a dialog: the artist asked for something the document
     // could not do, the command did not run, and the reason belongs where every other notice is.
@@ -620,6 +635,13 @@ void WindowStatusBar::refreshActivity() {
             progress = true;
             tone = kit::Color::Accent;
         }
+    }
+    if (text.isEmpty() && !backgroundWork_.text.isEmpty()) {
+        // #630, #636: a sound being prepared for the audio analysis nodes, or a bake.
+        text = backgroundWork_.text;
+        activityProgress_->setProgress(backgroundWork_.done, backgroundWork_.total);
+        progress = true;
+        tone = kit::Color::Accent;
     }
     if (text.isEmpty() && !previewNotice_.isEmpty()) {
         text = previewNotice_;

@@ -112,6 +112,22 @@ const std::string kWriteToPath =
     R"(Undo: one step removes the new node, or restores the target's value. )"
     R"(MCP example: {"op":"bloom.node.write-to-path","args":{"node":12,"time":0}}.)";
 
+const std::string kBakeToKeyframes =
+    R"(Bakes a number output of a value node to keyframes: the node is read at every frame of the )"
+    R"(composition, first to last, and the numbers are stored as keyframes on a new Number node )"
+    R"((bloom.value-scalar) beside it, one key a frame, linear between them. It is how an audio )"
+    R"(analysis number (Audio Bands, Audio Features, Audio Beat, Audio Amplitude and the others) )"
+    R"(becomes motion that can be tuned by hand. The node is read when the operation is created, off )"
+    R"(the UI thread, and stops when the request is cancelled; an audio node renders and analyzes its )"
+    R"(sound first, once. Nothing has to be connected to the node and its links never change. The )"
+    R"(keys are ordinary keyframes and do not follow the source afterwards; bake again to refresh )"
+    R"(them. `port` names the number output; the default is the node's first. )"
+    R"(Outputs: node (the Number node the keys were written to). )"
+    R"(Errors: "Node N does not exist"; "Node N has no number output"; the node's own diagnostic when )"
+    R"(it fails at a frame (a missing audio file); a composition of more than 100000 frames; )"
+    R"(bloom.scripting.cancelled. Undo: one step removes the Number node and its keys. )"
+    R"(MCP example: {"op":"bloom.node.bake-to-keyframes","args":{"node":12,"port":"level"}}.)";
+
 const std::string kWriteToNumberList =
     R"(Writes the list a value node's Number List output gives at `time` into a Number List node )"
     R"((bloom.value-number-list) as stored numbers, so they can be read back and edited by hand. )"
@@ -538,7 +554,7 @@ OperationCreateResult writeToPath(const std::string& op, const Arguments& args,
         context.stop, "Write To Path", runtime::TaskExecutor::Cpu,
         [&](const runtime::CancellationToken& cancellation) {
             return queryNodePath(source->snapshot, compositionId, nodeId, port.value_or(""), *time,
-                                 cancellation);
+                                 cancellation, source->assetBaseDirectory);
         });
     if (queried.cancelled || (queried.value && queried.value->cancelled))
         return cancelledRead(op);
@@ -588,7 +604,7 @@ OperationCreateResult writeToNumberList(const std::string& op, const Arguments& 
         context.stop, "Write To Number List", runtime::TaskExecutor::Cpu,
         [&](const runtime::CancellationToken& cancellation) {
             return queryNodeNumberList(source->snapshot, compositionId, nodeId, port.value_or(""),
-                                       *time, cancellation);
+                                       *time, cancellation, source->assetBaseDirectory);
         });
     if (queried.cancelled || (queried.value && queried.value->cancelled))
         return cancelledRead(op);
@@ -605,6 +621,47 @@ OperationCreateResult writeToNumberList(const std::string& op, const Arguments& 
     return made(std::make_unique<commands::WriteValueToNumberList>(
         compositionId, target.isValid() ? std::optional<NodeId>(target) : std::nullopt,
         std::move(*queried.value->list), position));
+}
+
+OperationCreateResult bakeToKeyframes(const std::string& op, const Arguments& args,
+                                      const OperationContext& context) {
+    Reader read(op, args);
+    const auto compositionId = read.id<CompositionId>("composition");
+    const auto nodeId = read.id<NodeId>("node");
+    const auto port = read.text("port");
+    if (read.failed())
+        return read.error();
+    if (!context.source)
+        return noSource(op);
+    const auto source = context.source();
+    if (!source)
+        return noSource(op);
+    const auto* composition = source->snapshot.project().findComposition(compositionId);
+    if (composition == nullptr)
+        return invalid(op, "composition",
+                       "Composition " + std::to_string(compositionId.value()) + " does not exist");
+    if (composition->graph().findNode(nodeId) == nullptr)
+        return invalid(op, "node", "Node " + std::to_string(nodeId.value()) + " does not exist");
+    auto queried = runCancellable<NodeScalarKeysQuery>(
+        context.stop, "Bake To Keyframes", runtime::TaskExecutor::Cpu,
+        [&](const runtime::CancellationToken& cancellation) {
+            return queryNodeScalarKeys(source->snapshot, compositionId, nodeId, port.value_or(""),
+                                       cancellation, source->assetBaseDirectory);
+        });
+    if (queried.cancelled || (queried.value && queried.value->cancelled))
+        return cancelledRead(op);
+    if (!queried.value)
+        return refuse(op, "bloom.scripting.read-failed", {}, "The node could not be read");
+    if (queried.value->keys.empty())
+        return invalid(op, "node", queried.value->diagnostic);
+    // Beside the source, clear of it; AddNode moves the card further when something is in the way.
+    document::Vec2d position{0.0, 0.0};
+    if (const auto found = composition->nodeLayout().find(nodeId);
+        found != composition->nodeLayout().end())
+        position = {found->second.position.x + found->second.width + 64.0,
+                    found->second.position.y};
+    return made(std::make_unique<commands::BakeValueToKeyframes>(
+        compositionId, std::move(queried.value->keys), position));
 }
 
 void addContextual(std::vector<OperationDescriptor>& descriptors, std::string id,
@@ -666,6 +723,13 @@ void addEvaluatedOperations(std::vector<OperationDescriptor>& descriptors) {
          timeFromContext("The time whose result is written (and where an animated target is "
                          "keyed). Defaults to the current playhead time.")},
         writeToPath);
+    addContextual(
+        descriptors, "bloom.node.bake-to-keyframes", kBakeToKeyframes,
+        {composition(),
+         need("node", ValueKind::Id, StableId{1}, "Id. The node whose number output is baked."),
+         maybe("port", ValueKind::String, "",
+               "The number output to bake. Defaults to the node's first number output.")},
+        bakeToKeyframes);
     addContextual(
         descriptors, "bloom.node.write-to-number-list", kWriteToNumberList,
         {composition(),

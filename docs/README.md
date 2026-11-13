@@ -117,8 +117,9 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   hue, saturation and luma range; Edge Extend: solid color pushed under a soft alpha edge.
 - [Audio Effects](user-guide/audio-effects.md) — Equalizer, Compressor, Auto Level, Mono and Hiss for an
   audio layer, heard the same in playback and export.
-- [Audio Amplitude, Waveform and Spectrum](user-guide/audio-analysis.md) — a loudness value and two
-  pictures (the shape of the sound and its frequencies) read from an audio or video source.
+- [Audio analysis](user-guide/audio-analysis.md) — numbers and pictures read from any sound so
+  motion can follow it: frequency bands, the spectrum and waveform, hits, brightness, stereo, the
+  beat and the pitch classes, and baking any of them to keyframes.
 - [Codec Degrade](user-guide/codec-degrade.md) — block quantisation, chroma bleed and keyframe
   smearing: quality, block size, GOP length and P-frame persistence.
 - [Stabilize](user-guide/stabilize.md) — follow a feature through a shot and hold the picture still, or

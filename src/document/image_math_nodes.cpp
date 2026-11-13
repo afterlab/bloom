@@ -77,11 +77,13 @@ bool isImagePixelParameterValueValid(const std::string_view schemaKey,
 NodeDefinition imagePixelDefinition(const std::string_view typeId) {
     // #347: the audio analysis nodes read the sound of a source, not an image. Audio Amplitude gives
     // one Scalar; Audio Waveform and Audio Spectrum draw an Image from the analysis.
-    const bool audioAnalysis = typeId == kAudioAmplitudeNodeType ||
-                               typeId == kAudioWaveformNodeType || typeId == kAudioSpectrumNodeType;
+    // #632 to #635: the table nodes give Scalars and number lists from the sound's analysis table.
+    const bool audioTable = isAudioTableNodeType(typeId);
+    const bool audioAnalysis = isAudioAnalysisNodeType(typeId);
     NodeDefinition definition{
         {std::string(typeId), kImagePixelNodeSchemaVersion},
         typeId == kAudioAmplitudeNodeType    ? NodeLoweringKind::ValueAudioAmplitude
+        : audioTable                         ? NodeLoweringKind::ValueAudioTable
         : typeId == kImageStatisticsNodeType ? NodeLoweringKind::ValueImageStatistics
                                              : NodeLoweringKind::ImageEffect,
         {{std::string(audioAnalysis ? kAudioAnalysisInputPort : kImagePixelInputPort),
@@ -94,7 +96,8 @@ NodeDefinition imagePixelDefinition(const std::string_view typeId) {
                               NodeCardinality::Many,
                               // Histogram and Image Compare publish an analysis image, not the input
                               // changed, so a mask over the input has nothing to select.
-                              typeId == kAudioAmplitudeNodeType || typeId == kImageStatisticsNodeType
+                              typeId == kAudioAmplitudeNodeType ||
+                                      typeId == kImageStatisticsNodeType || audioTable
                                   ? NodeCategory::Values
                               : typeId == kHistogramNodeType || typeId == kImageCompareNodeType ||
                                       typeId == kAudioWaveformNodeType ||
@@ -106,6 +109,13 @@ NodeDefinition imagePixelDefinition(const std::string_view typeId) {
         definition.outputs.clear();
         for (const auto port : kImageStatisticsOutputPorts)
             definition.outputs.push_back({std::string(port), SocketValueKind::Scalar});
+    }
+    if (audioTable) {
+        definition.outputs.clear();
+        for (const auto port : audioTableOutputPorts(typeId))
+            definition.outputs.push_back({std::string(port), isAudioTableListOutput(port)
+                                                                 ? SocketValueKind::NumberList
+                                                                 : SocketValueKind::Scalar});
     }
     if (typeId == kImageMathNodeType)
         definition.inputs.push_back(

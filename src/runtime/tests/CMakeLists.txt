@@ -2868,6 +2868,13 @@ target_link_libraries(bloom_runtime_audio_sound_test PRIVATE bloom_runtime_compi
 bloom_enable_warnings(bloom_runtime_audio_sound_test)
 bloom_add_test(NAME bloom.runtime.audio-sound COMMAND bloom_runtime_audio_sound_test LABELS unit runtime TIMEOUT 120)
 
+# #631 to #635 the audio table nodes (Bands, Sample, Features, Beat, Pitch) through a document, the
+# real compiler and the CPU evaluator, over a real file whose answers are known.
+add_executable(bloom_runtime_audio_table_nodes_test ${PROJECT_SOURCE_DIR}/tests/integration/audio_table_nodes_tests.cpp)
+target_link_libraries(bloom_runtime_audio_table_nodes_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_media_audio bloom_platform bloom_scripting)
+bloom_enable_warnings(bloom_runtime_audio_table_nodes_test)
+bloom_add_test(NAME bloom.runtime.audio-table-nodes COMMAND bloom_runtime_audio_table_nodes_test LABELS unit runtime TIMEOUT 120)
+
 # #598 Warp Path and Transform Path skew through the real compiler and CPU evaluator.
 add_executable(bloom_runtime_warp_path_test ${PROJECT_SOURCE_DIR}/tests/integration/warp_path_tests.cpp)
 target_include_directories(bloom_runtime_warp_path_test PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")

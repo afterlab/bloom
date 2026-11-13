@@ -8,6 +8,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
+#include "node_keyframe_baker.hpp"
 #include "node_path_writer.hpp"
 #include <QPalette>
 #include <QPixmap>
@@ -821,6 +822,38 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
                            writer = new NodePathWriter(session_, this);
                        writer->request(id);
                    });
+        // #636: a number output of a value node, read at every frame and stored as keyframes on
+        // a new Number node. One output is the item itself; several are a submenu naming each.
+        if (nodes.size() == 1) {
+            auto* baker = findChild<NodeKeyframeBaker*>();
+            const auto id = *nodes.begin();
+            const auto bake = [this, id](const std::string& port) {
+                auto* running = findChild<NodeKeyframeBaker*>();
+                if (running == nullptr)
+                    running = new NodeKeyframeBaker(session_, this);
+                running->request(id, port);
+            };
+            if (baker != nullptr && baker->busy())
+                action(tr("Cancel Bake to Keyframes"), QStringLiteral("nodeCancelBakeAction"),
+                       [this] {
+                           if (auto* running = findChild<NodeKeyframeBaker*>())
+                               running->cancel();
+                       });
+            else if (const auto outputs = NodeKeyframeBaker::outputs(graphComposition, id);
+                     outputs.size() == 1)
+                action(tr("Bake to Keyframes"), QStringLiteral("nodeBakeToKeyframesAction"),
+                       [bake, port = outputs.front().first] { bake(port); });
+            else if (!outputs.empty()) {
+                auto* submenu = menu->addMenu(tr("Bake to Keyframes"));
+                submenu->setObjectName(QStringLiteral("nodeBakeToKeyframesMenu"));
+                for (const auto& [port, label] : outputs) {
+                    auto* item = submenu->addAction(label);
+                    item->setObjectName(QStringLiteral("nodeBakeToKeyframesAction_") +
+                                        QString::fromStdString(port));
+                    connect(item, &QAction::triggered, this, [bake, port] { bake(port); });
+                }
+            }
+        }
         // #704: Dissolve and Delete are always offered for a selection; a node that must stay
         // says why in the status bar when they are used.
         action(tr("Dissolve"), QStringLiteral("nodeDissolveAction"),

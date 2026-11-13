@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/runtime/audio_sound.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/viewer_editor_probe.hpp>
@@ -17,6 +18,7 @@
 
 #include <bloom/ui/kit/surfaces.hpp>
 #include <cstddef>
+#include <cstdint>
 
 class QLabel;
 class QResizeEvent;
@@ -79,6 +81,19 @@ struct PreviewColorState final {
 // sentence the viewer canvas used to paint as a chip over the pixels.
 [[nodiscard]] QString previewActivityText(const CompositionPreviewState& preview);
 [[nodiscard]] kit::Color previewActivityColor(const CompositionPreviewState& preview);
+
+// #630, #636: background work the activity cell reports when nothing more urgent is shown: a sound
+// being rendered and measured for the audio analysis nodes, or a bake reading its frames. `text` is
+// empty when neither is running; `total` 0 is work whose size is not known yet.
+struct BackgroundWorkReadout final {
+    QString text;
+    std::uint64_t done = 0;
+    std::uint64_t total = 0;
+    friend bool operator==(const BackgroundWorkReadout&, const BackgroundWorkReadout&) = default;
+};
+[[nodiscard]] BackgroundWorkReadout backgroundWorkReadout(const runtime::AudioSoundActivity& sound,
+                                                          std::uint64_t bakeFramesDone,
+                                                          std::uint64_t bakeFramesTotal);
 
 // The dropped-frame count, EMPTY unless a playback run is counting: outside a run this reports
 // nothing rather than a stale or invented figure. Zero dropped frames during a run still reads
@@ -279,6 +294,10 @@ class WindowStatusBar final : public kit::KSurface {
     QElapsedTimer behindSince_;
     [[nodiscard]] bool renderingNoticeHeld() const;
     QTimer* mediaDiskCacheTimer_ = nullptr;
+    // #630, #636: the sound store and the bake have no Qt signal (they are Qt-free), so the
+    // activity cell reads them on a light poll and repaints only when the readout changes.
+    QTimer* backgroundWorkTimer_ = nullptr;
+    BackgroundWorkReadout backgroundWork_;
     QString transientMessage_;
     QString persistentMessage_;
     // max(8 GiB, 40% of physical) -- what the memory ledger left to the rest of the machine, and

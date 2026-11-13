@@ -549,6 +549,10 @@ template <typename Definition>
         // #347 Audio Amplitude: the exact generated shape.
         return definition.key.typeId == kAudioAmplitudeNodeType &&
                definition == imagePixelDefinition(kAudioAmplitudeNodeType);
+    case NodeLoweringKind::ValueAudioTable:
+        // #632 to #635 the table nodes: the exact generated shape.
+        return isAudioTableNodeType(definition.key.typeId) &&
+               definition == imagePixelDefinition(definition.key.typeId);
     case NodeLoweringKind::ValueImageStatistics:
         // #349 Image Statistics: the exact generated shape.
         return definition.key.typeId == kImageStatisticsNodeType &&
@@ -1848,6 +1852,11 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         imagePixelDefinition(kAudioAmplitudeNodeType),
         imagePixelDefinition(kAudioWaveformNodeType),
         imagePixelDefinition(kAudioSpectrumNodeType),
+        imagePixelDefinition(kAudioBandsNodeType),
+        imagePixelDefinition(kAudioSampleNodeType),
+        imagePixelDefinition(kAudioFeaturesNodeType),
+        imagePixelDefinition(kAudioBeatNodeType),
+        imagePixelDefinition(kAudioPitchNodeType),
         audioEffectDefinition(kAudioEqualizerNodeType),
         audioEffectDefinition(kAudioCompressorNodeType),
         audioEffectDefinition(kAudioAutoLevelNodeType),

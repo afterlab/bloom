@@ -129,7 +129,9 @@ int main(int argc, char** argv) {
     ui::kit::installAfterlabTheme(app);
     auto project = document::makeNewProject("Fields", "Main", core::RationalTime::fromInteger(10));
     document::Document document(std::move(project.project));
-    commands::CommandStack stack(document);
+    // One step per node type is added below and the list edits are counted after them, so the
+    // history holds more than the default 256 steps.
+    commands::CommandStack stack(document, {.maxEntries = 4096});
     ui::CompositionSession session(document, stack, project.initialCompositionId);
     ui::NodeGraphEditor editor(session);
     editor.resize(1400, 900);

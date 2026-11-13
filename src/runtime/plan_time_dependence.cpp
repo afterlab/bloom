@@ -47,6 +47,8 @@ void analyzeValueOperations(const std::span<const CompiledValueOperation> operat
               (warpFunction->bodyY != nullptr && warpFunction->bodyY->timeDependent))) ||
             // #347: the level of the audio at this time.
             std::holds_alternative<CompiledValueAudioAmplitude>(operation.kernel) ||
+            // #632 to #635: the table readings at this time.
+            std::holds_alternative<CompiledValueAudioTable>(operation.kernel) ||
             // #349: the statistics of the picture at this time.
             std::holds_alternative<CompiledValueImageStatistics>(operation.kernel) ||
             // #509: a Mask Path over a keyed mask.
