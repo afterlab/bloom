@@ -944,10 +944,14 @@ void testAutoFollowsFitResize(Expectations& expectations) {
     using namespace bloom;
     ViewerFixture fixture(
         document::makeNewProject("Fit resolution", "Main", core::RationalTime::fromInteger(1)));
+    // Auto is resolved once per turn of the event loop for size and ratio events (#718), so each
+    // step lets that turn run.
     fixture.viewer.show();
+    QCoreApplication::processEvents();
     expectations.expect(fixture.controller.resolutionDivisor() == 4,
                         "a small fitted 1080p viewer chooses Quarter");
     fixture.viewer.resize(800, 500);
+    QCoreApplication::processEvents();
     expectations.expect(fixture.controller.resolutionDivisor() == 2,
                         "enlarging the fitted viewer raises Auto to Half");
     if (!fixture.controller.state().desiredIdentity.has_value()) {
@@ -955,13 +959,24 @@ void testAutoFollowsFitResize(Expectations& expectations) {
     }
     const auto generation = fixture.controller.state().desiredIdentity->requestGeneration;
     fixture.viewer.resize(850, 500);
+    QCoreApplication::processEvents();
     expectations.expect(fixture.controller.state().desiredIdentity.has_value() &&
                             fixture.controller.state().desiredIdentity->requestGeneration ==
                                 generation,
                         "a resize within Half does not request another frame");
+    // A window on its way to another size passes through sizes nobody sees: only the size it
+    // has when the turn ends is asked for.
+    fixture.viewer.resize(300, 200);
+    expectations.expect(fixture.controller.resolutionDivisor() == 2,
+                        "a size the viewer only passes through selects no resolution");
     fixture.viewer.resize(1200, 800);
+    QCoreApplication::processEvents();
     expectations.expect(fixture.controller.resolutionDivisor() == 1,
                         "a large fitted viewer raises Auto to Full");
+    expectations.expect(fixture.controller.state().desiredIdentity.has_value() &&
+                            fixture.controller.state().desiredIdentity->requestGeneration ==
+                                generation + 1,
+                        "the sizes passed through on the way asked for no frame");
     reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
 }
 

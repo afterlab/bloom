@@ -517,6 +517,11 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     gpuResidentTimer_ = new QTimer(this);
     gpuResidentTimer_->setInterval(16);
     connect(gpuResidentTimer_, &QTimer::timeout, this, &ViewerEditor::pollGpuResident);
+    previewResolutionTimer_ = new QTimer(this);
+    previewResolutionTimer_->setSingleShot(true);
+    previewResolutionTimer_->setInterval(0);
+    connect(previewResolutionTimer_, &QTimer::timeout, this,
+            &ViewerEditor::updatePreviewResolution);
 }
 
 ViewerEditor::~ViewerEditor() {
@@ -845,6 +850,13 @@ void ViewerEditor::layoutStatusBar() {
     statusBarFooter_->setGeometry(statusBarRect().toRect());
 }
 
+void ViewerEditor::schedulePreviewResolution() {
+    if (previewResolutionTimer_ != nullptr)
+        previewResolutionTimer_->start();
+    else
+        updatePreviewResolution();
+}
+
 void ViewerEditor::updatePreviewResolution() {
     // A resident frame is presented at its native resolution. Auto stays stable Full so a zoom/pan
     // only updates the present parameters (destination/source) and never forces a re-evaluation or
@@ -891,7 +903,7 @@ bool ViewerEditor::event(QEvent* event) {
         if (dragActive_) {
             endDrag(false);
         }
-        updatePreviewResolution();
+        schedulePreviewResolution();
         updateGpuResidentPresentation();
     }
     return handled;
@@ -1823,7 +1835,7 @@ void ViewerEditor::resizeEvent(QResizeEvent* event) {
     }
     layoutStatusBar();
     layoutEmptyState();
-    updatePreviewResolution();
+    schedulePreviewResolution();
     updateGpuResidentPresentation();
 }
 

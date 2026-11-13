@@ -1364,7 +1364,12 @@ store. The preview identity carries no viewport size or device pixel ratio: unde
 Quarter resolution settings a window change prepares nothing. Under Auto the displayed scale, which
 includes the device pixel ratio, selects the divisor, so a move between a 1x and a 1.5x screen can
 flip Half and Full. Each divisor's frame is prepared once on the GPU-prepared packed route and then
-served from the preview cache; it never takes the CPU fallback. The only per-ratio cache is the icon
+served from the preview cache; it never takes the CPU fallback. A window that is changing screen
+or size delivers its ratio, screen and size as separate events, and the layouts between them
+would select divisors the window only passes through; the Viewer therefore resolves Auto once
+per turn of the event loop for those events (`ViewerEditor::schedulePreviewResolution()`), so no
+frame is asked for at a passing size (#718: such a request used to be cancelled while it decoded,
+and reached the device once the playhead's decoded samples stayed in memory). The only per-ratio cache is the icon
 pixmap cache, bounded by the icon set times the ratios in use.
 
 A frame from the packed route carries no Float32 process image, so the pixel probe answers the

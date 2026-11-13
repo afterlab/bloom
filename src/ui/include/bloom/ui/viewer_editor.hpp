@@ -658,6 +658,11 @@ class ViewerEditor final : public QWidget,
     void layoutStatusBar();
     void refreshZoomDropdown();
     void updatePreviewResolution();
+    // A window that is moving between screens or being resized delivers its ratio, screen and
+    // size changes as separate events, and the layouts between them are not ones the artist ever
+    // sees. The Auto resolution is resolved once, after the events of this turn of the event
+    // loop, so no frame is asked for at a size the window only passed through.
+    void schedulePreviewResolution();
 
     // GPU-resident presentation plumbing (viewer_gpu_resident.cpp): presents the resident arm
     // through the adapter, records the overlays as an immutable QPicture for off-thread raster, and
@@ -1256,6 +1261,7 @@ class ViewerEditor final : public QWidget,
     bool gpuDomainCleared_ = false;
     std::size_t cpuCoverByteBudget_ = kResidentOverlayByteBudget;
     QTimer* gpuResidentTimer_ = nullptr;
+    QTimer* previewResolutionTimer_ = nullptr;
     bool residentActive_ = false;
     bool packedHostShutdown_ = false;
     PreparedPreviewFrameHandle lastCpuFrame_;
