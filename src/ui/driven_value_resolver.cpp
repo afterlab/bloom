@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <bloom/core/worker_thread.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
+#include <bloom/runtime/audio_analysis.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/image_statistics.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
@@ -243,7 +244,8 @@ void DrivenValueResolver::start() {
             {runtime::TaskOwnerKind::Application, runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Interactive},
         [snapshot, compositionId, time, parameters, readoutNodes, cache = probeCache_,
-         work = work_, shared = session_.sharedEvaluator()](runtime::TaskContext& context) {
+         work = work_, shared = session_.sharedEvaluator(),
+         assetBase = session_.projectDirectory()](runtime::TaskContext& context) {
             auto values = std::make_shared<Values>();
             for (auto parameter : parameters)
                 values->parameters[parameter] = QObject::tr("Unavailable");
@@ -318,6 +320,12 @@ void DrivenValueResolver::start() {
                             statisticsReason.empty())
                             statisticsReason = diagnostic.summary;
                 } else {
+                    // #630: an audio analysis node prepares what it reads on this worker, as a
+                    // frame's evaluation does, so a value driven by sound resolves whether or
+                    // not the Viewer has shown the composition. The sound store renders a sound
+                    // once and every reader shares it.
+                    const runtime::AudioAnalysisPreparation audioPreparation(
+                        compiled.plan, assetBase, context.cancellation());
                     runtime::ValueGraphMemoization memoization;
                     memoization.cancellation = &context.cancellation();
                     const auto evaluated =

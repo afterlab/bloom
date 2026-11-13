@@ -1,6 +1,11 @@
 #include "case_timer.hpp"
 #include "await_qt.hpp"
 #include <QAction>
+#include <QColor>
+#include <QDataStream>
+#include <QFile>
+#include <QImage>
+#include <QTemporaryDir>
 #include <QApplication>
 #include <QDir>
 #include <QElapsedTimer>
@@ -25,11 +30,18 @@
 #include <algorithm>
 #include <array>
 #include <bloom/runtime/font_resolver.hpp>
+#include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/audio_effect_nodes.hpp>
+#include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/graph.hpp>
+#include <bloom/platform/source_identity.hpp>
+#include <bloom/runtime/audio_analysis.hpp>
+#include <bloom/runtime/audio_sound.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/document/auto_exposure_nodes.hpp>
 #include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
@@ -69,7 +81,13 @@
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/test_card_widget.hpp>
+#include <cmath>
+#include <filesystem>
 #include <functional>
+#include <memory>
+#include <numbers>
+#include <optional>
+#include <bloom/ui/dither_widget.hpp>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -3111,6 +3129,147 @@ void pathStampAndSourceRows() {
     saveReadoutCapture(properties, "properties-alpha-contour");
 }
 
+// #630, #718-11: values resolved for Properties prepare what they read on their own worker and
+// share what the application's evaluator holds. A node that reads sound renders and analyzes it
+// once, with nothing else having evaluated the composition; a value measured from a picture reads
+// its source file through the shared evaluator once, however often the playhead moves.
+void drivenValuesShareWhatIsPrepared() {
+    QTemporaryDir directory;
+    expect(directory.isValid(), "a folder for the driven value sources");
+    const std::filesystem::path folder = directory.path().toStdString();
+    // Two seconds of a 100 Hz sine at half scale, 16-bit stereo.
+    {
+        constexpr std::uint32_t rate = 48'000;
+        constexpr std::uint32_t frames = rate * 2;
+        QFile wav(directory.filePath(QStringLiteral("tone.wav")));
+        expect(wav.open(QIODevice::WriteOnly), "the tone file opens");
+        QDataStream out(&wav);
+        out.setByteOrder(QDataStream::LittleEndian);
+        const std::uint32_t dataBytes = frames * 4U;
+        wav.write("RIFF", 4);
+        out << static_cast<quint32>(36U + dataBytes);
+        wav.write("WAVEfmt ", 8);
+        out << quint32{16} << quint16{1} << quint16{2} << static_cast<quint32>(rate)
+            << static_cast<quint32>(rate * 4U) << quint16{4} << quint16{16};
+        wav.write("data", 4);
+        out << static_cast<quint32>(dataBytes);
+        for (std::uint32_t frame = 0; frame < frames; ++frame) {
+            const auto sample = static_cast<qint16>(
+                16384.0 * std::sin(2.0 * std::numbers::pi * 100.0 * frame / rate));
+            out << sample << sample;
+        }
+    }
+    QImage picture(16, 16, QImage::Format_RGBA8888);
+    picture.fill(QColor(128, 128, 128));
+    expect(picture.save(directory.filePath(QStringLiteral("grey.png"))), "the picture is written");
+
+    runtime::clearAudioAnalysis();
+    runtime::clearAudioSounds();
+    runtime::setAudioSoundDirectory(folder / "sounds");
+    {
+        ReadoutFixture fixture;
+        auto& session = fixture.session;
+        session.setProjectDirectory(folder);
+        auto evaluator = std::make_shared<runtime::CpuCompositionEvaluator>();
+        evaluator->setAssetBaseDirectory(folder);
+        session.setSharedEvaluator(evaluator);
+        const auto run = [&](auto&& build) {
+            commands::Transaction transaction("Driven fixture", session.snapshot().revision());
+            build(transaction);
+            const auto result = session.executeTransaction(std::move(transaction));
+            expect(result.succeeded(), "a driven value fixture command applies");
+            QCoreApplication::processEvents();
+            return result;
+        };
+        run([&](auto& t) {
+            t.template emplace<commands::ImportAssets>(
+                std::vector<std::filesystem::path>{folder / "tone.wav", folder / "grey.png"}, folder);
+        });
+        document::AssetId tone;
+        document::AssetId grey;
+        for (const auto& asset : session.snapshot().project().assets())
+            (asset.kind == document::AssetKind::Audio ? tone : grey) = asset.id;
+        expect(tone.isValid() && grey.isValid(), "the tone and the picture are imported");
+        if (!tone.isValid() || !grey.isValid())
+            return;
+        run([&](auto& t) {
+            t.template emplace<commands::AddAudioLayer>(session.compositionId(), tone);
+        });
+        document::NodeId audioLayer;
+        for (const auto& layer : session.composition()->graph().layerOutputs())
+            audioLayer = layer.nodeId;
+        run([&](auto& t) {
+            t.template emplace<commands::AddImageLayer>(session.compositionId(), grey);
+        });
+        document::NodeId imageSource;
+        for (const auto& node : session.composition()->graph().nodes())
+            if (node.typeId == document::kImageSourceNodeType)
+                imageSource = node.id;
+        expect(audioLayer.isValid() && imageSource.isValid(), "both layers are added");
+        const auto waitFor = [&](const char* what, const QString& port, const double want) {
+            QElapsedTimer wait;
+            wait.start();
+            QString text;
+            bool reached = false;
+            while (!reached && wait.elapsed() < 20000) {
+                QCoreApplication::processEvents();
+                QThread::msleep(5);
+                const auto texts = readoutTexts(fixture.properties);
+                text = texts.contains(port) ? texts.at(port) : QString();
+                bool number = false;
+                const double value = text.toDouble(&number);
+                reached = number && std::abs(value - want) < 0.02;
+            }
+            expect(reached, (std::string(what) + ": " + text.toStdString()).c_str());
+        };
+
+        // Sound: the low band of the tone, against its own peak, is 1 while it sounds.
+        const auto bands = addNode(session, document::kAudioBandsNodeType);
+        run([&](auto& t) {
+            t.template emplace<commands::ConnectPorts>(
+                session.compositionId(),
+                document::OutputPortRef{audioLayer,
+                                        std::string(document::kLayerOutputAudioOutputPort)},
+                document::NodeInputRef{bands, std::string(document::kAudioAnalysisInputPort)});
+        });
+        setNodeValue(session, bands, "normalize", std::int64_t{1});
+        expect(session.setCurrentTime(*core::RationalTime::create(1, 1)), "the playhead moves");
+        expect(runtime::audioSoundStatistics().rendered == 0, "nothing has rendered the sound yet");
+        session.selectNode(bands);
+        waitFor("a node that reads sound resolves on the Properties worker", QStringLiteral("level"),
+                1.0);
+        expect(runtime::audioSoundStatistics().rendered == 1,
+               "the sound was rendered once, by the readout itself");
+        expect(session.setCurrentTime(*core::RationalTime::create(3, 1)), "the playhead moves");
+        waitFor("past the end of the sound the level is silence", QStringLiteral("level"), 0.0);
+        expect(runtime::audioSoundStatistics().rendered == 1,
+               "another time reads the same rendered sound");
+
+        // Picture: Image Statistics of the grey file. The first resolution reads the file through
+        // the shared evaluator; a playhead move measures again and reads nothing.
+        const auto stats = addNode(session, document::kImageStatisticsNodeType);
+        connectNodes(session, imageSource, stats, "input");
+        session.selectNode(stats);
+        waitFor("Image Statistics of an image file resolves", QStringLiteral("count"), 256.0);
+        const auto read = platform::sourceReadWork().fullReads;
+        const auto evaluations = session.drivenValueWork().evaluations;
+        expect(session.setCurrentTime(*core::RationalTime::create(2, 1)), "the playhead moves");
+        QElapsedTimer wait;
+        wait.start();
+        while (session.drivenValueWork().evaluations == evaluations && wait.elapsed() < 20000) {
+            QCoreApplication::processEvents();
+            QThread::msleep(5);
+        }
+        waitFor("and resolves again at another time", QStringLiteral("count"), 256.0);
+        expect(session.drivenValueWork().evaluations > evaluations &&
+                   platform::sourceReadWork().fullReads == read,
+               "a value measured again reads no source file the shared evaluator holds");
+    }
+    runtime::clearAudioAnalysis();
+    runtime::clearAudioSounds();
+    runtime::setAudioSoundDirectory(std::nullopt);
+}
+
 void imageStatisticsReadoutsResolve() {
     ReadoutFixture fixture;
     const auto solid = addNode(fixture.session, document::kSolidSourceNodeType);
@@ -3465,6 +3624,7 @@ int main(int argc, char** argv) try {
     if (argc > 1 && std::string_view(argv[1]) == "--readouts") {
         BLOOM_TIMED_CASE(pathReadoutsResolve());
         BLOOM_TIMED_CASE(pathStampAndSourceRows());
+        BLOOM_TIMED_CASE(drivenValuesShareWhatIsPrepared());
         BLOOM_TIMED_CASE(imageStatisticsReadoutsResolve());
         BLOOM_TIMED_CASE(timeUpdatesReadout());
         BLOOM_TIMED_CASE(integerAndBooleanReadouts());
