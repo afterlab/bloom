@@ -294,6 +294,19 @@ void testSequenceDecodeAhead(Expectations& expectations, const Fixture& fixture,
     expectations.expect(first.hasValue() && first.scene->mediaStatistics().imageConversions == 1 &&
                             first.scene->mediaStatistics().imageDecodedAhead == 0,
                         "decode ahead: frame 0 decodes its own member");
+    // #718: the samples a frame decoded for itself stay in the operation cache, so preparing
+    // that frame again decodes nothing; an explicit bypass still decodes.
+    const auto again = builder.build(plan, frameRequest(0));
+    expectations.expect(again.hasValue() && again.scene->mediaStatistics().imageConversions == 0 &&
+                            again.scene->mediaStatistics().imageDecodedAhead == 1,
+                        "decode ahead: a frame prepared again uses the samples it decoded itself");
+    auto bypassed = frameRequest(0);
+    bypassed.bypassOperationCache = true;
+    const auto direct = builder.build(plan, bypassed);
+    expectations.expect(direct.hasValue() &&
+                            direct.scene->mediaStatistics().imageConversions == 1 &&
+                            direct.scene->mediaStatistics().imageDecodedAhead == 0,
+                        "decode ahead: an explicit bypass decodes the frame again");
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (context.sequenceReadAhead->statistics().decoded +
                    context.sequenceReadAhead->statistics().failed <
