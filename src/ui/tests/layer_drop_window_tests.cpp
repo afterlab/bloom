@@ -7,6 +7,7 @@
 
 #include "asset_drop.hpp"
 #include "assets_editor_internal.hpp"
+#include "await_qt.hpp"
 #include "window_fixture.hpp"
 
 #include <QDir>
@@ -37,16 +38,12 @@
 using namespace bloom;
 
 namespace {
+// The ceiling for a broken run; a passing wait returns as soon as its condition holds.
+constexpr std::chrono::milliseconds kWait{20000};
+
 void require(const bool condition, const std::string& message) {
     if (!condition)
         throw std::runtime_error(message);
-}
-template <typename Predicate> bool waitUntil(Predicate predicate, const int timeoutMs = 20000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < timeoutMs)
-        QTest::qWait(10);
-    return predicate();
 }
 core::RationalTime frame(const std::int64_t index) {
     return *core::RationalTime::create(index, 24);
@@ -222,7 +219,9 @@ int run(int argc, char** argv) {
                     return asset.id;
             return document::AssetId{};
         }();
-        require(waitUntil([&] { return !controller->thumbnail(id).isNull(); }), "video thumbnail");
+        require(bloom::test_support::awaitQtCondition(
+                    "video thumbnail", [&] { return !controller->thumbnail(id).isNull(); }, kWait),
+                "video thumbnail");
         selectInAssets(*assets, {video});
         const auto colour = headerLine(*assets, "assetsSelectionColour");
         std::cout << "video header: " << headerLine(*assets, "assetsSelectionKind").toStdString()
@@ -237,12 +236,15 @@ int run(int argc, char** argv) {
 
     // A composition's header: its rendered frame.
     selectInAssets(*assets, {QStringLiteral("Title Card")});
-    require(waitUntil([&] {
-                QApplication::processEvents();
-                const auto image = thumbnail->pixmap().toImage();
-                return thumbnails->current(titleCard) && !image.isNull() &&
-                       image.pixelColor(image.width() / 2, image.height() / 4).red() > 100;
-            }),
+    require(bloom::test_support::awaitQtCondition(
+                "the composition header shows its rendered frame",
+                [&] {
+                    QApplication::processEvents();
+                    const auto image = thumbnail->pixmap().toImage();
+                    return thumbnails->current(titleCard) && !image.isNull() &&
+                           image.pixelColor(image.width() / 2, image.height() / 4).red() > 100;
+                },
+                kWait),
             "the composition header shows its rendered frame");
     capture(QStringLiteral("02-composition-header"), *window);
     toggleMaximized(*assets);
@@ -304,7 +306,7 @@ int run(int argc, char** argv) {
     require(session.undo() && session.composition()->graph().layerStack().entries().size() == 2,
             "one undo removes the whole drop");
     std::cout << "PASS: layer drop window\n";
-    return 0;
+    return bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }
 } // namespace
 

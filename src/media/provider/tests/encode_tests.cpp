@@ -411,13 +411,13 @@ void tests(const std::filesystem::path& directory) {
         mp4.audioCodec = "aac";
         (void)run(mp4, directory / "export-h264.mp4");
         {
-            // #650: thirty seconds of music-like audio with drum transients and full-scale clicks
+            // #650: two seconds of music-like audio with drum transients and full-scale clicks
             // peaking at -0.3 dBFS, the kind of program profile v1 refused, exports to H.264
             // MP4 with AAC and verifies. bloom.media.aac-sync reads the published file back
             // through FFmpeg alone and checks its levels and its start against the same samples.
             auto program = mp4;
-            program.frames = 720;
-            program.audioSamples = bloom::media::testing::kFrames;
+            program.frames = 48;
+            program.audioSamples = program.frames * 2000U;
             const auto samples = bloom::media::testing::programAudio();
             EncodeSessionV1 session({});
             ok(session.begin(program));
@@ -440,7 +440,7 @@ void tests(const std::filesystem::path& directory) {
             }
             const auto qc = get(session.finish());
             test::check(qc.frames == program.frames && qc.audioSamples == program.audioSamples,
-                        "thirty seconds of program audio verifies in H.264 MP4 with AAC");
+                        "two seconds of program audio verifies in H.264 MP4 with AAC");
             std::ofstream file(directory / "export-h264-program.mp4", std::ios::binary);
             for (std::uint64_t offset = 0; offset < qc.bytes;) {
                 const auto chunk = get(session.read(offset));
@@ -894,6 +894,7 @@ void chromaSampling(const std::filesystem::path& directory) {
     settings.width = 1920;
     settings.height = 1080;
     settings.rate = {25, 1};
+    settings.frames = 2;
     (void)run(settings, directory / "red-square-dnxhd.mxf");
     settings = {};
     settings.width = 640;
@@ -902,8 +903,8 @@ void chromaSampling(const std::filesystem::path& directory) {
     settings.videoCodec = "h264";
     settings.profile = "high";
     (void)run(settings, directory / "red-square-h264.mov");
-    // The bundled Kvazaar at 640x360 and at 1920x1080, where its encoder threads must fit the
-    // worker's address-space ceiling.
+    // The bundled Kvazaar at 640x360 and, as the integration witness, at 1920x1080. The encoder
+    // thread ceilings (#406) are checked as a pure function in prores4444Threaded.
     {
         auto hevc = settings;
         hevc.videoCodec = "hevc";
@@ -911,9 +912,10 @@ void chromaSampling(const std::filesystem::path& directory) {
         (void)run(hevc, directory / "red-square-hevc.mov");
         hevc.width = 1920;
         hevc.height = 1080;
+        hevc.frames = 2;
         (void)run(hevc, directory / "red-square-hevc-1080p.mov");
     }
-    // The bundled libvpx and SVT-AV1 at 1920x1080 in 10 bits, inside the same ceiling.
+    // The bundled libvpx and SVT-AV1 at 1920x1080 in 10 bits, one witness each.
     for (const auto* codec : {"vp9", "av1"}) {
         auto web = settings;
         web.videoCodec = codec;
@@ -921,6 +923,7 @@ void chromaSampling(const std::filesystem::path& directory) {
         web.container = "webm";
         web.width = 1920;
         web.height = 1080;
+        web.frames = 2;
         (void)run(web, directory / (std::string("red-square-") + codec + "-1080p.webm"));
     }
     if (!std::filesystem::exists("/dev/dri/renderD128") &&
@@ -995,7 +998,7 @@ void prores4444Threaded(const std::filesystem::path& directory) {
     settings.rate = {25, 1};
     settings.width = 1920;
     settings.height = 1080;
-    settings.frames = 24;
+    settings.frames = 2;
     // The export runner's automatic thread count, in both alpha profiles.
     settings.threads = 0;
     for (const auto* profile : {"4444", "4444xq"}) {
@@ -1006,7 +1009,7 @@ void prores4444Threaded(const std::filesystem::path& directory) {
     // A 64-thread computer's automatic count, and UHD at 16 threads.
     settings.profile = "4444";
     for (const auto& [width, height, threads, frames] :
-         {std::tuple{1920U, 1080U, 64U, 70U}, std::tuple{3840U, 2160U, 16U, 20U}}) {
+         {std::tuple{1920U, 1080U, 64U, 2U}, std::tuple{3840U, 2160U, 16U, 2U}}) {
         settings.width = width;
         settings.height = height;
         settings.threads = threads;

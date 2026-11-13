@@ -4,6 +4,7 @@
 // it saves each state as a PNG; BLOOM_IMPORT_CAPTURE_SCREEN names a command that is given the
 // destination path to capture the whole screen, window titles included.
 
+#include "await_qt.hpp"
 #include "import_progress_dialog.hpp"
 #include "import_progress_test_support.hpp"
 #include "window_fixture.hpp"
@@ -27,18 +28,14 @@
 #include <mutex>
 
 namespace {
+// The ceiling for a broken run; a passing wait returns as soon as its condition holds.
+constexpr std::chrono::milliseconds kWait{15000};
+
 using namespace bloom;
 
 void require(const bool condition, const char* message) {
     if (!condition)
         throw std::runtime_error(message);
-}
-template <typename Predicate> bool waitUntil(Predicate predicate, const int timeoutMs = 15000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < timeoutMs)
-        QTest::qWait(5);
-    return predicate();
 }
 void writePng(const QString& path, const QColor& colour) {
     QImage image(320, 180, QImage::Format_RGBA8888);
@@ -135,15 +132,20 @@ int run(int argc, char** argv) {
     holdAt(2);
     assets.importFiles(
         {file("Plate_A.png"), file("Plate_B.png"), file("Pulse.0001.png"), file("Plate_C.png")});
-    require(waitUntil([&] { return gate->reached() && visibleDialog(fixture) != nullptr; }),
+    require(bloom::test_support::awaitQtCondition(
+                "MainWindow shows the import dialog",
+                [&] { return gate->reached() && visibleDialog(fixture) != nullptr; }, kWait),
             "MainWindow shows the import dialog");
     auto* dialog = visibleDialog(fixture);
     require(dialog->parentWidget() == fixture.window.get() && dialog->isModal(),
             "the dialog is modal over the main window");
-    require(waitUntil([&] {
-                return dialog->headingText() ==
-                       QStringLiteral("Importing 3 of 4: Pulse · sequence");
-            }),
+    require(bloom::test_support::awaitQtCondition(
+                "progress over the main window names the sequence",
+                [&] {
+                    return dialog->headingText() ==
+                           QStringLiteral("Importing 3 of 4: Pulse · sequence");
+                },
+                kWait),
             "progress over the main window names the sequence");
     capture(QStringLiteral("01-import-progress"), *dialog);
 
@@ -151,31 +153,41 @@ int run(int argc, char** argv) {
     QTest::mouseClick(dialog->cancelButton(), Qt::LeftButton);
     capture(QStringLiteral("02-import-cancelling"), *dialog);
     gate->release();
-    require(waitUntil([&] { return !assets.busy() && dialog->summarizing(); }),
-            "cancelled summary");
+    require(
+        bloom::test_support::awaitQtCondition(
+            "cancelled summary", [&] { return !assets.busy() && dialog->summarizing(); }, kWait),
+        "cancelled summary");
     require(assetCount() == 2 &&
                 dialog->detailText() == QStringLiteral("Imported 2 · Not imported 2"),
             "Cancel keeps the two finished items");
     capture(QStringLiteral("03-import-cancelled"), *dialog);
     QTest::mouseClick(dialog->closeButton(), Qt::LeftButton);
-    require(waitUntil([&] { return visibleDialog(fixture) == nullptr; }), "summary closes");
+    require(bloom::test_support::awaitQtCondition(
+                "summary closes", [&] { return visibleDialog(fixture) == nullptr; }, kWait),
+            "summary closes");
     require(fixture.session.undo() && assetCount() == 0, "one Undo removes what was kept");
 
     // A partial import: the summary lists each skipped file and its reason.
     holdAt(0);
     assets.importFiles(
         {file("Broken.png"), file("Plate_A.png"), file("Grade.cube"), file("Pulse.0001.png")});
-    require(waitUntil([&] { return gate->reached() && visibleDialog(fixture) != nullptr; }),
+    require(bloom::test_support::awaitQtCondition(
+                "partial import dialog",
+                [&] { return gate->reached() && visibleDialog(fixture) != nullptr; }, kWait),
             "partial import dialog");
     dialog = visibleDialog(fixture);
     gate->release();
-    require(waitUntil([&] { return !assets.busy() && dialog->summarizing(); }), "partial summary");
+    require(bloom::test_support::awaitQtCondition(
+                "partial summary", [&] { return !assets.busy() && dialog->summarizing(); }, kWait),
+            "partial summary");
     require(assetCount() == 2 && dialog->headingText() == QStringLiteral("Import finished") &&
                 dialog->detailText() == QStringLiteral("Imported 2 · Skipped 2"),
             "the partial summary counts imported and skipped files");
     capture(QStringLiteral("04-import-summary-skipped"), *dialog);
     QTest::keyClick(dialog, Qt::Key_Escape);
-    require(waitUntil([&] { return visibleDialog(fixture) == nullptr; }), "Escape closes it");
+    require(bloom::test_support::awaitQtCondition(
+                "Escape closes it", [&] { return visibleDialog(fixture) == nullptr; }, kWait),
+            "Escape closes it");
 
     // A folder dropped on the Timeline that imports everything: the dialog closes on its own,
     // the imported files become layers (#380) and the status bar reports both.
@@ -192,10 +204,14 @@ int run(int argc, char** argv) {
     QDropEvent drop(point, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(timeline, &drop);
     require(drop.isAccepted(), "the Timeline takes the folder");
-    require(waitUntil([&] { return gate->reached() && visibleDialog(fixture) != nullptr; }),
+    require(bloom::test_support::awaitQtCondition(
+                "a Timeline drop shows the import dialog",
+                [&] { return gate->reached() && visibleDialog(fixture) != nullptr; }, kWait),
             "a Timeline drop shows the import dialog");
     gate->release();
-    require(waitUntil([&] { return !assets.busy() && visibleDialog(fixture) == nullptr; }),
+    require(bloom::test_support::awaitQtCondition(
+                "an import that added everything closes its dialog",
+                [&] { return !assets.busy() && visibleDialog(fixture) == nullptr; }, kWait),
             "an import that added everything closes its dialog");
     require(assetCount() == 4, "both dropped files import");
     require(fixture.session.composition()->graph().layerOutputs().size() == layersBefore + 2,
@@ -218,31 +234,43 @@ int run(int argc, char** argv) {
         return state.phase == Phase::Finding && state.findingFrames && state.found == 37;
     });
     assets.importFiles({shot});
-    require(waitUntil([&] { return gate->reached() && visibleDialog(fixture) != nullptr; }),
+    require(bloom::test_support::awaitQtCondition(
+                "discovery dialog",
+                [&] { return gate->reached() && visibleDialog(fixture) != nullptr; }, kWait),
             "discovery dialog");
     dialog = visibleDialog(fixture);
-    require(waitUntil([&] { return dialog->headingText() == QStringLiteral("Finding frames…"); }),
+    require(bloom::test_support::awaitQtCondition(
+                "discovery over the main window",
+                [&] { return dialog->headingText() == QStringLiteral("Finding frames…"); }, kWait),
             "discovery over the main window");
     capture(QStringLiteral("06-import-finding-frames"), *dialog);
     gate->release();
-    require(waitUntil([&] { return !assets.busy(); }), "sequence import finishes");
+    require(bloom::test_support::awaitQtCondition(
+                "sequence import finishes", [&] { return !assets.busy(); }, kWait),
+            "sequence import finishes");
     require(fixture.session.undo(), "undo the sequence");
     holdWhen([](const commands::ImportProgress& state) {
         return state.phase == Phase::Reading && state.frames == shotFrames &&
                state.framesRead == 24;
     });
     assets.importFiles({shot});
-    require(waitUntil([&] { return gate->reached() && visibleDialog(fixture) != nullptr; }),
+    require(bloom::test_support::awaitQtCondition(
+                "reading dialog",
+                [&] { return gate->reached() && visibleDialog(fixture) != nullptr; }, kWait),
             "reading dialog");
     dialog = visibleDialog(fixture);
-    require(
-        waitUntil([&] { return dialog->detailText() == QStringLiteral("Reading frame 25 of 60"); }),
-        "reading a sequence over the main window");
+    require(bloom::test_support::awaitQtCondition(
+                "reading a sequence over the main window",
+                [&] { return dialog->detailText() == QStringLiteral("Reading frame 25 of 60"); },
+                kWait),
+            "reading a sequence over the main window");
     capture(QStringLiteral("07-import-reading-sequence"), *dialog);
     gate->release();
-    require(waitUntil([&] { return !assets.busy(); }), "second sequence import finishes");
+    require(bloom::test_support::awaitQtCondition(
+                "second sequence import finishes", [&] { return !assets.busy(); }, kWait),
+            "second sequence import finishes");
     assets.setImportProgressHookForTesting({});
-    return 0;
+    return bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }
 } // namespace
 

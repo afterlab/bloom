@@ -1,6 +1,8 @@
 // Failure-only fake tool for the GPU shader compiler adapter. Behaviour is selected by the
 // invoked executable's basename, so the adapter's real argv contract is exercised without a
 // shell. The success path in the companion test uses the genuine pinned glslang/spirv-val.
+#include "process_probe.hpp"
+
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -20,6 +22,11 @@ int main(int argc, char** argv) {
         }
     }
     if (name.find("hang") != std::string::npos) {
+        // Records its process id beside the executable so the test can check the child is gone.
+        if (argc > 0 && argv[0] != nullptr) {
+            const auto processId = bloom::test_support::currentProcessId();
+            std::ofstream(std::string(argv[0]) + ".pid") << processId << '\n';
+        }
         while (true) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }

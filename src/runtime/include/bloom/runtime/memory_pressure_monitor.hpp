@@ -68,6 +68,13 @@ class MemoryPressureMonitor final {
         std::size_t trimThresholdBytes = std::size_t{32} * 1024U * 1024U;
         // Use a Linux PSI trigger to wake before the interval elapses.
         bool psiTrigger = true;
+        // The time source for the stall fraction (default: the steady clock). A test passes a
+        // manual clock.
+        std::function<std::chrono::steady_clock::time_point()> now = [] {
+            return std::chrono::steady_clock::now();
+        };
+        // False: no sampling thread; the owner drives each sampling pass with poll(). For tests.
+        bool background = true;
     };
 
     MemoryPressureMonitor(MemoryBudgetLedger& ledger, Deliver deliver, Options options);
@@ -80,12 +87,16 @@ class MemoryPressureMonitor final {
     void stop() noexcept;
     // Samples now instead of at the next interval (a headroom change, for example).
     void wake() noexcept;
+    // One sampling pass on the calling thread. Only for a monitor created with
+    // `background = false`; it is not safe to call alongside a sampling thread.
+    void poll() noexcept;
     [[nodiscard]] std::uint64_t deliveries() const noexcept { return deliveries_.load(); }
     [[nodiscard]] std::uint64_t trims() const noexcept { return trims_.load(); }
     [[nodiscard]] std::uint64_t samples() const noexcept { return samples_.load(); }
 
   private:
     void run();
+    void samplePass() noexcept;
     [[nodiscard]] bool waitForNextSample(int psiDescriptor);
 
     MemoryBudgetLedger& ledger_;
@@ -98,6 +109,10 @@ class MemoryPressureMonitor final {
     std::atomic<std::uint64_t> deliveries_{0};
     std::atomic<std::uint64_t> trims_{0};
     std::atomic<std::uint64_t> samples_{0};
+    // State of the sampling pass: the thread's, or the poll() caller's.
+    std::optional<MemoryPressureCounters> last_;
+    std::chrono::steady_clock::time_point lastAt_;
+    std::size_t releasedPending_ = 0;
     bloom::core::WorkerThread thread_;
 };
 

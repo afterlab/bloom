@@ -255,6 +255,11 @@ class McpServerCore final {
     // calls it from pump() so events after a replacement are kept from the start). Any thread.
     void followLiveSession();
 
+    // Replaces the two export waits of the limits the core was built with. For tests that cross a
+    // wait limit without waiting for it; call while no request is in flight.
+    void setExportWaitLimits(std::chrono::milliseconds destinationCheckWait,
+                             std::chrono::milliseconds encoderProbeWait) noexcept;
+
     // The stdio host: replaces the headless session's project in place (project.open, project.new
     // and project.close through scripting::Session::adopt inside `replace`). The core lets go of
     // the old project's event stream before `replace` runs and follows the new one after it; older

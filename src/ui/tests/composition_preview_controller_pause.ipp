@@ -23,13 +23,13 @@ void testPauseReplacesCancelledSameTime(Expectations& expectations) {
                 playback.enterAndWait();
             return pipeline(snapshot, identity, bytes, overrides, context);
         });
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("initial red frame is ready", [&] { return isReady(controller); }, kWait),
                         "initial red frame is ready");
     controller.setPlaybackActive(true);
     expectations.expect(session.setCurrentTime(core::RationalTime::fromInteger(1)),
                         "real playback time changes");
     controller.presentPlaybackFrame(1s);
-    const bool entered = waitUntil([&] { return playback.entered(); });
+    const bool entered = bloom::test_support::awaitQtCondition("the playback request starts on the worker", [&] { return playback.entered(); }, kWait);
     expectations.expect(entered, "playback request is held before terminal delivery");
     const auto beforePause = generation(controller.state());
     controller.setPlaybackActive(false);
@@ -40,12 +40,12 @@ void testPauseReplacesCancelledSameTime(Expectations& expectations) {
                         "newest stopped source is green while cancelled task drains");
     playback.release();
     expectations.expect(
-        waitUntil([&] {
+        bloom::test_support::awaitQtCondition("stopped newest green source becomes Current after cancelled playback drains", [&] {
             return isReady(controller) && controller.state().frame &&
                    controller.state().frame->desiredIdentity().time == session.currentTime() &&
                    controller.state().frame->desiredIdentity().sourceRevision ==
                        session.snapshot().revision();
-        }),
+        }, kWait),
         "stopped newest green source becomes Current after cancelled playback drains");
     const auto frame = controller.state().frame;
     const auto pixels = frame ? frame->displayBufferView() : std::nullopt;
@@ -90,13 +90,13 @@ void testShutdownCannotRecoverStalePlayback(Expectations& expectations) {
                 held.enterAndWait();
             return pipeline(snapshot, identity, bytes, overrides, context);
         });
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("shutdown control starts Current", [&] { return isReady(controller); }, kWait),
                         "shutdown control starts Current");
     controller.playbackController().play();
     expectations.expect(session.setCurrentTime(core::RationalTime::fromInteger(1)),
                         "held playback time changes");
     controller.presentPlaybackFrame(1s);
-    expectations.expect(waitUntil([&] { return held.entered(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("shutdown playback is held on real worker", [&] { return held.entered(); }, kWait),
                         "shutdown playback is held on real worker");
     expectations.expect(controller.state().freshness == ui::FrameFreshness::Stale,
                         "shutdown starts with previous pixels Stale, not readyCurrent dedup");
@@ -142,7 +142,7 @@ void testColdPlaybackCarriesUsefulFrames(Expectations& expectations) {
                 wrapped.enterAndWait();
             return pipeline(snapshot, identity, bytes, overrides, context);
         });
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("cold control starts with real frame0", [&] { return isReady(controller); }, kWait),
                         "cold control starts with real frame0");
     controller.setPlaybackActive(true);
     controller.beginDroppedFrameCounting();
@@ -153,17 +153,17 @@ void testColdPlaybackCarriesUsefulFrames(Expectations& expectations) {
             1ns); // Force deadline miss without changing production clock.
     };
     ask(1);
-    expectations.expect(waitUntil([&] { return first.entered(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("one cold producer is held across ticks", [&] { return first.entered(); }, kWait),
                         "one cold producer is held across ticks");
     ask(2);
     ask(3);
     first.release();
     expectations.expect(
-        waitUntil([&] {
+        bloom::test_support::awaitQtCondition("valid old completion makes visible progress and only newest pending starts", [&] {
             return newest.entered() && controller.state().frame &&
                    controller.state().frame->desiredIdentity().time ==
                        core::RationalTime::fromInteger(1);
-        }),
+        }, kWait),
         "valid old completion makes visible progress and only newest pending starts");
     expectations.expect(controller.state().freshness == ui::FrameFreshness::Stale &&
                             controller.state().desiredIdentity &&
@@ -177,11 +177,11 @@ void testColdPlaybackCarriesUsefulFrames(Expectations& expectations) {
     ask(2); // An uncached backward/looped target: generation ordering, not time ordering.
     newest.release();
     expectations.expect(
-        waitUntil([&] {
+        bloom::test_support::awaitQtCondition("useful newer-generation frame3 is visible while newest intent moves back to2", [&] {
             return wrapped.entered() && controller.state().frame &&
                    controller.state().frame->desiredIdentity().time ==
                        core::RationalTime::fromInteger(3);
-        }),
+        }, kWait),
         "useful newer-generation frame3 is visible while newest intent moves back to2");
     expectations.expect(controller.state().desiredIdentity &&
                             controller.state().desiredIdentity->time ==
@@ -193,7 +193,7 @@ void testColdPlaybackCarriesUsefulFrames(Expectations& expectations) {
     expectations.expect(isReady(controller),
                         "newer cached exact-time frame wins immediately without evaluation");
     wrapped.release();
-    expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("cancelled older producer retires after warm hit", [&] { return scheduler.isQuiescent(); }, kWait),
                         "cancelled older producer retires after warm hit");
     QCoreApplication::processEvents();
     expectations.expect(
@@ -240,19 +240,19 @@ void testLatePlaybackCountsFailureOnce(Expectations& expectations) {
                                                .detail = {},
                                                .suggestedAction = {}});
             });
-        expectations.expect(waitUntil([&] { return isReady(controller); }),
+        expectations.expect(bloom::test_support::awaitQtCondition("late accounting starts ready", [&] { return isReady(controller); }, kWait),
                             "late accounting starts ready");
         controller.beginDroppedFrameCounting();
         controller.setPlaybackActive(true);
         expectations.expect(session.setCurrentTime(core::RationalTime::fromInteger(1)),
                             "late failure target changes");
         controller.presentPlaybackFrame(1ns);
-        expectations.expect(waitUntil([&] { return held.entered(); }),
+        expectations.expect(bloom::test_support::awaitQtCondition("late failure is held past deadline", [&] { return held.entered(); }, kWait),
                             "late failure is held past deadline");
         held.release();
         const auto outcome =
             unsupported ? ui::PreviewActivity::Unsupported : ui::PreviewActivity::Failed;
-        expectations.expect(waitUntil([&] { return controller.state().activity == outcome; }) &&
+        expectations.expect(bloom::test_support::awaitQtCondition("one expired latest failure or Unsupported records exactly one drop", [&] { return controller.state().activity == outcome; }, kWait) &&
                                 controller.droppedFrameCount() == 1,
                             "one expired latest failure or Unsupported records exactly one drop");
         reachQuiescence(controller, bridge, scheduler, expectations);
@@ -282,14 +282,14 @@ void testLatePlaybackPurgeObserverRejectsOldDelivery(Expectations& expectations)
                 held.enterAndWait();
             return pipeline(snapshot, identity, bytes, overrides, context);
         });
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("purge barrier starts ready", [&] { return isReady(controller); }, kWait),
                         "purge barrier starts ready");
     controller.beginDroppedFrameCounting();
     controller.setPlaybackActive(true);
     expectations.expect(session.setCurrentTime(core::RationalTime::fromInteger(1)),
                         "purge barrier target changes");
     controller.presentPlaybackFrame(1ns);
-    expectations.expect(waitUntil([&] { return held.entered(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("old successful delivery is held before expiry accounting", [&] { return held.entered(); }, kWait),
                         "old successful delivery is held before expiry accounting");
     bool purged = false;
     const auto connection = QObject::connect(
@@ -300,7 +300,7 @@ void testLatePlaybackPurgeObserverRejectsOldDelivery(Expectations& expectations)
             }
         });
     held.release();
-    expectations.expect(waitUntil([&] { return purged; }),
+    expectations.expect(bloom::test_support::awaitQtCondition("lateness signal synchronously purges old delivery domain", [&] { return purged; }, kWait),
                         "lateness signal synchronously purges old delivery domain");
     const auto key = controller.cacheKeyForTime(core::RationalTime::fromInteger(1));
     expectations.expect(

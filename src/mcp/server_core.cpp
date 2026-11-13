@@ -231,6 +231,12 @@ McpServerCore::~McpServerCore() = default;
 
 void McpServerCore::followLiveSession() { state_->syncEvents(); }
 
+void McpServerCore::setExportWaitLimits(const std::chrono::milliseconds destinationCheckWait,
+                                        const std::chrono::milliseconds encoderProbeWait) noexcept {
+    state_->dependencies.limits.destinationCheckWait = destinationCheckWait;
+    state_->dependencies.limits.encoderProbeWait = encoderProbeWait;
+}
+
 void McpServerCore::replaceHeadlessProject(const std::function<void()>& replace) {
     auto& state = *state_;
     auto* headless =

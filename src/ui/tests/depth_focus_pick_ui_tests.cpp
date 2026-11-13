@@ -5,6 +5,7 @@
 // cancels. The selected Z Defocus draws its focus point and the 5 x 5 area it samples over the
 // frame. With BLOOM_GRAMMAR_ARTIFACT_DIR set it writes the Viewer to <dir>/focus-pick-viewer.png.
 
+#include "await_qt.hpp"
 #include <QApplication>
 #include <QDir>
 #include <QElapsedTimer>
@@ -37,6 +38,9 @@
 #include <string>
 
 namespace {
+// The ceiling for a broken run; a passing wait returns as soon as its condition holds.
+constexpr std::chrono::milliseconds kWait{15000};
+
 using namespace bloom;
 
 int failures = 0;
@@ -45,14 +49,6 @@ void expect(const bool value, const std::string& message) {
         ++failures;
         std::cerr << "FAIL: " << message << '\n';
     }
-}
-
-template <typename Predicate> bool waitUntil(Predicate predicate, const int milliseconds = 15000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < milliseconds)
-        QTest::qWait(5);
-    return predicate();
 }
 
 constexpr std::uint32_t kWidth = 96;
@@ -160,11 +156,14 @@ void testFocusPick() {
     scene.session.selectNode(scene.defocus);
     QApplication::processEvents();
     std::optional<ui::ViewerMapping> mapping;
-    expect(waitUntil([&] {
-               mapping = viewer->mappingForTest();
-               return mapping.has_value() &&
-                      preview.state().activity == ui::PreviewActivity::Ready;
-           }),
+    expect(bloom::test_support::awaitQtCondition(
+               "the Viewer shows the composition",
+               [&] {
+                   mapping = viewer->mappingForTest();
+                   return mapping.has_value() &&
+                          preview.state().activity == ui::PreviewActivity::Ready;
+               },
+               kWait),
            "the Viewer shows the composition");
     if (!mapping)
         return;
@@ -212,7 +211,9 @@ void testFocusPick() {
     // The indicator: the focus point and its sampled area drawn in the accent colour while the
     // node is selected (the unarmed click above selected the layer under it).
     scene.session.selectNode(scene.defocus);
-    expect(waitUntil([&] { return preview.state().activity == ui::PreviewActivity::Ready; }),
+    expect(bloom::test_support::awaitQtCondition(
+               "the refocused frame renders",
+               [&] { return preview.state().activity == ui::PreviewActivity::Ready; }, kWait),
            "the refocused frame renders");
     viewer->update();
     QApplication::processEvents();
@@ -255,7 +256,7 @@ int main(int argc, char** argv) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;
     }
-    if (failures != 0)
+    if (failures + bloom::test_support::awaitFailureCount() != 0)
         return 1;
     std::cout << "PASS: Z Defocus focus pick\n";
     return 0;

@@ -15,6 +15,7 @@
 #include <bloom/project/canonical_manifest.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
+#include "await_qt.hpp"
 #include "zip_container_test_support.hpp"
 
 #include <QApplication>
@@ -60,6 +61,10 @@
 // waitUntil() idiom.
 
 namespace {
+using bloom::test_support::awaitQtCondition;
+
+// The ceiling for a broken run; a passing wait returns as soon as its condition holds.
+constexpr std::chrono::milliseconds kWait{4000};
 
 using bloom::commands::SetProjectName;
 using bloom::commands::Transaction;
@@ -122,21 +127,9 @@ class TempDirectory final {
     std::filesystem::path path_;
 };
 
-template <typename Predicate> [[nodiscard]] bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 4'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate)) {
-            return true;
-        }
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return std::invoke(predicate);
-}
-
 [[nodiscard]] bool waitUntilIdle(const ProjectHost& host) {
-    return waitUntil([&host] { return !host.isBusy(); });
+    return awaitQtCondition(
+        "the host is no longer busy", [&host] { return !host.isBusy(); }, kWait);
 }
 
 // Executes a rename transaction directly through the host's live command stack (the same path
@@ -308,7 +301,9 @@ void testRecoverySnapshotAndStartupOffer(Expectations& expectations) {
     expectations.expect(executeRename(host, "Recovered Project"),
                         "recovery: the rename transaction commits");
     host.writeRecoverySnapshot();
-    expectations.expect(waitUntil([&] { return host.recoveryOffer().has_value(); }),
+    expectations.expect(awaitQtCondition(
+                            "recovery: the asynchronous snapshot completes",
+                            [&] { return host.recoveryOffer().has_value(); }, kWait),
                         "recovery: the asynchronous snapshot completes");
     const auto offer = host.recoveryOffer();
     expectations.expect(offer.has_value() && pathExists(offer->recoveryPath),
@@ -321,7 +316,9 @@ void testRecoverySnapshotAndStartupOffer(Expectations& expectations) {
     expectations.expect(!host.isDirty() && pathExists(targetPath),
                         "recovery: the real save publishes and cleans the session");
     expectations.expect(offer.has_value() &&
-                            waitUntil([&] { return !pathExists(offer->recoveryPath); }),
+                            awaitQtCondition(
+                                "recovery: a successful save removes the recovery file",
+                                [&] { return !pathExists(offer->recoveryPath); }, kWait),
                         "recovery: a successful save removes the recovery file");
     expectations.expect(!host.recoveryOffer().has_value(),
                         "recovery: and there is nothing left to offer on the next launch");
@@ -330,7 +327,9 @@ void testRecoverySnapshotAndStartupOffer(Expectations& expectations) {
     // file through the ordinary Open path.
     expectations.expect(executeRename(host, "Edited Again"), "recovery: a second edit commits");
     host.writeRecoverySnapshot();
-    expectations.expect(waitUntil([&] { return host.recoveryOffer().has_value(); }),
+    expectations.expect(awaitQtCondition(
+                            "recovery: the second asynchronous snapshot completes",
+                            [&] { return host.recoveryOffer().has_value(); }, kWait),
                         "recovery: the second asynchronous snapshot completes");
     const auto secondOffer = host.recoveryOffer();
     expectations.expect(secondOffer.has_value(), "recovery: the second edit is described on disk");
@@ -344,8 +343,10 @@ void testRecoverySnapshotAndStartupOffer(Expectations& expectations) {
         return false;
     });
     host.offerRecoveryOnStartup();
-    expectations.expect(waitUntil([&] { return asked == 1; }),
-                        "recovery: the startup scan reaches its decision");
+    expectations.expect(
+        awaitQtCondition(
+            "recovery: the startup scan reaches its decision", [&] { return asked == 1; }, kWait),
+        "recovery: the startup scan reaches its decision");
     expectations.expect(asked == 1 && !host.isBusy(),
                         "recovery: a declined offer asks once and opens nothing");
 
@@ -355,7 +356,9 @@ void testRecoverySnapshotAndStartupOffer(Expectations& expectations) {
         return true;
     });
     host.offerRecoveryOnStartup();
-    expectations.expect(waitUntil([&] { return asked == 2; }),
+    expectations.expect(awaitQtCondition(
+                            "recovery: the second startup scan reaches its decision",
+                            [&] { return asked == 2; }, kWait),
                         "recovery: the second startup scan reaches its decision");
     expectations.expect(asked == 2, "recovery: an accepted offer asks again and proceeds");
     expectations.expect(waitUntilIdle(host),
@@ -388,7 +391,9 @@ void testRecoverySurvivesCleanRestartAndPendingDecision(Expectations& expectatio
         expectations.expect(executeRename(crashed, "Unsaved before restart"),
                             "recovery restart: the first host becomes dirty");
         crashed.writeRecoverySnapshot();
-        expectations.expect(waitUntil([&] { return crashed.recoveryOffer().has_value(); }),
+        expectations.expect(awaitQtCondition(
+                                "recovery restart: the asynchronous snapshot completes",
+                                [&] { return crashed.recoveryOffer().has_value(); }, kWait),
                             "recovery restart: the asynchronous snapshot completes");
         const auto offer = crashed.recoveryOffer();
         expectations.expect(offer.has_value(),
@@ -422,7 +427,9 @@ void testRecoverySurvivesCleanRestartAndPendingDecision(Expectations& expectatio
         return false;
     });
     restarted.offerRecoveryOnStartup();
-    expectations.expect(waitUntil([&] { return decisions == 1; }),
+    expectations.expect(awaitQtCondition(
+                            "recovery restart: the asynchronous scan reaches its decision",
+                            [&] { return decisions == 1; }, kWait),
                         "recovery restart: the asynchronous scan reaches its decision");
     expectations.expect(decisions == 1 && pathExists(crashedPath),
                         "recovery restart: declining the offer leaves the prior artifact intact");
@@ -446,7 +453,9 @@ void testCrashRecoveryOffByDefault(Expectations& expectations) {
         expectations.expect(executeRename(crashed, "Unsaved on disk"),
                             "recovery off: the earlier host becomes dirty");
         crashed.writeRecoverySnapshot();
-        expectations.expect(waitUntil([&] { return crashed.recoveryOffer().has_value(); }),
+        expectations.expect(awaitQtCondition(
+                                "recovery off: the enabled host writes recovery data",
+                                [&] { return crashed.recoveryOffer().has_value(); }, kWait),
                             "recovery off: the enabled host writes recovery data");
         if (const auto offer = crashed.recoveryOffer())
             existingPath = offer->recoveryPath;
@@ -468,7 +477,13 @@ void testCrashRecoveryOffByDefault(Expectations& expectations) {
     expectations.expect(executeRename(host, "Unsaved while off"),
                         "recovery off: the default host becomes dirty");
     host.writeRecoverySnapshot();
-    expectations.expect(!waitUntil([&] { return host.recoveryOffer().has_value(); }),
+    // With recovery off the call schedules nothing; once the scheduler is quiet, any snapshot
+    // that was going to be written has been.
+    expectations.expect(awaitQtCondition(
+                            "recovery off: no recovery work is scheduled",
+                            [&] { return scheduler.isQuiescent(); }, kWait),
+                        "recovery off: no recovery work is scheduled");
+    expectations.expect(!host.recoveryOffer().has_value(),
                         "recovery off: no recovery snapshot is written");
     expectations.expect(countFiles() == before, "recovery off: no recovery file is added");
     int asked = 0;
@@ -477,18 +492,26 @@ void testCrashRecoveryOffByDefault(Expectations& expectations) {
         return false;
     });
     host.offerRecoveryOnStartup();
-    expectations.expect(!waitUntil([&] { return asked > 0; }),
-                        "recovery off: no recovery prompt is shown");
+    expectations.expect(awaitQtCondition(
+                            "recovery off: no recovery scan is scheduled",
+                            [&] { return scheduler.isQuiescent(); }, kWait),
+                        "recovery off: no recovery scan is scheduled");
+    QCoreApplication::processEvents();
+    expectations.expect(asked == 0, "recovery off: no recovery prompt is shown");
     expectations.expect(pathExists(existingPath) && countFiles() == before,
                         "recovery off: recovery data already on disk is left untouched");
 
     host.setCrashRecoveryEnabled(true);
     host.writeRecoverySnapshot();
-    expectations.expect(waitUntil([&] { return countFiles() > before; }),
+    expectations.expect(awaitQtCondition(
+                            "recovery on: the snapshot is written without a restart",
+                            [&] { return countFiles() > before; }, kWait),
                         "recovery on: the snapshot is written without a restart");
     host.offerRecoveryOnStartup();
-    expectations.expect(waitUntil([&] { return asked == 1; }),
-                        "recovery on: the startup prompt is offered again");
+    expectations.expect(
+        awaitQtCondition(
+            "recovery on: the startup prompt is offered again", [&] { return asked == 1; }, kWait),
+        "recovery on: the startup prompt is offered again");
 }
 
 void testConcurrentRecoveryOwnersAndExplicitDiscard(Expectations& expectations) {
@@ -511,7 +534,9 @@ void testConcurrentRecoveryOwnersAndExplicitDiscard(Expectations& expectations) 
     expectations.expect(executeRename(first, "First unsaved"),
                         "recovery owners: the first host becomes dirty");
     first.writeRecoverySnapshot();
-    expectations.expect(waitUntil([&] { return first.recoveryOffer().has_value(); }),
+    expectations.expect(awaitQtCondition(
+                            "recovery owners: first asynchronous snapshot completes",
+                            [&] { return first.recoveryOffer().has_value(); }, kWait),
                         "recovery owners: first asynchronous snapshot completes");
     const auto firstOffer = first.recoveryOffer();
     expectations.expect(firstOffer.has_value(),
@@ -538,7 +563,9 @@ void testConcurrentRecoveryOwnersAndExplicitDiscard(Expectations& expectations) 
     expectations.expect(executeRename(second, "Second unsaved"),
                         "recovery owners: the second host becomes dirty");
     second.writeRecoverySnapshot();
-    expectations.expect(waitUntil([&] { return artifactCount() == 2; }),
+    expectations.expect(awaitQtCondition(
+                            "recovery owners: second asynchronous snapshot completes",
+                            [&] { return artifactCount() == 2; }, kWait),
                         "recovery owners: second asynchronous snapshot completes");
     std::vector<std::filesystem::path> paths;
     for (const auto& entry : std::filesystem::directory_iterator(recoveryDirectory)) {
@@ -557,14 +584,20 @@ void testConcurrentRecoveryOwnersAndExplicitDiscard(Expectations& expectations) 
 
     second.setUnsavedChangeDecisionProvider([] { return UnsavedChangeDecision::Discard; });
     second.newProject();
-    expectations.expect(waitUntil([&] { return !pathExists(secondPath); }) &&
-                            pathExists(firstPath) && !second.isDirty(),
-                        "recovery owners: explicit Discard retires only the discarded session's "
-                        "artifact");
+    expectations.expect(
+        awaitQtCondition(
+            "recovery owners: explicit Discard retires only the discarded session's ",
+            [&] { return !pathExists(secondPath); }, kWait) &&
+            pathExists(firstPath) && !second.isDirty(),
+        "recovery owners: explicit Discard retires only the discarded session's "
+        "artifact");
 
     first.beginSaveAs(directory.path() / "first.bloom");
     expectations.expect(waitUntilIdle(first), "recovery owners: the first real save completes");
-    expectations.expect(waitUntil([&] { return !pathExists(firstPath); }) && !first.isDirty(),
+    expectations.expect(awaitQtCondition(
+                            "recovery owners: saving the remaining host retires its own artifact",
+                            [&] { return !pathExists(firstPath); }, kWait) &&
+                            !first.isDirty(),
                         "recovery owners: saving the remaining host retires its own artifact");
 }
 
@@ -581,7 +614,9 @@ void testDiscardKeepsRecoveryWhenOpenFails(Expectations& expectations) {
     expectations.expect(executeRename(host, "Keep this work"),
                         "failed open: the current project becomes dirty");
     host.writeRecoverySnapshot();
-    expectations.expect(waitUntil([&] { return host.recoveryOffer().has_value(); }),
+    expectations.expect(awaitQtCondition(
+                            "failed open: recovery snapshot completes",
+                            [&] { return host.recoveryOffer().has_value(); }, kWait),
                         "failed open: recovery snapshot completes");
     const auto offer = host.recoveryOffer();
     if (!offer.has_value()) {
@@ -592,13 +627,17 @@ void testDiscardKeepsRecoveryWhenOpenFails(Expectations& expectations) {
     host.setUnsavedChangeDecisionProvider([] { return UnsavedChangeDecision::Discard; });
     host.setOpenPathProvider([&] { return directory.path() / "absent.bloom"; });
     host.requestOpen();
-    expectations.expect(waitUntil([&] { return opened.count == 1; }),
+    expectations.expect(awaitQtCondition(
+                            "failed open: the worker reports the missing path",
+                            [&] { return opened.count == 1; }, kWait),
                         "failed open: the worker reports the missing path");
     expectations.expect(opened.outcome == ProjectHostOperationOutcome::Failed && host.isDirty() &&
                             pathExists(offer->recoveryPath),
                         "failed open: the dirty session and its recovery file survive Discard");
     host.newProject();
-    expectations.expect(waitUntil([&] { return !pathExists(offer->recoveryPath); }),
+    expectations.expect(awaitQtCondition(
+                            "failed open: actual replacement retires the old owned artifact",
+                            [&] { return !pathExists(offer->recoveryPath); }, kWait),
                         "failed open: actual replacement retires the old owned artifact");
 }
 
@@ -647,7 +686,9 @@ void testOpenCancellationIsPromptWhileWorkerIsHeld(Expectations& expectations) {
         released = true;
     }
     condition.notify_all();
-    expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }) &&
+    expectations.expect(awaitQtCondition(
+                            "cancel Open: abandoned worker cannot install a replacement",
+                            [&] { return scheduler.isQuiescent(); }, kWait) &&
                             host.stateSnapshot().projectSessionId == originalSession,
                         "cancel Open: abandoned worker cannot install a replacement");
 }
@@ -700,8 +741,11 @@ void testRecoveryCoalescesToNewestRevision(Expectations& expectations) {
         released = true;
     }
     condition.notify_all();
-    expectations.expect(waitUntil([&] { return host.recoveryOffer().has_value(); }),
-                        "recovery revision: newest snapshot publishes after held worker releases");
+    expectations.expect(
+        awaitQtCondition(
+            "recovery revision: newest snapshot publishes after held worker releases",
+            [&] { return host.recoveryOffer().has_value(); }, kWait),
+        "recovery revision: newest snapshot publishes after held worker releases");
     const auto offer = host.recoveryOffer();
     if (!offer.has_value()) {
         return;
@@ -830,7 +874,9 @@ void testUnsavedChangeDecisionSeamForNew(Expectations& expectations) {
     });
     host.setUnsavedChangeDecisionProvider([] { return UnsavedChangeDecision::Save; });
     host.newProject();
-    expectations.expect(waitUntil([&] { return sessionReplacedCount == 2; }),
+    expectations.expect(awaitQtCondition(
+                            "unsaved flow (New): Save eventually replaces the session",
+                            [&] { return sessionReplacedCount == 2; }, kWait),
                         "unsaved flow (New): Save eventually replaces the session");
     expectations.expect(saveDialogInvoked,
                         "unsaved flow (New): the pathless Save routed through the Save As seam");
@@ -882,7 +928,9 @@ void testUnsavedChangeDecisionSeamForOpen(Expectations& expectations) {
     // Discard: the open-path seam is invoked and the open proceeds.
     host.setUnsavedChangeDecisionProvider([] { return UnsavedChangeDecision::Discard; });
     host.requestOpen();
-    expectations.expect(waitUntil([&] { return sessionReplacedCount == 1; }),
+    expectations.expect(awaitQtCondition(
+                            "unsaved flow (Open): Discard opens the chosen file",
+                            [&] { return sessionReplacedCount == 1; }, kWait),
                         "unsaved flow (Open): Discard opens the chosen file");
     expectations.expect(!host.isDirty(), "unsaved flow (Open): the opened session is clean");
 
@@ -891,7 +939,9 @@ void testUnsavedChangeDecisionSeamForOpen(Expectations& expectations) {
                         "unsaved flow (Open): the re-dirtying transaction commits");
     host.setUnsavedChangeDecisionProvider([] { return UnsavedChangeDecision::Save; });
     host.requestOpen();
-    expectations.expect(waitUntil([&] { return sessionReplacedCount == 2; }),
+    expectations.expect(awaitQtCondition(
+                            "unsaved flow (Open): Save eventually opens the chosen file",
+                            [&] { return sessionReplacedCount == 2; }, kWait),
                         "unsaved flow (Open): Save eventually opens the chosen file");
     expectations.expect(!host.isDirty(), "unsaved flow (Open): the final opened session is clean");
 }
@@ -938,7 +988,9 @@ void testFileOpenEventOpensTheProject(Expectations& expectations) {
 
     // At launch and while running the event is the same: a clean project is replaced.
     sendFileOpenEvent(projectPath);
-    expectations.expect(waitUntil([&] { return sessionReplacedCount == 1; }),
+    expectations.expect(awaitQtCondition(
+                            "file-open event: the named project opens",
+                            [&] { return sessionReplacedCount == 1; }, kWait),
                         "file-open event: the named project opens");
     expectations.expect(host.displayPath() == projectPath && !host.isDirty() && dialogCount == 0,
                         "file-open event: the session is the file's, clean, with no dialog");
@@ -952,7 +1004,10 @@ void testFileOpenEventOpensTheProject(Expectations& expectations) {
                         "file-open event: Cancel keeps the unsaved project");
     host.setUnsavedChangeDecisionProvider([] { return UnsavedChangeDecision::Discard; });
     sendFileOpenEvent(projectPath);
-    expectations.expect(waitUntil([&] { return sessionReplacedCount == 2; }) && !host.isDirty(),
+    expectations.expect(awaitQtCondition(
+                            "file-open event: Discard opens the named project",
+                            [&] { return sessionReplacedCount == 2; }, kWait) &&
+                            !host.isDirty(),
                         "file-open event: Discard opens the named project");
 
     // An event that arrives while another project operation runs waits for it and is not lost.
@@ -962,7 +1017,9 @@ void testFileOpenEventOpensTheProject(Expectations& expectations) {
     host.beginSaveAs(otherPath);
     expectations.expect(host.isBusy(), "file-open event: a save is in progress");
     sendFileOpenEvent(projectPath);
-    expectations.expect(waitUntil([&] { return sessionReplacedCount == 3; }),
+    expectations.expect(awaitQtCondition(
+                            "file-open event: the waiting request opens once the save has finished",
+                            [&] { return sessionReplacedCount == 3; }, kWait),
                         "file-open event: the waiting request opens once the save has finished");
     expectations.expect(pathExists(otherPath) && host.displayPath() == projectPath,
                         "file-open event: the save completed first and the project then opened");
@@ -971,7 +1028,9 @@ void testFileOpenEventOpensTheProject(Expectations& expectations) {
     OutcomeCapture opened;
     connectOpenCapture(host, opened);
     sendFileOpenEvent(directory.path() / "absent.bloom");
-    expectations.expect(waitUntil([&] { return opened.count == 1; }) &&
+    expectations.expect(awaitQtCondition(
+                            "file-open event: a missing file is a failed open, not a new project",
+                            [&] { return opened.count == 1; }, kWait) &&
                             opened.outcome == ProjectHostOperationOutcome::Failed &&
                             sessionReplacedCount == 3,
                         "file-open event: a missing file is a failed open, not a new project");
@@ -1142,5 +1201,5 @@ int main(int argc, char** argv) {
     testSaveCopyUnavailableOnEditableContent(expectations);
     testDefaultSaveAsAddsBloomSuffix(expectations);
     testDefaultUnsavedPromptNamesTheAction(expectations);
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

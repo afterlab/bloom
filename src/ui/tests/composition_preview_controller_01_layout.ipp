@@ -37,7 +37,7 @@ void testLayoutEditRetainsEvaluationWork(Expectations& expectations) {
                             context);
         });
 
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("the initial frame is ready and warm in the cache", [&] { return isReady(controller); }, kWait),
                         "the initial frame is ready and warm in the cache");
     const auto evalRevision = session.evaluationSnapshot().revision();
     const auto frameBefore = controller.state().frame;
@@ -85,7 +85,7 @@ void testLayoutEditRetainsEvaluationWork(Expectations& expectations) {
 
     const auto other = core::RationalTime::create(1, 2);
     expectations.expect(other.has_value() && session.setCurrentTime(*other) &&
-                            waitUntil([&] { return isReady(controller); }),
+                            bloom::test_support::awaitQtCondition("a second time reaches a ready frame", [&] { return isReady(controller); }, kWait),
                         "a second time reaches a ready frame");
     const auto afterSecond = invocationCount.load();
     const auto again = nodeEdit("Move Nodes Again", [&](commands::Transaction& transaction) {
@@ -94,13 +94,13 @@ void testLayoutEditRetainsEvaluationWork(Expectations& expectations) {
     });
     expectations.expect(again.changed(), "a second layout edit publishes");
     expectations.expect(session.setCurrentTime(core::RationalTime::fromInteger(0)) &&
-                            waitUntil([&] { return isReady(controller); }),
+                            bloom::test_support::awaitQtCondition("returning to the first time reaches a ready frame", [&] { return isReady(controller); }, kWait),
                         "returning to the first time reaches a ready frame");
     expectations.expect(invocationCount.load() == afterSecond,
                         "the warmed frame is taken from the cache, not evaluated again");
 
     controller.requestRefresh();
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("the explicit refresh reaches ready", [&] { return isReady(controller); }, kWait),
                         "the explicit refresh reaches ready");
     expectations.expect(invocationCount.load() > afterSecond,
                         "an explicit refresh re-derives the frame rather than serving the cache");
@@ -122,7 +122,7 @@ void testPixelMixedAndRebindAdvanceEvaluation(Expectations& expectations) {
     PipelineFixture fixture;
     ui::CompositionPreviewController controller(session, scheduler, bridge, fixture.pipeline);
 
-    expectations.expect(waitUntil([&] { return isReady(controller); }), "initial frame ready");
+    expectations.expect(bloom::test_support::awaitQtCondition("initial frame ready", [&] { return isReady(controller); }, kWait), "initial frame ready");
     const auto nodeId = firstGraphNode(session);
     const auto baseRevision = session.snapshot().revision();
 
@@ -134,7 +134,7 @@ void testPixelMixedAndRebindAdvanceEvaluation(Expectations& expectations) {
                                 session.snapshot().revision() &&
                             session.evaluationSnapshot().revision() != baseRevision,
                         "SetNodeMuted advances the evaluation snapshot");
-    expectations.expect(waitUntil([&] { return isReady(controller); }), "pixel frame ready");
+    expectations.expect(bloom::test_support::awaitQtCondition("pixel frame ready", [&] { return isReady(controller); }, kWait), "pixel frame ready");
 
     expectations.expect(session.undo() && session.evaluationSnapshot().revision() ==
                                               session.snapshot().revision(),
@@ -202,7 +202,7 @@ void testInFlightFrameSurvivesLayoutEdit(Expectations& expectations) {
                             context);
         });
 
-    expectations.expect(waitUntil([&] { return gate.entered(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("the first frame is in flight on the worker", [&] { return gate.entered(); }, kWait),
                         "the first frame is in flight on the worker");
     const auto evalRevision = session.evaluationSnapshot().revision();
     const auto nodeId = firstGraphNode(session);
@@ -215,7 +215,7 @@ void testInFlightFrameSurvivesLayoutEdit(Expectations& expectations) {
                             session.snapshot().revision() != evalRevision,
                         "the in-flight frame's evaluation snapshot was retained");
     gate.release();
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("the in-flight frame still arrives as Current after the layout edit", [&] { return isReady(controller); }, kWait),
                         "the in-flight frame still arrives as Current after the layout edit");
     expectations.expect(controller.state().frame != nullptr &&
                             controller.state().frame->desiredIdentity().sourceRevision ==
@@ -253,7 +253,7 @@ void testInFlightFrameRejectedAfterPixelEdit(Expectations& expectations) {
                             context);
         });
 
-    expectations.expect(waitUntil([&] { return gate.entered(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("the first frame is in flight on the worker", [&] { return gate.entered(); }, kWait),
                         "the first frame is in flight on the worker");
     const auto preEditRevision = session.snapshot().revision();
     std::vector<document::Revision> readyRevisions;
@@ -271,11 +271,11 @@ void testInFlightFrameRejectedAfterPixelEdit(Expectations& expectations) {
                                 session.snapshot().revision(),
                         "the pixel edit advances the evaluation snapshot immediately");
     gate.release();
-    expectations.expect(waitUntil([&] {
+    expectations.expect(bloom::test_support::awaitQtCondition("only a frame for the advanced evaluation reaches Ready", [&] {
                             return isReady(controller) && controller.state().frame != nullptr &&
                                    controller.state().frame->desiredIdentity().sourceRevision ==
                                        session.snapshot().revision();
-                        }),
+                        }, kWait),
                         "only a frame for the advanced evaluation reaches Ready");
     for (const auto revision : readyRevisions) {
         expectations.expect(revision != preEditRevision,
@@ -305,7 +305,7 @@ void testViewerAnalysisUsesRetainedProvenance(Expectations& expectations) {
     expectations.expect(
         session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
         "the analysis fixture has content and a selected layer");
-    expectations.expect(waitUntil([&] { return isReady(controller); }), "initial frame ready");
+    expectations.expect(bloom::test_support::awaitQtCondition("initial frame ready", [&] { return isReady(controller); }, kWait), "initial frame ready");
 
     const auto makeIdentity = [&](const std::uint64_t generation) {
         auto identity = controller.state().frame->desiredIdentity();
@@ -329,10 +329,10 @@ void testViewerAnalysisUsesRetainedProvenance(Expectations& expectations) {
     expectations.expect(submission.accepted(),
                         "a retained-frame analysis request is accepted after a layout edit");
     std::optional<runtime::TaskResult<ui::PreviewPreparationResultHandle>> analysisResult;
-    expectations.expect(waitUntil([&] {
+    expectations.expect(bloom::test_support::awaitQtCondition("the analysis request reaches a terminal result", [&] {
                             analysisResult = submission.handle.tryTakeResult();
                             return analysisResult.has_value();
-                        }),
+                        }, kWait),
                         "the analysis request reaches a terminal result");
     expectations.expect(
         analysisResult.has_value() && analysisResult->state() == runtime::TaskState::Succeeded &&
@@ -350,7 +350,7 @@ void testViewerAnalysisUsesRetainedProvenance(Expectations& expectations) {
                         "the pixel edit advances the evaluation snapshot");
     expectations.expect(!controller.submitViewerAnalysis(retainedIdentity).accepted(),
                         "a stale retained identity is refused after a pixel edit");
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("the post-pixel frame becomes ready before the next layout edit", [&] { return isReady(controller); }, kWait),
                         "the post-pixel frame becomes ready before the next layout edit");
 
     commands::Transaction moveAgain("Move Nodes", session.snapshot().revision());
@@ -412,7 +412,7 @@ void testRebindWithCollidingIdentitiesRendersNewPixels(Expectations& expectation
     PipelineFixture fixture;
     ui::CompositionSession session(firstDocument, firstCommands, compositionId);
     ui::CompositionPreviewController controller(session, scheduler, bridge, fixture.pipeline);
-    expectations.expect(waitUntil([&] { return isReady(controller); }), "first frame ready");
+    expectations.expect(bloom::test_support::awaitQtCondition("first frame ready", [&] { return isReady(controller); }, kWait), "first frame ready");
     const auto firstFrame = controller.state().frame;
     expectations.expect(firstFrame != nullptr, "the first document produced a frame");
     if (firstFrame == nullptr) {
@@ -432,10 +432,10 @@ void testRebindWithCollidingIdentitiesRendersNewPixels(Expectations& expectation
     const auto firstPlan = firstFrame->processIdentity().plan;
 
     session.rebind(secondDocument, secondCommands, secondCompositionId);
-    expectations.expect(waitUntil([&] {
+    expectations.expect(bloom::test_support::awaitQtCondition("a freshly prepared frame for the rebound document reaches the viewer", [&] {
                             return isReady(controller) && controller.state().frame != nullptr &&
                                    controller.state().frame != firstFrame;
-                        }),
+                        }, kWait),
                         "a freshly prepared frame for the rebound document reaches the viewer");
     const auto secondFrame = controller.state().frame;
     expectations.expect(secondFrame->processIdentity().plan != firstPlan,
@@ -498,12 +498,12 @@ void testRebindInFlightFrameCannotPublishOldPixels(Expectations& expectations) {
             return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, interactionOverride,
                             context);
         });
-    expectations.expect(waitUntil([&] { return gate.entered(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("the first document's frame is in flight", [&] { return gate.entered(); }, kWait),
                         "the first document's frame is in flight");
     session.rebind(secondDocument, secondCommands, secondCompositionId);
     gate.release();
     expectations.expect(
-        waitUntil([&] { return isReady(controller) && controller.state().frame != nullptr; }),
+        bloom::test_support::awaitQtCondition("the rebound document's frame becomes ready", [&] { return isReady(controller) && controller.state().frame != nullptr; }, kWait),
         "the rebound document's frame becomes ready");
     const auto buffer = controller.state().frame->displayBufferView();
     expectations.expect(buffer.has_value() && !buffer->pixels.empty(),
@@ -557,7 +557,7 @@ void testWorkAreaEditDoesNotRefreshOrResurrect(Expectations& expectations) {
     expectations.expect(
         session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
         "the work-area foreground fixture has content");
-    expectations.expect(waitUntil([&] { return isReady(controller); }), "initial frame ready");
+    expectations.expect(bloom::test_support::awaitQtCondition("initial frame ready", [&] { return isReady(controller); }, kWait), "initial frame ready");
     const auto evalRevision = session.evaluationSnapshot().revision();
     const auto frameBefore = controller.state().frame;
 
@@ -587,11 +587,11 @@ void testWorkAreaEditDoesNotRefreshOrResurrect(Expectations& expectations) {
     // A late in-flight completion for the out-of-range time cannot reinsert it.
     blockNext.store(true);
     controller.requestRefresh();
-    expectations.expect(waitUntil([&] { return gate.entered(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("the forced refresh is in flight", [&] { return gate.entered(); }, kWait),
                         "the forced refresh is in flight");
     const auto rangeDropsBefore = controller.frameCache().statistics().rangeDrops;
     gate.release();
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("the in-flight frame completes", [&] { return isReady(controller); }, kWait),
                         "the in-flight frame completes");
     expectations.expect(time0Key && !controller.frameCache().contains(*time0Key) &&
                             controller.frameCache().statistics().rangeDrops > rangeDropsBefore,

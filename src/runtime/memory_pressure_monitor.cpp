@@ -158,7 +158,9 @@ MemoryPressureMonitor::MemoryPressureMonitor(MemoryBudgetLedger& ledger, Deliver
                                              Options options)
     : ledger_(ledger), deliver_(std::move(deliver)), options_(std::move(options)) {
     configureHostMemoryReturn();
-    thread_ = bloom::core::WorkerThread([this] { run(); });
+    lastAt_ = options_.now();
+    if (options_.background)
+        thread_ = bloom::core::WorkerThread([this] { run(); });
 }
 
 MemoryPressureMonitor::~MemoryPressureMonitor() { stop(); }
@@ -219,58 +221,61 @@ bool MemoryPressureMonitor::waitForNextSample(const int psiDescriptor) {
     return !stopping_;
 }
 
+void MemoryPressureMonitor::poll() noexcept { samplePass(); }
+
+void MemoryPressureMonitor::samplePass() noexcept {
+    try {
+        auto sample = options_.sampler ? options_.sampler() : MachineMemorySample{};
+        samples_.fetch_add(1, std::memory_order_relaxed);
+        const auto now = options_.now();
+        if (options_.counterSampler) {
+            const auto counters = options_.counterSampler();
+            if (last_ && now > lastAt_) {
+                const auto micros =
+                    std::chrono::duration<double, std::micro>(now - lastAt_).count();
+                const auto delta = [](const std::optional<std::uint64_t>& current,
+                                      const std::optional<std::uint64_t>& previous) {
+                    return current && previous && *current >= *previous
+                               ? static_cast<double>(*current - *previous)
+                               : 0.0;
+                };
+                const bool stalled =
+                    delta(counters.fullStallMicroseconds, last_->fullStallMicroseconds) >=
+                    options_.fullStallFraction * micros;
+                sample.memoryStall = sample.memoryStall || stalled;
+            }
+            last_ = counters;
+            lastAt_ = now;
+        }
+        if (ledger_.pressureDeficit(sample) > 0 && deliver_) {
+            deliveries_.fetch_add(1, std::memory_order_relaxed);
+            deliver_(sample);
+        }
+        // Evictions applied on any thread since the last pass (this delivery, a previous one,
+        // a headroom change or a process sample): give the freed pages back to the OS.
+        const auto released = ledger_.takeReleasedBytes();
+        releasedPending_ = released > std::numeric_limits<std::size_t>::max() - releasedPending_
+                               ? std::numeric_limits<std::size_t>::max()
+                               : releasedPending_ + released;
+        if (releasedPending_ >= options_.trimThresholdBytes) {
+            releaseFreedHostMemory();
+            trims_.fetch_add(1, std::memory_order_relaxed);
+            releasedPending_ = 0;
+        }
+    } catch (...) { // NOLINT(bugprone-empty-catch)
+        // One failed sample must not end pressure monitoring; the next interval retries.
+    }
+}
+
 void MemoryPressureMonitor::run() {
     int psiDescriptor = -1;
 #if defined(__linux__)
     if (options_.psiTrigger)
         psiDescriptor = openPsiTrigger();
 #endif
-    std::optional<MemoryPressureCounters> last;
-    auto lastAt = std::chrono::steady_clock::now();
-    std::size_t releasedPending = 0;
-    while (waitForNextSample(psiDescriptor)) {
-        try {
-            auto sample = options_.sampler ? options_.sampler() : MachineMemorySample{};
-            samples_.fetch_add(1, std::memory_order_relaxed);
-            const auto now = std::chrono::steady_clock::now();
-            if (options_.counterSampler) {
-                const auto counters = options_.counterSampler();
-                if (last && now > lastAt) {
-                    const auto micros =
-                        std::chrono::duration<double, std::micro>(now - lastAt).count();
-                    const auto delta = [](const std::optional<std::uint64_t>& current,
-                                          const std::optional<std::uint64_t>& previous) {
-                        return current && previous && *current >= *previous
-                                   ? static_cast<double>(*current - *previous)
-                                   : 0.0;
-                    };
-                    const bool stalled =
-                        delta(counters.fullStallMicroseconds, last->fullStallMicroseconds) >=
-                        options_.fullStallFraction * micros;
-                    sample.memoryStall = sample.memoryStall || stalled;
-                }
-                last = counters;
-                lastAt = now;
-            }
-            if (ledger_.pressureDeficit(sample) > 0 && deliver_) {
-                deliveries_.fetch_add(1, std::memory_order_relaxed);
-                deliver_(sample);
-            }
-            // Evictions applied on any thread since the last pass (this delivery, a previous one,
-            // a headroom change or a process sample): give the freed pages back to the OS.
-            const auto released = ledger_.takeReleasedBytes();
-            releasedPending = released > std::numeric_limits<std::size_t>::max() - releasedPending
-                                  ? std::numeric_limits<std::size_t>::max()
-                                  : releasedPending + released;
-            if (releasedPending >= options_.trimThresholdBytes) {
-                releaseFreedHostMemory();
-                trims_.fetch_add(1, std::memory_order_relaxed);
-                releasedPending = 0;
-            }
-        } catch (...) { // NOLINT(bugprone-empty-catch)
-            // One failed sample must not end pressure monitoring; the next interval retries.
-        }
-    }
+    lastAt_ = options_.now();
+    while (waitForNextSample(psiDescriptor))
+        samplePass();
 #if defined(__linux__)
     if (psiDescriptor >= 0)
         ::close(psiDescriptor);

@@ -3,6 +3,7 @@
 // cancellation stops between and within files, a changed file is reported with the relink
 // suggestion, and the Assets controller runs the pass as a "Verify footage" job that purges the
 // media caches (footageChanged) when bytes changed since import.
+#include "await_qt.hpp"
 #include "footage_verification.hpp"
 
 #include <QApplication>
@@ -28,6 +29,9 @@
 #include <string>
 
 namespace {
+// The ceiling for a broken run; a passing wait returns as soon as its condition holds.
+constexpr std::chrono::milliseconds kWait{20000};
+
 using namespace bloom;
 namespace fs = std::filesystem;
 
@@ -38,14 +42,6 @@ void expect(const bool condition, const std::string& message) {
         std::cerr << "FAILED: " << message << '\n';
     }
 }
-template <typename Predicate> bool waitUntil(Predicate predicate, const int timeoutMs = 20000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < timeoutMs)
-        QTest::qWait(5);
-    return predicate();
-}
-
 void writeFile(const fs::path& path, const std::string& bytes) {
     std::ofstream stream(path, std::ios::binary | std::ios::trunc);
     stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
@@ -190,7 +186,10 @@ struct Harness final {
     ui::TaskUiBridge bridge{scheduler};
     ui::AssetController controller{session, host, scheduler, bridge};
     ~Harness() {
-        waitUntil([this] { return !controller.busy() && !controller.verifyingFootage(); });
+        expect(bloom::test_support::awaitQtCondition(
+                   "the import and verification settle",
+                   [this] { return !controller.busy() && !controller.verifyingFootage(); }, kWait),
+               "the import and verification settle");
     }
 };
 
@@ -202,8 +201,12 @@ void controllerRunsTheJob(const QTemporaryDir& temporary) {
     expect(image.save(path), "write the PNG fixture");
     QSignalSpy changed(&harness.controller, &ui::AssetController::footageChanged);
     harness.controller.importFiles({path});
-    expect(waitUntil([&] { return !harness.controller.busy(); }), "the import finishes");
-    expect(waitUntil([&] { return !harness.controller.verifyingFootage(); }),
+    expect(bloom::test_support::awaitQtCondition(
+               "the import finishes", [&] { return !harness.controller.busy(); }, kWait),
+           "the import finishes");
+    expect(bloom::test_support::awaitQtCondition(
+               "the verification pass after the import finishes",
+               [&] { return !harness.controller.verifyingFootage(); }, kWait),
            "the verification pass after the import finishes");
     expect(harness.controller.lastFootageVerification().has_value(),
            "a verification pass ran after the import");
@@ -211,7 +214,9 @@ void controllerRunsTheJob(const QTemporaryDir& temporary) {
     image.fill(Qt::black);
     expect(image.save(path), "rewrite the PNG fixture");
     harness.controller.verifyFootage();
-    expect(waitUntil([&] { return !harness.controller.verifyingFootage(); }),
+    expect(bloom::test_support::awaitQtCondition(
+               "the requested pass finishes",
+               [&] { return !harness.controller.verifyingFootage(); }, kWait),
            "the requested pass finishes");
     const auto& summary = harness.controller.lastFootageVerification();
     expect(summary && summary->files == 1 && summary->hashed == 1 && summary->changed == 1,
@@ -250,5 +255,5 @@ int main(int argc, char** argv) {
         std::cerr << "FAILED: " << error.what() << '\n';
         return 1;
     }
-    return failures == 0 ? 0 : 1;
+    return failures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

@@ -5,6 +5,7 @@
 // Escape confirms it and a mode with no point or radius has no handle. With BLOOM_GRAMMAR_ARTIFACT_DIR
 // set it writes each Viewer to <dir>/<name>-viewer.png.
 
+#include "await_qt.hpp"
 #include <QApplication>
 #include <QDir>
 #include <QElapsedTimer>
@@ -39,6 +40,9 @@
 #include <string_view>
 
 namespace {
+// The ceiling for a broken run; a passing wait returns as soon as its condition holds.
+constexpr std::chrono::milliseconds kWait{15000};
+
 using namespace bloom;
 
 int failures = 0;
@@ -47,14 +51,6 @@ void expect(const bool value, const std::string& message) {
         ++failures;
         std::cerr << "FAIL: " << message << '\n';
     }
-}
-
-template <typename Predicate> bool waitUntil(Predicate predicate, const int milliseconds = 15000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < milliseconds)
-        QTest::qWait(5);
-    return predicate();
 }
 
 constexpr std::uint32_t kWidth = 320;
@@ -160,11 +156,14 @@ struct Harness final {
         window.show();
         scene.session.selectNode(scene.warp);
         QApplication::processEvents();
-        expect(waitUntil([&] {
-                   mapping = viewer->mappingForTest();
-                   return mapping.has_value() &&
-                          preview.state().activity == ui::PreviewActivity::Ready;
-               }),
+        expect(bloom::test_support::awaitQtCondition(
+                   "the Viewer shows the composition",
+                   [&] {
+                       mapping = viewer->mappingForTest();
+                       return mapping.has_value() &&
+                              preview.state().activity == ui::PreviewActivity::Ready;
+                   },
+                   kWait),
                "the Viewer shows the composition");
     }
     [[nodiscard]] QPoint at(const double offsetX, const double offsetY) const {
@@ -193,7 +192,10 @@ struct Harness final {
         if (directory.isEmpty())
             return;
         QDir().mkpath(directory);
-        waitUntil([&] { return preview.state().activity == ui::PreviewActivity::Ready; });
+        expect(bloom::test_support::awaitQtCondition(
+                   "the preview is ready",
+                   [&] { return preview.state().activity == ui::PreviewActivity::Ready; }, kWait),
+               "the preview is ready");
         QApplication::processEvents();
         if (!viewer->grab().save(directory + QLatin1Char('/') + name + QStringLiteral("-viewer.png")))
             std::cerr << "could not write " << name.toStdString() << '\n';
@@ -368,7 +370,7 @@ int main(int argc, char** argv) {
     testSplit();
     testOthers();
     testNoHandle();
-    if (failures != 0) {
+    if (failures + bloom::test_support::awaitFailureCount() != 0) {
         std::cerr << failures << " warp handle expectation(s) failed\n";
         return 1;
     }

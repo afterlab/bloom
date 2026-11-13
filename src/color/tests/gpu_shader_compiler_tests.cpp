@@ -1,3 +1,5 @@
+#include "process_probe.hpp"
+
 #include <bloom/color/gpu_shader_compiler.hpp>
 #include <bloom/core/executable_suffix.hpp>
 #include <bloom/core/sha256.hpp>
@@ -259,15 +261,22 @@ void testFakeToolFailures(Expectations& expectations, FixtureDirectory& fixtures
     expectations.expect(invalid.status == GpuShaderCompileStatus::Failed && invalid.failure &&
                             invalid.failure->code == GpuShaderCompileError::ValidationFailed,
                         "a failing spirv-val is a typed validation failure");
-    request = baseRequest(fixtures.tool("hang"), spirvVal);
-    request.limits.deadline = 250ms;
-    const auto start = std::chrono::steady_clock::now();
+    const auto hangTool = fixtures.tool("hang");
+    request = baseRequest(hangTool, spirvVal);
+    // Long enough for the child to start and record its process id on a busy machine.
+    request.limits.deadline = 1000ms;
     const auto timedOut = compiler.compile(request);
-    const auto elapsed = std::chrono::steady_clock::now() - start;
     expectations.expect(timedOut.status == GpuShaderCompileStatus::Failed && timedOut.failure &&
                             timedOut.failure->code == GpuShaderCompileError::Timeout,
                         "a hung child hits the compile deadline");
-    expectations.expect(elapsed < 5s, "a hung child is killed and reaped promptly");
+    // The compile has returned, so the child must already be killed and reaped: its process id no
+    // longer names a process (an unreaped child would still be listed as a zombie).
+    long long hungProcessId = 0;
+    std::ifstream(hangTool + ".pid") >> hungProcessId;
+    expectations.expect(hungProcessId > 0, "the hung child started and recorded its process id");
+    if (hungProcessId > 0)
+        expectations.expect(bloom::test_support::processGone(hungProcessId),
+                            "a hung child is killed and reaped when the compile returns");
     request = baseRequest(fixtures.tool("hang"), spirvVal);
     const auto cancelStart = std::chrono::steady_clock::now();
     const auto cancelled = compiler.compile(request, [cancelStart]() {

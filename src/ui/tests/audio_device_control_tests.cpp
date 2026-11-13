@@ -1,3 +1,4 @@
+#include "await_qt.hpp"
 #include <bloom/ui/audio_device_control.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
@@ -17,23 +18,15 @@
 #include <vector>
 
 namespace {
+// The ceiling for a broken run; a passing wait returns as soon as its condition holds.
+constexpr std::chrono::milliseconds kWait{5000};
+
 using namespace bloom;
 using namespace std::chrono_literals;
 
 void require(const bool value, const char* message) {
     if (!value)
         throw std::runtime_error(message);
-}
-
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    const auto deadline = std::chrono::steady_clock::now() + 5s;
-    while (std::chrono::steady_clock::now() < deadline) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-        if (std::invoke(predicate))
-            return true;
-        std::this_thread::sleep_for(1ms);
-    }
-    return std::invoke(predicate);
 }
 
 struct Gate final {
@@ -94,28 +87,37 @@ void heldStartAndLatestStop() {
         completedPlaying = playing;
     });
     (void)control.requestPlay(core::RationalTime{});
-    require(waitUntil([&] {
-                const std::lock_guard lock(gate->mutex);
-                return gate->entered;
-            }),
+    require(bloom::test_support::awaitQtCondition(
+                "held backend entered worker start",
+                [&] {
+                    const std::lock_guard lock(gate->mutex);
+                    return gate->entered;
+                },
+                kWait),
             "held backend entered worker start");
-    const auto before = std::chrono::steady_clock::now();
     (void)control.requestSeek(core::RationalTime::fromInteger(1));
     const auto stopped = control.requestStop();
-    require(std::chrono::steady_clock::now() - before < 100ms,
-            "held device never blocks UI seek/pause");
+    // Both calls returned while the backend is still held inside start(): they did not wait on it.
+    {
+        const std::lock_guard lock(gate->mutex);
+        require(!gate->open && gate->starts.load() == 1, "held device never blocks UI seek/pause");
+    }
     {
         const std::lock_guard lock(gate->mutex);
         gate->open = true;
     }
     gate->ready.notify_all();
-    require(waitUntil([&] { return completedGeneration == stopped && !completedPlaying; }),
+    require(bloom::test_support::awaitQtCondition(
+                "only newest stop completion is published",
+                [&] { return completedGeneration == stopped && !completedPlaying; }, kWait),
             "only newest stop completion is published");
     require(gate->starts.load() == 1 && !control.isPlaying(),
             "intermediate seek did not start a second device operation");
     require(!gate->stoppedOnUi.load(), "all backend stop calls stayed off UI");
     control.beginShutdown();
-    require(waitUntil([&] { return gate->destroyed.load(std::memory_order_acquire); }),
+    require(bloom::test_support::awaitQtCondition(
+                "terminal task retires held device",
+                [&] { return gate->destroyed.load(std::memory_order_acquire); }, kWait),
             "terminal task retires held device");
     require(control.retirementComplete() && gate->destroyedOn != std::this_thread::get_id(),
             "device destructor ran off the UI thread");
@@ -170,7 +172,9 @@ void heldStopThenPlayIsAudible() {
     buffer->frames = 512;
     buffer->planes = {std::vector<float>(512, 0.75F)};
     (void)control.replaceClips({media::audio::playback::AudioClip{.buffer = buffer}});
-    require(waitUntil([&] { return control.isIdle(); }), "initial clip reached worker");
+    require(bloom::test_support::awaitQtCondition(
+                "initial clip reached worker", [&] { return control.isIdle(); }, kWait),
+            "initial clip reached worker");
     std::uint64_t completed = 0;
     bool playing = false;
     control.setCompletionHandler([&](const std::uint64_t generation, const bool nowPlaying,
@@ -179,7 +183,9 @@ void heldStopThenPlayIsAudible() {
         playing = nowPlaying;
     });
     const auto firstPlay = control.requestPlay(core::RationalTime{});
-    require(waitUntil([&] { return completed == firstPlay && playing; }), "first play started");
+    require(bloom::test_support::awaitQtCondition(
+                "first play started", [&] { return completed == firstPlay && playing; }, kWait),
+            "first play started");
     // Occupy BlockingIo before Stop reaches AudioEngine. The newer Play must capture its token
     // before the older Stop executes, or an extra worker-side generation bump is not tested.
     auto blocker = scheduler.submit<void>(
@@ -206,10 +212,13 @@ void heldStopThenPlayIsAudible() {
         }
     } releaseBlocker{gate};
     require(blocker.accepted(), "independent worker blocker admitted");
-    require(waitUntil([&] {
-                const std::lock_guard lock(gate->mutex);
-                return gate->blockerEntered;
-            }),
+    require(bloom::test_support::awaitQtCondition(
+                "independent blocker occupies the audio worker",
+                [&] {
+                    const std::lock_guard lock(gate->mutex);
+                    return gate->blockerEntered;
+                },
+                kWait),
             "independent blocker occupies the audio worker");
     int stopsBefore = 0;
     {
@@ -223,29 +232,36 @@ void heldStopThenPlayIsAudible() {
         gate->blockerOpen = true;
     }
     gate->ready.notify_all();
-    require(waitUntil([&] { return completed == secondPlay && playing; }),
+    require(bloom::test_support::awaitQtCondition(
+                "newer play completed after queued worker stop",
+                [&] { return completed == secondPlay && playing; }, kWait),
             "newer play completed after queued worker stop");
     {
         const std::lock_guard lock(gate->mutex);
         require(gate->stops >= stopsBefore + 2, "older stop executed before newer play");
     }
-    const bool audible = waitUntil([&] {
-        media::audio::playback::Backend::Callback callback = nullptr;
-        void* userData = nullptr;
-        {
-            const std::lock_guard lock(gate->mutex);
-            if (!gate->started)
-                return false;
-            callback = gate->callback;
-            userData = gate->userData;
-        }
-        std::vector<float> output(256 * 2);
-        callback(userData, output);
-        return std::any_of(output.begin(), output.end(), [](float value) { return value > 0.1F; });
-    });
+    const bool audible = bloom::test_support::awaitQtCondition(
+        "Stop then Play produces output",
+        [&] {
+            media::audio::playback::Backend::Callback callback = nullptr;
+            void* userData = nullptr;
+            {
+                const std::lock_guard lock(gate->mutex);
+                if (!gate->started)
+                    return false;
+                callback = gate->callback;
+                userData = gate->userData;
+            }
+            std::vector<float> output(256 * 2);
+            callback(userData, output);
+            return std::any_of(output.begin(), output.end(),
+                               [](float value) { return value > 0.1F; });
+        },
+        kWait);
     require(audible, "Stop then Play produces nonzero output after worker stop");
     control.beginShutdown();
-    require(waitUntil([&] { return control.retirementComplete(); }),
+    require(bloom::test_support::awaitQtCondition(
+                "held-stop device retires", [&] { return control.retirementComplete(); }, kWait),
             "held-stop device retires");
     control.drainAfterEventLoop();
 }
@@ -297,7 +313,7 @@ int main(int argc, char** argv) try {
     heldStopThenPlayIsAudible();
     closedAdmissionUsesRootFallback();
     stalePlayCannotUnsilence();
-    return 0;
+    return bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 } catch (const std::exception& error) {
     std::cerr << "Audio device control: " << error.what() << '\n';
     return 1;

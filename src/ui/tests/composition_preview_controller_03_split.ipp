@@ -28,13 +28,13 @@ void testDocumentEditRebuildsChangedTargetWhileDisplayedUnchanged(Expectations& 
         "the repair fixture has a solid layer");
     const auto layerId = session.composition()->graph().layerOutputs().front().layerId;
     expectations.expect(session.setCurrentTime(core::RationalTime::fromInteger(1)) &&
-                            waitUntil([&] { return isReady(controller); }),
+                            bloom::test_support::awaitQtCondition("the unaffected time 1 is displayed", [&] { return isReady(controller); }, kWait),
                         "the unaffected time 1 is displayed");
     const auto displayed = controller.state().frame;
     // Gate the t5 request: it is a miss, t5 was never warmed.
     blockNext.store(true);
     expectations.expect(session.setCurrentTime(core::RationalTime::fromInteger(5)) &&
-                            waitUntil([&] { return gate.entered(); }),
+                            bloom::test_support::awaitQtCondition("the t5 request is in flight while t1 is still displayed", [&] { return gate.entered(); }, kWait),
                         "the t5 request is in flight while t1 is still displayed");
     expectations.expect(controller.state().frame == displayed,
                         "the last-good frame is still the unaffected t1");
@@ -45,11 +45,11 @@ void testDocumentEditRebuildsChangedTargetWhileDisplayedUnchanged(Expectations& 
     expectations.expect(session.executeTransaction(std::move(trim)).changed(),
                         "the trim changes t5 but not t1");
     gate.release();
-    expectations.expect(waitUntil([&] {
+    expectations.expect(bloom::test_support::awaitQtCondition("the viewer reaches Ready at the actual target t5", [&] {
                             return isReady(controller) && controller.state().frame != nullptr &&
                                    controller.state().frame->desiredIdentity().time ==
                                        core::RationalTime::fromInteger(5);
-                        }),
+                        }, kWait),
                         "the viewer reaches Ready at the actual target t5");
     const auto frame = controller.state().frame;
     expectations.expect(frame->desiredIdentity().sourceRevision == session.snapshot().revision(),
@@ -118,7 +118,7 @@ void testSplitReusesBothHalvesWithCurrentLayerMetadata(Expectations& expectation
                         "key the foreground at time 8");
     const auto warm = [&](const std::int64_t second) {
         return session.setCurrentTime(core::RationalTime::fromInteger(second)) &&
-               waitUntil([&] { return isReady(controller); });
+               bloom::test_support::awaitQtCondition("the preview is ready", [&] { return isReady(controller); }, kWait);
     };
     expectations.expect(warm(2) && warm(5) && warm(2), "times 2 and 5 warm");
     const auto warmed = preparations.load();
@@ -207,7 +207,7 @@ void testSplitReusesBothHalvesWithCurrentLayerMetadata(Expectations& expectation
 
     // The tail half is served from cache (no preparation) with geometry translated to the new tail.
     expectations.expect(session.setCurrentTime(core::RationalTime::fromInteger(5)) &&
-                            waitUntil([&] { return isReady(controller); }),
+                            bloom::test_support::awaitQtCondition("the tail time reaches ready", [&] { return isReady(controller); }, kWait),
                         "the tail time reaches ready");
     expectations.expect(preparations.load() == warmed,
                         "the tail half is served from cache with no preparation");
@@ -299,7 +299,7 @@ void testSplitAfterLayoutEditMapsRetainedSource(Expectations& expectations) {
         "the fixture has a layer");
     const auto boundary = session.composition()->graph().layerOutputs().back();
     expectations.expect(session.setCurrentTime(core::RationalTime::fromInteger(5)) &&
-                            waitUntil([&] { return isReady(controller); }),
+                            bloom::test_support::awaitQtCondition("the tail time is warmed", [&] { return isReady(controller); }, kWait),
                         "the tail time is warmed");
     // A layout edit retains the source snapshot (render-neutral).
     const auto nodeId = session.composition()->graph().nodes().front().id;
@@ -395,7 +395,7 @@ void testMixedFiniteExtendAndSplitLeavesLiveIntervalUnmapped(Expectations& expec
     // Warm t=9.5 with the ACTUAL live B active there.
     const auto nineAndHalf = core::RationalTime::create(19, 2);
     expectations.expect(nineAndHalf.has_value() && session.setCurrentTime(*nineAndHalf) &&
-                            waitUntil([&] { return isReady(controller); }),
+                            bloom::test_support::awaitQtCondition("t9.5 warms with the live tail", [&] { return isReady(controller); }, kWait),
                         "t9.5 warms with the live tail");
     if (!nineAndHalf.has_value()) {
         return;

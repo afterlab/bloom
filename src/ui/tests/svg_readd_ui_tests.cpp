@@ -10,6 +10,7 @@
 
 #include "asset_drop.hpp"
 #include "assets_editor_internal.hpp"
+#include "await_qt.hpp"
 #include "layer_drop.hpp"
 #include "node_editor_items.hpp"
 
@@ -59,20 +60,15 @@
 #include <stdexcept>
 
 namespace {
+// The ceiling for a broken run; a passing wait returns as soon as its condition holds.
+constexpr std::chrono::milliseconds kWait{20000};
+
 using namespace bloom;
 
 void require(const bool ok, const char* message) {
     if (!ok)
         throw std::runtime_error(message);
 }
-template <typename Predicate> bool waitUntil(Predicate predicate, const int timeoutMs = 20000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < timeoutMs)
-        QTest::qWait(5);
-    return predicate();
-}
-
 constexpr auto kFirst = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100">
 <rect id="box" x="10" y="10" width="80" height="60" fill="#cc3333"/>
 <path id="ring" fill="#336699" fill-rule="evenodd" d="M110 10H190V90H110Z M130 30H170V70H130Z"/></svg>
@@ -108,7 +104,9 @@ struct Harness final {
     }
     ~Harness() {
         session.setAssetController(nullptr);
-        waitUntil([this] { return !controller.busy(); });
+        if (!bloom::test_support::awaitQtCondition(
+                "the controller settles at teardown", [this] { return !controller.busy(); }, kWait))
+            std::cerr << "FAIL: the controller did not settle at teardown\n";
     }
     [[nodiscard]] const document::Composition& composition() const {
         return *session.snapshot().project().findComposition(session.compositionId());
@@ -136,10 +134,17 @@ struct Harness final {
             [mode](std::size_t) { return std::optional<commands::SvgImportMode>(mode); });
         const auto before = assets();
         controller.importFiles({path});
-        require(waitUntil([&] { return !controller.busy() && assets() > before; }), "the SVG imports");
+        require(
+            bloom::test_support::awaitQtCondition(
+                "the SVG imports", [&] { return !controller.busy() && assets() > before; }, kWait),
+            "the SVG imports");
         return assetNamed(QFileInfo(path).fileName());
     }
-    void settle() { require(waitUntil([&] { return !controller.busy(); }), "the controller settles"); }
+    void settle() {
+        require(bloom::test_support::awaitQtCondition(
+                    "the controller settles", [&] { return !controller.busy(); }, kWait),
+                "the controller settles");
+    }
 };
 
 void rememberChoice(const ui::SvgImportChoice choice) {
@@ -225,8 +230,12 @@ int main(int argc, char** argv) {
             });
             std::size_t committed = 0;
             harness.controller.addToComposition({a, b}, {}, [&](const commands::CommandResult&) { ++committed; });
-            require(waitUntil([&] { return !harness.controller.busy() && harness.layers() > layersBefore; }),
-                    "the add commits");
+            require(
+                bloom::test_support::awaitQtCondition(
+                    "the add commits",
+                    [&] { return !harness.controller.busy() && harness.layers() > layersBefore; },
+                    kWait),
+                "the add commits");
             require(asked == std::vector<std::size_t>{2}, "the chooser is asked once, for the two SVG assets");
             require(committed == 1 && harness.layers() == layersBefore + 2, "two layers join, in one commit");
             require(harness.assets() == assetsBefore, "no second Assets record");
@@ -253,7 +262,12 @@ int main(int argc, char** argv) {
             });
             const auto before = harness.count(kPathNodes);
             harness.controller.addToComposition({a}, {}, {});
-            require(waitUntil([&] { return !harness.controller.busy() && harness.count(kPathNodes) > before; }),
+            require(bloom::test_support::awaitQtCondition(
+                        "the remembered mode builds the shapes without a prompt",
+                        [&] {
+                            return !harness.controller.busy() && harness.count(kPathNodes) > before;
+                        },
+                        kWait),
                     "the remembered mode builds the shapes without a prompt");
             QSettings().clear();
         }
@@ -294,7 +308,10 @@ int main(int argc, char** argv) {
             harness.controller.setSvgImportChooserForTesting(
                 [](std::size_t) { return std::optional(commands::SvgImportMode::Shapes); });
             harness.controller.addToComposition({held}, {}, {});
-            require(waitUntil([&] { return !harness.controller.busy() && harness.layers() > before; }),
+            require(bloom::test_support::awaitQtCondition(
+                        "an SVG the project holds adds with its file gone",
+                        [&] { return !harness.controller.busy() && harness.layers() > before; },
+                        kWait),
                     "an SVG the project holds adds with its file gone");
             const auto afterHeld = harness.layers();
             harness.diagnostics.clear();
@@ -334,7 +351,10 @@ int main(int argc, char** argv) {
             mime.setData(ui::kAssetMimeType, ui::assetMimePayload(harness.session, a));
             const auto layersBefore = harness.layers();
             require(dropOn(target, mime, QPoint(5, 5)), "the drop is accepted");
-            const bool grew = waitUntil([&] { return !harness.controller.busy() && harness.layers() > layersBefore; });
+            const bool grew = bloom::test_support::awaitQtCondition(
+                "the drop adds a layer",
+                [&] { return !harness.controller.busy() && harness.layers() > layersBefore; },
+                kWait);
             require(grew, "the drop adds the artwork");
             require(harness.count(document::kVectorArtworkNodeType) == 2 && harness.count("bloom.image-source") == 0,
                     "the dropped SVG is artwork, not an image layer");
@@ -358,8 +378,12 @@ int main(int argc, char** argv) {
             placement.stack = commands::LayerDropPlacement::Stack::Bottom;
             placement.start = core::RationalTime::fromInteger(2);
             harness.controller.importFiles({first}, harness.controller.importFolder(), {}, {}, placement);
-            require(waitUntil([&] { return !harness.controller.busy() && harness.layers() > layersBefore; }),
-                    "the dropped file imports");
+            require(
+                bloom::test_support::awaitQtCondition(
+                    "the dropped file imports",
+                    [&] { return !harness.controller.busy() && harness.layers() > layersBefore; },
+                    kWait),
+                "the dropped file imports");
             const auto entries = harness.composition().graph().layerStack().entries();
             const auto* added = harness.composition().graph().findLayer(entries.back().layerId);
             require(added != nullptr && added->inPoint == core::RationalTime::fromInteger(2),
@@ -384,8 +408,13 @@ int main(int argc, char** argv) {
             const auto nodesBefore = harness.composition().graph().nodes().size();
             const auto layersBefore = harness.layers();
             require(dropOn(widget, mime, QPoint(30, 40)), "the node drop is accepted");
-            require(waitUntil([&] { return !harness.controller.busy() &&
-                                           harness.composition().graph().nodes().size() > nodesBefore; }),
+            require(bloom::test_support::awaitQtCondition(
+                        "the node drop adds nodes",
+                        [&] {
+                            return !harness.controller.busy() &&
+                                   harness.composition().graph().nodes().size() > nodesBefore;
+                        },
+                        kWait),
                     "the node drop adds nodes");
             require(harness.count("bloom.image-source") == 0, "never an image node");
             if (mode == commands::SvgImportMode::Layer)
@@ -423,8 +452,12 @@ int main(int argc, char** argv) {
             const auto layersBefore = harness.layers();
             auto names = contextMenu(*tree, at(), QStringLiteral("assetsAddToCompositionAction"));
             require(names.contains(QStringLiteral("assetsAddToCompositionAction")), "the menu offers Add to Composition");
-            require(waitUntil([&] { return !harness.controller.busy() && harness.layers() > layersBefore; }),
-                    "Add to Composition builds the artwork");
+            require(
+                bloom::test_support::awaitQtCondition(
+                    "Add to Composition builds the artwork",
+                    [&] { return !harness.controller.busy() && harness.layers() > layersBefore; },
+                    kWait),
+                "Add to Composition builds the artwork");
             require(harness.count(document::kVectorArtworkNodeType) == 2 && harness.count("bloom.image-source") == 0 &&
                         harness.assets() == 1,
                     "it is artwork on the existing record");
@@ -433,8 +466,14 @@ int main(int argc, char** argv) {
             const auto compositions = harness.session.snapshot().project().compositions().size();
             row = findRow(*tree, QStringLiteral("one.svg"));
             (void)contextMenu(*tree, at(), QStringLiteral("assetsNewCompositionFromSelectionAction"));
-            require(waitUntil([&] { return !harness.controller.busy() &&
-                                           harness.session.snapshot().project().compositions().size() > compositions; }),
+            require(bloom::test_support::awaitQtCondition(
+                        "New Composition from Selection builds a composition",
+                        [&] {
+                            return !harness.controller.busy() &&
+                                   harness.session.snapshot().project().compositions().size() >
+                                       compositions;
+                        },
+                        kWait),
                     "New Composition from Selection builds a composition");
             require(harness.count(document::kVectorArtworkNodeType) == 1 && harness.count("bloom.image-source") == 0 &&
                         harness.session.composition()->format().width() == 200,
@@ -531,5 +570,5 @@ int main(int argc, char** argv) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;
     }
-    return 0;
+    return bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

@@ -40,7 +40,7 @@ void testGroupCommandsRetainEvaluationWork(Expectations& expectations) {
             return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, interactionOverride,
                             context);
         });
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("the initial frame is ready and warm in the cache", [&] { return isReady(controller); }, kWait),
                         "the initial frame is ready and warm in the cache");
     const auto evalRevision = session.evaluationSnapshot().revision();
     const auto frameBefore = controller.state().frame;

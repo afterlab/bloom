@@ -1,3 +1,5 @@
+#include "await_qt.hpp"
+
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
@@ -52,6 +54,8 @@
 #include <vector>
 
 namespace {
+// The ceiling for a broken run; a passing wait returns as soon as its condition holds.
+constexpr std::chrono::milliseconds kWait{4000};
 
 using namespace std::chrono_literals;
 using PipelineResult = bloom::runtime::TaskResult<bloom::ui::PreviewPreparationResultHandle>;
@@ -99,20 +103,6 @@ class WorkerGate final {
     bool entered_ = false;
     bool released_ = false;
 };
-
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 4'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (std::invoke(predicate)) {
-            return true;
-        }
-        std::this_thread::yield();
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return std::invoke(predicate);
-}
 
 bloom::runtime::TaskSchedulerConfig testSchedulerConfig() {
     return {.cpuWorkerCount = 1,
@@ -200,7 +190,9 @@ void reachQuiescence(bloom::ui::CompositionPreviewController& controller,
                      [&quiescentSignal] { quiescentSignal = true; });
     controller.beginShutdown();
     bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return quiescentSignal && scheduler.isQuiescent(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "preview fixture reaches asynchronous scheduler quiescence",
+                            [&] { return quiescentSignal && scheduler.isQuiescent(); }, kWait),
                         "preview fixture reaches asynchronous scheduler quiescence");
 }
 
@@ -232,8 +224,10 @@ void testRevisionAndPanelSuppression(Expectations& expectations) {
         });
     auto* viewer = new ui::ViewerEditor(session, controller);
 
-    expectations.expect(waitUntil([&] { return firstRequest.entered(); }),
-                        "first revision starts on the worker");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "first revision starts on the worker", [&] { return firstRequest.entered(); }, kWait),
+        "first revision starts on the worker");
     const auto oldGeneration = generation(controller.state());
     std::vector<std::uint64_t> publishedReadyGenerations;
     QObject::connect(&controller, &ui::CompositionPreviewController::stateChanged, &controller,
@@ -254,7 +248,9 @@ void testRevisionAndPanelSuppression(Expectations& expectations) {
 
     delete viewer;
     firstRequest.release();
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "current revision becomes ready after the replaced Viewer is destroyed",
+                            [&] { return isReady(controller); }, kWait),
                         "current revision becomes ready after the replaced Viewer is destroyed");
     expectations.expect(controller.state().desiredIdentity.has_value() &&
                             controller.state().desiredIdentity->sourceRevision ==
@@ -314,7 +310,9 @@ void testNewestPendingRequestGate(Expectations& expectations) {
             return result;
         });
 
-    expectations.expect(waitUntil([&] { return firstRequest.entered(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "the active preview enters preparation before the request storm",
+                            [&] { return firstRequest.entered(); }, kWait),
                         "the active preview enters preparation before the request storm");
     const auto activeGeneration = generation(controller.state());
     std::vector<std::uint64_t> requestedGenerations;
@@ -340,8 +338,11 @@ void testNewestPendingRequestGate(Expectations& expectations) {
     }
 
     firstRequest.release();
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
-                        "the newest pending preview starts after the active task reaches terminal");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "the newest pending preview starts after the active task reaches terminal",
+            [&] { return isReady(controller); }, kWait),
+        "the newest pending preview starts after the active task reaches terminal");
     {
         std::scoped_lock lock(invocationMutex);
         expectations.expect(invokedGenerations == std::vector{activeGeneration, newestGeneration},
@@ -402,7 +403,9 @@ void testInteractiveCadenceCoalescesBurstAndVisibleBypasses(Expectations& expect
         },
         settings);
 
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "initial frame becomes ready before the cadence burst",
+                            [&] { return isReady(controller); }, kWait),
                         "initial frame becomes ready before the cadence burst");
     const auto callsBeforeBurst = invocationCount.load();
 
@@ -428,7 +431,9 @@ void testInteractiveCadenceCoalescesBurstAndVisibleBypasses(Expectations& expect
     expectations.expect(invocationCount.load() <= callsBeforeBurst + 1,
                         "the newest updates coalesce behind the first active request");
 
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "the coalesced newest Interactive request completes",
+                            [&] { return isReady(controller); }, kWait),
                         "the coalesced newest Interactive request completes");
     expectations.expect(invocationCount.load() >= callsBeforeBurst + 1 &&
                             invocationCount.load() <= callsBeforeBurst + 2,
@@ -443,7 +448,9 @@ void testInteractiveCadenceCoalescesBurstAndVisibleBypasses(Expectations& expect
     const auto callsBeforeVisible = invocationCount.load();
     controller.requestRefresh();
     const auto visibleGeneration = generation(controller.state());
-    expectations.expect(waitUntil([&] { return invocationCount.load() > callsBeforeVisible; }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "a Visible request submits without waiting for any cadence window",
+                            [&] { return invocationCount.load() > callsBeforeVisible; }, kWait),
                         "a Visible request submits without waiting for any cadence window");
     const auto visibleSnapshot = snapshotForGeneration(scheduler, visibleGeneration);
     expectations.expect(visibleSnapshot.has_value() &&
@@ -472,7 +479,9 @@ void testDroppedFrameCountingIsArmedAndHonest(Expectations& expectations) {
     ui::CompositionPreviewController controller(session, scheduler, bridge, fixture.pipeline,
                                                 settings);
 
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "the dropped-frame fixture reaches its first ready frame",
+                            [&] { return isReady(controller); }, kWait),
                         "the dropped-frame fixture reaches its first ready frame");
 
     // Disarmed: a burst that definitely coalesces counts nothing, because nothing has claimed to be
@@ -491,8 +500,10 @@ void testDroppedFrameCountingIsArmedAndHonest(Expectations& expectations) {
                         "a coalesced burst counts nothing while counting is disarmed, so a surface "
                         "can never show a figure nobody asked for");
     controller.notifyScrubEnded();
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
-                        "the disarmed burst completes");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "the disarmed burst completes", [&] { return isReady(controller); }, kWait),
+        "the disarmed burst completes");
 
     // Armed: the same burst now counts every request the cadence window discarded. Five distinct
     // times produce one submitted request and four supersessions.
@@ -515,7 +526,9 @@ void testDroppedFrameCountingIsArmedAndHonest(Expectations& expectations) {
     expectations.expect(countChangedSignals > 1,
                         "and announces each one, so a footer never has to poll");
     controller.notifyScrubEnded();
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "the armed burst's newest request still completes",
+                            [&] { return isReady(controller); }, kWait),
                         "the armed burst's newest request still completes");
     const auto burstCount = controller.droppedFrameCount();
 
@@ -526,7 +539,9 @@ void testDroppedFrameCountingIsArmedAndHonest(Expectations& expectations) {
                             controller.droppedFrameCount() == burstCount,
                         "disarming stops counting but keeps the finished run's total");
     controller.requestRefresh();
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "a later request still completes after disarming",
+                            [&] { return isReady(controller); }, kWait),
                         "a later request still completes after disarming");
     expectations.expect(controller.droppedFrameCount() == burstCount,
                         "and nothing after the run can change its figure");
@@ -550,8 +565,9 @@ void testActiveGateHoldsAndScrubEndBypassesRemainingCadence(Expectations& expect
     WorkerGate firstRequest;
     std::atomic<int> invocationCount = 0;
     ui::CompositionPreviewSettings settings;
-    // A long cadence window proves notifyScrubEnded() bypasses it rather than merely outlasting it.
-    settings.interactiveTrailingCadence = 2000ms;
+    // A cadence window no test run can outlast: a flush that happens at all came from
+    // notifyScrubEnded() bypassing it, so no elapsed time is measured.
+    settings.interactiveTrailingCadence = std::chrono::hours{1};
     ui::CompositionPreviewController controller(
         session, scheduler, bridge,
         [&firstRequest, &invocationCount, pipeline = fixture.pipeline](
@@ -568,7 +584,9 @@ void testActiveGateHoldsAndScrubEndBypassesRemainingCadence(Expectations& expect
         },
         settings);
 
-    expectations.expect(waitUntil([&] { return firstRequest.entered(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "the initial Visible request occupies the active-request gate",
+                            [&] { return firstRequest.entered(); }, kWait),
                         "the initial Visible request occupies the active-request gate");
 
     controller.beginInteractiveScrub();
@@ -590,8 +608,11 @@ void testActiveGateHoldsAndScrubEndBypassesRemainingCadence(Expectations& expect
                         "the newest pending Interactive request is not yet submitted");
 
     firstRequest.release();
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
-                        "the pending Interactive request submits once the active task terminates");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "the pending Interactive request submits once the active task terminates",
+            [&] { return isReady(controller); }, kWait),
+        "the pending Interactive request submits once the active task terminates");
     expectations.expect(invocationCount.load() == 2,
                         "the superseded active request ran to terminal before the pending request "
                         "submitted, and only the newest pending request was ever prepared");
@@ -607,15 +628,13 @@ void testActiveGateHoldsAndScrubEndBypassesRemainingCadence(Expectations& expect
     expectations.expect(secondTime.has_value() && session.setCurrentTime(*secondTime),
                         "a fresh post-gate scrub time is accepted");
     expectations.expect(invocationCount.load() == callsBeforeSecondScrub,
-                        "the fresh Interactive request is held by the 2 second cadence, not yet "
+                        "the fresh Interactive request is held by the cadence, not yet "
                         "submitted");
-    QElapsedTimer bypassTimer;
-    bypassTimer.start();
     controller.notifyScrubEnded();
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "notifyScrubEnded() flushes the pending Interactive request",
+                            [&] { return isReady(controller); }, kWait),
                         "notifyScrubEnded() flushes the pending Interactive request");
-    expectations.expect(bypassTimer.elapsed() < 1000,
-                        "the flush happens immediately, far under the 2 second cadence window");
     expectations.expect(invocationCount.load() == callsBeforeSecondScrub + 1,
                         "exactly one additional preparation call services the bypassed request");
 
@@ -646,7 +665,9 @@ void testSameRevisionGenerationAndSelection(Expectations& expectations) {
                             context);
         });
 
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "initial same-revision frame becomes ready",
+                            [&] { return isReady(controller); }, kWait),
                         "initial same-revision frame becomes ready");
     const auto halfway = core::RationalTime::create(1, 2);
     if (!halfway.has_value()) {
@@ -662,7 +683,9 @@ void testSameRevisionGenerationAndSelection(Expectations& expectations) {
                             controller.state().desiredIdentity->time == *halfway &&
                             session.snapshot().revision() == revisionBeforeTime,
                         "session time advances preview intent without dirtying the document");
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "the exact session time reaches the prepared frame",
+                            [&] { return isReady(controller); }, kWait),
                         "the exact session time reaches the prepared frame");
     const auto callsAfterTime = invocationCount.load();
     const auto generationAfterTime = generation(controller.state());
@@ -690,7 +713,9 @@ void testSameRevisionGenerationAndSelection(Expectations& expectations) {
                             controller.state().freshness == ui::FrameFreshness::Stale &&
                             controller.state().frame == firstFrame,
                         "same-revision refresh marks the retained frame stale");
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "replacement same-revision generation completes",
+                            [&] { return isReady(controller); }, kWait),
                         "replacement same-revision generation completes");
     expectations.expect(generation(controller.state()) == secondGeneration &&
                             controller.state().freshness == ui::FrameFreshness::Current,
@@ -773,8 +798,10 @@ void testLastGoodAndOutcomeMapping(Expectations& expectations) {
                                            .suggestedAction = {}});
         });
 
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
-                        "initial prepared frame becomes current");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "initial prepared frame becomes current", [&] { return isReady(controller); }, kWait),
+        "initial prepared frame becomes current");
     const auto lastGood = controller.state().frame;
     expectations.expect(lastGood != nullptr &&
                             controller.state().freshness == ui::FrameFreshness::Current,
@@ -788,19 +815,25 @@ void testLastGoodAndOutcomeMapping(Expectations& expectations) {
 
     outcome.store(Outcome::SlowFailed);
     controller.requestRefresh();
-    expectations.expect(waitUntil([&] { return slowFailure.entered(); }),
-                        "slow replacement enters worker code");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "slow replacement enters worker code", [&] { return slowFailure.entered(); }, kWait),
+        "slow replacement enters worker code");
     expectations.expect(controller.state().activity == ui::PreviewActivity::Rendering &&
                             controller.state().freshness == ui::FrameFreshness::Stale &&
                             controller.state().frame == lastGood,
                         "Rendering retains and visibly marks the previous frame stale");
     bool heartbeat = false;
     QTimer::singleShot(0, &controller, [&heartbeat] { heartbeat = true; });
-    expectations.expect(waitUntil([&] { return heartbeat; }),
+    expectations.expect(bloom::test_support::awaitQtCondition(
+                            "Qt event loop remains responsive while evaluation is blocked",
+                            [&] { return heartbeat; }, kWait),
                         "Qt event loop remains responsive while evaluation is blocked");
     slowFailure.release();
     expectations.expect(
-        waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Failed; }),
+        bloom::test_support::awaitQtCondition(
+            "slow failure reaches a terminal state",
+            [&] { return controller.state().activity == ui::PreviewActivity::Failed; }, kWait),
         "slow failure reaches a terminal state");
     expectations.expect(controller.state().frame == lastGood &&
                             controller.state().freshness == ui::FrameFreshness::Stale &&
@@ -810,7 +843,9 @@ void testLastGoodAndOutcomeMapping(Expectations& expectations) {
     outcome.store(Outcome::Unsupported);
     controller.requestRefresh();
     expectations.expect(
-        waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Unsupported; }),
+        bloom::test_support::awaitQtCondition(
+            "semantic rejection maps to Unsupported",
+            [&] { return controller.state().activity == ui::PreviewActivity::Unsupported; }, kWait),
         "semantic rejection maps to Unsupported");
     expectations.expect(controller.state().frame == lastGood &&
                             controller.state().freshness == ui::FrameFreshness::Stale,
@@ -819,7 +854,9 @@ void testLastGoodAndOutcomeMapping(Expectations& expectations) {
     outcome.store(Outcome::Cancelled);
     controller.requestRefresh();
     expectations.expect(
-        waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Cancelled; }),
+        bloom::test_support::awaitQtCondition(
+            "task cancellation maps to Cancelled",
+            [&] { return controller.state().activity == ui::PreviewActivity::Cancelled; }, kWait),
         "task cancellation maps to Cancelled");
     expectations.expect(controller.state().frame == lastGood &&
                             controller.state().freshness == ui::FrameFreshness::Stale,
@@ -828,7 +865,9 @@ void testLastGoodAndOutcomeMapping(Expectations& expectations) {
     outcome.store(Outcome::Mismatch);
     controller.requestRefresh();
     expectations.expect(
-        waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Failed; }),
+        bloom::test_support::awaitQtCondition(
+            "mismatched successful frame is rejected",
+            [&] { return controller.state().activity == ui::PreviewActivity::Failed; }, kWait),
         "mismatched successful frame is rejected");
     expectations.expect(
         controller.state().frame == lastGood &&
@@ -837,8 +876,10 @@ void testLastGoodAndOutcomeMapping(Expectations& expectations) {
 
     outcome.store(Outcome::Prepared);
     controller.requestRefresh();
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
-                        "a later valid request recovers Ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "a later valid request recovers Ready", [&] { return isReady(controller); }, kWait),
+        "a later valid request recovers Ready");
     expectations.expect(controller.state().frame != lastGood &&
                             controller.state().freshness == ui::FrameFreshness::Current,
                         "recovery atomically replaces the retained frame");
@@ -861,8 +902,10 @@ void testCompositionSwitchClearsPixels(Expectations& expectations) {
     PipelineFixture fixture;
     ui::CompositionPreviewController controller(session, scheduler, bridge, fixture.pipeline);
 
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
-                        "first composition frame becomes ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "first composition frame becomes ready", [&] { return isReady(controller); }, kWait),
+        "first composition frame becomes ready");
     const auto firstFrame = controller.state().frame;
     const auto nonzeroTime = core::RationalTime::create(3, 2);
     expectations.expect(nonzeroTime.has_value() && session.setCurrentTime(*nonzeroTime),
@@ -877,8 +920,10 @@ void testCompositionSwitchClearsPixels(Expectations& expectations) {
                             controller.state().desiredIdentity->time ==
                                 core::RationalTime::fromInteger(0),
                         "composition switch resets time and clears pixels in one preview intent");
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
-                        "second composition frame becomes ready");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "second composition frame becomes ready", [&] { return isReady(controller); }, kWait),
+        "second composition frame becomes ready");
     expectations.expect(controller.state().frame != firstFrame &&
                             controller.state().frame->desiredIdentity().compositionId ==
                                 secondCompositionId,
@@ -919,7 +964,9 @@ void testQualifiedDisplayReadinessAndFailClosed(Expectations& expectations) {
         ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline);
 
         expectations.expect(
-            waitUntil([&] { return isReady(controller); }),
+            bloom::test_support::awaitQtCondition(
+                "an initial frame becomes ready before the qualified processor is built",
+                [&] { return isReady(controller); }, kWait),
             "an initial frame becomes ready before the qualified processor is built");
         expectations.expect(controller.state().frame != nullptr &&
                                 !controller.state().frame->isOcioQualified(),
@@ -949,10 +996,14 @@ void testQualifiedDisplayReadinessAndFailClosed(Expectations& expectations) {
         }
 
         controller.requestRefresh();
-        expectations.expect(waitUntil([&] {
-                                return controller.state().activity == ui::PreviewActivity::Ready &&
-                                       controller.state().frame != referenceFrame;
-                            }),
+        expectations.expect(bloom::test_support::awaitQtCondition(
+                                "a request after readiness produces a new frame",
+                                [&] {
+                                    return controller.state().activity ==
+                                               ui::PreviewActivity::Ready &&
+                                           controller.state().frame != referenceFrame;
+                                },
+                                kWait),
                             "a request after readiness produces a new frame");
         const auto qualifiedFrame = controller.state().frame;
         expectations.expect(qualifiedFrame != nullptr && qualifiedFrame->isOcioQualified(),
@@ -976,7 +1027,9 @@ void testQualifiedDisplayReadinessAndFailClosed(Expectations& expectations) {
                             "a newly-submitted request immediately marks the retained qualified "
                             "frame stale rather than discarding it");
         expectations.expect(
-            waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Ready; }),
+            bloom::test_support::awaitQtCondition(
+                "the superseding request itself reaches Ready",
+                [&] { return controller.state().activity == ui::PreviewActivity::Ready; }, kWait),
             "the superseding request itself reaches Ready");
         expectations.expect(controller.state().frame->isOcioQualified() &&
                                 controller.state().freshness == ui::FrameFreshness::Current,
@@ -1008,8 +1061,11 @@ void testQualifiedDisplayReadinessAndFailClosed(Expectations& expectations) {
                                                            qualifiedProvider);
         ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline);
 
-        expectations.expect(waitUntil([&] { return isReady(controller); }),
-                            "the honest startup window still produces a reference-labeled frame");
+        expectations.expect(
+            bloom::test_support::awaitQtCondition(
+                "the honest startup window still produces a reference-labeled frame",
+                [&] { return isReady(controller); }, kWait),
+            "the honest startup window still produces a reference-labeled frame");
         const auto lastGood = controller.state().frame;
         expectations.expect(lastGood != nullptr && !lastGood->isOcioQualified(),
                             "the retained last-good frame is reference-labeled");
@@ -1033,7 +1089,9 @@ void testQualifiedDisplayReadinessAndFailClosed(Expectations& expectations) {
 
         controller.requestRefresh();
         expectations.expect(
-            waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Failed; }),
+            bloom::test_support::awaitQtCondition(
+                "a request after a forced qualification failure reaches Failed",
+                [&] { return controller.state().activity == ui::PreviewActivity::Failed; }, kWait),
             "a request after a forced qualification failure reaches Failed");
         expectations.expect(controller.state().frame == lastGood &&
                                 controller.state().freshness == ui::FrameFreshness::Stale &&
@@ -1047,7 +1105,9 @@ void testQualifiedDisplayReadinessAndFailClosed(Expectations& expectations) {
         // it stays Failed with the exact same retained frame.
         controller.requestRefresh();
         expectations.expect(
-            waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Failed; }),
+            bloom::test_support::awaitQtCondition(
+                "a subsequent request after the forced failure also reaches Failed",
+                [&] { return controller.state().activity == ui::PreviewActivity::Failed; }, kWait),
             "a subsequent request after the forced failure also reaches Failed");
         expectations.expect(controller.state().frame == lastGood,
                             "no later request silently substitutes a fresh reference frame");
@@ -1143,15 +1203,19 @@ void testProxyPipelineUsesRoundedExtent(Expectations& expectations) {
     PipelineFixture pipeline;
     ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline.pipeline);
     controller.setDisplayedCompositionScale(0.25);
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
-                        "Quarter passes through the real pipeline");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "Quarter passes through the real pipeline", [&] { return isReady(controller); }, kWait),
+        "Quarter passes through the real pipeline");
     const auto view = controller.state().frame->displayBufferView();
     expectations.expect(view.has_value() && view->displayWindow.extent().width() == 1 &&
                             view->displayWindow.extent().height() == 1,
                         "4x3 rounds Quarter up to a nonempty 1x1 display buffer");
     controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
-                        "Half passes through the real pipeline");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition(
+            "Half passes through the real pipeline", [&] { return isReady(controller); }, kWait),
+        "Half passes through the real pipeline");
     const auto half = controller.state().frame->displayBufferView();
     expectations.expect(half.has_value() && half->displayWindow.extent().width() == 2 &&
                             half->displayWindow.extent().height() == 2,
@@ -1233,5 +1297,5 @@ int main(int argc, char** argv) {
         std::cerr << "unexpected exception: " << error.what() << '\n';
         return 1;
     }
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

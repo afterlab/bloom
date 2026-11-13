@@ -248,13 +248,21 @@ void FakeExportRunBackend::setDestinationCheckDelay(const std::chrono::milliseco
     checkDelayChanged_.notify_all();
 }
 
+std::size_t FakeExportRunBackend::waitingDestinationChecks() const {
+    const std::scoped_lock lock(mutex_);
+    return waitingChecks_;
+}
+
 ExportDestinationSample
 FakeExportRunBackend::sampleDestination(const ExportDestinationSampleRequest& request) {
     {
         std::unique_lock lock(mutex_);
         const auto delay = checkDelay_;
-        if (delay.count() > 0)
+        if (delay.count() > 0) {
+            ++waitingChecks_;
             checkDelayChanged_.wait_for(lock, delay, [&] { return checkDelay_.count() == 0; });
+            --waitingChecks_;
+        }
     }
     ExportDestinationSample sample;
     sample.firstPath = request.firstPath;

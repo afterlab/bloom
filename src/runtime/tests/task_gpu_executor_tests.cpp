@@ -641,11 +641,13 @@ void testDeviceLossRecoveryAndShutdown(Expectations& expectations) {
                                      shutdownToken.emplace(std::move(completion));
                                  });
     static_cast<void>(recovered.lease.dispatchOne());
-    const auto started = std::chrono::steady_clock::now();
     scheduler.beginShutdown();
-    const auto elapsed = std::chrono::steady_clock::now() - started;
-    expectations.expect(elapsed < 250ms && required(shutdownToken).cancellationRequested(),
-                        "beginShutdown is non-blocking and signals live GPU work");
+    // The completion token is still held, so the GPU task is still Running: returning at all
+    // proves beginShutdown did not wait for it.
+    expectations.expect(
+        shutdownToken.has_value() && required(shutdownToken).cancellationRequested() &&
+            !liveShutdown.handle.tryTakeResult().has_value() && !scheduler.isQuiescent(),
+        "beginShutdown is non-blocking and signals live GPU work");
     expectations.expect(recovered.lease.forceShutdownFallback(),
                         "service lag is bounded by an explicit shutdown fallback");
     const auto shutdownResult = liveShutdown.handle.tryTakeResult();

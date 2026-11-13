@@ -48,7 +48,7 @@ void testReachabilityProvenEditsKeepFrames(Expectations& expectations) {
                         "the clip is finite [4,8)");
     const auto warm = [&](const std::int64_t seconds) {
         static_cast<void>(session.setCurrentTime(core::RationalTime::fromInteger(seconds)));
-        return waitUntil([&] { return isReady(controller); });
+        return bloom::test_support::awaitQtCondition("the preview is ready", [&] { return isReady(controller); }, kWait);
     };
     expectations.expect(warm(1) && warm(5) && warm(9) && warm(1), "times 1, 5, 9 warm");
     const auto warmed = preparations.load();
@@ -146,11 +146,11 @@ void testCompositionSwitchRetainsUnaffectedCache(Expectations& expectations) {
     const auto second = *copy;
     const auto warm = [&](const std::int64_t seconds) {
         static_cast<void>(session.setCurrentTime(core::RationalTime::fromInteger(seconds)));
-        return waitUntil([&] { return isReady(controller); });
+        return bloom::test_support::awaitQtCondition("the preview is ready", [&] { return isReady(controller); }, kWait);
     };
     // A switch requests time zero first, so each composition warms it too.
     const auto enter = [&](const document::CompositionId id) {
-        return session.setComposition(id) && waitUntil([&] { return isReady(controller); });
+        return session.setComposition(id) && bloom::test_support::awaitQtCondition("the preview is ready", [&] { return isReady(controller); }, kWait);
     };
     expectations.expect(warm(0) && warm(1) && warm(5), "the first composition warms");
     expectations.expect(enter(second) && warm(1), "the second composition warms");
@@ -178,10 +178,10 @@ void testCompositionSwitchRetainsUnaffectedCache(Expectations& expectations) {
                         "a reachable rewire is a whole render scoped to its composition");
     // The rewire re-renders the second composition in the background. Count its preparation
     // before the baseline, or it lands inside the measured window on a loaded machine.
-    expectations.expect(waitUntil([&] {
+    expectations.expect(bloom::test_support::awaitQtCondition("the second composition finishes its whole render", [&] {
                             return generation(controller.state()) > generationBeforeRewire &&
                                    isReady(controller);
-                        }),
+                        }, kWait),
                         "the second composition finishes its whole render");
     const auto beforeReturn = preparations.load();
     expectations.expect(enter(first) && warm(1) && warm(5) && preparations.load() == beforeReturn,

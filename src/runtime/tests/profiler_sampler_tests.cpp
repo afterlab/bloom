@@ -2,6 +2,8 @@
 // without an allocation, seqlock consistency under concurrent readers, statm parsing, the
 // scheduler's fixed-slot copy, the ledger adapter, absent fields staying absent, and the cost of
 // one sample.
+#include "await.hpp"
+
 #include <bloom/core/telemetry_counters.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/profiler_ledger_adapter.hpp>
@@ -79,15 +81,7 @@ template <typename Body> long allocationsDuring(Body&& body) {
     return gAllocations.load();
 }
 
-bool waitFor(const auto& condition) {
-    const auto deadline = std::chrono::steady_clock::now() + 5s;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (condition())
-            return true;
-        std::this_thread::sleep_for(1ms);
-    }
-    return false;
-}
+using bloom::test_support::awaitCondition;
 
 TaskOwner owner(const std::uint64_t value, const TaskOwnerKind kind = TaskOwnerKind::Composition) {
     return {.kind = kind, .id = TaskOwnerId::fromRaw(value)};
@@ -119,7 +113,9 @@ struct BusyScheduler final {
                                           TaskPriority::Background, TaskExecutor::BlockingIo),
                               block)
                 .handle);
-        expect(waitFor([this] { return entered.load() == 2; }), "both blockers start");
+        expect(awaitCondition(
+                   "both blockers start", [this] { return entered.load() == 2; }, 5s),
+               "both blockers start");
         for (int index = 0; index < queued; ++index) {
             handles.push_back(
                 scheduler
@@ -133,7 +129,9 @@ struct BusyScheduler final {
     ~BusyScheduler() {
         released.store(true);
         scheduler.beginShutdown();
-        waitFor([this] { return scheduler.isQuiescent(); });
+        expect(awaitCondition(
+                   "scheduler quiesces", [this] { return scheduler.isQuiescent(); }, 5s),
+               "the scheduler quiesces");
     }
     BusyScheduler(const BusyScheduler&) = delete;
     BusyScheduler& operator=(const BusyScheduler&) = delete;
@@ -178,7 +176,9 @@ void lifecycleStartsOnFirstAndStopsOnLast() {
     const auto afterManual = sampler.publishedSamples();
     sampler.acquire();
     expect(sampler.running(), "the first subscriber starts the thread");
-    expect(waitFor([&] { return sampler.publishedSamples() > afterManual; }),
+    expect(awaitCondition(
+               "the thread samples at once",
+               [&] { return sampler.publishedSamples() > afterManual; }, 5s),
            "the thread samples at once");
     expect(!sampler.sampleNow(), "sampleNow is refused while the thread runs");
     sampler.acquire();
@@ -188,20 +188,23 @@ void lifecycleStartsOnFirstAndStopsOnLast() {
     sampler.release();
     expect(!sampler.running() && sampler.subscribers() == 0, "the last release stops and joins");
     const auto stopped = sampler.publishedSamples();
-    std::this_thread::sleep_for(150ms);
+    // The last release joined the thread, so nothing can publish another sample.
     expect(sampler.publishedSamples() == stopped, "nothing samples without a subscriber");
 
-    // Restart at the fastest rate: about ten samples a second.
+    // Restart at the fastest rate.
     sampler.setInterval(1ms);
     expect(sampler.interval() == ProfilerSampler::kMinimumInterval, "the interval is clamped");
     sampler.setInterval(5s);
     expect(sampler.interval() == ProfilerSampler::kMaximumInterval, "the interval is clamped");
     sampler.setInterval(100ms);
     sampler.acquire();
-    std::this_thread::sleep_for(450ms);
+    // The thread samples at once and again after each interval: it keeps publishing. Its pacing
+    // is not asserted, because that would be a measurement of elapsed time.
+    expect(awaitCondition(
+               "the thread samples again after its interval",
+               [&] { return sampler.publishedSamples() >= stopped + 3; }, 5s),
+           "the thread keeps sampling at its interval");
     sampler.release();
-    const auto taken = sampler.publishedSamples() - stopped;
-    expect(taken >= 2 && taken <= 8, "the thread samples at its interval");
 }
 
 void tenThousandSamplesAllocateNothing() {
@@ -287,7 +290,11 @@ void seqlockReadersSeeWholeWrites() {
                 }
             }
         });
-    std::this_thread::sleep_for(350ms);
+    const auto publishedBefore = sampler.publishedSamples();
+    expect(awaitCondition(
+               "the thread publishes while readers read",
+               [&] { return sampler.publishedSamples() >= publishedBefore + 3; }, 5s),
+           "the sampler publishes while snapshot readers run");
     done.store(true);
     for (auto& reader : snapshotReaders)
         reader.join();
@@ -917,6 +924,7 @@ int main() try {
     absentFieldsStayAbsent();
     viewerAndFillInputsReachTheSnapshot();
     sampleCost();
+    failures += bloom::test_support::awaitFailureCount();
     if (failures == 0)
         std::cout << "profiler sampler: all checks passed\n";
     return failures == 0 ? 0 : 1;

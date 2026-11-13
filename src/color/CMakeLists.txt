@@ -64,6 +64,8 @@ if(BUILD_TESTING)
         tests/gpu_shader_compiler_test_helper.cpp
     )
     target_compile_features(bloom_color_gpu_shader_test_helper PRIVATE cxx_std_20)
+    target_include_directories(bloom_color_gpu_shader_test_helper
+        PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     bloom_enable_warnings(bloom_color_gpu_shader_test_helper)
 
     add_executable(
@@ -76,6 +78,8 @@ if(BUILD_TESTING)
             "BLOOM_GPU_SHADER_TEST_HELPER=\"$<TARGET_FILE:bloom_color_gpu_shader_test_helper>\""
     )
     target_link_libraries(bloom_color_gpu_shader_test PRIVATE bloom_color_gpu_shader)
+    target_include_directories(bloom_color_gpu_shader_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     add_dependencies(bloom_color_gpu_shader_test bloom_color_gpu_shader_test_helper)
     bloom_enable_warnings(bloom_color_gpu_shader_test)
 

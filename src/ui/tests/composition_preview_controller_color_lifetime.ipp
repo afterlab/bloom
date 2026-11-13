@@ -29,7 +29,7 @@ void testQueuedColorIntentOwnership(Expectations& expectations) {
         {.colorIntent = {.workingColorSpaceId = working, .ocioConfigUri = uri},
          .displayName = {},
          .viewName = {}});
-    expectations.expect(waitUntil([&] { return gate.entered(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("color capture task enters before producer mutation", [&] { return gate.entered(); }, kWait),
                         "color capture task enters before producer mutation");
     const auto retainedIdentity = controller.state().desiredIdentity;
     working.assign(4096, 'x');
@@ -43,7 +43,7 @@ void testQueuedColorIntentOwnership(Expectations& expectations) {
                                 std::string(256, 'z'),
                         "color update stores owning intent before next asynchronous request");
     gate.release();
-    expectations.expect(waitUntil([&] { return originalSurvived.load(); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("cancelled queued worker still reads its original exact color strings", [&] { return originalSurvived.load(); }, kWait),
                         "cancelled queued worker still reads its original exact color strings");
     expectations.expect(
         retainedIdentity.has_value() && retainedIdentity->colorIntent.storage &&

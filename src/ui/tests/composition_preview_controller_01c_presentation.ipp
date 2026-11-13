@@ -43,7 +43,7 @@ void testPresentationEditsRetainEvaluationWork(Expectations& expectations) {
     expectations.expect(
         session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
         "the presentation fixture has a layer");
-    expectations.expect(waitUntil([&] { return isReady(controller); }),
+    expectations.expect(bloom::test_support::awaitQtCondition("the layer's frame is ready and warm in the cache", [&] { return isReady(controller); }, kWait),
                         "the layer's frame is ready and warm in the cache");
     const auto layers = session.composition()->graph().layerOutputs();
     expectations.expect(!layers.empty(), "the fixture exposes a layer boundary");
@@ -129,11 +129,11 @@ void testPresentationEditsRetainEvaluationWork(Expectations& expectations) {
     const auto hitsBefore = controller.frameCache().statistics().hits;
     const auto other = core::RationalTime::create(1, 2);
     expectations.expect(other.has_value() && session.setCurrentTime(*other) &&
-                            waitUntil([&] { return isReady(controller); }),
+                            bloom::test_support::awaitQtCondition("a second time reaches a ready frame", [&] { return isReady(controller); }, kWait),
                         "a second time reaches a ready frame");
     const auto afterSecond = invocationCount.load();
     expectations.expect(session.setCurrentTime(core::RationalTime::fromInteger(0)) &&
-                            waitUntil([&] { return isReady(controller); }),
+                            bloom::test_support::awaitQtCondition("returning to the warm time reaches a ready frame", [&] { return isReady(controller); }, kWait),
                         "returning to the warm time reaches a ready frame");
     expectations.expect(invocationCount.load() == afterSecond &&
                             controller.frameCache().statistics().hits > hitsBefore,
@@ -150,7 +150,7 @@ void testPresentationEditsRetainEvaluationWork(Expectations& expectations) {
                                     session.snapshot().revision(),
                             "an evaluation edit advances the evaluation snapshot");
         expectations.expect(
-            waitUntil([&] { return isReady(controller) && invocationCount.load() > invocations; }),
+            bloom::test_support::awaitQtCondition("an evaluation edit re-prepares the frame", [&] { return isReady(controller) && invocationCount.load() > invocations; }, kWait),
             "an evaluation edit re-prepares the frame");
     };
     pixelEdit("Disable Layer", [&](commands::Transaction& transaction) {

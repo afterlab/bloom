@@ -6,6 +6,7 @@
 // session seam dirties the project. Also the enum-label table: every enum parameter's Properties choices equal the
 // document's one table. Offscreen.
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
+#include "await_qt.hpp"
 #include "composition_preview_stage_shared.hpp"
 #include "properties_registry_row.hpp"
 #include "readonly_archive_fixture.hpp"
@@ -41,6 +42,9 @@
 #include <set>
 
 namespace {
+// The ceiling for a broken run; a passing wait returns as soon as its condition holds.
+constexpr std::chrono::milliseconds kWait{20000};
+
 using namespace bloom;
 namespace fs = std::filesystem;
 using mcp::McpUiRefusal;
@@ -51,14 +55,6 @@ void expect(const bool condition, const char* message) {
         std::fprintf(stderr, "FAIL: %s\n", message);
         ++gFailures;
     }
-}
-
-template <typename Predicate> bool waitFor(Predicate&& done, const int milliseconds = 20000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!done() && timer.elapsed() < milliseconds)
-        QTest::qWait(5);
-    return done();
 }
 
 struct World final {
@@ -79,7 +75,9 @@ mcp::McpProjectResult runProject(ui::McpLiveUiBinding& binding, mcp::McpProjectR
         ++calls;
         result = std::move(value);
     });
-    waitFor([&] { return result.has_value(); });
+    expect(bloom::test_support::awaitQtCondition(
+               "the project lifecycle call answers", [&] { return result.has_value(); }, kWait),
+           "the project lifecycle call answers");
     QTest::qWait(20);
     expect(calls == 1, "done is called exactly once");
     return result.value_or(mcp::McpProjectResult{.refusal = McpUiRefusal::Failed,
@@ -546,7 +544,10 @@ void testBinding() {
         const auto colour = port.setColorSettings(*host.colorSettings());
         expect(colour.refusal == McpUiRefusal::Busy || first.has_value(),
                "color settings are Busy while a project opens");
-        expect(waitFor([&] { return first.has_value(); }) && first->ok(), "the open finishes");
+        expect(bloom::test_support::awaitQtCondition(
+                   "the open finishes", [&] { return first.has_value(); }, kWait) &&
+                   first->ok(),
+               "the open finishes");
     }
 
     // ---- JobsRunning and stopJobs
@@ -569,19 +570,26 @@ void testBinding() {
                                        e.range = document::ExportRange{
                                            document::ExportRangeKind::Custom, 0, 239};
                                    }));
-            expect(waitFor([&] {
-                       adapter->drain();
-                       return adapter->snapshot()->jobs[0]
-                           .commands[host::ExportCommand::Start]
-                           .available;
-                   }),
+            expect(bloom::test_support::awaitQtCondition(
+                       "the job becomes startable",
+                       [&] {
+                           adapter->drain();
+                           return adapter->snapshot()
+                               ->jobs[0]
+                               .commands[host::ExportCommand::Start]
+                               .available;
+                       },
+                       kWait),
                    "the job becomes startable");
             expect(adapter->start(job).accepted, "the job starts");
-            expect(waitFor([&] {
-                       adapter->drain();
-                       return host.exportQueue() != nullptr &&
-                              host.exportQueue()->activeJobCount() > 0;
-                   }),
+            expect(bloom::test_support::awaitQtCondition(
+                       "an export is running",
+                       [&] {
+                           adapter->drain();
+                           return host.exportQueue() != nullptr &&
+                                  host.exportQueue()->activeJobCount() > 0;
+                       },
+                       kWait),
                    "an export is running");
             result = runProject(binding, request(mcp::McpProjectRequestKind::Open, shot, true));
             expect(result.refusal == McpUiRefusal::JobsRunning,
@@ -717,5 +725,5 @@ int main(int argc, char** argv) {
     }
     if (gFailures != 0)
         std::fprintf(stderr, "%d failure(s)\n", gFailures);
-    return gFailures == 0 ? 0 : 1;
+    return gFailures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

@@ -17,6 +17,7 @@
 #include <bloom/scripting/session.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -1746,12 +1747,7 @@ void exportAcceptsEveryListedPreset() {
         requested = settings;
         return mcp::McpUiResult{};
     };
-    // A short destination-check wait, so the case below that never gets its check stays quick;
-    // the same for the encoder probe wait (#683).
-    auto limits = mcp::kMcpMessageLimits;
-    limits.destinationCheckWait = std::chrono::milliseconds(2000);
-    limits.encoderProbeWait = std::chrono::milliseconds(5000);
-    Live server(std::move(port), std::move(exports), folder, {}, limits);
+    Live server(std::move(port), std::move(exports), folder, {});
     live = &server;
     const scripting::LiveSessionCommitter committer{
         .execute =
@@ -1769,9 +1765,15 @@ void exportAcceptsEveryListedPreset() {
         .gestureOpen = [] { return false; },
         .revision = [&] { return server.session->snapshot().revision(); },
         .viewerLevel = {}};
-    const auto call = [&](const std::string& tool, const std::string& arguments) {
+    // `during` runs on each turn of the owner loop while the call is in flight; a case uses it to
+    // answer the check or probe the call is waiting for.
+    const auto call = [&](const std::string& tool, const std::string& arguments,
+                          const std::function<void(int)>& during = {}) {
         auto result = std::async(std::launch::async, [&] { return server.call(tool, arguments); });
+        int turns = 0;
         while (result.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready) {
+            if (during)
+                during(++turns);
             if (queue)
                 queue->pump();
             std::deque<std::function<void()>> work;
@@ -1844,11 +1846,14 @@ void exportAcceptsEveryListedPreset() {
         expect(!rows.empty(), "export.presets lists presets with their extension: " + presets);
         return rows;
     };
-    const auto exportWith = [&](const Listed& preset, const std::string& stem) {
-        return call("export", R"({"composition":1,"frame":0,"preset":")" + preset.id +
-                                  R"(","destination":")" +
-                                  (folder / (stem + "." + preset.extension)).generic_string() +
-                                  R"(","overwrite":"replace"})");
+    const auto exportWith = [&](const Listed& preset, const std::string& stem,
+                                const std::function<void(int)>& during = {}) {
+        return call("export",
+                    R"({"composition":1,"frame":0,"preset":")" + preset.id +
+                        R"(","destination":")" +
+                        (folder / (stem + "." + preset.extension)).generic_string() +
+                        R"(","overwrite":"replace"})",
+                    during);
     };
     const auto transact = [&](const std::string& operations) {
         const auto revision =
@@ -1947,22 +1952,33 @@ void exportAcceptsEveryListedPreset() {
         // "done" or "done-with-warnings": the job ran, it was not merely left idle.
         return contains(waited, R"("finished":true)") && contains(waited, R"("state":"done)");
     };
-    fake->setDestinationCheckDelay(std::chrono::milliseconds(300));
+    // The check is held until the call has been waiting on it for a while: the call can only
+    // succeed by waiting, whatever the platform's speed, and no test time is spent on the wait.
+    const auto answerCheck = [&](const int turns) {
+        if (turns >= 20 && fake->waitingDestinationChecks() > 0)
+            fake->setDestinationCheckDelay(std::chrono::milliseconds(0));
+    };
+    fake->setDestinationCheckDelay(std::chrono::minutes(10));
     if (const auto job = queued("slow-check"); job != 0) {
         fake->push({});
-        const auto started = call("export.start", R"({"jobs":[)" + std::to_string(job) + "]}");
+        const auto started =
+            call("export.start", R"({"jobs":[)" + std::to_string(job) + "]}", answerCheck);
         expect(contains(started, R"("isError":false)") &&
                    !contains(started, "DestinationCheckPending") && ran(job),
                "export.start waits for a slow destination check: " + started);
     }
+    fake->setDestinationCheckDelay(std::chrono::minutes(10));
     if (const auto job = queued("slow-check-all"); job != 0) {
         fake->push({});
-        const auto started = call("export.start-all", "{}");
+        const auto started = call("export.start-all", "{}", answerCheck);
         expect(contains(started, R"("isError":false)") && ran(job),
                "export.start-all waits for a slow destination check and starts that job: " +
                    started);
     }
+    // A wait limit of zero is already reached when the call starts: the limit is enforced, and no
+    // test time passes. The default limits come back for the cases that must wait.
     fake->setDestinationCheckDelay(std::chrono::minutes(10));
+    server.core->setExportWaitLimits(std::chrono::milliseconds(0), std::chrono::milliseconds(0));
     if (const auto job = queued("stuck-check"); job != 0) {
         const auto refusedStart = call("export.start", R"({"jobs":[)" + std::to_string(job) + "]}");
         expect(contains(refusedStart, R"("isError":true)") &&
@@ -1975,6 +1991,8 @@ void exportAcceptsEveryListedPreset() {
                "the same job starts once its check has answered: " + started);
     }
     fake->setDestinationCheckDelay(std::chrono::milliseconds(0));
+    server.core->setExportWaitLimits(mcp::kMcpMessageLimits.destinationCheckWait,
+                                     mcp::kMcpMessageLimits.encoderProbeWait);
 
     // #683: right after launch the encoder probe is still running. The one-call export of a movie
     // preset waits for that probe (bounded by encoderProbeWait) and answers with the real
@@ -1984,7 +2002,9 @@ void exportAcceptsEveryListedPreset() {
         std::mutex probeMutex;
         std::condition_variable probeGate;
         bool probeReleased = false;
+        std::atomic<bool> probeEntered{false};
         const auto slowProbe = [&](const host::ExportEncoderStatus&) {
+            probeEntered.store(true);
             std::unique_lock lock(probeMutex);
             probeGate.wait(lock, [&] { return probeReleased; });
             return everything;
@@ -2002,12 +2022,11 @@ void exportAcceptsEveryListedPreset() {
         makeQueue(host::ExportEncoderStatus{}, slowProbe);
         queue->presets().refreshEncoders(server.scheduler);
         fake->push({});
-        std::thread answer([&] {
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
-            releaseProbe();
+        const auto waited = exportWith(h264, "slow-probe", [&](const int turns) {
+            // As for the destination check: answered after the call has been waiting a while.
+            if (turns >= 20 && probeEntered.load())
+                releaseProbe();
         });
-        const auto waited = exportWith(h264, "slow-probe");
-        answer.join();
         expect(contains(waited, R"("isError":false)") && !contains(waited, "Checking encoders") &&
                    contains(waited, R"("publishedFrames":)"),
                "export waits for a running encoder probe: " + waited);
@@ -2015,7 +2034,11 @@ void exportAcceptsEveryListedPreset() {
         probeReleased = false;
         makeQueue(host::ExportEncoderStatus{}, slowProbe);
         queue->presets().refreshEncoders(server.scheduler);
+        server.core->setExportWaitLimits(std::chrono::milliseconds(0),
+                                         std::chrono::milliseconds(0));
         const auto stuck = exportWith(h264, "stuck-probe");
+        server.core->setExportWaitLimits(mcp::kMcpMessageLimits.destinationCheckWait,
+                                         mcp::kMcpMessageLimits.encoderProbeWait);
         expect(contains(stuck, R"("isError":true)") && contains(stuck, "Checking encoders"),
                "a probe that outlasts the wait is the typed refusal: " + stuck);
         releaseProbe();

@@ -11,6 +11,7 @@
 //     "Pick in Viewer" switches to the eyedropper, and the hint line is there;
 //  6. with no mattes selected the Image output is transparent black.
 
+#include "await_qt.hpp"
 #include "cryptomatte_fixture_support.hpp"
 #include "node_editor_items.hpp"
 
@@ -66,20 +67,15 @@ namespace {
 using namespace bloom;
 namespace fixture = bloom::cryptomatte_fixture;
 
+// The ceiling for a broken run; a passing wait returns as soon as its condition holds.
+constexpr std::chrono::milliseconds kWait{20000};
+
 int failures = 0;
 void expect(const bool value, const std::string& message) {
     if (!value) {
         ++failures;
         std::cerr << "FAIL: " << message << '\n';
     }
-}
-
-template <typename Predicate> bool waitUntil(Predicate predicate, const int milliseconds = 20000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < milliseconds)
-        QTest::qWait(5);
-    return predicate();
 }
 
 // A plain RGBA beauty frame the size of the Cryptomatte fixture.
@@ -185,7 +181,9 @@ int main(int argc, char** argv) {
         assets.importFiles({QString::fromStdString((folder / "SC_image_0001.exr").string()),
                             QString::fromStdString(
                                 (folder / "SC_cryptomatte_asset_0001.exr").string())});
-        waitUntil([&] { return !assets.busy(); });
+        expect(bloom::test_support::awaitQtCondition(
+                   "import finishes", [&] { return !assets.busy(); }, kWait),
+               "the import finishes");
         const auto& records = session.snapshot().project().assets();
         expect(records.size() == 2, "both sequences import");
         if (records.size() != 2)
@@ -196,7 +194,9 @@ int main(int argc, char** argv) {
         const auto* sidecarRecord = session.snapshot().project().findAsset(sidecar);
         expect(sidecarRecord != nullptr && sidecarRecord->kind == document::AssetKind::Sequence,
                "the sidecar is a sequence asset");
-        expect(waitUntil([&] { return !assets.thumbnail(sidecar).isNull(); }),
+        expect(bloom::test_support::awaitQtCondition(
+                   "the sidecar gets a thumbnail",
+                   [&] { return !assets.thumbnail(sidecar).isNull(); }, kWait),
                "the sidecar gets a thumbnail");
         expect(!assets.missing(sidecar) && assets.problem(sidecar).isEmpty() &&
                    assets.dataOnly(sidecar),
@@ -278,19 +278,22 @@ int main(int argc, char** argv) {
         auto* sourceCard = card(*nodes, source);
         ui::kit::KDropdown* cardPart = nullptr;
         ui::kit::KDropdown* cardLayer = nullptr;
-        expect(waitUntil([&] {
-                   QApplication::processEvents();
-                   nodes->graphScene()->refreshValues();
-                   cardPart = sourceCard ? qobject_cast<ui::kit::KDropdown*>(
-                                               sourceCard->fieldWidget("nodeImagePart"))
-                                         : nullptr;
-                   cardLayer = sourceCard ? qobject_cast<ui::kit::KDropdown*>(
-                                                sourceCard->fieldWidget("nodeImageLayer"))
-                                          : nullptr;
-                   return cardPart != nullptr && cardLayer != nullptr &&
-                          cardPart->toolTip().isEmpty() && cardLayer->count() > 0 &&
-                          cardLayer->itemText(cardLayer->currentIndex()) == "No color layer";
-               }),
+        expect(bloom::test_support::awaitQtCondition(
+                   "the Image source card shows Part and Layer dropdowns once the file is read",
+                   [&] {
+                       QApplication::processEvents();
+                       nodes->graphScene()->refreshValues();
+                       cardPart = sourceCard ? qobject_cast<ui::kit::KDropdown*>(
+                                                   sourceCard->fieldWidget("nodeImagePart"))
+                                             : nullptr;
+                       cardLayer = sourceCard ? qobject_cast<ui::kit::KDropdown*>(
+                                                    sourceCard->fieldWidget("nodeImageLayer"))
+                                              : nullptr;
+                       return cardPart != nullptr && cardLayer != nullptr &&
+                              cardPart->toolTip().isEmpty() && cardLayer->count() > 0 &&
+                              cardLayer->itemText(cardLayer->currentIndex()) == "No color layer";
+                   },
+                   kWait),
                "the Image source card shows Part and Layer dropdowns once the file is read");
         expect(cardPart && cardPart->count() == 1 && cardPart->itemText(0) == "First part",
                "the card's Part dropdown lists only the file's one part");
@@ -302,14 +305,18 @@ int main(int argc, char** argv) {
         session.selectNode(source);
         QApplication::processEvents();
         QLabel* note = nullptr;
-        expect(waitUntil([&] {
-                   QApplication::processEvents();
-                   note = nullptr;
-                   for (auto* label : properties->findChildren<QLabel*>("propertiesImageColourNote"))
-                       if (label->isVisible())
-                           note = label;
-                   return note != nullptr;
-               }),
+        expect(bloom::test_support::awaitQtCondition(
+                   "Properties shows the color note for the data-only source",
+                   [&] {
+                       QApplication::processEvents();
+                       note = nullptr;
+                       for (auto* label :
+                            properties->findChildren<QLabel*>("propertiesImageColourNote"))
+                           if (label->isVisible())
+                               note = label;
+                       return note != nullptr;
+                   },
+                   kWait),
                "Properties shows the color note for the data-only source");
         expect(note && note->text() == "No color layer — use Channels",
                "the note says plainly what to use");
@@ -317,14 +324,21 @@ int main(int argc, char** argv) {
         // The Cryptomatte card: a Layer dropdown, no matte text field.
         auto* cryptoCard = card(*nodes, node);
         ui::kit::KDropdown* cryptoLayer = nullptr;
-        expect(waitUntil([&] {
-                   QApplication::processEvents();
-                   nodes->graphScene()->refreshValues();
-                   cryptoLayer = cryptoCard ? qobject_cast<ui::kit::KDropdown*>(
-                                                  cryptoCard->fieldWidget("nodeCryptomatteLayer"))
-                                            : nullptr;
-                   return cryptoLayer != nullptr && cryptoLayer->isEnabled();
-               }) || (cryptoLayer && cryptoLayer->count() == 1),
+        expect(bloom::test_support::awaitQtCondition(
+                   "the Cryptomatte card lists its one layer once the file is read",
+                   [&] {
+                       QApplication::processEvents();
+                       nodes->graphScene()->refreshValues();
+                       cryptoLayer = cryptoCard
+                                         ? qobject_cast<ui::kit::KDropdown*>(
+                                               cryptoCard->fieldWidget("nodeCryptomatteLayer"))
+                                         : nullptr;
+                       // A single layer leaves nothing to choose, so the dropdown is disabled by
+                       // design; the listing has arrived when its "Reading the file" tip is gone.
+                       return cryptoLayer != nullptr && cryptoLayer->toolTip().isEmpty() &&
+                              cryptoLayer->count() == 1;
+                   },
+                   kWait),
                "the Cryptomatte card shows its Layer as a dropdown");
         expect(cryptoLayer && cryptoLayer->itemText(cryptoLayer->currentIndex()) == "CryptoAsset",
                "the card's Layer dropdown shows CryptoAsset");
@@ -336,24 +350,32 @@ int main(int argc, char** argv) {
         QApplication::processEvents();
         expect(properties->findChild<QLabel*>("propertiesValueOutput.mask") == nullptr,
                "Properties shows no Mask readout stuck on Resolving");
-        auto* previewToggle = properties->findChild<ui::kit::KSwitch*>("propertiesCryptomattePreview");
+        auto* previewToggle =
+            properties->findChild<ui::kit::KSwitch*>("propertiesCryptomattePreview");
         expect(previewToggle && previewToggle->isChecked(), "Preview is on by default");
         auto* hint = properties->findChild<QLabel*>("propertiesCryptomatteHint");
         expect(hint && hint->text() == "Click objects in the Viewer to add them",
                "the hint line is shown");
-        expect(waitUntil([&] {
-                   const auto& inspection = preview.viewerChannelInspection();
-                   return inspection && inspection->node == node &&
-                          inspection->port == document::kCryptomattePreviewInspectionPort;
-               }),
+        expect(bloom::test_support::awaitQtCondition(
+                   "the Viewer shows the Cryptomatte ID-color preview",
+                   [&] {
+                       const auto& inspection = preview.viewerChannelInspection();
+                       return inspection && inspection->node == node &&
+                              inspection->port == document::kCryptomattePreviewInspectionPort;
+                   },
+                   kWait),
                "selecting the Cryptomatte shows its ID-colour preview in the Viewer");
-        expect(waitUntil([&] {
-                   const auto& state = preview.state();
-                   return state.activity == ui::PreviewActivity::Ready && state.frame != nullptr &&
-                          state.frame->desiredIdentity().channelInspection ==
-                              preview.viewerChannelInspection() &&
-                          state.frame->hasProcessFrame();
-               }),
+        expect(bloom::test_support::awaitQtCondition(
+                   "the preview renders",
+                   [&] {
+                       const auto& state = preview.state();
+                       return state.activity == ui::PreviewActivity::Ready &&
+                              state.frame != nullptr &&
+                              state.frame->desiredIdentity().channelInspection ==
+                                  preview.viewerChannelInspection() &&
+                              state.frame->hasProcessFrame();
+                   },
+                   kWait),
                "the preview renders");
         if (const auto frame = preview.state().frame; frame && frame->hasProcessFrame()) {
             // Pixel 0 is the sphere alone at full coverage, mixed halfway with no colour image.
@@ -373,12 +395,15 @@ int main(int argc, char** argv) {
                "Pick in Viewer switches the app-wide tool to the eyedropper");
 
         QList<ui::kit::KCheckBox*> names;
-        expect(waitUntil([&] {
-                   QApplication::processEvents();
-                   names = properties->findChildren<ui::kit::KCheckBox*>(
-                       "propertiesCryptomatteName");
-                   return static_cast<std::size_t>(names.size()) == fixture::kObjects.size();
-               }),
+        expect(bloom::test_support::awaitQtCondition(
+                   "the manifest names are listed",
+                   [&] {
+                       QApplication::processEvents();
+                       names = properties->findChildren<ui::kit::KCheckBox*>(
+                           "propertiesCryptomatteName");
+                       return static_cast<std::size_t>(names.size()) == fixture::kObjects.size();
+                   },
+                   kWait),
                "the manifest names are listed");
         for (auto* check : names)
             if (check->property("matteName").toString() == "cube")
@@ -387,19 +412,23 @@ int main(int argc, char** argv) {
         expect(cryptomatte.mattes(node) == std::vector<std::string>{"cube"},
                "checking a name adds it to the matte");
         ui::kit::KLineEdit* search = nullptr;
-        waitUntil([&] {
-            for (auto* field :
-                 properties->findChildren<ui::kit::KLineEdit*>("propertiesCryptomatteSearch"))
-                if (field->isVisible())
-                    search = field;
-            return search != nullptr;
-        }, 3000);
-        expect(search != nullptr, "the name search field is shown");
+        expect(bloom::test_support::awaitQtCondition(
+                   "name search field shown",
+                   [&] {
+                       for (auto* field : properties->findChildren<ui::kit::KLineEdit*>(
+                                "propertiesCryptomatteSearch"))
+                           if (field->isVisible())
+                               search = field;
+                       return search != nullptr;
+                   },
+                   std::chrono::milliseconds{3000}),
+               "the name search field is shown");
         if (search != nullptr)
             search->setText("fl");
         QApplication::processEvents();
         int visible = 0;
-        for (auto* check : properties->findChildren<ui::kit::KCheckBox*>("propertiesCryptomatteName"))
+        for (auto* check :
+             properties->findChildren<ui::kit::KCheckBox*>("propertiesCryptomatteName"))
             visible += check->isVisibleTo(properties) ? 1 : 0;
         expect(visible == 1, "searching narrows the name list");
 
@@ -407,16 +436,22 @@ int main(int argc, char** argv) {
         expect(cryptomatte.setMattes(node, {}, "Clear"), "clear the mattes");
         previewToggle->click();
         expect(!cryptomatte.preview(node), "the toggle turns the preview off");
-        expect(waitUntil([&] { return !preview.viewerChannelInspection().has_value(); }),
+        expect(bloom::test_support::awaitQtCondition(
+                   "turning Preview off returns the Viewer to the composition",
+                   [&] { return !preview.viewerChannelInspection().has_value(); }, kWait),
                "turning Preview off returns the Viewer to the composition");
-        expect(waitUntil([&] {
-                   const auto& state = preview.state();
-                   return state.activity == ui::PreviewActivity::Ready && state.frame != nullptr &&
-                          !state.frame->desiredIdentity().channelInspection &&
-                          state.frame->desiredIdentity().sourceRevision ==
-                              session.snapshot().revision() &&
-                          state.frame->hasProcessFrame();
-               }),
+        expect(bloom::test_support::awaitQtCondition(
+                   "the composition renders",
+                   [&] {
+                       const auto& state = preview.state();
+                       return state.activity == ui::PreviewActivity::Ready &&
+                              state.frame != nullptr &&
+                              !state.frame->desiredIdentity().channelInspection &&
+                              state.frame->desiredIdentity().sourceRevision ==
+                                  session.snapshot().revision() &&
+                              state.frame->hasProcessFrame();
+                   },
+                   kWait),
                "the composition renders");
         if (const auto frame = preview.state().frame; frame && frame->hasProcessFrame()) {
             bool black = true;
@@ -438,7 +473,7 @@ int main(int argc, char** argv) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;
     }
-    if (failures != 0)
+    if (failures + bloom::test_support::awaitFailureCount() != 0)
         return 1;
     std::cout << "PASS: Cryptomatte sidecar workflow\n";
     return 0;

@@ -6,6 +6,7 @@
 // error and changes nothing, and `events` names the edit's origin; the Viewer's drill level (#645)
 // round-trips through viewer.set, the viewer and context queries and bloom.viewer.set_level. Real
 // window and session, offscreen.
+#include "await_qt.hpp"
 #include "mcp_http_client.hpp"
 #include "window_fixture.hpp"
 
@@ -32,6 +33,8 @@
 #include <string>
 
 namespace {
+// The ceiling for a broken run; a passing wait returns as soon as its condition holds.
+constexpr std::chrono::milliseconds kWait{60000};
 
 using namespace bloom;
 using ui::test::mcp_http::call;
@@ -40,14 +43,6 @@ using ui::test::mcp_http::post;
 void require(const bool condition, const char* message) {
     if (!condition)
         throw std::runtime_error(message);
-}
-
-template <typename Predicate> bool waitFor(Predicate predicate, const int milliseconds = 60000) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < milliseconds)
-        QTest::qWait(5);
-    return predicate();
 }
 
 [[nodiscard]] bool has(const std::string& text, const std::string_view part) {
@@ -100,16 +95,23 @@ void exercise() {
     QTimer pump;
     QObject::connect(&pump, &QTimer::timeout, [&service] { service.pump(); });
     pump.start(5);
-    require(waitFor([&] { return service.snapshot()->token.state == mcp::McpTokenState::Ready; }),
+    require(bloom::test_support::awaitQtCondition(
+                "Token ready",
+                [&] { return service.snapshot()->token.state == mcp::McpTokenState::Ready; },
+                kWait),
             "Token ready");
     require(service.start().accepted, "Server started");
     const auto token = service.revealToken().token;
 
     const auto async = [&](auto work) {
         auto future = std::async(std::launch::async, std::move(work));
-        require(waitFor([&] {
-                    return future.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
-                }),
+        require(bloom::test_support::awaitQtCondition(
+                    "HTTP exchange finished",
+                    [&] {
+                        return future.wait_for(std::chrono::seconds(0)) ==
+                               std::future_status::ready;
+                    },
+                    kWait),
                 "HTTP exchange finished");
         return future.get();
     };
@@ -257,7 +259,9 @@ void exercise() {
     }
 
     service.beginShutdown();
-    require(waitFor([&] { return service.quiescent(); }), "Server shut down");
+    require(bloom::test_support::awaitQtCondition(
+                "Server shut down", [&] { return service.quiescent(); }, kWait),
+            "Server shut down");
     pump.stop();
     runtime->shutdown();
     adapter.shutdown();
@@ -279,5 +283,5 @@ int main(int argc, char** argv) {
         std::cerr << error.what() << '\n';
         return 1;
     }
-    return 0;
+    return bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

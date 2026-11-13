@@ -57,6 +57,8 @@ class FakeExportRunBackend final : public ExportRunBackend {
     // Every destination check takes this long from now on; zero (the default) also releases the
     // checks that are waiting. Simulates a slow volume.
     void setDestinationCheckDelay(std::chrono::milliseconds delay);
+    // Destination checks blocked by the delay right now.
+    [[nodiscard]] std::size_t waitingDestinationChecks() const;
     [[nodiscard]] std::size_t runsStarted() const;
     // The worker limits each started run was given, in start order.
     [[nodiscard]] std::vector<ExportWorkerLimits> startedLimits() const;
@@ -72,6 +74,7 @@ class FakeExportRunBackend final : public ExportRunBackend {
     std::map<std::filesystem::path, std::uint64_t> existing_;
     std::chrono::milliseconds checkDelay_{0};
     std::condition_variable checkDelayChanged_;
+    std::size_t waitingChecks_ = 0;
     std::size_t started_ = 0;
     std::vector<ExportWorkerLimits> limits_;
 };

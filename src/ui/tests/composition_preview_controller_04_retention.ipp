@@ -36,7 +36,7 @@ void testTemporalDeleteRetainsUnaffectedFrames(Expectations& expectations) {
                         "the clip is finite [4,8)");
     const auto warm = [&](const std::int64_t second) {
         return session.setCurrentTime(core::RationalTime::fromInteger(second)) &&
-               waitUntil([&] { return isReady(controller); });
+               bloom::test_support::awaitQtCondition("the preview is ready", [&] { return isReady(controller); }, kWait);
     };
     expectations.expect(warm(1) && warm(5) && warm(9) && warm(1), "times 1, 5, 9 warm");
     const auto warmed = preparations.load();
@@ -96,14 +96,14 @@ void testTemporalDeleteRetainsUnaffectedFrames(Expectations& expectations) {
                         "the deleted layer has no selectable bounds in the retained outside frame");
 
     expectations.expect(session.setCurrentTime(core::RationalTime::fromInteger(5)) &&
-                            waitUntil([&] { return isReady(controller); }),
+                            bloom::test_support::awaitQtCondition("the deleted span's time reaches ready", [&] { return isReady(controller); }, kWait),
                         "the deleted span's time reaches ready");
     expectations.expect(preparations.load() == warmed + 1, "only the clip span re-prepares");
     expectations.expect(
         sameDisplayPixels(controller.state().frame, oracleAt(core::RationalTime::fromInteger(5))),
         "the re-derived clip-span frame matches the live oracle");
     expectations.expect(session.setCurrentTime(core::RationalTime::fromInteger(1)) &&
-                            waitUntil([&] { return isReady(controller); }) &&
+                            bloom::test_support::awaitQtCondition("the outside frame is retained and still matches the post-deletion live ", [&] { return isReady(controller); }, kWait) &&
                             preparations.load() == warmed + 1 &&
                             sameDisplayPixels(controller.state().frame, oracleOneAfter),
                         "the outside frame is retained and still matches the post-deletion live "
@@ -114,7 +114,7 @@ void testTemporalDeleteRetainsUnaffectedFrames(Expectations& expectations) {
     expectations.expect(session.undo() && preparations.load() == beforeUndo,
                         "undo preserves the unaffected outside frame with no preparation");
     expectations.expect(session.setCurrentTime(core::RationalTime::fromInteger(5)) &&
-                            waitUntil([&] { return isReady(controller); }) &&
+                            bloom::test_support::awaitQtCondition("undo invalidates exactly the restored clip span", [&] { return isReady(controller); }, kWait) &&
                             preparations.load() == beforeUndo + 1,
                         "undo invalidates exactly the restored clip span");
     expectations.expect(session.redo(), "redo publishes");
@@ -173,7 +173,7 @@ void testTemporalDeleteParentDependencyInvalidatesWhole(Expectations& expectatio
     expectations.expect(session.setSelectedPosition(3.0, 2.0),
                         "the parent carries a nonzero transform");
     expectations.expect(session.setCurrentTime(core::RationalTime::fromInteger(1)) &&
-                            waitUntil([&] { return isReady(controller); }),
+                            bloom::test_support::awaitQtCondition("t1 outside the parent's span is warmed", [&] { return isReady(controller); }, kWait),
                         "t1 outside the parent's span is warmed");
     const auto oracleAt = [&](const core::RationalTime time) {
         const runtime::PreviewRequestIdentity identity{
@@ -211,7 +211,7 @@ void testTemporalDeleteParentDependencyInvalidatesWhole(Expectations& expectatio
         session.evaluationSnapshotForTime(core::RationalTime::fromInteger(1)).revision() ==
             session.snapshot().revision(),
         "a surviving child forces whole-render invalidation at t1");
-    expectations.expect(waitUntil([&] { return isReady(controller); }) &&
+    expectations.expect(bloom::test_support::awaitQtCondition("t1 re-prepares after the parent deletion", [&] { return isReady(controller); }, kWait) &&
                             preparations.load() > before &&
                             controller.state().frame != retainedBefore,
                         "t1 re-prepares after the parent deletion");
@@ -309,7 +309,7 @@ bool runTemporalBenchmark() {
         return false;
     const auto layerId = session.composition()->graph().layerOutputs().front().layerId;
     static_cast<void>(session.setCurrentTime(core::RationalTime::fromInteger(1)));
-    if (!waitUntil([&] { return isReady(controller); }))
+    if (!bloom::test_support::awaitQtCondition("the preview is ready", [&] { return isReady(controller); }, kWait))
         return false;
     const auto retained = controller.state().frame;
     if (retained == nullptr)
@@ -372,6 +372,5 @@ bool runTemporalBenchmark() {
               << kSamples << " samples; parity OK (excludes GPU, decode, warm-up)\n";
     controller.beginShutdown();
     bridge.beginShutdown();
-    static_cast<void>(waitUntil([&] { return scheduler.isQuiescent(); }));
-    return true;
+    return bloom::test_support::awaitQtCondition("the scheduler reaches quiescence", [&] { return scheduler.isQuiescent(); }, kWait);
 }

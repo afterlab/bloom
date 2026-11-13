@@ -243,10 +243,10 @@ prepareLiveOracle(bloom::runtime::TaskScheduler& scheduler,
     if (!submission.accepted())
         return nullptr;
     std::optional<bloom::runtime::TaskResult<bloom::ui::PreviewPreparationResultHandle>> result;
-    if (!waitUntil([&] {
+    if (!bloom::test_support::awaitQtCondition("the preparation task delivers its result", [&] {
             result = submission.handle.tryTakeResult();
             return result.has_value();
-        }))
+        }, kWait))
         return nullptr;
     if (!result.has_value()) {
         return nullptr;
@@ -323,7 +323,7 @@ void testTemporalRangeReuseKeepsUnaffectedFrames(Expectations& expectations) {
                         "key the foreground position at 8");
     const auto warm = [&](const std::int64_t second) {
         return session.setCurrentTime(core::RationalTime::fromInteger(second)) &&
-               waitUntil([&] { return isReady(controller); });
+               bloom::test_support::awaitQtCondition("the preview is ready", [&] { return isReady(controller); }, kWait);
     };
     expectations.expect(warm(1) && warm(2) && warm(5) && warm(1), "times 1, 2, 5 warm");
     const auto warmed = preparations.load();
@@ -379,7 +379,7 @@ void testTemporalRangeReuseKeepsUnaffectedFrames(Expectations& expectations) {
 
     // The changed interval's time 5 is re-derived; time 1 is then served from cache again.
     expectations.expect(session.setCurrentTime(core::RationalTime::fromInteger(5)) &&
-                            waitUntil([&] { return isReady(controller); }),
+                            bloom::test_support::awaitQtCondition("the changed time reaches ready", [&] { return isReady(controller); }, kWait),
                         "the changed time reaches ready");
     expectations.expect(preparations.load() == warmed + 1, "only the changed interval re-prepares");
     const auto oracleFive = oracleAt(core::RationalTime::fromInteger(5));
@@ -387,7 +387,7 @@ void testTemporalRangeReuseKeepsUnaffectedFrames(Expectations& expectations) {
                             sameDisplayPixels(controller.state().frame, oracleFive),
                         "the re-derived changed frame matches the live oracle");
     expectations.expect(session.setCurrentTime(core::RationalTime::fromInteger(1)) &&
-                            waitUntil([&] { return isReady(controller); }),
+                            bloom::test_support::awaitQtCondition("time 1 is revisited", [&] { return isReady(controller); }, kWait),
                         "time 1 is revisited");
     expectations.expect(preparations.load() == warmed + 1 &&
                             sameDisplayPixels(controller.state().frame, oracleOne),
@@ -409,7 +409,7 @@ void testTemporalRangeReuseKeepsUnaffectedFrames(Expectations& expectations) {
                                            core::RationalTime::fromInteger(3),
                                            core::RationalTime::fromInteger(10));
     expectations.expect(session.executeTransaction(std::move(shift)).changed() &&
-                            waitUntil([&] { return isReady(controller); }) &&
+                            bloom::test_support::awaitQtCondition("a shift re-derives exactly the newly changed interval", [&] { return isReady(controller); }, kWait) &&
                             preparations.load() == beforeShift + 1,
                         "a shift re-derives exactly the newly changed interval");
     expectations.expect(
@@ -420,7 +420,7 @@ void testTemporalRangeReuseKeepsUnaffectedFrames(Expectations& expectations) {
     auto settings = document::makeBloomNeutralColorSettingsV1(core::Sha256Digest{});
     const auto beforeColor = preparations.load();
     session.setColorSettings(settings);
-    expectations.expect(waitUntil([&] { return preparations.load() > beforeColor; }),
+    expectations.expect(bloom::test_support::awaitQtCondition("a non-document evaluation transition forces a fresh derivation", [&] { return preparations.load() > beforeColor; }, kWait),
                         "a non-document evaluation transition forces a fresh derivation");
 
     reachQuiescence(controller, bridge, scheduler, expectations);
