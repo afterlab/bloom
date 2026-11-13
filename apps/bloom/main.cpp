@@ -867,6 +867,9 @@ int main(int argc, char* argv[]) try {
                             const bloom::runtime::CancellationToken& cancellation) {
                 return cpuEvaluator.evaluate(std::move(plan), request, cancellation);
             };
+        // query kind scopes (#724): the same device, OCIO context and CPU evaluator routes, and the
+        // preview cache's warm sidecars of the frames the Viewer's controller has cached.
+        mcpLiveUi.setScopes(routes, &previewController, previewFrameCache);
         scopesServices.scheduler = &taskScheduler;
         scopesServices.bridge = &taskUiBridge;
         scopesServices.cache = previewFrameCache;

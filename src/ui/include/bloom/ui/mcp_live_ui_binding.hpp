@@ -17,6 +17,8 @@
 // the members that need it answer a typed refusal.
 
 #include <bloom/mcp/live_ui_port.hpp>
+#include <bloom/runtime/scope_frame_measure.hpp>
+#include <bloom/ui/preview_frame_cache.hpp>
 
 #include <QObject>
 #include <QPointer>
@@ -33,6 +35,7 @@ class QTimer;
 
 namespace bloom::ui {
 
+class CompositionPreviewController;
 class CompositionSession;
 class ExportQueueAdapter;
 class MainWindow;
@@ -66,6 +69,13 @@ class McpLiveUiBinding final : public QObject {
     // The Script editor's runtime, for script.run. Weak; without one (a build without embedded
     // Python) script.run answers Unbound.
     void setScriptRuntime(const std::shared_ptr<ScriptPanelRuntime>& runtime);
+    // #724 Scopes: where query kind scopes measures a frame (the application's final-render device,
+    // its shared OCIO context and its CPU reference evaluator, the same routes the Scopes panel
+    // uses), and the preview controller and cache whose warm sidecars a read may reuse. The routes
+    // are copied; the controller is weak and the cache shared. Without them a read measures every
+    // frame on the CPU reference.
+    void setScopes(runtime::ScopeFrameRoutes routes, CompositionPreviewController* preview,
+                   PreviewFrameCacheHandle cache);
 
     // The members, bound to this object (which must outlive the service).
     [[nodiscard]] mcp::McpLiveUiPort port();
@@ -107,6 +117,14 @@ class McpLiveUiBinding final : public QObject {
     [[nodiscard]] mcp::McpViewerState viewerState();
     [[nodiscard]] mcp::McpPreviewCacheState previewCache() const;
     [[nodiscard]] mcp::McpViewerRoute viewerRoute();
+    // query kind scopes (#724).
+    [[nodiscard]] runtime::ScopeFrameRoutes scopeRoutes() const;
+    // The preview cache's sidecar of the frame at `query.time` when it was measured under exactly
+    // what the read measures: the same frame identity (composition, resolution, quality, color,
+    // display and view, no region of interest, isolation or channel inspection, looks on) and the
+    // same measure settings.
+    [[nodiscard]] std::optional<scripting::ScopeWarmHit>
+    warmScopes(const scripting::ScopeWarmQuery& query) const;
 
   private:
     struct Pending;
@@ -137,6 +155,9 @@ class McpLiveUiBinding final : public QObject {
     QPointer<ExportQueueAdapter> exportQueue_;
     QPointer<TaskMonitorModel> tasks_;
     std::weak_ptr<ScriptPanelRuntime> script_;
+    runtime::ScopeFrameRoutes scopeRoutes_;
+    QPointer<CompositionPreviewController> scopePreview_;
+    PreviewFrameCacheHandle scopeCache_;
     std::unique_ptr<Pending> pending_;
     QTimer* jobsTimer_ = nullptr;
 };

@@ -1,16 +1,18 @@
 #include <bloom/ui/mcp_live_ui_binding.hpp>
 
 #include "composition_editor_support.hpp"
+#include "composition_preview_stage_shared.hpp"
 
 #include <bloom/document/project.hpp>
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/project_session.hpp>
+#include <bloom/ui/application_preferences.hpp>
+#include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/export_queue_adapter.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/project_host.hpp>
-#include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/task_monitor_model.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
@@ -114,25 +116,23 @@ mcp::McpLiveUiPort McpLiveUiBinding::port() {
                    std::function<void(mcp::McpProjectResult)> done) {
                 projectLifecycle(std::move(request), std::move(done));
             },
-        .setSelection = [this](const mcp::McpSelectionRequest& request) {
-            return setSelection(request);
-        },
+        .setSelection =
+            [this](const mcp::McpSelectionRequest& request) { return setSelection(request); },
         .activateComposition =
             [this](const document::CompositionId composition) {
                 return activateComposition(composition);
             },
-        .transport = [this](const mcp::McpTransportRequest& request) {
-            return transport(request);
-        },
+        .transport = [this](const mcp::McpTransportRequest& request) { return transport(request); },
         .setViewer = [this](const mcp::McpViewerRequest& request) { return setViewer(request); },
         .setColorSettings =
             [this](const document::ColorSettings& settings) { return setColorSettings(settings); },
         .revealExport =
             [this](const std::optional<document::ExportJobId> job) { return revealExport(job); },
         .preferences = [this] { return preferences(); },
-        .setPreferences = [this](const std::vector<mcp::McpPreference>& entries) {
-            return setPreferences(entries);
-        },
+        .setPreferences =
+            [this](const std::vector<mcp::McpPreference>& entries) {
+                return setPreferences(entries);
+            },
         .purgeCache = [this](const bool media) { return purgeCache(media); },
         .jobs = [this] { return jobs(); },
         .cancelJob = [this](const std::uint64_t job) { return cancelJob(job); },
@@ -151,8 +151,7 @@ mcp::McpLiveUiPort McpLiveUiBinding::port() {
             [this](const std::string& name) { return deleteCompositionPreset(name); },
         .answerDialog = [this](const std::string& button) { return answerDialog(button); },
         .runScript =
-            [this](mcp::McpScriptRequest request,
-                   std::function<void(mcp::McpScriptResult)> done) {
+            [this](mcp::McpScriptRequest request, std::function<void(mcp::McpScriptResult)> done) {
                 runScript(std::move(request), std::move(done));
             },
         .cancelScript = [this] { cancelScript(); },
@@ -160,6 +159,8 @@ mcp::McpLiveUiPort McpLiveUiBinding::port() {
         .viewerState = [this] { return viewerState(); },
         .previewCache = [this] { return previewCache(); },
         .viewerRoute = [this] { return viewerRoute(); },
+        .scopeRoutes = [this] { return scopeRoutes(); },
+        .warmScopes = [this](const scripting::ScopeWarmQuery& query) { return warmScopes(query); },
     };
 }
 
@@ -504,6 +505,44 @@ mcp::McpPreviewCacheState McpLiveUiBinding::previewCache() const {
         }
     }
     return state;
+}
+
+void McpLiveUiBinding::setScopes(runtime::ScopeFrameRoutes routes,
+                                 CompositionPreviewController* const preview,
+                                 PreviewFrameCacheHandle cache) {
+    scopeRoutes_ = std::move(routes);
+    scopePreview_ = preview;
+    scopeCache_ = std::move(cache);
+}
+
+runtime::ScopeFrameRoutes McpLiveUiBinding::scopeRoutes() const { return scopeRoutes_; }
+
+std::optional<scripting::ScopeWarmHit>
+McpLiveUiBinding::warmScopes(const scripting::ScopeWarmQuery& query) const {
+    if (scopeCache_ == nullptr || scopePreview_ == nullptr)
+        return std::nullopt;
+    const auto key = scopePreview_->cacheKeyForTime(query.time);
+    if (!key || key->compositionId != query.composition ||
+        key->output != runtime::PreviewOutput::Composition ||
+        !(key->resolution == query.resolution) || key->quality != query.quality ||
+        !(key->colorIntent == query.colorIntent))
+        return std::nullopt;
+    // The read measures the whole frame, with looks, and no Viewer inspection: a frame the Viewer
+    // cached under a region of interest, an isolation or a channel view is another picture.
+    if (key->roi || !key->isolation.empty() || key->channelInspection || !key->showLook)
+        return std::nullopt;
+    if (query.settings.signal == runtime::ScopeSignal::Display) {
+        const bool named = key->displayName == query.display && key->viewName == query.view;
+        // A Viewer that has not chosen a display shows the neutral configuration's one pair.
+        const bool defaulted = query.defaultDisplayView && key->displayName.empty() &&
+                               key->viewName.empty() && detail::isNeutralIntent(key->colorIntent);
+        if (!named && !defaulted)
+            return std::nullopt;
+    }
+    const auto sidecar = scopeCache_->scopesFor(*key, PreviewScopeIdentity{query.settings, {}});
+    if (sidecar == nullptr)
+        return std::nullopt;
+    return scripting::ScopeWarmHit{sidecar->tables, sidecar->area, sidecar->note};
 }
 
 mcp::McpViewerRoute McpLiveUiBinding::viewerRoute() {
