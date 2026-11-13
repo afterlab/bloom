@@ -286,6 +286,12 @@ void ViewerEditor::applyViewerChoicesToPreview() {
 
 void ViewerEditor::connectPreviewController() {
     auto* controller = previewController_;
+    // The deferred resolution update reads the controller, so it does not outlive it: a Viewer
+    // waiting to be deleted can still be here after the controller it showed has gone.
+    connect(controller, &QObject::destroyed, this, [this] {
+        if (previewResolutionTimer_ != nullptr)
+            previewResolutionTimer_->stop();
+    });
     connect(controller, &CompositionPreviewController::stateChanged, this, [this] {
         if (probePosition_)
             refreshProbe(*probePosition_);

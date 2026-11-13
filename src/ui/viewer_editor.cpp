@@ -525,6 +525,9 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
 }
 
 ViewerEditor::~ViewerEditor() {
+    // A pending resolution update must not run while the members below are being taken down.
+    if (previewResolutionTimer_ != nullptr)
+        previewResolutionTimer_->stop();
     resetChannelDisplay();
     if (gpuResidentTimer_ != nullptr) {
         gpuResidentTimer_->stop();
