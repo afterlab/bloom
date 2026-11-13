@@ -353,6 +353,22 @@ if(BUILD_TESTING)
     set_tests_properties(bloom.scripting.headless-export-queue-gpu-display PROPERTIES
         SKIP_RETURN_CODE 77)
 
+    # #724 Scopes: the scripting read on a real device (the headless routes MCP and Python use)
+    # against the CPU reference of the same frame. Skips (exit 77) without a device or the packaged
+    # tools. Registered on every platform, like the render tests above.
+    add_executable(bloom_scripting_scope_read_native_test tests/scope_read_native_tests.cpp)
+    target_link_libraries(bloom_scripting_scope_read_native_test PRIVATE bloom_scripting)
+    bloom_package_gpu_shader_tools(bloom_scripting_scope_read_native_test)
+    bloom_enable_warnings(bloom_scripting_scope_read_native_test)
+    bloom_add_test(
+        NAME bloom.scripting.scope-read-native
+        COMMAND bloom_scripting_scope_read_native_test
+        LABELS unit scripting runtime native gpu render
+        ENVIRONMENT ${_bloom_render_injected_test_environment}
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.scripting.scope-read-native PROPERTIES SKIP_RETURN_CODE 77)
+
     # Scripted export route-proof writers: the same production Render::run facade, opt-in
     # --route-proof-dir, publishing only after every parity assertion passed. The sequence/range
     # route exercises the real FrameRangeRunner image-sequence mode; the headless route the
