@@ -144,6 +144,12 @@ struct ApplicationPreferences final {
     // An operating-system notification for a render result while Bloom is not the active window.
     bool renderNotificationsEnabled = true;
 
+    // #688: the keys of Edit > Purge > Purge preview cache and Purge media cache, as portable
+    // key-sequence text (QKeySequence::PortableText). Empty is no shortcut. Ctrl is the Command
+    // key on macOS.
+    QString purgePreviewCacheShortcut = QStringLiteral("Ctrl+Alt+Shift+P");
+    QString purgeMediaCacheShortcut = QStringLiteral("Ctrl+Alt+Shift+M");
+
     // Agent routes that act on the machine rather than the project. Both are off by default and
     // only this model (the Preferences window) turns them on: the MCP preferences.set refuses to.
     // Answer open dialogs: the dialog.answer tool may press a button of the dialog that blocks the

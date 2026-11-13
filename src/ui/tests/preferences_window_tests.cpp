@@ -15,6 +15,8 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QFontMetrics>
+#include <QKeySequence>
+#include <QKeySequenceEdit>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -201,6 +203,54 @@ void testApplyEmitsAndClearsDirty(Expectations& check) {
     check.expect(!apply->isEnabled(), "a successful Apply clears the dirty state");
 }
 
+// #688: the Shortcuts page edits the two Purge keys. A key another command of the window has is
+// refused with that command's name, the other Purge key is refused too, and an emptied field is
+// no shortcut.
+void testShortcutsPage(Expectations& check) {
+    const auto initial = ui::defaultApplicationPreferences();
+    check.expect(initial.purgePreviewCacheShortcut == QStringLiteral("Ctrl+Alt+Shift+P") &&
+                     initial.purgeMediaCacheShortcut == QStringLiteral("Ctrl+Alt+Shift+M"),
+                 "#688: the Purge commands have default shortcuts");
+    QAction taken(QStringLiteral("Add to Export &Queue"), &owner());
+    taken.setObjectName(QStringLiteral("takenShortcutAction"));
+    taken.setShortcut(QKeySequence(Qt::CTRL | Qt::Key_M));
+    owner().addAction(&taken);
+    ui::PreferencesWindow window(owner(), initial);
+    auto* preview =
+        window.findChild<QKeySequenceEdit*>(QStringLiteral("preferencesPurgePreviewCacheShortcut"));
+    auto* media =
+        window.findChild<QKeySequenceEdit*>(QStringLiteral("preferencesPurgeMediaCacheShortcut"));
+    auto* refusal = window.findChild<QLabel*>(QStringLiteral("preferencesShortcutRefusal"));
+    auto* apply = window.findChild<QAbstractButton*>(QStringLiteral("preferencesApplyButton"));
+    check.expect(preview != nullptr && media != nullptr && refusal != nullptr && apply != nullptr,
+                 "#688: the Shortcuts page has a field for each Purge command");
+    if (preview == nullptr || media == nullptr || refusal == nullptr || apply == nullptr) {
+        owner().removeAction(&taken);
+        return;
+    }
+    check.expect(preview->keySequence() == QKeySequence(Qt::CTRL | Qt::ALT | Qt::SHIFT | Qt::Key_P) &&
+                     media->keySequence() == QKeySequence(Qt::CTRL | Qt::ALT | Qt::SHIFT | Qt::Key_M),
+                 "#688: the fields show the current keys");
+    preview->setKeySequence(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_F9));
+    check.expect(window.preferences().purgePreviewCacheShortcut == QStringLiteral("Ctrl+Alt+F9") &&
+                     apply->isEnabled() && refusal->isHidden(),
+                 "#688: a new key updates the draft and enables Apply");
+    preview->setKeySequence(QKeySequence(Qt::CTRL | Qt::Key_M));
+    check.expect(window.preferences().purgePreviewCacheShortcut == QStringLiteral("Ctrl+Alt+F9") &&
+                     preview->keySequence() == QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_F9) &&
+                     !refusal->isHidden() &&
+                     refusal->text().contains(QStringLiteral("Add to Export Queue")),
+                 "#688: a key another command has is refused, naming the command");
+    media->setKeySequence(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_F9));
+    check.expect(window.preferences().purgeMediaCacheShortcut == QStringLiteral("Ctrl+Alt+Shift+M") &&
+                     !refusal->isHidden(),
+                 "#688: the two Purge commands cannot share a key");
+    media->setKeySequence(QKeySequence());
+    check.expect(window.preferences().purgeMediaCacheShortcut.isEmpty() && refusal->isHidden(),
+                 "#688: an emptied field is no shortcut");
+    owner().removeAction(&taken);
+}
+
 void testSetPreferencesRoundTripsControls(Expectations& check) {
     ui::PreferencesWindow window(owner(), ui::ApplicationPreferences{});
     const auto prefs = samplePreferences();
@@ -323,15 +373,16 @@ void testRestartBadgesAndRail(Expectations& check) {
         else
             categories << rail->item(row)->text();
     }
-    check.expect(categories == QStringList{"General", "Import", "Sounds", "Viewer", "Timeline",
-                                           "Node Graph", "Memory & Caches", "Performance"} &&
+    check.expect(categories == QStringList{"General", "Import", "Sounds", "Shortcuts", "Viewer",
+                                           "Timeline", "Node Graph", "Memory & Caches",
+                                           "Performance"} &&
                      gaps == 2,
-                 "the sidebar lists the eight categories in three groups");
-    check.expect(pages->count() == 8, "the stack carries the eight pages");
+                 "the sidebar lists the nine categories in three groups");
+    check.expect(pages->count() == 9, "the stack carries the nine pages");
     const auto pageOf = [pages](const char* name) {
         return pages->indexOf(pages->findChild<QWidget*>(QLatin1StringView(name)));
     };
-    rail->setCurrentRow(5);
+    rail->setCurrentRow(6);
     check.expect(pages->currentIndex() == pageOf("preferencesTimelinePage"),
                  "selecting a category switches the page");
     // A sidebar list, not radio dots: the keyboard moves through it like any list, over the gaps.
@@ -837,6 +888,7 @@ int main(int argc, char** argv) {
     testControlsReflectPreferences(check);
     testEditingUpdatesDraftAndApplyState(check);
     testApplyEmitsAndClearsDirty(check);
+    testShortcutsPage(check);
     testSetPreferencesRoundTripsControls(check);
     testRestoreDefaults(check);
     testCacheDirectoryIsValidated(check);

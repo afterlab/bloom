@@ -247,7 +247,8 @@ PreferencesWindow::PreferencesWindow(QWidget& owner, const ApplicationPreference
     // editors, the machine. A page whose id no group names (a later page such as Sounds, until it
     // is listed) still appears, in a group of its own after these.
     std::vector<std::vector<QString>> groups{
-        {QStringLiteral("general"), QStringLiteral("import"), QStringLiteral("sounds")},
+        {QStringLiteral("general"), QStringLiteral("import"), QStringLiteral("sounds"),
+         QStringLiteral("shortcuts")},
         {QStringLiteral("viewer"), QStringLiteral("timeline"), QStringLiteral("nodes")},
         {QStringLiteral("memory"), QStringLiteral("performance")}};
     std::vector<QString> unlisted;
@@ -488,6 +489,7 @@ std::vector<PreferencesWindow::Page> PreferencesWindow::buildPages() {
     pages.push_back({QStringLiteral("nodes"), tr("Node Graph"), buildNodeGraphPage()});
     pages.push_back({QStringLiteral("viewer"), tr("Viewer"), buildViewerPage()});
     pages.push_back({QStringLiteral("sounds"), tr("Sounds"), buildSoundsPage()});
+    pages.push_back({QStringLiteral("shortcuts"), tr("Shortcuts"), buildShortcutsPage()});
     pages.push_back({QStringLiteral("import"), tr("Import"), buildImportPage()});
     pages.push_back({QStringLiteral("performance"), tr("Performance"), buildPerformancePage()});
     return pages;

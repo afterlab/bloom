@@ -82,6 +82,7 @@ class PreferencesWindow final : public kit::KDialog {
     QWidget* buildNodeGraphPage();
     QWidget* buildViewerPage();
     QWidget* buildSoundsPage();
+    QWidget* buildShortcutsPage();
     QWidget* buildImportPage();
     QWidget* buildPerformancePage();
     [[nodiscard]] QWidget* makeScrollPage();

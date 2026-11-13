@@ -719,6 +719,13 @@ void MainWindow::createMenus(QMenuBar& menuBar) {
     purgeMediaCacheAction_ = purgeMenu_->addAction(tr("Purge media cache"));
     purgeMediaCacheAction_->setObjectName(QStringLiteral("purgeMediaCacheAction"));
     connect(purgeMediaCacheAction_, &QAction::triggered, this, &MainWindow::purgeMediaCache);
+    // #688: both have a key, shown here and edited in Preferences > Shortcuts.
+    for (auto* action : {purgePreviewCacheAction_, purgeMediaCacheAction_})
+        action->setShortcutContext(Qt::WindowShortcut);
+    {
+        const QSettings settings;
+        applyPurgeShortcuts(loadApplicationPreferences(settings));
+    }
 
     compositionMenu_ = menuBar.addMenu("&Composition");
     createCompositionMenu(*compositionMenu_);
@@ -1114,11 +1121,22 @@ void MainWindow::applyPreferencesToOpenEditors(const ApplicationPreferences& pre
     // click would toggle from stale state. Mirror the committed preference with signals blocked so
     // no duplicate playback command runs here; the app's preferencesChanged handler owns the
     // playback engine update.
+    applyPurgeShortcuts(preferences);
     if (viewAudioEnabledAction_ != nullptr &&
         viewAudioEnabledAction_->isChecked() != preferences.audioEnabled) {
         const QSignalBlocker blocker(viewAudioEnabledAction_);
         viewAudioEnabledAction_->setChecked(preferences.audioEnabled);
     }
+}
+
+// #688: the Purge actions take their keys from the preferences (empty: none).
+void MainWindow::applyPurgeShortcuts(const ApplicationPreferences& preferences) {
+    if (purgePreviewCacheAction_ != nullptr)
+        purgePreviewCacheAction_->setShortcut(QKeySequence::fromString(
+            preferences.purgePreviewCacheShortcut, QKeySequence::PortableText));
+    if (purgeMediaCacheAction_ != nullptr)
+        purgeMediaCacheAction_->setShortcut(QKeySequence::fromString(
+            preferences.purgeMediaCacheShortcut, QKeySequence::PortableText));
 }
 
 void MainWindow::applyCommittedPreferencesForTest(const ApplicationPreferences& preferences) {

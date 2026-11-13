@@ -232,6 +232,7 @@ class MainWindow final : public QMainWindow {
     void showProjectColorSettings();
     void showPreferences();
     void applyPreferencesToOpenEditors(const ApplicationPreferences& preferences);
+    void applyPurgeShortcuts(const ApplicationPreferences& preferences);
 
     const EditorRegistry& editorRegistry_;
     CompositionSession& compositionSession_;

@@ -51,8 +51,18 @@ with a modifier — bare letters belong to tools.
 | `Ctrl+Shift+Space`, `Numpad 0` | RAM Preview: cache this composition's range, then play it; press again, or `Esc`, to cancel (never fires while typing in a field) |
 | `Esc` | Cancel the RAM preview being cached (bound only while one is) |
 | `F11` | Full screen |
+| `Ctrl+Alt+Shift+P` | Edit → Purge… → Purge preview cache (default; editable in Preferences → Shortcuts) |
+| `Ctrl+Alt+Shift+M` | Edit → Purge… → Purge media cache (default; editable in Preferences → Shortcuts) |
 | `` ` `` | Maximize or restore the panel under the pointer |
 | `Alt` (held) | Reveal menu mnemonics |
+
+The two Purge keys (#688) use all three modifiers because a purge is deliberate maintenance that
+throws work away, never something to hit by accident beside a neighbor: `Ctrl+Shift+P` is the
+Viewer's pixel grid and `Ctrl+M` is Add to Export Queue. `P` is for preview and `M` for media. No
+other Bloom command and no reserved system shortcut on Linux, macOS (where Ctrl is Command) or
+Windows uses either. Both are window shortcuts, shown beside their menu items, and
+**Preferences → Shortcuts** changes or clears them; a key another command of the window already has
+is refused there with that command's name.
 
 New project (`Ctrl+N`) and application startup begin **blank**: the project owns no composition, so
 every editor shows its empty state and the composition-dependent commands (Duplicate, Rename,

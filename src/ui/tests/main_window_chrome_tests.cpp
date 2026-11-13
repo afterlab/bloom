@@ -228,6 +228,46 @@ void testLegacyLayoutMigration(Expectations& expectations) {
                         "the current schema pins Assets into the migrated default");
 }
 
+// #688: Purge preview cache and Purge media cache have keys, shown in the Edit menu, that no other
+// command of the window answers to, and the preferences change them.
+void testPurgeShortcuts(Expectations& expectations) {
+    bloom::ui::test::WindowFixture fixture;
+    auto* preview = fixture.window->findChild<QAction*>(QStringLiteral("purgePreviewCacheAction"));
+    auto* media = fixture.window->findChild<QAction*>(QStringLiteral("purgeMediaCacheAction"));
+    expectations.expect(preview != nullptr && media != nullptr, "purge shortcuts: both actions exist");
+    if (preview == nullptr || media == nullptr)
+        return;
+    expectations.expect(
+        preview->shortcut() == QKeySequence(Qt::CTRL | Qt::ALT | Qt::SHIFT | Qt::Key_P) &&
+            media->shortcut() == QKeySequence(Qt::CTRL | Qt::ALT | Qt::SHIFT | Qt::Key_M) &&
+            preview->shortcutContext() == Qt::WindowShortcut &&
+            media->shortcutContext() == Qt::WindowShortcut,
+        "purge shortcuts: the defaults are Ctrl+Alt+Shift+P and Ctrl+Alt+Shift+M, window-wide");
+    auto* purgeMenu = fixture.window->findChild<QMenu*>(QStringLiteral("editPurgeMenu"));
+    expectations.expect(purgeMenu != nullptr && purgeMenu->actions().contains(preview) &&
+                            purgeMenu->actions().contains(media),
+                        "purge shortcuts: the Edit > Purge menu lists both actions, which carry "
+                        "their keys");
+    QStringList clashes;
+    for (const auto* action : fixture.window->findChildren<QAction*>()) {
+        if (action == preview || action == media)
+            continue;
+        for (const auto& keys : action->shortcuts())
+            if (keys.matches(preview->shortcut()) == QKeySequence::ExactMatch ||
+                keys.matches(media->shortcut()) == QKeySequence::ExactMatch)
+                clashes << action->objectName() + QLatin1Char(' ') + action->text();
+    }
+    expectations.expect(clashes.isEmpty(), "purge shortcuts: no other command has either key: " +
+                                               clashes.join(QStringLiteral(", ")).toStdString());
+    auto preferences = bloom::ui::defaultApplicationPreferences();
+    preferences.purgePreviewCacheShortcut = QStringLiteral("Ctrl+Alt+F9");
+    preferences.purgeMediaCacheShortcut.clear();
+    fixture.window->applyCommittedPreferencesForTest(preferences);
+    expectations.expect(preview->shortcut() == QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_F9) &&
+                            media->shortcut().isEmpty(),
+                        "purge shortcuts: the preferences change and clear the keys");
+}
+
 void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expectations) {
     try {
         bloom::ui::test::WindowFixture fixture;
@@ -1402,6 +1442,7 @@ int main(int argc, char** argv) {
     testChromeModeFromSettingsReadsTheInjectedFile(expectations);
     testLegacyLayoutMigration(expectations);
     testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(expectations);
+    testPurgeShortcuts(expectations);
     testMainWindowAlwaysBuildsNativeChrome(expectations);
     testNumpadZeroIsTheRamPreviewShortcut(expectations);
     testNumpadZeroReachesRamPreviewFromEveryEditor(expectations);

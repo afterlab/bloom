@@ -48,6 +48,8 @@ constexpr auto kSoundVolumeKey = "sound/volume-percent";
 constexpr auto kEventSoundsKey = "sound/events";
 constexpr auto kInteractionSoundsKey = "sound/interaction";
 constexpr auto kRenderNotificationsKey = "sound/render-notifications";
+constexpr auto kPurgePreviewCacheShortcutKey = "shortcuts/purge-preview-cache";
+constexpr auto kPurgeMediaCacheShortcutKey = "shortcuts/purge-media-cache";
 constexpr auto kAgentAnswerDialogsKey = "agents/answer-dialogs";
 constexpr auto kAgentRunScriptsKey = "agents/run-scripts";
 constexpr auto kImportSequenceFrameRateKey = "import/sequence-frame-rate";
@@ -259,6 +261,14 @@ ApplicationPreferences loadApplicationPreferences(const QSettings& settings) {
         settings.value(QLatin1String(kInteractionSoundsKey), false).toBool();
     preferences.renderNotificationsEnabled =
         settings.value(QLatin1String(kRenderNotificationsKey), true).toBool();
+    // #688: a stored value is the artist's, an empty one included (no shortcut); only a missing
+    // one is the default.
+    if (settings.contains(QLatin1String(kPurgePreviewCacheShortcutKey)))
+        preferences.purgePreviewCacheShortcut =
+            settings.value(QLatin1String(kPurgePreviewCacheShortcutKey)).toString();
+    if (settings.contains(QLatin1String(kPurgeMediaCacheShortcutKey)))
+        preferences.purgeMediaCacheShortcut =
+            settings.value(QLatin1String(kPurgeMediaCacheShortcutKey)).toString();
     preferences.agentsAnswerDialogs =
         settings.value(QLatin1String(kAgentAnswerDialogsKey), false).toBool();
     preferences.agentsRunScripts = settings.value(QLatin1String(kAgentRunScriptsKey), false).toBool();
@@ -360,6 +370,10 @@ void saveApplicationPreferences(QSettings& settings, const ApplicationPreference
     settings.setValue(QLatin1String(kInteractionSoundsKey), preferences.interactionSoundsEnabled);
     settings.setValue(QLatin1String(kRenderNotificationsKey),
                       preferences.renderNotificationsEnabled);
+    settings.setValue(QLatin1String(kPurgePreviewCacheShortcutKey),
+                      preferences.purgePreviewCacheShortcut);
+    settings.setValue(QLatin1String(kPurgeMediaCacheShortcutKey),
+                      preferences.purgeMediaCacheShortcut);
     settings.setValue(QLatin1String(kAgentAnswerDialogsKey), preferences.agentsAnswerDialogs);
     settings.setValue(QLatin1String(kAgentRunScriptsKey), preferences.agentsRunScripts);
     const auto& rate = preferences.importSequenceFrameRate;

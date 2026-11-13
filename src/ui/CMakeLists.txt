@@ -509,6 +509,7 @@ target_sources(
         preferences_window.hpp
         preferences_window_performance.cpp
         preferences_window_import.cpp
+        preferences_window_shortcuts.cpp
         preferences_window_sounds.cpp
         frameless_window_support.cpp
         jobs_editor.cpp

@@ -201,6 +201,17 @@ void testSoundDefaultsAndBounds(Expectations& check) {
     ui::saveApplicationPreferences(settings, prefs);
     check.expect(ui::loadApplicationPreferences(settings).soundVolumePercent == 100,
                  "saving clamps the volume");
+    // #688: the Purge shortcuts. A stored empty value is the artist's "no shortcut".
+    check.expect(defaults.purgePreviewCacheShortcut == QStringLiteral("Ctrl+Alt+Shift+P") &&
+                     defaults.purgeMediaCacheShortcut == QStringLiteral("Ctrl+Alt+Shift+M"),
+                 "#688: the Purge commands default to Ctrl+Alt+Shift+P and Ctrl+Alt+Shift+M");
+    prefs.purgePreviewCacheShortcut = QStringLiteral("Ctrl+Alt+F9");
+    prefs.purgeMediaCacheShortcut.clear();
+    ui::saveApplicationPreferences(settings, prefs);
+    const auto reloaded = ui::loadApplicationPreferences(settings);
+    check.expect(reloaded.purgePreviewCacheShortcut == QStringLiteral("Ctrl+Alt+F9") &&
+                     reloaded.purgeMediaCacheShortcut.isEmpty(),
+                 "#688: an edited and a cleared Purge shortcut are stored and read back");
 }
 
 // Import (#381): a sequence rate (or the composition's) and a still duration (or the

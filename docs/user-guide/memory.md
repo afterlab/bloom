@@ -156,7 +156,9 @@ GPU-driver memory and do not guarantee protection from every allocation failure.
 one edits the project: no command, revision, dirty state, or undo step is produced, and no live
 frame held by the viewer or an export is invalidated — the purge only drops the caches' own
 references, so anything still in use stays valid until its owner releases it. Neither command asks
-for confirmation; both clear only rebuildable derived data.
+for confirmation; both clear only rebuildable derived data. Each has a shortcut, shown in the menu:
+Ctrl+Alt+Shift+P for the preview cache and Ctrl+Alt+Shift+M for the media cache (Command in place
+of Ctrl on macOS). **Preferences → Shortcuts** changes or clears either one.
 
 - **Purge preview cache** drops every retained RAM preview frame, including the cache's references
   to GPU-resident frames, the evaluator's cached derived operation results, and the shared GPU-scene
