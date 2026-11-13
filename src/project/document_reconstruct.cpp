@@ -103,7 +103,8 @@ using StepResult = std::optional<ReconstructionRejected>;
                                             entry.slotId.value());
         }
     }
-    graph.setCompositionOutput(std::move(decodedGraph.compositionOutput));
+    if (decodedGraph.compositionOutput)
+        graph.setCompositionOutput(std::move(*decodedGraph.compositionOutput));
     return std::nullopt;
 }
 

@@ -120,7 +120,8 @@ struct DecodedGraph final {
     std::vector<document::LayerOutputBoundary> layerOutputs;
     DecodedLayerStack layerStack;
     std::vector<DecodedLayerStack> merges;
-    document::OutputPortRef compositionOutput;
+    // #716: empty when the composition's Output node was deleted (the document holds null).
+    std::optional<document::OutputPortRef> compositionOutput;
 
     friend bool operator==(const DecodedGraph&, const DecodedGraph&) = default;
 };

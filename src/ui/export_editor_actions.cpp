@@ -406,6 +406,23 @@ void ExportEditor::offerSoftwareEncoder(const document::ExportJobId job, const d
     });
 }
 
+// #716: a job whose composition has no Output node cannot export; the status bar says so when it
+// is asked to start (the queue refuses the job itself with the same words).
+void ExportEditor::warnWithoutOutput(const std::vector<document::ExportJobId>& jobs) {
+    const auto snapshot = adapter_->snapshot();
+    if (!snapshot)
+        return;
+    for (const auto& job : snapshot->jobs) {
+        if (std::ranges::find(jobs, job.id) == jobs.end())
+            continue;
+        const auto* composition = session_.snapshot().project().findComposition(job.record.composition);
+        if (composition != nullptr && !composition->graph().compositionOutput().has_value()) {
+            emit session_.commandRejected(CompositionSession::noOutputMessage());
+            return;
+        }
+    }
+}
+
 void ExportEditor::startAll() {
     const auto snapshot = adapter_->snapshot();
     if (!snapshot)
@@ -414,6 +431,7 @@ void ExportEditor::startAll() {
     for (const auto& job : snapshot->jobs)
         if (!job.transient && job.record.enabled && job.state == host::ExportJobState::Ready)
             jobs.push_back(job.id);
+    warnWithoutOutput(jobs);
     QPointer<ExportEditor> self(this);
     confirmReplacements(jobs, [self] {
         if (self != nullptr)
@@ -422,6 +440,7 @@ void ExportEditor::startAll() {
 }
 
 void ExportEditor::startJob(const document::ExportJobId job) {
+    warnWithoutOutput({job});
     QPointer<ExportEditor> self(this);
     confirmReplacements({job}, [self, job] {
         if (self != nullptr)

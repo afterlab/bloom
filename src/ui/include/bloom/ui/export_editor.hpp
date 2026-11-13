@@ -145,6 +145,7 @@ class ExportEditor final : public QWidget, public EditorChromeProvider {
     void addActiveComposition();
     void showJobMenu(document::ExportJobId job, QPoint globalPosition);
     void report(const ExportEditResult& result);
+    void warnWithoutOutput(const std::vector<document::ExportJobId>& jobs);
     void quickRange(document::ExportJobId job, int kind);
     void chooseDestination(document::ExportJobId job, document::ExportOutputId output);
     void useDefaultName(document::ExportJobId job, document::ExportOutputId output);

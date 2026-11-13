@@ -150,18 +150,18 @@ void testDriversCountAsPaths(TestContext& test) {
                 "undo restores the driver and what it drove");
 }
 
-// The Composition Output and a node of a locked layer stay however unused they look.
+// #716: an Output node that is not the composition's output is unused like any other node; what
+// the composition renders through stays, as it is on the path.
 void testProtectedNodesStay(TestContext& test) {
     Fixture fixture;
     const auto output = addNode(fixture, kCompositionOutputNodeType);
     const auto loose = addNode(fixture, kSolidSourceNodeType);
     const auto unused = findUnusedNodes(fixture.composition());
-    test.expect(unused.removable == std::set<NodeId>{loose} &&
-                    unused.staying == std::set<NodeId>{output},
-                "a second Output is reported as staying, not removable");
-    test.expect(deleteUnused(fixture).changed() && has(fixture, output) && !has(fixture, loose) &&
+    test.expect(unused.removable == std::set<NodeId>{loose, output} && unused.staying.empty(),
+                "an Output node the composition does not render through is unused");
+    test.expect(deleteUnused(fixture).changed() && !has(fixture, output) && !has(fixture, loose) &&
                     has(fixture, kLayerStackNodeId),
-                "the Output and the Merge on it stay");
+                "the unused nodes go and the Merge the composition renders through stays");
 }
 
 // A frame loses deleted members; one left empty goes; one with no deleted member is untouched.

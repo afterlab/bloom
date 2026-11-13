@@ -8,7 +8,7 @@
 namespace bloom::quality::schema_detail {
 namespace {
 
-const std::array<SchemaNodePin, 669> kDocumentSchemaLock{{
+const std::array<SchemaNodePin, 671> kDocumentSchemaLock{{
     {"", R"pin({"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"urn:afterlab:bloom:schema:project-document:1.0","title":"Bloom Project Document 1.0","$comment":"The Bloom project document: one current schema. A document of a newer minor of the same major opens through the preservation rules in project-format.md; another major is refused.","type":"object","required":["schemaVersion","project","idAllocation","extensions"],"properties":["schemaVersion","project","idAllocation","extensions"],"$defs":["nodeGroup-1.31","nodeLayout-1.1","unsigned32","positiveUnsigned32","fixedVersion-1.0","schemaVersion-1.0","objectId","allocatorHighWater","signed64Decimal","positiveSigned64Decimal","positiveUnsigned32Decimal","humanFacingName","structuralText","namespacedIdentifier","rationalTime","positiveRationalTime","unsignedRatio","project-1.0","composition-1.0","safeAreaSettings-1.9","compositionFormat-1.0","colorSettings-1.0","ocioConfigReference-1.0","ocioConfigLocator-1.0","externalFileUri","ocioConfigRevision-1.0","ocioContextVariable-1.0","parameter-1.0","parameterSource-1.4","parameterValue-1.4","parameterValue-1.0","animationCurve-1.9","vec2ComponentKeyframe-1.9","vec3ComponentKeyframe-1.9","color4ComponentKeyframe-1.9","scalarKeyframe-1.3","graph-1.0","node-1.0","parameterBinding-1.0","edge-1.0","outputPortReference-1.0","inputPortReference-1.0","layerOutput-1.37","layerContentExtent-1.23","layerStack-1.0","layerStackEntry-1.0","idAllocation-1.0","extensionRecord-1.0","extensionTarget-1.0","extensionReferencePolicy-1.0","extensionHostReference-1.0","canonicalBase64","assetLocator-1.11","assetMember-1.36","assetManifest-1.36","asset-1.11","assetInterpretation-1.34","audio-1.11","keyframeHandle-1.12","keyframeInterpolation-1.30","keyframeHandleMode-1.32","keyframeEasing-1.30","pathPoint-1.14","pathAnchor-1.14","pathValue-1.14","compoundPathValue-1.43","font-1.15","assetFolder-1.16","videoStream-1.34","video-1.17","documentSchemaVersion","dataBlock-1.18","highestIssued-1.24","layerMask-1.24","trackMatte-1.24","pathKeyframe-1.24","exportQueue-1.29","exportJob-1.29","exportRange-1.29","exportOutput-1.29","exportFormat-1.33","exportCodecProfile-1.33","exportOutputSettings-1.29","exportNaming-1.29","exportDestination-1.29","gradientStop-1.38","gradientValue-1.38","gradientKeyframe-1.38","gradientColorMode-1.41","gradientHueDirection-1.41","gradientInterpolation-1.41"],"unevaluatedProperties":true})pin"},
     {"/properties/schemaVersion", R"pin({"$ref":"#/$defs/documentSchemaVersion"})pin"},
     {"/properties/project", R"pin({"$ref":"#/$defs/project-1.0"})pin"},
@@ -276,7 +276,9 @@ const std::array<SchemaNodePin, 669> kDocumentSchemaLock{{
     {"/$defs/graph-1.0/properties/layerStack", R"pin({"anyOf":2})pin"},
     {"/$defs/graph-1.0/properties/layerStack/anyOf/0", R"pin({"$ref":"#/$defs/layerStack-1.0"})pin"},
     {"/$defs/graph-1.0/properties/layerStack/anyOf/1", R"pin({"type":"null"})pin"},
-    {"/$defs/graph-1.0/properties/compositionOutput", R"pin({"$ref":"#/$defs/outputPortReference-1.0"})pin"},
+    {"/$defs/graph-1.0/properties/compositionOutput", R"pin({"anyOf":2})pin"},
+    {"/$defs/graph-1.0/properties/compositionOutput/anyOf/0", R"pin({"$ref":"#/$defs/outputPortReference-1.0"})pin"},
+    {"/$defs/graph-1.0/properties/compositionOutput/anyOf/1", R"pin({"type":"null"})pin"},
     {"/$defs/graph-1.0/properties/merges", R"pin({"type":"array","maxItems":1000000,"items":"<schema>"})pin"},
     {"/$defs/graph-1.0/properties/merges/items", R"pin({"$ref":"#/$defs/layerStack-1.0"})pin"},
     {"/$defs/node-1.0", R"pin({"type":"object","required":["id","typeId","schemaVersion","parameters"],"properties":["id","typeId","schemaVersion","parameters"],"unevaluatedProperties":true})pin"},

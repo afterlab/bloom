@@ -400,6 +400,9 @@ bool CanonicalGraph::eraseNode(const NodeId id) {
         return stack == nullptr || stack->find(*boundary.entrySlot) == nullptr;
     });
     std::erase_if(nodes_, [id](const auto& node) { return node.id == id; });
+    // #716: the composition's output endpoint leaves with its node.
+    if (compositionOutput_ && compositionOutput_->nodeId == id)
+        compositionOutput_.reset();
     return true;
 }
 
@@ -881,16 +884,18 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
         }
     }
 
-    if (!compositionOutput_.has_value()) {
-        result.add(ValidationCode::MissingCompositionOutput, "compositionOutput",
-                   "Composition graph requires one explicit output endpoint");
-    } else if (!compositionOutput_->nodeId.isValid() ||
-               !isValidStructuralText(compositionOutput_->port)) {
-        result.add(ValidationCode::InvalidValue, "compositionOutput",
-                   "Composition output endpoint is invalid");
-    } else if (findNode(compositionOutput_->nodeId) == nullptr) {
-        result.add(ValidationCode::MissingReference, "compositionOutput.nodeId",
-                   "Composition output references a missing node");
+    // #716: a composition may have no output endpoint: its Output node was deleted. It then
+    // renders, plays and exports nothing until an Output is added again. When it names one, the
+    // endpoint must be a node of the graph.
+    if (compositionOutput_.has_value()) {
+        if (!compositionOutput_->nodeId.isValid() ||
+            !isValidStructuralText(compositionOutput_->port)) {
+            result.add(ValidationCode::InvalidValue, "compositionOutput",
+                       "Composition output endpoint is invalid");
+        } else if (findNode(compositionOutput_->nodeId) == nullptr) {
+            result.add(ValidationCode::MissingReference, "compositionOutput.nodeId",
+                       "Composition output references a missing node");
+        }
     }
 
     std::deque<NodeId> ready;

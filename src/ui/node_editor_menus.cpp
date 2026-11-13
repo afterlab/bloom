@@ -170,15 +170,6 @@ QString addActionName(const std::string_view type) {
 QString removalRefusalText(const commands::NodeRemovalRefusal refusal) {
     using Refusal = commands::NodeRemovalRefusal;
     switch (refusal) {
-    case Refusal::CompositionOutput:
-        return QCoreApplication::translate(
-            "NodeGraphEditor",
-            "The Output belongs to the composition and cannot be deleted");
-    case Refusal::LayerStackMerge:
-        return QCoreApplication::translate(
-            "NodeGraphEditor",
-            "The Merge connected to the Output holds the composition's layers and cannot be "
-            "deleted; connect another Merge to the Output first");
     case Refusal::Locked:
         return QCoreApplication::translate(
             "NodeGraphEditor", "The node belongs to a locked layer; unlock the layer to delete it");

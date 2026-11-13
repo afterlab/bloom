@@ -1784,18 +1784,17 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
         } else if (!emitStack(graph.merges().front()))
             return false;
     }
-    if (!graph.compositionOutput().has_value()) {
-        {
-            state.walk.fail(CanonicalDocumentError::InvalidGraph, compositionIndex);
-            return false;
-        }
-    }
     if (!state.ok(writer.memberName("compositionOutput"))) {
         return false;
     }
     {
+        // #716: null when the composition's Output node was deleted, as layerStack is without a
+        // Merge.
         const PathScope compositionOutputScope(state, "compositionOutput");
-        if (!emitOutputPortRef(state, *graph.compositionOutput())) {
+        if (!graph.compositionOutput().has_value()) {
+            if (!state.ok(writer.nullValue()))
+                return false;
+        } else if (!emitOutputPortRef(state, *graph.compositionOutput())) {
             return false;
         }
     }

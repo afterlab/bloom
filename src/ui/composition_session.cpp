@@ -1005,6 +1005,18 @@ const document::Composition* CompositionSession::composition() const noexcept {
     return snapshot_.project().findComposition(compositionId_);
 }
 
+QString CompositionSession::noOutputMessage() {
+    return tr("The composition has no output node, so nothing can play or export");
+}
+
+bool CompositionSession::refuseWithoutOutput() {
+    const auto* active = composition();
+    if (active == nullptr || active->graph().compositionOutput().has_value())
+        return false;
+    emit commandRejected(noOutputMessage());
+    return true;
+}
+
 const CompositionSelection& CompositionSession::selection() const noexcept { return selection_; }
 
 core::RationalTime CompositionSession::currentTime() const noexcept { return currentTime_; }
@@ -2371,6 +2383,11 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
             normalizeSelection();
             normalizeViewerLevel();
             emit snapshotChanged();
+            // #716: the edit that takes the composition's Output away says what that means, however
+            // it was made (Delete, Dissolve, a script, an agent, redo).
+            if (const auto* before = previousSnapshot.project().findComposition(compositionId_);
+                before != nullptr && before->graph().compositionOutput().has_value())
+                static_cast<void>(refuseWithoutOutput());
             // A document command moved the time-indexed provenance. This is the distinct signal a
             // finite clip-range edit emits; evaluationChanged() is reserved for non-document
             // transitions (display qualification, colour settings, rebind) that always force work.

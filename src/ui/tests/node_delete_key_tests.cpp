@@ -139,7 +139,7 @@ int main(int argc, char** argv) {
             QCoreApplication::processEvents();
         }
 
-        // --- A protected node refuses, out loud.
+        // --- #716: the composition's Merge deletes like any other node, in one undo step.
         // --------------------------------------------------
         {
             const auto stack = a.nodeOfType(document::kLayerStackNodeType);
@@ -147,12 +147,12 @@ int main(int argc, char** argv) {
             if (stack.has_value()) {
                 a.session.selectNode(*stack);
                 QCoreApplication::processEvents();
-                QSignalSpy refusals(&a.session, &CompositionSession::commandRejected);
-                const auto before = a.session.composition()->graph().nodes().size();
                 pressKeyAtFocus(a, Qt::Key_Delete);
-                expect(a.session.composition()->graph().nodes().size() == before,
-                       "Merge cannot be deleted");
-                expect(!refusals.isEmpty(), "and the refusal reaches the artist as a status line");
+                expect(a.session.composition()->graph().findNode(*stack) == nullptr,
+                       "#716: Delete removes the composition's Merge");
+                expect(a.session.undo() &&
+                           a.session.composition()->graph().findNode(*stack) != nullptr,
+                       "#716: and one undo brings it back");
             }
         }
     } catch (const std::exception& error) {

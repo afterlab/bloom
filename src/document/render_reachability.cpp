@@ -558,6 +558,9 @@ RenderConfinement confineNodeChange(const Composition& composition,
         });
     };
 
+    // #716: the reachability may be an earlier revision's; this composition may have no output.
+    if (!graph.compositionOutput().has_value())
+        return {};
     const auto rootId = graph.compositionOutput()->nodeId;
     const auto duration = composition.duration();
     bool reachedRoot = false;

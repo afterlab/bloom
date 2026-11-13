@@ -210,7 +210,10 @@ Rows of a shared Layer node show the shared marker. Output with no direct Merge 
 rows. Properties lists the selected Merge's own entries in topmost-first order with editable blend
 mode and opacity on every entry, and shows the full layer controls of the selected row.
 
-Only Output and the Merge directly feeding it are protected from removal. Other Merges can be
+Output and the Merge directly feeding it can be removed like any other node; a composition without
+an Output has no output endpoint (`compositionOutput` is `null` in the project file) and renders,
+plays and exports nothing until an Output node is added, which names it as the endpoint again. A
+composition without any Merge refuses a new layer. Other Merges can be
 added, duplicated, disconnected or deleted through ordinary commands. There is no secondary layer
 list or generated Merge chain to synchronize. Composition sources provide nesting across composition graphs, as described below.
 
@@ -914,7 +917,8 @@ owner's second report.
 `RemoveNodes(set<NodeId>)` validates the entire set, then removes those nodes, incident edges,
 layout records, and parameters that no surviving node references. Orphaned owned animation curves
 are removed too. Removing a Layer Output also removes its boundary and stable stack slot, without
-removing shared upstream nodes. Only Output and the Merge directly feeding it are protected.
+removing shared upstream nodes. Output and the Merge directly feeding it are removed like any other
+node, and removing Output clears the composition's output endpoint.
 
 `DuplicateNodes(set<NodeId>, offset)` allocates new node and parameter IDs, deeply copies owned
 curves and keyframes, copies all layout fields with a finite offset, and copies only edges between

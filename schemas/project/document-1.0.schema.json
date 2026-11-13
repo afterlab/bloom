@@ -1303,7 +1303,14 @@
                     ]
                 },
                 "compositionOutput": {
-                    "$ref": "#/$defs/outputPortReference-1.0"
+                    "anyOf": [
+                        {
+                            "$ref": "#/$defs/outputPortReference-1.0"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ]
                 },
                 "merges": {
                     "type": "array",

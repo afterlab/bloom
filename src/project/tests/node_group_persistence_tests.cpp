@@ -183,11 +183,56 @@ void multipleMergeRoundTrip() {
     expect(archiveOf(restored, opened.colorSettings) == bytes,
            "multiple Merge archive is byte stable");
 }
+
+// #716: a composition whose Output node was deleted, and one whose Merge went too, save and reopen
+// as they are: no output endpoint, and no layer stack.
+void compositionWithoutOutputRoundTrips() {
+    for (const bool alsoMerge : {false, true}) {
+        auto authored = authoredProject();
+        auto snapshot = authored.document->snapshot();
+        auto draft = authored.document->draft(snapshot);
+        auto& composition = *draft.project().findComposition(authored.compositionId);
+        auto& graph = composition.graph();
+        const auto output = graph.compositionOutput();
+        const auto merge = graph.outputMergeId();
+        if (!output || !merge)
+            throw std::logic_error("a new composition has an Output and its Merge");
+        for (auto& [id, group] : composition.nodeGroups())
+            group.members.clear();
+        expect(graph.eraseNode(output->nodeId), "the Output node is removed");
+        composition.nodeLayout().erase(output->nodeId);
+        if (alsoMerge) {
+            expect(graph.eraseNode(*merge), "the Merge is removed");
+            composition.nodeLayout().erase(*merge);
+        }
+        expect(!graph.compositionOutput().has_value(), "the composition has no output endpoint");
+        expect(authored.document->commit(snapshot.revision(), std::move(draft)).committed(),
+               "a composition without an Output is a valid document");
+        snapshot = authored.document->snapshot();
+        const auto bytes = archiveOf(snapshot, neutralColorSettings());
+        auto result = openProjectArchive(bytes, {}, memory());
+        expect(result.outcome() == OpenArchiveOutcome::Opened,
+               "a composition without an Output reopens");
+        if (result.outcome() != OpenArchiveOutcome::Opened)
+            continue;
+        auto opened = std::move(result).takeOpened();
+        const auto restored = opened.document->snapshot();
+        const auto& restoredGraph =
+            restored.project().findComposition(authored.compositionId)->graph();
+        expect(!restoredGraph.compositionOutput().has_value() &&
+                   restoredGraph.nodes().size() == (alsoMerge ? 0U : 1U) &&
+                   restoredGraph.merges().size() == (alsoMerge ? 0U : 1U),
+               "the reopened composition has no output endpoint and the same nodes");
+        expect(archiveOf(restored, opened.colorSettings) == bytes,
+               "a composition without an Output re-saves byte-identically");
+    }
+}
 } // namespace
 
 int main() {
     try {
         multipleMergeRoundTrip();
+        compositionWithoutOutputRoundTrips();
         roundTripAndReopen();
     } catch (const std::exception& error) {
         std::cerr << error.what() << "\n";

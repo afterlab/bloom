@@ -129,24 +129,25 @@ void testBase(TestContext& test) {
     Fixture fixture;
     Checker(test, fixture).run();
     const Checker checker(test, fixture);
-    test.expect(!canRemoveNodes(checker.comp, {kLayerStackNodeId}),
-                "protected Merge cannot be removed");
+    test.expect(canRemoveNodes(checker.comp, {kLayerStackNodeId}) &&
+                    canDissolveNode(checker.comp, kLayerStackNodeId),
+                "#716: the composition's Merge can be removed and dissolved");
     test.expect(canDissolveNode(checker.comp, kFirstLayerNodeId),
                 "#704: a Layer Output without a connected image input dissolves by deleting");
     test.expect(canRemoveNodes(checker.comp, {kFirstLayerNodeId}), "a Layer Output can be removed");
     test.expect(!canRemoveNodes(checker.comp, {NodeId::fromRaw(9999)}), "missing node refused");
 }
 
-// #704: every Merge the user adds deletes and dissolves; only the composition's Output and the
-// Merge feeding it (its layer stack) refuse, each with its own reason.
+// #704, #716: every Merge deletes and dissolves, the one that is the composition's output included;
+// only a stale id (and a locked layer's node) refuses.
 void testRemovalRefusals(TestContext& test) {
     Fixture fixture;
     const auto merge = addNode(fixture, kLayerStackNodeType);
     const auto& comp =
         *fixture.document.snapshot().project().findComposition(kCompositionId);
     // This fixture's composition output is the layer stack itself; the UI tests cover an Output node.
-    test.expect(nodeRemovalRefusal(comp, kLayerStackNodeId) == NodeRemovalRefusal::LayerStackMerge,
-                "#704: the Merge feeding the Output stays as the composition's layer stack");
+    test.expect(nodeRemovalRefusal(comp, kLayerStackNodeId) == NodeRemovalRefusal::None,
+                "#716: the Merge that is the composition's output can be deleted");
     test.expect(nodeRemovalRefusal(comp, NodeId::fromRaw(9999)) == NodeRemovalRefusal::Missing,
                 "#704: a stale id is reported as missing");
     test.expect(nodeRemovalRefusal(comp, merge) == NodeRemovalRefusal::None &&
@@ -323,8 +324,7 @@ void testEveryNodeTypeRemovesAndDissolves(TestContext& test) {
                                       .findComposition(kCompositionId)
                                       ->graph()
                                       .findNode(*id);
-            const bool protectedNode = type == kCompositionOutputNodeType;
-            test.expect(protectedNode || (result.succeeded() && removed),
+            test.expect(result.succeeded() && removed,
                         describe(dissolve ? "Dissolve removes" : "Delete removes"));
             if (!result.succeeded())
                 continue;

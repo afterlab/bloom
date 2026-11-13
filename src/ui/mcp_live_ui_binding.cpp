@@ -316,6 +316,9 @@ mcp::McpUiResult McpLiveUiBinding::transport(const mcp::McpTransportRequest& req
         return uiOk(tr("The playhead moved."));
     }
     case Action::Play:
+        // #716: a composition whose Output node was deleted has nothing to play.
+        if (session_.refuseWithoutOutput())
+            return uiResult(McpUiRefusal::Failed, CompositionSession::noOutputMessage() + u'.');
         playback_.play();
         return uiOk(tr("Playing."));
     case Action::Stop:

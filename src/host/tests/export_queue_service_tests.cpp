@@ -3,6 +3,7 @@
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/export_queue_operations.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/core/file_uri.hpp>
 #include <bloom/core/sha256.hpp>
@@ -34,6 +35,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <set>
 #include <span>
 #include <stop_token>
 #include <thread>
@@ -1136,6 +1138,48 @@ void testTransient() {
            "a transient job needs an existing composition");
 }
 
+// #716: a composition whose Output node was deleted has nothing to export. A queued job fails
+// before any frame is rendered and a transient one is refused, both with the reason in words.
+void testCompositionWithoutOutputNode() {
+    Fixture f("no-output");
+    const auto job = f.addJob(png(), "Exports/none.png");
+    const auto output = currentSnapshot(f.session)
+                            .project()
+                            .findComposition(f.composition())
+                            ->graph()
+                            .compositionOutput();
+    expect(output.has_value(), "the composition has an Output node");
+    if (!output)
+        return;
+    commands::Transaction remove("Delete Output");
+    remove.emplace<commands::RemoveNodes>(f.composition(),
+                                          std::set<document::NodeId>{output->nodeId});
+    expect(f.session.execute(std::move(remove)).changed(), "the Output node is deleted");
+    const std::string words = "The composition has no output node, so nothing can play or export";
+    expect(f.startable(job), "the job is still offered Start");
+    expect(f.service->start(std::span<const document::ExportJobId>(&job, 1)).accepted,
+           "the job starts");
+    expect(f.pumpUntil([&] { return f.view(job) && host::isTerminal(f.view(job)->state); }),
+           "the job without an output ends");
+    const auto* view = f.view(job);
+    expect(view && view->state == ExportJobState::Failed && view->failure &&
+               view->failure->code == host::ExportFailureCode::PreflightRefused &&
+               view->failure->diagnosticCode == "export.composition.no-output" &&
+               view->failure->reason == words,
+           "#716: an export of a composition without an Output node fails saying so");
+    expect(!std::filesystem::exists(f.folder / "Exports" / "none.png"), "and writes nothing");
+    host::ExportTransientJobRequest request;
+    request.composition = f.composition();
+    request.range = {document::ExportRangeKind::Frame, 0, 0};
+    request.settings = png();
+    request.destination = {"external", fileUri(f.folder / "capture.png"),
+                           document::ExportOverwritePolicy::Replace};
+    const auto refused = f.service->submitTransient(request);
+    expect(!refused.accepted && refused.availability.code == ExportUnavailableCode::PreflightBlocked &&
+               refused.availability.reason == words,
+           "#716: a transient export of a composition without an Output node is refused saying so");
+}
+
 // OCIO colour-space names are free text. A working space such as "Linear Rec.709 (sRGB)" (spaces
 // and parentheses) used to fail every frame's analysis before encoding; stills, sequences and
 // movies all export with it now.
@@ -1639,6 +1683,7 @@ int main() {
         testPolicyHoldsAtPublication();
         testEveryPlatformExports();
         testTransient();
+        testCompositionWithoutOutputNode();
         testExplicitExportView();
         testAcesExportView();
         testConfigurationSwitchFollowsView();

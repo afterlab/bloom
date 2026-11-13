@@ -146,11 +146,15 @@ struct DissolvePath final {
 dissolvePath(const document::Composition& composition, document::NodeId nodeId,
              const document::NodeDefinitionRegistry& registry);
 
-inline bool protectedNode(const document::CanonicalGraph& graph, const document::NodeId id) {
-    const auto* node = graph.findNode(id);
-    return graph.outputMergeId() == id ||
-           (graph.compositionOutput() && graph.compositionOutput()->nodeId == id) ||
-           (node && node->typeId == document::kCompositionOutputNodeType);
+// #716: a layer is an entry of a Merge. A composition whose Merge nodes were all deleted has
+// nowhere to put one, and says so instead of failing on the topology.
+inline constexpr std::string_view kNoMergeForLayers =
+    "The composition has no Merge node to hold layers; add a Merge node first";
+inline std::optional<OperationResult> noMergeForLayers(const document::CanonicalGraph& graph) {
+    if (!graph.merges().empty())
+        return std::nullopt;
+    return OperationResult::rejected(OperationIssueCode::Unsupported,
+                                     std::string(kNoMergeForLayers));
 }
 inline document::NodeLayoutRecord layoutFor(const document::Composition& composition,
                                             const document::NodeId id) {

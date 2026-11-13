@@ -71,7 +71,16 @@ CommandResult exercise(TestContext& test, Fixture& fixture, Args&&... args) {
     const auto after = fixture.document.snapshot();
     test.expect(result.status == CommandStatus::Succeeded &&
                     fixture.stack.size() == historySize + 1,
-                "one authoring operation creates exactly one transaction/history entry");
+                "one authoring operation creates exactly one transaction/history entry (status " +
+                    std::to_string(static_cast<int>(result.status)) + ", history " +
+                    std::to_string(fixture.stack.size() - historySize) + ")" +
+                    (result.operationFailures.empty()
+                         ? std::string()
+                         : ": " + result.operationFailures.front().issue.message) +
+                    (result.validation.ok()
+                         ? std::string()
+                         : ": " + result.validation.issues().front().path + " " +
+                               result.validation.issues().front().message));
     if (!result.changed())
         return result;
     test.expect(after.revision().value() == before.revision().value() + 1 &&
@@ -511,13 +520,13 @@ void testValidityQuery(TestContext& test) {
     test.expect(canApplyNodeOperation(
                     before, DuplicateNodes(kCompositionId, {kFirstLayerNodeId}, {24, 24})),
                 "menu query accepts a valid duplicate without issuing IDs");
-    test.expect(!canApplyNodeOperation(before, RemoveNodes(kCompositionId, {kLayerStackNodeId})),
-                "menu query refuses protected removal");
+    test.expect(canApplyNodeOperation(before, RemoveNodes(kCompositionId, {kLayerStackNodeId})),
+                "#716: menu query accepts removing the composition's Merge");
     test.expect(canApplyNodeOperation(before, DissolveNode(kCompositionId, kFirstLayerNodeId)),
                 "#704: menu query accepts a Layer Output dissolve with nothing to reconnect "
                 "through; it deletes the node");
-    test.expect(!canApplyNodeOperation(before, DissolveNode(kCompositionId, kLayerStackNodeId)),
-                "menu query refuses a protected Merge dissolve");
+    test.expect(canApplyNodeOperation(before, DissolveNode(kCompositionId, kLayerStackNodeId)),
+                "#716: menu query accepts dissolving the composition's Merge");
     const auto after = fixture.document.snapshot();
     test.expect(sameTruth(before, after) && before.revision() == after.revision() &&
                     before.ids().highWater() == after.ids().highWater() &&
@@ -1849,14 +1858,10 @@ void testRemoveAndDissolve(TestContext& test) {
                         dissolved.graph().edges(),
                         [&](const auto& edge) { return edge.source.nodeId == source; }) == 2,
                 "dissolve removes orphan parameters/layout and reconnects every consumer");
-    // #704: a node with nothing to reconnect through dissolves by deleting; only the protected
-    // Merge refuses.
+    // #704: a node with nothing to reconnect through dissolves by deleting.
     test.expect(canApplyNodeOperation(fixture.document.snapshot(), DissolveNode(kCompositionId, source)),
                 "a source with no image input dissolves by deleting");
-    refuse<DissolveNode>(test, fixture, OperationIssueCode::Unsupported, kLayerStackNodeId);
     refuse<DissolveNode>(test, fixture, OperationIssueCode::InvalidTarget, NodeId::fromRaw(999));
-    refuse<RemoveNodes>(test, fixture, OperationIssueCode::Unsupported,
-                        std::set<NodeId>{source, kLayerStackNodeId});
     refuse<RemoveNodes>(test, fixture, OperationIssueCode::InvalidTarget,
                         std::set<NodeId>{source, NodeId::fromRaw(999)});
     const auto compositionOutput =
@@ -1868,8 +1873,8 @@ void testRemoveAndDissolve(TestContext& test) {
                     std::string(kCompositionOutputNodeType), Vec2d{});
     if (!(compositionOutput.has_value()))
         throw std::logic_error("output fixture");
-    refuse<RemoveNodes>(test, fixture, OperationIssueCode::Unsupported,
-                        std::set<NodeId>{*compositionOutput});
+    // #716: an Output node deletes like any other node, in one undo step.
+    exercise<RemoveNodes>(test, fixture, std::set<NodeId>{*compositionOutput});
     exercise<RemoveNodes>(test, fixture, std::set<NodeId>{kFirstLayerNodeId});
     const auto& removed = composition(fixture.document.snapshot());
     test.expect(
@@ -1880,6 +1885,40 @@ void testRemoveAndDissolve(TestContext& test) {
     exercise<RemoveNodes>(test, fixture, std::set<NodeId>{source});
     test.expect(apply<RemoveNodes>(fixture, std::set<NodeId>{}).status == CommandStatus::NoChange,
                 "empty removal is a no-op");
+}
+
+// #716: the composition's Output and the Merge feeding it delete and dissolve like any other
+// node, each in one undo step. The composition then has no output until an Output is added again,
+// and no Merge to hold a new layer until one is added.
+void testDeleteOutputAndItsMerge(TestContext& test) {
+    const auto graphOf = [](const Fixture& fixture) -> const CanonicalGraph& {
+        return composition(fixture.document.snapshot()).graph();
+    };
+    {
+        // This fixture's composition output is its Merge.
+        Fixture fixture;
+        test.expect(graphOf(fixture).compositionOutput().has_value() &&
+                        graphOf(fixture).compositionOutput()->nodeId == kLayerStackNodeId,
+                    "the fixture's output is its Merge");
+        exercise<RemoveNodes>(test, fixture, std::set<NodeId>{kLayerStackNodeId});
+        test.expect(!graphOf(fixture).findNode(kLayerStackNodeId) &&
+                        !graphOf(fixture).compositionOutput().has_value() &&
+                        graphOf(fixture).merges().empty(),
+                    "#716: deleting the output Merge leaves a composition with no output");
+        refuse<AddSolidLayer>(test, fixture, OperationIssueCode::Unsupported, std::string("Solid"),
+                              core::Color4d{1.0, 0.0, 0.0, 1.0});
+        test.expect(fixture.stack.undo().changed() &&
+                        graphOf(fixture).compositionOutput().has_value() &&
+                        graphOf(fixture).compositionOutput()->nodeId == kLayerStackNodeId,
+                    "#716: one undo brings the Merge and the output back");
+    }
+    {
+        Fixture fixture;
+        exercise<DissolveNode>(test, fixture, kLayerStackNodeId);
+        test.expect(!graphOf(fixture).findNode(kLayerStackNodeId) &&
+                        !graphOf(fixture).compositionOutput().has_value(),
+                    "#716: Dissolve removes the output Merge as Delete does");
+    }
 }
 
 void testDeepDuplication(TestContext& test) {
@@ -2473,7 +2512,7 @@ void testRemovalTimeFootprint(TestContext& test) {
         const auto history = fixture.stack.size();
         Transaction transaction("Atomic refusal");
         transaction.emplace<SetProjectName>("Must roll back");
-        transaction.emplace<RemoveNodes>(kCompositionId, std::set<NodeId>{kLayerStackNodeId});
+        transaction.emplace<RemoveNodes>(kCompositionId, std::set<NodeId>{NodeId::fromRaw(9999)});
         const auto result = fixture.stack.execute(std::move(transaction));
         test.expect(result.status == CommandStatus::Rejected && !result.affectedTimes.has_value() &&
                         fixture.document.snapshot().revision() == before.revision() &&
@@ -2616,6 +2655,7 @@ int main() {
         bloom::commands::test::testNewNodePlacementDoesNotMoveExistingCards(test);
         bloom::commands::test::testWiringAndRename(test);
         bloom::commands::test::testRemoveAndDissolve(test);
+        bloom::commands::test::testDeleteOutputAndItsMerge(test);
         bloom::commands::test::testDissolveParticipatingLayer(test);
         bloom::commands::test::testDeepDuplication(test);
         bloom::commands::test::testDuplicationOwnershipEdges(test);

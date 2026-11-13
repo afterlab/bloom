@@ -189,6 +189,12 @@ OperationResult AddNode::apply(document::Draft& draft) const {
     if (!composition->graph().addNode(std::move(node)))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Node could not be inserted");
+    // #716: a composition whose Output was deleted takes a newly added Output as its output
+    // endpoint again (only one Output node is allowed, so there is never a choice to make).
+    if (nodeTypeId_ == document::kCompositionOutputNodeType &&
+        !composition->graph().compositionOutput())
+        composition->graph().setCompositionOutput(
+            {*nodeId, std::string(document::kCompositionOutputOutputPort)});
     // The requested point is still authoritative when it is clear: it is where the artist pointed
     // (task N1, item 3). When the card would touch another, only this new card moves, to the
     // nearest grid position kNodeLayoutGap past its neighbour (item 4); existing authoring
@@ -427,11 +433,6 @@ OperationResult RemoveNodes::apply(document::Draft& draft) const {
         const auto* node = composition->graph().findNode(id);
         if (!node)
             return detail::missingNode(composition, compositionId_, id);
-        if (detail::protectedNode(composition->graph(), id))
-            return OperationResult::rejected(
-                OperationIssueCode::Unsupported,
-                "Node " + std::to_string(id.value()) +
-                    " is the composition Output or the Merge connected to it and cannot be removed");
         for (const auto& binding : node->parameters)
             candidates.insert(binding.parameterId);
         // ADR 0028: a removed layer's masks own parameters (and curves) outside node bindings;
@@ -939,11 +940,6 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
     const auto* node = graph.findNode(nodeId_);
     if (!node)
         return detail::missingNode(composition, compositionId_, nodeId_);
-    if (detail::protectedNode(graph, nodeId_))
-        return OperationResult::rejected(
-            OperationIssueCode::Unsupported,
-            "Node " + std::to_string(nodeId_.value()) +
-                " is the composition Output or the Merge connected to it and cannot be dissolved");
     // #704: Dissolve reconnects through the node where its types allow and otherwise deletes it,
     // breaking its links, exactly as Delete does.
     const auto path = detail::dissolvePath(*composition, nodeId_, registry_);

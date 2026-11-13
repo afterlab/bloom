@@ -765,6 +765,63 @@ void testDuplicateCompositionRemapsEveryReference(TestContext& test) {
 
 // #342: a group is made, edited and pointed at in single undo steps, and a group that would contain
 // itself is refused with a message.
+// #716: a new composition's Output and the Merge feeding it delete like any other node, each in one
+// undo step; an Output added to a composition without one is its output again.
+void testOutputAndItsMergeDelete(TestContext& test) {
+    Document document(
+        document::makeNewProject("Project", "Main", core::RationalTime::fromInteger(10)).project);
+    CommandStack stack(document);
+    const auto id = document.snapshot().project().compositions().front().id();
+    const auto graph = [&]() -> const document::CanonicalGraph& {
+        return document.snapshot().project().findComposition(id)->graph();
+    };
+    const auto run = [&](const auto& fill) {
+        Transaction transaction("Node edit", document.snapshot().revision());
+        fill(transaction);
+        return stack.execute(std::move(transaction));
+    };
+    const auto merge = graph().outputMergeId();
+    const auto output = graph().compositionOutput();
+    test.expect(merge.has_value() && output.has_value(), "a new composition has its Merge and Output");
+    if (!merge || !output)
+        return;
+    const auto outputId = output->nodeId;
+    const auto history = stack.size();
+
+    test.expect(run([&](Transaction& t) { t.emplace<RemoveNodes>(id, std::set<NodeId>{outputId}); }).changed() &&
+                    graph().findNode(outputId) == nullptr && !graph().compositionOutput().has_value() &&
+                    graph().findNode(*merge) != nullptr && stack.size() == history + 1,
+                "#716: deleting the Output is one step and leaves the Merge and no output");
+    const auto again = run([&](Transaction& t) { t.emplace<AddNode>(
+                               id, std::string(document::kCompositionOutputNodeType), document::Vec2d{}); })
+                           .outputId<NodeId>(kAddNodeOutput);
+    test.expect(again.has_value() && graph().compositionOutput().has_value() &&
+                    graph().compositionOutput()->nodeId == *again,
+                "#716: an Output added to a composition without one is its output again");
+    test.expect(stack.undo().changed() && stack.undo().changed() &&
+                    graph().compositionOutput() == output && graph().outputMergeId() == merge,
+                "#716: undo brings the deleted Output back, connected, as the output");
+
+    test.expect(run([&](Transaction& t) { t.emplace<RemoveNodes>(id, std::set<NodeId>{*merge}); }).changed() &&
+                    graph().findNode(*merge) == nullptr && graph().merges().empty() &&
+                    graph().compositionOutput() == output && stack.size() == history + 1,
+                "#716: deleting the Merge that feeds the Output is one step and keeps the Output");
+    test.expect(run([&](Transaction& t) { t.emplace<AddSolidLayer>(id, "Solid", core::Color4d{1.0, 0.0, 0.0, 1.0}); })
+                        .status == CommandStatus::Rejected,
+                "#716: a layer has nowhere to go without a Merge and is refused");
+    test.expect(stack.undo().changed() && graph().outputMergeId() == merge,
+                "#716: undo brings the Merge back, feeding the Output");
+
+    test.expect(run([&](Transaction& t) { t.emplace<DissolveNode>(id, outputId); }).changed() &&
+                    !graph().compositionOutput().has_value() && stack.undo().changed() &&
+                    graph().compositionOutput() == output,
+                "#716: Dissolve removes the Output as Delete does, and undoes");
+    test.expect(run([&](Transaction& t) { t.emplace<RemoveNodes>(id, std::set<NodeId>{outputId, *merge}); }).changed() &&
+                    graph().nodes().empty() && stack.size() == history + 1 && stack.undo().changed() &&
+                    graph().compositionOutput() == output && graph().outputMergeId() == merge,
+                "#716: the Output and its Merge delete together in one step, and undo");
+}
+
 void testGroupDefinitionIsUndoableAndRefusesCycles(TestContext& test) {
     Document document(
         document::makeNewProject("Project", "Main", core::RationalTime::fromInteger(10)).project);
@@ -836,6 +893,7 @@ int main() {
     bloom::commands::test::TestContext test;
     try {
         bloom::commands::test::testAddCompositionBuildsTopologyAndUndoRedo(test);
+bloom::commands::test::testOutputAndItsMergeDelete(test);
         bloom::commands::test::testNewCompositionStartsArranged(test);
         bloom::commands::test::testDeleteCompositionAllowsLastAndUndoRedo(test);
         bloom::commands::test::testDuplicateCompositionRemapsDeepDocumentState(test);

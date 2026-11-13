@@ -137,6 +137,8 @@ OperationResult writeEditable(document::Draft& draft, document::Composition& com
         DraftTarget target(draft, compositionId);
         document::SvgArtworkWriter writer(composition, target, description);
         auto& graph = composition.graph();
+        if (!detachedAt && graph.merges().empty())
+            throw Failure{std::string(detail::kNoMergeForLayers)};
         const auto top = graph.layerStack().nodeId();
         const auto rootMerge = writer.addRoot();
         // #646: the node editor's route leaves the root group unconnected, at the drop point.
@@ -239,6 +241,8 @@ OperationResult writeLayer(document::Draft& draft, document::Composition& compos
                                false});
         DraftTarget target(draft, compositionId);
         document::SvgArtworkWriter writer(composition, target, layer);
+        if (!detachedAt && composition.graph().merges().empty())
+            throw Failure{std::string(detail::kNoMergeForLayers)};
         const auto top = composition.graph().layerStack().nodeId();
         const auto node = writer.addRoot();
         std::vector<OperationOutput> outputs;

@@ -2210,12 +2210,15 @@ checkLayerOutputNodeReferences(DecodeState& state, const std::string& layerOutpu
     const auto compositionOutputPath = joinPath(path, "compositionOutput");
     {
         const AttachmentScope compositionOutputScope(state, "compositionOutput");
-        if (!decodeOutputPortRef(*members[4], state, compositionOutputPath,
-                                 out.compositionOutput)) {
-            return false;
+        // #716: null is a composition whose Output node was deleted.
+        if (members[4]->kind() != JsonValueKind::Null) {
+            document::OutputPortRef output;
+            if (!decodeOutputPortRef(*members[4], state, compositionOutputPath, output))
+                return false;
+            out.compositionOutput = std::move(output);
         }
     }
-    if (!nodeExists(out.nodes, out.compositionOutput.nodeId)) {
+    if (out.compositionOutput && !nodeExists(out.nodes, out.compositionOutput->nodeId)) {
         state.fail(DocumentDecodeError::DanglingReference,
                    joinPath(compositionOutputPath, "nodeId"));
         return false;

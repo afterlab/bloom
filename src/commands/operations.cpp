@@ -510,6 +510,8 @@ addStructuredLayer(document::Draft& draft, document::Composition& composition,
                    const std::string& name, StructuredLayerDescriptor descriptor,
                    const document::Vec2d position, const double opacity,
                    const StructuredLayerOutputNames& outputNames) {
+    if (auto refusal = detail::noMergeForLayers(composition.graph()))
+        return *refusal;
     const auto ids = allocateStructuredLayerIds(draft.ids(), descriptor.sourceParameters.size());
     if (!ids.has_value()) {
         return exhaustedIds("node, edge, layer, layer slot and parameter");

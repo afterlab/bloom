@@ -406,6 +406,16 @@ struct Pump final {
                         detail::exportFailure(ExportFailureCode::CompositionMissing,
                                               "export.composition-missing",
                                               "The job's composition no longer exists"));
+        // #716: a composition whose Output node was deleted has nothing to export.
+        if (!s.snapshot->project()
+                 .findComposition(record.composition)
+                 ->graph()
+                 .compositionOutput()
+                 .has_value())
+            return fail(id, job,
+                        detail::exportFailure(ExportFailureCode::PreflightRefused,
+                                              "export.composition.no-output",
+                                              std::string(document::kNoCompositionOutputMessage)));
         if (!context.range)
             return fail(id, job,
                         detail::exportFailure(ExportFailureCode::PreflightRefused,
@@ -1337,6 +1347,14 @@ ExportTransientSubmitResult ExportQueueService::submitTransient(ExportTransientJ
         return refuse(ExportUnavailableCode::NoProject, "No project is open");
     if (!s.snapshot->project().findComposition(request.composition))
         return refuse(ExportUnavailableCode::CompositionMissing, "The composition does not exist");
+    // #716: a composition whose Output node was deleted has nothing to export.
+    if (!s.snapshot->project()
+             .findComposition(request.composition)
+             ->graph()
+             .compositionOutput()
+             .has_value())
+        return refuse(ExportUnavailableCode::PreflightBlocked,
+                      std::string(document::kNoCompositionOutputMessage));
     document::ExportJob job;
     job.id = ExportJobId::fromRaw(s.nextTransient++);
     job.composition = request.composition;

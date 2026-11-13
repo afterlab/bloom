@@ -229,16 +229,16 @@ void testBackspaceAndDeleteKeys() {
            "the Node menu's Delete is bound to Delete and Backspace");
 }
 
-// A node that must stay never makes Delete a silent no-op: the status bar says why, and the rest
-// of the selection still goes. A Merge the user added deletes like any other node.
-void testRefusedDeleteSaysWhy() {
+// #716: every node deletes, the composition's Output and the Merge feeding it included, each in
+// one undo step. Deleting the Output says in the status bar what the composition then cannot do.
+void testOutputAndItsMergeDelete() {
     test::Fixture f;
     QStringList notices;
-    // Only Delete's own explanations are counted: the fixture's submit adapter restores the old
+    // Only the no-output warning is counted: the fixture's submit adapter restores the old
     // selection after every edit and reports that the deleted nodes cannot be selected again.
     QObject::connect(&f.session, &ui::CompositionSession::commandRejected, &f.session,
                      [&](const QString& message) {
-                         if (message.contains(QStringLiteral("cannot be deleted")))
+                         if (message.contains(QStringLiteral("no output node")))
                              notices << message;
                      });
     const auto& graph = f.session.composition()->graph();
@@ -251,35 +251,53 @@ void testRefusedDeleteSaysWhy() {
     const auto stackId = *stack;
     f.session.selectNode(outputId);
     settle();
+    auto history = f.stack.size();
     f.key(Qt::Key_Delete);
     settle();
-    expect(f.session.composition()->graph().findNode(outputId) != nullptr && notices.size() == 1 &&
-               notices.back().contains(QStringLiteral("Output")),
-           "Delete on the Output leaves it and says why in the status bar");
+    expect(f.session.composition()->graph().findNode(outputId) == nullptr &&
+               !f.session.composition()->graph().compositionOutput().has_value() &&
+               f.stack.size() == history + 1,
+           "#716: Delete removes the Output in one undo step");
+    expect(notices.size() == 1 &&
+               notices.back() ==
+                   QStringLiteral("The composition has no output node, so nothing can play or export"),
+           "#716: the status bar says the composition has no output node");
+    expect(f.session.undo() && f.session.composition()->graph().compositionOutput() == output &&
+               f.session.composition()->graph().outputMergeId() == stackId && notices.size() == 1,
+           "#716: one undo brings the Output back, connected");
     const auto solid = f.add(document::kSolidSourceNodeType, {0, 600});
     f.session.selectNodes({stackId, solid}, solid);
     settle();
+    history = f.stack.size();
     {
         std::unique_ptr<QMenu> menu(f.editor.contextMenuForTest(true));
         auto* action = menuAction(menu.get(), "nodeDeleteAction");
-        expect(action != nullptr, "Delete is offered for a selection holding the layer-stack Merge");
+        expect(action != nullptr, "Delete is offered for a selection holding the Output's Merge");
         if (action != nullptr)
             action->trigger();
     }
     settle();
     expect(!f.session.composition()->graph().findNode(solid) &&
-               f.session.composition()->graph().findNode(stackId) != nullptr && notices.size() == 2 &&
-               notices.back().contains(QStringLiteral("Merge")),
-           "the rest of the selection goes; the layer-stack Merge stays and the status bar says why");
-    const auto merge = f.add(document::kLayerStackNodeType, {280, 600});
-    f.session.selectNode(merge);
+               !f.session.composition()->graph().findNode(stackId) && f.stack.size() == history + 1 &&
+               f.session.composition()->graph().compositionOutput() == output && notices.size() == 1,
+           "#716: the Merge feeding the Output deletes with the rest of the selection in one step; "
+           "the Output stays, so there is no warning");
+    expect(f.session.undo() && f.session.composition()->graph().outputMergeId() == stackId,
+           "#716: one undo brings the Merge back, feeding the Output");
+    f.session.selectNode(stackId);
     settle();
-    const auto history = f.stack.size();
-    f.key(Qt::Key_Backspace);
+    {
+        std::unique_ptr<QMenu> menu(f.editor.contextMenuForTest(true));
+        auto* action = menuAction(menu.get(), "nodeDissolveAction");
+        expect(action != nullptr, "Dissolve is offered for the Output's Merge");
+        if (action != nullptr)
+            action->trigger();
+    }
     settle();
-    expect(!f.session.composition()->graph().findNode(merge) && f.stack.size() == history + 1 &&
-               notices.size() == 2,
-           "a Merge the user added deletes in one undo step with no refusal");
+    expect(!f.session.composition()->graph().findNode(stackId),
+           "#716: Dissolve removes the Merge feeding the Output");
+    expect(f.session.undo() && f.session.composition()->graph().outputMergeId() == stackId,
+           "#716: and one undo brings it back, feeding the Output");
 }
 
 // Delete and Dissolve on a node that drives a parameter and on a pass-through node.
@@ -794,7 +812,7 @@ int main(int argc, char** argv) {
     testRightClickKeepsSelection();
     testBackspaceAndDeleteKeys();
     testDeleteAndDissolveEveryKind();
-    testRefusedDeleteSaysWhy();
+    testOutputAndItsMergeDelete();
     testCryptomattePickerOnlyInContext();
     testExposureFieldReadsInFull();
     testNodeEditorPinch();

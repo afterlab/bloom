@@ -213,14 +213,16 @@ void testSearchKeyboardAndMenus() {
     const auto stackId = f.session.composition()->graph().layerStack().nodeId();
     f.session.selectNode(stackId);
     history = f.stack.size();
-    const auto refusalCount = refused.size();
-    f.key(Qt::Key_Delete);
-    expect(f.stack.size() == history && refused.size() == refusalCount + 1,
-           "the protected remove keyboard path reports refusal without mutation");
     menu = f.editor.contextMenuForTest(true);
     expect(named(menu, "nodeDeleteAction") && named(menu, "nodeDissolveAction"),
-           "the layer-stack Merge's menu offers Delete and Dissolve, which say why it stays (#704)");
+           "the layer-stack Merge's menu offers Delete and Dissolve (#704, #716)");
     delete menu;
+    f.key(Qt::Key_Delete);
+    expect(f.stack.size() == history + 1 &&
+               f.session.composition()->graph().findNode(stackId) == nullptr,
+           "#716: the keyboard removes the layer-stack Merge in one undo step");
+    expect(f.session.undo() && f.session.composition()->graph().findNode(stackId) != nullptr,
+           "#716: and one undo brings it back");
     expect(f.edit<commands::ConnectPorts>(document::OutputPortRef{a, "image"},
                                           document::NodeInputRef{b, "image"})
                .changed(),

@@ -299,6 +299,11 @@ class CompositionSession final : public QObject {
     [[nodiscard]] const document::Snapshot& snapshot() const noexcept;
     [[nodiscard]] document::CompositionId compositionId() const noexcept;
     [[nodiscard]] const document::Composition* composition() const noexcept;
+    // #716: the status bar's words for a composition whose Output node was deleted, and the
+    // refusal playback and export make of one: true (with that message through commandRejected())
+    // when the active composition has no output node.
+    [[nodiscard]] static QString noOutputMessage();
+    bool refuseWithoutOutput();
     [[nodiscard]] const CompositionSelection& selection() const noexcept;
     [[nodiscard]] core::RationalTime currentTime() const noexcept;
 

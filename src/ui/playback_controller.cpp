@@ -309,6 +309,9 @@ void PlaybackController::play() {
     if (composition == nullptr) {
         return;
     }
+    // #716: a composition whose Output node was deleted has nothing to play, and says so.
+    if (session_.refuseWithoutOutput())
+        return;
     const auto mapping = mappingForComposition(*composition);
     if (!mapping.has_value()) {
         // Covers the zero/invalid-duration no-op (design decision 5) and any other rate/duration

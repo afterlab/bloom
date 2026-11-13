@@ -1,4 +1,5 @@
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
@@ -34,6 +35,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSettings>
+#include <QStringList>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTextEdit>
@@ -54,6 +56,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <source_location>
 #include <string>
 #include <thread>
@@ -273,6 +276,45 @@ void testWorkAreaLoop(Expectations& expectations) {
     playback.tick();
     expectations.expect(fixture.session.currentTime() == time(1),
                         "exclusive end wraps to nonzero work-area start");
+    playback.pause();
+    finishFixture(fixture, expectations);
+}
+
+// #716: a composition whose Output node was deleted has nothing to play. Deleting the Output says
+// so in the status bar, and so does every request to play it; undo makes it playable again.
+void testPlaybackWithoutAnOutputNodeIsRefused(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("No output", time(4)));
+    QStringList notices;
+    QObject::connect(&fixture.session, &ui::CompositionSession::commandRejected, &fixture.session,
+                     [&](const QString& message) { notices << message; });
+    const auto output = fixture.session.composition()->graph().compositionOutput();
+    expectations.expect(output.has_value(), "the composition has an Output node");
+    if (!output)
+        return;
+    ManualClock clock;
+    ui::PlaybackController playback(
+        fixture.session, fixture.controller, [&clock] { return clock.now; }, 16ms);
+    commands::Transaction remove("Delete", fixture.session.snapshot().revision());
+    remove.emplace<commands::RemoveNodes>(fixture.session.compositionId(),
+                                          std::set<document::NodeId>{output->nodeId});
+    expectations.expect(fixture.session.executeTransaction(std::move(remove)).changed() &&
+                            !fixture.session.composition()->graph().compositionOutput().has_value(),
+                        "#716: the Output node is deleted");
+    const auto expected =
+        QStringLiteral("The composition has no output node, so nothing can play or export");
+    expectations.expect(notices.size() == 1 && notices.back() == expected,
+                        "#716: deleting the Output says the composition has no output node");
+    playback.play();
+    expectations.expect(playback.state() == ui::PlaybackState::Stopped && notices.size() == 2 &&
+                            notices.back() == expected,
+                        "#716: playback without an Output node is refused with the same words");
+    expectations.expect(fixture.session.undo() &&
+                            fixture.session.composition()->graph().compositionOutput() == output,
+                        "#716: one undo brings the Output back");
+    playback.play();
+    expectations.expect(playback.state() == ui::PlaybackState::Playing && notices.size() == 2,
+                        "#716: the composition plays again after the undo, with no warning");
     playback.pause();
     finishFixture(fixture, expectations);
 }
@@ -2091,6 +2133,7 @@ int main(int argc, char** argv) try {
         return expectations.failures() == 0 ? 0 : 1;
     }
     testWorkAreaLoop(expectations);
+    testPlaybackWithoutAnOutputNodeIsRefused(expectations);
     testNonLoopingEndKeepsLastFrameAndCountsInRangeDrops(expectations);
     testPlayAdvancesExactFrameTimesAndDropsFrames(expectations);
     testCachedFramesUseElapsedClock(expectations);

@@ -497,15 +497,16 @@ undoable; a newly chosen background starts fitted.
 Dissolve takes every selected node out (#704): it reconnects each consumer of the node's output to
 what feeds its input where the types allow, and otherwise deletes the node and breaks its links, as
 Delete does. Both are one undo step for the whole selection, and both are offered for every
-selection. Every node the user added can be deleted and dissolved, Merge nodes included. Only these
-stay, and the status bar says why whenever Delete or Dissolve leaves one in place (the rest of the
-selection still goes):
+selection. Every node can be deleted and dissolved, the composition's Output and the Merge
+connected to it included. Only a node of a locked layer stays (the layer's lock protects it; unlock
+the layer to delete it), and the status bar says so whenever Delete or Dissolve leaves one in place
+(the rest of the selection still goes).
 
-| Node that stays | Why |
-| --- | --- |
-| The composition Output | The composition owns it and cannot exist without it. |
-| The Merge connected to the Output | It is the composition's layer stack, where its layers are composited; connect another Merge to the Output first. |
-| A node of a locked layer | The layer's lock protects it; unlock the layer to delete it. |
+A composition whose Output was deleted has no output node. The status bar says "The composition has
+no output node, so nothing can play or export" when the Output is deleted and again on every
+request to play or export the composition; add an Output node (or undo) to play and export again. A
+composition without any Merge has nowhere to put a new layer, and adding one is refused with that
+reason until a Merge node is added.
 
 The node context menu's **Add Node** submenu lists nodes by name only; stroking the selected
 layer's letters or masks (#509) is an action beside it, **Stroke Selected Text** and **Stroke
@@ -593,7 +594,7 @@ opinion.
 
 Merge is available in Add menus and search. Drop any image output on its pill to insert at the
 caret; drop on the body to append. Drag an existing link end within the pill to reorder its stable
-slot, or away to disconnect. Only Output and its directly connected Merge are protected from Delete.
+slot, or away to disconnect. Output and its directly connected Merge delete like any other node.
 
 ## Timeline
 

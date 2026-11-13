@@ -664,8 +664,9 @@ The graph object has `nodes`, `edges`, `layerOutputs`, `layerStack`, then `compo
 Destination `kind` is exactly `node-input` or `layer-stack-input`. Nodes sort by numeric `NodeId`,
 edges by numeric `EdgeId`, and layer-output boundaries by numeric `LayerId` then `NodeId`. Parameter
 bindings sort by UTF-8 `role` then numeric `ParameterId`. Layer Stack entries remain in semantic
-top-to-bottom authoring order and are never ID-sorted. `compositionOutput` is a required output-port
-reference.
+top-to-bottom authoring order and are never ID-sorted. `compositionOutput` is a required member: an
+output-port reference, or `null` for a composition whose Output node was deleted (it renders, plays
+and exports nothing until an Output node is added again).
 
 ## Inclusive Allocator State
 

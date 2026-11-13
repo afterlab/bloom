@@ -35,11 +35,10 @@ namespace bloom::commands {
 // canApplyNodeOperation.
 [[nodiscard]] bool canRemoveNodes(const document::Composition& composition,
                                   const std::set<document::NodeId>& nodes);
-// #704: why Delete and Dissolve leave a node in place. Every node a user added can be deleted; only
-// what the composition itself owns and cannot exist without refuses (its Output, and the Merge that
-// feeds the Output, which is the composition's layer stack), plus a node of a locked layer, which
-// the command stack's lock refuses until the layer is unlocked. Missing is a stale id.
-enum class NodeRemovalRefusal : std::uint8_t { None, Missing, CompositionOutput, LayerStackMerge, Locked };
+// #704, #716: why Delete and Dissolve leave a node in place. Every node can be deleted, the
+// composition's Output and the Merge feeding it included; only a node of a locked layer refuses,
+// which the command stack's lock holds until the layer is unlocked. Missing is a stale id.
+enum class NodeRemovalRefusal : std::uint8_t { None, Missing, Locked };
 [[nodiscard]] NodeRemovalRefusal nodeRemovalRefusal(const document::Composition& composition,
                                                     document::NodeId nodeId);
 [[nodiscard]] bool canDissolveNode(

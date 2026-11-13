@@ -785,6 +785,11 @@ OperationResult AddAudioLayer::apply(document::Draft& draft) const {
             OperationIssueCode::InvalidTarget,
             "Asset " + std::to_string(asset_.value()) +
                 (asset == nullptr ? " does not exist in the project" : " is not an audio asset"));
+    // #716: a layer is an entry of a Merge; without one there is nowhere to put it.
+    if (composition->graph().merges().empty())
+        return OperationResult::rejected(
+            OperationIssueCode::Unsupported,
+            "The composition has no Merge node to hold layers; add a Merge node first");
 
     const auto sourceNodeId = draft.ids().allocateNode();
     const auto layerOutputNodeId = draft.ids().allocateNode();

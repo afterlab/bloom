@@ -69,6 +69,10 @@ inline constexpr std::string_view kLayerStackAudioOutputPort = "audio";
 inline constexpr std::string_view kCompositionOutputInputPort = "image";
 inline constexpr std::string_view kCompositionOutputOutputPort = "image";
 inline constexpr std::string_view kCompositionOutputAudioInputPort = "audio";
+// #716: what a composition whose Output node was deleted says wherever it is asked to play or
+// export, and when the Output is deleted.
+inline constexpr std::string_view kNoCompositionOutputMessage =
+    "The composition has no output node, so nothing can play or export";
 
 inline constexpr std::string_view kSolidColorParameterRole = "color";
 inline constexpr std::string_view kSolidWidthParameterRole = "width";
@@ -286,6 +290,9 @@ class CanonicalGraph final {
     // clear each matte naming it as target or source whose two ends no longer share a Merge.
     void clearTrackMattesOutsideMerge(LayerId layer);
     void setCompositionOutput(OutputPortRef output) { compositionOutput_ = std::move(output); }
+    // #716: a composition whose Output node was deleted has no output endpoint (eraseNode clears
+    // it); adding an Output node names it again.
+    void clearCompositionOutput() noexcept { compositionOutput_.reset(); }
 
     [[nodiscard]] ValidationResult
     validate(const ParameterStore& parameters,
