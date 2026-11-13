@@ -14,6 +14,7 @@
 // product needs a real window system and is not available to this offscreen test.
 
 #include "await_qt.hpp"
+#include "fixed_memory_budget.hpp"
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
@@ -427,6 +428,7 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
 #if defined(BLOOM_UI_EXPORT_REVISIONS_GPU)
     if (route.gpu) {
         runtime::GpuProcessFrameEvaluatorOptions options;
+        options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
         options.enabled = true;
         options.loaderPath = loader;
         options.ocioResolver = host::makePackagedGpuOcioResolver(host::currentExecutablePath());
@@ -436,6 +438,7 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     std::shared_ptr<host::GpuExportProvider> reference;
     {
         runtime::GpuProcessFrameEvaluatorOptions options;
+        options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
         options.enabled = false;
         reference = host::GpuExportProvider::create(options);
         reference->prepare(exportScheduler);

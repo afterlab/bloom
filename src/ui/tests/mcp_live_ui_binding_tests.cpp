@@ -8,6 +8,7 @@
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
 #include "await_qt.hpp"
 #include "composition_preview_stage_shared.hpp"
+#include "fixed_memory_budget.hpp"
 #include "properties_registry_row.hpp"
 #include "readonly_archive_fixture.hpp"
 #include "window_fixture.hpp"
@@ -175,6 +176,7 @@ void testBinding() {
     expect(out.isValid() && projects.isValid() && world.scratch.isValid(), "temp folders");
     ui::test::WindowFixture fixture([&](ui::test::WindowFixture& f) {
         runtime::GpuProcessFrameEvaluatorOptions gpuOptions;
+        gpuOptions.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
         gpuOptions.enabled = false;
         world.gpu = host::GpuExportProvider::create(std::move(gpuOptions));
         world.gpu->prepare(f.scheduler);

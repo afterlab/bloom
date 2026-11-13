@@ -422,6 +422,7 @@ void testGpuExportProviderFactoryDisplayPreparation(Expectations& expectations) 
         return;
     }
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = false; // display preparation is CPU-only: no device needed here
     options.ocioResolver = resolver;
     auto provider = host::GpuExportProvider::create(std::move(options));
@@ -473,6 +474,7 @@ void testGpuExportProviderFactoryDisplayPreparation(Expectations& expectations) 
     expectations.expect(resolver == nullptr,
                         "factory: no packaged resolver is composed without qualified tools");
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = false; // display preparation is CPU-only: no device needed here
     options.ocioResolver = resolver;
     auto provider = host::GpuExportProvider::create(std::move(options));

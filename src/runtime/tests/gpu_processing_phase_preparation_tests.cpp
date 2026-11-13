@@ -1,3 +1,4 @@
+#include "fixed_memory_budget.hpp"
 #include "gpu_coverage_contract_plans.hpp"
 #include "gpu_process_frame_preparation_private.hpp"
 #include "gpu_scene_coverage.hpp"
@@ -125,6 +126,7 @@ void finalPreparation() {
     auto request = bloom::gpu_coverage_fixtures::requestFor(*plan);
     request.pixelStorageByteLimit = gib;
     GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.processingPhasePolicy = policy;
     options.requestByteBudget = gib;
     options.readbackByteBudget = gib;

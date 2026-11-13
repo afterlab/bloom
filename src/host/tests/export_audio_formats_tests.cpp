@@ -6,6 +6,7 @@
 // provenance instead of counting every frame as CPU reference. Issue #450: a 5.1 source exports
 // to stereo through the ITU-R BS.775 downmix instead of losing every channel past the second.
 // Issue #459: an automated level exports as a continuous ramp, not a step every mix block.
+#include "fixed_memory_budget.hpp"
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/export_queue_operations.hpp>
@@ -224,6 +225,7 @@ struct Fixture {
             throw std::runtime_error("registry");
         registry.freeze();
         runtime::GpuProcessFrameEvaluatorOptions options;
+        options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
         options.enabled = false;
         gpu = host::GpuExportProvider::create(std::move(options));
         gpu->prepare(scheduler);

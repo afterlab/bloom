@@ -1,5 +1,6 @@
 // ADR 0033: the export queue's runtime owner, presets, destinations and runner, driven headlessly
 // through a real ProjectSession, scheduler, staged publication and the media worker.
+#include "fixed_memory_budget.hpp"
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/export_queue_operations.hpp>
@@ -596,6 +597,7 @@ struct Fixture {
     static std::shared_ptr<host::GpuExportProvider>
     makeProvider(std::shared_ptr<runtime::GpuProcessingPhasePolicy> root) {
         runtime::GpuProcessFrameEvaluatorOptions options;
+        options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
         options.enabled = false;
         options.processingPhasePolicy = std::move(root);
         return host::GpuExportProvider::create(std::move(options));

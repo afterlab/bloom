@@ -270,6 +270,7 @@ void testProductionUploadUnknown(Expectations& expectations, const Options& opti
         return;
     }
     GpuProcessFrameEvaluatorOptions configured;
+    configured.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     configured.loaderPath = options.loader_path;
     configured.processingPhasePolicy = policy;
     configured.mediaContext = GpuSceneMediaContext::fromEvaluator(cpu);
@@ -393,6 +394,7 @@ void testNextFrameAfterUnretiredSubmission(Expectations& expectations, const Opt
             const auto delivered = ledger.applySample(std::move(sample), now);
             policy->applyHostSample(delivered, ledger.physicalByteBudget(), now);
             GpuProcessFrameEvaluatorOptions configured;
+            configured.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
             configured.loaderPath = options.loader_path;
             configured.processingPhasePolicy = policy;
             configured.mediaContext = GpuSceneMediaContext::fromEvaluator(cpu);

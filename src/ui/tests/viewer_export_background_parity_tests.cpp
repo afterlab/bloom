@@ -15,6 +15,7 @@
 // NotRun explicitly, and --require-device turns that into a failure.
 
 #include "await_qt.hpp"
+#include "fixed_memory_budget.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -342,6 +343,7 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
 #if defined(BLOOM_UI_BACKGROUND_PARITY_GPU)
     if (route.gpu) {
         runtime::GpuProcessFrameEvaluatorOptions options;
+        options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
         options.enabled = true;
         options.loaderPath = loader;
         options.ocioResolver = host::makePackagedGpuOcioResolver(host::currentExecutablePath());
@@ -350,6 +352,7 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
 #endif
     if (!route.gpu) {
         runtime::GpuProcessFrameEvaluatorOptions options;
+        options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
         options.enabled = false;
         provider = host::GpuExportProvider::create(options);
     }

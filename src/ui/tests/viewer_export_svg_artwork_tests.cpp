@@ -845,6 +845,7 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
 #if defined(BLOOM_UI_SVG_ARTWORK_ROUTES_GPU)
     if (route.gpu) {
         runtime::GpuProcessFrameEvaluatorOptions options;
+        options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
         options.enabled = true;
         options.loaderPath = loader;
         options.ocioResolver = host::makePackagedGpuOcioResolver(host::currentExecutablePath());
@@ -1016,6 +1017,7 @@ void reAddedOnTheDevice(Expectations& checks, const std::filesystem::path& workD
     runtime::TaskScheduler scheduler;
     const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = true;
     options.loaderPath = loader;
     options.ocioResolver = host::makePackagedGpuOcioResolver(host::currentExecutablePath());

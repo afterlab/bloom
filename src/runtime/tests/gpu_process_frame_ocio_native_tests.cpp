@@ -365,6 +365,7 @@ int run(int argc, char** argv) {
     cpuEvaluator.setAssetBaseDirectory(fixture.directory);
 
     GpuProcessFrameEvaluatorOptions evaluatorOptions;
+    evaluatorOptions.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     bloom::render::test::FinalHostRetirementScope host;
     auto phasePolicy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(32, host.owner);
     std::optional<bloom::runtime::MemoryBudgetLedger> liveLedger;

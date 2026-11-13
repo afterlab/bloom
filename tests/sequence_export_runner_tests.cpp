@@ -67,6 +67,7 @@ void testRootedQueueAdmission() {
     sample.processSampleFresh = true;
     root->applyHostSample(sample, 16 * gib, sample.process.sampledAt);
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = false;
     options.processingPhasePolicy = root;
     auto provider = host::GpuExportProvider::create(std::move(options));
@@ -456,6 +457,7 @@ std::shared_ptr<host::GpuExportProvider>
 capacityProvider(runtime::TaskScheduler& scheduler,
                  std::shared_ptr<runtime::GpuProcessingPhasePolicy> policy, const char* loader) {
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.processingPhasePolicy = std::move(policy);
     options.enabled = loader != nullptr;
     if (loader != nullptr)
@@ -761,6 +763,7 @@ GpuProofOutcome testGpuVideoProvenance(Fixture& f, const std::filesystem::path& 
     }
     auto provider = host::GpuExportProvider::create([&] {
         runtime::GpuProcessFrameEvaluatorOptions options;
+        options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
         options.enabled = true;
         options.loaderPath = std::filesystem::path(loader);
 #if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
@@ -940,6 +943,7 @@ void testRejectedRetirementWithLiveEncoder(Fixture& f, const std::filesystem::pa
         ~ReleaseGate() { gate->release(); }
     } releaseOnFailure{gate};
     runtime::GpuProcessFrameEvaluatorOptions cpuOptions;
+    cpuOptions.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     cpuOptions.enabled = false;
     const auto provider = host::GpuExportProvider::create(cpuOptions);
     provider->prepare(f.scheduler);
@@ -1233,6 +1237,7 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
     // disabled provider uses the same single policy for all admitted frames and releases the phase
     // before the next frame; it never acquires a native generation or labels CPU output GPU.
     runtime::GpuProcessFrameEvaluatorOptions cpuOptions;
+    cpuOptions.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     cpuOptions.enabled = false;
     const auto cpuProvider = host::GpuExportProvider::create(cpuOptions);
     const auto cpuPolicy = cpuProvider->processingPhasePolicy();

@@ -3,6 +3,7 @@
 // from a media file that changed after import names the asset and says what to do without any
 // internal stage or code in the user-facing sentence.
 
+#include "fixed_memory_budget.hpp"
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -131,6 +132,7 @@ struct Project final {
 
 [[nodiscard]] std::shared_ptr<host::GpuExportProvider> cpuProvider() {
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = false;
     return host::GpuExportProvider::create(options);
 }

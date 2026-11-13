@@ -1,3 +1,4 @@
+#include "fixed_memory_budget.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
@@ -167,6 +168,7 @@ int main() {
         std::filesystem::remove(outputPath, staleError);
     }
     bloom::runtime::GpuProcessFrameEvaluatorOptions renderOptions;
+    renderOptions.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     renderOptions.enabled = false;
     const auto renderProvider = bloom::host::GpuExportProvider::create(renderOptions);
     const auto render = bloom::scripting::Render::run(

@@ -51,6 +51,7 @@ void testVideoSourceRevisionBoundary(Expectations& expectations,
                             warm.scene->mediaStatistics().sourceHashNanoseconds == 0,
                         "warm video edit uses owned bytes with zero source I/O and hash work");
     bloom::runtime::GpuProcessFrameEvaluatorOptions finalOptions;
+    finalOptions.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     finalOptions.mediaContext = context;
     const auto changed =
         bloom::runtime::detail::prepareExportScene(finalOptions, plan, request, {}, false);

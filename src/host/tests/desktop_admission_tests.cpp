@@ -7,6 +7,7 @@
 // on frame 1 with "stage=evaluating; code=9" (BudgetRefused) while the same composition exported
 // headlessly. Admission must use actual capacity and each phase's actual need, so concurrent
 // preview work never makes an export refuse while the machine is mostly free.
+#include "fixed_memory_budget.hpp"
 #include "gpu_export_provider_test_access.hpp"
 
 #include <bloom/core/color.hpp>
@@ -326,6 +327,7 @@ std::shared_ptr<host::GpuExportProvider> exportProvider(Expectations& checks, De
         return {};
     }
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = true;
     options.loaderPath = loader;
     options.processingPhasePolicy = root.policy;

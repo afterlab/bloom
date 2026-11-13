@@ -4,6 +4,7 @@
 // adapter then shows an empty queue. Runs the real service over the deterministic fake runner.
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
 #include "await_qt.hpp"
+#include "fixed_memory_budget.hpp"
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -81,6 +82,7 @@ int main(int argc, char** argv) {
     definitions.freeze();
     runtime::SnapshotCompiler compiler(definitions);
     runtime::GpuProcessFrameEvaluatorOptions gpuOptions;
+    gpuOptions.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     gpuOptions.enabled = false;
     auto gpu = host::GpuExportProvider::create(std::move(gpuOptions));
     gpu->prepare(scheduler);

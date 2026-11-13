@@ -2,6 +2,7 @@
 // host::ExportJobRunner. This test keeps the previous Render::run implementation verbatim as the
 // reference (legacyRender) and proves the new route writes the same files with the same bytes for
 // the deterministic image formats, a still and a range, and the same result summary.
+#include "fixed_memory_budget.hpp"
 #include <bloom/commands/export_queue_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/core/file_uri.hpp>
@@ -585,6 +586,7 @@ void testParity() {
     runtime::TaskScheduler scheduler(config);
     runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = false;
     const auto provider = host::GpuExportProvider::create(options);
     const auto root = std::filesystem::temp_directory_path() / "bloom-render-parity";
@@ -782,6 +784,7 @@ void testDesktopQueueMatchesHeadless() {
     runtime::TaskScheduler scheduler(config);
     runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = false;
     const auto provider = host::GpuExportProvider::create(options);
     constexpr std::uint64_t kFirst = 0;

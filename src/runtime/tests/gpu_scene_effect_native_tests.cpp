@@ -12,9 +12,9 @@
 // failure. An explicit --loader selects the Vulkan loader. Without the pinned tools the real arms
 // are skipped.
 
-#include "case_timer.hpp"
 #include "audio_plot_test_support.hpp"
 #include "auto_exposure_test_support.hpp"
+#include "case_timer.hpp"
 #include "codec_degrade_test_support.hpp"
 #include "compositing_recipe_test_support.hpp"
 #include "denoise_test_support.hpp"
@@ -22,6 +22,7 @@
 #include "dither_image_effect.hpp"
 #include "dither_test_support.hpp"
 #include "film_grain_test_support.hpp"
+#include "fixed_memory_budget.hpp"
 #include "histogram_test_support.hpp"
 #include "lens_flare_test_support.hpp"
 #include "motion_blur_test_support.hpp"
@@ -4383,6 +4384,7 @@ void runStatistics(Expectations& expectations, GpuDevice& device, GpuSceneCache&
 void runStatisticsRoute(Expectations& expectations) {
     namespace stt = bloom::statistics_test;
     bloom::runtime::GpuProcessFrameEvaluatorOptions evaluatorOptions;
+    evaluatorOptions.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     evaluatorOptions.enabled = true;
     evaluatorOptions.loaderPath = loaderPath();
     evaluatorOptions.ocioContext = std::make_shared<const GpuSceneOcioContext>(ocioContext());

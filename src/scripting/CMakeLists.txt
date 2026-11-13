@@ -162,6 +162,7 @@ if(BUILD_TESTING)
     # ADR 0033 "One runner": Render::run through host::ExportJobRunner writes the same files and
     # bytes as the previous direct attempt/publication route, kept verbatim in the test.
     add_executable(bloom_scripting_render_parity_test tests/render_parity_tests.cpp)
+    target_include_directories(bloom_scripting_render_parity_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     target_link_libraries(bloom_scripting_render_parity_test PRIVATE bloom_scripting)
     add_dependencies(bloom_scripting_render_parity_test bloom-media-worker)
     bloom_enable_warnings(bloom_scripting_render_parity_test)
@@ -196,6 +197,7 @@ if(BUILD_TESTING)
     bloom_find_dependency(OpenColorIO)
     add_executable(bloom_scripting_external_config_render_test
                    tests/external_config_render_tests.cpp)
+    target_include_directories(bloom_scripting_external_config_render_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     target_link_libraries(bloom_scripting_external_config_render_test
                           PRIVATE bloom_scripting OpenColorIO::OpenColorIO)
     add_dependencies(bloom_scripting_external_config_render_test bloom-media-worker)
@@ -235,6 +237,7 @@ if(BUILD_TESTING)
     endif()
     # #588: scratch-folder cleanup and the changed-media failure of Render::run.
     add_executable(bloom_scripting_render_cleanup_test tests/render_cleanup_tests.cpp)
+    target_include_directories(bloom_scripting_render_cleanup_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     target_link_libraries(bloom_scripting_render_cleanup_test PRIVATE bloom_scripting)
     add_dependencies(bloom_scripting_render_cleanup_test bloom-media-worker)
     bloom_enable_warnings(bloom_scripting_render_cleanup_test)
@@ -245,6 +248,7 @@ if(BUILD_TESTING)
         TIMEOUT 300
     )
     add_executable(bloom_scripting_facade_test tests/facade_tests.cpp)
+    target_include_directories(bloom_scripting_facade_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     target_link_libraries(bloom_scripting_facade_test PRIVATE bloom_scripting)
     bloom_enable_warnings(bloom_scripting_facade_test)
     bloom_add_test(

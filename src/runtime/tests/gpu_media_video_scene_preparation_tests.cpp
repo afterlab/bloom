@@ -1,3 +1,4 @@
+#include "fixed_memory_budget.hpp"
 #include "gpu_media_cache_test_support.hpp"
 #include "gpu_media_video_scene_preparation_test_support.hpp"
 

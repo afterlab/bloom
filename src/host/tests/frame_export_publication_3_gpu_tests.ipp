@@ -49,6 +49,7 @@ makeGpuDisplayTestProvider(ExportFixture& fixture, const std::string_view contex
         return nullptr;
     }
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = true;
     options.loaderPath = std::filesystem::path(loader);
     auto provider = host::GpuExportProvider::create(options);
@@ -247,6 +248,7 @@ void testGpuStaleDisplayBindingRefused(Expectations& expectations) {
         return;
     }
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = true;
     options.loaderPath = std::filesystem::path(loader);
     auto provider = host::GpuExportProvider::create(options);
@@ -361,6 +363,7 @@ GpuProofOutcome testGpuCompositedExportParity(Expectations& expectations, const 
         return GpuProofOutcome::Ran;
     }
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = true;
     options.loaderPath = std::filesystem::path(loader);
     auto provider = host::GpuExportProvider::create(options);

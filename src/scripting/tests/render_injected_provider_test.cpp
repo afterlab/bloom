@@ -13,6 +13,7 @@
 // this single translation unit inside the anonymous namespace, so every test is still called with
 // its assertions token-preserved; the split is organizational only.
 
+#include "fixed_memory_budget.hpp"
 #include "gpu_route_proof_export_support.hpp"
 
 #include <bloom/commands/animation_operations.hpp>

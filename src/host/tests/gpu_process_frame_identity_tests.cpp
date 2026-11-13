@@ -9,6 +9,7 @@
 //
 // Without a loader/device it prints an explicit SKIP unless --require-device is passed.
 
+#include "fixed_memory_budget.hpp"
 #include "gpu_media_executor_test_support.hpp"
 #include "gpu_scene_executor_test_support.hpp"
 
@@ -75,6 +76,7 @@ int run(const Options& options) {
     const auto request = requestFor(*plan);
 
     runtime::GpuProcessFrameEvaluatorOptions evaluatorOptions;
+    evaluatorOptions.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     evaluatorOptions.enabled = true;
     evaluatorOptions.loaderPath = options.loader_path;
     evaluatorOptions.requestByteBudget = kRequestBudget;

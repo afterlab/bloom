@@ -9,6 +9,7 @@
 // <dir>/mcp/token. "DONE <line>" answers each one once it has taken effect: regenerate once the
 // new token is in force (or the attempt failed), await-connections once exactly <n> HTTP
 // connections are open, so the test waits on the server's state rather than on a delay.
+#include "fixed_memory_budget.hpp"
 #include <bloom/host/export_presets.hpp>
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
@@ -100,6 +101,7 @@ int main(int argc, char** argv) {
     runtime::TaskScheduler scheduler;
     auto gpu = [] {
         runtime::GpuProcessFrameEvaluatorOptions options;
+        options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
         options.enabled = false;
         return host::GpuExportProvider::create(std::move(options));
     }();

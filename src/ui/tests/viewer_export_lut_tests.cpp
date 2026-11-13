@@ -15,6 +15,7 @@
 // media worker: where it is absent the test says NotRun for that route.
 
 #include "await_qt.hpp"
+#include "fixed_memory_budget.hpp"
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
@@ -513,6 +514,7 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
 #if defined(BLOOM_UI_LUT_ROUTES_GPU)
     if (route.gpu) {
         runtime::GpuProcessFrameEvaluatorOptions options;
+        options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
         options.enabled = true;
         options.loaderPath = loader;
         options.ocioResolver = host::makePackagedGpuOcioResolver(host::currentExecutablePath());
@@ -521,6 +523,7 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
 #endif
     if (!route.gpu) {
         runtime::GpuProcessFrameEvaluatorOptions options;
+        options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
         options.enabled = false;
         provider = host::GpuExportProvider::create(options);
     }

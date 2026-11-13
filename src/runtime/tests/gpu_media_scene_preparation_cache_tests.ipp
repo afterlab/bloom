@@ -312,6 +312,7 @@ void testImmutableSourceRevisionReuse(Expectations& expectations, const MediaFix
         !builder.build(planB, finalRequest),
         "default final revalidation refuses a disappeared source despite warm upload");
     bloom::runtime::GpuProcessFrameEvaluatorOptions finalOptions;
+    finalOptions.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     finalOptions.mediaContext = context;
     const auto forcedFinal =
         bloom::runtime::detail::prepareExportScene(finalOptions, planB, requestB, {}, false);

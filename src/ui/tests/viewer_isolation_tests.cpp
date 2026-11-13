@@ -21,6 +21,7 @@
 // --require-device makes that a failure.
 
 #include "await_qt.hpp"
+#include "fixed_memory_budget.hpp"
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
@@ -595,6 +596,7 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     std::shared_ptr<host::GpuExportProvider> provider;
     {
         runtime::GpuProcessFrameEvaluatorOptions options;
+        options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
         options.enabled = route.gpu;
 #if defined(BLOOM_UI_ISOLATION_GPU)
         if (route.gpu) {

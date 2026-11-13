@@ -5,6 +5,7 @@
 // TIFF, flat EXR and ProRes must come out with the reference's bytes; a changed or missing config
 // stops the render with its reason instead of falling back to another config.
 
+#include "fixed_memory_budget.hpp"
 #include <bloom/core/file_uri.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/node_definition_registry.hpp>
@@ -227,6 +228,7 @@ bool run(const bool device, const bool requireDevice) {
     runtime::TaskScheduler scheduler(config);
     const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = false;
     const char* const loader = std::getenv("BLOOM_TEST_VULKAN_LOADER");
     if (device) {

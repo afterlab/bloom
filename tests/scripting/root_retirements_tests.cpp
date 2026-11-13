@@ -1,3 +1,4 @@
+#include "fixed_memory_budget.hpp"
 #include <root_retirements_private.hpp>
 
 #include <bloom/render/packed_rgba8_storage.hpp>
@@ -76,6 +77,7 @@ struct Gate final {
 };
 auto cpuProvider() {
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = false;
     return host::GpuExportProvider::create(std::move(options));
 }
@@ -160,6 +162,7 @@ void borrowedRoot() {
     RegistryFixture fixture;
     auto owner = render::PackedHostRetirementOwner::create();
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = false;
     options.processingPhasePolicy = std::make_shared<runtime::GpuProcessingPhasePolicy>(32, owner);
     auto provider = host::GpuExportProvider::create(options);
@@ -190,6 +193,7 @@ template <class Predicate> void await(Predicate predicate, const char* message) 
 void sharedBootstrapGateCancellation() {
     RegistryFixture fixture;
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.loaderPath = "__bloom_test_missing_native_loader__";
     auto cancelled = fixture.registry->createOwnedProvider(options);
     auto surviving = fixture.registry->createOwnedProvider(options);

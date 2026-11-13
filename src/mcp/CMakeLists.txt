@@ -85,6 +85,7 @@ if(BUILD_TESTING)
     )
     # Streamable HTTP framing and admission against a hostile-input corpus (pure, byte strings).
     add_executable(bloom_mcp_core_tools_test tests/core_tools_tests.cpp)
+    target_include_directories(bloom_mcp_core_tools_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     target_link_libraries(bloom_mcp_core_tools_test PRIVATE bloom_mcp bloom_host_export_testing
                                                     yyjson::yyjson)
     bloom_enable_warnings(bloom_mcp_core_tools_test)
@@ -123,6 +124,7 @@ if(BUILD_TESTING)
     )
     # Streamable HTTP over a real loopback socket against a headless McpServerService.
     add_executable(bloom_mcp_http_test_host tests/http_test_host.cpp)
+    target_include_directories(bloom_mcp_http_test_host PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     target_link_libraries(bloom_mcp_http_test_host PRIVATE bloom_mcp bloom_mcp_testing)
     bloom_enable_warnings(bloom_mcp_http_test_host)
     find_package(Python3 QUIET COMPONENTS Interpreter)

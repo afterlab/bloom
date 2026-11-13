@@ -9,6 +9,7 @@
 // an explicit SKIP unless --require-device is passed.
 
 #include "final_host_test_support.hpp"
+#include "fixed_memory_budget.hpp"
 #include "gpu_media_executor_test_support.hpp"
 #include "gpu_scene_executor_test_support.hpp"
 
@@ -78,6 +79,7 @@ evaluateCpu(const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>
 [[nodiscard]] GpuProcessFrameEvaluatorOptions
 gpuEvaluatorOptions(const std::filesystem::path& loaderPath) {
     GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = true;
     options.loaderPath = loaderPath;
     options.requestByteBudget = kRequestBudget;

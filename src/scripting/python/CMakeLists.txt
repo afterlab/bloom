@@ -67,6 +67,7 @@ bloom_enable_warnings(bloom_python_runtime)
 if(BUILD_TESTING)
     include(BloomTesting)
     add_executable(bloom_python_root_retirements_test "${PROJECT_SOURCE_DIR}/tests/scripting/root_retirements_tests.cpp" root_retirements.cpp)
+    target_include_directories(bloom_python_root_retirements_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     target_link_libraries(bloom_python_root_retirements_test PRIVATE bloom_scripting bloom_render)
     target_include_directories(bloom_python_root_retirements_test PRIVATE
         "${PROJECT_SOURCE_DIR}/src/render" "${CMAKE_CURRENT_SOURCE_DIR}")

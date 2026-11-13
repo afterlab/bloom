@@ -1,3 +1,4 @@
+#include "fixed_memory_budget.hpp"
 #include <bloom/core/executable_suffix.hpp>
 #include <bloom/host/frame_export_publication.hpp>
 #include <bloom/platform/private_temporary_directory.hpp>

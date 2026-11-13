@@ -324,6 +324,7 @@ if(BUILD_TESTING)
         # --require-device contract as the runtime GPU fixture.
         add_executable(bloom_host_gpu_process_frame_identity_test
                        tests/gpu_process_frame_identity_tests.cpp)
+        target_include_directories(bloom_host_gpu_process_frame_identity_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
         target_include_directories(bloom_host_gpu_process_frame_identity_test
             PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime/tests")
         target_link_libraries(bloom_host_gpu_process_frame_identity_test
@@ -377,6 +378,7 @@ if(BUILD_TESTING)
                        LABELS unit host media output TIMEOUT 300)
 
         add_executable(bloom_host_export_audio_formats_test tests/export_audio_formats_tests.cpp)
+        target_include_directories(bloom_host_export_audio_formats_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
         target_link_libraries(bloom_host_export_audio_formats_test PRIVATE bloom_host
                                                                            bloom_commands)
         add_dependencies(bloom_host_export_audio_formats_test bloom-media-worker)
@@ -443,6 +445,7 @@ if(BUILD_TESTING)
         # one shared processing root. The plain registration takes the CPU reference host phase; the
         # device registration requires the real GPU export provider.
         add_executable(bloom_host_desktop_admission_test tests/desktop_admission_tests.cpp)
+        target_include_directories(bloom_host_desktop_admission_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
         target_include_directories(bloom_host_desktop_admission_test PRIVATE
             "${PROJECT_SOURCE_DIR}/src/host" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
         target_link_libraries(bloom_host_desktop_admission_test PRIVATE

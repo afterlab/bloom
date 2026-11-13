@@ -21,6 +21,7 @@ void testFinalEvaluatorTerminalAndUnknown(Expectations& expectations) {
         return;
     }
     GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.processingPhasePolicy = policy;
     options.requestByteBudget = 64ULL << 20;
     options.readbackByteBudget = 64ULL << 20;

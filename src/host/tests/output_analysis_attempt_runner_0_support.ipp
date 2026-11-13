@@ -161,6 +161,7 @@ requestFor(const std::filesystem::path& targetPath) {
 [[nodiscard]] runtime::GpuProcessFrameEvaluatorOptions
 gpuOptions(const bool enabled, std::filesystem::path loader = {}) {
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = enabled;
     options.loaderPath = std::move(loader);
     return options;

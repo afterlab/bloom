@@ -152,6 +152,7 @@ struct IndependentPngDecode final {
 [[nodiscard]] runtime::GpuProcessFrameEvaluatorOptions
 optionsFor(const std::filesystem::path& loader) {
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     // A deliberately absent loader keeps a real owner worker alive (because enabled is true) but
     // never publishes a device, so retirementComplete() is only true after we retire it.
     options.enabled = true;
@@ -165,6 +166,7 @@ optionsFor(const std::filesystem::path& loader) {
 
 [[nodiscard]] runtime::GpuProcessFrameEvaluatorOptions disabledOptions() {
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = false;
     return options;
 }

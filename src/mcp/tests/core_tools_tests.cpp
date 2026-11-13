@@ -2,6 +2,7 @@
 // transport: the export queue's absence, and (live host) the session and UI seams of
 // live_ui_port.hpp. One stdio transport check: it stops while its input is idle.
 
+#include "fixed_memory_budget.hpp"
 #include <bloom/document/project.hpp>
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
@@ -76,6 +77,7 @@ struct Headless final {
         std::shared_ptr<host::GpuExportProvider> renderProvider;
         if (!captures.empty()) {
             runtime::GpuProcessFrameEvaluatorOptions options;
+            options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
             options.enabled = false;
             renderProvider = host::GpuExportProvider::create(std::move(options));
         }
@@ -2637,6 +2639,7 @@ void fileSessionsBesideALiveProject() {
     {
         // The provider the application passes for file sessions only; it has no device here.
         runtime::GpuProcessFrameEvaluatorOptions options;
+        options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
         options.enabled = false;
         Live server({}, {}, {}, host::GpuExportProvider::create(std::move(options)));
         server.bindProject(live);

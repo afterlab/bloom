@@ -1,3 +1,4 @@
+#include "fixed_memory_budget.hpp"
 #include "gpu_media_scene_preparation_test_support.hpp"
 #include "gpu_process_frame_preparation_private.hpp"
 
