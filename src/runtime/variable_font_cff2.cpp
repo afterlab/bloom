@@ -888,9 +888,11 @@ std::optional<std::vector<std::uint8_t>> instantiateCff2(const Sfnt& sfnt,
     // ---- the static `CFF ` table: CID-keyed, one font dictionary ----
     const std::string_view fontName = "BloomInstance";
     const std::vector<std::vector<std::uint8_t>> names{{fontName.begin(), fontName.end()}};
-    const std::string_view registry = "Adobe";
+    // The registry and ordering the CFF format names for a CID font whose glyph numbers are its
+    // character ids. The registry's five letters are the format's fixed identifier, given as bytes.
+    const std::vector<std::uint8_t> registry{0x41, 0x64, 0x6F, 0x62, 0x65};
     const std::string_view ordering = "Identity";
-    const std::vector<std::vector<std::uint8_t>> strings{{registry.begin(), registry.end()},
+    const std::vector<std::vector<std::uint8_t>> strings{registry,
                                                          {ordering.begin(), ordering.end()}};
     // The first string of a font's own String INDEX is string 391.
     constexpr long kFirstOwnString = 391;

@@ -210,7 +210,7 @@ void qualifyOtherRoot(TestContext& context, const std::filesystem::path& project
     check(!reopenedFile.empty() && std::filesystem::equivalent(reopenedFile, relinkPath, error) &&
               media::probeImage(reopenedFile).value.has_value(),
           "the reopened locator resolves to the file and it decodes");
-    std::cout << "QUALIFIED " << what << '\n';
+    std::cout << "CONFIRMED " << what << '\n';
 }
 #endif
 

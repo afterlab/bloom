@@ -294,7 +294,7 @@ void testRealFolder() {
             expect(storageClass(member) == volume.storageClass &&
                        storageClass(folder) == volume.storageClass,
                    "the disk keeps its own class after its share was asked about");
-            std::cout << "QUALIFIED a share's storage class\n";
+            std::cout << "CONFIRMED a share's storage class\n";
         } else {
             std::cout << "NOT RUN a share's storage class: this account cannot reach the "
                          "computer's own drive share\n";
