@@ -230,6 +230,7 @@ target_sources(
         pixel_math_image_effect.cpp
         color_tool_image_effect.cpp
         histogram_image_effect.cpp
+        scope_measure.cpp
         statistics_image_effect.cpp
         audio_analysis.cpp
         audio_mix_render.cpp

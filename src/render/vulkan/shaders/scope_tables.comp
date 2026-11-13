@@ -6,7 +6,10 @@
 // number of pixels, added with atomicAdd on a uint storage buffer: integer adds commute, so the
 // result does not depend on how the device schedules the invocations. All float arithmetic is
 // binary32, in the order written, `precise` (no contraction), and constants that are not exact in
-// decimal are written as bits.
+// decimal are written as bits. A device's own float division is not required to be correctly
+// rounded and is not on every device, so every division goes through bloom_scope_divide, which
+// corrects the device's quotient to the correctly rounded one the CPU computes (the method of the
+// OCIO wrapper's bloom_ocio_cpu_div).
 //
 // Binding 0 is the signal picture: red, green, blue are the signal taken over black (the
 // premultiplied color) and alpha the pixel's alpha. Binding 1 is the same picture converted to
@@ -61,6 +64,46 @@ const uint kScopeVectorscope = 4u;
 const uint kScopeChromaticity = 8u;
 const uint kCodeUnder = 1024u;
 const uint kCodeOver = 1025u;
+
+precise float bloom_scope_next_up(float x)
+{
+    const uint u = floatBitsToUint(x);
+    if (x == 0.0) { return uintBitsToFloat(1u); }
+    return (x > 0.0) ? uintBitsToFloat(u + 1u) : uintBitsToFloat(u - 1u);
+}
+
+precise float bloom_scope_next_down(float x)
+{
+    const uint u = floatBitsToUint(x);
+    if (x == 0.0) { return uintBitsToFloat(0x80000001u); }
+    return (x > 0.0) ? uintBitsToFloat(u - 1u) : uintBitsToFloat(u + 1u);
+}
+
+// a / b, correctly rounded to nearest (ties to even). The residual of the device's quotient is
+// exact (fma), so two refinements bring the quotient within one unit in the last place and the
+// last step moves it to the nearer neighbor of the exact quotient q + r / b.
+precise float bloom_scope_divide(float a, float b)
+{
+    precise float q = a / b;
+    precise float r = fma(-b, q, a);
+    q = q + r / b;
+    r = fma(-b, q, a);
+    q = q + r / b;
+    r = fma(-b, q, a);
+    if (r != 0.0) {
+        precise float up = bloom_scope_next_up(q);
+        precise float down = bloom_scope_next_down(q);
+        precise bool away = (r > 0.0) == (b > 0.0);
+        precise float gap = away ? abs(up - q) : abs(q - down);
+        precise float midpoint = abs(b) * 0.5 * gap;
+        if (abs(r) > midpoint) {
+            q = away ? up : down;
+        } else if (abs(r) == midpoint && (floatBitsToUint(q) & 1u) != 0u) {
+            q = away ? up : down;
+        }
+    }
+    return q;
+}
 
 bool bloom_scope_not_finite(float value)
 {
@@ -156,10 +199,10 @@ void bloom_scope_pixel_pass(uint linear)
 
     if ((bloom_scope_push.scopes & kScopeVectorscope) != 0u) {
         precise float cbDifference = signal.b - luma;
-        precise float cb = cbDifference / bloom_scope_push.cbDenominator;
+        precise float cb = bloom_scope_divide(cbDifference, bloom_scope_push.cbDenominator);
         precise float cbShifted = cb + 0.5;
         precise float crDifference = signal.r - luma;
-        precise float cr = crDifference / bloom_scope_push.crDenominator;
+        precise float cr = bloom_scope_divide(crDifference, bloom_scope_push.crDenominator);
         precise float crShifted = cr + 0.5;
         uint column = bloom_scope_cell(cbShifted);
         uint row = bloom_scope_cell(crShifted);
@@ -179,10 +222,10 @@ void bloom_scope_pixel_pass(uint linear)
             bloom_scope_add(2u);
         } else {
             // 0.8 and 0.9 as the nearest binary32.
-            precise float x = xyz.r / sum;
-            precise float xScaled = x / uintBitsToFloat(0x3F4CCCCDu);
-            precise float y = xyz.g / sum;
-            precise float yScaled = y / uintBitsToFloat(0x3F666666u);
+            precise float x = bloom_scope_divide(xyz.r, sum);
+            precise float xScaled = bloom_scope_divide(x, uintBitsToFloat(0x3F4CCCCDu));
+            precise float y = bloom_scope_divide(xyz.g, sum);
+            precise float yScaled = bloom_scope_divide(y, uintBitsToFloat(0x3F666666u));
             uint column = bloom_scope_cell(xScaled);
             uint row = bloom_scope_cell(yScaled);
             if (column == 512u || row == 512u) {

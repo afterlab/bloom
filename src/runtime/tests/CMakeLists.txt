@@ -2958,3 +2958,28 @@ bloom_add_test(
 set_tests_properties(bloom.runtime.gpu_warp_path_native
     PROPERTIES SKIP_RETURN_CODE 77)
 
+
+# #724 Scopes: the CPU reference of the scope measure, its packed form and summary.
+add_executable(bloom_runtime_scope_measure_test scope_measure_tests.cpp)
+target_include_directories(bloom_runtime_scope_measure_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_scope_measure_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_scope_measure_test)
+bloom_enable_strict_floating_point(bloom_runtime_scope_measure_test)
+bloom_add_test(NAME bloom.runtime.scope_measure COMMAND bloom_runtime_scope_measure_test LABELS unit runtime render)
+
+# #724 Scopes: the CPU reference and the GPU kernel give equal tables for the same float pictures,
+# every scope and both signals, at 256 x 256 on a real device. Skips (exit 77) without a device.
+add_executable(bloom_runtime_scope_measure_gpu_parity_test scope_measure_gpu_parity_tests.cpp)
+target_include_directories(bloom_runtime_scope_measure_gpu_parity_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests")
+target_link_libraries(bloom_runtime_scope_measure_gpu_parity_test
+    PRIVATE bloom_runtime_evaluator bloom_render)
+bloom_enable_warnings(bloom_runtime_scope_measure_gpu_parity_test)
+bloom_enable_strict_floating_point(bloom_runtime_scope_measure_gpu_parity_test)
+bloom_add_test(
+    NAME bloom.runtime.scope_measure_gpu_parity
+    COMMAND bloom_runtime_scope_measure_gpu_parity_test
+    LABELS runtime native gpu render
+)
+set_tests_properties(bloom.runtime.scope_measure_gpu_parity
+    PROPERTIES SKIP_RETURN_CODE 77)
