@@ -169,6 +169,9 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 - [Using Bloom from an agent](user-guide/mcp.md) — stdio MCP tools and request limits.
 - [When a composition cannot render](user-guide/compile-failures.md) — the status bar's Details popup and what to do.
 - [MCP Server panel](user-guide/mcp-server-panel.md) — start or stop the in-app MCP server, port, token and clients.
+- [The Scopes panel](user-guide/scopes.md) — Waveform, Parade, Vectorscope, Histogram and CIE
+  chromaticity of the picture a Viewer shows, the status line, the region, and reads from MCP and
+  Python.
 - [The Profiler panel](user-guide/profiler.md) — Bloom's memory, GPU, CPU, workload, pressure and
   helper processes over time.
 - [Headless scripting](user-guide/scripting.md) — `bloom-cli`, JSON transactions, and headless

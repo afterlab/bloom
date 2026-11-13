@@ -185,6 +185,59 @@ Tables are described as flat arrays (dense, or the non-zero cells as index and c
 is `summarizeScopes` of the tables, and a picture is `renderScopePicture` or `renderAllScopesPicture`
 encoded with `encodeScopePng`, so a picture equals what the panel draws.
 
+## Sidecars and identity
+
+A frame's count tables are kept beside the frame in the preview cache as a sidecar
+(`PreviewScopeSidecar`, `preview_frame_cache.hpp`): the packed tables, the measured area, the route
+that counted and, for a frame the device could not count, the reason.
+
+- The sidecar's identity is the frame's `PreviewFrameCacheKey` plus `PreviewScopeIdentity`: the
+  measure settings (which scopes, the signal and its axis maximum, the region, Ignore Transparent
+  Pixels) and the Viewer's exposure and gamma. A frame has at most one sidecar.
+- A scope setting replaces the sidecar and leaves the frame's entry alone. An edit of the document
+  gives the frame another cache key, so the frame and its sidecar are both new. A sidecar leaves
+  the cache with its frame.
+- A sidecar's bytes are charged to the cache's byte budget and reported with the frame bytes
+  (`scopeSidecarBytes`, part of `hostBytes`). Tables are packed to the narrowest whole-number
+  width that holds their largest count (`ScopeTables`). A sidecar that does not fit is not kept.
+- A cached frame without a matching sidecar is measured again from the frame's own plan and
+  request through `measureScopeFrame`, never from the packed 8-bit picture, and gives the tables a
+  cold frame gives.
+
+The sidecar is measured by a cancellable task of its own after the frame is shown or retained,
+not inside the frame's preparation: a frame is never delayed by its scopes, and a hidden panel
+costs nothing. The device route therefore runs the frame's scene again on the final-render
+evaluator.
+
+## The panel
+
+`ScopesController` (`scopes_controller.hpp`) is told which frame the followed Viewer shows and
+which measure the panel wants. It takes the tables from the frame's sidecar when the identity
+matches, and otherwise measures on a task worker and attaches the result. A superseded request is
+cancelled and its result is neither shown nor cached. While another frame's tables are on show the
+reading is marked behind and names the frame that was measured. During a RAM preview fill with a
+panel open, each frame the cache retains is measured in the background.
+
+`ScopesEditor` (`bloom.scopes`) is the panel: the header, the status line and five collapsible
+sections whose collapse state is kept per panel area. A hidden panel and a collapsed section ask
+for no measure. Mapping tables to trace images runs on a task worker (`ScopesTraceRenderer`); a
+Brightness change maps again and does not measure again. Nothing of the measure or the mapping
+runs on the interface thread.
+
+## The scope region
+
+`ScopesRegionStore` holds one region per project and composition, the armed flag of the Region
+toggle and the count of visible Scopes panels. It is session state: it holds no reference to the
+document, is not saved, is not an undo step and does not change rendering, export or the Viewer's
+region of interest. The region is whole composition pixels clipped to the frame;
+`scopeMeasuredArea` scales it to the resolution measured.
+
+Every Viewer of the composition draws the region as an overlay labeled "Scopes" while a Scopes
+panel is visible, on the widget and on the device presentation alike. The Viewer takes input for
+it only while the toggle is armed (draw a rectangle, or move the region by its body) or when the
+press is on one of its handles (resize), so layer moves, marquee selection and the region of
+interest tool are unaffected. The store is written when a drag ends.
+
 ## Budget, cancellation and retirement
 
 The measure is part of its frame's request. The tables, their staging copy and their host copy are
