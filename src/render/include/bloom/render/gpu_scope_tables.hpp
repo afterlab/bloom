@@ -107,6 +107,10 @@ class GpuScopeTables final {
     // Owner-thread. Requests cancellation; nothing is freed until the fence is proven.
     void cancel() noexcept;
 
+    // Owner-thread. True while a submission of this measure, or one it handed to the process slot,
+    // is not proven retired; a handed-over submission whose fence has signaled is freed here.
+    [[nodiscard]] bool hasUnretiredSubmission() noexcept;
+
     // Positive proof that native dispatches were submitted to the queue (tests and route proofs).
     [[nodiscard]] static std::uint64_t nativeDispatchCount() noexcept;
 

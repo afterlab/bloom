@@ -751,6 +751,61 @@ void testInvalidAndCancel() {
     check(!runtime::measureScopesCpu(huge).has_value(), "more than 2^32 - 1 pixels refused");
 }
 
+// The measured area: the display window, cut to the region of interest and to the region, which
+// is in composition pixels and scales outward to the picture.
+void testMeasuredArea() {
+    using runtime::ScopeMeasuredArea;
+    using runtime::ScopeRegion;
+    const auto window = [](const std::int64_t x, const std::int64_t y, const std::uint64_t w,
+                           const std::uint64_t h) {
+        const auto created = render::ImageWindow::create(x, y, w, h);
+        if (created.value() == nullptr)
+            throw std::logic_error("the test window must be valid");
+        return *created.value();
+    };
+    const auto display = window(0, 0, 200, 100);
+    const auto area = [&](const render::ImageWindow& data,
+                          const std::optional<render::ImageWindow>& roi,
+                          const std::optional<ScopeRegion>& region, const std::uint32_t width = 200,
+                          const std::uint32_t height = 100) {
+        return runtime::scopeMeasuredArea(data, display, roi, region, width, height);
+    };
+    check(area(display, {}, {}) == ScopeMeasuredArea{0, 0, 200, 100},
+          "no region measures the display window");
+    // A data window larger than, and offset from, the display window: the area is the display
+    // window, from the data window's first pixel.
+    check(area(window(-10, -5, 220, 110), {}, {}) == ScopeMeasuredArea{10, 5, 200, 100},
+          "the area is counted from the data window's first pixel");
+    // A data window smaller than the display window: the area reaches outside the picture.
+    check(area(window(50, 20, 40, 30), {}, {}) == ScopeMeasuredArea{-50, -20, 200, 100},
+          "the area may reach outside the stored picture");
+    check(area(display, window(20, 10, 50, 40), {}) == ScopeMeasuredArea{20, 10, 50, 40},
+          "a region of interest cuts the area");
+    check(area(display, {}, ScopeRegion{30, 20, 60, 50}) == ScopeMeasuredArea{30, 20, 60, 50},
+          "a region at full resolution is its own pixels");
+    check(area(display, {}, ScopeRegion{-20, -10, 60, 50}) == ScopeMeasuredArea{0, 0, 40, 40},
+          "a region is cut to the display window");
+    check(area(display, window(20, 10, 50, 40), ScopeRegion{30, 0, 100, 30}) ==
+              ScopeMeasuredArea{30, 10, 40, 20},
+          "a region and a region of interest cut each other");
+    // A proxy picture of a 400 x 200 composition: the region scales outward.
+    check(area(display, {}, ScopeRegion{31, 21, 60, 50}, 400, 200) ==
+              ScopeMeasuredArea{15, 10, 31, 26},
+          "a region scales to a proxy picture outward");
+    check(area(display, {}, ScopeRegion{-3, -3, 2, 2}, 400, 200) == std::nullopt,
+          "a region left of the picture is empty");
+    check(area(display, {}, ScopeRegion{-3, -3, 4, 4}, 400, 200) == ScopeMeasuredArea{0, 0, 1, 1},
+          "a region that touches the first pixel measures it");
+    check(area(display, {}, ScopeRegion{500, 10, 20, 20}) == std::nullopt,
+          "a region outside the picture is empty");
+    check(area(display, {}, ScopeRegion{10, 10, 0, 20}) == std::nullopt,
+          "a region with no width is empty");
+    check(area(display, window(300, 0, 10, 10), {}) == std::nullopt,
+          "a region of interest outside the display window is empty");
+    check(area(display, {}, ScopeRegion{10, 10, 20, 20}, 0, 100) == std::nullopt,
+          "a region needs the composition's size");
+}
+
 } // namespace
 
 int main() {
@@ -767,6 +822,7 @@ int main() {
         testPacking();
         testSummary();
         testInvalidAndCancel();
+        testMeasuredArea();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

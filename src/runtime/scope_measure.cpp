@@ -554,4 +554,57 @@ ScopeSummary summarizeScopes(const ScopeCounts& counts) {
     return summary;
 }
 
+std::optional<ScopeMeasuredArea> scopeMeasuredArea(const render::ImageWindow& dataWindow,
+                                                   const render::ImageWindow& displayWindow,
+                                                   const std::optional<render::ImageWindow>& roi,
+                                                   const std::optional<ScopeRegion>& region,
+                                                   const std::uint32_t compositionWidth,
+                                                   const std::uint32_t compositionHeight) noexcept {
+    std::int64_t left = displayWindow.originX();
+    std::int64_t top = displayWindow.originY();
+    std::int64_t right = displayWindow.maxXExclusive();
+    std::int64_t bottom = displayWindow.maxYExclusive();
+    if (roi) {
+        left = std::max(left, roi->originX());
+        top = std::max(top, roi->originY());
+        right = std::min(right, roi->maxXExclusive());
+        bottom = std::min(bottom, roi->maxYExclusive());
+    }
+    if (region) {
+        if (compositionWidth == 0 || compositionHeight == 0)
+            return std::nullopt;
+        const auto floorDivide = [](const std::int64_t value, const std::int64_t by) {
+            const auto quotient = value / by;
+            return (value % by != 0 && value < 0) ? quotient - 1 : quotient;
+        };
+        const auto ceilDivide = [&floorDivide](const std::int64_t value, const std::int64_t by) {
+            return -floorDivide(-value, by);
+        };
+        const auto width = static_cast<std::int64_t>(displayWindow.extent().width());
+        const auto height = static_cast<std::int64_t>(displayWindow.extent().height());
+        const std::int64_t regionRight = std::int64_t{region->x} + region->width;
+        const std::int64_t regionBottom = std::int64_t{region->y} + region->height;
+        left = std::max(left, displayWindow.originX() +
+                                  floorDivide(std::int64_t{region->x} * width, compositionWidth));
+        top = std::max(top, displayWindow.originY() +
+                                floorDivide(std::int64_t{region->y} * height, compositionHeight));
+        right = std::min(right, displayWindow.originX() +
+                                    ceilDivide(regionRight * width, compositionWidth));
+        bottom = std::min(bottom, displayWindow.originY() +
+                                      ceilDivide(regionBottom * height, compositionHeight));
+    }
+    if (right <= left || bottom <= top)
+        return std::nullopt;
+    const auto x = left - dataWindow.originX();
+    const auto y = top - dataWindow.originY();
+    constexpr std::int64_t low = std::numeric_limits<std::int32_t>::min();
+    constexpr std::int64_t high = std::numeric_limits<std::int32_t>::max();
+    if (x < low || x > high || y < low || y > high || right - left > high || bottom - top > high)
+        return std::nullopt;
+    return ScopeMeasuredArea{.x = static_cast<std::int32_t>(x),
+                             .y = static_cast<std::int32_t>(y),
+                             .width = static_cast<std::uint32_t>(right - left),
+                             .height = static_cast<std::uint32_t>(bottom - top)};
+}
+
 } // namespace bloom::runtime

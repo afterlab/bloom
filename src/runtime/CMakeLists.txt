@@ -230,6 +230,7 @@ target_sources(
         pixel_math_image_effect.cpp
         color_tool_image_effect.cpp
         histogram_image_effect.cpp
+        scope_frame_measure.cpp
         scope_measure.cpp
         statistics_image_effect.cpp
         audio_analysis.cpp
@@ -302,6 +303,8 @@ target_sources(
         gpu_process_frame_preparation_private.hpp
         gpu_process_frame_readback.cpp
         gpu_process_frame_readback_private.hpp
+        gpu_process_frame_scope.cpp
+        gpu_process_frame_scope_private.hpp
         gpu_process_frame_support_private.hpp
         gpu_ocio_wrapper.cpp
         gpu_ocio_command.cpp
@@ -369,6 +372,8 @@ target_sources(
             include/bloom/runtime/image_sequence_read_ahead.hpp
             include/bloom/runtime/gpu_scene_executor.hpp
             include/bloom/runtime/gpu_process_frame.hpp
+            include/bloom/runtime/gpu_scope_measure.hpp
+            include/bloom/runtime/scope_frame_measure.hpp
             include/bloom/runtime/gpu_processing_phase_policy.hpp
             include/bloom/runtime/packed_host_retirement.hpp
             include/bloom/runtime/gpu_ocio_wrapper.hpp

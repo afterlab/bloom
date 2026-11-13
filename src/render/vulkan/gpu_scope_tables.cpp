@@ -423,6 +423,21 @@ const GpuScopeTablesDiagnostic& GpuScopeTables::diagnostic() const noexcept {
     return impl_ == nullptr ? empty : impl_->diagnostic;
 }
 
+bool GpuScopeTables::hasUnretiredSubmission() noexcept {
+    if (impl_ != nullptr && impl_->submitted) {
+        return true;
+    }
+    std::lock_guard lock(scopeSlotMutex());
+    ScopeSlot& slot = scopeSlot();
+    if (slot.slotState != ScopeSlotState::Quarantined) {
+        return false;
+    }
+    if (slot.ownerThread == std::this_thread::get_id()) {
+        static_cast<void>(retireQuarantinedSlotLocked(slot));
+    }
+    return slot.slotState == ScopeSlotState::Quarantined;
+}
+
 std::uint64_t GpuScopeTables::nativeDispatchCount() noexcept {
     return scopeDispatchCounter().load();
 }

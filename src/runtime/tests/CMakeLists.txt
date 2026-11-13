@@ -2983,3 +2983,29 @@ bloom_add_test(
 )
 set_tests_properties(bloom.runtime.scope_measure_gpu_parity
     PROPERTIES SKIP_RETURN_CODE 77)
+
+# #724 Scopes: the scope measure of a frame as a job of the final-render evaluator, against the CPU
+# reference, through the real OCIO context of this target's own packaged tools. Skips (exit 77)
+# without a device or the tools.
+if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_runtime_scope_frame_measure_native_test
+        scope_frame_measure_native_tests.cpp)
+    target_include_directories(bloom_runtime_scope_frame_measure_native_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime" "${PROJECT_SOURCE_DIR}/src/render/tests")
+    target_link_libraries(bloom_runtime_scope_frame_measure_native_test
+        PRIVATE bloom_runtime_evaluator bloom_render bloom_color_gpu_shader)
+    target_compile_definitions(bloom_runtime_scope_frame_measure_native_test PRIVATE
+        "BLOOM_SCOPE_FRAME_MEASURE_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_scope_frame_measure_native_test>\"")
+    bloom_enable_warnings(bloom_runtime_scope_frame_measure_native_test)
+    bloom_enable_strict_floating_point(bloom_runtime_scope_frame_measure_native_test)
+    include(BloomGpuShaderTools)
+    bloom_package_gpu_shader_tools(bloom_runtime_scope_frame_measure_native_test)
+    bloom_add_test(
+        NAME bloom.runtime.scope_frame_measure_native
+        COMMAND bloom_runtime_scope_frame_measure_native_test
+        LABELS runtime native gpu color render
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.runtime.scope_frame_measure_native
+        PROPERTIES SKIP_RETURN_CODE 77)
+endif()

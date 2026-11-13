@@ -76,6 +76,15 @@ class PreparedDisplayFrame;
     const PreparedCpuDisplayProcessorHandle& handle, std::span<const render::Rgba32f> sourcePixels,
     std::span<float> scratchRgba, std::span<render::Rgba8> destinationPixels) noexcept;
 
+// #724 Scopes: step 3 alone, kept in float. `rgba` holds whole pixels of four floats: the straight
+// red, green and blue of each pixel in, the display's red, green and blue out, with no clamp and no
+// packing; the fourth lane is never read or written. The caller hands in finite values and checks
+// the result. Fails for a span that is not whole pixels, an unsupported floating-point
+// environment or a processor that could not run.
+[[nodiscard]] render::ImageStatus
+applyDisplayFloatChunk(const PreparedCpuDisplayProcessorHandle& handle,
+                       std::span<float> rgba) noexcept;
+
 // Runs the complete seven-step flow over `source`'s full data window in bounded chunks of
 // `chunkPixelCount` pixels (the last chunk may be shorter), checking `isCancelled` between
 // chunks. Different `chunkPixelCount` values must produce bit-identical output (tested). The

@@ -48,6 +48,8 @@ GpuScopeTablesResult GpuScopeTables::take() noexcept { return {}; }
 
 void GpuScopeTables::cancel() noexcept {}
 
+bool GpuScopeTables::hasUnretiredSubmission() noexcept { return false; }
+
 std::uint64_t GpuScopeTables::nativeDispatchCount() noexcept { return 0; }
 
 } // namespace bloom::render

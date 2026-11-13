@@ -143,6 +143,27 @@ struct ScopeCounts final {
 [[nodiscard]] std::optional<ScopeCounts>
 measureScopesCpu(const ScopeMeasureInput& input, const std::function<bool()>& cancelled = {});
 
+// The measured area of a picture, in picture pixels from the first stored pixel of its data window.
+struct ScopeMeasuredArea final {
+    std::int32_t x = 0;
+    std::int32_t y = 0;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+
+    friend bool operator==(const ScopeMeasuredArea&, const ScopeMeasuredArea&) = default;
+};
+
+// The area a measure counts: the picture's display window, cut to the frame's region of interest
+// when it has one and to `region` when one is set. `region` is in composition pixels of a
+// composition `compositionWidth` x `compositionHeight` and is scaled to the picture's display
+// window outward (its first pixel floored, its end raised), so a region drawn at full resolution
+// measures the same part of a proxy picture. Nothing when the area is empty.
+[[nodiscard]] std::optional<ScopeMeasuredArea>
+scopeMeasuredArea(const render::ImageWindow& dataWindow, const render::ImageWindow& displayWindow,
+                  const std::optional<render::ImageWindow>& roi,
+                  const std::optional<ScopeRegion>& region, std::uint32_t compositionWidth,
+                  std::uint32_t compositionHeight) noexcept;
+
 // A measure as a frame's sidecar keeps it: every table packed to the narrowest of 8, 16 or 32 bits
 // that holds its largest count, exactly. The counters stay 32 bits.
 class ScopeTables final {

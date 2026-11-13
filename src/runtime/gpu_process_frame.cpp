@@ -3,6 +3,7 @@
 
 #include "gpu_process_frame_preparation_private.hpp"
 #include "gpu_process_frame_readback_private.hpp"
+#include "gpu_process_frame_scope_private.hpp"
 #include "gpu_process_frame_support_private.hpp"
 
 #include <bloom/render/cpu_image_primitives.hpp>
@@ -74,6 +75,8 @@ struct GpuProcessFrameRequest final {
     // Display-only job (transformOutput): the host process image to upload, and its identity.
     std::shared_ptr<const render::Rgba32fImage> uploadSource;
     std::optional<ProcessFrameIdentity> uploadIdentity;
+    // #724: the scope measure this request runs instead of the final readback.
+    std::shared_ptr<detail::ScopeMeasureWork> scope;
 
     bool done = false;
     GpuProcessFrameOutcome outcome;
@@ -106,6 +109,8 @@ struct GpuProcessFrameEvaluator::Impl final {
     std::unique_ptr<GpuOutputColorStage> outputColor;
     // Owner-thread upload pipeline for display-only jobs, created on first use.
     std::unique_ptr<render::GpuImageUpload> uploader;
+    // #724: the scope measure's color step executor and count kernel, created on first use.
+    std::unique_ptr<detail::ScopeMeasureStage> scopeStage;
 
     // Bounded FIFO of admitted requests. A caller admits its slot under `mutex`, wakes the owner,
     // and waits on the slot's own condition variable until the owner marks it done or shutdown
@@ -185,14 +190,16 @@ struct GpuProcessFrameEvaluator::Impl final {
                const CancellationToken& cancellation, const EvaluationProgressCallback& progress,
                std::shared_ptr<const PreparedGpuOcioCommand> outputCommand,
                const std::shared_ptr<render::GpuProcessingPhaseLease>& phaseLease,
-               std::uint64_t readbackByteAllowance);
+               std::uint64_t readbackByteAllowance,
+               const std::shared_ptr<detail::ScopeMeasureWork>& scope);
     GpuProcessFrameOutcome runUpload(GpuProcessFrameRequest& request);
     GpuProcessFrameOutcome runRequestImpl(
         const std::shared_ptr<const CompiledCompositionPlan>& plan,
         const EvaluationRequest& request, const std::shared_ptr<const PreparedGpuScene>& scene,
         const CancellationToken& cancellation, const EvaluationProgressCallback& progress,
         std::shared_ptr<const PreparedGpuOcioCommand> outputCommand, FinalProcessingPhase& phase,
-        std::uint64_t readbackByteAllowance);
+        std::uint64_t readbackByteAllowance,
+        const std::shared_ptr<detail::ScopeMeasureWork>& scope);
 };
 
 // Marks a queued-but-not-yet-run request done with a Cancelled outcome and wakes its caller. Called
@@ -211,7 +218,8 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequest(
     const EvaluationProgressCallback& progress,
     std::shared_ptr<const PreparedGpuOcioCommand> outputCommand,
     const std::shared_ptr<render::GpuProcessingPhaseLease>& phaseLease,
-    const std::uint64_t readbackByteAllowance) {
+    const std::uint64_t readbackByteAllowance,
+    const std::shared_ptr<detail::ScopeMeasureWork>& scope) {
     FinalProcessingPhase phase{.device = device.get(), .lease = phaseLease};
     // A previous frame whose native work could not be proven retired leaves its phase latched on
     // this generation. Recover it here instead of refusing every later frame: the device-wide idle
@@ -226,6 +234,8 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequest(
                 static_cast<void>(executor->poll());
             if (outputColor)
                 static_cast<void>(outputColor->poll());
+            if (scopeStage)
+                scopeStage->poll();
         }
     }
     if ((options.processingPhasePolicy && !phaseLease) ||
@@ -235,8 +245,9 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequest(
     }
     phase.armed = static_cast<bool>(phaseLease);
     try {
-        auto outcome = runRequestImpl(plan, request, scene, cancellation, progress,
-                                      std::move(outputCommand), phase, readbackByteAllowance);
+        auto outcome =
+            runRequestImpl(plan, request, scene, cancellation, progress, std::move(outputCommand),
+                           phase, readbackByteAllowance, scope);
         // A native allocation refused for device room: the scene cache gives way before the
         // retry, not the frame (#425).
         if (phaseLease && device) {
@@ -277,7 +288,8 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
     const std::shared_ptr<const PreparedGpuScene>& scene, const CancellationToken& cancellation,
     const EvaluationProgressCallback& progress,
     std::shared_ptr<const PreparedGpuOcioCommand> outputCommand, FinalProcessingPhase& phase,
-    const std::uint64_t readbackByteAllowance) {
+    const std::uint64_t readbackByteAllowance,
+    const std::shared_ptr<detail::ScopeMeasureWork>& scope) {
     if (executor == nullptr || device == nullptr || cache == nullptr) {
         return failure(GpuProcessFrameStatus::DeviceUnavailable,
                        GpuProcessFrameDiagnosticCode::DeviceUnavailable,
@@ -291,7 +303,8 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
     // Respect a prior unproven native submission before reusing the executor: drain on the owner
     // thread with a real bounded deadline, never reuse under an unretired submission.
     const auto outputColorUnretired = [this] {
-        return outputColor != nullptr && outputColor->hasUnretiredSubmission();
+        return (outputColor != nullptr && outputColor->hasUnretiredSubmission()) ||
+               (scopeStage != nullptr && scopeStage->hasUnretiredSubmission());
     };
     if (executor->ownerDrainRequired() || executor->hasUnretiredSubmission() ||
         outputColorUnretired()) {
@@ -302,6 +315,9 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
             static_cast<void>(executor->poll());
             if (outputColor != nullptr) {
                 static_cast<void>(outputColor->poll());
+            }
+            if (scopeStage != nullptr) {
+                scopeStage->poll();
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
@@ -448,6 +464,27 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
         outcome.status = GpuProcessFrameStatus::Failed;
         outcome.diagnostic = {GpuProcessFrameDiagnosticCode::InternalInvariant,
                               "the executor reported Ready without an output image"};
+        return outcome;
+    }
+
+    // #724: a scope measure counts the resident picture on the device and reads back only its
+    // tables; the picture is never read back and no frame is published.
+    if (scope != nullptr) {
+        if (scopeStage == nullptr) {
+            std::string message;
+            scopeStage = detail::ScopeMeasureStage::create(*device, message);
+            if (scopeStage == nullptr) {
+                outcome.status = GpuProcessFrameStatus::Failed;
+                outcome.diagnostic = {GpuProcessFrameDiagnosticCode::ExecutorUnavailable,
+                                      std::move(message)};
+                return outcome;
+            }
+        }
+        auto measured = detail::runScopeMeasure(*scopeStage, *scope, std::move(image),
+                                                readbackByteAllowance, options.nativeDeadline,
+                                                cancellation, stopRequested, phase.retired);
+        outcome.status = measured.status;
+        outcome.diagnostic = {measured.code, std::move(measured.message)};
         return outcome;
     }
 
@@ -786,7 +823,7 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
                 ? runUpload(*active)
                 : runRequest(active->plan, *evaluation, active->scene, active->cancellation,
                              active->progress, std::move(active->outputCommand), active->phaseLease,
-                             active->readbackByteAllowance);
+                             active->readbackByteAllowance, active->scope);
         active->uploadSource.reset();
 
         // Completed preparation and phase aliases must end on the owner before completion is
@@ -817,6 +854,7 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
     if (device)
         device->setDeviceRoomReclaimer({});
     uploader.reset();
+    scopeStage.reset();
     outputColor.reset();
     executor.reset();
     cache.reset();
@@ -892,7 +930,8 @@ bool GpuProcessFrameEvaluator::Impl::retireLeftovers() noexcept {
     const auto unretired = [this] {
         return executor->ownerDrainRequired() || executor->hasUnretiredSubmission() ||
                (outputColor != nullptr && outputColor->hasUnretiredSubmission()) ||
-               (uploader != nullptr && uploader->hasUnretiredSubmission());
+               (uploader != nullptr && uploader->hasUnretiredSubmission()) ||
+               (scopeStage != nullptr && scopeStage->hasUnretiredSubmission());
     };
     if (unretired()) {
         // One non-blocking turn. The executor's poll also drains the generation's quarantined
@@ -902,6 +941,8 @@ bool GpuProcessFrameEvaluator::Impl::retireLeftovers() noexcept {
             static_cast<void>(outputColor->poll());
         if (uploader != nullptr && uploader->hasUnretiredSubmission())
             static_cast<void>(uploader->poll());
+        if (scopeStage != nullptr)
+            scopeStage->poll();
         if (unretired())
             return true;
     }
@@ -957,6 +998,8 @@ std::uint64_t GpuProcessFrameEvaluator::Impl::reclaimDevice(const std::uint64_t 
         released += executor->reclaimOcioPrograms(bytes - released);
     if (released < bytes && outputColor)
         released += outputColor->reclaimPrograms(bytes - released);
+    if (released < bytes && scopeStage)
+        released += scopeStage->reclaimPrograms(bytes - released);
     return released;
 }
 
@@ -1021,10 +1064,20 @@ GpuProcessFrameDiagnostic GpuProcessFrameEvaluator::availabilityDiagnostic() con
 }
 
 GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
-    std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& borrowedRequest,
+    std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& request,
     const CancellationToken& cancellation, EvaluationProgressCallback progress,
     std::shared_ptr<const PreparedGpuOcioCommand> outputCommand,
     const std::optional<std::filesystem::path>& assetBaseDirectory) {
+    return evaluateWith(std::move(plan), request, cancellation, std::move(progress),
+                        std::move(outputCommand), assetBaseDirectory, nullptr);
+}
+
+GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluateWith(
+    std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& borrowedRequest,
+    const CancellationToken& cancellation, EvaluationProgressCallback progress,
+    std::shared_ptr<const PreparedGpuOcioCommand> outputCommand,
+    const std::optional<std::filesystem::path>& assetBaseDirectory,
+    const std::shared_ptr<detail::ScopeMeasureWork>& scope) {
     if (impl_ == nullptr) {
         return failure(GpuProcessFrameStatus::Failed,
                        GpuProcessFrameDiagnosticCode::InternalInvariant, "no evaluator");
@@ -1129,12 +1182,27 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
                                                       assetBaseDirectory);
             },
             cancellation);
-        auto preparation =
-            detail::prepareExportScene(impl_->options, plan, request, cancellation,
-                                       static_cast<bool>(outputCommand), assetBaseDirectory);
+        auto preparation = detail::prepareExportScene(
+            impl_->options, plan, request, cancellation,
+            static_cast<bool>(outputCommand) ||
+                (scope != nullptr && detail::scopeMeasureUsesColorProgram(scope->job)),
+            assetBaseDirectory, scope != nullptr ? detail::scopeMeasureTableBytes(scope->job) : 0);
         if (preparation.scene == nullptr) {
             return failure(preparation.status, preparation.diagnosticCode,
                            std::move(preparation.diagnosticMessage));
+        }
+        // #724: the measured area and the color programs of a scope measure, on this worker.
+        if (scope != nullptr) {
+            if (plan == nullptr)
+                return failure(GpuProcessFrameStatus::Failed,
+                               GpuProcessFrameDiagnosticCode::InvalidRequest, "no plan");
+            if (auto refused = detail::prepareScopeMeasure(*scope, *preparation.scene, *plan,
+                                                           request, cancellation))
+                return failure(refused->status, refused->code, std::move(refused->message));
+            if (scope->emptyArea)
+                return failure(GpuProcessFrameStatus::Failed,
+                               GpuProcessFrameDiagnosticCode::InvalidRequest,
+                               "the scope region lies outside the picture");
         }
 
         // Test-only deterministic fault seam: simulate the slot allocation failing after admission
@@ -1154,6 +1222,7 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
         slot->phaseLease = std::move(preparation.phaseLease);
         slot->readbackByteAllowance = preparation.readbackByteAllowance;
         slot->scene = std::move(preparation.scene);
+        slot->scope = scope;
         {
             std::lock_guard lock(impl_->mutex);
             if (impl_->stopping) {

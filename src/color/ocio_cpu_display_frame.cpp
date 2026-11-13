@@ -146,6 +146,39 @@ ImageStatus applyBloomNeutralDisplayChunk(const PreparedCpuDisplayProcessorHandl
     return std::nullopt; // step 7: nothing is published from here -- the caller owns the frame.
 }
 
+ImageStatus applyDisplayFloatChunk(const PreparedCpuDisplayProcessorHandle& handle,
+                                   const std::span<float> rgba) noexcept {
+    if (rgba.size() % 4 != 0) {
+        return codeError(ImageErrorCode::InvalidParameter);
+    }
+    const std::size_t n = rgba.size() / 4;
+    if (n == 0) {
+        return std::nullopt;
+    }
+    if (!core::supportsReferenceFloatingPointEnvironment<float>()) {
+        return codeError(ImageErrorCode::UnsupportedFloatingPointEnvironment);
+    }
+    if (const auto& remote = handle.impl().remoteForward()) {
+        if (!remote->apply(rgba, true)) {
+            return codeError(ImageErrorCode::InvalidState);
+        }
+        return std::nullopt;
+    }
+    const auto& cpuProcessor = handle.impl().cpuProcessor();
+    try {
+        constexpr auto floatBytes = static_cast<std::ptrdiff_t>(sizeof(float));
+        OCIO::PackedImageDesc desc(rgba.data(), static_cast<long>(n), 1L, 3L, OCIO::BIT_DEPTH_F32,
+                                   floatBytes, floatBytes * 4,
+                                   floatBytes * 4 * static_cast<std::ptrdiff_t>(n));
+        cpuProcessor->apply(desc);
+    } catch (const OCIO::Exception&) {
+        return codeError(ImageErrorCode::InvalidState);
+    } catch (const std::exception&) {
+        return codeError(ImageErrorCode::InvalidState);
+    }
+    return std::nullopt;
+}
+
 PreparedDisplayFrame::PreparedDisplayFrame(const render::ImageWindow displayWindow,
                                            const core::PixelAspectRatio pixelAspect,
                                            const render::PackedImageLayout layout,

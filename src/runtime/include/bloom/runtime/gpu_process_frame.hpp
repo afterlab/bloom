@@ -53,6 +53,11 @@ class Rgba32fImage;
 namespace bloom::runtime {
 
 class GpuOcioContextResolver;
+struct GpuScopeMeasureJob;
+struct GpuScopeMeasureOutcome;
+namespace detail {
+struct ScopeMeasureWork;
+} // namespace detail
 
 enum class GpuProcessFrameStatus : std::uint8_t {
     // A genuine GPU process frame was produced and read back exactly once.
@@ -283,6 +288,16 @@ class GpuProcessFrameEvaluator final {
                     std::shared_ptr<const PreparedGpuOcioCommand> outputCommand = nullptr,
                     const CancellationToken& cancellation = {});
 
+    // #724 Scopes (bloom/runtime/gpu_scope_measure.hpp): runs the frame's scene as evaluate() does
+    // and, instead of the final picture readback, counts the scope tables of the resident picture
+    // on the device and reads back only those tables (`prep.scopes.result_readback`). The color
+    // programs are prepared on the calling worker. Called on a CPU worker, never the owner.
+    [[nodiscard]] GpuScopeMeasureOutcome
+    measureScopes(std::shared_ptr<const CompiledCompositionPlan> plan,
+                  const EvaluationRequest& request, const GpuScopeMeasureJob& job,
+                  const CancellationToken& cancellation = {},
+                  const std::optional<std::filesystem::path>& assetBaseDirectory = std::nullopt);
+
     // Thread-safe snapshot of the owner's device retention counters.
     [[nodiscard]] GpuProcessFrameRetentionStats retentionStats() const noexcept;
 
@@ -299,6 +314,15 @@ class GpuProcessFrameEvaluator final {
   private:
     struct Impl;
     explicit GpuProcessFrameEvaluator(std::unique_ptr<Impl> impl) noexcept;
+
+    // evaluate(), or with `scope` the scope measure of the same frame.
+    [[nodiscard]] GpuProcessFrameOutcome
+    evaluateWith(std::shared_ptr<const CompiledCompositionPlan> plan,
+                 const EvaluationRequest& request, const CancellationToken& cancellation,
+                 EvaluationProgressCallback progress,
+                 std::shared_ptr<const PreparedGpuOcioCommand> outputCommand,
+                 const std::optional<std::filesystem::path>& assetBaseDirectory,
+                 const std::shared_ptr<detail::ScopeMeasureWork>& scope);
 
     // The only place a GPU-provenance frame is constructed. It is a member of the friend class, so
     // the real private ProcessFrame constructor is reached without any public or forged path.

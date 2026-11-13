@@ -45,7 +45,8 @@ prepareExportScene(const GpuProcessFrameEvaluatorOptions& options,
                    const std::shared_ptr<const CompiledCompositionPlan>& plan,
                    const EvaluationRequest& request, const CancellationToken& cancellation,
                    const bool encodedOutput,
-                   const std::optional<std::filesystem::path>& assetBaseDirectory) {
+                   const std::optional<std::filesystem::path>& assetBaseDirectory,
+                   const std::uint64_t extraOutputBytes) {
     ExportScenePreparation result;
     if (cancellation.isCancellationRequested()) {
         result.status = GpuProcessFrameStatus::Cancelled;
@@ -89,8 +90,15 @@ prepareExportScene(const GpuProcessFrameEvaluatorOptions& options,
         // Reserve actual selected output overlap, with one MiB for native transfer rounding. The
         // OCIO arm's existing per-program ceiling is separate from transfer/adoption storage.
         constexpr std::uint64_t padding = 1024ULL * 1024;
-        const std::uint64_t nativeProgram = encodedOutput ? 512ULL * 1024 * 1024 : 0;
+        const std::uint64_t programBytes = encodedOutput ? 512ULL * 1024 * 1024 : 0;
         const std::uint64_t perPixel = encodedOutput ? 64 : 32;
+        if (extraOutputBytes > std::numeric_limits<std::uint64_t>::max() - padding - programBytes) {
+            result.status = GpuProcessFrameStatus::Failed;
+            result.diagnosticCode = GpuProcessFrameDiagnosticCode::BudgetRefused;
+            result.diagnosticMessage = "The final phase output envelope overflows";
+            return result;
+        }
+        const std::uint64_t nativeProgram = programBytes + extraOutputBytes;
         if (pixels >
             (std::numeric_limits<std::uint64_t>::max() - padding - nativeProgram) / perPixel) {
             result.status = GpuProcessFrameStatus::Failed;

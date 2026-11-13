@@ -21,11 +21,14 @@ struct ExportScenePreparation final {
     std::string diagnosticMessage;
 };
 
+// `extraOutputBytes` is output this request reads back besides the picture (#724: the scope
+// tables, their staging and their host copy); it is part of the output envelope.
 [[nodiscard]] ExportScenePreparation
 prepareExportScene(const GpuProcessFrameEvaluatorOptions& options,
                    const std::shared_ptr<const CompiledCompositionPlan>& plan,
                    const EvaluationRequest& request, const CancellationToken& cancellation,
                    bool encodedOutput = false,
-                   const std::optional<std::filesystem::path>& assetBaseDirectory = std::nullopt);
+                   const std::optional<std::filesystem::path>& assetBaseDirectory = std::nullopt,
+                   std::uint64_t extraOutputBytes = 0);
 
 } // namespace bloom::runtime::detail

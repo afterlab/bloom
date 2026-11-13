@@ -1,0 +1,578 @@
+// #724 Scopes: the scope measure of a frame through the production device route.
+//
+// The real GpuProcessFrameEvaluator runs a two-layer scene and, as a scope measure job, counts the
+// resident picture on the device and reads back only the tables. The OCIO context is qualified
+// through the real GpuOcioContextResolver from this target's own packaging, the seam the desktop,
+// CLI and MCP roots use.
+//
+// What is asserted:
+//   * Working signal: the device's tables equal the CPU reference's, cell for cell, for the same
+//     float picture (the picture the same evaluator reads back for the same request), with and
+//     without a region, a region of interest, a proxy resolution and ignored transparent pixels.
+//   * Display signal and the Chromaticity table: OCIO's CPU and GPU processors round differently,
+//     so a pixel may land in the neighboring cell. Every pixel is counted, and along every table
+//     axis no pixel is more than one cell from where the CPU reference puts it.
+//   * The job reads back one set of tables and no picture.
+//   * measureScopeFrame names the route that counted, and says why when the device did not.
+//
+// Requires the Vulkan backend and the pinned shader tools; skips (77) otherwise.
+
+#include "final_host_test_support.hpp"
+#include "gpu_composite_native_support.hpp"
+#include "gpu_scene_executor_test_support.hpp"
+
+#include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/core/sha256.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/gpu_ocio_context.hpp>
+#include <bloom/runtime/gpu_process_frame.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
+#include <bloom/runtime/gpu_scope_measure.hpp>
+#include <bloom/runtime/scope_frame_measure.hpp>
+
+#include <cstdint>
+#include <filesystem>
+#include <iostream>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace {
+
+using bloom::core::Color4d;
+using bloom::render::ImageWindow;
+using bloom::render::kScopeChannels;
+using bloom::render::kScopeCodeOver;
+using bloom::render::kScopeCodeUnder;
+using bloom::render::kScopeTableAll;
+using bloom::render::kScopeTableChromaticity;
+using bloom::render::kScopeTableHistogram;
+using bloom::render::kScopeTableVectorscope;
+using bloom::render::kScopeTableWaveform;
+using bloom::render::kScopeWaveformLevelOver;
+using bloom::render::kScopeWaveformLevelUnder;
+using bloom::runtime::CpuCompositionEvaluator;
+using bloom::runtime::EvaluationRequest;
+using bloom::runtime::GpuOcioContextRequest;
+using bloom::runtime::GpuOcioContextResolver;
+using bloom::runtime::GpuProcessFrameEvaluator;
+using bloom::runtime::GpuProcessFrameEvaluatorOptions;
+using bloom::runtime::GpuProcessFrameStatus;
+using bloom::runtime::ScopeCounts;
+using bloom::runtime::ScopeFrameMeasure;
+using bloom::runtime::ScopeFrameRoutes;
+using bloom::runtime::ScopeFrameStatus;
+using bloom::runtime::ScopeMeasuredArea;
+using bloom::runtime::ScopeMeasureSettings;
+using bloom::runtime::ScopeRegion;
+using bloom::runtime::ScopeRoute;
+using bloom::runtime::ScopeSignal;
+using bloom::runtime::ScopeSignalColor;
+using bloom::runtime::ViewAdjust;
+
+using namespace bloom::runtime::executor_test;
+
+#if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
+
+[[nodiscard]] std::optional<bloom::core::Sha256Digest> parseDigest(const std::string_view text) {
+    constexpr std::string_view prefix = "sha256:";
+    if (text.size() != prefix.size() + bloom::core::kSha256HexCharacters ||
+        text.substr(0, prefix.size()) != prefix) {
+        return std::nullopt;
+    }
+    return bloom::core::Sha256Digest::fromLowercaseHex(text.substr(prefix.size()));
+}
+
+[[nodiscard]] bloom::color::GpuShaderToolPackage packagedToolsDescriptor() {
+    bloom::color::GpuShaderToolPackage package;
+    package.toolsDirectory = BLOOM_GPU_TOOLS_DIR;
+    package.inventoryName = BLOOM_GPU_TOOLS_INVENTORY_NAME;
+    package.glslangValidatorName = BLOOM_GPU_TOOLS_GLSLANG_NAME;
+    package.spirvValName = BLOOM_GPU_TOOLS_SPIRV_VAL_NAME;
+#if defined(BLOOM_GPU_TOOLS_RELOCATED)
+    package.relocated = BLOOM_GPU_TOOLS_RELOCATED != 0;
+#endif
+#if defined(BLOOM_GPU_TOOLS_BUNDLE_RELATIVE)
+    package.bundleRelative = true;
+#endif
+#if defined(BLOOM_GPU_TOOLS_GLSLANG_STAGED_SHA256)
+    package.glslangStagedDigest = parseDigest(BLOOM_GPU_TOOLS_GLSLANG_STAGED_SHA256);
+#endif
+#if defined(BLOOM_GPU_TOOLS_SPIRV_VAL_STAGED_SHA256)
+    package.spirvValStagedDigest = parseDigest(BLOOM_GPU_TOOLS_SPIRV_VAL_STAGED_SHA256);
+#endif
+    return package;
+}
+
+// True when no count of `left` is more than one cell from where `right` has it, along one axis:
+// each running total of one lies between the other's running totals one cell before and at it.
+[[nodiscard]] bool withinOneCell(const std::vector<std::uint64_t>& left,
+                                 const std::vector<std::uint64_t>& right) {
+    if (left.size() != right.size())
+        return false;
+    std::uint64_t leftTotal = 0;
+    std::uint64_t rightTotal = 0;
+    std::uint64_t leftBefore = 0;
+    std::uint64_t rightBefore = 0;
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        leftTotal += left[index];
+        rightTotal += right[index];
+        if (leftBefore > rightTotal || rightBefore > leftTotal)
+            return false;
+        leftBefore = leftTotal;
+        rightBefore = rightTotal;
+    }
+    return leftTotal == rightTotal;
+}
+
+// One channel's Histogram along the code axis: under, 0..1023, over.
+[[nodiscard]] std::vector<std::uint64_t> histogramAxis(const ScopeCounts& counts,
+                                                       const std::uint32_t channel) {
+    std::vector<std::uint64_t> axis;
+    axis.push_back(counts.histogram(channel, kScopeCodeUnder));
+    for (std::uint32_t code = 0; code < 1024; ++code)
+        axis.push_back(counts.histogram(channel, code));
+    axis.push_back(counts.histogram(channel, kScopeCodeOver));
+    return axis;
+}
+
+[[nodiscard]] std::vector<std::uint64_t>
+waveformAxis(const ScopeCounts& counts, const std::uint32_t channel, const std::uint32_t column) {
+    std::vector<std::uint64_t> axis;
+    axis.push_back(counts.waveform(channel, column, kScopeWaveformLevelUnder));
+    for (std::uint32_t level = 0; level < 512; ++level)
+        axis.push_back(counts.waveform(channel, column, level));
+    axis.push_back(counts.waveform(channel, column, kScopeWaveformLevelOver));
+    return axis;
+}
+
+// A 512 x 512 table summed onto one of its axes, with the pixels outside it as a last cell.
+template <typename Cell>
+[[nodiscard]] std::vector<std::uint64_t> planeAxis(const Cell& cell, const bool alongFirst,
+                                                   const std::uint32_t outside) {
+    std::vector<std::uint64_t> axis(513, 0);
+    for (std::uint32_t first = 0; first < 512; ++first) {
+        for (std::uint32_t second = 0; second < 512; ++second)
+            axis[alongFirst ? first : second] += cell(first, second);
+    }
+    axis[512] = outside;
+    return axis;
+}
+
+// The pixels outside a 512 x 512 table are one count for both axes, so a pixel that crosses the
+// table's edge is not placed along an axis: the axes are compared only when both sides agree on
+// how many are outside.
+[[nodiscard]] bool planesWithinOneCell(const ScopeCounts& device, const ScopeCounts& reference,
+                                       const bool chromaticity) {
+    const auto cellOf = [chromaticity](const ScopeCounts& counts) {
+        return [&counts, chromaticity](const std::uint32_t first, const std::uint32_t second) {
+            return chromaticity ? counts.chromaticity(first, second)
+                                : counts.vectorscope(first, second);
+        };
+    };
+    const auto outsideOf = [chromaticity](const ScopeCounts& counts) {
+        return chromaticity ? counts.chromaticityOutside() + counts.noChromaticity()
+                            : counts.vectorscopeOutside();
+    };
+    for (const bool alongFirst : {true, false}) {
+        auto left = planeAxis(cellOf(device), alongFirst, outsideOf(device));
+        auto right = planeAxis(cellOf(reference), alongFirst, outsideOf(reference));
+        if (left[512] != right[512]) {
+            // Some pixels sit on the table's edge: only the totals can be compared.
+            std::uint64_t leftTotal = 0;
+            std::uint64_t rightTotal = 0;
+            for (std::size_t index = 0; index < left.size(); ++index) {
+                leftTotal += left[index];
+                rightTotal += right[index];
+            }
+            if (leftTotal != rightTotal)
+                return false;
+            continue;
+        }
+        if (!withinOneCell(left, right))
+            return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool tablesWithinOneCell(const ScopeCounts& device, const ScopeCounts& reference) {
+    if (device.layout != reference.layout || device.counted() != reference.counted() ||
+        device.notFinite() != reference.notFinite())
+        return false;
+    const auto& layout = device.layout;
+    for (std::uint32_t channel = 0; channel < kScopeChannels; ++channel) {
+        if (layout.has(kScopeTableHistogram) &&
+            !withinOneCell(histogramAxis(device, channel), histogramAxis(reference, channel)))
+            return false;
+        if (layout.has(kScopeTableWaveform)) {
+            for (std::uint32_t column = 0; column < layout.columns; ++column) {
+                if (!withinOneCell(waveformAxis(device, channel, column),
+                                   waveformAxis(reference, channel, column)))
+                    return false;
+            }
+        }
+    }
+    if (layout.has(kScopeTableVectorscope) && !planesWithinOneCell(device, reference, false))
+        return false;
+    if (layout.has(kScopeTableChromaticity) && !planesWithinOneCell(device, reference, true))
+        return false;
+    return true;
+}
+
+int run(int argc, char** argv) {
+    const auto options = bloom::render::composite_proof::parseOptions(argc, argv);
+    if (!options.valid) {
+        std::cerr << "invalid arguments\n";
+        return 2;
+    }
+    Expectations expectations;
+
+    GpuOcioContextResolver resolver{
+        GpuOcioContextRequest{std::filesystem::path{BLOOM_SCOPE_FRAME_MEASURE_TEST_EXECUTABLE},
+                              packagedToolsDescriptor(),
+                              {},
+                              {}}};
+    const auto resolved = resolver.resolve();
+    expectations.expect(resolved.hasValue(), "the packaged tools resolve to a shared context");
+    if (!resolved.hasValue()) {
+        std::cerr << "resolver diagnostic: " << resolved.diagnostic << '\n';
+        return 1;
+    }
+    const auto ocioContext = resolved.context;
+
+    // A fixed host sample: the test does not depend on the memory this machine has free.
+    bloom::render::test::FinalHostRetirementScope host;
+    auto phasePolicy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(32, host.owner);
+    {
+        constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
+        bloom::runtime::MemoryBudgetState sample;
+        sample.machine.availableBytes = 60 * gib;
+        sample.process.status = bloom::runtime::ProcessMemoryStatus::Finite;
+        sample.process.source = bloom::runtime::ProcessMemorySource::LinuxCgroupV2;
+        sample.process.sampledAt = bloom::runtime::GpuProcessingPhasePolicy::Clock::now();
+        sample.process.domains.push_back({.path = "/fixture",
+                                          .kind = bloom::runtime::ProcessMemoryLimitKind::Finite,
+                                          .limitBytes = 8 * gib,
+                                          .currentBytes = 6 * gib});
+        sample.processSampleFresh = true;
+        sample.sampleSerial = 1;
+        phasePolicy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+    }
+
+    CpuCompositionEvaluator cpuEvaluator;
+    GpuProcessFrameEvaluatorOptions evaluatorOptions;
+    evaluatorOptions.processingPhasePolicy = phasePolicy;
+    evaluatorOptions.enabled = true;
+    evaluatorOptions.loaderPath = options.loader_path;
+    evaluatorOptions.ocioContext = ocioContext;
+    evaluatorOptions.mediaContext =
+        bloom::runtime::GpuSceneMediaContext::fromEvaluator(cpuEvaluator);
+    std::shared_ptr<GpuProcessFrameEvaluator> evaluator =
+        GpuProcessFrameEvaluator::create(evaluatorOptions);
+    if (evaluator == nullptr || !evaluator->gpuAvailable()) {
+        if (options.require_device) {
+            std::cerr << "FAIL: required device unavailable: "
+                      << (evaluator != nullptr ? evaluator->availabilityDiagnostic().message
+                                               : std::string{"no evaluator"})
+                      << '\n';
+            return 1;
+        }
+        std::cout << "SKIP: no compatible Vulkan device available\n";
+        return 77;
+    }
+
+    auto neutral =
+        bloom::color::resolveOcioBuiltIn(bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
+                                         bloom::color::kBloomNeutralV1ConfigUri,
+                                         bloom::color::ocioBuiltInContentRevision(
+                                             bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
+                                             bloom::color::kBloomNeutralV1ConfigUri)
+                                             .value_or(bloom::color::kBloomNeutralV1ConfigDigest),
+                                         "lin_rec709_scene")
+            .takeResolved();
+    expectations.expect(neutral.has_value(), "Bloom Neutral resolves");
+    if (!neutral) {
+        evaluator->beginShutdown();
+        return 1;
+    }
+    const auto config =
+        std::make_shared<const bloom::color::ResolvedBloomNeutralConfig>(std::move(*neutral));
+
+    // An opaque solid under a half-transparent one with a value above 1 and one below 0, in a
+    // 256 x 256 composition they do not fill: flat areas, an overlap, and transparent pixels.
+    const auto plan =
+        twoSolidPlan(format(256, 256), Color4d{0.43, 0.27, 0.13, 1.0},
+                     LayerValues{.position = {10.0, 20.0}}, Color4d{-0.2, 3.2, 0.35, 0.5},
+                     LayerValues{.position = {60.0, 50.0}, .opacity = 0.8}, 180.0, 150.0, 7000);
+    const auto request = requestFor(*plan);
+
+    const auto colorFor = [&](const ScopeSignal signal, const ViewAdjust adjust = {}) {
+        auto prepared = ScopeSignalColor::prepare(
+            {.config = config, .signal = signal, .display = {}, .view = {}, .viewAdjust = adjust});
+        expectations.expect(static_cast<bool>(prepared),
+                            "the scope signal's color objects prepare: " + prepared.message);
+        return prepared.color;
+    };
+    const auto working = colorFor(ScopeSignal::Working);
+    const auto display = colorFor(ScopeSignal::Display);
+    const auto adjusted = colorFor(ScopeSignal::Display, ViewAdjust{.exposure = 0.5, .gamma = 1.2});
+    if (working == nullptr || display == nullptr || adjusted == nullptr) {
+        evaluator->beginShutdown();
+        return 1;
+    }
+    expectations.expect(working->identity() != display->identity() &&
+                            display->identity() != adjusted->identity(),
+                        "a signal, and an adjustment, change the color identity");
+
+    // The picture the device computes for a request, read back: the float input both routes of
+    // the Working signal count.
+    const auto devicePicture = [&](const EvaluationRequest& frameRequest) {
+        auto outcome = evaluator->evaluate(plan, frameRequest);
+        expectations.expect(outcome.status == GpuProcessFrameStatus::Evaluated &&
+                                outcome.frame != nullptr,
+                            "the device evaluates the frame: " + outcome.diagnostic.message);
+        return outcome.frame;
+    };
+    const auto onDevice = [&](const EvaluationRequest& frameRequest,
+                              const ScopeMeasureSettings& settings, const ScopeSignalColor& color) {
+        return bloom::runtime::measureScopeFrameOnDevice(*evaluator, *ocioContext, plan,
+                                                         frameRequest, settings, color);
+    };
+    const auto settingsFor = [](const ScopeSignal signal, const std::uint32_t scopes) {
+        ScopeMeasureSettings settings;
+        settings.signal = signal;
+        settings.scopes = scopes;
+        return settings;
+    };
+    constexpr std::uint32_t kNoChromaticity =
+        kScopeTableHistogram | kScopeTableWaveform | kScopeTableVectorscope;
+
+    const auto fullPicture = devicePicture(request);
+    if (fullPicture == nullptr) {
+        evaluator->beginShutdown();
+        return 1;
+    }
+
+    // Working, exact, and the native work of one measure.
+    {
+        const auto settings = settingsFor(ScopeSignal::Working, kNoChromaticity);
+        bloom::runtime::GpuScopeMeasureJob job;
+        job.scopes = settings.scopes;
+        job.luma = working->luma();
+        const auto outcome = evaluator->measureScopes(plan, request, job);
+        expectations.expect(outcome.status == bloom::runtime::GpuScopeMeasureStatus::Measured,
+                            "the device measures the Working signal: " +
+                                outcome.diagnostic.message);
+        expectations.expect(outcome.tableReadbacks == 1 && outcome.pictureReadbacks == 0 &&
+                                outcome.colorDispatches == 0,
+                            "the Working measure reads back its tables and no picture");
+        const auto reference =
+            bloom::runtime::measureScopeFrameCpu(*fullPicture, settings, *working);
+        expectations.expect(reference.status == ScopeFrameStatus::Measured &&
+                                reference.route == ScopeRoute::Cpu,
+                            "the CPU reference measures the device's picture");
+        expectations.expect(outcome.counts == reference.counts,
+                            "Working: the device's tables equal the CPU reference's");
+        expectations.expect(
+            (outcome.area == ScopeMeasuredArea{.x = 0, .y = 0, .width = 256, .height = 256}) &&
+                outcome.counts.counted() == 256U * 256U,
+            "the whole display window is measured, transparent pixels included");
+        expectations.expect(outcome.counts.histogram(1, kScopeCodeOver) != 0 &&
+                                outcome.counts.histogram(0, kScopeCodeUnder) != 0,
+                            "values above the axis and below zero are counted over and under");
+    }
+
+    // Working with ignored transparent pixels, a region, a region of interest and a proxy.
+    {
+        auto settings = settingsFor(ScopeSignal::Working, kNoChromaticity);
+        settings.ignoreTransparent = true;
+        const auto measured = onDevice(request, settings, *working);
+        const auto reference =
+            bloom::runtime::measureScopeFrameCpu(*fullPicture, settings, *working);
+        expectations.expect(measured.status == ScopeFrameStatus::Measured &&
+                                measured.route == ScopeRoute::Gpu &&
+                                measured.counts == reference.counts,
+                            "ignored transparent pixels: the routes agree exactly");
+        expectations.expect(measured.counts.counted() < 256U * 256U &&
+                                measured.counts.counted() != 0,
+                            "transparent pixels are not counted when ignored");
+    }
+    {
+        auto settings = settingsFor(ScopeSignal::Working, kNoChromaticity);
+        settings.region = ScopeRegion{.x = 40, .y = 30, .width = 100, .height = 90};
+        const auto measured = onDevice(request, settings, *working);
+        const auto reference =
+            bloom::runtime::measureScopeFrameCpu(*fullPicture, settings, *working);
+        expectations.expect(measured.status == ScopeFrameStatus::Measured &&
+                                measured.counts == reference.counts &&
+                                measured.area == reference.area,
+                            "a region: the routes agree exactly");
+        expectations.expect(
+            (measured.area == ScopeMeasuredArea{.x = 40, .y = 30, .width = 100, .height = 90}) &&
+                measured.counts.counted() == 100U * 90U && measured.counts.layout.columns == 100,
+            "a region measures its own pixels in its own columns");
+
+        settings.region = ScopeRegion{.x = 400, .y = 30, .width = 20, .height = 20};
+        const auto outside = onDevice(request, settings, *working);
+        expectations.expect(outside.status == ScopeFrameStatus::EmptyArea,
+                            "a region outside the picture has nothing to count");
+        expectations.expect(
+            bloom::runtime::measureScopeFrameCpu(*fullPicture, settings, *working).status ==
+                ScopeFrameStatus::EmptyArea,
+            "the CPU reference reports the same empty area");
+    }
+    {
+        auto roiRequest = request;
+        const auto roiWindow = ImageWindow::create(32, 48, 96, 64);
+        roiRequest.roi = *roiWindow.value();
+        const auto picture = devicePicture(roiRequest);
+        auto settings = settingsFor(ScopeSignal::Working, kNoChromaticity);
+        settings.region = ScopeRegion{.x = 0, .y = 0, .width = 100, .height = 100};
+        const auto measured = onDevice(roiRequest, settings, *working);
+        expectations.expect(measured.status == ScopeFrameStatus::Measured,
+                            "a region of interest is measured: " + measured.message);
+        if (picture != nullptr) {
+            const auto reference =
+                bloom::runtime::measureScopeFrameCpu(*picture, settings, *working);
+            expectations.expect(measured.counts == reference.counts &&
+                                    measured.area == reference.area,
+                                "a region of interest: the routes agree exactly");
+        }
+        expectations.expect(measured.counts.counted() == 68U * 52U,
+                            "the region is cut to the region of interest");
+    }
+    {
+        auto proxyRequest = request;
+        const auto proxyExtent = bloom::render::ImageExtent::create(128, 128);
+        proxyRequest.resolution = bloom::runtime::ProxyResolution{*proxyExtent.value()};
+        const auto picture = devicePicture(proxyRequest);
+        auto settings = settingsFor(ScopeSignal::Working, kNoChromaticity);
+        settings.region = ScopeRegion{.x = 40, .y = 30, .width = 100, .height = 90};
+        const auto measured = onDevice(proxyRequest, settings, *working);
+        expectations.expect(measured.status == ScopeFrameStatus::Measured,
+                            "a proxy frame is measured: " + measured.message);
+        if (picture != nullptr) {
+            const auto reference =
+                bloom::runtime::measureScopeFrameCpu(*picture, settings, *working);
+            expectations.expect(measured.counts == reference.counts,
+                                "a proxy frame: the routes agree exactly");
+        }
+        expectations.expect(
+            (measured.area == ScopeMeasuredArea{.x = 20, .y = 15, .width = 50, .height = 45}),
+            "a region in composition pixels measures the same part of a proxy picture");
+    }
+
+    // The Chromaticity table and the Display signal: OCIO's two processors, within one cell.
+    {
+        const auto settings = settingsFor(ScopeSignal::Working, kScopeTableAll);
+        const auto measured = onDevice(request, settings, *working);
+        const auto reference =
+            bloom::runtime::measureScopeFrameCpu(*fullPicture, settings, *working);
+        expectations.expect(measured.status == ScopeFrameStatus::Measured &&
+                                reference.status == ScopeFrameStatus::Measured,
+                            "Working with Chromaticity is measured: " + measured.message);
+        expectations.expect(tablesWithinOneCell(measured.counts, reference.counts),
+                            "Working with Chromaticity: no pixel is more than one cell away");
+        bool exact = true;
+        for (std::uint32_t channel = 0; channel < kScopeChannels && exact; ++channel)
+            exact =
+                histogramAxis(measured.counts, channel) == histogramAxis(reference.counts, channel);
+        expectations.expect(exact, "the Histogram does not depend on the XYZ step");
+    }
+    for (const auto& [color, name] :
+         {std::pair{display, std::string_view("Display")},
+          std::pair{adjusted, std::string_view("Display with exposure and gamma")}}) {
+        const auto settings = settingsFor(ScopeSignal::Display, kScopeTableAll);
+        const auto measured = onDevice(request, settings, *color);
+        const auto reference = bloom::runtime::measureScopeFrameCpu(*fullPicture, settings, *color);
+        expectations.expect(measured.status == ScopeFrameStatus::Measured &&
+                                measured.route == ScopeRoute::Gpu,
+                            std::string(name) + " is measured on the device: " + measured.message);
+        expectations.expect(reference.status == ScopeFrameStatus::Measured,
+                            std::string(name) +
+                                " is measured by the CPU reference: " + reference.message);
+        expectations.expect(tablesWithinOneCell(measured.counts, reference.counts),
+                            std::string(name) + ": no pixel is more than one cell away");
+        expectations.expect(measured.counts.counted() == 256U * 256U,
+                            std::string(name) + ": every pixel is counted");
+    }
+    {
+        const auto neutralCounts =
+            onDevice(request, settingsFor(ScopeSignal::Display, kScopeTableHistogram), *display);
+        const auto adjustedCounts =
+            onDevice(request, settingsFor(ScopeSignal::Display, kScopeTableHistogram), *adjusted);
+        expectations.expect(neutralCounts.counts != adjustedCounts.counts,
+                            "the Viewer's exposure and gamma change the Display signal");
+        const auto workingCounts =
+            onDevice(request, settingsFor(ScopeSignal::Working, kScopeTableHistogram), *working);
+        expectations.expect(neutralCounts.counts != workingCounts.counts,
+                            "the Display and Working signals differ");
+    }
+
+    // measureScopeFrame: the route is named, and the CPU reference says why it counted.
+    {
+        const auto settings = settingsFor(ScopeSignal::Working, kNoChromaticity);
+        ScopeFrameRoutes routes;
+        routes.device = [&evaluator] { return evaluator; };
+        routes.ocio = [&ocioContext] { return ocioContext; };
+        routes.evaluateCpu = [&cpuEvaluator](auto framePlan, const EvaluationRequest& frameRequest,
+                                             const auto& cancellation) {
+            return cpuEvaluator.evaluate(std::move(framePlan), frameRequest, cancellation);
+        };
+        const auto device =
+            bloom::runtime::measureScopeFrame(routes, plan, request, settings, *working, true);
+        expectations.expect(device.status == ScopeFrameStatus::Measured &&
+                                device.route == ScopeRoute::Gpu && device.message.empty(),
+                            "a device frame is measured on the device");
+        const auto cpu =
+            bloom::runtime::measureScopeFrame(routes, plan, request, settings, *working, false);
+        expectations.expect(cpu.status == ScopeFrameStatus::Measured &&
+                                cpu.route == ScopeRoute::Cpu && cpu.message.empty(),
+                            "a CPU frame is measured by the CPU reference");
+        expectations.expect(tablesWithinOneCell(device.counts, cpu.counts),
+                            "the two routes' frames measure within one cell of each other");
+        routes.device = [] { return std::shared_ptr<GpuProcessFrameEvaluator>(); };
+        const auto fallback =
+            bloom::runtime::measureScopeFrame(routes, plan, request, settings, *working, true);
+        expectations.expect(fallback.status == ScopeFrameStatus::Measured &&
+                                fallback.route == ScopeRoute::Cpu && !fallback.message.empty() &&
+                                fallback.counts == cpu.counts,
+                            "without a device the CPU reference counts and says why");
+    }
+
+    evaluator->beginShutdown();
+    evaluator.reset();
+    if (!expectations.ok())
+        return 1;
+    std::cout << "PASS: scope frame measure on the device route\n";
+    return 0;
+}
+
+#else
+
+int run(int argc, char** argv) {
+    const auto options = bloom::render::composite_proof::parseOptions(argc, argv);
+    if (options.require_device) {
+        std::cerr << "FAIL: required device unavailable: packaged GPU shader tools unavailable\n";
+        return 1;
+    }
+    std::cout << "SKIP: packaged GPU shader tools unavailable\n";
+    return 77;
+}
+
+#endif
+
+} // namespace
+
+int main(int argc, char** argv) {
+    try {
+        return run(argc, argv);
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
+        return 1;
+    }
+}
