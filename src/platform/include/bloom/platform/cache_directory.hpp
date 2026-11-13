@@ -13,7 +13,8 @@ namespace bloom::platform {
 // Linux: `$XDG_CACHE_HOME/<appSubdirectory>` when `XDG_CACHE_HOME` is set to an absolute path,
 // else `$HOME/.cache/<appSubdirectory>`.
 // Windows: `%LOCALAPPDATA%/<appSubdirectory>/Cache`.
-// macOS takes the Linux rule (`$HOME/.cache/<appSubdirectory>` unless `XDG_CACHE_HOME` is set).
+// macOS: `$HOME/Library/Caches/<appSubdirectory>` (#718), unless `XDG_CACHE_HOME` is set to an
+// absolute path, which wins as on Linux (tests and scripted runs point it at a private folder).
 // Any platform without a resolvable home/local-app-data variable: `nullopt`. Derived
 // caches are always optional runtime state (docs/architecture/media-io.md), so a caller must
 // treat a missing directory as "disk cache unavailable" rather than fabricate a relative path.

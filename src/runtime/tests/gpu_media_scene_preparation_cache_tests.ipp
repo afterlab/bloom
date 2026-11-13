@@ -661,14 +661,12 @@ void testSequenceReadAheadClaim(Expectations& expectations, const MediaFixture& 
 // unclassifiable volume, which keeps read-ahead), so the default policy must queue nothing there
 // and count what it skipped; choosing Capture queues the same request.
 void testSequenceReadAheadFollowsStorage(Expectations& expectations, const MediaFixture& fixture) {
-    using bloom::platform::VolumeKind;
     const auto member = fixture.directory / "storage_member.bin";
     {
         std::ofstream(member, std::ios::binary) << "member";
     }
-    const auto kind = bloom::platform::volumeKind(member);
-    if (kind != VolumeKind::Local)
-        return; // the temporary folder is on a network or unclassifiable volume
+    if (bloom::platform::isSlowStorage(bloom::platform::storageClass(member)))
+        return; // the temporary folder is on slow, network or unclassifiable storage
     const auto cache = std::make_shared<bloom::runtime::OperationCache>(std::size_t{1} << 30);
     using bloom::runtime::ImageSequenceReadAhead;
     const auto request = [&](std::string key) {

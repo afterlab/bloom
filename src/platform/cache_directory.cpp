@@ -24,7 +24,11 @@ std::optional<std::filesystem::path> userCacheDirectory(const std::string_view a
     if (const auto xdg = environmentPath("XDG_CACHE_HOME"); xdg && xdg->is_absolute())
         return *xdg / appSubdirectory;
     if (const auto home = environmentPath("HOME"))
+#if defined(__APPLE__)
+        return *home / "Library" / "Caches" / appSubdirectory;
+#else
         return *home / ".cache" / appSubdirectory;
+#endif
     return std::nullopt;
 #endif
 }

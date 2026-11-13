@@ -1069,8 +1069,8 @@ Bloom kernels, OCIO programs, path coverage, the displays and the Viewer's prese
 through one `VkPipelineCache`, so a route rebuilt on the same generation reuses compiled pipelines.
 When the device is created with a cache directory, the cache is persisted across launches as
 derived per-user cache state, never project state: `platform::gpuPipelineCacheDirectory()`, the
-`gpu-pipeline-cache` leaf of the per-user cache root (Linux and macOS `$XDG_CACHE_HOME/bloom` or
-`$HOME/.cache/bloom`, Windows `%LOCALAPPDATA%/bloom/Cache`). The application, `bloom-cli`,
+`gpu-pipeline-cache` leaf of the per-user cache root (Linux `$XDG_CACHE_HOME/bloom` or
+`$HOME/.cache/bloom`, macOS `$HOME/Library/Caches/bloom`, Windows `%LOCALAPPDATA%/bloom/Cache`). The application, `bloom-cli`,
 `bloom-mcp`, the headless export queue and the Python provider pass it; tests and tools that pass
 none keep the cache in memory. One file per physical GPU
 (`vulkan-<vendor>-<device>-<device UUID>.pipelinecache`) holds an 80-byte Bloom header (magic,

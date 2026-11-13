@@ -81,6 +81,12 @@ int main() {
 #else
     EnvironmentVariable xdg("XDG_CACHE_HOME");
     EnvironmentVariable home("HOME");
+    // #718: macOS keeps per-user caches under Library/Caches; Linux under .cache.
+#if defined(__APPLE__)
+    constexpr const char* kHomeCache = "/tmp/bloom-cache-directory-test-home/Library/Caches/bloom";
+#else
+    constexpr const char* kHomeCache = "/tmp/bloom-cache-directory-test-home/.cache/bloom";
+#endif
 
     xdg.set("/tmp/bloom-cache-directory-test-xdg");
     const auto fromXdg = platform::userCacheDirectory("bloom");
@@ -93,15 +99,15 @@ int main() {
     const auto relativeXdgIgnored = platform::userCacheDirectory("bloom");
     check.expect(relativeXdgIgnored.has_value() &&
                      *relativeXdgIgnored ==
-                         std::filesystem::path("/tmp/bloom-cache-directory-test-home/.cache/bloom"),
-                 "a relative XDG_CACHE_HOME is ignored in favor of $HOME/.cache");
+                         std::filesystem::path(kHomeCache),
+                 "a relative XDG_CACHE_HOME is ignored in favor of the home cache folder");
 
     xdg.unset();
     const auto fromHome = platform::userCacheDirectory("bloom");
     check.expect(fromHome.has_value() &&
                      *fromHome ==
-                         std::filesystem::path("/tmp/bloom-cache-directory-test-home/.cache/bloom"),
-                 "no XDG_CACHE_HOME falls back to $HOME/.cache/<app>");
+                         std::filesystem::path(kHomeCache),
+                 "no XDG_CACHE_HOME falls back to the home cache folder");
 
     home.unset();
     const auto neither = platform::userCacheDirectory("bloom");

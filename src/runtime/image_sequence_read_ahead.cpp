@@ -2,7 +2,7 @@
 #include <bloom/runtime/image_sequence_read_ahead.hpp>
 
 #include <bloom/media/image.hpp>
-#include <bloom/platform/volume_kind.hpp>
+#include <bloom/platform/storage_class.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 
 #include "image_source.hpp"
@@ -258,7 +258,7 @@ void ImageSequenceReadAhead::request(const std::shared_ptr<OperationCache>& cach
     // Classified before the lock: the first look at a folder may touch the volume, and the answer
     // is remembered for the folder afterwards.
     if (state_->localStorage.load() == LocalStorage::Skip &&
-        platform::volumeKind(requests.front().path) == platform::VolumeKind::Local) {
+        !platform::isSlowStorage(platform::storageClass(requests.front().path))) {
         const std::lock_guard lock(state_->mutex);
         state_->statistics.localSkipped += requests.size();
         return;

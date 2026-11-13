@@ -165,7 +165,7 @@ endif()
 # this narrow target so codec trust domains do not inherit unused platform-library closures.
 add_library(bloom_platform_process STATIC file_snapshot.cpp private_temporary_directory.cpp
                                           shared_frame_arena.cpp source_identity.cpp
-                                          thread_priority.cpp volume_kind.cpp)
+                                          thread_priority.cpp storage_class.cpp)
 target_link_libraries(bloom_platform_process PUBLIC bloom_core)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Threads REQUIRED)
@@ -173,6 +173,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(bloom_platform_process PRIVATE Threads::Threads)
 elseif(APPLE)
     target_sources(bloom_platform_process PRIVATE process_supervisor_macos.cpp)
+    # The storage classifier asks Disk Arbitration and the I/O registry what a volume's disk is.
+    target_link_libraries(bloom_platform_process PRIVATE "-framework DiskArbitration"
+                          "-framework IOKit" "-framework CoreFoundation")
 elseif(WIN32)
     # ADR 0035: named pipes with overlapped I/O, a job object and an explicit inherited-handle list.
     target_sources(bloom_platform_process PRIVATE process_supervisor_windows.cpp)
@@ -185,7 +188,7 @@ target_sources(bloom_platform_process PUBLIC FILE_SET HEADERS BASE_DIRS include
                      include/bloom/platform/shared_frame_arena.hpp
                      include/bloom/platform/source_identity.hpp
                      include/bloom/platform/thread_priority.hpp
-                     include/bloom/platform/volume_kind.hpp)
+                     include/bloom/platform/storage_class.hpp)
 target_compile_features(bloom_platform_process PUBLIC cxx_std_20)
 bloom_enable_warnings(bloom_platform_process)
 
@@ -213,12 +216,12 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_platform_thread_priority_test)
     bloom_add_test(NAME bloom.platform.thread-priority
                    COMMAND bloom_platform_thread_priority_test LABELS unit platform)
-    # #535: the volume classification read-ahead follows.
-    add_executable(bloom_platform_volume_kind_test tests/volume_kind_tests.cpp)
-    target_link_libraries(bloom_platform_volume_kind_test PRIVATE bloom_platform_process)
-    bloom_enable_warnings(bloom_platform_volume_kind_test)
-    bloom_add_test(NAME bloom.platform.volume-kind
-                   COMMAND bloom_platform_volume_kind_test LABELS unit platform media)
+    # #535, #718: the storage classification read-ahead and local copies follow.
+    add_executable(bloom_platform_storage_class_test tests/storage_class_tests.cpp)
+    target_link_libraries(bloom_platform_storage_class_test PRIVATE bloom_platform_process)
+    bloom_enable_warnings(bloom_platform_storage_class_test)
+    bloom_add_test(NAME bloom.platform.storage-class
+                   COMMAND bloom_platform_storage_class_test LABELS unit platform media)
 endif()
 
 if(BUILD_TESTING AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE))
