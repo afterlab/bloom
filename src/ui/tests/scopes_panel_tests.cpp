@@ -45,6 +45,7 @@
 
 #include <QApplication>
 #include <QElapsedTimer>
+#include <QScrollArea>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QVBoxLayout>
@@ -477,6 +478,27 @@ int main(int argc, char** argv) {
             e.expect(unavailable.controller() == nullptr &&
                          unavailable.statusText().line.contains("not available"),
                      "a panel without services says scopes are not available");
+        }
+
+        // ---- The narrowest panel fits every scope beside its scroll bar ----------------------
+        {
+            ScopesEditor narrow(services);
+            narrow.show();
+            narrow.resize(narrow.minimumSizeHint().width(), 500);
+            QCoreApplication::processEvents();
+            auto* scroll = narrow.findChild<QScrollArea*>(QStringLiteral("scopesScroll"));
+            e.expect(scroll != nullptr, "the panel has its scroll area");
+            for (const auto kind : kKinds) {
+                auto* scope = narrow.view(kind);
+                if (scroll == nullptr || scope == nullptr || !scope->isVisible()) {
+                    e.expect(false, "every scope is shown in the narrow panel");
+                    continue;
+                }
+                const QRect inViewport(scope->mapTo(scroll->viewport(), QPoint(0, 0)),
+                                       scope->size());
+                e.expect(inViewport.left() >= 0 && inViewport.right() < scroll->viewport()->width(),
+                         "at the panel's minimum width no scope is wider than the scroll area");
+            }
         }
 
         // ---- The panel, sections and settings -------------------------------------------------

@@ -19,6 +19,7 @@
 #include <QApplication>
 #include <QHBoxLayout>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 
@@ -144,6 +145,17 @@ ScopesEditor::~ScopesEditor() {
     // The views read the renderer's finished images; they go first.
     delete scroll_;
     scroll_ = nullptr;
+}
+
+QSize ScopesEditor::minimumSizeHint() const {
+    auto hint = QWidget::minimumSizeHint();
+    // The scroll area clips what is wider than its viewport, so the body's own minimum width and
+    // the vertical scroll bar beside it are part of the panel's.
+    if (scroll_ != nullptr && scroll_->widget() != nullptr)
+        hint.setWidth(std::max(hint.width(), scroll_->widget()->minimumSizeHint().width() +
+                                                 scroll_->verticalScrollBar()->sizeHint().width() +
+                                                 2 * scroll_->frameWidth()));
+    return hint;
 }
 
 void ScopesEditor::buildHeader(QWidget* const parent) {

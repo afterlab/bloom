@@ -133,6 +133,8 @@ class ScopesEditor final : public QWidget {
         return views_[static_cast<std::size_t>(kind)];
     }
     [[nodiscard]] bool panelShown() const noexcept { return shown_; }
+    // The narrowest panel that still fits every scope beside the scroll bar.
+    [[nodiscard]] QSize minimumSizeHint() const override;
 
   signals:
     // Region and Clear Region (and a Viewer's drag, through setRegion) change the region.
