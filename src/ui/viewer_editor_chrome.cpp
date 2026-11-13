@@ -503,8 +503,8 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     roiAction_->setObjectName(QStringLiteral("viewerRoiAction"));
     roiAction_->setCheckable(true);
     roiAction_->setIcon(kit::icon(kit::IconId::RegionOfInterest, kit::IconRole::Control));
-    roiAction_->setToolTip(tr("Region of interest: evaluate only this region (Ctrl-drag with "
-                              "Select draws it)"));
+    roiAction_->setToolTip(tr("Region of interest: evaluate only this region (Ctrl+Alt-drag "
+                              "with Select draws it)"));
     connect(roiAction_, &QAction::toggled, this, [this] { publishRoi(); });
     roiButton_ = makeFooterButton(kit::IconId::RegionOfInterest, roiAction_->toolTip(),
                                   tr("Region of interest"), QStringLiteral("viewerRoiToggle"),

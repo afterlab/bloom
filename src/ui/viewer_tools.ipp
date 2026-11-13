@@ -268,8 +268,10 @@ bool ViewerEditor::roiPress(QMouseEvent* event) {
         event->accept();
         return true;
     }
+    // #698: Ctrl alone is the marquee's toggle modifier, so the region takes Ctrl+Alt.
     if (textEdit_ || tool() != ViewerTool::Select || event->button() != Qt::LeftButton ||
-        !event->modifiers().testFlag(Qt::ControlModifier))
+        !event->modifiers().testFlag(Qt::ControlModifier) ||
+        !event->modifiers().testFlag(Qt::AltModifier))
         return false;
     const auto mapping = currentMapping();
     if (!mapping || !contentRect().contains(event->position()))

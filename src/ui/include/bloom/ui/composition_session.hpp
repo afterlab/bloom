@@ -325,6 +325,13 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool setCurrentTime(core::RationalTime time);
     void clearSelection();
     void selectLayer(document::LayerId layerId, bool extend = false);
+    // #698: a marquee's layers as one selection change. Replace selects exactly `layers`; Add
+    // keeps what is selected and adds them; Toggle selects those that were not selected and
+    // deselects those that were. The same selection the Timeline's layer rows and the node cards
+    // show (selectLayer per layer). Layers that no longer exist are skipped.
+    enum class LayerSelectionMode : std::uint8_t { Replace, Add, Toggle };
+    void selectLayers(const std::vector<document::LayerId>& layers,
+                      LayerSelectionMode mode = LayerSelectionMode::Replace);
     [[nodiscard]] const document::LayerStack* timelineMerge() const noexcept;
     void selectNode(document::NodeId nodeId);
     [[nodiscard]] document::WorkArea workArea() const noexcept;

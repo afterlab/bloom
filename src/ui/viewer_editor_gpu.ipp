@@ -118,6 +118,7 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
         }
         paintRoi(painter);
         paintCreation(painter);
+        paintLayerMarquee(painter);
         paintPathTools(painter);
         paintAnchorEditing(painter);
         paintTextEditing(painter);

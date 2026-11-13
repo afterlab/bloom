@@ -1156,6 +1156,68 @@ void CompositionSession::selectLayer(const document::LayerId layerId, const bool
     }
 }
 
+void CompositionSession::selectLayers(const std::vector<document::LayerId>& layers,
+                                      const LayerSelectionMode mode) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    const bool keep = mode != LayerSelectionMode::Replace;
+    auto nextNodes = keep ? selectedNodes_ : std::set<document::NodeId>{};
+    auto nextEntries = keep ? selectedEntries() : std::vector<document::MergeEntryRef>{};
+    // The primary is the last layer this call selected; a toggle that only deselects keeps the
+    // primary when it is still selected.
+    std::optional<document::LayerId> primary;
+    for (const auto layerId : layers) {
+        if (layerBoundary(layerId) == nullptr)
+            continue;
+        if (const auto boundary = boundaryNodeForLayer(layerId)) {
+            if (mode == LayerSelectionMode::Toggle && nextNodes.contains(*boundary)) {
+                nextNodes.erase(*boundary);
+                continue;
+            }
+            nextNodes.insert(*boundary);
+            primary = layerId;
+        } else if (const auto entry = entryOfSelectedLayer(layerId)) {
+            const auto found = std::ranges::find(nextEntries, *entry);
+            if (found != nextEntries.end()) {
+                if (mode == LayerSelectionMode::Toggle)
+                    nextEntries.erase(found);
+                continue;
+            }
+            nextEntries.push_back(*entry);
+            primary = layerId;
+        }
+    }
+    const auto selects = [&](const document::LayerId layerId) {
+        if (const auto boundary = boundaryNodeForLayer(layerId))
+            return nextNodes.contains(*boundary);
+        const auto entry = entryOfSelectedLayer(layerId);
+        return entry && std::ranges::find(nextEntries, *entry) != nextEntries.end();
+    };
+    if (!primary && selection_.contextualLayer && selects(*selection_.contextualLayer))
+        primary = selection_.contextualLayer;
+    if (!primary) {
+        // Any layer still selected: the first in the composition's own order.
+        if (const auto* composition = this->composition())
+            for (const auto& layer : composition->graph().layerOutputs())
+                if (selects(layer.layerId)) {
+                    primary = layer.layerId;
+                    break;
+                }
+    }
+    if (!primary) {
+        if (nextNodes.empty() && nextEntries.empty())
+            clearSelection();
+        return;
+    }
+    CompositionSelection next{.primary = *primary, .contextualLayer = *primary};
+    if (selection_ != next || selectedNodes_ != nextNodes || selectedEntries_ != nextEntries) {
+        selection_ = next;
+        selectedNodes_ = std::move(nextNodes);
+        selectedEntries_ = std::move(nextEntries);
+        primaryEntry_ = entryOfSelectedLayer(*primary);
+        emit selectionChanged();
+    }
+}
+
 const document::LayerStack* CompositionSession::timelineMerge() const noexcept {
     const auto* comp = composition();
     if (!comp)

@@ -19,6 +19,24 @@ pressed the mouse.
 - Shift still adds to the selection when you click, scales proportionally when you drag a corner
   handle, and steps rotation by 15 degrees. Shift only constrains a move that is already dragging.
 
+## Selecting several layers
+
+With the Select tool, drag from empty space to draw a selection rectangle. When you release, every
+layer the rectangle touches is selected; a layer does not have to be fully inside it.
+
+- A plain drag replaces the selection. A rectangle that touches nothing clears it.
+- Hold **Shift** to add the touched layers to the selection.
+- Hold **Ctrl** (**Command** on macOS) to toggle them: selected layers leave the selection, the
+  others join it.
+- Press **Escape** before releasing to cancel the rectangle and keep the selection as it was.
+- A click on empty space, without dragging, clears the selection.
+
+The selection is the same one the Timeline, the Nodes panel and Properties show. The rectangle's
+border keeps the same thickness at every zoom. Inside a group you have entered, a drag on empty
+space does not draw a rectangle; Shift-click the children instead.
+
+To draw a region of interest, hold **Ctrl+Alt** (**Command+Option** on macOS) and drag.
+
 ## Drilling into groups
 
 A group is a layer whose content is a Merge of other layers: an SVG imported as editable shapes,

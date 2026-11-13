@@ -852,6 +852,15 @@ class ViewerEditor final : public QWidget,
     void commitRoiGesture(QPointF pointer);
     void paintRoi(QPainter& painter) const;
     void publishRoi();
+    // #698: a drag that starts on empty Viewer space with the Select tool draws a marquee and
+    // selects the layers it touches on release (Shift adds, the platform's toggle modifier
+    // toggles); a press released in place clears the selection as before.
+    void beginLayerMarquee(QMouseEvent* event);
+    bool layerMarqueeMove(QMouseEvent* event);
+    bool layerMarqueeRelease(QMouseEvent* event);
+    void cancelLayerMarquee();
+    void paintLayerMarquee(QPainter& painter) const;
+    [[nodiscard]] std::vector<document::LayerId> layersTouching(const QRectF& widgetRect) const;
     [[nodiscard]] QString analysisSettingsPrefix() const;
     [[nodiscard]] QString displayViewConfigRevision() const;
     [[nodiscard]] QString lookSettingsKey() const;
@@ -898,6 +907,13 @@ class ViewerEditor final : public QWidget,
     std::optional<ViewerDisplayDescriptor> cpuPaintedDisplay_, cpuCoverDisplay_,
         coverCaptureDisplay_;
     std::optional<CreationGesture> roiGesture_;
+    struct LayerMarquee final {
+        QPointF origin;
+        QPointF pointer;
+        Qt::KeyboardModifiers modifiers;
+        bool moved = false;
+    };
+    std::optional<LayerMarquee> layerMarquee_;
     std::optional<QRectF> roiRect_;
     QToolButton* roiButton_ = nullptr;
     QToolButton* roiClearButton_ = nullptr;

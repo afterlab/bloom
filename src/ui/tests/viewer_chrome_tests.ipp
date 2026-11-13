@@ -314,7 +314,7 @@ void testViewerChromeRoiClearFollowsTheRegion(Expectations& expectations) {
     auto* clearAction = fixture.viewer.findChild<QAction*>("viewerClearRoiAction");
     expectations.expect(clear->isHidden() && !clearAction->isEnabled(),
                         "Clear ROI is not offered while there is no region");
-    toolDrag(fixture, {50, 40}, {180, 120}, Qt::ControlModifier);
+    toolDrag(fixture, {50, 40}, {180, 120}, Qt::ControlModifier | Qt::AltModifier);
     toolReady(fixture, expectations);
     expectations.expect(!clear->isHidden() && clearAction->isEnabled(),
                         "drawing a region offers Clear ROI");

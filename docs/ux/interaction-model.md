@@ -203,6 +203,8 @@ visible Viewer, the window makes no displayed qualification claim.
 | `Ctrl+0` | Fit |
 | `Ctrl+1` | Actual size (100%) |
 | Middle drag | Pan |
+| Drag on empty space, Select tool (#698) | Draws a marquee; on release selects every top-level layer the marquee touches, through the session's selection (the one the Timeline, Nodes and MCP read). Shift adds, the toggle modifier (`Ctrl`; Command on macOS) toggles, `Esc` cancels; released in place it is a click on empty space and clears the selection. The border is one hairline in widget pixels at any zoom |
+| `Ctrl+Alt`-drag, Select tool | Defines the region of interest (it was `Ctrl`-drag before the marquee took `Ctrl` as its toggle modifier) |
 | Wheel | Zoom about the pointer |
 | `Esc` | Confirm whatever is in flight and return to Select: a gizmo move/rotate/scale/anchor drag, a region of interest, a creation, a text edit or a path/mask anchor edit (see below); Undo discards |
 | `Left` / `Right` | Step one frame |

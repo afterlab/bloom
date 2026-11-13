@@ -2155,6 +2155,7 @@ void testViewerAdjustments(Expectations& expectations) {
 #include "viewer_chrome_tests.ipp"
 #include "viewer_background_tests.ipp"
 #include "context_bar_tests.ipp"
+#include "viewer_marquee_tests.ipp"
 
 } // namespace
 
@@ -2396,6 +2397,7 @@ int main(int argc, char** argv) {
     testContextBarAlignment(expectations);
     testContextBarLayoutAndDefaults(expectations);
     testContextBarWorkspaceField(expectations);
+    testViewerMarqueeSelection(expectations);
     testContextBarReturnsFocus(expectations);
     try {
         testViewerChromeRoiClearFollowsTheRegion(expectations);

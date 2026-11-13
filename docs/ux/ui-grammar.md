@@ -622,7 +622,8 @@ The frame field defaults to `HH:MM:SS:FF`, honors `timeline/time-format`, accept
 non-drop timecode or an exact frame index, clamps to the composition, and rejects invalid
 fields without changing time. It uses nominal-rate timecode and exact rational frame mapping.
 
-With Select active, Ctrl-drag defines a composition-space ROI without selecting or moving a layer.
+With Select active, Ctrl+Alt-drag defines a composition-space ROI without selecting or moving a
+layer (Ctrl alone is the marquee's toggle modifier).
 The ROI toggle suspends and restores the rectangle; Clear ROI forgets it. The viewer dims outside
 it and draws an Accent hairline. Escape keeps the region drawn so far; capture loss, mapping
 changes, and session changes cancel an unfinished drag; switching compositions clears the

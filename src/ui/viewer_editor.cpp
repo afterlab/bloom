@@ -1085,6 +1085,7 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
 
     paintRoi(painter);
     paintCreation(painter);
+    paintLayerMarquee(painter);
     paintPathTools(painter);
     paintAnchorEditing(painter);
     paintTextEditing(painter);
@@ -1400,8 +1401,8 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
     if (drillPress(event, *mapping, hit))
         return;
     if (hit.region == ViewerHitRegion::Empty) {
-        session_.clearSelection();
-        event->accept();
+        // #698: empty space starts a marquee; released in place it clears the selection.
+        beginLayerMarquee(event);
         return;
     }
     QPointer<ViewerEditor> self(this);
@@ -1482,6 +1483,8 @@ void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
     if (pathMove(event))
         return;
     if (creationMove(event))
+        return;
+    if (layerMarqueeMove(event))
         return;
     if (panActive_) {
         transform_ = panBaseTransform_;
@@ -1597,6 +1600,8 @@ void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
         return;
     if (creationRelease(event))
         return;
+    if (layerMarqueeRelease(event))
+        return;
     if (panActive_ && event->button() == panButton_) {
         panActive_ = false;
         panButton_ = Qt::NoButton;
@@ -1683,6 +1688,11 @@ void ViewerEditor::keyPressEvent(QKeyEvent* event) {
     }
     if (warpDrag_ && event->key() == Qt::Key_Escape) {
         finishWarpHandle();
+        event->accept();
+        return;
+    }
+    if (layerMarquee_ && event->key() == Qt::Key_Escape) {
+        cancelLayerMarquee();
         event->accept();
         return;
     }

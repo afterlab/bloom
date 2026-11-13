@@ -331,7 +331,7 @@ QString ViewerEditor::applyRemoteChange(const RemoteChange& change) {
     if (change.look)
         lookAction_->setChecked(*change.look);
     if (change.regionOfInterest) {
-        // What drawing the region (Ctrl-drag) and Clear Region of Interest do.
+        // What drawing the region (Ctrl+Alt-drag) and Clear Region of Interest do.
         roiGesture_.reset();
         roiRect_ = region;
         roiAction_->setChecked(region.has_value());

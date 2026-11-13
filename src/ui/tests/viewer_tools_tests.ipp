@@ -416,11 +416,11 @@ void testViewerRoi(Expectations& expectations) {
     fixture.viewer.show();
     toolReady(fixture, expectations);
     const auto revision = fixture.session.snapshot().revision();
-    toolDrag(fixture, {50, 40}, {180, 120}, Qt::ControlModifier);
+    toolDrag(fixture, {50, 40}, {180, 120}, Qt::ControlModifier | Qt::AltModifier);
     toolReady(fixture, expectations);
     const auto roi = fixture.controller.regionOfInterest();
     expectations.expect(roi.has_value() && fixture.session.snapshot().revision() == revision,
-                        "Ctrl-drag defines a session-only ROI without a document edit");
+                        "Ctrl+Alt-drag defines a session-only ROI without a document edit");
     expectations.expect(fixture.controller.state().frame->desiredIdentity().roi == roi,
                         "ROI reaches the prepared request identity");
     auto* toggle = fixture.viewer.findChild<QToolButton*>("viewerRoiToggle");
@@ -437,8 +437,8 @@ void testViewerRoi(Expectations& expectations) {
     expectations.expect(!fixture.controller.regionOfInterest() && !toggle->isChecked(),
                         "clear forgets ROI and disables it");
     // Escape confirms a region drag too: the region drawn so far is kept.
-    toolMouse(fixture, QEvent::MouseButtonPress, {60, 50}, Qt::ControlModifier);
-    toolMouse(fixture, QEvent::MouseMove, {150, 110}, Qt::ControlModifier);
+    toolMouse(fixture, QEvent::MouseButtonPress, {60, 50}, Qt::ControlModifier | Qt::AltModifier);
+    toolMouse(fixture, QEvent::MouseMove, {150, 110}, Qt::ControlModifier | Qt::AltModifier);
     toolKey(fixture, Qt::Key_Escape);
     toolMouse(fixture, QEvent::MouseButtonRelease, {150, 110});
     toolReady(fixture, expectations);
