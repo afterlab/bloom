@@ -474,15 +474,19 @@ lower(const std::vector<document::NodeId>& order) {
         if (definition->second->lowering == runtime::NodeLoweringKind::AudioSource ||
             definition->second->lowering == runtime::NodeLoweringKind::AudioEffect)
             continue;
+        // A source whose picture is the inspected output itself (an Image Preview of it, or the
+        // picture an Image Statistics node reads) has no edge leaving that output in the
+        // inspection's plan, and is lowered all the same.
+        const bool inspectedPicture = inspectsPixelOutput(*node);
         if (definition->second->lowering == runtime::NodeLoweringKind::CompositionSource &&
-            std::ranges::none_of(reachableEdges_, [&](const auto* edge) {
+            !inspectedPicture && std::ranges::none_of(reachableEdges_, [&](const auto* edge) {
                 return edge->source.nodeId == nodeId && edge->source.port == "image";
             }))
             continue;
         // ADR 0026: an Image source whose colour `image` output feeds nothing is reachable only
         // through its `channels` output, which compiles into a Shuffle's channel expression.
         if (definition->second->lowering == runtime::NodeLoweringKind::ImageSource &&
-            !hasReachableOutput(nodeId, document::kImageSourceImageOutputPort))
+            !inspectedPicture && !hasReachableOutput(nodeId, document::kImageSourceImageOutputPort))
             continue;
         if (emptyImages_.contains(nodeId) && !transformParents_.contains(nodeId))
             continue;
