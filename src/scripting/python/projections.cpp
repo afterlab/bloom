@@ -95,6 +95,14 @@ nb::object parameterValue(const document::ParameterValue& value) {
                 gradient["hue_direction"] =
                     std::string(document::gradientHueDirectionName(item.modes.hueDirection));
                 return gradient;
+            } else if constexpr (std::is_same_v<T, document::NumberListValue>) {
+                // #627: {"values": [n...]}, the spelling an argument takes.
+                nb::list values;
+                for (const double number : item.values)
+                    values.append(number);
+                nb::dict list;
+                list["values"] = values;
+                return list;
             } else {
                 return nb::cast(item);
             }

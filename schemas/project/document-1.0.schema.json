@@ -800,6 +800,9 @@
                 },
                 {
                     "$ref": "#/$defs/gradientValue-1.38"
+                },
+                {
+                    "$ref": "#/$defs/numberListValue-1.44"
                 }
             ]
         },
@@ -3290,6 +3293,28 @@
                 }
             },
             "unevaluatedProperties": false
+        },
+        "numberListValue-1.44": {
+            "$comment":
+                "An ordered list of finite numbers. The empty list is a value. A list is a constant or a driver result; no curve kind carries one.",
+            "type": "object",
+            "required": [
+                "kind",
+                "values"
+            ],
+            "properties": {
+                "kind": {
+                    "const": "numberList"
+                },
+                "values": {
+                    "type": "array",
+                    "maxItems": 65536,
+                    "items": {
+                        "type": "number"
+                    }
+                }
+            },
+            "unevaluatedProperties": true
         },
         "gradientValue-1.38": {
             "type": "object",

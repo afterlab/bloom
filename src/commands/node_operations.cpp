@@ -543,7 +543,13 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
             OperationIssueCode::SocketKindMismatch,
             "Output \"" + source_.port + "\" of node " + std::to_string(source_.nodeId.value()) +
                 " cannot connect to the " + detail::describeInput(destination_) +
-                ": their socket kinds do not match");
+                // #627: a list has its own rule, so the refusal states it.
+                (*sourceKind == document::SocketValueKind::NumberList
+                     ? ": a number list connects only to a Number List input"
+                     : *inputKind == document::SocketValueKind::NumberList
+                           ? ": a Number List input takes a number list, a number, a vector or a "
+                             "color"
+                           : ": their socket kinds do not match"));
     // #543: the first link into a gradient stop's socket binds the stop's own link record: a
     // parameter holding only the driver, bound under the socket's name beside the gradient.
     if (const auto* fixed = std::get_if<document::NodeInputRef>(&destination_);

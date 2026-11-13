@@ -1505,6 +1505,17 @@ one-contour paths on shapes, a mask with keys, a data block, a field remap curve
 it. The schema holds the compound value as the `compoundPathValue-1.43` arm of
 `parameterValue-1.4`.
 
+## Number Lists
+
+A number list constant (issue #627, `docs/architecture/number-list.md`) is written
+`{"kind": "numberList", "values": [n, ...]}`: at most 65536 finite numbers in authored order, each
+written as every other Float64 is. The empty list is `"values": []`. An item that is not a number,
+a `values` that is not an array and a list past the limit are refused. No curve kind carries a
+list, so the kind appears only as a constant. A build that predates the kind opens a project
+holding one as preserved read-only, under the rule for unknown core discriminators. The schema
+holds the value as the `numberListValue-1.44` arm of `parameterValue-1.4`;
+`bloom.project.value-graph` saves, reopens and re-encodes one byte for byte.
+
 ## Matte Sources
 
 A layer mask may follow its `opacity` with `matte`, an output port reference (`{"node", "port"}`)

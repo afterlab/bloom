@@ -62,8 +62,21 @@ struct CompiledPathValue final {
     }
 };
 
-using CompiledValue = std::variant<bool, std::int64_t, double, document::Vec2d, document::Vec3d,
-                                   core::Color4d, std::string, CompiledPathValue>;
+// #627: a NumberList output is shared in the same way. `values` is never null.
+struct CompiledNumberList final {
+    std::shared_ptr<const std::vector<double>> values =
+        std::make_shared<const std::vector<double>>();
+    CompiledNumberList() = default;
+    explicit CompiledNumberList(std::vector<double> items)
+        : values(std::make_shared<const std::vector<double>>(std::move(items))) {}
+    friend bool operator==(const CompiledNumberList& left, const CompiledNumberList& right) {
+        return left.values == right.values || *left.values == *right.values;
+    }
+};
+
+using CompiledValue =
+    std::variant<bool, std::int64_t, double, document::Vec2d, document::Vec3d, core::Color4d,
+                 std::string, CompiledPathValue, CompiledNumberList>;
 
 // Where one value lands. The plan's value outputs are a flat table: every operation claims a
 // consecutive run of entries in it, so a Separate RGBA's four channels and a Time node's two units
@@ -247,6 +260,13 @@ enum class ValuePromotion : std::uint8_t {
     BooleanToScalar,
     ScalarToVector2,
     ScalarToVector3,
+    // #627: every value that is one or more numbers in a fixed order, as a list of them.
+    ScalarToList,
+    IntegerToList,
+    BooleanToList,
+    Vector2ToList,
+    Vector3ToList,
+    ColorToList,
 };
 
 struct CompiledValuePromotion final {

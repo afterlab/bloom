@@ -92,6 +92,7 @@ runtime::SnapshotCompileResult compileDriverProbe(const document::Snapshot& snap
     // Every value output a selected node reads out in Properties (properties_value_outputs.hpp),
     // so a node nothing consumes still gets a value operation to read.
     const auto readoutBegin = outputs.size();
+    std::vector<document::NodeId> valueReadouts;
     for (const auto nodeId : readoutNodes) {
         const auto* node = composition->graph().findNode(nodeId);
         const auto* definition =
@@ -114,6 +115,12 @@ runtime::SnapshotCompileResult compileDriverProbe(const document::Snapshot& snap
             if (optional)
                 continue;
             return {};
+        }
+        // #627: no image node reads a list, so a list output is compiled as a value readout
+        // instead of through a private sink.
+        if (*kind == document::SocketValueKind::NumberList) {
+            valueReadouts.push_back(output.nodeId);
+            continue;
         }
         auto valueKind = document::ParameterValueKind::Float64;
         auto type = document::kSolidSourceNodeType;
@@ -187,6 +194,8 @@ runtime::SnapshotCompileResult compileDriverProbe(const document::Snapshot& snap
     if (!probe.connect({merge, "image"}, document::NodeInputRef{outputId, "image"}))
         return {};
     runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
-    return compiler.compile({probe.snapshot(), compositionId}, cancellation);
+    runtime::SnapshotCompileRequest request{probe.snapshot(), compositionId};
+    request.valueReadouts = std::move(valueReadouts);
+    return compiler.compile(request, cancellation);
 }
 } // namespace bloom::ui

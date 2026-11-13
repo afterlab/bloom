@@ -4,6 +4,7 @@
 #include "numeric_field_projection.hpp"
 #include "properties_registry_row.hpp"
 #include "properties_sections.hpp"
+#include "properties_number_list_edit.hpp"
 #include "properties_text_edit.hpp"
 #include "properties_value_edits.hpp"
 #include "row_inline_controls.hpp"
@@ -1502,6 +1503,21 @@ class NodeItem final : public QGraphicsObject {
             valueRows_.push_back({label, row.text, nullptr, {}});
             break;
         }
+        case document::ParameterValueKind::NumberList: {
+            // #627: the list typed as its numbers, committed when the edit ends.
+            row.text = new kit::KLineEdit;
+            row.text->setObjectName(QStringLiteral("nodeOperandNumberListEditor"));
+            row.text->setAccessibleName(label);
+            row.text->setTypeRole(kit::TypeRole::Value);
+            row.text->resize(row.text->sizeHint());
+            prepareField(row.text);
+            registerControlRole(row.text, role);
+            if (session_ != nullptr)
+                properties::bindNumberListEdit(*session_, *row.text,
+                                               [id = row.parameterId] { return id; });
+            valueRows_.push_back({label, row.text, nullptr, {}});
+            break;
+        }
         case document::ParameterValueKind::Color4d: {
             row.color = new kit::KColorChip;
             row.color->setObjectName(QStringLiteral("nodeOperandColorChip"));
@@ -1656,6 +1672,8 @@ class NodeItem final : public QGraphicsObject {
             switch (row.kind) {
             case document::ParameterValueKind::Path:
             case document::ParameterValueKind::Gradient:
+            // A list commits itself through properties::bindNumberListEdit().
+            case document::ParameterValueKind::NumberList:
                 return std::nullopt;
             case document::ParameterValueKind::Boolean:
                 return row.toggle == nullptr
@@ -1733,6 +1751,7 @@ class NodeItem final : public QGraphicsObject {
             return;
         case document::ParameterValueKind::Path:
         case document::ParameterValueKind::Gradient:
+        case document::ParameterValueKind::NumberList:
         case document::ParameterValueKind::Boolean:
         case document::ParameterValueKind::Integer:
         case document::ParameterValueKind::Vec3d:
@@ -1926,6 +1945,14 @@ class NodeItem final : public QGraphicsObject {
                         if (row.text != nullptr) {
                             const QSignalBlocker blocker(row.text);
                             row.text->setText(QString::fromStdString(held));
+                        }
+                    } else if constexpr (std::is_same_v<Held, document::NumberListValue>) {
+                        // Text being typed is kept until its edit ends; anything else follows
+                        // the document.
+                        if (row.text != nullptr &&
+                            !(row.text->hasFocus() && row.text->isModified())) {
+                            const QSignalBlocker blocker(row.text);
+                            row.text->setText(properties::numberListText(held));
                         }
                     }
                 },

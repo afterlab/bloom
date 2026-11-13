@@ -15,6 +15,7 @@ target_sources(
         asset_organization_operations.cpp
         footage_interpretation_operations.cpp
         node_operations.cpp
+        number_list_write_operations.cpp
         path_write_operations.cpp
         entry_layer_operations.cpp
         svg_import_operations.cpp
@@ -57,6 +58,7 @@ target_sources(
             include/bloom/commands/track_operations.hpp
             include/bloom/commands/export_queue_operations.hpp
             include/bloom/commands/node_operations.hpp
+            include/bloom/commands/number_list_write_operations.hpp
             include/bloom/commands/path_write_operations.hpp
             include/bloom/commands/group_definition_operations.hpp
             include/bloom/commands/path_glow_presets.hpp

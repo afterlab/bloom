@@ -57,6 +57,8 @@ kit::Color socketColorToken(const runtime::SocketValueKind kind) noexcept {
         return kit::Color::SocketColorField;
     case runtime::SocketValueKind::Path:
         return kit::Color::SocketPath;
+    case runtime::SocketValueKind::NumberList:
+        return kit::Color::SocketNumberList;
     }
     return kit::Color::SocketImage;
 }
@@ -285,6 +287,7 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         LibraryName{document::kColorValueNodeType, "Color"},
         LibraryName{document::kBooleanValueNodeType, "Boolean"},
         LibraryName{document::kPathValueNodeType, "Path"},
+        LibraryName{document::kNumberListValueNodeType, "Number List"},
         LibraryName{document::kTimeValueNodeType, "Time"},
         LibraryName{document::kScalarMathNodeType, "Math"},
         LibraryName{document::kVector2MathNodeType, "Vector 2 Math"},
@@ -418,6 +421,9 @@ QString parameterText(const document::ParameterRecord& parameter) {
             } else if constexpr (std::is_same_v<Value, document::GradientValue>) {
                 return QCoreApplication::translate("node_editor", "%1 stops")
                     .arg(value.stops.size());
+            } else if constexpr (std::is_same_v<Value, document::NumberListValue>) {
+                return QCoreApplication::translate("node_editor", "%1 items")
+                    .arg(value.values.size());
             } else {
                 return QStringLiteral("%1/%2").arg(value.numerator()).arg(value.denominator());
             }
@@ -684,6 +690,8 @@ QString socketKindName(const document::SocketValueKind kind) {
         return QStringLiteral("Color Field");
     case document::SocketValueKind::Path:
         return QStringLiteral("Path");
+    case document::SocketValueKind::NumberList:
+        return QStringLiteral("Number List");
     }
     return {};
 }

@@ -469,6 +469,7 @@ ParameterPresentation fallback(const ParameterValueKind kind) {
     case ParameterValueKind::String:
     case ParameterValueKind::Path:
     case ParameterValueKind::Gradient:
+    case ParameterValueKind::NumberList:
         break;
     }
     ParameterPresentation other;
@@ -826,7 +827,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         if (name == schemaKey)
             return choice();
     if (kind == ParameterValueKind::Boolean || kind == ParameterValueKind::String ||
-        kind == ParameterValueKind::Path || kind == ParameterValueKind::Gradient) {
+        kind == ParameterValueKind::Path || kind == ParameterValueKind::Gradient ||
+        kind == ParameterValueKind::NumberList) {
         auto other = fallback(kind);
         other.named = true;
         return other;

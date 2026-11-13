@@ -276,7 +276,11 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
         node->typeId == document::kVector3MathNodeType ||
         std::ranges::any_of(definition->parameters,
                             [](const auto& parameter) {
-                                return parameter.valueKind == document::ParameterValueKind::String;
+                                // A text field, or a list typed as text (#627).
+                                return parameter.valueKind ==
+                                           document::ParameterValueKind::String ||
+                                       parameter.valueKind ==
+                                           document::ParameterValueKind::NumberList;
                             }) ||
         std::ranges::any_of(definition->inputs,
                             [](const auto& port) {

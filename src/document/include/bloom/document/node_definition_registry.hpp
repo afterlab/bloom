@@ -45,6 +45,9 @@ enum class SocketValueKind {
     // #589: a whole path value (document::PathValue), evaluated per frame like the other value
     // kinds and read by any number of consumers. Connects only to its own kind.
     Path,
+    // #627: a list of numbers (document::NumberListValue), Bloom's one list kind. A number or a
+    // vector promotes into it; a list connects only to a list input.
+    NumberList,
 };
 
 enum class ParameterValueKind {
@@ -64,6 +67,8 @@ enum class ParameterValueKind {
     Path,
     // #541: a colour gradient (GradientValue).
     Gradient,
+    // #627: a list of numbers (NumberListValue).
+    NumberList,
 };
 
 // The lower-case names scripting clients and diagnostics use for the two kinds ("scalar",
@@ -100,6 +105,8 @@ enum class ParameterValueKind {
         return "color-field";
     case SocketValueKind::Path:
         return "path";
+    case SocketValueKind::NumberList:
+        return "number-list";
     }
     return "image";
 }
@@ -125,6 +132,8 @@ parameterValueKindName(const ParameterValueKind kind) noexcept {
         return "path";
     case ParameterValueKind::Gradient:
         return "gradient";
+    case ParameterValueKind::NumberList:
+        return "number-list";
     }
     return "scalar";
 }
@@ -139,6 +148,8 @@ socketKindForParameterValueKind(const ParameterValueKind kind) noexcept {
         return SocketValueKind::Path; // #589.
     case ParameterValueKind::Gradient:
         return std::nullopt; // Gradients (#541) are inline: no socket carries them.
+    case ParameterValueKind::NumberList:
+        return SocketValueKind::NumberList; // #627.
     case ParameterValueKind::Color4d:
         return SocketValueKind::Color;
     case ParameterValueKind::Vec2d:
@@ -177,28 +188,42 @@ socketKindForParameterValueKind(const ParameterValueKind kind) noexcept {
 // Nothing promotes INTO Boolean, String, or Image, and no vector promotes to another width: each of
 // those would have to invent information (which components? which spelling? which pixels?), and a
 // refusal the artist can see is better than a guess they cannot.
+//
+// #627. A number list takes every value that is one or more numbers in a fixed order:
+//
+//   Scalar, Integer, Boolean -> NumberList   a list of that one number.
+//   Vector2, Vector3         -> NumberList   the components in order: x, y (, z).
+//   Color                    -> NumberList   red, green, blue, alpha.
+//
+// Nothing promotes OUT of a list: reading one item, or folding a list to a number, is a choice
+// (which item? which fold?) a node makes, never a connection.
 [[nodiscard]] constexpr bool
 isPromotedSocketConnection(const SocketValueKind source,
                            const SocketValueKind destination) noexcept {
     switch (source) {
     case SocketValueKind::Integer:
-        return destination == SocketValueKind::Scalar;
+        return destination == SocketValueKind::Scalar ||
+               destination == SocketValueKind::NumberList;
     case SocketValueKind::Boolean:
-        return destination == SocketValueKind::Integer || destination == SocketValueKind::Scalar;
+        return destination == SocketValueKind::Integer || destination == SocketValueKind::Scalar ||
+               destination == SocketValueKind::NumberList;
     case SocketValueKind::Scalar:
-        return destination == SocketValueKind::Vector2 || destination == SocketValueKind::Vector3;
-    case SocketValueKind::Image:
-    case SocketValueKind::Audio:
+        return destination == SocketValueKind::Vector2 || destination == SocketValueKind::Vector3 ||
+               destination == SocketValueKind::NumberList;
     case SocketValueKind::Color:
     case SocketValueKind::Vector2:
-    case SocketValueKind::String:
     case SocketValueKind::Vector3:
+        return destination == SocketValueKind::NumberList;
+    case SocketValueKind::Image:
+    case SocketValueKind::Audio:
+    case SocketValueKind::String:
     case SocketValueKind::Mask:
     case SocketValueKind::ChannelSet:
     case SocketValueKind::ScalarField:
     case SocketValueKind::Vector2Field:
     case SocketValueKind::ColorField:
     case SocketValueKind::Path:
+    case SocketValueKind::NumberList:
         return false;
     }
     return false;

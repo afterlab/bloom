@@ -375,6 +375,11 @@ std::string valueJson(const Value& value) {
                             std::string(document::gradientHueDirectionName(modes.hueDirection)) +
                             "\"";
                 return text + "}";
+            } else if constexpr (std::is_same_v<Held, document::NumberListValue>) {
+                std::string text = "{\"values\":[";
+                for (std::size_t index = 0; index < held.values.size(); ++index)
+                    text += (index == 0 ? "" : ",") + numberText(held.values[index]);
+                return text + "]}";
             } else {
                 std::string text = "[";
                 for (std::size_t index = 0; index < held.size(); ++index)

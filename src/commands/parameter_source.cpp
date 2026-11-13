@@ -184,6 +184,7 @@ std::optional<document::ParameterValue> coerce(const document::ParameterValue& v
     case document::ParameterValueKind::Vec2d:
     case document::ParameterValueKind::Vec3d:
     case document::ParameterValueKind::Gradient:
+    case document::ParameterValueKind::NumberList:
         return value;
     }
     return value;
@@ -208,6 +209,8 @@ std::string valueText(const document::ParameterValue& value) {
         return "a path";
     if (std::holds_alternative<document::GradientValue>(value))
         return "a gradient";
+    if (std::holds_alternative<document::NumberListValue>(value))
+        return "a number list";
     return "this value";
 }
 

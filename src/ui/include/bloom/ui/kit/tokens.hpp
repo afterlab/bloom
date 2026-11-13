@@ -104,6 +104,9 @@ enum class Color : std::uint8_t {
     // #589: the Path value transport (docs/architecture/path-value.md). Pale steel blue, drawn as
     // an ordinary circular value socket.
     SocketPath,
+    // #627: a number list (docs/architecture/number-list.md). Pale mint, drawn as an ordinary
+    // circular value socket.
+    SocketNumberList,
     // GRAPH-1: the graph editor's per-component curve strokes. X/Y/Z/W is the axis vocabulary and
     // R/G/B/A borrows it unchanged, so one colour always means "the first component" whatever the
     // parameter is. A scalar curve takes Keyframe; selection takes Accent; none of these four is

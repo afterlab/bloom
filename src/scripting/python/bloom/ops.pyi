@@ -8874,6 +8874,78 @@ class NodeOps:
         Related: transact
         """
         ...
+    def write_to_number_list(self, node: int | Proxy, port: str = ..., target: int | Proxy = ..., *, composition: int | Proxy = ..., time: Time = ...) -> Mapping[str, Any] | None:
+        """bloom.node.write-to-number-list  (operation, node)
+        Writes the list a value node's Number List output gives at `time` into a Number List node
+        (bloom.value-number-list) as stored numbers, so they can be read back and edited by hand. The
+        node is evaluated when the operation is created, off the UI thread, and stops when the request
+        is cancelled; nothing has to be connected to it. With no `target` a new Number List node is
+        added beside the source and wired to nothing; the source's links never change. With a `target`
+        Number List node its value is replaced. `port` names the Number List output; the default is the
+        node's first. Outputs: node (the Number List node written). Errors: "Node N does not exist";
+        "Node N has no Number List output"; the node's own diagnostic when it fails at that time; "Node
+        N is not a Number List node"; bloom.scripting.cancelled. Undo: one step removes the new node, or
+        restores the target's value. MCP example:
+        {"op":"bloom.node.write-to-number-list","args":{"node":12,"time":0}}.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          node  id  required
+              Id. The node whose Number List result is written.
+              Unit: node id (query:nodes)
+              Range: >= 1
+          port  str  optional
+              The Number List output to write. Defaults to the node's first Number List output.
+              Unit: port name (query:node-types lists each type's ports)
+          target  id  optional, default selection
+              Id. An existing Number List node to write into. Defaults to a new Number List node beside
+              the source.
+              Unit: stable id (a positive integer)
+              Range: >= 1
+              Values:
+                "selection"  The union of the layers' bounds
+                "composition"  The composition frame
+                "key-object"  The key layer's bounds
+          time  time  optional, defaults to the playhead (frame 0 headless) (context time)
+              The time whose result is written. Defaults to the current playhead time.
+              Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
+              denominator]
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.node.write-to-number-list","args":{"node":1}}]}}
+          Python:
+            bloom.ops.node.write_to_number_list(node=1)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.node.write-to-number-list","args":{"node":1}}]
+
+        Related: transact
+        """
+        ...
     def write_to_path(self, node: int | Proxy, port: str = ..., target: int | Proxy = ..., *, composition: int | Proxy = ..., time: Time = ...) -> Mapping[str, Any] | None:
         """bloom.node.write-to-path  (operation, node)
         Writes what a Path-producing value node (Resample Path, Trim Path, Transform Path, Offset Path,

@@ -79,6 +79,8 @@ void chargeValue(std::size_t& total, const ParameterValue& value) {
                 chargePath(total, item);
             else if constexpr (std::is_same_v<Value, GradientValue>)
                 chargeRecords<GradientStop>(total, item.stops.size());
+            else if constexpr (std::is_same_v<Value, NumberListValue>)
+                chargeRecords<double>(total, item.values.size());
         },
         value);
 }

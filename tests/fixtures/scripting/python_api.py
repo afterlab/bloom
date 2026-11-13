@@ -556,6 +556,67 @@ class PythonApi(unittest.TestCase):
         self.assertEqual(len(value['anchors']), 4)
         self.assertNotIn('contours', value)
 
+    def test_a_number_list_is_authored_read_and_written(self):
+        """#627: a number list is {'values': [...]} from Python and bloom-cli; a computed list is
+        read by writing it to a Number List node."""
+        composition = bloom.context.composition
+        result = bloom.ops.node.add(nodeType='bloom.value-number-list', position=(0, 0))
+        self.assertTrue(result['succeeded'])
+        node = next(o['id'] for o in result['outputs'] if o['name'] == 'node')
+        parameter = bloom.data.nodes(composition).get(node).parameters['value']
+        def read(id):
+            # A read value is frozen: a mapping holding a tuple.
+            return dict(bloom.data.parameters(composition).get(id).value)
+        self.assertEqual(read(parameter), {'values': ()})
+        authored = {'values': [1, 2.5, -3]}
+        self.assertTrue(bloom.ops.parameter.set_source(parameter, value=authored)['succeeded'])
+        self.assertEqual(read(parameter), {'values': (1.0, 2.5, -3.0)})
+        # Nothing reads the node; its result is still written out as stored numbers.
+        written = bloom.ops.node.write_to_number_list(node)
+        self.assertTrue(written['succeeded'])
+        copy = next(o['id'] for o in written['outputs'] if o['name'] == 'node')
+        self.assertNotEqual(copy, node)
+        stored = bloom.data.nodes(composition).get(copy).parameters['value']
+        self.assertEqual(read(stored), {'values': (1.0, 2.5, -3.0)})
+        # A value that was read is an argument as it stands.
+        self.assertTrue(bloom.ops.parameter.set_source(stored, value={'values': [7]})['succeeded'])
+        self.assertTrue(bloom.ops.parameter.set_source(stored, value=read(parameter))['succeeded'])
+        self.assertEqual(read(stored), {'values': (1.0, 2.5, -3.0)})
+        # What is not a list of finite numbers never reaches the document.
+        for bad in ({'values': [1, 'x']}, {'values': [float('nan')]}, {'values': 3},
+                    {'values': [1], 'more': 2}, {'values': [True]}):
+            with self.subTest(bad=bad), self.assertRaises((TypeError, ValueError,
+                                                           bloom.OperationError)):
+                bloom.ops.parameter.set_source(parameter, value=bad)
+        with self.assertRaises(bloom.OperationError):
+            bloom.ops.parameter.set_source(parameter, value=2.0)
+        self.assertEqual(read(parameter), {'values': (1.0, 2.5, -3.0)})
+        scalar = bloom.ops.node.add(nodeType='bloom.value-scalar', position=(0, 200))
+        scalar = next(o['id'] for o in scalar['outputs'] if o['name'] == 'node')
+        with self.assertRaises(bloom.OperationError) as refused:
+            bloom.ops.node.write_to_number_list(scalar)
+        self.assertIn('has no Number List output', str(refused.exception))
+
+        # The same edits as a bloom-cli script: a fresh project allocates the same ids.
+        with tempfile.TemporaryDirectory(prefix='bloom-cli-list-') as directory:
+            def run(name, edits):
+                script = pathlib.Path(directory) / name
+                script.write_text(json.dumps(edits))
+                return subprocess.run([CLI, 'run', str(script)], capture_output=True, timeout=60)
+            add = {'op': 'bloom.node.add', 'args': {'nodeType': 'bloom.value-number-list'}}
+            good = run('list.json', [
+                add,
+                {'op': 'bloom.parameter.set-source',
+                 'args': {'parameter': parameter, 'value': authored}},
+                {'op': 'bloom.node.write-to-number-list', 'args': {'node': node}}])
+            self.assertEqual(good.returncode, 0, good.stderr.decode())
+            self.assertIn(b'executed 3 transaction(s)', good.stdout)
+            bad = run('bad.json', [
+                add,
+                {'op': 'bloom.parameter.set-source',
+                 'args': {'parameter': parameter, 'value': {'values': [1, 'x']}}}])
+            self.assertNotEqual(bad.returncode, 0)
+
     def test_layer_masks_take_path_values(self):
         """ADR 0028: a path is a value kind; masks are added, edited and keyed from Python and the CLI."""
         composition = bloom.context.composition

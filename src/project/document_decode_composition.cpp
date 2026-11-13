@@ -355,6 +355,35 @@ using document::Vec3d;
         out = document::PathValue::fromContour(std::move(contour));
         return true;
     }
+    // #627: a number list, its items in order.
+    if (kindText == "numberList") {
+        static constexpr std::array<std::string_view, 2> keys{"kind", "values"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
+            return false;
+        const auto valuesPath = joinPath(path, "values");
+        if (members[1]->kind() != JsonValueKind::Array ||
+            members[1]->arrayElements().size() > document::kMaximumNumberListItems) {
+            state.fail(DocumentDecodeError::InvalidConstantValueKind, valuesPath);
+            return false;
+        }
+        document::NumberListValue value;
+        value.values.reserve(members[1]->arrayElements().size());
+        for (const auto& item : members[1]->arrayElements()) {
+            double number = 0.0;
+            if (!decodeFloat64Member(item, state,
+                                     valuesPath + "/" + std::to_string(value.values.size()),
+                                     number))
+                return false;
+            value.values.push_back(number);
+        }
+        if (!value.isValid()) {
+            state.fail(DocumentDecodeError::DomainViolation, valuesPath);
+            return false;
+        }
+        out = std::move(value);
+        return true;
+    }
     // #541: a gradient's stops, each {position, red, green, blue, alpha}.
     if (kindText == "gradient") {
         // #546: its colour mode, hue direction and interpolation follow, each only when not the

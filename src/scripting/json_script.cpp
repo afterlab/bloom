@@ -538,6 +538,28 @@ class Parser final {
     return Value{std::move(gradient)};
 }
 
+// #627: a number list object, {"values": [n...]}, the shape the parameter projection publishes.
+[[nodiscard]] std::optional<Value> numberListOf(const JsonObject& object) {
+    const auto values = object.find("values");
+    const auto* items =
+        values == object.end() ? nullptr : std::get_if<JsonArray>(&values->second.storage);
+    if (items == nullptr || object.size() != 1 || items->size() > document::kMaximumNumberListItems)
+        return std::nullopt;
+    document::NumberListValue list;
+    list.values.reserve(items->size());
+    for (const auto& item : *items) {
+        if (const auto* real = std::get_if<double>(&item.storage))
+            list.values.push_back(*real);
+        else if (const auto* whole = std::get_if<std::int64_t>(&item.storage))
+            list.values.push_back(static_cast<double>(*whole));
+        else
+            return std::nullopt;
+    }
+    if (!list.isValid())
+        return std::nullopt;
+    return Value{std::move(list)};
+}
+
 // #574: {"name": "Shot 2"} (a layer) or {"layer": "Shot 2" or an id, "role": "opacity"} (a
 // parameter), with an optional "composition". nullopt for any object with another member.
 [[nodiscard]] std::optional<Value> referenceOf(const JsonObject& object) {
@@ -581,6 +603,8 @@ class Parser final {
             } else if constexpr (std::is_same_v<Type, JsonObject>) {
                 if (value.contains("stops"))
                     return gradientOf(value);
+                if (value.contains("values"))
+                    return numberListOf(value);
                 if (auto reference = referenceOf(value))
                     return reference;
                 return pathOf(value);

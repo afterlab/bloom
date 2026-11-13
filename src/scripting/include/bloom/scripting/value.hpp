@@ -39,10 +39,12 @@ struct ObjectReference final {
 // `anchors`, each anchor a `point` and optional in/out handles.
 // #541: document::GradientValue is a gradient parameter's value, read from a mapping with `stops`,
 // each stop a `position` and a `color` [r, g, b, a].
+// #627: document::NumberListValue is a number list parameter's value, read from a mapping with
+// `values`, an array of numbers. (A bare array is already a vector, a colour or a list of ids.)
 using ValueStorage =
     std::variant<bool, std::int64_t, double, std::string, document::Vec2d, document::Vec3d,
                  core::Color4d, StableId, ValueArray, document::PathValue, document::GradientValue,
-                 ObjectReference>;
+                 ObjectReference, document::NumberListValue>;
 
 struct Value final {
     ValueStorage storage;
@@ -62,6 +64,7 @@ struct Value final {
     Value(document::PathValue value) : storage(std::move(value)) {}
     Value(document::GradientValue value) : storage(std::move(value)) {}
     Value(ObjectReference value) : storage(std::move(value)) {}
+    Value(document::NumberListValue value) : storage(std::move(value)) {}
 };
 
 using Arguments = std::map<std::string, Value, std::less<>>;

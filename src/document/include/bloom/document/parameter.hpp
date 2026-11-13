@@ -492,8 +492,23 @@ isGradientAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 [[nodiscard]] bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
                                                         const double value) noexcept;
 
-using ParameterValue = std::variant<bool, std::int64_t, double, Vec2d, Vec3d, core::Color4d,
-                                    std::string, core::RationalTime, PathValue, GradientValue>;
+// #627: a list of numbers, Bloom's one list value. Any node family may produce or read one; the
+// socket that carries it is SocketValueKind::NumberList and the literal Number List node holds
+// one as a constant (docs/architecture/number-list.md).
+inline constexpr std::string_view kNumberListValueParameterSchemaKey = "bloom.value.number-list";
+// A spectrum at the largest analysis size or one value per pixel column of an 8K frame fits; a
+// list is never a place to keep samples of a whole clip.
+inline constexpr std::size_t kMaximumNumberListItems = 65536;
+struct NumberListValue {
+    std::vector<double> values;
+    // At most kMaximumNumberListItems items, each finite. The empty list is valid.
+    [[nodiscard]] bool isValid() const noexcept;
+    friend bool operator==(const NumberListValue&, const NumberListValue&) = default;
+};
+
+using ParameterValue =
+    std::variant<bool, std::int64_t, double, Vec2d, Vec3d, core::Color4d, std::string,
+                 core::RationalTime, PathValue, GradientValue, NumberListValue>;
 
 struct ConstantValueSource {
     ParameterValue value;

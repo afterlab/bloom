@@ -2853,6 +2853,13 @@ bloom_enable_warnings(bloom_runtime_resample_path_test)
 bloom_enable_strict_floating_point(bloom_runtime_resample_path_test)
 bloom_add_test(NAME bloom.runtime.resample-path COMMAND bloom_runtime_resample_path_test LABELS unit runtime persistence TIMEOUT 120)
 
+# #627 Number list: authoring and undo, connection rules, the read of an unconsumed list and Write
+# to a Number List, through commands, the real compiler and the scripted query.
+add_executable(bloom_runtime_number_list_test ${PROJECT_SOURCE_DIR}/tests/integration/number_list_tests.cpp)
+target_link_libraries(bloom_runtime_number_list_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project bloom_render bloom_scripting)
+bloom_enable_warnings(bloom_runtime_number_list_test)
+bloom_add_test(NAME bloom.runtime.number-list COMMAND bloom_runtime_number_list_test LABELS unit runtime TIMEOUT 120)
+
 # #598 Warp Path and Transform Path skew through the real compiler and CPU evaluator.
 add_executable(bloom_runtime_warp_path_test ${PROJECT_SOURCE_DIR}/tests/integration/warp_path_tests.cpp)
 target_include_directories(bloom_runtime_warp_path_test PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")

@@ -229,6 +229,15 @@ class Evaluator final {
                     }
                     retainedPathAnchors_ += anchors;
                 }
+                if (const auto* list = std::get_if<runtime::CompiledNumberList>(&value)) {
+                    const auto items = list->values->size();
+                    if (items > document::kMaximumNumberListItems ||
+                        items > memoization_.maxRetainedListItems - retainedListItems_) {
+                        initialBudgetFailures_.push_back(index);
+                        continue;
+                    }
+                    retainedListItems_ += items;
+                }
                 outputs_[index] = value;
             }
         }
@@ -470,8 +479,27 @@ class Evaluator final {
             retainedStringBytes_ -= oldBytes;
             return;
         }
+        // #627: a list is charged the same way, by its items; one that is too long, or that
+        // takes the outputs past their allowance, reads empty and says so.
+        const auto itemsOf = [](const CompiledValue& held) -> std::size_t {
+            const auto* list = std::get_if<runtime::CompiledNumberList>(&held);
+            return list == nullptr ? 0 : list->values->size();
+        };
+        const auto oldItems = itemsOf(outputs_[index]);
+        const auto newItems = itemsOf(value);
+        if (newItems > document::kMaximumNumberListItems ||
+            newItems > memoization_.maxRetainedListItems - (retainedListItems_ - oldItems)) {
+            fail(operation, {}, "Value graph list budget exceeded",
+                 "The number list output exceeds the per-list or retained-output item limit.");
+            outputs_[index] = runtime::CompiledNumberList{};
+            retainedListItems_ -= oldItems;
+            retainedPathAnchors_ -= oldAnchors;
+            retainedStringBytes_ -= oldBytes;
+            return;
+        }
         const auto* newString = std::get_if<std::string>(&value);
         outputs_[index] = value;
+        retainedListItems_ = retainedListItems_ - oldItems + newItems;
         retainedPathAnchors_ = retainedPathAnchors_ - oldAnchors + newAnchors;
         retainedStringBytes_ = retainedStringBytes_ - oldBytes +
                                (newString == nullptr ? std::size_t{0} : newString->size());
@@ -551,6 +579,7 @@ class Evaluator final {
     std::vector<ValueGraphDiagnostic> diagnostics_;
     std::size_t retainedStringBytes_ = 0;
     std::size_t retainedPathAnchors_ = 0;
+    std::size_t retainedListItems_ = 0;
     std::vector<std::size_t> initialBudgetFailures_;
 };
 
@@ -1639,6 +1668,51 @@ void Evaluator::evaluatePromotion(const runtime::CompiledValueOperation& operati
         } else {
             write(operation, 0, document::Vec2d{*scalar, *scalar});
         }
+        return;
+    }
+    // #627: the numbers a value is, in their fixed order.
+    case runtime::ValuePromotion::ScalarToList:
+    case runtime::ValuePromotion::IntegerToList:
+    case runtime::ValuePromotion::BooleanToList:
+    case runtime::ValuePromotion::Vector2ToList:
+    case runtime::ValuePromotion::Vector3ToList:
+    case runtime::ValuePromotion::ColorToList: {
+        std::optional<std::vector<double>> items;
+        if (value != nullptr)
+            switch (kernel.promotion) {
+            case runtime::ValuePromotion::ScalarToList:
+                if (const auto* scalar = std::get_if<double>(value))
+                    items = std::vector<double>{*scalar};
+                break;
+            case runtime::ValuePromotion::IntegerToList:
+                if (const auto* integer = std::get_if<std::int64_t>(value))
+                    items = std::vector<double>{static_cast<double>(*integer)};
+                break;
+            case runtime::ValuePromotion::BooleanToList:
+                if (const auto* boolean = std::get_if<bool>(value))
+                    items = std::vector<double>{*boolean ? 1.0 : 0.0};
+                break;
+            case runtime::ValuePromotion::Vector2ToList:
+                if (const auto* vector = std::get_if<document::Vec2d>(value))
+                    items = std::vector<double>{vector->x, vector->y};
+                break;
+            case runtime::ValuePromotion::Vector3ToList:
+                if (const auto* vector = std::get_if<document::Vec3d>(value))
+                    items = std::vector<double>{vector->x, vector->y, vector->z};
+                break;
+            case runtime::ValuePromotion::ColorToList:
+                if (const auto* color = std::get_if<core::Color4d>(value))
+                    items = std::vector<double>{color->red, color->green, color->blue,
+                                                color->alpha};
+                break;
+            default:
+                break;
+            }
+        if (!items) {
+            reject(runtime::CompiledNumberList{});
+            return;
+        }
+        write(operation, 0, runtime::CompiledNumberList{std::move(*items)});
         return;
     }
     }

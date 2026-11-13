@@ -1111,7 +1111,8 @@ when the drag ends.
 #### Socket Kinds And Promotion
 
 `SocketValueKind` is `Image`, `Color`, `Scalar`, `Vector2`, `Vector3`, `Integer`, `Boolean`, `String`,
-and `Path` (`path-value.md`), besides the transports the other documents own.
+`Path` (`path-value.md`) and `NumberList` (`number-list.md`), besides the transports the other
+documents own.
 A connection is accepted when the kinds are equal, or when the source appears in this whitelist:
 
 | From | To | Meaning |
@@ -1121,9 +1122,11 @@ A connection is accepted when the kinds are equal, or when the source appears in
 | `Boolean` | `Scalar` | The same mapping, widened once more |
 | `Scalar` | `Vector2` | Splat: the one value in every component |
 | `Scalar` | `Vector3` | Splat |
+| `Scalar`, `Integer`, `Boolean` | `NumberList` | A list of that one number |
+| `Vector2`, `Vector3`, `Color` | `NumberList` | The components in order |
 
-Nothing promotes into `Boolean`, `String`, `Path` or `Image`, and no vector changes width: each of those would
-have to invent information. Every promotion compiles to its own operation rather than being folded
+Nothing promotes into `Boolean`, `String`, `Path` or `Image`, no vector changes width, and nothing
+promotes out of a `NumberList`: each of those would have to invent information. Every promotion compiles to its own operation rather than being folded
 into whoever reads the value, so a widening is visible in a plan dump and diagnosable like any other
 step. One predicate -- `document::isAcceptedSocketConnection()` -- answers for the editor's drag
 affinity, `ConnectPorts`, document validation and the compiler's edge check alike.

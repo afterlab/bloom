@@ -3,6 +3,7 @@
 #include "node_editor_items.hpp"
 #include "numeric_field_projection.hpp"
 #include "properties_sections.hpp"
+#include "properties_number_list_edit.hpp"
 #include "properties_text_edit.hpp"
 #include "properties_value_edits.hpp"
 #include "row_inline_controls.hpp"
@@ -553,6 +554,13 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
                                    : "propertiesRegistryBool");
         layout->addWidget(toggle_);
         connect(toggle_, &kit::KSwitch::toggled, this, [this] { commit(); });
+    } else if (definition_.valueKind == document::ParameterValueKind::NumberList) {
+        // #627: the list typed as its numbers; the editor commits itself when the edit ends.
+        text_ = new kit::KLineEdit(controls);
+        text_->setObjectName("propertiesRegistryNumberList");
+        text_->setTypeRole(kit::TypeRole::Value);
+        layout->addWidget(text_, 1);
+        properties::bindNumberListEdit(session_, *text_, [this] { return parameter_; });
     } else if (definition_.valueKind == document::ParameterValueKind::String) {
         text_ = new kit::KLineEdit(controls);
         text_->setObjectName("propertiesRegistryString");
@@ -809,6 +817,10 @@ void PropertiesRegistryRow::refresh() {
             properties::refreshColor(session_, definition_.schemaKey, *color, color_,
                                      {fields_[0], fields_[1], fields_[2], fields_[3]});
         }
+        // Text being typed is kept until its edit ends; anything else follows the document.
+        if (auto* list = std::get_if<document::NumberListValue>(&value);
+            list && text_ && !(text_->hasFocus() && text_->isModified()))
+            text_->setText(properties::numberListText(*list));
         if (auto* boolean = std::get_if<bool>(&value); boolean && toggle_)
             toggle_->setChecked(*boolean);
         if (auto* text = std::get_if<std::string>(&value)) {
@@ -898,6 +910,8 @@ void PropertiesRegistryRow::commit(const std::optional<std::size_t> component) {
         value = integer_->integerValue();
     else if (toggle_)
         value = toggle_->isChecked();
+    else if (definition_.valueKind == document::ParameterValueKind::NumberList)
+        return; // The list field commits itself through bindNumberListEdit().
     else if (text_)
         value = text_->text().toStdString();
     else if (multiline_)

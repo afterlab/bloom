@@ -136,6 +136,8 @@ class ValueUtilityReader final {
         break;
     case document::SocketValueKind::Path:
         return CompiledPathValue{};
+    case document::SocketValueKind::NumberList:
+        return CompiledNumberList{};
     }
     return 0.0;
 }

@@ -12,12 +12,14 @@
 #include "properties_registry_row.hpp"
 
 #include <QApplication>
+#include <QElapsedTimer>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter_enums.hpp>
 #include <bloom/document/parameter_presentation.hpp>
+#include <bloom/document/value_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
@@ -29,6 +31,7 @@
 #include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/node_editor.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <vector>
@@ -110,6 +113,7 @@ const char* kindName(const document::ParameterValueKind k) {
     case document::ParameterValueKind::String: return "string";
     case document::ParameterValueKind::Path: return "path";
     case document::ParameterValueKind::Gradient: return "gradient";
+    case document::ParameterValueKind::NumberList: return "number list";
     }
     return "?";
 }
@@ -223,6 +227,135 @@ int main(int argc, char** argv) {
                 expect(qobject_cast<ui::kit::KColorChip*>(card) != nullptr ||
                            qobject_cast<ui::kit::KValueField*>(card) != nullptr,
                        "card shows a color control for " + label);
+        }
+    }
+    // #627: a number list is typed as its numbers, on the card and in Properties. Each ending of
+    // the edit is one transaction; text that is not a list is refused and never written.
+    {
+        const auto found = std::ranges::find(
+            added, std::string(document::kNumberListValueNodeType),
+            &std::pair<std::string, document::NodeId>::first);
+        expect(found != added.end(), "the registry has the Number List node");
+        if (found != added.end()) {
+            const auto id = found->second;
+            const auto* node = session.composition()->graph().findNode(id);
+            const auto binding = std::ranges::find(node->parameters,
+                                                   std::string(document::kValueParameterRole),
+                                                   &document::ParameterBinding::role);
+            const auto parameter = binding->parameterId;
+            const auto held = [&]() -> std::vector<double> {
+                const auto* record = session.composition()->parameters().find(parameter);
+                const auto* constant =
+                    record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
+                const auto* list =
+                    constant ? std::get_if<document::NumberListValue>(&constant->value) : nullptr;
+                return list ? list->values : std::vector<double>{-1.0};
+            };
+            const auto controls = editor.graphScene()->nodeControlsForRoleForTest(
+                id, QString::fromLatin1(document::kValueParameterRole.data(),
+                                        static_cast<int>(document::kValueParameterRole.size())));
+            auto* card = controls.isEmpty()
+                             ? nullptr
+                             : qobject_cast<ui::kit::KLineEdit*>(controls.front());
+            expect(card != nullptr &&
+                       card->objectName() == QStringLiteral("nodeOperandNumberListEditor") &&
+                       card->inlineEdit() != nullptr,
+                   "the Number List card shows the list editor");
+            const auto* definition =
+                document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion);
+            ui::PropertiesRegistryRow row(session, id, parameter, definition->parameters.front(),
+                                          nullptr);
+            auto* props = row.findChild<ui::kit::KLineEdit*>(
+                QStringLiteral("propertiesRegistryNumberList"));
+            expect(props != nullptr && props->inlineEdit() != nullptr,
+                   "Properties shows the list editor");
+            if (card != nullptr && props != nullptr && card->inlineEdit() != nullptr &&
+                props->inlineEdit() != nullptr) {
+                expect(held().empty() && card->text().isEmpty(), "a new list is empty");
+                const auto undoBefore = stack.size();
+                card->setText(QStringLiteral("1, 2.5 -3"));
+                card->inlineEdit()->finish();
+                QCoreApplication::processEvents();
+                expect(held() == std::vector<double>{1.0, 2.5, -3.0},
+                       "numbers typed on the card, by comma or space, are the list");
+                expect(stack.size() == undoBefore + 1, "the edit is one undo step");
+                expect(card->text() == QStringLiteral("1, 2.5, -3"),
+                       "the card shows the list as the document spells it");
+                row.refresh();
+                expect(props->text() == QStringLiteral("1, 2.5, -3"),
+                       "Properties shows the same list");
+
+                card->setText(QStringLiteral("1, x"));
+                expect(!card->inlineEdit()->validate() &&
+                           card->inlineEdit()->refusal().contains(QStringLiteral("\"x\"")),
+                       "text that is not a number is refused, naming it");
+                card->inlineEdit()->finish();
+                QCoreApplication::processEvents();
+                expect(held() == std::vector<double>{1.0, 2.5, -3.0} &&
+                           stack.size() == undoBefore + 1 &&
+                           card->text() == QStringLiteral("1, 2.5, -3"),
+                       "a refused edit writes nothing and the card shows the list again");
+
+                card->inlineEdit()->finish();
+                expect(stack.size() == undoBefore + 1,
+                       "ending an edit that changed nothing commits nothing");
+
+                props->setText(QStringLiteral("4 5"));
+                props->inlineEdit()->finish();
+                QCoreApplication::processEvents();
+                expect(held() == std::vector<double>{4.0, 5.0} &&
+                           stack.size() == undoBefore + 2,
+                       "a list typed in Properties is one more undo step");
+                expect(card->text() == QStringLiteral("4, 5"), "and the card follows it");
+                expect(session.undo(), "the Properties edit undoes");
+                QCoreApplication::processEvents();
+                expect(held() == std::vector<double>{1.0, 2.5, -3.0} &&
+                           card->text() == QStringLiteral("1, 2.5, -3"),
+                       "undo restores the list on the card");
+                card->setText(QString{});
+                card->inlineEdit()->finish();
+                QCoreApplication::processEvents();
+                expect(held().empty(), "clearing the field is the empty list");
+            }
+        }
+    }
+    // #627: a list output is read out in Properties although nothing consumes it. A project of
+    // its own: the audit's composition holds every node type unconnected and does not compile.
+    {
+        auto listProject =
+            document::makeNewProject("List", "Main", core::RationalTime::fromInteger(10));
+        document::Document listDocument(std::move(listProject.project));
+        commands::CommandStack listStack(listDocument);
+        ui::CompositionSession listSession(listDocument, listStack,
+                                           listProject.initialCompositionId);
+        commands::Transaction transaction("Add", listSession.snapshot().revision());
+        transaction.emplace<commands::AddNode>(listSession.compositionId(),
+                                               std::string(document::kNumberListValueNodeType),
+                                               document::Vec2d{});
+        const auto id = listSession.executeNodeTransaction(std::move(transaction))
+                            .outputId<document::NodeId>(commands::kAddNodeOutput);
+        expect(id.has_value(), "a Number List node is added to the clean project");
+        if (id) {
+            const auto* node = listSession.composition()->graph().findNode(*id);
+            const auto parameter =
+                std::ranges::find(node->parameters, std::string(document::kValueParameterRole),
+                                  &document::ParameterBinding::role)
+                    ->parameterId;
+            expect(listSession.setParameterValue(
+                       parameter, document::NumberListValue{{1.0, 2.5, -3.0, 4.0, 5.0}}, "List"),
+                   "the clean project's list is authored");
+            listSession.selectNode(*id);
+            QElapsedTimer wait;
+            wait.start();
+            QString readout;
+            while (readout.isEmpty() && wait.elapsed() < 15'000) {
+                listSession.refreshDrivenValues();
+                QApplication::processEvents(QEventLoop::AllEvents, 20);
+                readout = listSession.valueOutputText(*id, document::kValuePortName);
+            }
+            expect(readout == QStringLiteral("5 items: 1, 2.5, -3, 4, …"),
+                   "the list output reads out its length and first numbers, not \"" +
+                       readout.toStdString() + "\"");
         }
     }
     if (capture) {

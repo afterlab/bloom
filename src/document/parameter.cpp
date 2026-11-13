@@ -59,6 +59,9 @@ namespace {
                 if (const auto* gradient =
                         std::get_if<bloom::document::GradientValue>(&valueSource.value))
                     return gradient->isValid();
+                if (const auto* list =
+                        std::get_if<bloom::document::NumberListValue>(&valueSource.value))
+                    return list->isValid();
                 if (const auto* value = std::get_if<double>(&valueSource.value)) {
                     return std::isfinite(*value);
                 }
@@ -244,6 +247,11 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
         const auto* path = std::get_if<PathValue>(&constant.value);
         return path != nullptr && path->isValid();
     }
+    // #627: a list operand holds any valid list, as a constant or a driver.
+    if (schemaKey == kNumberListOperandParameterSchemaKey) {
+        const auto* list = std::get_if<NumberListValue>(&constant.value);
+        return list != nullptr && list->isValid();
+    }
     if (schemaKey == kIntegerOperationParameterSchemaKey) {
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr &&
@@ -293,6 +301,11 @@ constantMatchesSchema(const std::string_view schemaKey,
     if (schemaKey == kPathValueParameterSchemaKey) {
         const auto* path = std::get_if<PathValue>(&constant.value);
         return path != nullptr && path->isValid();
+    }
+    // #627: the literal Number List node holds any valid list.
+    if (schemaKey == kNumberListValueParameterSchemaKey) {
+        const auto* list = std::get_if<NumberListValue>(&constant.value);
+        return list != nullptr && list->isValid();
     }
     if (schemaKey == kLayerMaskInvertedSchemaKey)
         return std::holds_alternative<bool>(constant.value);
@@ -769,6 +782,11 @@ constantMatchesSchema(const std::string_view schemaKey,
          schemaKey == bloom::document::kPathOperandParameterSchemaKey) &&
         std::holds_alternative<bloom::document::AnimationCurveSource>(source))
         return false;
+    // #627: a list has no keys: it is a constant, or (an operand) the driver on its socket.
+    if ((schemaKey == bloom::document::kNumberListValueParameterSchemaKey ||
+         schemaKey == bloom::document::kNumberListOperandParameterSchemaKey) &&
+        std::holds_alternative<bloom::document::AnimationCurveSource>(source))
+        return false;
     // #543: a stop link holds its driver and nothing else.
     if (bloom::document::isGradientStopSchemaKey(schemaKey))
         return std::holds_alternative<bloom::document::DriverBindingSource>(source) &&
@@ -1083,6 +1101,11 @@ std::optional<PathFillRule> pathFillRuleFromName(const std::string_view name) no
         if (pathFillRuleName(rule) == name)
             return rule;
     return std::nullopt;
+}
+
+bool NumberListValue::isValid() const noexcept {
+    return values.size() <= kMaximumNumberListItems &&
+           std::ranges::all_of(values, [](const double value) { return std::isfinite(value); });
 }
 
 PathValue PathValue::fromContour(PathContour contour) {

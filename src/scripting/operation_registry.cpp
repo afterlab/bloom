@@ -153,6 +153,10 @@ using AnimationValue = std::variant<double, document::Vec2d, document::Vec3d, co
     if (const auto* result = std::get_if<document::GradientValue>(&value.storage)) {
         return result->isValid() ? std::optional(document::ParameterValue(*result)) : std::nullopt;
     }
+    // #627: a number list parameter's {values} object.
+    if (const auto* result = std::get_if<document::NumberListValue>(&value.storage)) {
+        return result->isValid() ? std::optional(document::ParameterValue(*result)) : std::nullopt;
+    }
     const auto authoredValue = animationValueOf(value);
     if (!authoredValue.has_value()) {
         return std::nullopt;
@@ -1157,6 +1161,12 @@ std::string pythonLiteral(const Value& value) {
                             std::string(document::gradientHueDirectionName(modes.hueDirection)) +
                             "\"";
                 return text + "}";
+            } else if constexpr (std::is_same_v<Held, document::NumberListValue>) {
+                std::string text = "{\"values\": [";
+                for (std::size_t index = 0; index < held.values.size(); ++index)
+                    text += (index == 0 ? std::string() : std::string(", ")) +
+                            pythonLiteral(Value(held.values[index]));
+                return text + "]}";
             } else {
                 std::string text = "(";
                 for (std::size_t index = 0; index < held.size(); ++index) {

@@ -224,6 +224,26 @@ document::Vec2d pathPoint(const nb::handle value) {
     return point;
 }
 
+// #627: a number list argument is the mapping bloom.data projects for a list value:
+// {"values": [n...]}.
+Value numberListValue(const nb::dict& mapping) {
+    if (nb::len(mapping) != 1 || !nb::isinstance<nb::sequence>(mapping["values"]) ||
+        nb::isinstance<nb::str>(mapping["values"]))
+        throw nb::type_error("A number list is {'values': [numbers]}");
+    document::NumberListValue list;
+    for (const auto item : nb::borrow<nb::sequence>(mapping["values"])) {
+        if (nb::isinstance<nb::bool_>(item) ||
+            !(nb::isinstance<nb::float_>(item) || nb::isinstance<nb::int_>(item)))
+            throw nb::type_error("A number list holds numbers");
+        list.values.push_back(nb::cast<double>(item));
+        if (list.values.size() > document::kMaximumNumberListItems)
+            break;
+    }
+    if (!list.isValid())
+        throw nb::value_error("A number list holds at most 65536 finite numbers");
+    return Value(std::move(list));
+}
+
 // #541: a gradient argument is the mapping bloom.data projects for a gradient value: {"stops":
 // [{"position": p, "color": (r, g, b, a)}]}.
 // #546: with an optional 'interpolation', 'color_mode' and 'hue_direction' by name.
@@ -471,9 +491,12 @@ Value scriptValue(const nb::handle value, const std::size_t depth) {
             return referenceValue(mapping);
         if (mapping.contains("stops"))
             return gradientValue(mapping);
+        if (mapping.contains("values"))
+            return numberListValue(mapping);
         return pathValue(mapping);
     }
-    throw nb::type_error("Expected a scalar, an array, a path or a gradient of Bloom argument values");
+    throw nb::type_error(
+        "Expected a scalar, an array, a path, a gradient or a number list of Bloom argument values");
 }
 
 namespace {

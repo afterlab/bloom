@@ -11,6 +11,7 @@
 #include <bloom/commands/layer_alignment_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/commands/number_list_write_operations.hpp>
 #include <bloom/commands/path_write_operations.hpp>
 #include <bloom/core/file_uri.hpp>
 #include <bloom/document/channel_nodes.hpp>
@@ -110,6 +111,21 @@ const std::string kWriteToPath =
     R"(fails at that time (a count past the Path caps, a bad operand); "Node N is not a Path node"; bloom.scripting.cancelled. )"
     R"(Undo: one step removes the new node, or restores the target's value. )"
     R"(MCP example: {"op":"bloom.node.write-to-path","args":{"node":12,"time":0}}.)";
+
+const std::string kWriteToNumberList =
+    R"(Writes the list a value node's Number List output gives at `time` into a Number List node )"
+    R"((bloom.value-number-list) as stored numbers, so they can be read back and edited by hand. )"
+    R"(The node is evaluated when the operation is created, off the UI thread, and stops when the )"
+    R"(request is cancelled; nothing has to be connected to it. With no `target` a new Number List )"
+    R"(node is added beside the source and wired to nothing; the source's links never change. With )"
+    R"(a `target` Number List node its value is replaced. `port` names the Number List output; the )"
+    R"(default is the node's first. )"
+    R"(Outputs: node (the Number List node written). )"
+    R"(Errors: "Node N does not exist"; "Node N has no Number List output"; the node's own )"
+    R"(diagnostic when it fails at that time; "Node N is not a Number List node"; )"
+    R"(bloom.scripting.cancelled. )"
+    R"(Undo: one step removes the new node, or restores the target's value. )"
+    R"(MCP example: {"op":"bloom.node.write-to-number-list","args":{"node":12,"time":0}}.)";
 
 [[nodiscard]] OperationCreateResult refuse(const std::string& op, std::string code,
                                            std::string argument, std::string message) {
@@ -540,6 +556,57 @@ OperationCreateResult writeToPath(const std::string& op, const Arguments& args,
         std::move(*queried.value->path), position, *time));
 }
 
+OperationCreateResult writeToNumberList(const std::string& op, const Arguments& args,
+                                        const OperationContext& context) {
+    Reader read(op, args);
+    const auto compositionId = read.id<CompositionId>("composition");
+    const auto nodeId = read.id<NodeId>("node");
+    const auto target = read.id<NodeId>("target", false);
+    const auto port = read.text("port");
+    const auto time = read.time("time");
+    if (read.failed())
+        return read.error();
+    if (!context.source)
+        return noSource(op);
+    const auto source = context.source();
+    if (!source)
+        return noSource(op);
+    const auto* composition = source->snapshot.project().findComposition(compositionId);
+    if (composition == nullptr)
+        return invalid(op, "composition",
+                       "Composition " + std::to_string(compositionId.value()) + " does not exist");
+    if (composition->graph().findNode(nodeId) == nullptr)
+        return invalid(op, "node", "Node " + std::to_string(nodeId.value()) + " does not exist");
+    if (target.isValid()) {
+        const auto* existing = composition->graph().findNode(target);
+        if (existing == nullptr || existing->typeId != document::kNumberListValueNodeType)
+            return invalid(op, "target",
+                           "Node " + std::to_string(target.value()) +
+                               " is not a Number List node");
+    }
+    const auto queried = runCancellable<NodeNumberListQuery>(
+        context.stop, "Write To Number List", runtime::TaskExecutor::Cpu,
+        [&](const runtime::CancellationToken& cancellation) {
+            return queryNodeNumberList(source->snapshot, compositionId, nodeId, port.value_or(""),
+                                       *time, cancellation);
+        });
+    if (queried.cancelled || (queried.value && queried.value->cancelled))
+        return cancelledRead(op);
+    if (!queried.value)
+        return refuse(op, "bloom.scripting.read-failed", {}, "The node could not be read");
+    if (!queried.value->list)
+        return invalid(op, "node", queried.value->diagnostic);
+    // Beside the source, clear of it; AddNode moves the card further when something is in the way.
+    document::Vec2d position{0.0, 0.0};
+    if (const auto found = composition->nodeLayout().find(nodeId);
+        found != composition->nodeLayout().end())
+        position = {found->second.position.x + found->second.width + 64.0,
+                    found->second.position.y};
+    return made(std::make_unique<commands::WriteValueToNumberList>(
+        compositionId, target.isValid() ? std::optional<NodeId>(target) : std::nullopt,
+        std::move(*queried.value->list), position));
+}
+
 void addContextual(std::vector<OperationDescriptor>& descriptors, std::string id,
                    std::string description, std::vector<ArgumentSchema> arguments,
                    OperationCreateResult (*create)(const std::string&, const Arguments&,
@@ -599,6 +666,19 @@ void addEvaluatedOperations(std::vector<OperationDescriptor>& descriptors) {
          timeFromContext("The time whose result is written (and where an animated target is "
                          "keyed). Defaults to the current playhead time.")},
         writeToPath);
+    addContextual(
+        descriptors, "bloom.node.write-to-number-list", kWriteToNumberList,
+        {composition(),
+         need("node", ValueKind::Id, StableId{1},
+              "Id. The node whose Number List result is written."),
+         maybe("port", ValueKind::String, "",
+               "The Number List output to write. Defaults to the node's first Number List output."),
+         maybe("target", ValueKind::Id, StableId{1},
+               "Id. An existing Number List node to write into. Defaults to a new Number List node "
+               "beside the source."),
+         timeFromContext("The time whose result is written. Defaults to the current playhead "
+                         "time.")},
+        writeToNumberList);
 }
 
 [[nodiscard]] static LayerBoundsReading measureLayerBoundsReading(const OperationContext& context,

@@ -57,6 +57,11 @@ class OperationKey final {
             }
         } else if constexpr (std::is_same_v<T, CompiledPathValue>) {
             add(*value.value);
+        } else if constexpr (std::is_same_v<T, CompiledNumberList>) {
+            // #627: the item count, then every item's bits.
+            add(value.values->size());
+            for (const double item : *value.values)
+                add(item);
         } else if constexpr (std::is_same_v<T, std::string>) {
             add(value.size());
             bytes_ += value;

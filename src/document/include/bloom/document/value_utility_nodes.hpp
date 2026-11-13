@@ -236,6 +236,9 @@ inline constexpr std::string_view kTextOutlineNodeType = "bloom.text-outline";
 // whose unconnected value is the empty path; it holds a constant or a driver, never keys (keys
 // belong to the Path node).
 inline constexpr std::string_view kPathOperandParameterSchemaKey = "bloom.operand.path";
+// #627: a list operand's own value, used while nothing is connected.
+inline constexpr std::string_view kNumberListOperandParameterSchemaKey =
+    "bloom.operand.number-list";
 // The stored integers of the three path selectors are durable.
 inline constexpr std::string_view kTrimModeParameterSchemaKey = "bloom.path.trim-mode";
 inline constexpr std::string_view kOffsetJoinParameterSchemaKey = "bloom.path.offset-join";

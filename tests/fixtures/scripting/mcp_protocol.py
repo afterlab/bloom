@@ -347,6 +347,55 @@ class Protocol(unittest.TestCase):
         self.assertTrue('error' in refused or not refused['result']['structuredContent']['succeeded'],
                         refused)
 
+    def test_a_number_list_is_authored_read_and_written(self):
+        """#627: MCP writes a list as {values: [...]}, reads it back in the same shape, writes a
+        node's list result into a Number List node and refuses what is not a list."""
+        add = {'op': 'bloom.node.add',
+               'args': {'composition': 1, 'nodeType': 'bloom.value-number-list'}}
+        def reply(responses, id):
+            return next(r for r in responses if r.get('id') == id)
+        def content(responses, id):
+            return reply(responses, id)['result']['structuredContent']
+        first = exchange([INIT, READY, tool(2, 'transact', {'expectedRevision': 0,
+                                                            'operations': [add]}),
+                          tool(3, 'query', {'kind': 'nodes', 'composition': 1})])
+        node = next(o['id'] for o in content(first, 2)['outputs'] if o['name'] == 'node')
+        parameter = next(r for r in content(first, 3)['records']
+                         if r['id'] == node)['parameters']['value']
+        def set_list(value):
+            return {'op': 'bloom.parameter.set-source',
+                    'args': {'composition': 1, 'parameter': parameter, 'value': value}}
+        responses = exchange([
+            INIT, READY,
+            tool(2, 'transact', {'expectedRevision': 0, 'operations': [
+                add, set_list({'values': [1, 2.5, -3]})]}),
+            tool(3, 'query', {'kind': 'parameters', 'composition': 1}),
+            tool(4, 'transact', {'expectedRevision': 1, 'operations': [
+                {'op': 'bloom.node.write-to-number-list',
+                 'args': {'composition': 1, 'node': node, 'time': 0}}]}),
+            tool(5, 'query', {'kind': 'nodes', 'composition': 1}),
+            tool(6, 'query', {'kind': 'parameters', 'composition': 1}),
+            tool(7, 'transact', {'expectedRevision': 2,
+                                 'operations': [set_list({'values': [1, 'x']})]}),
+            tool(8, 'transact', {'expectedRevision': 2, 'operations': [set_list(4.0)]}),
+            tool(9, 'query', {'kind': 'parameters', 'composition': 1})])
+        self.assertTrue(content(responses, 2)['succeeded'], responses)
+        record = next(r for r in content(responses, 3)['records'] if r['id'] == parameter)
+        self.assertEqual(record['value'], {'values': [1, 2.5, -3]})
+        self.assertTrue(content(responses, 4)['succeeded'], responses)
+        copy = next(o['id'] for o in content(responses, 4)['outputs'] if o['name'] == 'node')
+        self.assertNotEqual(copy, node)
+        stored = next(r for r in content(responses, 5)['records']
+                      if r['id'] == copy)['parameters']['value']
+        self.assertEqual(next(r for r in content(responses, 6)['records']
+                              if r['id'] == stored)['value'], {'values': [1, 2.5, -3]})
+        for id in (7, 8):
+            refused = reply(responses, id)
+            self.assertTrue('error' in refused or
+                            not refused['result']['structuredContent']['succeeded'], refused)
+        self.assertEqual(next(r for r in content(responses, 9)['records']
+                              if r['id'] == parameter)['value'], {'values': [1, 2.5, -3]})
+
     def test_handshake_transactions_and_events(self):
         responses = exchange([
             INIT, READY, request(2, 'tools/list', {}),

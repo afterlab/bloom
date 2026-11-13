@@ -558,6 +558,111 @@ void testOversizedLiteralNeverEntersCacheKey(Expectations& expectations) {
                         "the same literal is cached only after its byte budget admits it");
 }
 
+// #627: a number list as a literal, the six promotions into one, its place in the cache key and
+// its item budget.
+void testNumberLists(Expectations& expectations) {
+    using runtime::CompiledNumberList;
+    using runtime::ValuePromotion;
+    {
+        GraphBuilder builder;
+        const auto literal = builder.add(runtime::CompiledValuePassthrough{
+            constant(CompiledNumberList{{1.0, -2.5, 0.0}})});
+        const auto empty =
+            builder.add(runtime::CompiledValuePassthrough{constant(CompiledNumberList{})});
+        const auto scalar = builder.add(
+            runtime::CompiledValuePromotion{ValuePromotion::ScalarToList, constant(0.25)});
+        const auto integer = builder.add(runtime::CompiledValuePromotion{
+            ValuePromotion::IntegerToList, constant(std::int64_t{-7})});
+        const auto boolean = builder.add(
+            runtime::CompiledValuePromotion{ValuePromotion::BooleanToList, constant(true)});
+        const auto vector2 = builder.add(runtime::CompiledValuePromotion{
+            ValuePromotion::Vector2ToList, constant(document::Vec2d{3.0, 4.0})});
+        const auto vector3 = builder.add(runtime::CompiledValuePromotion{
+            ValuePromotion::Vector3ToList, constant(document::Vec3d{5.0, 6.0, 7.0})});
+        const auto color = builder.add(runtime::CompiledValuePromotion{
+            ValuePromotion::ColorToList, constant(core::Color4d{0.1, 0.2, 0.3, 0.4})});
+        const auto mismatched = builder.add(
+            runtime::CompiledValuePromotion{ValuePromotion::ScalarToList, constant(true)});
+        const auto evaluation = builder.run();
+        const auto list = [&](const ValueOutputIndex index, std::vector<double> expected) {
+            return holds(evaluation, index.value(), CompiledNumberList{std::move(expected)});
+        };
+        expectations.expect(list(literal, {1.0, -2.5, 0.0}) && list(empty, {}),
+                            "a list literal passes through in order, and the empty list is a value");
+        expectations.expect(list(scalar, {0.25}) && list(integer, {-7.0}) && list(boolean, {1.0}),
+                            "a Scalar, an Integer and a Boolean each become a list of one number");
+        expectations.expect(list(vector2, {3.0, 4.0}) && list(vector3, {5.0, 6.0, 7.0}),
+                            "a vector becomes its components in order");
+        expectations.expect(list(color, {0.1, 0.2, 0.3, 0.4}),
+                            "a Color becomes red, green, blue, alpha");
+        expectations.expect(list(mismatched, {}) && evaluation.diagnostics.size() == 1 &&
+                                evaluation.diagnostics.front().nodeId ==
+                                    document::NodeId::fromRaw(mismatched.value() + 1),
+                            "a promotion handed the wrong kind is diagnosed and reads empty");
+    }
+    {
+        // The list is part of what the cached value is: the same list is a hit, a changed item
+        // or a changed length is not.
+        runtime::OperationCache cache;
+        runtime::OperationCacheStatistics statistics;
+        runtime::ValueGraphMemoization memo;
+        memo.cache = &cache;
+        memo.statistics = &statistics;
+        memo.revision = document::Revision::fromRaw(1);
+        const auto evaluate = [&](std::vector<double> items) {
+            const std::vector<CompiledValueOperation> operations{
+                {document::NodeId::fromRaw(7), ValueOutputIndex::fromRaw(0), 1,
+                 runtime::CompiledValuePassthrough{
+                     constant(CompiledNumberList{std::move(items)})}}};
+            return runtime::evaluateValueGraph(operations, 1, core::RationalTime::fromInteger(0),
+                                               document::FrameRate::framesPerSecond24(), {}, memo);
+        };
+        (void)evaluate({1.0, 2.0});
+        const auto warm = evaluate({1.0, 2.0});
+        expectations.expect(statistics.hits == 1 && holds(warm, 0, CompiledNumberList{{1.0, 2.0}}),
+                            "the same list is read from the cache");
+        const auto changed = evaluate({1.0, 2.5});
+        const auto longer = evaluate({1.0, 2.0, 0.0});
+        expectations.expect(statistics.hits == 1 &&
+                                holds(changed, 0, CompiledNumberList{{1.0, 2.5}}) &&
+                                holds(longer, 0, CompiledNumberList{{1.0, 2.0, 0.0}}),
+                            "a changed item or a changed length is a different cached value");
+    }
+    {
+        const std::vector<CompiledValueOperation> operations{
+            {document::NodeId::fromRaw(1), ValueOutputIndex::fromRaw(0), 1,
+             runtime::CompiledValuePromotion{ValuePromotion::Vector3ToList,
+                                             constant(document::Vec3d{1.0, 2.0, 3.0})}},
+            {document::NodeId::fromRaw(2), ValueOutputIndex::fromRaw(1), 1,
+             runtime::CompiledValuePromotion{ValuePromotion::Vector2ToList,
+                                             constant(document::Vec2d{4.0, 5.0})}}};
+        runtime::OperationCache cache;
+        runtime::ValueGraphMemoization memo;
+        memo.cache = &cache;
+        memo.revision = document::Revision::fromRaw(1);
+        memo.maxRetainedListItems = 4;
+        const auto evaluate = [&] {
+            return runtime::evaluateValueGraph(operations, 2, core::RationalTime::fromInteger(0),
+                                               document::FrameRate::framesPerSecond24(), {}, memo);
+        };
+        const auto refused = evaluate();
+        expectations.expect(refused.diagnostics.size() == 1 &&
+                                refused.diagnostics.front().nodeId ==
+                                    document::NodeId::fromRaw(2) &&
+                                refused.diagnostics.front().summary ==
+                                    "Value graph list budget exceeded" &&
+                                holds(refused, 1, CompiledNumberList{}) &&
+                                holds(refused, 0, CompiledNumberList{{1.0, 2.0, 3.0}}),
+                            "a list past the retained item allowance is diagnosed and reads empty");
+        memo.maxRetainedListItems = 5;
+        const auto admitted = evaluate();
+        expectations.expect(admitted.diagnostics.empty() &&
+                                holds(admitted, 1, CompiledNumberList{{4.0, 5.0}}),
+                            "and is produced once the allowance admits it: the refusal was not "
+                            "cached as an empty list");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -573,5 +678,6 @@ int main() {
     testLayerBoundsPostImagePass(expectations);
     testRetainedStringBudgetAndDiagnostic(expectations);
     testOversizedLiteralNeverEntersCacheKey(expectations);
+    testNumberLists(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

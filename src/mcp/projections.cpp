@@ -69,6 +69,14 @@ yyjson_mut_val* parameterValue(Json& out, const document::ParameterValue& value)
                 out.set(gradient, "hueDirection",
                         out.text(document::gradientHueDirectionName(item.modes.hueDirection)));
                 return gradient;
+            } else if constexpr (std::is_same_v<T, document::NumberListValue>) {
+                // #627: {"values": [n...]}, the shape an argument sends a list in.
+                auto* list = out.object();
+                auto* values = out.array();
+                for (const double value : item.values)
+                    out.append(values, out.real(value));
+                out.set(list, "values", values);
+                return list;
             } else {
                 const auto contourMembers = [&](yyjson_mut_val* path,
                                                 const document::PathContour& contour) {

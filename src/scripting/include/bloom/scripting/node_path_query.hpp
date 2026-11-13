@@ -33,4 +33,19 @@ struct NodePathQuery final {
                                           core::RationalTime time,
                                           const runtime::CancellationToken& cancellation);
 
+// #627: what a number-list output of a value node answers at one time. Nothing has to read the
+// node: the plan is compiled with it as a value readout.
+struct NodeNumberListQuery final {
+    std::optional<document::NumberListValue> list;
+    std::string diagnostic;
+    bool cancelled = false;
+};
+
+// The Number List output `port` of `node` at `time`. An empty `port` is the node's first.
+[[nodiscard]] NodeNumberListQuery queryNodeNumberList(const document::Snapshot& snapshot,
+                                                      document::CompositionId composition,
+                                                      document::NodeId node, std::string_view port,
+                                                      core::RationalTime time,
+                                                      const runtime::CancellationToken& cancellation);
+
 } // namespace bloom::scripting

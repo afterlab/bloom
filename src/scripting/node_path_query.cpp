@@ -42,6 +42,43 @@ class Probe final {
     document::CompositionId composition_;
 };
 
+// Every value output of `plan` at `time`: the value pass alone, or the whole frame when a value
+// reads the picture (a Layer Bounds readout).
+void evaluateValueOutputs(const std::shared_ptr<const runtime::CompiledCompositionPlan>& shared,
+                          const document::Composition& composition, const core::RationalTime time,
+                          const runtime::CancellationToken& cancellation,
+                          std::vector<runtime::CompiledValue>& outputs,
+                          std::vector<runtime::ValueGraphDiagnostic>& diagnostics) {
+    const auto& plan = *shared;
+    const bool needsImage = std::ranges::any_of(
+        plan.valueOperations(), [](const auto& operation) { return operation.requiresPostImage; });
+    if (needsImage) {
+        const runtime::CpuCompositionEvaluator evaluator;
+        const auto evaluation = evaluator.evaluate(
+            shared,
+            {.time = time,
+             .output = plan.output(),
+             .resolution = runtime::CompositionFormatResolution{},
+             .quality = runtime::EvaluationQuality::Reference,
+             .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
+             .pixelStorageByteLimit = std::size_t{512} * 1024U * 1024U},
+            cancellation);
+        if (evaluation.frame() != nullptr) {
+            const auto span = evaluation.frame()->valueOutputs();
+            outputs.assign(span.begin(), span.end());
+        }
+    } else {
+        runtime::ValueGraphMemoization memoization;
+        memoization.cancellation = &cancellation;
+        auto evaluated = runtime::evaluateValueGraph(
+            plan.valueOperations(), plan.valueOutputCount(), time, composition.format().frameRate(),
+            {plan.scalarCurves(), plan.vec2Curves(), plan.color4Curves(), plan.vec3Curves()},
+            memoization);
+        outputs = std::move(evaluated.outputs);
+        diagnostics = std::move(evaluated.diagnostics);
+    }
+}
+
 } // namespace
 
 NodePathQuery queryNodePath(const document::Snapshot& snapshot,
@@ -111,33 +148,7 @@ NodePathQuery queryNodePath(const document::Snapshot& snapshot,
     const auto& plan = *compiled.plan;
     std::vector<runtime::CompiledValue> outputs;
     std::vector<runtime::ValueGraphDiagnostic> diagnostics;
-    const bool needsImage = std::ranges::any_of(
-        plan.valueOperations(), [](const auto& operation) { return operation.requiresPostImage; });
-    if (needsImage) {
-        const runtime::CpuCompositionEvaluator evaluator;
-        const auto evaluation = evaluator.evaluate(
-            compiled.plan,
-            {.time = time,
-             .output = plan.output(),
-             .resolution = runtime::CompositionFormatResolution{},
-             .quality = runtime::EvaluationQuality::Reference,
-             .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
-             .pixelStorageByteLimit = std::size_t{512} * 1024U * 1024U},
-            cancellation);
-        if (evaluation.frame() != nullptr) {
-            const auto span = evaluation.frame()->valueOutputs();
-            outputs.assign(span.begin(), span.end());
-        }
-    } else {
-        runtime::ValueGraphMemoization memoization;
-        memoization.cancellation = &cancellation;
-        auto evaluated = runtime::evaluateValueGraph(
-            plan.valueOperations(), plan.valueOutputCount(), time, composition->format().frameRate(),
-            {plan.scalarCurves(), plan.vec2Curves(), plan.color4Curves(), plan.vec3Curves()},
-            memoization);
-        outputs = std::move(evaluated.outputs);
-        diagnostics = std::move(evaluated.diagnostics);
-    }
+    evaluateValueOutputs(compiled.plan, *composition, time, cancellation, outputs, diagnostics);
     if (cancellation.isCancellationRequested()) {
         result.cancelled = true;
         return result;
@@ -158,6 +169,78 @@ NodePathQuery queryNodePath(const document::Snapshot& snapshot,
         return result;
     }
     return fail("The node produced no path at this time");
+}
+
+NodeNumberListQuery queryNodeNumberList(const document::Snapshot& snapshot,
+                                        const document::CompositionId compositionId,
+                                        const document::NodeId nodeId,
+                                        const std::string_view requestedPort,
+                                        const core::RationalTime time,
+                                        const runtime::CancellationToken& cancellation) {
+    NodeNumberListQuery result;
+    const auto fail = [&result](std::string message) {
+        result.diagnostic = std::move(message);
+        return result;
+    };
+    const auto* composition = snapshot.project().findComposition(compositionId);
+    if (composition == nullptr)
+        return fail("The composition does not exist");
+    const auto* node = composition->graph().findNode(nodeId);
+    const auto* definition =
+        node != nullptr ? document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion)
+                        : nullptr;
+    const auto name = "Node " + std::to_string(nodeId.value());
+    if (node == nullptr || definition == nullptr)
+        return fail(name + " does not exist");
+    std::string port(requestedPort);
+    std::size_t slot = 0;
+    bool found = false;
+    for (std::size_t index = 0; index < definition->outputs.size() && !found; ++index) {
+        const auto& output = definition->outputs[index];
+        if (output.valueKind != document::SocketValueKind::NumberList ||
+            (!port.empty() && port != output.name))
+            continue;
+        port = output.name;
+        slot = index;
+        found = true;
+    }
+    if (!found)
+        return fail(port.empty() ? name + " has no Number List output"
+                                 : name + " has no Number List output named \"" + port + "\"");
+    const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    runtime::SnapshotCompileRequest request{snapshot, compositionId};
+    request.valueReadouts.push_back(nodeId);
+    const auto compiled = compiler.compile(request, cancellation);
+    if (cancellation.isCancellationRequested()) {
+        result.cancelled = true;
+        return result;
+    }
+    if (!compiled.plan)
+        return fail(compiled.diagnostics.empty() ? std::string("The node could not be compiled")
+                                                 : compiled.diagnostics.front().summary);
+    std::vector<runtime::CompiledValue> outputs;
+    std::vector<runtime::ValueGraphDiagnostic> diagnostics;
+    evaluateValueOutputs(compiled.plan, *composition, time, cancellation, outputs, diagnostics);
+    if (cancellation.isCancellationRequested()) {
+        result.cancelled = true;
+        return result;
+    }
+    for (const auto& diagnostic : diagnostics)
+        if (diagnostic.nodeId == nodeId)
+            return fail(diagnostic.summary + ": " + diagnostic.detail);
+    for (const auto& operation : compiled.plan->valueOperations()) {
+        if (operation.sourceNodeId != nodeId)
+            continue;
+        const auto index = operation.firstOutput.value() + slot;
+        if (index >= outputs.size())
+            break;
+        const auto* list = std::get_if<runtime::CompiledNumberList>(&outputs[index]);
+        if (list == nullptr || list->values == nullptr)
+            break;
+        result.list = document::NumberListValue{*list->values};
+        return result;
+    }
+    return fail("The node produced no number list at this time");
 }
 
 } // namespace bloom::scripting

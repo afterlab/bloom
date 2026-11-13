@@ -93,6 +93,9 @@ constexpr auto kColors = std::to_array<ColorEntry>({
     // #589: a pale steel blue, in the one free hue gap, and far lighter than Accent at the same
     // hue.
     {Color::SocketPath, 0x8FC0E3U},
+    // #627: a pale mint at hue 110, the one hue left that is 20 degrees from Scalar (90) and
+    // Channel Set (130), and far lighter than either.
+    {Color::SocketNumberList, 0xB4E3ABU},
     // GRAPH-1 component curves: red, green, a light sky blue clearly lighter than Accent
     // (0x0C8CE9) and AccentHover (0x3AA5F0), and a neutral for the fourth channel.
     {Color::ComponentX, 0xE06C75U},

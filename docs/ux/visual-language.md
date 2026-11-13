@@ -547,6 +547,7 @@ Thirteen separated hues for fourteen kinds, none of them `Accent` or `AccentHove
 | Vector Field | `SocketVectorField` | `#E05AD2` | magenta |
 | Color Field | `SocketColorField` | `#5A7CF0` | cornflower |
 | Path | `SocketPath` | `#8FC0E3` | pale steel blue |
+| Number List | `SocketNumberList` | `#B4E3AB` | pale mint |
 
 A field socket (#525, `docs/architecture/fields.md`) is drawn as a diamond rather than a circle, and
 its links take the same ink: a field is a lazy function of position, not a value or an image, and the

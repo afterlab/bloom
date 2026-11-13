@@ -19,8 +19,9 @@
 int main() {
     auto registry = bloom::scripting::OperationRegistry::builtIn();
     // #637 adds bloom.node.write-to-path; #703 bloom.node.insert-on-link; #701
-    // bloom.node.delete-unused.
-    if (registry.descriptors().size() != 154U ||
+    // bloom.node.delete-unused; #627 bloom.node.write-to-number-list.
+    if (registry.descriptors().size() != 155U ||
+        registry.find("bloom.node.write-to-number-list") == nullptr ||
         registry.find("bloom.layer.set-timing") == nullptr ||
         registry.find("bloom.node.write-to-path") == nullptr ||
         registry.find("bloom.node.insert-on-link") == nullptr ||

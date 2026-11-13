@@ -54,6 +54,8 @@ class CompileCheckpointObserver {
         return std::holds_alternative<document::PathValue>(value);
     case ParameterValueKind::Gradient:
         return std::holds_alternative<document::GradientValue>(value);
+    case ParameterValueKind::NumberList:
+        return std::holds_alternative<document::NumberListValue>(value);
     case ParameterValueKind::Color4d:
         return std::holds_alternative<core::Color4d>(value);
     case ParameterValueKind::Vec2d:

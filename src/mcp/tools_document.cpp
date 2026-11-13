@@ -299,6 +299,24 @@ document::GradientValue gradientValue(yyjson_val* item) {
     return gradient;
 }
 
+// #627: a number list argument has the shape the parameter projection publishes:
+// {"values": [n...]}.
+document::NumberListValue numberListValue(yyjson_val* item) {
+    auto* values = yyjson_obj_get(item, "values");
+    if (yyjson_obj_size(item) != 1 || !yyjson_is_arr(values) ||
+        yyjson_arr_size(values) > document::kMaximumNumberListItems)
+        throw InvalidInput("A number list is {values: [numbers]}, at most 65536 of them");
+    document::NumberListValue list;
+    list.values.reserve(yyjson_arr_size(values));
+    yyjson_arr_iter items = yyjson_arr_iter_with(values);
+    while (auto* number = yyjson_arr_iter_next(&items)) {
+        if (!yyjson_is_num(number) || !std::isfinite(yyjson_get_num(number)))
+            throw InvalidInput("A number list holds finite numbers");
+        list.values.push_back(yyjson_get_num(number));
+    }
+    return list;
+}
+
 // #574: {"name": "Shot 2"} (a layer) or {"layer": "Shot 2", "role": "opacity"} (a parameter), with
 // an optional "composition". An object with any other member is a path or a gradient.
 bool isReferenceObject(yyjson_val* item) {
@@ -372,9 +390,12 @@ scripting::Value value(yyjson_val* item, const std::size_t depth = 0) {
         return scripting::Value(referenceValue(item));
     if (yyjson_is_obj(item) && yyjson_obj_get(item, "stops") != nullptr)
         return scripting::Value(gradientValue(item));
+    if (yyjson_is_obj(item) && yyjson_obj_get(item, "values") != nullptr)
+        return scripting::Value(numberListValue(item));
     if (yyjson_is_obj(item))
         return scripting::Value(pathValue(item));
-    throw InvalidInput("Operation arguments require scalars, arrays, paths or gradients");
+    throw InvalidInput(
+        "Operation arguments require scalars, arrays, paths, gradients or number lists");
 }
 
 // An argument written {"fromFile": "<absolute .json path>"} is read from that file by the server,

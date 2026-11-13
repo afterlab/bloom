@@ -87,13 +87,14 @@ void testEveryColorRoleResolvesToItsSpecifiedValue(Expectations& expectations) {
     expectHex(kit::Color::SocketVectorField, "#e05ad2");
     expectHex(kit::Color::SocketColorField, "#5a7cf0");
     expectHex(kit::Color::SocketPath, "#8fc0e3");
+    expectHex(kit::Color::SocketNumberList, "#b4e3ab");
 
     const std::array sockets{
         kit::Color::SocketImage,       kit::Color::SocketAudio,       kit::Color::SocketColor,
         kit::Color::SocketScalar,      kit::Color::SocketInteger,     kit::Color::SocketVector,
         kit::Color::SocketString,      kit::Color::SocketBoolean,     kit::Color::SocketChannelSet,
         kit::Color::SocketScalarField, kit::Color::SocketVectorField, kit::Color::SocketColorField,
-        kit::Color::SocketPath};
+        kit::Color::SocketPath,        kit::Color::SocketNumberList};
     for (std::size_t index = 0; index < sockets.size(); ++index) {
         expectations.expect(kit::color(sockets.at(index)) != kit::color(kit::Color::Accent) &&
                                 kit::color(sockets.at(index)) !=

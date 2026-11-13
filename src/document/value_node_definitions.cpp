@@ -467,6 +467,8 @@ struct KindVocabulary final {
         break;
     case SocketValueKind::Path:
         return ParameterValueKind::Path; // #344: a path operand's own value.
+    case SocketValueKind::NumberList:
+        return ParameterValueKind::NumberList; // #627.
     }
     return ParameterValueKind::Float64;
 }
@@ -501,6 +503,8 @@ struct KindVocabulary final {
         break;
     case SocketValueKind::Path:
         return kPathOperandParameterSchemaKey;
+    case SocketValueKind::NumberList:
+        return kNumberListOperandParameterSchemaKey;
     }
     return kScalarOperandParameterSchemaKey;
 }
@@ -532,6 +536,8 @@ descriptorDefaultValue(const bloom::document::ValueUtilityOperand& operand) {
         break;
     case SocketValueKind::Path:
         return PathValue{};
+    case SocketValueKind::NumberList:
+        return NumberListValue{};
     }
     return operand.number;
 }
@@ -910,6 +916,9 @@ std::vector<NodeDefinition> valueNodeDefinitions() {
     definitions.push_back(valueConstantDefinition(kPathValueNodeType, kPathValueParameterSchemaKey,
                                                   SocketValueKind::Path, ParameterValueKind::Path,
                                                   PathValue{}));
+    definitions.push_back(valueConstantDefinition(
+        kNumberListValueNodeType, kNumberListValueParameterSchemaKey, SocketValueKind::NumberList,
+        ParameterValueKind::NumberList, NumberListValue{}));
     definitions.push_back(timeDefinition());
 
     definitions.push_back(scalarMathDefinition());

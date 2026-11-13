@@ -759,6 +759,18 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
         return state.ok(writer.endArray()) && emitPathValueTrailer(state, *path) &&
                emitRetainedTrailing(state) && state.ok(writer.endObject());
     }
+    // #627: a number list, its items in order.
+    if (const auto* list = std::get_if<bloom::document::NumberListValue>(&value)) {
+        if (!list->isValid() || !state.ok(writer.memberName("kind")) ||
+            !state.ok(writer.stringValue("numberList")) ||
+            !state.ok(writer.memberName("values")) || !state.ok(writer.beginArray()))
+            return false;
+        for (const double item : list->values)
+            if (!emitFloat64Value(state, "values", item))
+                return false;
+        return state.ok(writer.endArray()) && emitRetainedTrailing(state) &&
+               state.ok(writer.endObject());
+    }
     // #541: a gradient, its stops in stored order, each a flat object.
     if (const auto* gradient = std::get_if<GradientValue>(&value)) {
         if (!gradient->isValid() || !state.ok(writer.memberName("kind")) ||

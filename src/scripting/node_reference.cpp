@@ -194,7 +194,13 @@ std::string parameterValueJson(const document::ParameterValue& value) {
                        std::to_string(held.denominator()) + "]";
             else if constexpr (std::is_same_v<T, document::GradientValue>)
                 return gradientJson(held);
-            else
+            else if constexpr (std::is_same_v<T, document::NumberListValue>) {
+                // #627: {"values": [n...]}, the shape every client sends a list in.
+                std::string text = "{\"values\":[";
+                for (std::size_t index = 0; index < held.values.size(); ++index)
+                    text += (index == 0 ? "" : ",") + number(held.values[index]);
+                return text + "]}";
+            } else
                 return pathJson(held);
         },
         value);

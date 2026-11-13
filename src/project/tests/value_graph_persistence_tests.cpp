@@ -26,6 +26,7 @@
 #include <iostream>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -67,6 +68,7 @@ struct Authored final {
     document::ParameterId vector3Parameter;
     document::ParameterId drivenOpacity;
     document::NodeId scalarValueNode;
+    document::ParameterId numberListParameter;
 };
 
 // One composition carrying BOTH constructs at once: a Vector 3 value node whose constant is
@@ -102,10 +104,12 @@ Authored authoredProject() {
     const auto blendModeParameter = draft.ids().allocateParameter();
     const auto scalarValueParameter = draft.ids().allocateParameter();
     const auto vector3ValueParameter = draft.ids().allocateParameter();
+    const auto listNodeId = draft.ids().allocateNode();
+    const auto listValueParameter = draft.ids().allocateParameter();
     if (!solidNodeId || !layerNodeId || !scalarNodeId || !vector3NodeId || !layerId || !slotId ||
         !solidEdgeId || !stackEdgeId || !colorParameter || !positionParameter || !anchorParameter ||
         !scaleParameter || !rotationParameter || !opacityParameter || !blendModeParameter ||
-        !scalarValueParameter || !vector3ValueParameter) {
+        !scalarValueParameter || !vector3ValueParameter || !listNodeId || !listValueParameter) {
         throw std::runtime_error("fixture ids");
     }
 
@@ -133,6 +137,11 @@ Authored authoredProject() {
         graph.addNode({*vector3NodeId,
                        std::string(document::kVector3ValueNodeType),
                        {{std::string(document::kValueParameterRole), *vector3ValueParameter}},
+                       document::kValueNodeSchemaVersion}) &&
+        // #627: a Number List node, read by nothing.
+        graph.addNode({*listNodeId,
+                       std::string(document::kNumberListValueNodeType),
+                       {{std::string(document::kValueParameterRole), *listValueParameter}},
                        document::kValueNodeSchemaVersion}) &&
         graph.addLayerOutput(
             {*layerNodeId, *layerId, "Solid 1", std::string(document::kLayerOutputOutputPort)}) &&
@@ -181,6 +190,11 @@ Authored authoredProject() {
         composition.parameters().insert(
             {*vector3ValueParameter, std::string(document::kVector3ValueParameterSchemaKey),
              document::ConstantValueSource{document::Vec3d{-12.5, 0.1, 4096.0}}}) &&
+        // A negative item, one with no short decimal spelling and an HDR one, in authored order.
+        composition.parameters().insert(
+            {*listValueParameter, std::string(document::kNumberListValueParameterSchemaKey),
+             document::ConstantValueSource{
+                 document::NumberListValue{{-12.5, 0.1, 4096.0, 0.0}}}}) &&
         // The driven one: inserted as a driver source from the start, so what round-trips is the
         // binding itself rather than a constant that was later replaced.
         composition.parameters().insert(
@@ -230,7 +244,7 @@ Authored authoredProject() {
         throw std::runtime_error("fixture publication");
     }
     return {std::move(owned), initial.initialCompositionId, *vector3ValueParameter,
-            *opacityParameter, *scalarNodeId};
+            *opacityParameter, *scalarNodeId, *listValueParameter};
 }
 
 std::vector<std::byte> archiveOf(const document::Snapshot& snapshot,
@@ -323,6 +337,19 @@ void roundTripAndReopen() {
                                                         std::string(document::kValuePortName)},
            "a driver binding round-trips as the exact node-and-port pair it addressed");
 
+    // #627: the list keeps its items and their order.
+    expect(text.find("\"kind\": \"numberList\"") != std::string::npos,
+           "a number list constant is written with the numberList discriminator");
+    const auto* list = composition->parameters().find(authored.numberListParameter);
+    const auto* listConstant =
+        list == nullptr ? nullptr : std::get_if<document::ConstantValueSource>(&list->source);
+    const auto* listValue = listConstant == nullptr
+                                ? nullptr
+                                : std::get_if<document::NumberListValue>(&listConstant->value);
+    expect(listValue != nullptr &&
+               *listValue == document::NumberListValue{{-12.5, 0.1, 4096.0, 0.0}},
+           "every item of a number list survives the round trip exactly and in order");
+
     // Byte identity, not just value equality: re-encoding the reopened document must reproduce the
     // original archive's document.json exactly, or something in the pair was normalized on the way.
     const auto reencoded = documentTextOf(archiveOf(reopened, opened.colorSettings));
@@ -362,12 +389,70 @@ void minorGating() {
     }
 }
 
+// #627: what a number list on the wire must be. Each case edits the one list of a freshly written
+// document, so the rest of the document is known to decode.
+void numberListDecoding() {
+    const auto authored = authoredProject();
+    const auto settings = neutralColorSettings();
+    const auto baseline = documentTextOf(archiveOf(authored.document->snapshot(), settings));
+    const auto kind = baseline.find("\"kind\": \"numberList\"");
+    const auto open = kind == std::string::npos ? kind : baseline.find('[', kind);
+    const auto close = open == std::string::npos ? open : baseline.find(']', open);
+    expect(close != std::string::npos, "the fixture document holds one number list");
+    if (close == std::string::npos)
+        return;
+    const auto decodeWith = [&](const std::string& items) {
+        auto text = baseline;
+        text.replace(open, close - open + 1, items);
+        auto dom = parseStrictJsonDom(test::toBytes(text), {}, memory());
+        if (!dom)
+            throw std::runtime_error("number list parse");
+        return decodeDocumentEnvelope(dom.document()->root());
+    };
+    const auto listOf = [&](const DocumentDecodeResult& decoded)
+        -> std::optional<document::NumberListValue> {
+        if (decoded.outcome() != DocumentDecodeOutcome::Decoded)
+            return std::nullopt;
+        for (const auto& composition : decoded.value()->compositions)
+            for (const auto& record : composition.parameters) {
+                if (record.id != authored.numberListParameter)
+                    continue;
+                const auto* constant =
+                    std::get_if<document::ConstantValueSource>(&record.source);
+                const auto* list = constant == nullptr
+                                       ? nullptr
+                                       : std::get_if<document::NumberListValue>(&constant->value);
+                return list == nullptr ? std::nullopt : std::optional(*list);
+            }
+        return std::nullopt;
+    };
+    expect(listOf(decodeWith("[]")) == document::NumberListValue{},
+           "the empty list is a value and decodes");
+    expect(listOf(decodeWith("[3, -0.5]")) == document::NumberListValue{{3.0, -0.5}},
+           "a list decodes to its items in order");
+    expect(decodeWith("[1, \"2\"]").outcome() == DocumentDecodeOutcome::Failed,
+           "an item that is not a number is refused");
+    expect(decodeWith("[1, [2]]").outcome() == DocumentDecodeOutcome::Failed,
+           "a nested list is refused");
+    expect(decodeWith("3").outcome() == DocumentDecodeOutcome::Failed,
+           "a list that is not an array is refused");
+    std::string full = "[";
+    for (std::size_t index = 0; index < document::kMaximumNumberListItems; ++index)
+        full += index == 0 ? "0" : ", 0";
+    const auto atLimit = listOf(decodeWith(full + "]"));
+    expect(atLimit && atLimit->values.size() == document::kMaximumNumberListItems,
+           "a list of the maximum length decodes");
+    expect(decodeWith(full + ", 0]").outcome() == DocumentDecodeOutcome::Failed,
+           "a list one item past the maximum is refused");
+}
+
 } // namespace
 
 int main() {
     try {
         roundTripAndReopen();
         minorGating();
+        numberListDecoding();
     } catch (const std::exception& error) {
         std::cerr << "value graph persistence fixture failure: " << error.what() << '\n';
         return 1;

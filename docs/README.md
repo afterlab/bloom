@@ -28,6 +28,7 @@ provide research or rationale, but they are not binding until adopted here.
    [`architecture/value-node-library.md`](architecture/value-node-library.md),
    [`architecture/fields.md`](architecture/fields.md),
    [`architecture/path-value.md`](architecture/path-value.md),
+   [`architecture/number-list.md`](architecture/number-list.md),
    [`architecture/vector-artwork.md`](architecture/vector-artwork.md),
    [`architecture/animation-and-time.md`](architecture/animation-and-time.md),
    [`architecture/layer-alignment.md`](architecture/layer-alignment.md),

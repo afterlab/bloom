@@ -466,8 +466,12 @@ class CompilePass final {
         // composition's own graph is not part of that viewer-only plan.
         std::vector<document::NodeId> pending{
             request_.channelInspection ? request_.channelInspection->node : rootId};
-        if (!request_.channelInspection)
+        if (!request_.channelInspection) {
             pending.insert(pending.end(), readoutRoots.begin(), readoutRoots.end());
+            for (const auto readout : request_.valueReadouts)
+                if (findNode(readout) != nullptr)
+                    pending.push_back(readout);
+        }
         std::unordered_set<document::NodeId> visited;
         std::map<document::NodeId, const document::NodeRecord*> reachableNodes;
         std::map<document::EdgeId, const document::EdgeRecord*> reachableEdges;

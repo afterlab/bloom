@@ -1,6 +1,7 @@
 #include "driven_value_resolver.hpp"
 #include "composition_driver_probe.hpp"
 #include "properties_value_outputs.hpp"
+#include <QStringList>
 #include <QTimer>
 #include <algorithm>
 #include <bloom/core/worker_thread.hpp>
@@ -93,6 +94,20 @@ readoutOutputKeys(const document::Snapshot& snapshot, const document::Compositio
     return keys;
 }
 
+// #627: a list reads as its length and its first numbers, so a long one stays one line.
+QString numberListReadout(const std::vector<double>& values) {
+    constexpr std::size_t kShown = 4;
+    QStringList shown;
+    for (std::size_t index = 0; index < values.size() && index < kShown; ++index)
+        shown.push_back(QString::number(values[index], 'g', 6));
+    if (values.size() > kShown)
+        shown.push_back(QStringLiteral("…"));
+    return values.empty() ? QObject::tr("0 items")
+                          : QObject::tr("%1 items: %2")
+                                .arg(values.size())
+                                .arg(shown.join(QStringLiteral(", ")));
+}
+
 QString valueText(const runtime::CompiledValue& value) {
     return std::visit(
         [](const auto& held) -> QString {
@@ -117,6 +132,8 @@ QString valueText(const runtime::CompiledValue& value) {
                 return QObject::tr("%1 contours, %2 anchors")
                     .arg(held.value->contours.size())
                     .arg(held.value->anchorCount());
+            else if constexpr (std::is_same_v<T, runtime::CompiledNumberList>)
+                return numberListReadout(*held.values);
             else
                 return QString::number(static_cast<qlonglong>(held));
         },

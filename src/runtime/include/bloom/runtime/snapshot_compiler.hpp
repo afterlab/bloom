@@ -118,6 +118,10 @@ struct SnapshotCompileRequest {
     // The Viewer starts a missing Google font downloading and draws the fallback until it arrives;
     // an export waits for it.
     fonts::FontFetch fontFetch = fonts::FontFetch::Background;
+    // #627: value nodes a query reads although nothing in the picture reads them (a list output
+    // has no image consumer to act as a probe's sink). Each is compiled with what it reads, as a
+    // Layer Bounds readout is; a node that does not exist is ignored.
+    std::vector<document::NodeId> valueReadouts{};
 };
 
 struct SnapshotCompileResult {

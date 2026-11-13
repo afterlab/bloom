@@ -100,6 +100,8 @@ struct ValueGraphMemoization final {
     // #589: anchors one evaluation's Path outputs may hold together: eight whole values, as the
     // retained string allowance is eight whole strings.
     std::size_t maxRetainedPathAnchors = 8U * document::kMaximumPathValueAnchors;
+    // #627: items one evaluation's NumberList outputs may hold together: sixteen whole lists.
+    std::size_t maxRetainedListItems = 16U * document::kMaximumNumberListItems;
     // The linear pass (an export) this evaluation belongs to: memoized values are then retained
     // only when they recur within it (EvaluationRequest::linearPass).
     LinearPassRetention* linearPass = nullptr;

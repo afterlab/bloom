@@ -32,7 +32,8 @@ _EXPECTED = {
     "color4": "four numbers as (r, g, b, a) with alpha in 0..1",
     "array": "a list or tuple",
     "time": "a whole frame, a Fraction, or an exact (numerator, denominator) time",
-    "value": "a number, True/False, text, (x, y), (x, y, z), (r, g, b, a), a path or a gradient",
+    "value": "a number, True/False, text, (x, y), (x, y, z), (r, g, b, a), a path, a gradient "
+             "or a number list {'values': [numbers]}",
     "path": "a path {'closed': bool, 'anchors': [{'point': (x, y), 'in_handle': (x, y) or None, "
             "'out_handle': (x, y) or None, 'mode': 'corner' | 'mirrored' | 'aligned' | 'free' | "
             "'auto'}, ...]} (mode optional), or {'contours': [...], 'fill_rule': 'nonZero' | "
@@ -88,6 +89,13 @@ def _gradient(value):
                     for stop in value["stops"]))
 
 
+def _number_list(value):
+    """A number list {'values': [n, ...]}: at most 65536 finite numbers, in order."""
+    return (isinstance(value, dict) and set(value) == {"values"}
+            and isinstance(value["values"], tuple) and len(value["values"]) <= 65536
+            and all(_finite(item) for item in value["values"]))
+
+
 _REFERENCE_KEYS = {"name", "layer", "role", "composition"}
 
 
@@ -131,7 +139,7 @@ def _valid(value, kind):
     if kind == "value":
         return (_finite(value) or type(value) in (bool, str)
                 or any(_sequence(value, size) for size in (2, 3, 4)) or _valid(value, "path")
-                or _gradient(value))
+                or _gradient(value) or _number_list(value))
     if kind == "path":
         if isinstance(value, dict) and "contours" in value:
             # #589: a compound path; the host validates its groups and refuses it where it does not

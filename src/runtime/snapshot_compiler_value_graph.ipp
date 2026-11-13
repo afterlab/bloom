@@ -159,6 +159,8 @@ compiledValueFrom(const document::ParameterValue& value) {
             } else if constexpr (std::is_same_v<Held, document::PathValue>) {
                 return runtime::CompiledValue{
                     runtime::CompiledPathValue{std::make_shared<document::PathValue>(held)}};
+            } else if constexpr (std::is_same_v<Held, document::NumberListValue>) {
+                return runtime::CompiledValue{runtime::CompiledNumberList{held.values}};
             } else {
                 return runtime::CompiledValue{held};
             }
@@ -184,6 +186,24 @@ valuePromotionFor(const runtime::SocketValueKind source,
     }
     if (source == SocketValueKind::Scalar && destination == SocketValueKind::Vector3) {
         return runtime::ValuePromotion::ScalarToVector3;
+    }
+    if (destination == SocketValueKind::NumberList) {
+        switch (source) {
+        case SocketValueKind::Scalar:
+            return runtime::ValuePromotion::ScalarToList;
+        case SocketValueKind::Integer:
+            return runtime::ValuePromotion::IntegerToList;
+        case SocketValueKind::Boolean:
+            return runtime::ValuePromotion::BooleanToList;
+        case SocketValueKind::Vector2:
+            return runtime::ValuePromotion::Vector2ToList;
+        case SocketValueKind::Vector3:
+            return runtime::ValuePromotion::Vector3ToList;
+        case SocketValueKind::Color:
+            return runtime::ValuePromotion::ColorToList;
+        default:
+            break;
+        }
     }
     return std::nullopt;
 }
