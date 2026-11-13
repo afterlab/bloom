@@ -55,8 +55,11 @@ struct GpuSceneCache::Impl final {
             return;
         }
         retainedBytes -= found->second.bytes;
-        order.erase(found->second.position);
+        // The map entry goes first: its key is a view into the order node's string (and `key` may
+        // be one too), and erasing a map node may hash its key again.
+        const auto position = found->second.position;
         entries.erase(found);
+        order.erase(position);
         processRetained.fetch_sub(1, std::memory_order_relaxed);
     }
 

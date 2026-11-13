@@ -97,7 +97,7 @@ class Session:
             status = 'still running'
         try:
             self.errors.seek(0)
-            tail = self.errors.read()[-1500:].decode(errors='replace').strip()
+            tail = self.errors.read()[-6000:].decode(errors='replace').strip()
         except (OSError, ValueError):
             tail = ''
         return f'exit status {status}; stderr: {tail or "(empty)"}'
@@ -112,7 +112,7 @@ class Session:
             except queue.Empty:
                 raise SweepError(f'{method} did not answer within {timeout} seconds') from None
             if line is None:
-                raise SweepError(f'bloom-mcp exited; {self.death()}')
+                raise SweepError(f'bloom-mcp exited during {method}; {self.death()}')
             message = json.loads(line)
             if message.get('id') == self.sequence:
                 return message
