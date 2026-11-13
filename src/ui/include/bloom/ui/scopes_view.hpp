@@ -74,6 +74,8 @@ class ScopeView final : public QWidget {
     void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
     bool event(QEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void leaveEvent(QEvent* event) override;
 
   private:
     struct Geometry final {

@@ -5,6 +5,7 @@
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QHelpEvent>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QToolTip>
@@ -835,6 +836,21 @@ bool ScopeView::event(QEvent* const event) {
         return true;
     }
     return QWidget::event(event);
+}
+
+// The readout follows the pointer: it is the value under it, not a hint that waits for a pause.
+void ScopeView::mouseMoveEvent(QMouseEvent* const event) {
+    QWidget::mouseMoveEvent(event);
+    const auto text = readoutAt(event->position());
+    if (text.isEmpty())
+        QToolTip::hideText();
+    else
+        QToolTip::showText(event->globalPosition().toPoint(), text, this);
+}
+
+void ScopeView::leaveEvent(QEvent* const event) {
+    QWidget::leaveEvent(event);
+    QToolTip::hideText();
 }
 
 } // namespace bloom::ui
