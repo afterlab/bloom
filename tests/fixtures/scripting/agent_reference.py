@@ -194,7 +194,9 @@ class Reference(unittest.TestCase):
         guide = self.server.send('resources/read', {'uri': 'bloom://guide/agents'})
         text = guide['result']['contents'][0]['text']
         blocks = [json.loads(block.split('```', 1)[0]) for block in text.split('```json\n')[1:]]
-        fresh = Server()
+        # The guide's calls run on a new project, as they would in a new process.
+        fresh = self.server
+        fresh.tool('project.new', {'discardChanges': True, 'stopJobs': True})
         try:
             outputs = {}
             for call in blocks:
@@ -210,7 +212,7 @@ class Reference(unittest.TestCase):
                         self.assertEqual(op['args']['parameter'], outputs['positionParameter'],
                                          'the guide names a stale parameter id')
         finally:
-            fresh.close()
+            fresh.tool('project.new', {'discardChanges': True, 'stopJobs': True})
 
     def test_query_refusals_name_the_way_out(self):
         response = self.server.send('tools/call', {'name': 'query',
@@ -221,13 +223,31 @@ class Reference(unittest.TestCase):
 class ReadBack(unittest.TestCase):
     """What transact writes, query returns, in the same units."""
 
+    # One server for the class, a new untitled project per case.
+    @classmethod
+    def setUpClass(cls):
+        cls.shared = Server()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.shared.close()
+
     def setUp(self):
-        self.server = Server()
+        for attempt in range(2):
+            try:
+                self.shared.tool('project.new', {'discardChanges': True, 'stopJobs': True})
+                self.shared.revision = 0
+                break
+            except (AssertionError, KeyError, OSError, ValueError):
+                # A server a failed case left unusable is replaced, so the failure stays its own.
+                if attempt:
+                    raise
+                type(self).shared.process.kill()
+                type(self).shared.process.wait()
+                type(self).shared = Server()
+        self.server = self.shared
         self.server.query(kind='context')
         self.composition = self.server.query(kind='compositions')['records'][0]['id']
-
-    def tearDown(self):
-        self.server.close()
 
     def composition_record(self):
         records = self.server.query(kind='compositions')['records']

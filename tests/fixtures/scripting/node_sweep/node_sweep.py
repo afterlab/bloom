@@ -30,6 +30,7 @@ Exit status: 0 passed, 1 failed, 77 not run (no GPU device and --require-device 
 """
 
 import argparse
+import contextlib
 import hashlib
 import itertools
 import json
@@ -411,9 +412,37 @@ def environments(work):
     return gpu, cpu
 
 
-def render(mcp, env, work, node_type, builder, tag):
-    session = Session(mcp, env, work)
+class LongSession:
+    """One long-lived bloom-mcp for a route (GPU, or the driver hidden); restarted only after an error.
+
+    Every use starts from a fresh untitled project, so nothing a node built can reach the next."""
+
+    def __init__(self, mcp, env, work):
+        self.mcp, self.env, self.work = mcp, env, work
+        self.session = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.restart()
+
+    def fresh(self):
+        if self.session is None:
+            self.session = Session(self.mcp, self.env, self.work)
+        self.session.tool('project.new', {'discardChanges': True, 'stopJobs': True})
+        return self.session
+
+    def restart(self):
+        """Drop a session that errored or hung; the next use starts a new process."""
+        if self.session is not None:
+            self.session.close()
+            self.session = None
+
+
+def render(route, work, node_type, builder, tag):
     try:
+        session = route.fresh()
         composition = BUILDERS[builder](session, node_type, work)
         destination = os.path.join(work, f'{node_type["id"]}.{tag}.exr')
         answer = session.tool('render', {'composition': composition, 'frame': FRAME,
@@ -421,8 +450,9 @@ def render(mcp, env, work, node_type, builder, tag):
                                          'overwrite': 'replace'})
         return {'path': destination, 'digest': answer['files'][0]['digest'],
                 'provenance': answer.get('provenance'), 'routeNote': answer.get('routeNote')}
-    finally:
-        session.close()
+    except BaseException:
+        route.restart()
+        raise
 
 
 def sweep(arguments):
@@ -438,18 +468,22 @@ def sweep(arguments):
             baseline = json.load(file)
     failures = []
     records = []
-    with tempfile.TemporaryDirectory(prefix='bloom-node-sweep-') as work:
+    with tempfile.TemporaryDirectory(prefix='bloom-node-sweep-') as work, \
+            contextlib.ExitStack() as routes:
         gpu_env, cpu_env = environments(work)
-        session = Session(arguments.mcp, gpu_env, work)
+        # Two long-lived sessions, one per route; each node gets a fresh project inside them.
+        gpu_route = routes.enter_context(LongSession(arguments.mcp, gpu_env, work))
+        cpu_route = routes.enter_context(LongSession(arguments.mcp, cpu_env, work))
         try:
-            node_types = session.tool('query', {'kind': 'node-types'})['records']
-        finally:
-            session.close()
+            node_types = gpu_route.fresh().tool('query', {'kind': 'node-types'})['records']
+        except SweepError:
+            gpu_route.restart()
+            raise
         by_id = {node_type['id']: node_type for node_type in node_types}
         planned = plan(node_types, declarations)
 
         # No device at all is "not run", never a pass.
-        probe = render(arguments.mcp, gpu_env, work, by_id[SOURCE], 'chain', 'probe')
+        probe = render(gpu_route, work, by_id[SOURCE], 'chain', 'probe')
         if probe['provenance'] != 'gpu':
             message = f'no GPU device rendered the probe frame ({probe.get("routeNote")})'
             if arguments.require_device:
@@ -469,8 +503,8 @@ def sweep(arguments):
                 records.append(record)
                 continue
             try:
-                gpu = render(arguments.mcp, gpu_env, work, by_id[type_id], builder, 'gpu')
-                cpu = render(arguments.mcp, cpu_env, work, by_id[type_id], builder, 'cpu')
+                gpu = render(gpu_route, work, by_id[type_id], builder, 'gpu')
+                cpu = render(cpu_route, work, by_id[type_id], builder, 'cpu')
                 if cpu['provenance'] != 'cpu-reference':
                     raise SweepError('the reference render did not run on the CPU reference path')
                 parity, largest = compare_frames(gpu['path'], cpu['path'])

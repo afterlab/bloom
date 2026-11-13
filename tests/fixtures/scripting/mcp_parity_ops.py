@@ -69,12 +69,34 @@ def outputs(result, name):
 
 
 class ParityOperations(unittest.TestCase):
+    # One server for the class, a new untitled project per case. No case is about the process
+    # itself (start, end of input, crash), so none starts its own.
+    @classmethod
+    def setUpClass(cls):
+        cls.shared = Server()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.shared.close()
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory(prefix='bloom-mcp-parity-')
-        self.server = Server()
+        for attempt in range(2):
+            try:
+                started = self.shared.tool('project.new',
+                                           {'discardChanges': True, 'stopJobs': True})
+                self.assertTrue(started['succeeded'], started)
+                break
+            except (AssertionError, KeyError, OSError, ValueError):
+                # A server a failed case left unusable is replaced, so the failure stays its own.
+                if attempt:
+                    raise
+                type(self).shared.process.kill()
+                type(self).shared.process.wait()
+                type(self).shared = Server()
+        self.server = self.shared
 
     def tearDown(self):
-        self.server.close()
         self.directory.cleanup()
 
     def node_count(self, composition):

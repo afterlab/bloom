@@ -4,9 +4,11 @@ import hashlib
 import os
 import json
 import pathlib
+import queue
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -34,7 +36,8 @@ INIT = request(1, 'initialize', {'protocolVersion': '2025-11-25', 'capabilities'
 READY = json.dumps({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
 
 
-def exchange(lines, project=None):
+def exchange_own(lines, project=None):
+    """A process of its own: the lines, then end of input, and every answer."""
     command = [MCP] + (['--project', str(project)] if project else [])
     result = subprocess.run(command, input=('\n'.join(lines) + '\n').encode(),
                             capture_output=True, timeout=90)
@@ -43,7 +46,98 @@ def exchange(lines, project=None):
     return [json.loads(line) for line in result.stdout.splitlines()]
 
 
+class SharedServer:
+    """One bloom-mcp for the cases that only exchange messages; each starts a new project."""
+
+    def __init__(self):
+        self.process = subprocess.Popen([MCP], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE)
+        self.lines = queue.Queue()
+        threading.Thread(target=self.read, daemon=True).start()
+        self.initialized = self.send(INIT)
+        self.write(READY)
+        self.resets = 0
+
+    def read(self):
+        for line in self.process.stdout:
+            self.lines.put(line)
+        self.lines.put(None)
+
+    def write(self, line):
+        self.process.stdin.write((line + '\n').encode())
+        self.process.stdin.flush()
+
+    def send(self, line):
+        self.write(line)
+        try:
+            answer = self.lines.get(timeout=90)
+        except queue.Empty:
+            raise AssertionError('bloom-mcp did not answer within 90 seconds') from None
+        if answer is None:
+            raise AssertionError(self.process.stderr.read().decode(errors='replace'))
+        return json.loads(answer)
+
+    def exchange(self, lines):
+        """The answers exchange_own would return for lines that begin with INIT and READY."""
+        assert lines[:2] == [INIT, READY], 'a shared exchange starts with the handshake'
+        self.resets += 1
+        reset = self.send(tool(f'reset-{self.resets}', 'project.new',
+                               {'discardChanges': True, 'stopJobs': True}))
+        if 'error' in reset or reset['result'].get('isError'):
+            raise AssertionError(reset)
+        responses = [self.initialized]
+        for line in lines[2:]:
+            if 'id' in json.loads(line):
+                responses.append(self.send(line))
+            else:
+                self.write(line)
+        return responses
+
+    def close(self):
+        self.process.stdin.close()
+        self.process.wait(timeout=60)
+        self.process.stdout.close()
+        self.process.stderr.close()
+
+
+SHARED = None
+
+
+def exchange(lines, project=None, own=False):
+    """Answers to the lines. The shared server serves them unless the case is about a process
+    of its own (a startup project, several sessions, malformed input)."""
+    if project or own or SHARED is None:
+        return exchange_own(lines, project)
+    try:
+        return SHARED.exchange(lines)
+    except BaseException:
+        restart_shared()
+        raise
+
+
+def restart_shared():
+    """After an error the shared server is replaced, so one failure cannot reach the next case."""
+    global SHARED
+    broken, SHARED = SHARED, None
+    try:
+        broken.process.kill()
+        broken.process.wait()
+    finally:
+        SHARED = SharedServer()
+
+
 class Protocol(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        global SHARED
+        SHARED = SharedServer()
+
+    @classmethod
+    def tearDownClass(cls):
+        global SHARED
+        shared, SHARED = SHARED, None
+        shared.close()
+
     def test_large_transaction_array(self):
         operations = [{'op': 'bloom.project.set-name', 'args': {'name': 'Many'}}] * 5000
         transaction = tool(2, 'transact', {'expectedRevision': 0, 'operations': operations})
@@ -68,12 +162,12 @@ class Protocol(unittest.TestCase):
                                                    'color': [1, 0, 0, 1]}}]})
         first = exchange([INIT, READY, add,
                           tool(3, 'query', {'kind': 'parameters', 'composition': 1,
-                                             'pageSize': 1})])
+                                             'pageSize': 1})], own=True)
         cursor = first[-1]['result']['structuredContent']['nextCursor']
         self.assertIsNotNone(cursor)
         second = exchange([INIT, READY, add,
                            tool(4, 'query', {'kind': 'parameters', 'composition': 1,
-                                              'cursor': cursor})])
+                                              'cursor': cursor})], own=True)
         self.assertIn('error', second[-1])
 
     def test_large_parameters_paged_and_revision_bound(self):
@@ -412,7 +506,8 @@ class Protocol(unittest.TestCase):
                 hostile.append(tool(18, 'transact', {'expectedRevision': 0, 'operations': [
                     {'op': 'bloom.composition.add', 'args': {'name': 'Invalid rate', 'width': 64,
                         'height': 64, 'duration': [48, 1], field: value}}]}))
-        responses = exchange([INIT, READY, *hostile, tool(99, 'query', {'kind': 'project'})])
+        responses = exchange([INIT, READY, *hostile, tool(99, 'query', {'kind': 'project'})],
+                             own=True)
         self.assertEqual(len(responses), len(hostile) + 2)
         self.assertTrue(all('error' in response for response in responses[1:-1]))
         self.assertEqual(responses[-1]['result']['structuredContent']['revision'], 0)

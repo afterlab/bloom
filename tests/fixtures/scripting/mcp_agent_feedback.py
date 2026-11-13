@@ -124,11 +124,31 @@ def set_source(parameter, **source):
 
 
 class AgentFeedback(unittest.TestCase):
-    def setUp(self):
-        self.server = Server()
+    # One server for the class; every case starts from a new untitled project. No case here is
+    # about the process itself (start, end of input, crash), so none starts its own.
+    @classmethod
+    def setUpClass(cls):
+        cls.shared = Server()
 
-    def tearDown(self):
-        self.server.close()
+    @classmethod
+    def tearDownClass(cls):
+        cls.shared.close()
+
+    def setUp(self):
+        for attempt in range(2):
+            try:
+                started = self.shared.raw('project.new',
+                                          {'discardChanges': True, 'stopJobs': True})
+                self.assertTrue(started['result']['structuredContent']['succeeded'], started)
+                break
+            except (AssertionError, OSError):
+                # A server a failed case left unusable is replaced, so the failure stays its own.
+                if attempt:
+                    raise
+                type(self).shared.process.kill()
+                type(self).shared.process.wait()
+                type(self).shared = Server()
+        self.server = self.shared
 
     def constant(self, parameter):
         return self.server.parameter(parameter)['value']
