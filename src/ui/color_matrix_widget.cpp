@@ -113,14 +113,14 @@ ColorMatrixCardWidget::ColorMatrixCardWidget(CompositionSession& session,
     note_->setObjectName(QStringLiteral("colorMatrixPresetNote"));
     note_->setTone(kit::Color::Muted);
     note_->setWordWrap(true);
-    values_ = new kit::KButton(kit::IconId::CaretRight, tr("Values"), this);
-    values_->setVariant(kit::KButton::Variant::Ghost);
-    values_->setControlSize(kit::KButton::ControlSize::Compact);
-    values_->setCheckable(true);
-    values_->setObjectName(QStringLiteral("colorMatrixValues"));
-    values_->setAccessibleName(tr("Matrix element values"));
-    values_->setToolTip(tr("Show each element as a row, with its key and its socket, to link it"));
-    connect(values_, &QAbstractButton::clicked, this, [this] { setValuesExpanded(!expanded_); });
+    expandValues_ = new kit::KButton(kit::IconId::CaretRight, tr("Values"), this);
+    expandValues_->setVariant(kit::KButton::Variant::Ghost);
+    expandValues_->setControlSize(kit::KButton::ControlSize::Compact);
+    expandValues_->setCheckable(true);
+    expandValues_->setObjectName(QStringLiteral("colorMatrixValues"));
+    expandValues_->setAccessibleName(tr("Matrix element values"));
+    expandValues_->setToolTip(tr("Show each element as a row, with its key and its socket, to link it"));
+    connect(expandValues_, &QAbstractButton::clicked, this, [this] { setValuesExpanded(!expanded_); });
     for (const auto signal :
          {&CompositionSession::snapshotChanged, &CompositionSession::liveValueChanged,
           &CompositionSession::currentTimeChanged})
@@ -151,8 +151,8 @@ void ColorMatrixCardWidget::setValuesExpanded(const bool expanded) {
     if (expanded_ == expanded)
         return;
     expanded_ = expanded;
-    values_->setChecked(expanded_);
-    values_->setIconId(expanded_ ? kit::IconId::CaretDown : kit::IconId::CaretRight);
+    expandValues_->setChecked(expanded_);
+    expandValues_->setIconId(expanded_ ? kit::IconId::CaretDown : kit::IconId::CaretRight);
     emit rowsChanged();
 }
 
@@ -161,7 +161,7 @@ int ColorMatrixCardWidget::heightAt(const int width) const {
     int height = header + small() + side_ * control() + (side_ - 1) * small();
     if (preset_)
         height += small() + note_->heightForWidth(std::max(1, width));
-    height += small() + values_->sizeHint().height();
+    height += small() + expandValues_->sizeHint().height();
     return height;
 }
 
@@ -223,8 +223,8 @@ void ColorMatrixCardWidget::place() {
         y += noteHeight;
     }
     y += small();
-    const auto button = values_->sizeHint();
-    values_->setGeometry(0, y, std::min(width(), button.width()), button.height());
+    const auto button = expandValues_->sizeHint();
+    expandValues_->setGeometry(0, y, std::min(width(), button.width()), button.height());
 }
 
 void ColorMatrixCardWidget::refresh() {

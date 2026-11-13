@@ -46,7 +46,7 @@ class ColorMatrixCardWidget final : public NodeCardWidget {
     [[nodiscard]] int side() const noexcept { return side_; }
     // The cell of result channel `row` made from channel `column` (0 red to 3 alpha).
     [[nodiscard]] kit::KValueField* cell(int row, int column) const;
-    [[nodiscard]] kit::KButton* valuesButton() const noexcept { return values_; }
+    [[nodiscard]] kit::KButton* valuesButton() const noexcept { return expandValues_; }
     void setValuesExpanded(bool expanded);
     void refresh();
 
@@ -68,7 +68,7 @@ class ColorMatrixCardWidget final : public NodeCardWidget {
     std::array<kit::KLabel*, 4> columnLabels_{};
     std::array<kit::KLabel*, 4> rowLabels_{};
     kit::KLabel* note_ = nullptr;
-    kit::KButton* values_ = nullptr;
+    kit::KButton* expandValues_ = nullptr;
     int side_ = 3;
     bool preset_ = false;
     bool expanded_ = false;
