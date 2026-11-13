@@ -163,7 +163,7 @@ if(BUILD_TESTING)
     # bytes as the previous direct attempt/publication route, kept verbatim in the test.
     add_executable(bloom_scripting_render_parity_test tests/render_parity_tests.cpp)
     target_include_directories(bloom_scripting_render_parity_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
-    target_link_libraries(bloom_scripting_render_parity_test PRIVATE bloom_scripting)
+    target_link_libraries(bloom_scripting_render_parity_test PRIVATE bloom_scripting bloom_media_cache)
     add_dependencies(bloom_scripting_render_parity_test bloom-media-worker)
     bloom_enable_warnings(bloom_scripting_render_parity_test)
     bloom_add_test(
