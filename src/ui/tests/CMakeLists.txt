@@ -2442,6 +2442,8 @@ bloom_add_test(
 # routes. The CPU half always runs; the GPU half runs with a Vulkan loader and a qualified device
 # and prints NotRun otherwise (--require-device fails instead).
 add_executable(bloom_ui_viewer_export_svg_artwork_test viewer_export_svg_artwork_tests.cpp)
+target_include_directories(bloom_ui_viewer_export_svg_artwork_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 target_link_libraries(bloom_ui_viewer_export_svg_artwork_test PRIVATE bloom_ui bloom_host)
 if(TARGET bloom-media-worker)
     add_dependencies(bloom_ui_viewer_export_svg_artwork_test bloom-media-worker)

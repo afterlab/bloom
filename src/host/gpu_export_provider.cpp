@@ -115,7 +115,8 @@ struct GpuExportProvider::State final {
             now - *sampledAt < std::chrono::seconds(5)) {
             return;
         }
-        auto sample = options.processingPhasePolicy->sampleHostMemory(cancellation);
+        auto sample = options.processingPhasePolicy->sampleHostMemory(
+            cancellation, options.hostMemorySampler);
         if (cancellation.isCancellationRequested()) {
             return;
         }

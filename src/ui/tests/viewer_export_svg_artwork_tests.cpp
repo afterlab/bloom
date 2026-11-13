@@ -16,14 +16,18 @@
 // #642: the same routes again with the file imported as one layer (a Vector Artwork layer the
 // compiler expands), whose position, scale, rotation and opacity are keyed instead of a Path node:
 // Viewer frames from the expected route matching the CPU route's, a cold and a warm RAM preview,
-// a still, a range and a movie with their provenance, and on the GPU route a 1920 x 1080 and a
-// 3840 x 2160 still exported from the device with no CPU reference frame (plain, with a blur
-// between, masked and scaled 8x, and in a group scaled 3x).
+// a still, a range and a movie with their provenance, and on the GPU route a 512 x 288 still
+// exported from the device with no CPU reference frame (plain, with a blur between, masked and
+// scaled 8x, in a group scaled 3x) and a 3840 x 2160 one read by a Layer node pivoting on its
+// content. Admission
+// uses a fixed memory reading (fixed_memory_budget.hpp), never this machine's free memory.
 //
 // `--svg <file> --size <W>x<H>` (with --loader) instead shows a real file's first frame in the
 // Viewer at that size, through the GPU-prepared packed product wired as the application wires it,
 // and requires the frame from the device with no CPU fallback. Not part of the ctest run (it needs
 // the file); docs/architecture/vector-artwork.md records the results.
+
+#include "fixed_memory_budget.hpp"
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
@@ -850,12 +854,14 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
         options.enabled = true;
         options.loaderPath = loader;
         options.ocioResolver = host::makePackagedGpuOcioResolver(host::currentExecutablePath());
+        options.hostMemorySampler = test_support::fixedMemoryBudgetSample;
         provider = host::GpuExportProvider::create(options);
     }
 #endif
     if (!route.gpu) {
         runtime::GpuProcessFrameEvaluatorOptions options;
         options.enabled = false;
+        options.hostMemorySampler = test_support::fixedMemoryBudgetSample;
         provider = host::GpuExportProvider::create(options);
     }
     provider->prepare(exportScheduler);
@@ -923,17 +929,19 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     } else {
         std::cout << "NotRun: " << route.name << " movie: no media worker here\n";
     }
-    // #642: the one layer at 1080p and 4K, exported from the device with no CPU reference frame;
-    // B2: and with a blur between its artwork and its slot (drawn at its output scale); B3: at 4K
-    // masked and scaled 8x (drawn at 8x) and in a group scaled 3x (drawn at 4x), only the window
-    // the frame shows; B4: read by a Layer node pivoting on its content, scaled 6x and turned
-    // (drawn at 8x), only the window the frame shows.
+    // #642: the one layer at a size larger than the artwork, exported from the device with no CPU
+    // reference frame; B2: and with a blur between its artwork and its slot (drawn at its output
+    // scale); B3: masked and scaled 8x (drawn at 8x) and in a group scaled 3x (drawn at 4x), only
+    // the window the frame shows; B4: read by a Layer node pivoting on its content, scaled 6x and
+    // turned (drawn at 8x), only the window the frame shows. Each once; the first four at
+    // 512 x 288, where the route, the drawn scale and the window are the same as at 4K.
     if (route.gpu && route.layer) {
         enum class Dressed { Plain, Blurred, Masked8x, Group3x, ContentPivot8x };
         for (const auto& [width, height, dressed] :
-             {std::tuple{1920U, 1080U, Dressed::Plain}, std::tuple{3840U, 2160U, Dressed::Plain},
-              std::tuple{1920U, 1080U, Dressed::Blurred}, std::tuple{3840U, 2160U, Dressed::Blurred},
-              std::tuple{3840U, 2160U, Dressed::Masked8x}, std::tuple{3840U, 2160U, Dressed::Group3x},
+             {std::tuple{512U, 288U, Dressed::Plain}, std::tuple{512U, 288U, Dressed::Blurred},
+              std::tuple{512U, 288U, Dressed::Masked8x}, std::tuple{512U, 288U, Dressed::Group3x},
+              // The content pivot case keeps its 4K frame: at 512 x 288 the compiler draws this
+              // layer at 16x, not 8x, so the smaller frame would not prove the same thing.
               std::tuple{3840U, 2160U, Dressed::ContentPivot8x}}) {
             const auto size = std::to_string(width) + "x" + std::to_string(height) +
                               (dressed == Dressed::Blurred          ? " oversampled"
@@ -1010,6 +1018,7 @@ void reAddedOnTheDevice(Expectations& checks, const std::filesystem::path& workD
     options.enabled = true;
     options.loaderPath = loader;
     options.ocioResolver = host::makePackagedGpuOcioResolver(host::currentExecutablePath());
+    options.hostMemorySampler = test_support::fixedMemoryBudgetSample;
     auto provider = host::GpuExportProvider::create(options);
     provider->prepare(scheduler);
     for (const auto mode : {commands::SvgImportMode::Layer, commands::SvgImportMode::Shapes}) {
@@ -1142,9 +1151,14 @@ int viewerAtSize(const std::filesystem::path& svg, const std::uint32_t width,
     ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
     const auto policy =
         std::make_shared<runtime::GpuProcessingPhasePolicy>(32, retirementOwner, taskBudgetView);
-    ui::MemoryBudgetController memoryController(scheduler, bridge,
-                                                runtime::processMemoryBudgetLedger(),
-                                                ui::applicationMemorySampler(policy));
+    // The application's wiring with a constant reading and no pressure monitor: what the route
+    // admits never depends on what this machine has free.
+    ui::MemoryBudgetController memoryController(
+        scheduler, bridge, runtime::processMemoryBudgetLedger(),
+        [policy](const runtime::CancellationToken& cancellation) {
+            return policy->sampleHostMemory(cancellation, test_support::fixedMemoryBudgetSample);
+        },
+        nullptr, std::nullopt);
     static_cast<void>(ui::connectApplicationMemoryBudget(
         memoryController, policy, runtime::processMemoryBudgetLedger(), &bridge));
     auto planCache = std::make_shared<ui::CompiledPlanCache>();

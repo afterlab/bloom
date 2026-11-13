@@ -35,6 +35,7 @@
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 #include <bloom/runtime/image_statistics.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
 #include <cstdint>
@@ -160,6 +161,9 @@ struct GpuProcessFrameOutcome final {
 
 struct GpuProcessFrameEvaluatorOptions final {
     std::shared_ptr<GpuProcessingPhasePolicy> processingPhasePolicy = {};
+    // The host memory reading a root that owns its own sampling takes (no policy given above).
+    // The operating system's by default; a test gives a constant reading.
+    MemoryBudgetSample (*hostMemorySampler)(const CancellationToken&) noexcept = memoryBudgetSample;
     // Explicit activation: false never touches a device and every request is Disabled.
     bool enabled = true;
     // Explicit native loader override (empty means the platform loader). No workspace/build path is
