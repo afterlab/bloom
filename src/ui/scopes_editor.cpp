@@ -84,6 +84,7 @@ ScopesEditor::ScopesEditor(const ScopesServices& services, RamPreviewController*
     setAccessibleDescription(
         tr("Waveform, parade, vectorscope, histogram and CIE chromaticity of the picture the "
            "active Viewer shows"));
+    store_ = services_.regions != nullptr ? services_.regions : new ScopesRegionStore(this);
     if (services_.usable()) {
         controller_ = new ScopesController(*services_.scheduler, *services_.bridge, services_.cache,
                                            services_.measure, this);
@@ -120,12 +121,24 @@ ScopesEditor::ScopesEditor(const ScopesServices& services, RamPreviewController*
                 return;
             }
     });
+    connect(store_, &ScopesRegionStore::regionChanged, this,
+            [this](const ScopesRegionStore::Key& key) {
+                if (key == regionKey_)
+                    adoptRegion();
+            });
+    connect(store_, &ScopesRegionStore::armedChanged, this, [this](const bool armed) {
+        refreshControls();
+        emit regionArmedChanged(armed);
+    });
+    adoptRegion();
     refreshControls();
     refreshViewsActive();
     refreshStatus();
 }
 
 ScopesEditor::~ScopesEditor() {
+    if (countedVisible_)
+        store_->panelHidden();
     QObject::disconnect(viewerConnection_);
     QObject::disconnect(viewerDestroyedConnection_);
     // The views read the renderer's finished images; they go first.
@@ -387,9 +400,14 @@ void ScopesEditor::setBrightness(const float gain) {
 }
 
 void ScopesEditor::setRegion(const std::optional<runtime::ScopeRegion>& region) {
-    std::optional<runtime::ScopeRegion> next = region;
-    if (next && (next->width == 0 || next->height == 0))
-        next.reset();
+    store_->setRegion(regionKey_, region);
+    // The store tells every panel (this one included) when the value changed.
+    adoptRegion();
+}
+
+// Reads the followed composition's region from the store; measures again when it differs.
+void ScopesEditor::adoptRegion() {
+    const auto next = store_->region(regionKey_);
     if (region_ == next)
         return;
     region_ = next;
@@ -398,13 +416,14 @@ void ScopesEditor::setRegion(const std::optional<runtime::ScopeRegion>& region) 
     emit regionChanged(region_);
 }
 
-void ScopesEditor::setRegionArmed(const bool armed) {
-    if (regionArmed_ == armed)
+void ScopesEditor::adoptRegionKey(const ScopesRegionStore::Key& key) {
+    if (key == regionKey_)
         return;
-    regionArmed_ = armed;
-    refreshControls();
-    emit regionArmedChanged(regionArmed_);
+    regionKey_ = key;
+    adoptRegion();
 }
+
+void ScopesEditor::setRegionArmed(const bool armed) { store_->setArmed(armed); }
 
 void ScopesEditor::refreshControls() {
     const QSignalBlocker blockSignal(signalDropdown_);
@@ -420,7 +439,7 @@ void ScopesEditor::refreshControls() {
         label->setVisible(working);
     if (linearNote_ != nullptr)
         linearNote_->setVisible(working);
-    regionButton_->setChecked(regionArmed_);
+    regionButton_->setChecked(store_->armed());
     clearRegionButton_->setEnabled(region_.has_value());
     ignoreCheck_->setChecked(ignoreTransparent_);
     brightnessSlider_->setValue(static_cast<double>(brightness_));
@@ -485,6 +504,7 @@ void ScopesEditor::followViewer(ViewerEditor* const viewer) {
         onViewerState();
         return;
     }
+    adoptRegionKey({});
     if (controller_ != nullptr)
         controller_->showFrame(nullptr, {});
     hasViewer_ = false;
@@ -496,6 +516,7 @@ void ScopesEditor::onViewerState() {
     auto* const viewer = followedViewer();
     if (viewer == nullptr)
         return;
+    adoptRegionKey(viewer->scopesRegionKey().value_or(ScopesRegionStore::Key{}));
     const auto source = viewer->scopesSource();
     showViewerFrame(source.frame, source.viewAdjust);
 }
@@ -556,6 +577,10 @@ void ScopesEditor::onReading() {
 void ScopesEditor::showEvent(QShowEvent* const event) {
     QWidget::showEvent(event);
     shown_ = true;
+    if (!countedVisible_) {
+        countedVisible_ = true;
+        store_->panelShown();
+    }
     adoptPersistence();
     if (followed_.isNull())
         pickViewer();
@@ -566,6 +591,10 @@ void ScopesEditor::showEvent(QShowEvent* const event) {
 void ScopesEditor::hideEvent(QHideEvent* const event) {
     QWidget::hideEvent(event);
     shown_ = false;
+    if (countedVisible_) {
+        countedVisible_ = false;
+        store_->panelHidden();
+    }
     refreshViewsActive();
     applySettings();
 }

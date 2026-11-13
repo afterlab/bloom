@@ -834,7 +834,11 @@ int main(int argc, char* argv[]) try {
     // final-render device when that device is available (the provider's evaluator, read on the
     // worker), with the shared OCIO context resolved on the worker the way the preview resolves it,
     // and with the CPU reference evaluator otherwise.
+    // The scope regions, the Region toggle and the visible-panel count every Scopes panel and
+    // Viewer share: session state, never saved and never part of undo.
+    bloom::ui::ScopesRegionStore scopesRegions;
     bloom::ui::ScopesServices scopesServices;
+    scopesServices.regions = &scopesRegions;
     {
         bloom::runtime::ScopeFrameRoutes routes;
         routes.device = [statisticsDeviceSource] {

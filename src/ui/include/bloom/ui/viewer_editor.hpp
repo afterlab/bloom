@@ -11,6 +11,7 @@
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/preferences_aware.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
+#include <bloom/ui/scopes_region_store.hpp>
 #include <bloom/ui/tool_controller.hpp>
 #include <bloom/ui/viewer_channel_display.hpp>
 #include <bloom/ui/viewer_editor_probe.hpp>
@@ -24,6 +25,7 @@
 #include <QLineF>
 #include <QMetaObject>
 #include <QPointF>
+#include <QPointer>
 #include <QRectF>
 #include <QString>
 #include <QStringList>
@@ -35,6 +37,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace bloom::core {
 class PixelAspectRatio;
@@ -282,6 +285,18 @@ class ViewerEditor final : public QWidget,
         runtime::ViewAdjust viewAdjust{};
     };
     [[nodiscard]] ScopesSource scopesSource() const;
+    // #724 Scopes: the composition this Viewer shows, as the scope regions are keyed; nothing with
+    // no composition.
+    [[nodiscard]] std::optional<ScopesRegionStore::Key> scopesRegionKey() const;
+    // The session's scope regions (borrowed; null: this Viewer never draws or edits one). While a
+    // Scopes panel is visible the Viewer draws the shown composition's region as an overlay and
+    // takes a drag to draw it (armed), or to move or resize it (the pointer on it).
+    void setScopesRegionStore(ScopesRegionStore* store);
+    // Test seams: the gesture in flight and what the overlay draws now (composition pixels).
+    [[nodiscard]] bool scopesRegionGestureForTest() const noexcept {
+        return scopeGesture_.has_value();
+    }
+    [[nodiscard]] std::optional<runtime::ScopeRegion> scopesRegionDrawnForTest() const;
 
     // --- #536: pin/follow and the Viewer's own preview --------------------------------------
     // Where a Viewer gets a preview controller of its own. Without one the Viewer can only follow
@@ -864,6 +879,33 @@ class ViewerEditor final : public QWidget,
     bool creationRelease(QMouseEvent* event);
     void cancelCreation();
     void paintCreation(QPainter& painter) const;
+    // #724 Scopes: the scope region's gesture and overlay (viewer_editor_scopes_region.cpp).
+    struct ScopeRegionGesture final {
+        enum class Kind : std::uint8_t { Draw, Move, Resize };
+        static constexpr int kLeft = 1;
+        static constexpr int kTop = 2;
+        static constexpr int kRight = 4;
+        static constexpr int kBottom = 8;
+        ScopeRegionGesture(ViewerMapping frozen, ScopesRegionStore::Key target, QPointF at)
+            : mapping(std::move(frozen)), key(target), origin(at), pointer(at) {}
+        Kind kind = Kind::Draw;
+        ViewerMapping mapping;
+        ScopesRegionStore::Key key;
+        QPointF origin;
+        QPointF pointer;
+        runtime::ScopeRegion start;
+        int edges = 0;
+    };
+    bool scopesRegionPress(QMouseEvent* event);
+    bool scopesRegionMove(QMouseEvent* event);
+    bool scopesRegionRelease(QMouseEvent* event);
+    bool scopesRegionEscape(QKeyEvent* event);
+    [[nodiscard]] bool scopesRegionLive() const;
+    [[nodiscard]] std::optional<runtime::ScopeRegion>
+    scopesRegionCandidate(const ScopeRegionGesture& gesture) const;
+    void paintScopesRegion(QPainter& painter) const;
+    QPointer<ScopesRegionStore> scopesRegions_;
+    std::optional<ScopeRegionGesture> scopeGesture_;
     bool roiPress(QMouseEvent* event);
     bool roiMove(QMouseEvent* event);
     bool roiRelease(QMouseEvent* event);

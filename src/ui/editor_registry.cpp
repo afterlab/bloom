@@ -109,10 +109,11 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
 
     return addEditor(
                "bloom.viewer", "Viewer",
-               [&session, &previewController, ramPreview, gpuDependencies,
-                viewerPreviews](QWidget* parent) {
+               [&session, &previewController, ramPreview, gpuDependencies, viewerPreviews,
+                scopeRegions = scopesServices.regions](QWidget* parent) {
                    auto* viewer = new ViewerEditor(session, previewController, ramPreview, parent);
                    viewer->setPreviewPool(viewerPreviews);
+                   viewer->setScopesRegionStore(scopeRegions);
                    if (gpuDependencies != nullptr && gpuDependencies->presentationClient) {
                        viewer->setGpuPresentationDependencies(
                            gpuDependencies->presentationClient(), gpuDependencies->scheduler,

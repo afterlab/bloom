@@ -16,6 +16,7 @@
 #include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/scopes_controller.hpp>
 #include <bloom/ui/scopes_drawing.hpp>
+#include <bloom/ui/scopes_region_store.hpp>
 #include <bloom/ui/scopes_status.hpp>
 
 #include <QPointer>
@@ -58,6 +59,9 @@ struct ScopesServices final {
     TaskUiBridge* bridge = nullptr;
     PreviewFrameCacheHandle cache;
     ScopesMeasure measure;
+    // The scope regions, the Region toggle and the visible-panel count every panel and Viewer of
+    // the session share. Null: the panel keeps a store of its own (no Viewer then draws it).
+    ScopesRegionStore* regions = nullptr;
     // The composition's name for the status line; may be empty.
     std::function<QString(document::ProjectId, document::CompositionId)> compositionName;
 
@@ -92,7 +96,9 @@ class ScopesEditor final : public QWidget {
 
     // ---- The scope region (the seam the Viewer's region gesture connects to) -----------------
     // The rectangle, in composition pixels, that limits what is measured; nothing: the whole
-    // frame. Setting it measures again. Session state of the panel: never project state.
+    // frame. It is the followed Viewer's composition's region in the shared ScopesRegionStore, so
+    // every panel and Viewer of that composition agree. Setting it measures again. Session state:
+    // never project state, never undoable.
     void setRegion(const std::optional<runtime::ScopeRegion>& region);
     [[nodiscard]] const std::optional<runtime::ScopeRegion>& region() const noexcept {
         return region_;
@@ -100,7 +106,8 @@ class ScopesEditor final : public QWidget {
     void clearRegion() { setRegion(std::nullopt); }
     // The Region toggle: true while the panel asks the active Viewer to take a region drag.
     void setRegionArmed(bool armed);
-    [[nodiscard]] bool regionArmed() const noexcept { return regionArmed_; }
+    [[nodiscard]] bool regionArmed() const noexcept { return store_->armed(); }
+    [[nodiscard]] ScopesRegionStore* regionStore() const noexcept { return store_; }
 
     // ---- The followed Viewer -------------------------------------------------------------
     void followViewer(ViewerEditor* viewer);
@@ -151,6 +158,8 @@ class ScopesEditor final : public QWidget {
     void adoptPersistence();
     void pickViewer();
     void onViewerState();
+    void adoptRegion();
+    void adoptRegionKey(const ScopesRegionStore::Key& key);
     [[nodiscard]] std::uint32_t openScopeBits() const;
     [[nodiscard]] QString persistencePrefix() const;
 
@@ -172,7 +181,9 @@ class ScopesEditor final : public QWidget {
     bool ignoreTransparent_ = false;
     float brightness_ = scopes::traceBrightnessGainDefault();
     std::optional<runtime::ScopeRegion> region_;
-    bool regionArmed_ = false;
+    ScopesRegionStore* store_ = nullptr;
+    ScopesRegionStore::Key regionKey_;
+    bool countedVisible_ = false;
 
     kit::KDropdown* signalDropdown_ = nullptr;
     kit::KDropdown* axisDropdown_ = nullptr;

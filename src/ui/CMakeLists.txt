@@ -588,6 +588,7 @@ target_sources(
         scopes_controller.cpp
         scopes_drawing.cpp
         scopes_editor.cpp
+        scopes_region_store.cpp
         scopes_status.cpp
         scopes_trace_renderer.cpp
         scopes_view.cpp
@@ -731,6 +732,7 @@ target_sources(
         viewer_editor_cryptomatte.cpp
         viewer_editor_focus.cpp
         viewer_editor_marquee.cpp
+        viewer_editor_scopes_region.cpp
         viewer_editor_motion.cpp
         viewer_editor_line.cpp
         viewer_editor_warp.cpp
@@ -818,6 +820,7 @@ target_sources(
             include/bloom/ui/scopes_controller.hpp
             include/bloom/ui/scopes_drawing.hpp
             include/bloom/ui/scopes_editor.hpp
+            include/bloom/ui/scopes_region_store.hpp
             include/bloom/ui/scopes_status.hpp
             include/bloom/ui/scopes_trace_renderer.hpp
             include/bloom/ui/scopes_view.hpp

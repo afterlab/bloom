@@ -1099,6 +1099,7 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
     }
 
     paintRoi(painter);
+    paintScopesRegion(painter);
     paintCreation(painter);
     paintLayerMarquee(painter);
     paintPathTools(painter);
@@ -1332,6 +1333,8 @@ void ViewerEditor::updatePanCursor() {
 }
 
 void ViewerEditor::mousePressEvent(QMouseEvent* event) {
+    if (scopesRegionPress(event))
+        return;
     if (roiPress(event))
         return;
     // #536: a reference Viewer (pinned elsewhere, or to a node) keeps pan, zoom, the region of
@@ -1479,6 +1482,8 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
 
 void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
     refreshProbe(event->position());
+    if (scopesRegionMove(event))
+        return;
     if (roiMove(event))
         return;
     if (motionHandleMove(event))
@@ -1596,6 +1601,8 @@ void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton)
         drillPressDown_ = false;
     const auto repick = std::exchange(drillRepickPress_, std::nullopt);
+    if (scopesRegionRelease(event))
+        return;
     if (roiRelease(event))
         return;
     if (motionHandleRelease(event))
@@ -1646,7 +1653,7 @@ void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void ViewerEditor::wheelEvent(QWheelEvent* event) {
-    if (dragActive_ || panActive_ || creation_) {
+    if (dragActive_ || panActive_ || creation_ || scopeGesture_) {
         event->ignore();
         return;
     }
@@ -1662,7 +1669,7 @@ void ViewerEditor::wheelEvent(QWheelEvent* event) {
 
 // The one zoom the wheel and a trackpad pinch (#696) share, so both honour the same limits.
 void ViewerEditor::zoomAboutPosition(const QPointF position, const double factor) {
-    if (dragActive_ || panActive_ || creation_)
+    if (dragActive_ || panActive_ || creation_ || scopeGesture_)
         return;
     const auto geometry = currentDisplayGeometry();
     if (!geometry.has_value())
@@ -1674,6 +1681,8 @@ void ViewerEditor::zoomAboutPosition(const QPointF position, const double factor
 }
 
 void ViewerEditor::keyPressEvent(QKeyEvent* event) {
+    if (scopesRegionEscape(event))
+        return;
     if (refreshAnchorDrag(event)) {
         event->accept();
         return;
