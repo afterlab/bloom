@@ -71,7 +71,10 @@ class RecordingStore final : public SourceChunkStore {
         kept_[offset].assign(bytes.begin(), bytes.end());
         ++keeps_;
     }
-    [[nodiscard]] bool underPressure() const override { return pressure.load(); }
+    [[nodiscard]] bool underPressure() const override {
+        ++pressureChecks;
+        return pressure.load();
+    }
     [[nodiscard]] std::size_t keeps() const {
         const std::lock_guard lock(mutex_);
         return keeps_;
@@ -86,6 +89,8 @@ class RecordingStore final : public SourceChunkStore {
         return found == kept_.end() ? std::vector<std::byte>{} : found->second;
     }
     std::atomic_bool pressure{false};
+    // How often the background fill asked: a test waits for it to have asked and held off.
+    mutable std::atomic<std::uint64_t> pressureChecks{0};
 
   private:
     mutable std::mutex mutex_;
@@ -238,7 +243,10 @@ int main() {
         const auto store = std::make_shared<RecordingStore>();
         store->pressure.store(true);
         const auto snapshot = take(ReadOnlyFileSnapshot::captureProgressive(request(store, true)));
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        // The fill thread has asked, was told to hold off, and came back to ask again: it read
+        // nothing in between. No clock is involved.
+        while (snapshot && store->pressureChecks.load() < 2)
+            std::this_thread::yield();
         expectations.expect(snapshot && snapshot->localBytes() == 0,
                             "the background fill holds off while the store is under pressure");
         auto made = snapshot ? snapshot->ensureRange(kChunk, 1)
@@ -246,10 +254,9 @@ int main() {
         expectations.expect(std::holds_alternative<SnapshotRange>(made) && store->keeps() == 1,
                             "a frame's range is served under pressure all the same");
         store->pressure.store(false);
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-        while (snapshot && snapshot->verification() == SnapshotVerification::Pending &&
-               std::chrono::steady_clock::now() < deadline)
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        // The fill is asynchronous: wait for its result (the test's own time limit bounds this).
+        while (snapshot && snapshot->verification() == SnapshotVerification::Pending)
+            std::this_thread::yield();
         expectations.expect(snapshot &&
                                 snapshot->verification() == SnapshotVerification::Verified &&
                                 store->keeps() == 4,

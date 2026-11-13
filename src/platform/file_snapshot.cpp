@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/platform/file_snapshot.hpp>
 #include <bloom/platform/thread_priority.hpp>
 #include <cerrno>
@@ -79,7 +80,7 @@ struct ReadOnlyFileSnapshot::Progressive {
     SnapshotVerification verification = SnapshotVerification::Pending;
     bool hashing = false;
     std::atomic_bool stop{false};
-    std::thread thread;
+    core::WorkerThread thread;
 
     ~Progressive();
     [[nodiscard]] std::uint64_t chunkCount() const {
@@ -1056,7 +1057,7 @@ ReadOnlyFileSnapshot::captureProgressive(const ProgressiveSnapshotRequest& reque
     state->progressive = std::move(fill);
     auto snapshot = std::unique_ptr<ReadOnlyFileSnapshot>(new ReadOnlyFileSnapshot(std::move(state)));
     if (request.backgroundFill)
-        raw->thread = std::thread([raw] { raw->background(); });
+        raw->thread = core::WorkerThread([raw] { raw->background(); });
     return snapshot;
 #endif
 }
