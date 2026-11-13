@@ -1061,6 +1061,7 @@ endif()
 
 # --- gpu ---------------------------------------------------------------------------------------
 set(gpu_route "")
+set(gpu_capture "")
 if(GPU AND "gpu" IN_LIST ONLY AND NOT failures)
     if(NOT WORK)
         message(FATAL_ERROR "check_package.cmake: GPU needs WORK, a directory for the run's own "
@@ -1137,6 +1138,8 @@ if(GPU AND "gpu" IN_LIST ONLY AND NOT failures)
             list(APPEND failures "the GPU run reported: ${CMAKE_MATCH_1}")
         elseif(record MATCHES "^route (.+)$")
             set(gpu_route "${CMAKE_MATCH_1}")
+        elseif(record MATCHES "^capture (.+)$")
+            set(gpu_capture "${CMAKE_MATCH_1}")
         elseif(record STREQUAL "done gpu")
             set(gpu_done TRUE)
         endif()
@@ -1168,6 +1171,12 @@ endif()
 if(gpu_route)
     message(STATUS "${package_name}: the packaged application's Viewer frame was evaluated on "
                    "the GPU (${gpu_route})")
+    if(gpu_capture AND EXISTS "${gpu_capture}")
+        # The picture travels in the check's own output, which is all some machines hand back.
+        file(READ "${gpu_capture}" picture HEX)
+        message(STATUS "${package_name}: the status bar after that frame, a PNG in hexadecimal "
+                       "(${gpu_capture}):\nstatus-bar-png ${picture}")
+    endif()
 endif()
 if("${ONLY}" STREQUAL "gpu")
     return()

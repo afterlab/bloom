@@ -13,7 +13,10 @@ The script
      shows it in the Viewer;
   4. reads `query kind=render-route` until the Viewer displays a current frame, and requires that
      the frame's scene was evaluated on the GPU. A frame from the CPU reference path fails the
-     check, with the fallback reasons the preview service counted.
+     check, with the fallback reasons the preview service counted;
+  5. asks the application for a picture of its status bar as it is then
+     (BLOOM_PACKAGE_CHECK_CAPTURE, apps/bloom/main.cpp), which the check prints so that a person
+     can see the Render value the package shows. The verdict is the route's, not the picture's.
 
 Nothing here reads a device itself: the route is the one the displayed frame recorded, which is
 what the status bar shows as Render GPU or Render CPU.
@@ -22,6 +25,7 @@ Output (BLOOM_PACKAGE_CHECK_OUTPUT), one record per line:
 
   process application <number>   the process of the application
   route <json>                   the render-route answer the verdict was made from
+  capture <file>                 the PNG of the status bar, taken after that answer
   done gpu                       the displayed frame was evaluated on the GPU
   error <text>                   something did not work; the check fails with this text
 """
@@ -41,6 +45,8 @@ PROFILE = pathlib.Path(os.environ["BLOOM_PACKAGE_CHECK_PROFILE"])
 # show a current frame of a one-layer composition (a first frame compiles its pipelines).
 START_SECONDS = 180.0
 FRAME_SECONDS = 240.0
+# How long the application may take to write the picture of its status bar.
+CAPTURE_SECONDS = 30.0
 
 
 class CheckFailure(Exception):
@@ -213,11 +219,31 @@ def displayed_route(server, process):
     )
 
 
+def status_bar_picture(process):
+    picture = pathlib.Path(OUTPUT + ".status-bar.png")
+    request = pathlib.Path(str(picture) + ".request")
+    request.write_text("", encoding="utf-8")
+    started = time.monotonic()
+    while time.monotonic() - started < CAPTURE_SECONDS:
+        if process.poll() is not None:
+            raise CheckFailure(
+                f"the application exited with {process.returncode} while its status bar was "
+                "being captured"
+            )
+        if not request.exists() and picture.is_file():
+            return picture
+        time.sleep(0.1)
+    raise CheckFailure(
+        f"the application wrote no picture of its status bar within {int(CAPTURE_SECONDS)} seconds"
+    )
+
+
 def check(record):
     port = free_port()
     write_settings(port)
     environment = dict(os.environ)
     environment["QT_QPA_PLATFORM"] = "offscreen"
+    environment["BLOOM_PACKAGE_CHECK_CAPTURE"] = OUTPUT + ".status-bar.png"
     log = OUTPUT + ".application-log"
     with open(log, "wb") as output:
         process = subprocess.Popen(
@@ -249,6 +275,7 @@ def check(record):
                 f"{route.get('provider')}; why: {route.get('why')}; CPU fallbacks: "
                 f"{json.dumps(route.get('cpuFallbacks'), sort_keys=True)})"
             )
+        record(f"capture {status_bar_picture(process)}")
         record("done gpu")
     finally:
         # Stopped, not asked to quit, so it saves no window state.

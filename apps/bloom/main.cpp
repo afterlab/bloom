@@ -85,6 +85,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QEventLoop>
 #include <QGuiApplication>
 #include <QPointer>
@@ -1099,6 +1100,31 @@ int main(int argc, char* argv[]) try {
     window.show();
     if (mcpPreferences.autoStart)
         mcpService.requestAutoStart();
+
+    // The package check's picture of the status bar (#717). Only under the check's own profile
+    // (application_identity.hpp), and only when the check names a file: when the check creates
+    // "<file>.request", the status bar as it is at that moment is written to <file> as a PNG and
+    // the request is removed. The check asks once the Viewer's frame is known to be current, so
+    // the picture shows the Render value an artist would see beside the route the check read.
+    if (const QString statusBarPicture = qEnvironmentVariable("BLOOM_PACKAGE_CHECK_CAPTURE");
+        !statusBarPicture.isEmpty() &&
+        qEnvironmentVariableIsSet(bloom::ui::kPackageCheckProfileVariable)) {
+        auto* watch = new QTimer(&window);
+        watch->setInterval(200);
+        QObject::connect(watch, &QTimer::timeout, &window, [&window, statusBarPicture] {
+            const QString request = statusBarPicture + QStringLiteral(".request");
+            if (!QFile::exists(request) || window.statusStrip() == nullptr)
+                return;
+            // Written beside the file and renamed, so the check never reads half a picture.
+            const QString partial = statusBarPicture + QStringLiteral(".partial.png");
+            if (window.statusStrip()->grab().save(partial, "PNG")) {
+                QFile::remove(statusBarPicture);
+                QFile::rename(partial, statusBarPicture);
+            }
+            QFile::remove(request);
+        });
+        watch->start();
+    }
 
     // The EXISTING TaskUiBridge poll drives the cached capability refresh and keeps running until
     // shutdown, so a capability that is later lost is observed and published as a null client --
