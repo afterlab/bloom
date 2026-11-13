@@ -20,6 +20,9 @@
 #include <QStandardPaths>
 #include <QStringList>
 #include <bloom/commands/node_editor_operations.hpp>
+#include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/commands/node_operations.hpp>
+#include <bloom/commands/entry_layer_operations.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/ui/context_bar.hpp>
@@ -139,6 +142,118 @@ void testMarqueeBorderWidth() {
     expect(zoomedIn >= 1 && zoomedIn <= 2, "the marquee border is one or two pixels at 200%");
     expect(std::abs(zoomedIn - zoomedOut) <= 1,
            "the marquee border is the same width at 50% and 200%");
+}
+
+// ---- #723 ------------------------------------------------------------------------------------
+
+// The owner's chain: Adjustment, Curves, the Merge's Content slot. Dissolving the Curves from its
+// menu leaves the Adjustment in that slot, says nothing, and one undo restores the chain. A link
+// that cannot be kept is named in the status bar's message.
+void testDissolveReconnectsIntoMergeSlot() {
+    const auto port = [](test::Fixture& f, const document::NodeId id, const bool input) {
+        const auto* node = f.session.composition()->graph().findNode(id);
+        const auto* definition =
+            document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion);
+        if (input)
+            return std::ranges::find(definition->inputs, document::SocketValueKind::Image,
+                                     &document::InputPortDefinition::valueKind)
+                ->name;
+        return std::ranges::find(definition->outputs, document::SocketValueKind::Image,
+                                 &document::OutputPortDefinition::valueKind)
+            ->name;
+    };
+    const auto feeds = [](test::Fixture& f, const document::NodeId source,
+                          const document::InputPortRef& destination) {
+        return std::ranges::any_of(f.session.composition()->graph().edges(), [&](const auto& edge) {
+            return edge.source.nodeId == source && edge.destination == destination;
+        });
+    };
+    const auto dissolve = [](test::Fixture& f, const document::NodeId id) {
+        f.session.selectNodes({id}, id);
+        settle();
+        rightClick(f, cardPoint(f, id));
+        auto* menu = openNodeMenu();
+        if (auto* action = menuAction(menu, "nodeDissolveAction"))
+            action->trigger();
+        settle();
+        if (menu != nullptr)
+            menu->close();
+        settle();
+    };
+    {
+        test::Fixture f;
+        QStringList messages;
+        QObject::connect(&f.session, &ui::CompositionSession::commandRejected,
+                         [&messages](const QString& message) { messages.push_back(message); });
+        const auto merge = f.session.composition()->graph().layerStack().nodeId();
+        const auto added = f.edit<commands::AddAdjustmentLayer>(merge);
+        const auto adjustment = added.outputId<document::NodeId>(commands::kEntryLayerNodeOutput);
+        const auto slot = added.outputId<document::LayerSlotId>(commands::kEntryLayerSlotOutput);
+        expect(adjustment && slot, "#723: an Adjustment layer is added");
+        if (!adjustment || !slot)
+            return;
+        const auto curves = f.add(document::kCurvesNodeType, {300, 300});
+        const document::InputPortRef content =
+            document::LayerStackInputRef{merge, *slot, "content"};
+        expect(f.edit<commands::ConnectPorts>(
+                    document::OutputPortRef{*adjustment, port(f, *adjustment, false)},
+                    document::InputPortRef{document::NodeInputRef{curves, port(f, curves, true)}})
+                       .succeeded() &&
+                   f.edit<commands::ConnectPorts>(
+                        document::OutputPortRef{curves, port(f, curves, false)}, content)
+                       .succeeded() &&
+                   feeds(f, curves, content),
+               "#723: the chain is Adjustment, Curves, Content slot");
+        settle();
+        const auto entries = f.session.composition()->graph().merge(merge)->entries().size();
+        const auto history = f.stack.size();
+        dissolve(f, curves);
+        expect(f.session.composition()->graph().findNode(curves) == nullptr &&
+                   feeds(f, *adjustment, content) &&
+                   f.session.composition()->graph().merge(merge)->entries().size() == entries &&
+                   f.stack.size() == history + 1,
+               "#723: Dissolve leaves the Adjustment in the same Content slot, as one step");
+        expect(messages.isEmpty(), "#723: a dissolve that keeps every link says nothing");
+        expect(f.session.undo() && f.session.composition()->graph().findNode(curves) != nullptr &&
+                   feeds(f, curves, content) && !feeds(f, *adjustment, content),
+               "#723: one undo restores the node and its links");
+    }
+    {
+        // A Layer node already in the Merge cannot take the second entry its Curves fed.
+        test::Fixture f;
+        QStringList messages;
+        QObject::connect(&f.session, &ui::CompositionSession::commandRejected,
+                         [&messages](const QString& message) { messages.push_back(message); });
+        const auto merge = f.session.composition()->graph().layerStack().nodeId();
+        const auto solid = f.add(document::kSolidSourceNodeType, {0, 300});
+        const auto layer = f.add(document::kLayerOutputNodeType, {300, 300});
+        const auto curves = f.add(document::kCurvesNodeType, {600, 300});
+        const document::InputPortRef newSlot = document::LayerStackInputRef{merge, {}, "content"};
+        expect(f.edit<commands::ConnectPorts>(
+                    document::OutputPortRef{solid, "image"},
+                    document::InputPortRef{document::NodeInputRef{layer, "image"}})
+                       .succeeded() &&
+                   f.edit<commands::ConnectPorts>(document::OutputPortRef{layer, "image"}, newSlot)
+                       .succeeded() &&
+                   f.edit<commands::ConnectPorts>(
+                        document::OutputPortRef{layer, "image"},
+                        document::InputPortRef{document::NodeInputRef{curves, port(f, curves, true)}})
+                       .succeeded() &&
+                   f.edit<commands::ConnectPorts>(
+                        document::OutputPortRef{curves, port(f, curves, false)}, newSlot)
+                       .succeeded(),
+               "#723: a Layer node feeds one entry itself and another through a Curves");
+        settle();
+        dissolve(f, curves);
+        expect(f.session.composition()->graph().findNode(curves) == nullptr,
+               "#723: the node is dissolved all the same");
+        expect(messages.size() == 1 &&
+                   messages.front().contains(QStringLiteral("could not keep one link")) &&
+                   messages.front().contains(QStringLiteral("already another entry")),
+               ("#723: the status bar names the link that was not kept and why: " +
+                messages.join(QStringLiteral(" | ")).toStdString())
+                   .c_str());
+    }
 }
 
 // ---- #705 ------------------------------------------------------------------------------------
@@ -1007,6 +1122,7 @@ int main(int argc, char** argv) {
     kit::installAfterlabTheme(app);
     testMarqueeBorderWidth();
     testRightClickKeepsSelection();
+    testDissolveReconnectsIntoMergeSlot();
     testBackspaceAndDeleteKeys();
     testDeleteAndDissolveEveryKind();
     testOutputAndItsMergeDelete();

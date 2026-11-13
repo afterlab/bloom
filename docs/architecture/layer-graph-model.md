@@ -951,12 +951,18 @@ removes the slot along with the edge into it: a slot with nothing in it is not a
 graph admits, so the slot and the link into it are one thing to the artist and one thing here. The
 Layer node keeps its boundary and `LayerId`, so reconnecting it is one gesture rather than a rebuild.
 
-`DissolveNode(NodeId)` requires a registered first Image input/output pair and a connected input.
-It removes the node and reconnects the input source to every consumer of the first Image output,
-keeping those consumer edge IDs. A consumer that is a stack SLOT is not reconnected: the slot belongs
-to the layer, and the layer goes with its boundary node -- so dissolving a participating Layer Output
-takes that layer out of the stack, which is what the gesture means. Protected stack/output nodes are
-still refused.
+`DissolveNode(NodeId)` reconnects through the node's first Image input/output pair (or, with no
+Image pair, the first output that has an input of its own kind) when that input is connected: by an
+edge, or for an operand socket by its parameter's driver. It removes the node and reconnects the
+input source to every consumer of that output, each on its own (#723), keeping the consumer edge
+IDs: an ordinary input, a parameter the output drove (its driver moves to the source), and a Merge
+slot. A slot keeps its place and its entry: a plain image source leaves the entry's own layer and
+its settings as they are, and an upstream Layer node takes the entry over, as a link dragged onto
+the slot does. A consumer that cannot take the source (its kind does not connect, or the Merge
+already holds that Layer node as another entry) is not reconnected and loses its link as Delete
+would leave it; `dissolveRefusals()` lists those consumers with the reason, so the caller can say
+so. With no connected input there is nothing to reconnect and the node is deleted. Dissolving a
+Layer node still returns its values to its entries (#502).
 
 `MoveNodes(map<NodeId, Vec2d>)` validates every node and finite position before changing the layout
 map. `SetNodeCollapsed`, `SetNodeMuted`, and `SetNodeWidth` change one layout field; width must be

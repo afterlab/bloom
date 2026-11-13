@@ -950,8 +950,8 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
                                           &document::OutputPortDefinition::name);
     const auto input = std::ranges::find(definition->inputs, path->input,
                                          &document::InputPortDefinition::name);
-    const auto* incoming = detail::inputEdge(graph, document::NodeInputRef{nodeId_, input->name});
-    const auto source = incoming->source;
+    (void)input;
+    const auto source = path->source;
     const bool layerNode = node->typeId == document::kLayerOutputNodeType;
     std::optional<document::OutputPortRef> audioSource;
     if (layerNode)
@@ -965,13 +965,28 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
     // values back as its own entry layer, and the picture does not change.
     std::vector<document::EdgeRecord> slotEdges;
     std::vector<document::EdgeId> releasedSlotEdges;
+    // #723: any other node's Merge slots take its upstream too: the entry keeps its place, its
+    // own layer and that layer's settings, and only its content's source changes.
+    std::vector<document::EdgeRecord> slotRelinks;
+    // A slot whose content cannot take the upstream is left to the removal, with its audio.
+    const auto refusedSlot = [&](const document::LayerStackInputRef& slot) {
+        return std::ranges::any_of(path->refused, [&](const DissolveRefusal& refusal) {
+            const auto* other = std::get_if<document::LayerStackInputRef>(&refusal.destination);
+            return other != nullptr && other->stackNodeId == slot.stackNodeId &&
+                   other->slotId == slot.slotId;
+        });
+    };
     for (auto edge : graph.edges()) {
         if (edge.source.nodeId != nodeId_)
             continue;
-        if (std::holds_alternative<document::LayerStackInputRef>(edge.destination)) {
-            // Any other node's stack slot is NOT reconnected: dissolving takes the node out.
-            if (!layerNode)
+        if (const auto* slot = std::get_if<document::LayerStackInputRef>(&edge.destination)) {
+            if (refusedSlot(*slot))
                 continue;
+            if (!layerNode) {
+                if (edge.source.port == output->name)
+                    slotRelinks.push_back(std::move(edge));
+                continue;
+            }
             releasedSlotEdges.push_back(edge.id);
             if (edge.source.port == output->name) {
                 edge.source = source;
@@ -982,11 +997,17 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
             }
             continue;
         }
-        if (edge.source.port != output->name)
+        if (edge.source.port != output->name || path->refuses(edge.destination))
             continue;
         edge.source = source;
         consumers.push_back(std::move(edge));
     }
+    // #723: a parameter the node drove is driven by its upstream instead.
+    std::vector<document::ParameterId> drivers;
+    for (const auto& [destination, parameter] :
+         detail::drivenInputs(*composition, nodeId_, output->name))
+        if (!path->refuses(destination))
+            drivers.push_back(parameter);
     std::set<document::ParameterId> candidates;
     for (const auto& binding : node->parameters)
         candidates.insert(binding.parameterId);
@@ -1033,6 +1054,48 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
                 emptied.push_back(entry.slotId);
         for (const auto slot : emptied)
             (void)graph.merge(stack.nodeId())->erase(slot);
+    }
+    for (const auto parameter : drivers)
+        if (!composition->parameters().setSource(
+                parameter, document::DriverBindingSource{source.nodeId, source.port}))
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidValue,
+                "Dissolving node " + std::to_string(nodeId_.value()) +
+                    " could not move the driver of parameter " +
+                    std::to_string(parameter.value()) + " to node " +
+                    std::to_string(source.nodeId.value()));
+    for (const auto& edge : slotRelinks) {
+        const auto& slot = std::get<document::LayerStackInputRef>(edge.destination);
+        auto* stack = graph.merge(slot.stackNodeId);
+        const auto* entry = stack != nullptr ? stack->find(slot.slotId) : nullptr;
+        if (entry == nullptr)
+            return detail::brokenReference("The " + detail::describeInput(edge.destination) +
+                                           " does not exist in composition " +
+                                           std::to_string(compositionId_.value()));
+        (void)graph.eraseEdge(edge.id);
+        // As a link dragged onto the slot (ConnectPorts): a plain image keeps the entry's own
+        // layer; an upstream Layer node takes the entry over.
+        const auto boundaries = graph.layerOutputs();
+        const auto boundary = std::ranges::find_if(boundaries, [&](const auto& candidate) {
+            return !candidate.entryOwned() && candidate.nodeId == source.nodeId;
+        });
+        const auto replaced = entry->layerId;
+        if (boundary != boundaries.end() && replaced != boundary->layerId) {
+            if (!stack->setLayerId(slot.slotId, boundary->layerId))
+                return OperationResult::rejected(
+                    OperationIssueCode::Unsupported,
+                    "Dissolving node " + std::to_string(nodeId_.value()) +
+                        " would give the upstream Layer node " +
+                        std::to_string(source.nodeId.value()) + " a second entry on Merge node " +
+                        std::to_string(slot.stackNodeId.value()));
+            graph.clearTrackMattesOutsideMerge(replaced);
+        }
+        if (!graph.addEdge({edge.id, source, edge.destination}, registry_))
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidValue,
+                "Dissolving node " + std::to_string(nodeId_.value()) +
+                    " could not reconnect node " + std::to_string(source.nodeId.value()) +
+                    " to the " + detail::describeInput(edge.destination));
     }
     if (const auto failure = releaseDriversOf(*composition, {nodeId_}, registry_))
         return *failure;

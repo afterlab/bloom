@@ -44,6 +44,27 @@ enum class NodeRemovalRefusal : std::uint8_t { None, Missing, Locked };
 [[nodiscard]] bool canDissolveNode(
     const document::Composition& composition, document::NodeId nodeId,
     const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions());
+// #723: Dissolve reconnects the node's upstream to everything its output fed, each consumer on its
+// own: a Merge slot keeps its place and its entry, an ordinary input keeps its link, a driven
+// parameter keeps a driver. A consumer that cannot take the upstream loses its link, as Delete
+// would leave it, and is listed here so the caller can say which link was not kept and why. Empty
+// when every link is kept, and when the node has no upstream to reconnect (Dissolve is then a
+// plain Delete).
+enum class DissolveRefusalReason : std::uint8_t {
+    // The consumer does not take the kind the upstream gives.
+    KindMismatch,
+    // The upstream is a Layer node the Merge already holds as another entry.
+    LayerAlreadyInMerge,
+};
+struct DissolveRefusal final {
+    document::InputPortRef destination;
+    DissolveRefusalReason reason = DissolveRefusalReason::KindMismatch;
+    std::optional<document::SocketValueKind> sourceKind;
+    std::optional<document::SocketValueKind> inputKind;
+};
+[[nodiscard]] std::vector<DissolveRefusal> dissolveRefusals(
+    const document::Composition& composition, document::NodeId nodeId,
+    const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions());
 [[nodiscard]] bool canSetNodeMuted(const document::Composition& composition,
                                    document::NodeId nodeId, bool muted);
 [[nodiscard]] bool canSetNodeCollapsed(const document::Composition& composition,

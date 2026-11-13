@@ -327,16 +327,67 @@ void NodeGraphEditor::duplicateSelectedNodes() {
         view_->sceneFromViewport(view_->viewport()->mapFromGlobal(QCursor::pos())));
 }
 
+QString dissolveRefusalText(const document::Composition& composition,
+                            const commands::DissolveRefusal& refusal);
+
 void NodeGraphEditor::dissolveSelectedNode() {
     const auto nodes = removableTargets(commandTargets());
     if (nodes.empty())
         return;
     // #704, #705: every selected node, one undo step. Each reconnects through where its types
     // allow and is otherwise deleted with its links broken.
+    // #723: a consumer that cannot take a node's upstream loses its link; the status bar says
+    // which one and why, read here from the composition the commands are about to change.
+    QStringList unkept;
+    if (const auto* composition = session_.composition())
+        for (const auto id : nodes)
+            for (const auto& refusal : commands::dissolveRefusals(*composition, id))
+                unkept.push_back(dissolveRefusalText(*composition, refusal));
     commands::Transaction transaction("Edit Nodes", session_.snapshot().revision());
     for (const auto id : nodes)
         transaction.emplace<commands::DissolveNode>(session_.compositionId(), id);
-    (void)scene_->submit(std::move(transaction));
+    const auto result = scene_->submit(std::move(transaction));
+    if (result.succeeded() && !unkept.isEmpty())
+        emit session_.commandRejected(
+            unkept.size() == 1
+                ? tr("Dissolve could not keep one link. %1").arg(unkept.front())
+                : tr("Dissolve could not keep %n links. The first: %1", nullptr,
+                     static_cast<int>(unkept.size()))
+                      .arg(unkept.front()));
+}
+
+// #723: "the link into Blur (Radius): it takes a scalar, and the upstream gives an image".
+QString dissolveRefusalText(const document::Composition& composition,
+                            const commands::DissolveRefusal& refusal) {
+    const auto nodeName = [&](const document::NodeId id) {
+        const auto* node = composition.graph().findNode(id);
+        return node != nullptr ? node_editor::nodeDisplayName(composition, *node)
+                               : QCoreApplication::translate("NodeGraphEditor", "a removed node");
+    };
+    QString link;
+    if (const auto* input = std::get_if<document::NodeInputRef>(&refusal.destination))
+        link = QCoreApplication::translate("NodeGraphEditor", "The link into %1 (%2)")
+                   .arg(nodeName(input->nodeId), QString::fromStdString(input->port));
+    else
+        link = QCoreApplication::translate("NodeGraphEditor", "The link into %1 (%2 slot)")
+                   .arg(nodeName(std::get<document::LayerStackInputRef>(refusal.destination)
+                                     .stackNodeId),
+                        QString::fromStdString(
+                            std::get<document::LayerStackInputRef>(refusal.destination).role));
+    const auto kind = [](const std::optional<document::SocketValueKind> value) {
+        return value ? QString::fromUtf8(document::socketValueKindName(*value).data(),
+                                         static_cast<int>(
+                                             document::socketValueKindName(*value).size()))
+                     : QCoreApplication::translate("NodeGraphEditor", "another kind");
+    };
+    if (refusal.reason == commands::DissolveRefusalReason::LayerAlreadyInMerge)
+        return QCoreApplication::translate(
+                   "NodeGraphEditor", "%1: the upstream Layer node is already another entry of that "
+                   "Merge.")
+            .arg(link);
+    return QCoreApplication::translate("NodeGraphEditor",
+                                       "%1: it takes %2, and the upstream gives %3.")
+        .arg(link, kind(refusal.inputKind), kind(refusal.sourceKind));
 }
 
 void NodeGraphEditor::toggleSelectedMuted(const bool muted) {

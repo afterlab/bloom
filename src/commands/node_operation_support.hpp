@@ -141,7 +141,19 @@ struct DissolvePath final {
     std::string input;
     std::string output;
     document::OutputPortRef source;
+    // #723: the consumers of `output` that cannot take `source`; every other one is reconnected.
+    std::vector<DissolveRefusal> refused;
+    [[nodiscard]] bool refuses(const document::InputPortRef& destination) const {
+        return std::ranges::any_of(refused, [&](const DissolveRefusal& refusal) {
+            return refusal.destination == destination;
+        });
+    }
 };
+// The inputs a parameter driven by `output` of `nodeId` stands behind (task S7: a link into an
+// operand socket is the parameter's driver binding, not an edge).
+[[nodiscard]] std::vector<std::pair<document::InputPortRef, document::ParameterId>>
+drivenInputs(const document::Composition& composition, document::NodeId nodeId,
+             std::string_view output);
 [[nodiscard]] std::optional<DissolvePath>
 dissolvePath(const document::Composition& composition, document::NodeId nodeId,
              const document::NodeDefinitionRegistry& registry);

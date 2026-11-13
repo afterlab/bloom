@@ -43,44 +43,86 @@ std::optional<DissolvePath> dissolvePath(const document::Composition& compositio
         if (input == definition->inputs.end())
             return std::nullopt;
     }
-    const auto* incoming = detail::inputEdge(graph, document::NodeInputRef{nodeId, input->name});
-    if (!incoming)
+    // The upstream is the link into that input: an edge, or (task S7) the driver of the operand
+    // parameter the socket stands for.
+    std::optional<document::OutputPortRef> upstreamSource;
+    const document::InputPortRef through = document::NodeInputRef{nodeId, input->name};
+    if (const auto* edge = detail::inputEdge(graph, through)) {
+        upstreamSource = edge->source;
+    } else if (const auto* binding = detail::parameterSocketBinding(graph, through)) {
+        const auto* parameter = composition.parameters().find(binding->parameterId);
+        const auto* driver = parameter
+                                 ? std::get_if<document::DriverBindingSource>(&parameter->source)
+                                 : nullptr;
+        if (driver != nullptr)
+            upstreamSource = document::OutputPortRef{driver->sourceNodeId, driver->outputPort};
+    }
+    if (!upstreamSource)
         return std::nullopt;
-    // Each consumer is re-linked to the dissolved node's upstream source; CanonicalGraph::addEdge
-    // refuses a link whose source and destination kinds no longer connect.
-    const auto sourceKind = graph.outputKind(incoming->source, registry);
-    for (const auto& edge : graph.edges()) {
-        if (edge.source.nodeId != nodeId || edge.source.port != output->name ||
-            std::holds_alternative<document::LayerStackInputRef>(edge.destination))
+    const auto* incoming = &*upstreamSource;
+    // #723: each consumer is re-linked to the dissolved node's upstream source on its own. One that
+    // cannot take it (CanonicalGraph::addEdge refuses a link whose kinds no longer connect; a Merge
+    // refuses a Layer node it already holds as another entry) is listed, and loses its link.
+    DissolvePath path{input->name, output->name, *incoming, {}};
+    const auto sourceKind = graph.outputKind(*incoming, registry);
+    const auto upstream = std::ranges::find_if(graph.layerOutputs(), [&](const auto& layer) {
+        return !layer.entryOwned() && layer.nodeId == incoming->nodeId;
+    });
+    const auto consider = [&](const document::InputPortRef& destination) {
+        const auto targetKind = graph.inputKind(destination, registry);
+        if (sourceKind && targetKind && !graph.acceptsConnection(*sourceKind, destination, registry)) {
+            path.refused.push_back(
+                {destination, DissolveRefusalReason::KindMismatch, sourceKind, targetKind});
+            return;
+        }
+        // #502: a slot fed straight by a Layer node names that node's layer.
+        const auto* slot = std::get_if<document::LayerStackInputRef>(&destination);
+        if (slot == nullptr || upstream == graph.layerOutputs().end())
+            return;
+        const auto* stack = graph.merge(slot->stackNodeId);
+        if (stack != nullptr && std::ranges::any_of(stack->entries(), [&](const auto& entry) {
+                return entry.slotId != slot->slotId && entry.layerId == upstream->layerId;
+            }))
+            path.refused.push_back(
+                {destination, DissolveRefusalReason::LayerAlreadyInMerge, sourceKind, targetKind});
+    };
+    for (const auto& edge : graph.edges())
+        if (edge.source.nodeId == nodeId && edge.source.port == output->name)
+            consider(edge.destination);
+    for (const auto& [destination, parameter] : drivenInputs(composition, nodeId, output->name)) {
+        (void)parameter;
+        consider(destination);
+    }
+    return path;
+}
+
+std::vector<std::pair<document::InputPortRef, document::ParameterId>>
+drivenInputs(const document::Composition& composition, const document::NodeId nodeId,
+             const std::string_view output) {
+    std::vector<std::pair<document::InputPortRef, document::ParameterId>> driven;
+    for (const auto& node : composition.graph().nodes()) {
+        if (node.id == nodeId)
             continue;
-        const auto targetKind = graph.inputKind(edge.destination, registry);
-        if (sourceKind && targetKind &&
-            !graph.acceptsConnection(*sourceKind, edge.destination, registry))
-            return std::nullopt;
+        for (const auto& binding : node.parameters) {
+            const auto* parameter = composition.parameters().find(binding.parameterId);
+            const auto* driver =
+                parameter ? std::get_if<document::DriverBindingSource>(&parameter->source)
+                          : nullptr;
+            if (driver != nullptr && driver->sourceNodeId == nodeId && driver->outputPort == output)
+                driven.emplace_back(document::NodeInputRef{node.id, binding.role},
+                                    binding.parameterId);
+        }
     }
-    // #502: a Layer node's slots take its upstream; an upstream Layer node becomes their layer,
-    // which a Merge already holding that Layer node as another entry refuses.
-    if (node->typeId == document::kLayerOutputNodeType) {
-        const auto upstream = std::ranges::find_if(graph.layerOutputs(), [&](const auto& layer) {
-            return !layer.entryOwned() && layer.nodeId == incoming->source.nodeId;
-        });
-        if (upstream != graph.layerOutputs().end())
-            for (const auto& edge : graph.edges()) {
-                const auto* slot = std::get_if<document::LayerStackInputRef>(&edge.destination);
-                if (slot == nullptr || edge.source.nodeId != nodeId ||
-                    edge.source.port != output->name)
-                    continue;
-                const auto* stack = graph.merge(slot->stackNodeId);
-                if (stack != nullptr &&
-                    std::ranges::any_of(stack->entries(), [&](const auto& entry) {
-                        return entry.slotId != slot->slotId && entry.layerId == upstream->layerId;
-                    }))
-                    return std::nullopt;
-            }
-    }
-    return DissolvePath{input->name, output->name, incoming->source};
+    return driven;
 }
 } // namespace detail
+
+std::vector<DissolveRefusal> dissolveRefusals(const document::Composition& composition,
+                                              const document::NodeId nodeId,
+                                              const document::NodeDefinitionRegistry& registry) {
+    auto path = detail::dissolvePath(composition, nodeId, registry);
+    return path ? std::move(path->refused) : std::vector<DissolveRefusal>{};
+}
 
 // #704, #716: Delete removes any node that is not locked, the composition's Output and the Merge
 // feeding it included (the composition then has no output until an Output is added again); a

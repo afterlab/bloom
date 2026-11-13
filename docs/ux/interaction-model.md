@@ -507,9 +507,13 @@ pan (the Viewer's `ViewTransform`) and View ▸ Background for Fit, Actual Size,
 Clear. Which node is the background and whether it is shown are session state, never saved or
 undoable; a newly chosen background starts fitted.
 
-Dissolve takes every selected node out (#704): it reconnects each consumer of the node's output to
-what feeds its input where the types allow, and otherwise deletes the node and breaks its links, as
-Delete does. Both are one undo step for the whole selection, and both are offered for every
+Dissolve takes every selected node out (#704, #723): it reconnects each consumer of the node's
+output to what feeds its input, each consumer on its own. A Merge Content slot keeps its place, its
+entry and the entry's layer settings and takes the upstream as its content; an ordinary input keeps
+its link; a parameter the node drove is driven by the upstream. A consumer that cannot take the
+upstream (a different kind, or a Layer node the Merge already holds as another entry) loses its
+link, and the status bar says which link was not kept and why. A node with nothing upstream to
+reconnect is deleted with its links broken, as Delete does. Both are one undo step for the whole selection, and both are offered for every
 selection. Every node can be deleted and dissolved, the composition's Output and the Merge
 connected to it included. Only a node of a locked layer stays (the layer's lock protects it; unlock
 the layer to delete it), and the status bar says so whenever Delete or Dissolve leaves one in place

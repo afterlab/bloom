@@ -2,6 +2,7 @@
 // dissolve (adopt / return), shared Layer nodes, Adjustment layers, the layer commands on entry
 // layers, the reconcile pass's cleanup and its work counters, lock refusal and exact undo/redo.
 
+#include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/entry_layer_operations.hpp>
 #include <bloom/commands/layer_mask_operations.hpp>
@@ -381,6 +382,166 @@ void anExistingLayerNodeWinsUnlessDefault() {
            "the replaced entry layer and its parameters are gone");
 }
 
+// The first input and output of `node` that carry `kind`.
+std::string inputOfKind(const Composition& composition, const NodeId node, const SocketValueKind kind) {
+    const auto* record = composition.graph().findNode(node);
+    const auto* definition = builtInNodeDefinitions().find(record->typeId, record->schemaVersion);
+    const auto found = std::ranges::find(definition->inputs, kind, &InputPortDefinition::valueKind);
+    if (found == definition->inputs.end())
+        throw std::runtime_error("fixture node has no such input");
+    return found->name;
+}
+std::string outputOfKind(const Composition& composition, const NodeId node, const SocketValueKind kind) {
+    const auto* record = composition.graph().findNode(node);
+    const auto* definition = builtInNodeDefinitions().find(record->typeId, record->schemaVersion);
+    const auto found = std::ranges::find(definition->outputs, kind, &OutputPortDefinition::valueKind);
+    if (found == definition->outputs.end())
+        throw std::runtime_error("fixture node has no such output");
+    return found->name;
+}
+bool feeds(const Composition& composition, const NodeId source, const InputPortRef& destination) {
+    return std::ranges::any_of(composition.graph().edges(), [&](const EdgeRecord& edge) {
+        return edge.source.nodeId == source && edge.destination == destination;
+    });
+}
+
+// #723: dissolving a node whose output feeds a Merge Content slot puts its upstream into that same
+// slot. The entry keeps its place, its own layer and that layer's settings; one undo restores the
+// node and every link. With a plain image source upstream, and with an Adjustment.
+void dissolveReconnectsIntoTheSameMergeSlot() {
+    for (const bool adjustment : {false, true}) {
+        const std::string what = adjustment ? "Adjustment upstream" : "plain source upstream";
+        Fixture fixture;
+        const auto merge = fixture.mainMerge();
+        (void)fixture.connect(fixture.addSolid(), merge);
+        NodeId upstream;
+        LayerSlotId slot;
+        const auto curves = fixture.addNode(kCurvesNodeType);
+        const auto curvesIn = inputOfKind(fixture.comp(), curves, SocketValueKind::Image);
+        const auto curvesOut = outputOfKind(fixture.comp(), curves, SocketValueKind::Image);
+        if (adjustment) {
+            const auto added = fixture.must<AddAdjustmentLayer>(fixture.composition, merge);
+            upstream = *added.outputId<NodeId>(kEntryLayerNodeOutput);
+            slot = *added.outputId<LayerSlotId>(kEntryLayerSlotOutput);
+            fixture.link(upstream, curves, curvesIn);
+            fixture.must<ConnectPorts>(
+                fixture.composition, OutputPortRef{curves, curvesOut},
+                InputPortRef{LayerStackInputRef{merge, slot, "content"}});
+        } else {
+            upstream = fixture.addSolid();
+            fixture.link(upstream, curves, curvesIn);
+            slot = fixture.connect(curves, merge, curvesOut);
+        }
+        (void)fixture.connect(fixture.addSolid(), merge);
+        // A setting of the entry's own layer, so there is something to keep.
+        expect(fixture
+                   .edit(merge, slot,
+                         [&](const LayerId layer) {
+                             return std::make_unique<SetLayerSolo>(fixture.composition, layer, true);
+                         })
+                   .changed(),
+               what + ": the entry has a layer setting");
+        const auto before = fixture.document.snapshot();
+        const auto& was = *before.project().findComposition(fixture.composition);
+        const auto* layerBefore = entryLayer(was, merge, slot);
+        const std::vector<LayerStackEntry> entriesBefore(was.graph().merge(merge)->entries().begin(),
+                                                         was.graph().merge(merge)->entries().end());
+        const InputPortRef content = LayerStackInputRef{merge, slot, "content"};
+        expect(layerBefore != nullptr && layerBefore->solo && feeds(was, curves, content),
+               what + ": the chain is source, Curves, Content slot");
+        expect(dissolveRefusals(was, curves).empty(), what + ": every link can be kept");
+        const auto history = fixture.stack.size();
+        fixture.must<DissolveNode>(fixture.composition, curves);
+        const auto& now = fixture.comp();
+        expect(now.graph().findNode(curves) == nullptr && fixture.stack.size() == history + 1,
+               what + ": Dissolve removes the node as one step");
+        expect(feeds(now, upstream, content), what + ": the upstream feeds the same slot");
+        expect(std::ranges::equal(now.graph().merge(merge)->entries(), entriesBefore),
+               what + ": the Merge keeps its entries, in the same order");
+        const auto* layerNow = entryLayer(now, merge, slot);
+        expect(layerNow != nullptr && layerBefore != nullptr && *layerNow == *layerBefore,
+               what + ": the entry keeps its own layer and every setting of it");
+        if (adjustment)
+            expect(mergeEntryAdjustment(now.graph(), merge, slot) == upstream,
+                   what + ": the Adjustment serves the entry directly");
+        expect(noOrphanParameters(now) && fixture.document.snapshot().project().validate().ok(),
+               what + ": the project validates");
+        expectExactUndoRedo(fixture, before, "dissolve into a Merge slot (" + what + ")");
+    }
+}
+
+// #723: several consumers at once, each on its own. A Layer node feeds one entry of the Merge
+// directly and a Curves that feeds a second entry and another node. Dissolving the Curves keeps
+// the link into the other node; the second entry cannot take the Layer node (the Merge already
+// holds it), so that one link is not kept, and the refusal says which and why.
+void dissolveKeepsWhatItCanAndNamesWhatItCannot() {
+    Fixture fixture;
+    const auto merge = fixture.mainMerge();
+    const auto added =
+        fixture.must<AddNode>(fixture.composition, std::string(kLayerOutputNodeType), Vec2d{0, 0});
+    const auto layerNode = *added.outputId<NodeId>(kAddNodeOutput);
+    fixture.link(fixture.addSolid(), layerNode);
+    const auto direct = fixture.connect(layerNode, merge);
+    const auto curves = fixture.addNode(kCurvesNodeType);
+    const auto curvesIn = inputOfKind(fixture.comp(), curves, SocketValueKind::Image);
+    const auto curvesOut = outputOfKind(fixture.comp(), curves, SocketValueKind::Image);
+    fixture.link(layerNode, curves, curvesIn);
+    const auto second = fixture.connect(curves, merge, curvesOut);
+    const auto other = fixture.addNode(kCurvesNodeType);
+    fixture.must<ConnectPorts>(fixture.composition, OutputPortRef{curves, curvesOut},
+                               InputPortRef{NodeInputRef{other, curvesIn}});
+    const auto before = fixture.document.snapshot();
+    const auto refusals = dissolveRefusals(fixture.comp(), curves);
+    const InputPortRef refusedSlot = LayerStackInputRef{merge, second, "content"};
+    expect(refusals.size() == 1 && refusals.front().destination == refusedSlot &&
+               refusals.front().reason == DissolveRefusalReason::LayerAlreadyInMerge,
+           "the one link that cannot be kept is named with its reason");
+    fixture.must<DissolveNode>(fixture.composition, curves);
+    const auto& now = fixture.comp();
+    expect(now.graph().findNode(curves) == nullptr, "the node is removed");
+    expect(feeds(now, layerNode, InputPortRef{NodeInputRef{other, curvesIn}}),
+           "the consumer that can take the upstream is reconnected");
+    expect(feeds(now, layerNode, InputPortRef{LayerStackInputRef{merge, direct, "content"}}) &&
+               !feeds(now, layerNode, refusedSlot),
+           "the Layer node keeps its own entry and is not given a second one");
+    expect(fixture.document.snapshot().project().validate().ok(), "the project validates");
+    expectExactUndoRedo(fixture, before, "dissolve with a refusing consumer");
+}
+
+// #723: a value node's upstream arrives as the driver of its operand, and what it drove is a
+// parameter. Dissolving it moves that driver to the upstream; undo restores it.
+void dissolveMovesAParameterDriverToTheUpstream() {
+    Fixture fixture;
+    const auto value = fixture.addNode(kScalarValueNodeType);
+    const auto middle = fixture.addNode(kScalarMathNodeType);
+    const auto consumer = fixture.addNode(kScalarMathNodeType);
+    const auto operand = inputOfKind(fixture.comp(), middle, SocketValueKind::Scalar);
+    const auto result = outputOfKind(fixture.comp(), middle, SocketValueKind::Scalar);
+    const auto valueOut = outputOfKind(fixture.comp(), value, SocketValueKind::Scalar);
+    fixture.must<ConnectPorts>(fixture.composition, OutputPortRef{value, valueOut},
+                               InputPortRef{NodeInputRef{middle, operand}});
+    fixture.must<ConnectPorts>(fixture.composition, OutputPortRef{middle, result},
+                               InputPortRef{NodeInputRef{consumer, operand}});
+    const auto driverOf = [&](const Composition& composition) -> const DriverBindingSource* {
+        const auto* node = composition.graph().findNode(consumer);
+        const auto binding = std::ranges::find(node->parameters, operand, &ParameterBinding::role);
+        const auto* record = binding != node->parameters.end()
+                                 ? composition.parameters().find(binding->parameterId)
+                                 : nullptr;
+        return record ? std::get_if<DriverBindingSource>(&record->source) : nullptr;
+    };
+    expect(driverOf(fixture.comp()) != nullptr && driverOf(fixture.comp())->sourceNodeId == middle,
+           "the consumer's operand is driven by the middle node");
+    const auto before = fixture.document.snapshot();
+    fixture.must<DissolveNode>(fixture.composition, middle);
+    const auto* driver = driverOf(fixture.comp());
+    expect(fixture.comp().graph().findNode(middle) == nullptr && driver != nullptr &&
+               driver->sourceNodeId == value && driver->outputPort == valueOut,
+           "after Dissolve the operand is driven by the upstream value");
+    expect(fixture.document.snapshot().project().validate().ok(), "the project validates");
+    expectExactUndoRedo(fixture, before, "dissolve a value node");
+}
+
 void aSharedLayerNodeReturnsToEveryEntry() {
     Fixture fixture;
     const auto main = fixture.mainMerge();
@@ -709,6 +870,9 @@ int main() try {
     disconnectingAnEntryRetiresItsLayer();
     lockedEntryLayersRefuseEdits();
     adjustmentLayersAreAddedAboveOrAtTheTop();
+    dissolveReconnectsIntoTheSameMergeSlot();
+    dissolveKeepsWhatItCanAndNamesWhatItCannot();
+    dissolveMovesAParameterDriverToTheUpstream();
     reconcileSkipsParameterOnlyEdits();
     if (failures != 0) {
         std::cerr << failures << " entry layer expectation(s) failed\n";
