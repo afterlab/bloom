@@ -1072,9 +1072,10 @@ set_tests_properties(bloom.runtime.gpu_viewer_isolation_native
 
 # #642: an SVG imported as one layer (a Vector Artwork layer) on the production GPU route against
 # the CPU reference and the editable import: keyed, scaled and turned at 512 x 288 over a few frames,
-# at half resolution, at 1080p and 4K, admitted, retired and cancelled; in scaled groups and clipped
-# to the window the frame shows, and sharp at 4K scaled 4x and 8x and in a 3x group (a cropped
-# region against the scaled pre-composition). Skips (exit 77) only the GPU half.
+# at half resolution, admitted, retired and cancelled; in scaled groups and clipped to the window
+# the frame shows, and sharp scaled 4x and 8x and in a 3x group (a cropped region against the
+# scaled pre-composition) at 480 x 270. The same sharpness cases at 3840 x 2160 are the stress
+# test below. Skips (exit 77) only the GPU half.
 add_executable(bloom_runtime_gpu_svg_artwork_layer_test
     ${PROJECT_SOURCE_DIR}/tests/integration/gpu_svg_artwork_layer_tests.cpp)
 target_include_directories(bloom_runtime_gpu_svg_artwork_layer_test
@@ -1098,6 +1099,14 @@ bloom_add_test(
 )
 set_tests_properties(bloom.runtime.gpu_svg_artwork_layer
     PROPERTIES SKIP_RETURN_CODE 77)
+bloom_add_test(
+    NAME bloom.runtime.gpu_svg_artwork_layer_4k
+    COMMAND bloom_runtime_gpu_svg_artwork_layer_test --large-frame
+    LABELS runtime native gpu render memory
+    TIMEOUT 600
+    SKIP_RETURN_CODE 77
+    STRESS
+)
 
 # #642: the Vector Artwork layer's GPU cost against a Grade and the editable import of the same file
 # (tools/bench/run_bench.py `nodes`, benchmarks.md "Vector Artwork layer"). The smoke run keeps it

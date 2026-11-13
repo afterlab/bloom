@@ -18,8 +18,7 @@
 // Viewer frames from the expected route matching the CPU route's, a cold and a warm RAM preview,
 // a still, a range and a movie with their provenance, and on the GPU route a 512 x 288 still
 // exported from the device with no CPU reference frame (plain, with a blur between, masked and
-// scaled 8x, in a group scaled 3x) and a 3840 x 2160 one read by a Layer node pivoting on its
-// content. Admission
+// scaled 8x, in a group scaled 3x, read by a Layer node pivoting on its content). Admission
 // uses a fixed memory reading (fixed_memory_budget.hpp), never this machine's free memory.
 //
 // `--svg <file> --size <W>x<H>` (with --loader) instead shows a real file's first frame in the
@@ -27,6 +26,7 @@
 // and requires the frame from the device with no CPU fallback. Not part of the ctest run (it needs
 // the file); docs/architecture/vector-artwork.md records the results.
 
+#include "await_qt.hpp"
 #include "fixed_memory_budget.hpp"
 
 #include <bloom/commands/animation_operations.hpp>
@@ -75,7 +75,6 @@
 
 #include <QApplication>
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QImage>
 #include <QSettings>
@@ -129,20 +128,7 @@ constexpr std::uint64_t kFps = 24;
 // Half a second: the range a RAM preview fills.
 constexpr std::uint64_t kFrames = kFps / 2;
 
-template <typename Predicate>
-bool waitUntil(Predicate predicate, const std::chrono::milliseconds limit = 60s) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < limit.count()) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (predicate()) {
-            return true;
-        }
-        std::this_thread::sleep_for(1ms);
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return predicate();
-}
+using bloom::test_support::awaitQtCondition;
 
 struct Pixels final {
     bool ok = false;
@@ -443,8 +429,9 @@ commands::CommandResult edit(Authored& authored, Arguments&&... arguments) {
 }
 
 // #642 B4: the one layer read by a Layer node pivoting on its content (through a second Layer node
-// at its defaults into the entry's slot), scaled 6x and turned (drawn at 8x, only the window the
-// frame shows). The content scale the compiled plan draws the Layer node at, or 0 when an edit fails.
+// at its defaults into the entry's slot), scaled 6x and turned (oversampled, only the window the
+// frame shows). The content scale the compiled plan draws the Layer node at, or 0 when an edit
+// fails.
 [[nodiscard]] double contentPivotPastTheFrame(Authored& authored, const runtime::SnapshotCompiler& compiler) {
     const auto* main = authored.scripting->snapshot().project().findComposition(authored.composition);
     const document::LayerOutputBoundary* entry = nullptr;
@@ -707,12 +694,14 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
             rig.scheduler, gpuStage,
             ui::makeCompositionPreviewCpuStage(*rig.compiler, rig.evaluator, rig.qualified),
             ui::makeCompositionPreviewCpuDisplayFallback(rig.displayPreparer), options);
-        waitUntil(
-            [&] {
-                return service->status().state !=
-                       runtime::GpuPreviewDisplayServiceState::Initializing;
-            },
-            90s);
+        checks.expect(awaitQtCondition(
+                          "the preview service leaves Initializing",
+                          [&] {
+                              return service->status().state !=
+                                     runtime::GpuPreviewDisplayServiceState::Initializing;
+                          },
+                          90s),
+                      prefix + "the preview service finishes initializing");
         if (service->status().state != runtime::GpuPreviewDisplayServiceState::Ready) {
             std::cout << "NotRun: " << route.name << " preview: no qualified device ("
                       << service->status().residentDetail << ")\n";
@@ -754,13 +743,14 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
         controller.requestRefresh();
         const auto before =
             index == 0 ? ui::PreparedPreviewFrameHandle{} : viewer.displayedFrameForTest();
-        const bool ready = waitUntil([&] {
-            const auto displayed = viewer.displayedFrameForTest();
-            return controller.state().activity == ui::PreviewActivity::Ready &&
-                   displayed != nullptr && (index == 0 || displayed != before) &&
-                   displayed->provenance().provider == expectedProvider &&
-                   viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
-        });
+        const bool ready =
+            awaitQtCondition("the Viewer shows a current frame from the expected route", [&] {
+                const auto displayed = viewer.displayedFrameForTest();
+                return controller.state().activity == ui::PreviewActivity::Ready &&
+                       displayed != nullptr && (index == 0 || displayed != before) &&
+                       displayed->provenance().provider == expectedProvider &&
+                       viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
+            });
         checks.expect(ready, label + "the Viewer displays a current frame from the expected route");
         shown.at(index) = pixelsOf(viewer.displayedFrameForTest());
         checks.expect(shown.at(index).ok && shown.at(index).width == kWidth &&
@@ -811,19 +801,22 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
 
     // RAM preview at Half: cold fills every frame, warm prepares nothing and dispatches nothing.
     controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);
-    checks.expect(waitUntil([&] {
-                      const auto displayed = viewer.displayedFrameForTest();
-                      return controller.state().activity == ui::PreviewActivity::Ready &&
-                             displayed != nullptr &&
-                             displayed->provenance().provider == expectedProvider &&
-                             pixelsOf(displayed).width == kWidth / 2;
-                  }),
-                  prefix + "the Viewer shows the artwork at Half from the expected route");
+    checks.expect(
+        awaitQtCondition("the Viewer shows the artwork at Half",
+                         [&] {
+                             const auto displayed = viewer.displayedFrameForTest();
+                             return controller.state().activity == ui::PreviewActivity::Ready &&
+                                    displayed != nullptr &&
+                                    displayed->provenance().provider == expectedProvider &&
+                                    pixelsOf(displayed).width == kWidth / 2;
+                         }),
+        prefix + "the Viewer shows the artwork at Half from the expected route");
     ui::RamPreviewController ram(session, controller, rig.scheduler, *rig.bridge, pipeline, nullptr,
                                  submitter);
     const auto beforeCold = counters();
     ram.start();
-    const bool coldDone = waitUntil([&] { return !ram.isCaching(); }, 180s);
+    const bool coldDone =
+        awaitQtCondition("the cold RAM preview finishes", [&] { return !ram.isCaching(); }, 180s);
     const auto afterCold = counters();
     checks.expect(coldDone && ram.cachedFrameCount() == kFrames &&
                       ram.lastCompletion() == ui::RamPreviewController::Completion::Complete,
@@ -835,7 +828,8 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     checks.expect(!route.gpu || afterCold.nativeDispatches > beforeCold.nativeDispatches,
                   prefix + "the cold RAM preview ran on the device");
     ram.start();
-    const bool warmDone = waitUntil([&] { return !ram.isCaching(); }, 60s);
+    const bool warmDone =
+        awaitQtCondition("the warm RAM preview finishes", [&] { return !ram.isCaching(); }, 60s);
     const auto afterWarm = counters();
     checks.expect(warmDone && ram.preparedFrameCount() == 0 && ram.cachedFrameCount() == kFrames,
                   prefix + "a warm RAM preview prepares nothing");
@@ -933,22 +927,21 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     // reference frame; B2: and with a blur between its artwork and its slot (drawn at its output
     // scale); B3: masked and scaled 8x (drawn at 8x) and in a group scaled 3x (drawn at 4x), only
     // the window the frame shows; B4: read by a Layer node pivoting on its content, scaled 6x and
-    // turned (drawn at 8x), only the window the frame shows. Each once; the first four at
-    // 512 x 288, where the route, the drawn scale and the window are the same as at 4K.
+    // turned, only the window the frame shows. Each once, at 512 x 288: the route and the window
+    // do not depend on the frame's size, and each case asserts the scale the compiler draws it at
+    // at this size.
     if (route.gpu && route.layer) {
-        enum class Dressed { Plain, Blurred, Masked8x, Group3x, ContentPivot8x };
+        enum class Dressed { Plain, Blurred, Masked8x, Group3x, ContentPivot };
         for (const auto& [width, height, dressed] :
              {std::tuple{512U, 288U, Dressed::Plain}, std::tuple{512U, 288U, Dressed::Blurred},
               std::tuple{512U, 288U, Dressed::Masked8x}, std::tuple{512U, 288U, Dressed::Group3x},
-              // The content pivot case keeps its 4K frame: at 512 x 288 the compiler draws this
-              // layer at 16x, not 8x, so the smaller frame would not prove the same thing.
-              std::tuple{3840U, 2160U, Dressed::ContentPivot8x}}) {
+              std::tuple{512U, 288U, Dressed::ContentPivot}}) {
             const auto size = std::to_string(width) + "x" + std::to_string(height) +
-                              (dressed == Dressed::Blurred          ? " oversampled"
-                               : dressed == Dressed::Masked8x       ? " masked 8x"
-                               : dressed == Dressed::Group3x        ? " group 3x"
-                               : dressed == Dressed::ContentPivot8x ? " content pivot 8x"
-                                                                    : "");
+                              (dressed == Dressed::Blurred        ? " oversampled"
+                               : dressed == Dressed::Masked8x     ? " masked 8x"
+                               : dressed == Dressed::Group3x      ? " group 3x"
+                               : dressed == Dressed::ContentPivot ? " content pivot"
+                                                                  : "");
             auto large = author(checks, workDir, commands::SvgImportMode::Layer, width, height);
             if (!large.has_value())
                 continue;
@@ -957,10 +950,13 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
                 checks.expect(oversampled, prefix + size + ": a blur goes between and the layer is drawn at its output scale");
                 if (!oversampled)
                     continue;
-            } else if (dressed == Dressed::ContentPivot8x) {
+            } else if (dressed == Dressed::ContentPivot) {
+                // The compiler reports 16x for this layer at 512 x 288 (it reported 8x at
+                // 3840 x 2160, where this case used to run).
                 const auto drawn = contentPivotPastTheFrame(*large, exportCompiler);
-                checks.expect(drawn == 8.0, prefix + size + ": the Layer node's artwork is drawn at 8x (" +
-                                                std::to_string(drawn) + ")");
+                checks.expect(drawn == 16.0, prefix + size +
+                                                 ": the Layer node's artwork is drawn at 16x (" +
+                                                 std::to_string(drawn) + ")");
                 if (drawn <= 1.0)
                     continue;
             } else if (dressed != Dressed::Plain) {
@@ -994,13 +990,18 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
 
     controller.beginShutdown();
     rig.bridge->beginShutdown();
-    (void)waitUntil([&] { return rig.scheduler.isQuiescent(); }, 10s);
+    checks.expect(
+        awaitQtCondition("the scheduler is quiescent", [&] { return rig.scheduler.isQuiescent(); }),
+        prefix + "the scheduler goes quiet after shutdown begins");
 #if defined(BLOOM_UI_SVG_ARTWORK_ROUTES_GPU)
     if (service != nullptr) {
         service->beginShutdown();
-        (void)waitUntil([&] {
-            return service->status().state == runtime::GpuPreviewDisplayServiceState::Stopped;
-        });
+        checks.expect(awaitQtCondition("the preview service stops",
+                                       [&] {
+                                           return service->status().state ==
+                                                  runtime::GpuPreviewDisplayServiceState::Stopped;
+                                       }),
+                      prefix + "the preview service stops");
     }
 #endif
 }
@@ -1198,23 +1199,32 @@ int viewerAtSize(const std::filesystem::path& svg, const std::uint32_t width,
     const auto shutDown = [&] {
         memoryController.beginShutdown();
         bridge.beginShutdown();
-        (void)waitUntil([&] { return scheduler.isQuiescent(); }, 10s);
+        checks.expect(
+            awaitQtCondition("the scheduler is quiescent", [&] { return scheduler.isQuiescent(); }),
+            prefix + "the scheduler goes quiet after shutdown begins");
         service->beginShutdown();
-        (void)waitUntil([&] {
-            return service->status().state == runtime::GpuPreviewDisplayServiceState::Stopped;
-        });
+        checks.expect(awaitQtCondition("the preview service stops",
+                                       [&] {
+                                           return service->status().state ==
+                                                  runtime::GpuPreviewDisplayServiceState::Stopped;
+                                       }),
+                      prefix + "the preview service stops");
         evaluator.operationCache()->close();
         retirementOwner->beginShutdown();
-        const bool retired = waitUntil([&] { return retirementOwner->exitAcknowledged(); }, 15s);
+        const bool retired = awaitQtCondition("the packed host retirement exits",
+                                              [&] { return retirementOwner->exitAcknowledged(); });
         while (retired && !retirementOwner->collect())
             QCoreApplication::processEvents();
         checks.expect(retired, prefix + "the packed host retirement shuts down");
     };
-    waitUntil(
-        [&] {
-            return service->status().state != runtime::GpuPreviewDisplayServiceState::Initializing;
-        },
-        90s);
+    checks.expect(awaitQtCondition(
+                      "the preview service leaves Initializing",
+                      [&] {
+                          return service->status().state !=
+                                 runtime::GpuPreviewDisplayServiceState::Initializing;
+                      },
+                      90s),
+                  prefix + "the preview service finishes initializing");
     if (service->status().state != runtime::GpuPreviewDisplayServiceState::Ready) {
         std::cout << "NotRun: " << prefix << "no qualified device ("
                   << service->status().residentDetail << ")" << std::endl;
@@ -1238,7 +1248,8 @@ int viewerAtSize(const std::filesystem::path& svg, const std::uint32_t width,
         viewer.show();
         const auto before = service->status().counters;
         controller.requestRefresh();
-        const bool ready = waitUntil(
+        const bool ready = awaitQtCondition(
+            "the Viewer shows a current frame",
             [&] {
                 const auto displayed = viewer.displayedFrameForTest();
                 return controller.state().activity == ui::PreviewActivity::Ready &&

@@ -19,11 +19,12 @@
 // - A Layer node pivoting on its content above the oversampled picture (a blur between, masked,
 //   keyed from 1x to 3x, turned and panned) matches the CPU reference cold and warm with its
 //   bounds, 512 x 288 over frames 0 to 2, its box the same at every frame and only the window the
-//   frame shows drawn; at 3840 x 2160, scaled 4x and 8x and turned, a crop is the scaled
-//   pre-composition's on the device, with at most two frames of pixels drawn (#642 B4).
+//   frame shows drawn; scaled 4x and 8x and turned, a crop is the scaled pre-composition's on
+//   the device, with at most two frames of pixels drawn (#642 B4). That case and the masked and
+//   grouped one before it (#642 B3) run at 480 x 270, and at 3840 x 2160 with --large-frame.
 // - A 480 x 270 composition prepares and runs on the device, the plain layer and the oversampled
 //   one (no comparison; the export route's provenance is read by
-//   bloom.ui.viewer_export_svg_artwork). The 4K cases above are the large frames on the device.
+//   bloom.ui.viewer_export_svg_artwork).
 // - Admission (the phase admits the scene; a machine too small refuses it and holds nothing),
 //   retirement (releasing the scene returns every claimed byte), cancellation (a cancelled
 //   preparation and a cancelled run publish nothing) and the executor's request budget.
@@ -893,7 +894,54 @@ std::string sharpSvg(const std::string& transform) {
     return worst;
 }
 
-// The device frame of a compiled document at 4K, and the largest window its scene draws.
+// The frame the sharpness cases render: 16:9, with the 120 x 80 file fitted to its height. Every
+// length below follows from the frame, so the same case runs at 480 x 270 (the default) and at
+// 3840 x 2160 (--large-frame, a stress run).
+struct SharpFrame final {
+    std::uint32_t width = 480;
+    std::uint32_t height = 270;
+    // The fitted file's scale (27 at 4K) and its left edge (300 at 4K).
+    [[nodiscard]] double fit() const { return height / 80.0; }
+    [[nodiscard]] double fitLeft() const { return (width - 120.0 * fit()) / 2.0; }
+    [[nodiscard]] document::Vec2d centre() const { return {width / 2.0, height / 2.0}; }
+    // Where the fitted circle's leftmost point (68, 24) lands: (2136, 648) at 4K.
+    [[nodiscard]] document::Vec2d circleEdge() const {
+        return {68.0 * fit() + fitLeft(), 24.0 * fit()};
+    }
+    // A length given in 4K pixels, in this frame's.
+    [[nodiscard]] double from4K(const double length) const { return length * width / 3840.0; }
+    // The file baked `s` times larger and imported unfitted: a point p lands at
+    // s * (fit * p + (fitLeft, 0)) once the unfitted viewport's offset is taken off.
+    [[nodiscard]] std::string baked(const double s) const {
+        return sharpSvg("translate(" + std::to_string(s * fitLeft() - (width - 120.0) / 2.0) + " " +
+                        std::to_string(-(height - 80.0) / 2.0) + ") scale(" +
+                        std::to_string(fit() * s) + ")");
+    }
+    // The crop around the frame's centre: a fifth of the frame each way, inside the mask.
+    [[nodiscard]] std::uint32_t cropWidth() const { return width / 5; }
+    [[nodiscard]] std::uint32_t cropHeight() const { return height / 5; }
+    // One curved edge crosses every row of the crop, so the bounds are per row and hold at every
+    // frame size.
+    // - The crop holds the edge: a partly covered pixel in at least 100 of 216 rows.
+    [[nodiscard]] std::size_t edgeFloor() const { return std::size_t{cropHeight()} * 100 / 216; }
+    // - The one layer against the scaled pre-composition: the two flattenings are each within
+    //   1/32 pixel of the curve, so within 1/16 pixel of each other; a pixel has sixteen coverage
+    //   samples, so a band 1/16 pixel wide along an edge of length L holds at most 16 * L / 16 = L
+    //   samples that can land on opposite sides: one pixel a row. The edge is near vertical (turned
+    //   12 degrees at most), so L is at most a tenth more than the rows.
+    [[nodiscard]] std::size_t sharpCeiling() const { return std::size_t{cropHeight()} * 11 / 10; }
+    // - The resampled picture, drawn at the fitted size and enlarged `scale` times, spreads the
+    //   edge over `scale` pixels where the truth has one: at least `scale - 1` differing pixels a
+    //   row.
+    [[nodiscard]] std::size_t softFloor(const double scale) const {
+        return static_cast<std::size_t>(static_cast<double>(cropHeight()) * (scale - 1.0));
+    }
+    [[nodiscard]] std::string name() const {
+        return std::to_string(width) + " x " + std::to_string(height);
+    }
+};
+
+// The device frame of a compiled document, and the largest window its scene draws.
 struct LargeFrame final {
     std::vector<render::Rgba32f> pixels;
     std::uint64_t largestWindow = 0;
@@ -914,41 +962,39 @@ struct LargeFrame final {
     return result;
 }
 
-// #642 B3: at 3840 x 2160, a whole-frame artwork scaled 4x and 8x (masked: drawn at its output
+// #642 B3: a whole-frame artwork scaled 4x and 8x (masked: drawn at its output
 // scale) and one in a group scaled 3x render on the production GPU route with only the window the
-// frame shows drawn, and a crop around a curved edge is the scaled pre-composition's (the file baked
-// that many times larger, drawn through the editable import on the device) up to the flattenings'
-// coverage samples, far sharper than the resampled picture. No full-size CPU frame.
+// frame shows drawn, and a crop around a curved edge is the scaled pre-composition's (the file
+// baked that many times larger, drawn through the editable import on the device) up to the
+// flattenings' coverage samples, far sharper than the resampled picture. No full-size CPU frame.
 //
 // The one layer flattens the circle in the file's units through the band's matrix, the baked file
 // at its own size; each polyline is within 1/32 pixel of the curve, so where the curve passes that
 // close to a pixel's 4 x 4 coverage samples the two may land some on opposite sides. The crop is
 // centred on the circle's leftmost point, where its tangent runs along a column of samples, so up
 // to one column (four of the sixteen) can flip there; elsewhere one or two (vector-artwork.md
-// "The band"). At most a quarter of the crop's edge pixels may differ at all.
-void sharpAt4KOnTheDevice(Expectations& expectations, const Device& device) {
-    constexpr std::uint32_t kWidth = 3840;
-    constexpr std::uint32_t kHeight = 2160;
-    const document::Vec2d centre{kWidth / 2.0, kHeight / 2.0};
-    // Fitted, the 120 x 80 file is 27x about (300, 0); the circle's left edge lands at (2136, 648),
-    // which the layer's anchor puts at the frame's centre.
-    const document::Vec2d anchor{2136.0 - centre.x, 648.0 - centre.y};
+// "The band"). How many pixels may differ at all follows from the edge's length (SharpFrame).
+void sharpWhenScaledOnTheDevice(Expectations& expectations, const Device& device,
+                                const SharpFrame& frame) {
+    const std::uint32_t kWidth = frame.width;
+    const std::uint32_t kHeight = frame.height;
+    const document::Vec2d centre = frame.centre();
+    // The fitted circle's left edge, which the layer's anchor puts at the frame's centre.
+    const document::Vec2d anchor{frame.circleEdge().x - centre.x, frame.circleEdge().y - centre.y};
     struct Case final {
         std::string name;
         double scale;
         bool group;
         double factor;
     };
-    const std::vector<Case> cases{{"4K, masked, scaled 4x", 4.0, false, 4.0},
-                                  {"4K, masked, scaled 8x", 8.0, false, 8.0},
-                                  {"4K, in a group scaled 3x", 3.0, true, 4.0}};
-    const auto plain = writeSvg("b3-4k", sharpSvg(""));
+    const std::vector<Case> cases{{frame.name() + ", masked, scaled 4x", 4.0, false, 4.0},
+                                  {frame.name() + ", masked, scaled 8x", 8.0, false, 8.0},
+                                  {frame.name() + ", in a group scaled 3x", 3.0, true, 4.0}};
+    const auto plain = writeSvg("b3-sharp", sharpSvg(""));
     for (const auto& item : cases) {
-        // The file baked `factor` times larger, imported unfitted: a point p lands at
-        // factor * (27 p + (300, 0)) once the unfitted viewport's offset (1860, 1040) is taken off.
+        // The file baked `factor` times larger, imported unfitted.
         const double s = item.factor;
-        const auto baked = writeSvg("b3-4k-baked", sharpSvg("translate(" + std::to_string(s * 300.0 - 1860.0) + " " +
-                                                            std::to_string(-1040.0) + ") scale(" + std::to_string(27.0 * s) + ")"));
+        const auto baked = writeSvg("b3-sharp-baked", frame.baked(s));
         Fixture layer(plain, commands::SvgImportMode::Layer, kWidth, kHeight);
         Fixture reference(baked, commands::SvgImportMode::Shapes, kWidth, kHeight, false);
         std::filesystem::remove(baked);
@@ -959,12 +1005,17 @@ void sharpAt4KOnTheDevice(Expectations& expectations, const Device& device) {
             group = groupAround(layer, *layer.artworkNode);
             referenceGroup = groupAround(reference, *reference.rootMerge);
         } else {
-            const std::vector<document::Vec2d> quad{{1950, 540}, {2330, 560}, {2310, 760}, {1960, 740}};
-            addMask(layer, layer.art, quad, 2.0);
+            // Around the circle's left edge; given at 4K.
+            std::vector<document::Vec2d> quad;
+            for (const auto& point :
+                 {document::Vec2d{1950, 540}, {2330, 560}, {2310, 760}, {1960, 740}})
+                quad.push_back({frame.from4K(point.x), frame.from4K(point.y)});
+            const double feather = frame.from4K(2.0);
+            addMask(layer, layer.art, quad, feather);
             std::vector<document::Vec2d> scaled;
             for (const auto& point : quad)
                 scaled.push_back({point.x * s, point.y * s});
-            addMask(reference, reference.art, scaled, 2.0 * s);
+            addMask(reference, reference.art, scaled, feather * s);
         }
         layer.set(layer.layerParameter(document::kAnchorParameterRole), document::ParameterValue{anchor});
         layer.set(layer.layerParameter(document::kScaleParameterRole), document::ParameterValue{document::Vec2d{item.scale, item.scale}});
@@ -997,14 +1048,15 @@ void sharpAt4KOnTheDevice(Expectations& expectations, const Device& device) {
         const document::Document softDocument(std::move(project));
         const auto soft = largeFrame(expectations, device, softDocument, layer.main, item.name + " resampled");
 
-        const double frameArea = double{kWidth} * kHeight;
-        std::cout << item.name << ": the largest window drawn is " << one.largestWindow << " pixels (the frame is "
-                  << frameArea << "; the whole " << s << "x picture would be " << 3240.0 * 2160.0 * s * s << ")\n";
+        const double frameArea = static_cast<double>(kWidth) * kHeight;
+        std::cout << item.name << ": the largest window drawn is " << one.largestWindow
+                  << " pixels (the frame is " << frameArea << "; the whole " << s
+                  << "x picture would be " << 120.0 * frame.fit() * kHeight * s * s << ")\n";
         expectations.expect(one.largestWindow > 0 && static_cast<double>(one.largestWindow) <= 2.0 * frameArea,
                             item.name + ": only the window the frame shows is drawn (at most two frames of pixels)");
         // A crop around the frame's centre, where the circle's edge crosses.
-        constexpr std::uint32_t kCropWidth = 384;
-        constexpr std::uint32_t kCropHeight = 216;
+        const std::uint32_t kCropWidth = frame.cropWidth();
+        const std::uint32_t kCropHeight = frame.cropHeight();
         const auto left = kWidth / 2 - kCropWidth / 2;
         const auto top = kHeight / 2 - kCropHeight / 2;
         const auto sharp = crop(one.pixels, kWidth, left, top, kCropWidth, kCropHeight);
@@ -1020,11 +1072,14 @@ void sharpAt4KOnTheDevice(Expectations& expectations, const Device& device) {
         std::cout << item.name << " (crop " << kCropWidth << " x " << kCropHeight << "): worst difference to the scaled "
                   << "pre-composition " << worst << " on " << moved << " pixels (edge pixels " << edges
                   << "); the resampled picture differs on " << softMoved << " pixels (edge pixels " << softEdges << ")\n";
-        expectations.expect(edges > 100, item.name + ": the crop holds an edge");
-        expectations.expect(worst <= 4.0 / 16.0 + 1.0 / 255.0 && moved * 4 <= edges,
-                            item.name + ": the crop is the scaled pre-composition's up to one column of a pixel's "
-                                        "sixteen coverage samples where the curve runs along it");
-        expectations.expect(softMoved >= 10 * moved + 200 && softEdges > edges + edges / 2,
+        expectations.expect(edges > frame.edgeFloor(), item.name + ": the crop holds an edge");
+        expectations.expect(
+            worst <= 4.0 / 16.0 + 1.0 / 255.0 && moved <= frame.sharpCeiling(),
+            item.name + ": the crop is the scaled pre-composition's up to one column of a pixel's "
+                        "sixteen coverage samples where the curve runs along it, on at most one "
+                        "pixel a row");
+        expectations.expect(softMoved >= frame.softFloor(item.scale) && softMoved > 2 * moved &&
+                                softEdges > edges + edges / 2,
                             item.name + ": the resampled picture would be visibly softer");
     }
     std::filesystem::remove(plain);
@@ -1147,7 +1202,7 @@ void contentPivotOnTheDevice(Expectations& expectations, const Device& device) {
     return built.scene->bounds()[found->second].output.centre();
 }
 
-// #642 B4: at 3840 x 2160, a Layer node pivoting on its content above the fitted, whole-frame
+// #642 B4: a Layer node pivoting on its content above the fitted, whole-frame
 // artwork, scaled 4x and 8x and turned 12 degrees, renders on the production GPU route with only
 // the window the frame shows drawn, and a crop around a curved edge is the scaled
 // pre-composition's (the file baked that many times larger, through the editable import, turned
@@ -1155,17 +1210,18 @@ void contentPivotOnTheDevice(Expectations& expectations, const Device& device) {
 // drawn too) up to the flattenings' coverage samples, far sharper than the resampled picture. The
 // layer's anchor is set from its picture's bounds as the builder publishes them, to put the
 // circle's leftmost point at the frame's centre. No full-size CPU frame.
-void contentPivotSharpAt4KOnTheDevice(Expectations& expectations, const Device& device) {
-    constexpr std::uint32_t kWidth = 3840;
-    constexpr std::uint32_t kHeight = 2160;
-    const document::Vec2d centre{kWidth / 2.0, kHeight / 2.0};
-    // Fitted, the circle's left edge lands at (2136, 648) (sharpAt4KOnTheDevice).
-    const document::Vec2d target{2136.0, 648.0};
-    const auto plain = writeSvg("b4-4k", sharpSvg(""));
+void contentPivotSharpWhenScaledOnTheDevice(Expectations& expectations, const Device& device,
+                                            const SharpFrame& frame) {
+    const std::uint32_t kWidth = frame.width;
+    const std::uint32_t kHeight = frame.height;
+    const document::Vec2d centre = frame.centre();
+    // The fitted circle's left edge (sharpWhenScaledOnTheDevice).
+    const document::Vec2d target = frame.circleEdge();
+    const auto plain = writeSvg("b4-sharp", sharpSvg(""));
     for (const double s : {4.0, 8.0}) {
-        const auto name = "4K content pivot, scaled " + std::to_string(static_cast<int>(s)) + "x and turned";
-        const auto baked = writeSvg("b4-4k-baked", sharpSvg("translate(" + std::to_string(s * 300.0 - 1860.0) + " " +
-                                                            std::to_string(-1040.0) + ") scale(" + std::to_string(27.0 * s) + ")"));
+        const auto name = frame.name() + " content pivot, scaled " +
+                          std::to_string(static_cast<int>(s)) + "x and turned";
+        const auto baked = writeSvg("b4-sharp-baked", frame.baked(s));
         Fixture layer(plain, commands::SvgImportMode::Layer, kWidth, kHeight);
         Fixture reference(baked, commands::SvgImportMode::Shapes, kWidth, kHeight, false);
         std::filesystem::remove(baked);
@@ -1211,13 +1267,14 @@ void contentPivotSharpAt4KOnTheDevice(Expectations& expectations, const Device& 
         const document::Document softDocument(std::move(project));
         const auto soft = largeFrame(expectations, device, softDocument, layer.main, name + " resampled");
 
-        const double frameArea = double{kWidth} * kHeight;
-        std::cout << name << ": the largest window drawn is " << one.largestWindow << " pixels (the frame is "
-                  << frameArea << "; the whole " << s << "x picture would be " << 3240.0 * 2160.0 * s * s << ")\n";
+        const double frameArea = static_cast<double>(kWidth) * kHeight;
+        std::cout << name << ": the largest window drawn is " << one.largestWindow
+                  << " pixels (the frame is " << frameArea << "; the whole " << s
+                  << "x picture would be " << 120.0 * frame.fit() * kHeight * s * s << ")\n";
         expectations.expect(one.largestWindow > 0 && static_cast<double>(one.largestWindow) <= 2.0 * frameArea,
                             name + ": only the window the frame shows is drawn (at most two frames of pixels)");
-        constexpr std::uint32_t kCropWidth = 384;
-        constexpr std::uint32_t kCropHeight = 216;
+        const std::uint32_t kCropWidth = frame.cropWidth();
+        const std::uint32_t kCropHeight = frame.cropHeight();
         const auto left = kWidth / 2 - kCropWidth / 2;
         const auto top = kHeight / 2 - kCropHeight / 2;
         const auto sharp = crop(one.pixels, kWidth, left, top, kCropWidth, kCropHeight);
@@ -1234,11 +1291,13 @@ void contentPivotSharpAt4KOnTheDevice(Expectations& expectations, const Device& 
         std::cout << name << " (crop " << kCropWidth << " x " << kCropHeight << "): worst difference to the scaled "
                   << "pre-composition " << worst << " on " << moved << " pixels (edge pixels " << edges
                   << "); the resampled picture differs on " << softMoved << " pixels (edge pixels " << softEdges << ")\n";
-        expectations.expect(edges > 100, name + ": the crop holds an edge");
-        expectations.expect(worst <= 4.0 / 16.0 + 1.0 / 255.0 && moved * 4 <= edges,
-                            name + ": the crop is the scaled pre-composition's up to a column of a pixel's sixteen "
-                                   "coverage samples");
-        expectations.expect(softMoved >= 10 * moved + 200 && softEdges > edges + edges / 2,
+        expectations.expect(edges > frame.edgeFloor(), name + ": the crop holds an edge");
+        expectations.expect(
+            worst <= 4.0 / 16.0 + 1.0 / 255.0 && moved <= frame.sharpCeiling(),
+            name + ": the crop is the scaled pre-composition's up to a column of a pixel's sixteen "
+                   "coverage samples, on at most one pixel a row");
+        expectations.expect(softMoved >= frame.softFloor(s) && softMoved > 2 * moved &&
+                                softEdges > edges + edges / 2,
                             name + ": the resampled picture would be visibly softer");
     }
     std::filesystem::remove(plain);
@@ -1248,7 +1307,16 @@ void contentPivotSharpAt4KOnTheDevice(Expectations& expectations, const Device& 
 
 int main(int argc, char** argv) {
     try {
-        const Options options = parseOptions(argc, argv);
+        // --large-frame: the sharpness cases at 3840 x 2160 (the stress registration).
+        SharpFrame sharpFrame;
+        std::vector<char*> arguments;
+        for (int index = 0; index < argc; ++index) {
+            if (index > 0 && std::string_view(argv[index]) == "--large-frame")
+                sharpFrame = SharpFrame{3840, 2160};
+            else
+                arguments.push_back(argv[index]);
+        }
+        const Options options = parseOptions(static_cast<int>(arguments.size()), arguments.data());
         if (!options.valid) {
             std::cerr << "invalid arguments\n";
             return 2;
@@ -1290,20 +1358,21 @@ int main(int argc, char** argv) {
         oversampledOnTheDevice(expectations, device);
         groupOnTheDevice(expectations, device);
         clippedOnTheDevice(expectations, device);
-        sharpAt4KOnTheDevice(expectations, device);
+        sharpWhenScaledOnTheDevice(expectations, device, sharpFrame);
         contentPivotOnTheDevice(expectations, device);
-        contentPivotSharpAt4KOnTheDevice(expectations, device);
+        contentPivotSharpWhenScaledOnTheDevice(expectations, device, sharpFrame);
         std::filesystem::remove(composite);
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " Vector Artwork layer expectation(s) failed\n";
             return 1;
         }
-        std::cout << "PASS: a Vector Artwork layer renders on the GPU as the CPU reference and the "
-                     "editable import, "
-                     "keyed, turned, scaled, masked, retimed, with effects between, in scaled "
-                     "groups, on a "
-                     "content pivot, clipped to the window the frame shows, at half resolution, at "
-                     "4K, admitted, retired and cancelled\n";
+        std::cout
+            << "PASS: a Vector Artwork layer renders on the GPU as the CPU reference and the "
+               "editable import, "
+               "keyed, turned, scaled, masked, retimed, with effects between, in scaled "
+               "groups, on a "
+               "content pivot, clipped to the window the frame shows, at half resolution, sharp "
+               "when scaled, admitted, retired and cancelled\n";
         return 0;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';
