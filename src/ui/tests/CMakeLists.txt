@@ -2331,6 +2331,17 @@ bloom_add_test(
     TIMEOUT 180
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
 )
+# #724 Scopes: the scope region in the Viewer, through the Viewer's own mouse and key handling.
+add_executable(bloom_ui_scopes_region_test scopes_region_tests.cpp)
+target_link_libraries(bloom_ui_scopes_region_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_scopes_region_test)
+bloom_add_test(
+    NAME bloom.ui.scopes-region
+    COMMAND bloom_ui_scopes_region_test
+    LABELS ui unit
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+)
 add_executable(bloom_ui_preview_frame_cache_cpu_edge_test preview_frame_cache_cpu_edge_tests.cpp)
 add_executable(bloom_ui_preview_frame_trace_test preview_frame_trace_tests.cpp)
 target_link_libraries(bloom_ui_preview_frame_trace_test PRIVATE bloom_ui)

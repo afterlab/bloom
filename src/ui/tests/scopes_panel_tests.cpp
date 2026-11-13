@@ -49,6 +49,7 @@
 #include <QTemporaryDir>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -717,6 +718,10 @@ int main(int argc, char** argv) {
                      controller.reading().scopes->tables.counted() == 16U * 8U &&
                      controller.reading().scopes->area == runtime::ScopeMeasuredArea{4, 2, 16, 8},
                  "the region measures only its rectangle");
+        e.expect(controller.reading().scopes != nullptr &&
+                     controller.reading().scopes->tables.layout().columns ==
+                         std::min<std::uint32_t>(512U, 16U),
+                 "with a region the Waveform's columns span the region's width");
         e.expect(panel->statusText().line.contains("Region 4, 2, 16 x 8") &&
                      panel->statusText().line.contains("128 pixels counted"),
                  "the status line gives the rectangle and the pixels counted: " +
