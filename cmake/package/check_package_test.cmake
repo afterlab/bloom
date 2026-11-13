@@ -2,7 +2,7 @@
 # packaged programs, and it refuses the package once it is broken in each way that matters.
 #
 #   cmake (-DBUILD=<build tree> | -DBUNDLE=<deployed Bloom.app>) -DWORK=<work directory>
-#         [-DPATCHELF=<patchelf>] -P check_package_test.cmake
+#         [-DPATCHELF=<patchelf>] [-DGPU=ON] -P check_package_test.cmake
 #
 # With BUILD the package is installed from the build tree into the work directory; with BUNDLE
 # (macOS) the deployed bundle is copied there. The copy is this test's own: it is broken and
@@ -19,6 +19,10 @@
 #                                    (Linux and macOS; a Windows program has none)
 #   a carried distribution library   (Linux) one of the libraries carried beside Qt removed
 #   removed                          ("no libxcb-cursor.so.0 ... beside Qt")
+#
+# With GPU, the packaged application must also show a Viewer frame evaluated on the GPU (rule
+# `gpu`), and on Linux the same run with no GPU driver offered must be refused ("was evaluated
+# on the CPU, not the GPU").
 cmake_minimum_required(VERSION 3.25)
 
 if(NOT WORK OR (NOT BUILD AND NOT BUNDLE))
@@ -72,6 +76,43 @@ if(NOT result EQUAL 0)
 endif()
 string(STRIP "${output}${error}" passed)
 message(STATUS "${passed}")
+
+# 1b. With GPU (a build with the Vulkan backend): the packaged application shows a Viewer frame
+# that was evaluated on the GPU. A package whose application finds no device, or whose Viewer
+# falls back to the CPU reference path, fails here (#717).
+if(GPU)
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" "-DPACKAGE=${package}" -DGPU=ON -DONLY=gpu
+            "-DWORK=${WORK}/gpu" -P "${check}"
+        OUTPUT_VARIABLE output ERROR_VARIABLE error RESULT_VARIABLE result)
+    if(NOT result EQUAL 0)
+        message(FATAL_ERROR "the packaged application does not render on the GPU:\n"
+                            "${output}${error}")
+    endif()
+    string(STRIP "${output}${error}" passed)
+    message(STATUS "${passed}")
+    if(NOT CMAKE_HOST_APPLE AND NOT CMAKE_HOST_WIN32)
+        # The same run with no GPU driver offered to the loader is a genuine CPU fallback, and
+        # the rule must refuse it and say so. (Linux only: the loader reads these variables
+        # everywhere, but the macOS package names its own driver and Windows ignores them in an
+        # elevated process.)
+        file(MAKE_DIRECTORY "${WORK}/no-drivers")
+        execute_process(
+            COMMAND "${CMAKE_COMMAND}" -E env "VK_DRIVER_FILES=${WORK}/no-drivers"
+                "VK_ICD_FILENAMES=${WORK}/no-drivers" "VK_LOADER_LAYERS_DISABLE=~all~"
+                "${CMAKE_COMMAND}" "-DPACKAGE=${package}" -DGPU=ON -DONLY=gpu
+                "-DWORK=${WORK}/gpu-hidden" -P "${check}"
+            OUTPUT_VARIABLE output ERROR_VARIABLE error RESULT_VARIABLE result)
+        if(result EQUAL 0)
+            message(FATAL_ERROR "with no GPU driver offered, the GPU rule passed:\n"
+                                "${output}${error}")
+        elseif(NOT "${output}${error}" MATCHES "was evaluated on the CPU, not the GPU")
+            message(FATAL_ERROR "with no GPU driver offered, the GPU rule failed without saying "
+                                "that the frame was evaluated on the CPU:\n${output}${error}")
+        endif()
+        message(STATUS "refused, a Viewer frame from the CPU reference path")
+    endif()
+endif()
 
 # The check, without a run, must fail with `expected` in what it says.
 set(problems "")

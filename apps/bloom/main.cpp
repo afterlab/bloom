@@ -344,11 +344,14 @@ int main(int argc, char* argv[]) try {
 #ifdef BLOOM_BUNDLED_VULKAN_LOADER
     bundledNativeLoader = true;
     gpuPreviewDisplayOptions.enabled = true;
-    gpuPreviewDisplayOptions.loaderPath =
-        std::filesystem::path(QDir(QCoreApplication::applicationDirPath())
-                                  .filePath(QStringLiteral(BLOOM_BUNDLED_VULKAN_LOADER_SUBDIR
-                                                           "/" BLOOM_BUNDLED_VULKAN_LOADER_NAME))
-                                  .toStdString());
+    // An absolute path in the platform's own form: the loader is opened from exactly this place
+    // (Linux: bloom-vulkan/ beside the executable; Windows: beside the executable, #717).
+    gpuPreviewDisplayOptions.loaderPath = std::filesystem::path(
+        QDir::toNativeSeparators(
+            QDir::cleanPath(QDir(QCoreApplication::applicationDirPath())
+                                .filePath(QStringLiteral(BLOOM_BUNDLED_VULKAN_LOADER_SUBDIR
+                                                         "/" BLOOM_BUNDLED_VULKAN_LOADER_NAME))))
+            .toStdString());
 #elif defined(BLOOM_PACKAGED_VULKAN_RUNTIME)
     // macOS: the loader and driver packaged inside the bundle.
     if (auto packagedLoader = bloom::render::packagedVulkanLoaderPath(); !packagedLoader.empty()) {

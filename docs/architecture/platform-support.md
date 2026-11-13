@@ -330,6 +330,19 @@ broken in each way that matters: the interpreter removed, a license file removed
 program made to load a library from outside, a program given a search path outside the
 package, and on Linux one of the carried distribution libraries removed.
 
+A separate rule, `gpu`, asks more of the package than being self-contained: that its
+application renders on the GPU. The package's own `bloom-cli` runs
+`tests/fixtures/scripting/package_gpu_preview.py`, which starts the packaged application
+without a window with its MCP server on a loopback port, adds a composition with one Solid
+layer, shows it in the Viewer and reads which route produced the displayed frame
+(`query kind=render-route`, the route the status bar shows). The rule fails unless that frame's
+scene was evaluated on the GPU, and names the fallback reasons the preview service counted. It
+is never part of the default rules, because it needs a computer with a GPU and leaves the
+machine's driver visible; `bloom.package.check` includes it in every build with the Vulkan
+backend, on all three platforms, and on Linux also requires the rule to refuse the same run
+when no GPU driver is offered. The run uses the check's own settings, data and cache
+directories, as the other run does.
+
 ### Linux Package
 
 The Linux package is one tree published in two forms: `Bloom-<version>-linux-x86_64.tar.xz`,
@@ -643,7 +656,11 @@ gesture read-only behavior and charged worker retirement.
 ## Windows
 
 Windows uses the system's Vulkan driver through the locked Vulkan loader, which is built with the
-dependency prefix and found beside the programs. Bloom targets x86-64 Windows 10 version 1903 and
+dependency prefix and found beside the programs: the build copies `vulkan-1.dll` beside the
+application and installs it beside the programs of a package, and the application opens exactly
+that file. (Before that the Windows application was built with its GPU preview service off, so
+its Viewer and exports ran on the CPU reference path while the tests, which name the loader
+themselves, used the device.) Bloom targets x86-64 Windows 10 version 1903 and
 later, built with MSVC. Every executable carries a manifest that makes the process code page
 UTF-8 and the process long-path aware, so a name in any script and a path longer than 260
 characters reach the system as written, in Bloom's code and in the libraries it links; version

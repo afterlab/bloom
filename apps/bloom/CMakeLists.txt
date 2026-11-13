@@ -69,17 +69,23 @@ endif()
 include(BloomGpuShaderTools)
 bloom_package_gpu_shader_tools(bloom INSTALL)
 
-# --- Bundled compute-only Vulkan loader (Linux native-backend builds only) -----------------------
+# --- Bundled compute-only Vulkan loader (Linux and Windows native-backend builds) -----------------
 #
-# The device path loads the loader dynamically instead of linking it, so no DT_NEEDED entry makes
-# it a hard runtime requirement. Only the validated qualified prefix may supply the bundled loader:
-# this imports VulkanLoader from BLOOM_DEPENDENCY_PREFIX with NO_DEFAULT_PATH and never resolves a
-# host or developer-workspace loader. When the native backend is built and that exact prefix
-# provides one, the loader is copied into the app-relative "bloom-vulkan" directory and installed
-# to the same relative place. main.cpp resolves it from the executable's own directory and nothing
-# else. macOS, Windows, stub, developer-system, and missing-loader builds get no definition, so
-# main.cpp takes the explicit CPU fallback and never sets up a GPU preference.
+# The device path loads the loader dynamically instead of linking it, so no DT_NEEDED entry or
+# import makes it a hard runtime requirement. Only the validated qualified prefix may supply the
+# bundled loader, never a host or developer-workspace one. When the native backend is built and
+# that exact prefix provides one, the loader is copied to an application-relative place and
+# installed to the same relative place; main.cpp resolves it from the executable's own directory
+# and nothing else:
+#
+#   Linux    bloom-vulkan/libvulkan.so.1   (VulkanLoader imported with NO_DEFAULT_PATH)
+#   Windows  vulkan-1.dll beside the programs, where bloom-cli and bloom-mcp of a package find
+#            the same file by name (#717)
+#
+# macOS has its own packaged runtime below. Stub, developer-system, and missing-loader builds get
+# no definition, so main.cpp takes the explicit CPU fallback and never sets up a GPU preference.
 set(BLOOM_APP_BUNDLED_VULKAN_LOADER OFF)
+set(BLOOM_APP_BUNDLED_VULKAN_LOADER_FILE "")
 if(UNIX
    AND NOT APPLE
    AND BLOOM_RENDER_ENABLE_VULKAN
@@ -91,12 +97,22 @@ if(UNIX
     find_package(VulkanLoader QUIET CONFIG PATHS "${BLOOM_DEPENDENCY_PREFIX}" NO_DEFAULT_PATH)
     if(TARGET Vulkan::Headers AND TARGET GPUOpen::VulkanMemoryAllocator AND TARGET Vulkan::Loader)
         set(BLOOM_APP_BUNDLED_VULKAN_LOADER ON)
+        set(BLOOM_APP_BUNDLED_VULKAN_LOADER_FILE "$<TARGET_FILE:Vulkan::Loader>")
+        set(BLOOM_BUNDLED_VULKAN_LOADER_SUBDIR "bloom-vulkan")
+        set(BLOOM_BUNDLED_VULKAN_LOADER_NAME "libvulkan.so.1")
+    endif()
+elseif(WIN32 AND BLOOM_RENDER_ENABLE_VULKAN)
+    # Empty unless the build is qualified and the prefix has the locked loader.
+    bloom_prefix_vulkan_loader(bloom_app_prefix_loader)
+    if(bloom_app_prefix_loader)
+        set(BLOOM_APP_BUNDLED_VULKAN_LOADER ON)
+        set(BLOOM_APP_BUNDLED_VULKAN_LOADER_FILE "${bloom_app_prefix_loader}")
+        set(BLOOM_BUNDLED_VULKAN_LOADER_SUBDIR ".")
+        set(BLOOM_BUNDLED_VULKAN_LOADER_NAME "${BLOOM_VULKAN_LOADER_FILE_NAME}")
     endif()
 endif()
 
 if(BLOOM_APP_BUNDLED_VULKAN_LOADER)
-    set(BLOOM_BUNDLED_VULKAN_LOADER_SUBDIR "bloom-vulkan")
-    set(BLOOM_BUNDLED_VULKAN_LOADER_NAME "libvulkan.so.1")
     # Always-run refresh (not only POST_BUILD): the bundled loader is re-copied whenever its
     # content changes, even when the application itself does not relink. copy_if_different keeps
     # an unchanged loader from touching the app directory.
@@ -105,15 +121,17 @@ if(BLOOM_APP_BUNDLED_VULKAN_LOADER)
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_FILE_DIR:bloom>/${BLOOM_BUNDLED_VULKAN_LOADER_SUBDIR}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<TARGET_FILE:Vulkan::Loader>"
+            "${BLOOM_APP_BUNDLED_VULKAN_LOADER_FILE}"
             "$<TARGET_FILE_DIR:bloom>/${BLOOM_BUNDLED_VULKAN_LOADER_SUBDIR}/${BLOOM_BUNDLED_VULKAN_LOADER_NAME}"
-        DEPENDS Vulkan::Loader
         COMMENT "Refreshing the validated Vulkan loader beside the Bloom executable"
         VERBATIM
     )
+    if(TARGET Vulkan::Loader)
+        add_dependencies(bloom-bundled-vulkan-loader Vulkan::Loader)
+    endif()
     add_dependencies(bloom bloom-bundled-vulkan-loader)
     install(
-        FILES "$<TARGET_FILE:Vulkan::Loader>"
+        FILES "${BLOOM_APP_BUNDLED_VULKAN_LOADER_FILE}"
         DESTINATION "${BLOOM_PACKAGE_PROGRAM_DIR}/${BLOOM_BUNDLED_VULKAN_LOADER_SUBDIR}"
         RENAME "${BLOOM_BUNDLED_VULKAN_LOADER_NAME}"
     )

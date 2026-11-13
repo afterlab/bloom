@@ -189,12 +189,21 @@ function(bloom_add_package_rules)
             find_program(BLOOM_PACKAGE_PATCHELF patchelf)
             set(source "-DBUILD=${CMAKE_BINARY_DIR}" "-DPATCHELF=${BLOOM_PACKAGE_PATCHELF}")
         endif()
+        # A build with the Vulkan backend also requires the packaged application to show a
+        # Viewer frame evaluated on the GPU (check_package.cmake, rule `gpu`): the test then
+        # needs a computer with a GPU, like the other tests that require a device.
+        set(gpu "")
+        set(labels package integration)
+        if(BLOOM_RENDER_ENABLE_VULKAN)
+            set(gpu "-DGPU=ON")
+            list(APPEND labels gpu)
+        endif()
         bloom_add_test(
             NAME bloom.package.check
-            COMMAND ${CMAKE_COMMAND} ${source} "-DWORK=${CMAKE_BINARY_DIR}/package-test"
+            COMMAND ${CMAKE_COMMAND} ${source} ${gpu} "-DWORK=${CMAKE_BINARY_DIR}/package-test"
                 -P "${scripts}/check_package_test.cmake"
-            LABELS package integration
-            TIMEOUT 1200)
+            LABELS ${labels}
+            TIMEOUT 1800)
     endif()
     message(STATUS "Bloom package: ${BLOOM_PACKAGE_NAME}")
 endfunction()

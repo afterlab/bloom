@@ -2,6 +2,7 @@
 #
 #   cmake -DPACKAGE=<package root; on macOS the path of Bloom.app>
 #         [-DCOMPLETE=ON] [-DRUN=ON -DWORK=<empty work directory>]
+#         [-DGPU=ON -DONLY=gpu -DWORK=<empty work directory>]
 #         [-DBASE_LIBRARIES=<linux-base-libraries.txt>] [-DONLY=<rule>...]
 #         [-DFLOOR=<family>=<version>...]
 #         -P check_package.cmake
@@ -49,6 +50,15 @@
 #               C++ library symbol than the oldest system the package is for has, for example
 #               -DFLOOR=GLIBC=2.35;GLIBCXX=3.4.30;CXXABI=1.3.13 for Ubuntu 22.04. A package
 #               built on a developer's newer system is checked without it.
+#
+#   gpu         (with GPU and WORK; never part of the default rules) The package's own bloom-cli
+#               runs tests/fixtures/scripting/package_gpu_preview.py, which starts the packaged
+#               application without a window, has it show a one-layer composition in the Viewer
+#               and reads which route produced the displayed frame. The check fails unless that
+#               frame was evaluated on the GPU: a packaged application that finds no device, or
+#               whose Viewer falls back to the CPU reference path, does not pass. It needs a
+#               computer with a GPU, and unlike `run` it leaves the machine's driver visible. The
+#               run has its own settings, data and cache directories under WORK, like `run`.
 #
 # ONLY limits the check to the named rules (the check's own test uses it).
 #
@@ -1049,10 +1059,118 @@ if(RUN AND "run" IN_LIST ONLY AND NOT failures)
     endif()
 endif()
 
+# --- gpu ---------------------------------------------------------------------------------------
+set(gpu_route "")
+if(GPU AND "gpu" IN_LIST ONLY AND NOT failures)
+    if(NOT WORK)
+        message(FATAL_ERROR "check_package.cmake: GPU needs WORK, a directory for the run's own "
+                            "settings, data and cache")
+    endif()
+    get_filename_component(WORK "${WORK}" ABSOLUTE)
+    file(REMOVE_RECURSE "${WORK}")
+    file(MAKE_DIRECTORY "${WORK}/home" "${WORK}/profile" "${WORK}/run")
+    set(report "${WORK}/gpu.txt")
+    get_filename_component(script
+        "${CMAKE_CURRENT_LIST_DIR}/../../tests/fixtures/scripting/package_gpu_preview.py"
+        ABSOLUTE)
+    # Nothing of the build machine's setup reaches the run, except its GPU driver.
+    foreach(variable IN ITEMS PYTHONHOME PYTHONPATH PYTHONSTARTUP LD_LIBRARY_PATH LD_PRELOAD
+                              DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_INSERT_LIBRARIES
+                              DYLD_FALLBACK_LIBRARY_PATH QT_PLUGIN_PATH QT_QPA_PLATFORM
+                              QT_QPA_PLATFORM_PLUGIN_PATH QTDIR QT_VULKAN_LIB DISPLAY
+                              WAYLAND_DISPLAY)
+        unset(ENV{${variable}})
+    endforeach()
+    set(ENV{BLOOM_PACKAGE_CHECK_OUTPUT} "${report}")
+    set(ENV{BLOOM_PACKAGE_CHECK_APPLICATION} "${programs}/Bloom${suffix}")
+    if(NOT IS_ABSOLUTE "${WORK}/profile" OR NOT IS_DIRECTORY "${WORK}/profile")
+        message(FATAL_ERROR "check_package.cmake: the profile directory '${WORK}/profile' is "
+                            "not an absolute directory; nothing was started")
+    endif()
+    set(ENV{BLOOM_PACKAGE_CHECK_PROFILE} "${WORK}/profile")
+    # As in `run`: the per-user folders Qt names after the check's organization, where no
+    # variable moves them, are removed when the run is over.
+    set(leftovers "")
+    if(system STREQUAL "macos")
+        list(APPEND leftovers "$ENV{HOME}/Library/Caches/BloomPackageCheck"
+                              "$ENV{HOME}/Library/Application Support/BloomPackageCheck")
+    elseif(system STREQUAL "windows")
+        file(TO_CMAKE_PATH "$ENV{LOCALAPPDATA}" local_data)
+        file(TO_CMAKE_PATH "$ENV{APPDATA}" roaming_data)
+        list(APPEND leftovers "${local_data}/BloomPackageCheck"
+                              "${roaming_data}/BloomPackageCheck")
+    endif()
+    if(system STREQUAL "windows")
+        file(TO_NATIVE_PATH "$ENV{SystemRoot}/System32" native_system)
+        set(ENV{PATH} "${native_system};$ENV{SystemRoot}")
+        file(TO_NATIVE_PATH "${WORK}/home" native_home)
+        set(ENV{LOCALAPPDATA} "${native_home}")
+        set(ENV{APPDATA} "${native_home}")
+    else()
+        set(ENV{PATH} "/usr/bin:/bin")
+        set(ENV{HOME} "${WORK}/home")
+        set(ENV{XDG_CONFIG_HOME} "${WORK}/home/config")
+        set(ENV{XDG_DATA_HOME} "${WORK}/home/data")
+        set(ENV{XDG_CACHE_HOME} "${WORK}/home/cache")
+        set(ENV{XDG_STATE_HOME} "${WORK}/home/state")
+    endif()
+    execute_process(
+        COMMAND "${programs}/bloom-cli${suffix}" run "${script}"
+        WORKING_DIRECTORY "${WORK}/run"
+        RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 900)
+    foreach(leftover IN LISTS leftovers)
+        if(leftover MATCHES "/BloomPackageCheck$" AND IS_DIRECTORY "${leftover}")
+            file(REMOVE_RECURSE "${leftover}")
+        endif()
+    endforeach()
+    if(NOT result EQUAL 0)
+        bloom_fail("bloom-cli could not run the GPU check's script (${result}): "
+                   "${output}${error}")
+    endif()
+    set(records_read "")
+    if(EXISTS "${report}")
+        file(STRINGS "${report}" records_read)
+    endif()
+    set(gpu_done FALSE)
+    foreach(record IN LISTS records_read)
+        if(record MATCHES "^error (.*)$")
+            list(APPEND failures "the GPU run reported: ${CMAKE_MATCH_1}")
+        elseif(record MATCHES "^route (.+)$")
+            set(gpu_route "${CMAKE_MATCH_1}")
+        elseif(record STREQUAL "done gpu")
+            set(gpu_done TRUE)
+        endif()
+    endforeach()
+    if(NOT gpu_done AND NOT failures)
+        list(APPEND failures "the GPU run did not report a Viewer frame evaluated on the GPU")
+    endif()
+    if(failures AND EXISTS "${report}.application-log")
+        # What the application itself said, for whoever reads the failure.
+        file(STRINGS "${report}.application-log" application_lines)
+        list(LENGTH application_lines application_line_count)
+        if(application_line_count GREATER 40)
+            math(EXPR first "${application_line_count} - 40")
+            list(SUBLIST application_lines ${first} 40 application_lines)
+        endif()
+        list(JOIN application_lines "\n    " application_text)
+        message(STATUS "the application's output:\n    ${application_text}")
+    endif()
+endif()
+
 if(failures)
     list(REMOVE_DUPLICATES failures)
     list(JOIN failures "\n  " text)
+    if("${ONLY}" STREQUAL "gpu")
+        message(FATAL_ERROR "${package_name} does not show a Viewer frame from the GPU:\n  ${text}")
+    endif()
     message(FATAL_ERROR "${package_name} is not self-contained:\n  ${text}")
+endif()
+if(gpu_route)
+    message(STATUS "${package_name}: the packaged application's Viewer frame was evaluated on "
+                   "the GPU (${gpu_route})")
+endif()
+if("${ONLY}" STREQUAL "gpu")
+    return()
 endif()
 set(summary "${package_name}: ${count} programs and libraries resolve inside the package or ")
 string(APPEND summary "the operating system")
