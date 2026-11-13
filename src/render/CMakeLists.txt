@@ -780,6 +780,86 @@ else()
         "cryptomatte_coverage.comp digest is still enforced.")
 endif()
 
+# --- Fixed ScopeTablesV1 shader (#724): source pin and regeneration check ---------------------
+#
+# Offline artifact from the existing tools/gpu-shaders compile/validate/embed recipe. The checked-in
+# .comp is pinned here, the manifest must bind that source digest, and, when the locked
+# glslangValidator/spirv-val are present, configure recompiles it and confirms the SPIR-V digest
+# embedded in scope_tables_spirv.inc. Runtime code never compiles or loads a shader.
+set(BLOOM_SCOPE_TABLES_COMP
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/scope_tables.comp")
+set(BLOOM_SCOPE_TABLES_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/scope_tables.manifest")
+set(BLOOM_SCOPE_TABLES_INC
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/scope_tables_spirv.inc")
+set(BLOOM_SCOPE_TABLES_COMP_SHA256
+    "6ac2a30fd88af6839d4e22ddbcf2f81b08812e71849968c1464a33aa1f7dfe5e")
+set(BLOOM_SCOPE_TABLES_SPV_SHA256
+    "e2235831aae755391198eec1042fc24e824ba14e2ef0ecb7781348b4cd7f6ad3")
+
+file(SHA256 "${BLOOM_SCOPE_TABLES_COMP}" bloom_scope_tables_comp_sha256)
+if(NOT bloom_scope_tables_comp_sha256 STREQUAL BLOOM_SCOPE_TABLES_COMP_SHA256)
+    message(FATAL_ERROR
+        "scope_tables.comp SHA-256 mismatch: measured ${bloom_scope_tables_comp_sha256}, "
+        "pinned ${BLOOM_SCOPE_TABLES_COMP_SHA256}. Regenerate only through the tools/gpu-shaders "
+        "recipe and update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_SCOPE_TABLES_MANIFEST}" bloom_scope_tables_manifest_text)
+if(NOT bloom_scope_tables_manifest_text MATCHES "${BLOOM_SCOPE_TABLES_COMP_SHA256}")
+    message(FATAL_ERROR
+        "scope_tables.manifest does not bind the pinned scope_tables.comp SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_scope_tables_generated_spv
+        "${CMAKE_CURRENT_BINARY_DIR}/scope_tables.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_SCOPE_TABLES_COMP}" -o "${bloom_scope_tables_generated_spv}"
+        RESULT_VARIABLE bloom_scope_tables_glslang_result)
+    if(NOT bloom_scope_tables_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile scope_tables.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2
+                "${bloom_scope_tables_generated_spv}"
+        RESULT_VARIABLE bloom_scope_tables_spirv_val_result)
+    if(NOT bloom_scope_tables_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated ScopeTablesV1 SPIR-V.")
+    endif()
+    if(BLOOM_SPIRV_DIS)
+        set(bloom_scope_tables_generated_spvasm
+            "${CMAKE_CURRENT_BINARY_DIR}/scope_tables.generated.spvasm")
+        execute_process(
+            COMMAND "${BLOOM_SPIRV_DIS}" "${bloom_scope_tables_generated_spv}" -o
+                    "${bloom_scope_tables_generated_spvasm}"
+            RESULT_VARIABLE bloom_scope_tables_spirv_dis_result)
+        if(NOT bloom_scope_tables_spirv_dis_result EQUAL 0)
+            message(FATAL_ERROR "spirv-dis failed to disassemble the ScopeTablesV1 SPIR-V.")
+        endif()
+        file(READ "${bloom_scope_tables_generated_spvasm}" bloom_scope_tables_spvasm_text)
+        if(bloom_scope_tables_spvasm_text MATCHES "OpCapability Float64" OR
+           bloom_scope_tables_spvasm_text MATCHES "OpCapability Int64" OR
+           bloom_scope_tables_spvasm_text MATCHES "OpTypeFloat 64" OR
+           bloom_scope_tables_spvasm_text MATCHES "OpTypeInt 64")
+            message(FATAL_ERROR
+                "the ScopeTablesV1 SPIR-V declares a forbidden Float64/Int64 capability or "
+                "type; it must run on standard Float32 hardware without shaderFloat64.")
+        endif()
+    endif()
+    file(SHA256 "${bloom_scope_tables_generated_spv}" bloom_scope_tables_spv_sha256)
+    if(NOT bloom_scope_tables_spv_sha256 STREQUAL BLOOM_SCOPE_TABLES_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated ScopeTablesV1 SPIR-V SHA-256 ${bloom_scope_tables_spv_sha256} does "
+            "not match the embedded ${BLOOM_SCOPE_TABLES_SPV_SHA256}; the checked-in .comp and "
+            "scope_tables_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: scope_tables.comp regenerated, SPIR-V-validated, and "
+        "capability-checked (${bloom_scope_tables_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "scope_tables.comp digest is still enforced.")
+endif()
+
 # --- Fixed BlendV1 shader: source pin and regeneration check -------------------------------------
 #
 # Offline artifact from the existing tools/gpu-shaders compile/validate/embed recipe. The checked-in
@@ -1264,6 +1344,7 @@ target_sources(
             include/bloom/render/gpu_presentation_types.hpp
             include/bloom/render/gpu_process_readback.hpp
             include/bloom/render/gpu_resident_display.hpp
+            include/bloom/render/gpu_scope_tables.hpp
             include/bloom/render/gpu_shader_artifact.hpp
             include/bloom/render/gpu_solid.hpp
             include/bloom/render/image.hpp
@@ -1358,6 +1439,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_resident_display_readback.cpp
         vulkan/gpu_resident_display_readback_private.hpp
         vulkan/gpu_resident_display_resources.cpp
+        vulkan/gpu_scope_tables.cpp
         vulkan/gpu_solid.cpp
         vulkan/gpu_solid_checker.cpp
         vulkan/gpu_solid_resources.cpp
@@ -1389,6 +1471,9 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/shaders/sample_convert.manifest
         vulkan/shaders/sample_convert_spirv.inc
         vulkan/shaders/cryptomatte_coverage_spirv.inc
+        vulkan/shaders/scope_tables.comp
+        vulkan/shaders/scope_tables.manifest
+        vulkan/shaders/scope_tables_spirv.inc
         vulkan/shaders/solid_covered.comp
         vulkan/shaders/solid_covered.manifest
         vulkan/shaders/solid_covered_spirv.inc
@@ -1424,6 +1509,7 @@ else()
                                      gpu_output_color_readback_stub.cpp
                                      gpu_present_image_stub.cpp gpu_presentation_target_stub.cpp
                                      gpu_process_readback_stub.cpp gpu_resident_display_stub.cpp
+                                     gpu_scope_tables_stub.cpp
                                      gpu_solid_stub.cpp gpu_path_coverage_stub.cpp)
 endif()
 

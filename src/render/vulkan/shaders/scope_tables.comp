@@ -1,0 +1,238 @@
+#version 460
+// Bloom ScopeTablesV1 compute shader (#724). Offline-generated/embedded; do not edit at runtime.
+//
+// Counts the pixels of a measured area into the scope tables of docs/architecture/scopes.md,
+// exactly as the CPU reference does (src/runtime/scope_measure.cpp). Every table cell is a whole
+// number of pixels, added with atomicAdd on a uint storage buffer: integer adds commute, so the
+// result does not depend on how the device schedules the invocations. All float arithmetic is
+// binary32, in the order written, `precise` (no contraction), and constants that are not exact in
+// decimal are written as bits.
+//
+// Binding 0 is the signal picture: red, green, blue are the signal taken over black (the
+// premultiplied color) and alpha the pixel's alpha. Binding 1 is the same picture converted to
+// CIE XYZ (D65) and is read only when the Chromaticity table is asked for (the signal picture is
+// bound there otherwise). Binding 2 is the table buffer, zeroed by the host before the dispatch:
+//   words[0] pixels counted, [1] not finite, [2] no chromaticity, [3] chromaticity outside,
+//   [4] vectorscope outside, [5..7] zero;
+//   histogramOffset:    4 channels (red, green, blue, luma) x 1026: 1024 bins, under, over;
+//   waveformOffset:     4 channels x `columns` x 514: 512 levels, under, over;
+//   vectorscopeOffset:  512 rows (Cr) x 512 (Cb);
+//   chromaticityOffset: 512 rows (y) x 512 (x).
+//
+// Two passes, selected by `pass`, both flattened into 256-wide workgroups of `groupWidth`
+// invocations a row; invocations past the count return immediately.
+//   pass 0: one invocation per pixel of the measured area: the counters, the Histogram, the
+//           Vectorscope and the Chromaticity table.
+//   pass 1: one invocation per Waveform column. It owns that column of the table and walks the
+//           pixels that fall in it, so no other invocation adds to its cells.
+// A pixel of the measured area outside the picture is transparent black.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D bloom_scope_signal;
+layout(set = 0, binding = 1, rgba32f) uniform readonly image2D bloom_scope_xyz;
+layout(set = 0, binding = 2, std430) buffer BloomScopeTables {
+    uint words[];
+} bloom_scope_tables;
+
+layout(push_constant) uniform BloomScopePushConstants {
+    uint pass;
+    uint scopes;             // 1 Histogram, 2 Waveform, 4 Vectorscope, 8 Chromaticity
+    uint flags;              // 1 ignore transparent pixels
+    uint columns;
+    int areaX;               // the measured area's corner, in picture pixels
+    int areaY;
+    uint areaWidth;
+    uint areaHeight;
+    float inverseMaximum;    // 1 / M, M a power of two
+    float lumaRed;
+    float lumaGreen;
+    float lumaBlue;
+    float cbDenominator;     // 2 (1 - Kb), rounded once on the host
+    float crDenominator;     // 2 (1 - Kr)
+    uint histogramOffset;
+    uint waveformOffset;
+    uint vectorscopeOffset;
+    uint chromaticityOffset;
+    uint groupWidth;
+} bloom_scope_push;
+
+const uint kScopeHistogram = 1u;
+const uint kScopeVectorscope = 4u;
+const uint kScopeChromaticity = 8u;
+const uint kCodeUnder = 1024u;
+const uint kCodeOver = 1025u;
+
+bool bloom_scope_not_finite(float value)
+{
+    return (floatBitsToUint(value) & 0x7F800000u) == 0x7F800000u;
+}
+
+// The code of a component: floor(v / M * 1023 + 0.5), 0..1023, or under (and a value that is not a
+// number) or over.
+uint bloom_scope_code(float value)
+{
+    precise float scaled = value * bloom_scope_push.inverseMaximum;
+    precise float coded = scaled * 1023.0;
+    precise float rounded = coded + 0.5;
+    float whole = floor(rounded);
+    if (!(whole >= 0.0)) {
+        return kCodeUnder;
+    }
+    if (!(whole <= 1023.0)) {
+        return kCodeOver;
+    }
+    return uint(whole);
+}
+
+// 0 counted, 1 not finite, 2 not counted (a transparent pixel being ignored).
+uint bloom_scope_load(ivec2 area, out vec4 signal, out ivec2 coordinate, out bool inside)
+{
+    coordinate = ivec2(bloom_scope_push.areaX, bloom_scope_push.areaY) + area;
+    ivec2 size = imageSize(bloom_scope_signal);
+    inside = coordinate.x >= 0 && coordinate.y >= 0 && coordinate.x < size.x &&
+             coordinate.y < size.y;
+    signal = inside ? imageLoad(bloom_scope_signal, coordinate) : vec4(0.0);
+    if (bloom_scope_not_finite(signal.r) || bloom_scope_not_finite(signal.g) ||
+        bloom_scope_not_finite(signal.b) || bloom_scope_not_finite(signal.a)) {
+        return 1u;
+    }
+    if ((bloom_scope_push.flags & 1u) != 0u && signal.a == 0.0) {
+        return 2u;
+    }
+    return 0u;
+}
+
+float bloom_scope_luma(vec4 signal)
+{
+    precise float red = bloom_scope_push.lumaRed * signal.r;
+    precise float green = bloom_scope_push.lumaGreen * signal.g;
+    precise float blue = bloom_scope_push.lumaBlue * signal.b;
+    precise float redGreen = red + green;
+    precise float luma = redGreen + blue;
+    return luma;
+}
+
+void bloom_scope_add(uint index)
+{
+    atomicAdd(bloom_scope_tables.words[index], 1u);
+}
+
+// The cell of a table axis: floor(value * 512), or 512 when it is outside 0..511.
+uint bloom_scope_cell(float value)
+{
+    precise float scaled = value * 512.0;
+    float whole = floor(scaled);
+    if (!(whole >= 0.0) || !(whole <= 511.0)) {
+        return 512u;
+    }
+    return uint(whole);
+}
+
+void bloom_scope_pixel_pass(uint linear)
+{
+    ivec2 area = ivec2(int(linear % bloom_scope_push.areaWidth),
+                       int(linear / bloom_scope_push.areaWidth));
+    vec4 signal;
+    ivec2 coordinate;
+    bool inside;
+    uint kind = bloom_scope_load(area, signal, coordinate, inside);
+    if (kind == 1u) {
+        bloom_scope_add(1u);
+        return;
+    }
+    if (kind == 2u) {
+        return;
+    }
+    bloom_scope_add(0u);
+    float luma = bloom_scope_luma(signal);
+
+    if ((bloom_scope_push.scopes & kScopeHistogram) != 0u) {
+        uint base = bloom_scope_push.histogramOffset;
+        bloom_scope_add(base + bloom_scope_code(signal.r));
+        bloom_scope_add(base + 1026u + bloom_scope_code(signal.g));
+        bloom_scope_add(base + 2052u + bloom_scope_code(signal.b));
+        bloom_scope_add(base + 3078u + bloom_scope_code(luma));
+    }
+
+    if ((bloom_scope_push.scopes & kScopeVectorscope) != 0u) {
+        precise float cbDifference = signal.b - luma;
+        precise float cb = cbDifference / bloom_scope_push.cbDenominator;
+        precise float cbShifted = cb + 0.5;
+        precise float crDifference = signal.r - luma;
+        precise float cr = crDifference / bloom_scope_push.crDenominator;
+        precise float crShifted = cr + 0.5;
+        uint column = bloom_scope_cell(cbShifted);
+        uint row = bloom_scope_cell(crShifted);
+        if (column == 512u || row == 512u) {
+            bloom_scope_add(4u);
+        } else {
+            bloom_scope_add(bloom_scope_push.vectorscopeOffset + row * 512u + column);
+        }
+    }
+
+    if ((bloom_scope_push.scopes & kScopeChromaticity) != 0u) {
+        vec4 xyz = inside ? imageLoad(bloom_scope_xyz, coordinate) : vec4(0.0);
+        precise float xy = xyz.r + xyz.g;
+        precise float sum = xy + xyz.b;
+        if (bloom_scope_not_finite(xyz.r) || bloom_scope_not_finite(xyz.g) ||
+            bloom_scope_not_finite(xyz.b) || !(sum > 0.0)) {
+            bloom_scope_add(2u);
+        } else {
+            // 0.8 and 0.9 as the nearest binary32.
+            precise float x = xyz.r / sum;
+            precise float xScaled = x / uintBitsToFloat(0x3F4CCCCDu);
+            precise float y = xyz.g / sum;
+            precise float yScaled = y / uintBitsToFloat(0x3F666666u);
+            uint column = bloom_scope_cell(xScaled);
+            uint row = bloom_scope_cell(yScaled);
+            if (column == 512u || row == 512u) {
+                bloom_scope_add(3u);
+            } else {
+                bloom_scope_add(bloom_scope_push.chromaticityOffset + row * 512u + column);
+            }
+        }
+    }
+}
+
+uint bloom_scope_level(uint code)
+{
+    return code < 1024u ? (code >> 1u) : (code - 512u);
+}
+
+void bloom_scope_column_pass(uint column)
+{
+    uint columns = bloom_scope_push.columns;
+    uint width = bloom_scope_push.areaWidth;
+    // The pixels x with floor(x * columns / width) == column.
+    uint first = (column * width + columns - 1u) / columns;
+    uint last = ((column + 1u) * width + columns - 1u) / columns;
+    uint base = bloom_scope_push.waveformOffset + column * 514u;
+    uint channel = columns * 514u;
+    for (uint y = 0u; y < bloom_scope_push.areaHeight; ++y) {
+        for (uint x = first; x < last; ++x) {
+            vec4 signal;
+            ivec2 coordinate;
+            bool inside;
+            if (bloom_scope_load(ivec2(int(x), int(y)), signal, coordinate, inside) != 0u) {
+                continue;
+            }
+            float luma = bloom_scope_luma(signal);
+            bloom_scope_add(base + bloom_scope_level(bloom_scope_code(signal.r)));
+            bloom_scope_add(base + channel + bloom_scope_level(bloom_scope_code(signal.g)));
+            bloom_scope_add(base + 2u * channel + bloom_scope_level(bloom_scope_code(signal.b)));
+            bloom_scope_add(base + 3u * channel + bloom_scope_level(bloom_scope_code(luma)));
+        }
+    }
+}
+
+void main()
+{
+    uint linear = gl_GlobalInvocationID.y * bloom_scope_push.groupWidth + gl_GlobalInvocationID.x;
+    if (bloom_scope_push.pass == 0u) {
+        if (linear < bloom_scope_push.areaWidth * bloom_scope_push.areaHeight) {
+            bloom_scope_pixel_pass(linear);
+        }
+    } else if (linear < bloom_scope_push.columns) {
+        bloom_scope_column_pass(linear);
+    }
+}

@@ -1,0 +1,53 @@
+{
+  "schema": "bloom.gpu.shader.manifest.v1",
+  "generator": "tools/gpu-shaders compile/validate/embed recipe (reused, not reimplemented)",
+  "generatorRevision": 1,
+  "operation": "ScopeTablesV1",
+  "entrypoint": "main",
+  "shader": {
+    "language": "GLSL_460",
+    "stage": "compute",
+    "sha256": "6ac2a30fd88af6839d4e22ddbcf2f81b08812e71849968c1464a33aa1f7dfe5e",
+    "spirvSha256": "e2235831aae755391198eec1042fc24e824ba14e2ef0ecb7781348b4cd7f6ad3",
+    "localSizeX": 256,
+    "localSizeY": 1,
+    "localSizeZ": 1
+  },
+  "bindings": [
+    {"set": 0, "binding": 0, "kind": "storage-image", "access": "readonly", "format": "rgba32f",
+     "role": "signal-picture (red, green, blue = the signal over black; alpha = the pixel's alpha)"},
+    {"set": 0, "binding": 1, "kind": "storage-image", "access": "readonly", "format": "rgba32f",
+     "role": "signal-picture-in-cie-xyz-d65; read only with the Chromaticity table"},
+    {"set": 0, "binding": 2, "kind": "storage-buffer", "access": "readwrite", "element": "uint",
+     "role": "scope-count-tables", "layout": "8 counters, then the Histogram, Waveform, Vectorscope and Chromaticity tables that were asked for (scope_table_layout.hpp)"}
+  ],
+  "pushConstant": {
+    "byteCount": 76,
+    "fields": [
+      {"name": "pass", "type": "uint32", "values": "0 = one invocation per pixel, 1 = one invocation per Waveform column"},
+      {"name": "scopes", "type": "uint32", "values": "1 Histogram, 2 Waveform, 4 Vectorscope, 8 Chromaticity"},
+      {"name": "flags", "type": "uint32", "values": "1 = ignore transparent pixels"},
+      {"name": "columns", "type": "uint32"},
+      {"name": "areaX", "type": "int32"},
+      {"name": "areaY", "type": "int32"},
+      {"name": "areaWidth", "type": "uint32"},
+      {"name": "areaHeight", "type": "uint32"},
+      {"name": "inverseMaximum", "type": "float32"},
+      {"name": "lumaRed", "type": "float32"},
+      {"name": "lumaGreen", "type": "float32"},
+      {"name": "lumaBlue", "type": "float32"},
+      {"name": "cbDenominator", "type": "float32"},
+      {"name": "crDenominator", "type": "float32"},
+      {"name": "histogramOffset", "type": "uint32"},
+      {"name": "waveformOffset", "type": "uint32"},
+      {"name": "vectorscopeOffset", "type": "uint32"},
+      {"name": "chromaticityOffset", "type": "uint32"},
+      {"name": "groupWidth", "type": "uint32"}
+    ]
+  },
+  "contracts": {
+    "numeric": "exact against the scope CPU reference (src/runtime/scope_measure.cpp) for the same float input: every cell is a whole number of pixels added with atomicAdd, and the binary32 arithmetic that places a pixel is the reference's, in the same order, precise",
+    "readback": "only the count tables are read back (prep.scopes.result_readback); the picture never is",
+    "cpuFallback": "an invalid request, a device-limit or budget refusal, or a wrong thread fails closed with an explicit diagnostic; the caller then measures with the CPU reference and labels the result CPU"
+  }
+}

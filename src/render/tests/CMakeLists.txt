@@ -496,6 +496,20 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         LABELS unit gpu render export
     )
 
+    # ScopeTablesV1 (#724): the device's scope count tables equal counts made in the test from the
+    # same float pictures, at 256 x 256, including a flat field (every pixel adds to one cell).
+    add_executable(bloom_render_gpu_scope_tables_test gpu_scope_tables_native_tests.cpp)
+    target_link_libraries(bloom_render_gpu_scope_tables_test PRIVATE bloom_render)
+    target_include_directories(bloom_render_gpu_scope_tables_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    bloom_enable_warnings(bloom_render_gpu_scope_tables_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_scope_tables_test)
+    bloom_add_test(
+        NAME bloom.render.gpu_scope_tables
+        COMMAND bloom_render_gpu_scope_tables_test
+        LABELS unit gpu render
+    )
+
     add_executable(bloom_render_gpu_display_transfer_test gpu_display_transfer_tests.cpp)
     target_link_libraries(bloom_render_gpu_display_transfer_test PRIVATE
         bloom_render_display_transfer_test_faults bloom_render)
