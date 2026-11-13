@@ -12,6 +12,7 @@
 // failure. An explicit --loader selects the Vulkan loader. Without the pinned tools the real arms
 // are skipped.
 
+#include "case_timer.hpp"
 #include "audio_plot_test_support.hpp"
 #include "auto_exposure_test_support.hpp"
 #include "codec_degrade_test_support.hpp"
@@ -5055,43 +5056,43 @@ void runSharpens(Expectations& expectations, GpuDevice& device, GpuSceneCache& c
 
 void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                const std::string& from, const std::string& to) {
-    runBatchedChains(expectations, device, cache);
-    runCst(expectations, device, cache, from, to);
-    runPointwise(expectations, device, cache);
-    runPointwiseExtremeAlpha(expectations, device, cache);
-    runMultiplyAlpha(expectations, device, cache);
-    runCanvas(expectations, device, cache);
-    runDiscrete(expectations, device, cache);
-    runShapeMergeEntry(expectations, device, cache);
-    runResizeFit(expectations, device, cache);
-    runTransform2D(expectations, device, cache);
-    runBlurs(expectations, device, cache);
-    runDenoise(expectations, device, cache);
-    runSeparateBlurs(expectations, device, cache);
-    runLumaKeys(expectations, device, cache);
-    runColorGrades(expectations, device, cache);
-    runChannelSelects(expectations, device, cache);
-    runPixelMaths(expectations, device, cache);
-    runRecipes(expectations, device, cache);
-    runInnerLifecycle(expectations, device, cache);
-    runFields(expectations, device, cache);
-    runDepthEffects(expectations, device, cache);
-    runLensFlares(expectations, device, cache);
-    runFilmGrains(expectations, device, cache);
-    runDithers(expectations, device, cache);
-    runCodecDegrades(expectations, device, cache);
-    runProxyEdges(expectations, device, cache);
-    runTemporalDenoise(expectations, device, cache);
-    runAutoExposures(expectations, device, cache);
-    runHistograms(expectations, device, cache);
-    runStatistics(expectations, device, cache);
-    runStatisticsRoute(expectations);
-    runAudioPlots(expectations, device, cache);
-    runMotionBlur(expectations, device, cache);
-    runFrameRateHold(expectations, device, cache);
-    runSharpens(expectations, device, cache);
+    BLOOM_TIMED_CASE(runBatchedChains(expectations, device, cache));
+    BLOOM_TIMED_CASE(runCst(expectations, device, cache, from, to));
+    BLOOM_TIMED_CASE(runPointwise(expectations, device, cache));
+    BLOOM_TIMED_CASE(runPointwiseExtremeAlpha(expectations, device, cache));
+    BLOOM_TIMED_CASE(runMultiplyAlpha(expectations, device, cache));
+    BLOOM_TIMED_CASE(runCanvas(expectations, device, cache));
+    BLOOM_TIMED_CASE(runDiscrete(expectations, device, cache));
+    BLOOM_TIMED_CASE(runShapeMergeEntry(expectations, device, cache));
+    BLOOM_TIMED_CASE(runResizeFit(expectations, device, cache));
+    BLOOM_TIMED_CASE(runTransform2D(expectations, device, cache));
+    BLOOM_TIMED_CASE(runBlurs(expectations, device, cache));
+    BLOOM_TIMED_CASE(runDenoise(expectations, device, cache));
+    BLOOM_TIMED_CASE(runSeparateBlurs(expectations, device, cache));
+    BLOOM_TIMED_CASE(runLumaKeys(expectations, device, cache));
+    BLOOM_TIMED_CASE(runColorGrades(expectations, device, cache));
+    BLOOM_TIMED_CASE(runChannelSelects(expectations, device, cache));
+    BLOOM_TIMED_CASE(runPixelMaths(expectations, device, cache));
+    BLOOM_TIMED_CASE(runRecipes(expectations, device, cache));
+    BLOOM_TIMED_CASE(runInnerLifecycle(expectations, device, cache));
+    BLOOM_TIMED_CASE(runFields(expectations, device, cache));
+    BLOOM_TIMED_CASE(runDepthEffects(expectations, device, cache));
+    BLOOM_TIMED_CASE(runLensFlares(expectations, device, cache));
+    BLOOM_TIMED_CASE(runFilmGrains(expectations, device, cache));
+    BLOOM_TIMED_CASE(runDithers(expectations, device, cache));
+    BLOOM_TIMED_CASE(runCodecDegrades(expectations, device, cache));
+    BLOOM_TIMED_CASE(runProxyEdges(expectations, device, cache));
+    BLOOM_TIMED_CASE(runTemporalDenoise(expectations, device, cache));
+    BLOOM_TIMED_CASE(runAutoExposures(expectations, device, cache));
+    BLOOM_TIMED_CASE(runHistograms(expectations, device, cache));
+    BLOOM_TIMED_CASE(runStatistics(expectations, device, cache));
+    BLOOM_TIMED_CASE(runStatisticsRoute(expectations));
+    BLOOM_TIMED_CASE(runAudioPlots(expectations, device, cache));
+    BLOOM_TIMED_CASE(runMotionBlur(expectations, device, cache));
+    BLOOM_TIMED_CASE(runFrameRateHold(expectations, device, cache));
+    BLOOM_TIMED_CASE(runSharpens(expectations, device, cache));
 #if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
-    runFileTransform(expectations, device, cache, from, to);
+    BLOOM_TIMED_CASE(runFileTransform(expectations, device, cache, from, to));
 #endif
 }
 #endif // BLOOM_GPUSHADER_TOOLS_DIR

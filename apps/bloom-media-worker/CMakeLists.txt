@@ -425,7 +425,8 @@ if(BLOOM_MEDIA_FIXTURE_TESTS)
         add_executable(bloom_media_mediafoundation_parity_test
                        tests/mediafoundation_parity_tests.cpp)
         target_include_directories(bloom_media_mediafoundation_parity_test
-                                   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+                                   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+                                           "${PROJECT_SOURCE_DIR}/tests/support")
         target_link_libraries(bloom_media_mediafoundation_parity_test
                               PRIVATE bloom_media_provider bloom_media_ffmpeg_worker_provider)
         bloom_enable_warnings(bloom_media_mediafoundation_parity_test)

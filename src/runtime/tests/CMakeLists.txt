@@ -1,3 +1,6 @@
+# Every runtime test may use the shared test helpers (tests/support).
+include_directories("${PROJECT_SOURCE_DIR}/tests/support")
+
 add_executable(bloom_runtime_result_ownership_test task_result_ownership_tests.cpp)
 target_link_libraries(bloom_runtime_result_ownership_test PRIVATE bloom_runtime)
 bloom_enable_warnings(bloom_runtime_result_ownership_test)

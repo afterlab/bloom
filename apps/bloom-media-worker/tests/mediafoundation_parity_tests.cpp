@@ -8,6 +8,8 @@
 // read that way has to be refused with a reason, and never read differently.
 #include "ffmpeg_provider.hpp"
 
+#include "case_timer.hpp"
+
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/provider/protocol.hpp>
 #include <bloom/media/provider/provider_chain.hpp>
@@ -250,11 +252,15 @@ int main(int argc, char** argv) {
     const auto exports = std::filesystem::absolute(argv[2]);
     // H.264 in MPEG-4, tagged and untagged, rotated, anamorphic and with a variable cadence: read,
     // and equal to the software generation. The in-box H.264 decoder is part of every Windows.
+    std::set<std::filesystem::path> required;
     for (const char* name :
          {"numbered-h264.mp4", "untagged-h264.mp4", "pq2020-h264.mp4", "hlg2020-h264.mp4",
           "bars709-h264.mp4", "bars-untagged-h264.mp4", "long-h264.mp4", "anamorphic-h264.mp4",
-          "rotated-h264.mp4", "vfr-h264.mp4"})
+          "rotated-h264.mp4", "vfr-h264.mp4"}) {
+        bloom::test_support::caseMark(name);
         compare(fixtures / name, true);
+        required.insert(fixtures / name);
+    }
     // Everything else the fixture and export tests wrote is either refused with a reason or equal
     // to the software generation. HEVC is read where the system's HEVC decoder starts.
     std::vector<std::filesystem::path> written;
@@ -265,8 +271,14 @@ int main(int argc, char** argv) {
                 written.push_back(entry.path());
     }
     std::ranges::sort(written);
-    for (const auto& path : written)
+    for (const auto& path : written) {
+        // The ten above were compared already; once is enough.
+        if (required.contains(path))
+            continue;
+        bloom::test_support::caseMark(path.filename().string());
         compare(path, false);
+    }
+    bloom::test_support::caseMark({});
     check(compared >= 10 && frames > 0, "the H.264 fixtures were compared");
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

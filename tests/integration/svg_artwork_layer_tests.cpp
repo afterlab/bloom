@@ -16,6 +16,7 @@
 //   parses a block once per digest (VectorArtworkSceneCache: hit, miss, admission, retirement),
 //   cancels, refuses an unreadable SVG by name, and says which layers keep the resampled picture.
 
+#include "case_timer.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/commands/layer_drop_operations.hpp>
@@ -2533,29 +2534,29 @@ void reAddedAssetIsTheOriginalImport() {
 
 int main() {
     try {
-        reAddedAssetIsTheOriginalImport();
-        breakApartKeepsThePictureAndTheAnimation();
-        breakApartOfAScaledLayerIsTheResampledPicture();
-        layerComposesThroughTheExpansionRoot();
-        oneLayerIsTheEditableImport();
-        savedAndReopenedWithTheFileGone();
-        sharpWhenScaledAndTurned();
-        boundsFollowTheLayer();
-        boxIsWhatTheArtworkShows();
-        oneCompilePerRevisionAndOneParsePerFile();
-        cancellation();
-        budgetAdmissionAndRetirement();
-        unreadableArtworkIsRefusedByName();
-        whatResamplesAndWhatFollows();
-        sharpUnderEveryLayerEdit();
-        sharpOnAContentPivot();
-        namedWhenItCannotBeSharp();
-        oversampledCacheIdentity();
-        sharpInsideScaledGroups();
-        groupBoundsAndSiblings();
-        groupsNamedWhenTheyCannotBe();
-        windowAndGroupIdentity();
-        contentPivotDrawsItsWindow();
+        BLOOM_TIMED_CASE(reAddedAssetIsTheOriginalImport());
+        BLOOM_TIMED_CASE(breakApartKeepsThePictureAndTheAnimation());
+        BLOOM_TIMED_CASE(breakApartOfAScaledLayerIsTheResampledPicture());
+        BLOOM_TIMED_CASE(layerComposesThroughTheExpansionRoot());
+        BLOOM_TIMED_CASE(oneLayerIsTheEditableImport());
+        BLOOM_TIMED_CASE(savedAndReopenedWithTheFileGone());
+        BLOOM_TIMED_CASE(sharpWhenScaledAndTurned());
+        BLOOM_TIMED_CASE(boundsFollowTheLayer());
+        BLOOM_TIMED_CASE(boxIsWhatTheArtworkShows());
+        BLOOM_TIMED_CASE(oneCompilePerRevisionAndOneParsePerFile());
+        BLOOM_TIMED_CASE(cancellation());
+        BLOOM_TIMED_CASE(budgetAdmissionAndRetirement());
+        BLOOM_TIMED_CASE(unreadableArtworkIsRefusedByName());
+        BLOOM_TIMED_CASE(whatResamplesAndWhatFollows());
+        BLOOM_TIMED_CASE(sharpUnderEveryLayerEdit());
+        BLOOM_TIMED_CASE(sharpOnAContentPivot());
+        BLOOM_TIMED_CASE(namedWhenItCannotBeSharp());
+        BLOOM_TIMED_CASE(oversampledCacheIdentity());
+        BLOOM_TIMED_CASE(sharpInsideScaledGroups());
+        BLOOM_TIMED_CASE(groupBoundsAndSiblings());
+        BLOOM_TIMED_CASE(groupsNamedWhenTheyCannotBe());
+        BLOOM_TIMED_CASE(windowAndGroupIdentity());
+        BLOOM_TIMED_CASE(contentPivotDrawsItsWindow());
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return EXIT_FAILURE;

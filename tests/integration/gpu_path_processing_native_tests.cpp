@@ -17,6 +17,7 @@
 // The CPU assertions always run. Without a device the GPU half reports an explicit SKIP (exit 77)
 // after the CPU half passed; --require-device makes that a failure.
 
+#include "case_timer.hpp"
 #include "document_render_parity_support.hpp"
 #include <bloom/core/executable_suffix.hpp>
 
@@ -667,6 +668,7 @@ int main(int argc, char** argv) {
         std::vector<Prepared> prepared;
         std::string lastFamily;
 
+        bloom::test_support::caseMark("1 Every node, every mode");
         // 1. Every node, every mode: the CPU reference, an edit of one operand and an unrelated one.
         for (const auto& scenario : scenarios()) {
             Fixture fixture;
@@ -694,11 +696,13 @@ int main(int argc, char** argv) {
             prepared.push_back(std::move(entry));
         }
 
+        bloom::test_support::caseMark("2 HDR and alpha");
         // 2. HDR and alpha: a fill at alpha one half and a colour above one, through Offset Path.
         Fixture hdr;
         hdr.chain(document::kOffsetPathNodeType, framed(), {2.5, 0.4, 0.1, 0.5});
         hdr.set(lastNode(hdr.document, hdr.main, document::kOffsetPathNodeType), "amount", 5.0);
         auto hdrReference = referenceAt(expectations, hdr, 0, "hdr alpha");
+        bloom::test_support::caseMark("3 Data window");
         // 3. Data window: Transform Path moves the shape partly outside the frame.
         Fixture outside;
         const auto outsideChain = outside.chain(document::kTransformPathNodeType, framed());
@@ -707,6 +711,7 @@ int main(int argc, char** argv) {
         outside.set(layerNode(outside.document, outside.main, lastLayer(outside.document, outside.main)),
                     "position", Vec2d{-34, -26});
         auto outsideReference = referenceAt(expectations, outside, 0, "data window outside frame");
+        bloom::test_support::caseMark("4 Region of interest");
         // 4. Region of interest: Round Corners over a crop of the frame.
         Fixture region;
         const auto regionChain = region.chain(document::kRoundCornersNodeType, framed());
@@ -737,6 +742,7 @@ int main(int argc, char** argv) {
                 }
             expectations.expect(identical, "region of interest: the CPU region is the full frame's crop");
         }
+        bloom::test_support::caseMark("5 Path Stroke core -> Shape Source -> Glow");
         // 5. Path Stroke core -> Shape Source -> Glow.
         Fixture glow;
         const auto stroke = glow.chain(document::kPathStrokeNodeType, openLine());
@@ -848,6 +854,7 @@ int main(int argc, char** argv) {
             }
         }
 
+        bloom::test_support::caseMark("6 Keyed");
         // 6. Keyed: Trim Path's end animates, then holds.
         Fixture keyed;
         const auto keyedChain = keyed.chain(document::kTrimPathNodeType, framed());
@@ -952,6 +959,7 @@ int main(int argc, char** argv) {
         if (regionReference)
             gpuParity(expectations, *executor.executor, *regionReference, "region of interest");
 #ifdef BLOOM_GPUSHADER_TOOLS_DIR
+        bloom::test_support::caseMark("6 Image effects and compositing recipes over a vector leaf read as an image");
         // 6. Image effects and compositing recipes over a vector leaf read as an image.
         for (const auto& leaf : leafEffects)
             gpuParityWithOcio(expectations, *executor.executor, leaf.reference, leaf.label);
