@@ -8,13 +8,19 @@
 #include <QFile>
 #include <QTemporaryDir>
 #include <bloom/commands/animation_operations.hpp>
+#include <bloom/commands/layer_operations.hpp>
+#include <bloom/commands/layer_stack_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/document/node_definition_registry.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/ui/audio_device_control.hpp>
 #include <bloom/ui/audio_playback_session.hpp>
 #include <bloom/ui/composition_plan_cache.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/playback_controller.hpp>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -23,6 +29,8 @@
 #include <numbers>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace {
 using namespace bloom;
@@ -205,6 +213,131 @@ int run(int argc, char** argv) {
         require(unrelated.mixRequests == before.mixRequests &&
                     unrelated.silences == before.silences && appliedClips == 1,
                 "stage 7b: an unconnected node requests no remix and keeps the clip playing");
+    }
+
+    // #471: mute and solo are followed while the transport plays, and the mix playback holds is
+    // the one export evaluates. Neither switch can be keyed (they are layer switches, unlike the
+    // level), so what changes over time is the edit arriving during playback: each one reaches
+    // the playing transport's clips without a stop, and an engine playing those clips is silent,
+    // one tone or two tones accordingly.
+    {
+        const auto composition = fixture.session.compositionId();
+        const auto layerIds = [&] {
+            std::vector<document::LayerId> ids;
+            for (const auto& entry : fixture.session.composition()->graph().layerStack().entries())
+                ids.push_back(entry.layerId);
+            return ids;
+        };
+        // The clips the export's mix would play: the compiled live revision, evaluated at zero.
+        const auto exportAudible = [&] {
+            const auto compiled = runtime::SnapshotCompiler(document::builtInNodeDefinitions())
+                                      .compile({fixture.session.snapshot(), composition}, {});
+            require(compiled.plan != nullptr, "stage 7c: the revision compiles");
+            const auto mix =
+                runtime::CpuCompositionEvaluator{}.evaluateAudioMix(compiled.plan, {});
+            require(mix.has_value(), "stage 7c: the export mix evaluates");
+            std::vector<std::pair<std::uint64_t, double>> audible;
+            for (const auto& clip : mix->clips)
+                if (!clip.muted)
+                    audible.emplace_back(clip.sourceNodeId.value(), clip.level);
+            std::ranges::sort(audible);
+            return audible;
+        };
+        const auto playbackAudible = [&] {
+            std::vector<std::pair<std::uint64_t, double>> audible;
+            for (const auto& clip : audioPlaybackSession.mix()->clips)
+                if (!clip.muted)
+                    audible.emplace_back(clip.sourceNodeId.value(), clip.level);
+            std::ranges::sort(audible);
+            return audible;
+        };
+        // The peak an engine plays from the clips the transport was given.
+        const auto heardPeak = [&] {
+            auto owner = std::make_unique<media::audio::playback::NullBackend>();
+            auto* sink = owner.get();
+            media::audio::playback::AudioEngine heard(std::move(owner));
+            heard.replaceClips(audioPlaybackSession.engineClips());
+            require(!heard.play(core::RationalTime{}) && !heard.renderForTesting(2400).has_value(),
+                    "stage 7c: render");
+            float peak = 0.0F;
+            for (const float sample : sink->captured())
+                peak = std::max(peak, std::abs(sample));
+            return peak;
+        };
+        const auto edit = [&](auto&& build, const char* label) {
+            commands::Transaction transaction(label, fixture.session.snapshot().revision());
+            build(transaction);
+            require(fixture.session.executeTransaction(std::move(transaction)).succeeded(), label);
+            // The session keeps the previous mix audible until the worker publishes the new one,
+            // so wait for the published mix to describe this revision's audible clips.
+            const auto expected = exportAudible();
+            QElapsedTimer timer;
+            timer.start();
+            // ... and for the engine clips of every audible one (a new layer's audio is
+            // delivered after its mix).
+            const auto delivered = [&] {
+                const auto clips = audioPlaybackSession.engineClips();
+                return static_cast<std::size_t>(std::ranges::count_if(
+                           clips, [](const auto& clip) { return !clip.muted; })) == expected.size();
+            };
+            const auto published = [&] {
+                return audioPlaybackSession.mix().has_value() && playbackAudible() == expected &&
+                       delivered();
+            };
+            while (!published() && timer.elapsed() < 15000)
+                QTest::qWait(10);
+            require(published(), "stage 7c: playback publishes the mix export evaluates");
+            require(playback.state() == ui::PlaybackState::Playing,
+                    "stage 7c: the edit does not stop playback");
+        };
+        (void)fixture.session.setCurrentTime(core::RationalTime::fromInteger(0));
+        playback.play();
+        require(playback.state() == ui::PlaybackState::Playing, "stage 7c: transport playing");
+        const auto first = layerIds().front();
+        const float one = heardPeak();
+        require(one > 0.3F && playbackAudible().size() == 1, "stage 7c: one tone plays");
+
+        edit([&](auto& t) { t.template emplace<commands::SetLayerEnabled>(composition, first, false); },
+             "stage 7c: mute the layer");
+        require(playbackAudible().empty() && heardPeak() == 0.0F,
+                "stage 7c: a layer muted during playback is silent");
+        edit([&](auto& t) { t.template emplace<commands::SetLayerEnabled>(composition, first, true); },
+             "stage 7c: unmute the layer");
+        require(std::abs(heardPeak() - one) < 1e-4F, "stage 7c: the unmuted layer plays again");
+
+        edit([&](auto& t) { t.template emplace<commands::AddAudioLayer>(composition, assetId); },
+             "stage 7c: a second audio layer");
+        const auto ids = layerIds();
+        require(ids.size() == 2, "stage 7c: two audio layers");
+        const auto second = ids.front() == first ? ids.back() : ids.front();
+        const float two = heardPeak();
+        require(playbackAudible().size() == 2 && two > one * 1.8F,
+                "stage 7c: two layers of the same tone play together");
+        edit([&](auto& t) { t.template emplace<commands::SetLayerSolo>(composition, second, true); },
+             "stage 7c: solo the second layer");
+        require(playbackAudible().size() == 1 && std::abs(heardPeak() - one) < 1e-4F,
+                "stage 7c: a solo during playback silences the other layer");
+        edit([&](auto& t) { t.template emplace<commands::SetLayerSolo>(composition, second, false); },
+             "stage 7c: clear the solo");
+        require(playbackAudible().size() == 2 && std::abs(heardPeak() - two) < 1e-4F,
+                "stage 7c: clearing the solo plays both again");
+        // Back to the single layer the stages below expect.
+        commands::Transaction remove("Remove the second layer",
+                                     fixture.session.snapshot().revision());
+        remove.emplace<commands::DeleteLayers>(composition, std::vector<document::LayerId>{second});
+        require(fixture.session.executeTransaction(std::move(remove)).succeeded(),
+                "stage 7c: the second layer is removed");
+        {
+            QElapsedTimer timer;
+            timer.start();
+            while ((!audioPlaybackSession.mix() || playbackAudible().size() != 1) &&
+                   timer.elapsed() < 15000)
+                QTest::qWait(10);
+        }
+        require(audioPlaybackSession.mix().has_value() && playbackAudible().size() == 1,
+                "stage 7c: one layer remains");
+        playback.pause();
+        std::cout << "stage 7c ok: peaks " << one << " and " << two << '\n';
     }
 
     document::NodeId layerNode;

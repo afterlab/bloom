@@ -969,6 +969,12 @@ void AssetController::releaseAudioDelivery() {
         adoptedAudioBuffers_.insert_or_assign(id, buffer);
     audioDeliveryBuffers_.clear();
 }
+void AssetController::requestAudioDelivery() {
+    assetsDirty_ = true;
+    previewDirty_ = true;
+    if (!previewPending_)
+        startThumbnails();
+}
 void AssetController::retryAudioAfterCapacitySample() {
     if (!retryAudioAfterCapacitySample_)
         return;

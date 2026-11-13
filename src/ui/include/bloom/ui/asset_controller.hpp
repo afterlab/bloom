@@ -252,6 +252,11 @@ class AssetController final : public QObject {
     audioBuffer(document::AssetId id, std::uint32_t stream = 0) const;
     // Called by the playback session after it has adopted the active mix's buffers.
     void releaseAudioDelivery();
+    // The playback session's mix plays an audio stream this controller holds no buffer for (a
+    // delivered buffer lives only while a mix pins it): decode the project's audio again. The
+    // asset job otherwise runs only when its inputs change (#718), and a layer that is unmuted,
+    // or placed after its import, changes none of them.
+    void requestAudioDelivery();
     void retryAudioAfterCapacitySample();
     [[nodiscard]] std::filesystem::path baseDirectory() const;
     // CACHEFIX-1 accounting counters (no UI): the bytes this controller's two in-memory caches

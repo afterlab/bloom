@@ -12,6 +12,7 @@
 #include <QObject>
 
 #include <map>
+#include <set>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -101,6 +102,8 @@ class AudioPlaybackSession final : public QObject {
     AssetController* audioSource_ = nullptr;
     std::map<runtime::AudioStreamKey, std::shared_ptr<const media::audio::AudioBuffer>>
         pinnedAudio_;
+    // Streams the mix names that nobody holds and that were asked of the source already.
+    std::set<runtime::AudioStreamKey> requestedAudio_;
     std::optional<Active> active_;
     std::optional<Request> pending_;
     std::uint64_t generation_ = 0;

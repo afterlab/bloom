@@ -337,6 +337,8 @@ void AudioPlaybackSession::refreshPins(const bool notify) {
     if (!audioSource_)
         return;
     decltype(pinnedAudio_) next;
+    decltype(requestedAudio_) wanted;
+    bool request = false;
     if (mix_ && !shuttingDown_)
         for (const auto& clip : mix_->clips) {
             const runtime::AudioStreamKey key{clip.assetId, clip.audioStream};
@@ -346,11 +348,21 @@ void AudioPlaybackSession::refreshPins(const bool notify) {
                 if (old != pinnedAudio_.end())
                     buffer = old->second;
             }
-            if (buffer)
+            if (buffer) {
                 next.insert_or_assign(key, std::move(buffer));
+            } else if (!audioSource_->missing(clip.assetId)) {
+                // The mix plays a stream nobody holds: ask for it once for as long as the mix
+                // keeps naming it, so a source that cannot be decoded is not asked for again on
+                // every change.
+                request = request || !requestedAudio_.contains(key);
+                wanted.insert(key);
+            }
         }
+    requestedAudio_ = std::move(wanted);
     const bool changed = next != pinnedAudio_;
     pinnedAudio_ = std::move(next);
+    if (request)
+        audioSource_->requestAudioDelivery();
     if (mix_ || shuttingDown_ || (!active_ && !pending_ && session_.composition() == nullptr))
         audioSource_->releaseAudioDelivery();
     if (notify && changed)
