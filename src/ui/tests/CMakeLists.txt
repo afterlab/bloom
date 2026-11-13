@@ -1677,6 +1677,15 @@ target_compile_definitions(bloom_timeline_graph_capture PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_timeline_graph_capture)
 
+# Before and after review captures for the toolbar, workspace, panels, controls and LUT group (a
+# tool, not a test): bloom_lane_before_after_capture <directory> <before|after> [parts].
+add_executable(bloom_lane_before_after_capture lane_before_after_capture.cpp)
+target_include_directories(bloom_lane_before_after_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_lane_before_after_capture PRIVATE bloom_ui bloom_project bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_lane_before_after_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_lane_before_after_capture)
+
 # UI bug batch review captures (a tool, not a test): bloom_bug_batch_capture [directory] [parts].
 add_executable(bloom_bug_batch_capture bug_batch_capture.cpp)
 target_include_directories(bloom_bug_batch_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
