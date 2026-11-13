@@ -198,6 +198,8 @@ NodeGraphEditor::NodeGraphEditor(CompositionSession& session, QWidget* parent)
     layout->addWidget(view_);
 
     connect(&session_, &CompositionSession::snapshotChanged, this, &NodeGraphEditor::rebuild);
+    // #720: a projection that waited for a gesture to end.
+    connect(scene_, &NodeGraphicsScene::projectionDue, this, &NodeGraphEditor::rebuild);
     // #694: another composition (or project) opens at the opening frame, as a fresh panel does.
     connect(&session_, &CompositionSession::compositionChanged, this, [this] {
         // A placement belongs to the composition it was started in.

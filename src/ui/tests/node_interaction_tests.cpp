@@ -321,9 +321,102 @@ void testHeaderMenusGridSnappingLinkStyleAndFooter() {
 }
 } // namespace bloom::ui::test
 
+namespace bloom::ui::test {
+namespace {
+QGraphicsRectItem* marquee(Fixture& f) {
+    for (auto* item : f.scene()->items())
+        if (item->data(kNodeItemKindRole).toString() == QStringLiteral("selection-preview"))
+            return dynamic_cast<QGraphicsRectItem*>(item);
+    return nullptr;
+}
+
+// A publication that changes what the cards read but not the document: the session's color
+// settings, which also sends the display color converter back to its worker to land again later.
+void publishWithoutDocumentChange(Fixture& f) {
+    auto settings = f.session.colorSettings();
+    settings.processColorSpaceId += "-720";
+    f.session.setColorSettings(std::move(settings));
+}
+
+void waitForConverterToLand(Fixture& f) {
+    (void)f.session.colorConverter();
+    QSignalSpy landed(&f.session, &CompositionSession::snapshotChanged);
+    QElapsedTimer timer;
+    timer.start();
+    while (landed.isEmpty() && timer.elapsed() < 5'000)
+        QTest::qWait(5);
+    expect(!landed.isEmpty(), "the color converter's publication arrives");
+}
+} // namespace
+
+// #720: a publication that changed no document state (the display color converter landing from
+// its worker, a color settings change) arriving in the middle of a marquee or a drag must not end
+// it. The projection waits for the gesture; a document change still ends the gesture.
+void testGestureSurvivesPublicationWithoutDocumentChange() {
+    Fixture f;
+    const auto solid = f.add(document::kSolidSourceNodeType, {400, 200});
+    const QRectF box = f.card(solid)->sceneBoundingRect();
+    const QPointF origin = box.topLeft() - QPointF(60, 60);
+    const QPointF corner = box.bottomRight() + QPointF(60, 60);
+    auto& counters = node_editor::nodeCanvasWorkCounters();
+
+    // A marquee.
+    f.press(origin);
+    f.move(box.center());
+    expect(marquee(f) != nullptr, "a drag on empty canvas draws a marquee");
+    const auto projections = counters.projections;
+    publishWithoutDocumentChange(f);
+    expect(marquee(f) != nullptr, "the marquee survives a publication without a document change");
+    expect(counters.projections == projections,
+           "the canvas is not projected in the middle of the marquee");
+    waitForConverterToLand(f);
+    expect(marquee(f) != nullptr, "the marquee survives the color converter landing");
+    expect(counters.projections == projections,
+           "the converter landing does not project in the middle of the marquee");
+    f.move(corner);
+    f.release(corner);
+    expect(marquee(f) == nullptr, "the release ends the marquee");
+    expect(f.session.selectedNodes().contains(solid),
+           "the surviving marquee selects the card it covers");
+    QCoreApplication::processEvents();
+    expect(counters.projections > projections,
+           "the projection the marquee held back runs once the marquee has ended");
+
+    // A card drag: it still commits, as one undo step, to the revision it froze.
+    const QPointF grab(f.card(solid)->sceneBoundingRect().center().x(),
+                       f.card(solid)->sceneBoundingRect().top() + 8);
+    const QPointF before = f.card(solid)->pos();
+    const auto revision = f.session.snapshot().revision();
+    f.press(grab);
+    f.move(grab + QPointF(120, 80));
+    publishWithoutDocumentChange(f);
+    waitForConverterToLand(f);
+    f.move(grab + QPointF(240, 160));
+    f.release(grab + QPointF(240, 160));
+    QCoreApplication::processEvents();
+    expect(f.last.succeeded() && f.session.snapshot().revision() != revision,
+           "a drag a publication arrived in still commits the move");
+    expect(f.card(solid) != nullptr && f.card(solid)->pos() != before,
+           "the card is where the drag left it");
+    expect(f.session.undo(), "the move can be undone");
+    QCoreApplication::processEvents();
+    expect(f.card(solid) != nullptr && f.card(solid)->pos() == before,
+           "the move is one undo step");
+
+    // A document change in the middle of a marquee still ends it.
+    f.press(origin);
+    f.move(box.center());
+    expect(marquee(f) != nullptr, "a second marquee starts");
+    (void)f.add(document::kSolidSourceNodeType, {900, 500});
+    expect(marquee(f) == nullptr, "a document change ends the marquee");
+    f.release(box.center());
+}
+} // namespace bloom::ui::test
+
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
+        bloom::ui::test::testGestureSurvivesPublicationWithoutDocumentChange();
         bloom::ui::test::testLayoutSelectionAndSockets();
         bloom::ui::test::testConnectionsCutAndInsertion();
         bloom::ui::test::testMergeAudioPill();

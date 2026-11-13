@@ -4,6 +4,7 @@
 #include <QGraphicsView>
 #include <QPainterPathStroker>
 #include <cmath>
+#include <utility>
 
 namespace bloom::ui {
 using namespace node_editor;
@@ -75,6 +76,10 @@ void NodeGraphicsScene::cancelGesture() {
     const auto moved = std::move(gesture.positions);
     gesture = {};
     updateGroupGeometry(moved);
+    // #720: the projection a gesture held back. Queued: a caller that ends its gesture here may
+    // still hold items the projection replaces, and a commit that follows projects by itself.
+    if (std::exchange(projectionDeferred_, false))
+        QMetaObject::invokeMethod(this, &NodeGraphicsScene::projectionDue, Qt::QueuedConnection);
 }
 void NodeGraphicsScene::selectAllNodes() {
     if (!session_ || !session_->composition())
@@ -289,6 +294,9 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
     }
     cancelGesture();
     gesture.mode = NodeInteraction::Mode::Box;
+    // A marquee commits nothing, but it selects the cards of the document it started on, so it
+    // ends with that document like every other gesture (#720).
+    gesture.revision = session_->snapshot().revision();
     gesture.origin = event->scenePos();
     if (event->modifiers().testFlag(Qt::ShiftModifier))
         gesture.baseSelection = session_->selectedNodes();

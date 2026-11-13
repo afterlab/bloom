@@ -130,6 +130,8 @@ class NodeGraphicsScene final : public QGraphicsScene {
                             std::optional<document::OutputPortRef> output);
     // Shift + right drag crossed a link and asks for a reroute at that point (task FIX1, item I).
     void rerouteRequested(document::InputPortRef input, QPointF scenePosition);
+    // #720: a projection that waited for a gesture to end is due now (see setProjection).
+    void projectionDue();
 
   public:
     // The session in-node field rows read and commit through (decision 5). Null leaves the scene a
@@ -219,6 +221,9 @@ class NodeGraphicsScene final : public QGraphicsScene {
     bool suppressContextMenu_ = false;
     Submit submit_;
     std::unique_ptr<NodeInteraction> interaction_;
+    // #720: a publication that changed no document state arrived during a gesture; the canvas
+    // is projected once the gesture has ended (projectionDue).
+    bool projectionDeferred_ = false;
     std::unique_ptr<node_editor::NodeCanvasIndex> index_;
     LinkStyle linkStyle_ = LinkStyle::Spline;
     bool snapEnabled_ = false;

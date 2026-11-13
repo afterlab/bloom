@@ -136,12 +136,22 @@ void NodeGraphicsScene::setProjection(const document::Snapshot& snapshot,
         index_->projected = std::move(inputs);
         return;
     }
+    // #720: what a card reads changed, but the document the gesture froze did not: the display
+    // color converter landed from its worker, or the color settings changed. That must not end
+    // the artist's marquee or drag. The gesture holds items a projection rebuilds, so the
+    // projection waits until the gesture has ended; the gesture's own commit still applies to the
+    // revision it froze, and a real document change still ends it below.
+    if (gestureActive() && !placementActive() && interaction_->revision == snapshot.revision()) {
+        projectionDeferred_ = true;
+        return;
+    }
     // #703: a placement outlives a projection (an asynchronous publication must not snatch the
     // card from under the pointer); only the link it targeted is let go, as links are rebuilt.
     if (placementActive())
         releasePlacementTarget();
     else
         cancelGesture();
+    projectionDeferred_ = false;
     ++counters.projections;
 
     index_->links = buildProjectionIndex(*composition);
