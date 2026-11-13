@@ -1,4 +1,5 @@
 #include "packed_host_retirement_private.hpp"
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <bloom/media/cache/source_mirror.hpp>
@@ -24,6 +25,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 #if defined(__linux__)
 #include <sys/wait.h>
 #endif
@@ -250,6 +252,56 @@ void sessionRevisions(const std::filesystem::path& source, const std::filesystem
         check(gestureQuota->residentBytes() == 0 && gestureCache.residentBytes() == 0,
               "cold read-only gesture inserts neither source nor decoded frame");
     }
+}
+// #329: a movie's audio as the windowed stream preview and export read it. The stream holds one
+// bounded window, not the clip, and every read (forward across windows, the clip's last frames,
+// back to an earlier place, one sample at a time) gives the samples a whole decode of the clip
+// gives.
+void windowedAudioStream(const std::filesystem::path& fixtures,
+                         const std::filesystem::path& scratch) {
+    const auto session = std::make_shared<video::VideoDecodeSession>(
+        fixtures / "numbered-prores.mov", video::VideoDecodeSession::defaultWorker(),
+        std::shared_ptr<bloom::platform::FileSnapshotQuota>{}, scratch / "windowed-audio-spool");
+    const auto probe = product(session->probe());
+    const auto stream = std::ranges::find(probe.streams, provider::MediaKind::Audio,
+                                          &provider::StreamDescriptor::kind);
+    check(stream != probe.streams.end(), "the ProRes fixture carries audio");
+    const auto frames = video::audioClipFrameCount(*stream);
+    const auto channels = stream->channelLayout.size();
+    constexpr std::size_t window = 1024;
+    check(frames && *frames > 4 * window, "the fixture spans several windows");
+    const auto whole = product(video::decodeAudioClip(*session, probe, *frames * channels));
+    const auto windowed = product(video::openWindowedVideoAudio(session, probe, 0, window));
+    check(windowed.stream != nullptr && windowed.planes.empty() && windowed.frames == *frames &&
+              windowed.channels == channels && windowed.rate == stream->sampleRate,
+          "the windowed buffer describes the clip and holds no decoded planes");
+    check(windowed.stream->retainedBytes() < *frames * channels * sizeof(float),
+          "the stream retains a window, not the clip");
+    std::vector<float> read;
+    const auto same = [&](const std::uint64_t first, const std::size_t count) {
+        read.assign(count * channels, 0.0F);
+        const auto got = windowed.stream->readInterleaved(first, read);
+        if (!got || *got.value() != count)
+            return false;
+        for (std::size_t frame = 0; frame < count; ++frame)
+            for (std::size_t channel = 0; channel < channels; ++channel)
+                if (read[frame * channels + channel] !=
+                    whole.planes[channel][static_cast<std::size_t>(first) + frame])
+                    return false;
+        return true;
+    };
+    check(same(0, 700), "the first frames equal the whole decode");
+    check(same(700, 700), "a read that crosses the window's end continues it");
+    check(same(3 * window + 17, 500), "a read further on decodes forward to it");
+    check(same(*frames - 500, 500), "the clip's last frames arrive, to the last sample");
+    check(same(100, 300), "a read back to an earlier place decodes it again");
+    for (const std::uint64_t frame : {std::uint64_t{0}, std::uint64_t{2 * window + 3}, *frames - 1})
+        for (std::uint32_t channel = 0; channel < channels; ++channel) {
+            const auto value = windowed.stream->sample(frame, channel);
+            check(value && *value == whole.planes[channel][static_cast<std::size_t>(frame)],
+                  "one sample equals the whole decode");
+        }
+    check(!windowed.stream->diagnostic(), "valid reads leave no diagnostic");
 }
 #if defined(__linux__)
 void audioOnePass(const std::filesystem::path& fixtures, const std::filesystem::path& scratch) {
@@ -887,6 +939,7 @@ int main(int argc, char** argv) {
         freshSessionAdoptsRetainedSnapshot(source, scratch.path);
         audioOnePass(fixtures, scratch.path);
 #endif
+        windowedAudioStream(fixtures, scratch.path);
         progressiveSource(fixtures, scratch.path);
         mirroredSource(fixtures, scratch.path);
         retirement(source, scratch.path / "retirement-spool");
