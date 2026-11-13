@@ -104,7 +104,16 @@ LayerAlignmentActions::LayerAlignmentActions(CompositionSession& session,
         auto* action = new QAction(kit::icon(arrangementIcon(arrangement), kit::IconRole::Chrome),
                                    layerArrangementName(arrangement), this);
         action->setObjectName(QStringLiteral("alignAction-") + objectStem(arrangement));
-        connect(action, &QAction::triggered, this, [this, arrangement] { (void)run(arrangement); });
+        connect(action, &QAction::triggered, this, [this, arrangement] {
+            // #713: the buttons stay enabled while the Viewer catches up with an edit, so a click
+            // in that moment waits for the current frame instead of being lost.
+            if (selectionReason(arrangement).isEmpty() && !frameReason().isEmpty() &&
+                preview_ != nullptr) {
+                pending_ = arrangement;
+                return;
+            }
+            (void)run(arrangement);
+        });
         actions_[index] = action;
     }
     auto* group = new QActionGroup(this);
@@ -125,13 +134,25 @@ LayerAlignmentActions::LayerAlignmentActions(CompositionSession& session,
     targets_[2]->setToolTip(tr("Align to the primary selected layer, which stays where it is"));
 
     const auto refreshLater = [this] { refresh(); };
-    connect(&session_, &CompositionSession::selectionChanged, this, refreshLater);
+    // A click that waits for the Viewer's frame (#713) is for the selection it was made on.
+    const auto forgetPending = [this] {
+        pending_.reset();
+        refresh();
+    };
+    connect(&session_, &CompositionSession::selectionChanged, this, forgetPending);
     connect(&session_, &CompositionSession::snapshotChanged, this, refreshLater);
-    connect(&session_, &CompositionSession::compositionChanged, this, refreshLater);
-    connect(&session_, &CompositionSession::currentTimeChanged, this, refreshLater);
+    connect(&session_, &CompositionSession::compositionChanged, this, forgetPending);
     connect(&session_.tools(), &ToolController::alignmentTargetChanged, this, refreshLater);
+    // #713: what the Viewer shows, and the playhead, decide when an arrangement can be measured,
+    // not whether the buttons are offered; neither refreshes them.
     if (preview_ != nullptr)
-        connect(preview_, &CompositionPreviewController::stateChanged, this, refreshLater);
+        connect(preview_, &CompositionPreviewController::stateChanged, this, [this] {
+            if (!pending_ || !frameReason().isEmpty())
+                return;
+            const auto arrangement = *pending_;
+            pending_.reset();
+            (void)run(arrangement);
+        });
     refresh();
 }
 
@@ -205,6 +226,13 @@ QString LayerAlignmentActions::keyLayerName() const {
 }
 
 QString LayerAlignmentActions::unavailableReason(const LayerArrangement arrangement) const {
+    const auto reason = selectionReason(arrangement);
+    return reason.isEmpty() ? frameReason() : reason;
+}
+
+// What the selection and the Align To choice allow: this alone decides whether a button is
+// offered (#713).
+QString LayerAlignmentActions::selectionReason(const LayerArrangement arrangement) const {
     if (session_.composition() == nullptr)
         return tr("No composition is open");
     const auto layers = selectedLayers();
@@ -218,6 +246,14 @@ QString LayerAlignmentActions::unavailableReason(const LayerArrangement arrangem
         return tr("Select a key layer and at least one more layer");
     if (target == AlignmentTarget::Selection && !distributing && layers.size() < 2)
         return tr("Select two or more layers, or align to the composition");
+    if (preview_ == nullptr)
+        return tr("Alignment measures the Viewer's frame, and no Viewer preview is running");
+    return {};
+}
+
+// Whether the Viewer shows the frame an arrangement is measured on. It changes with every edit and
+// every frame, so it never reaches the buttons (#713): a run waits for it instead.
+QString LayerAlignmentActions::frameReason() const {
     if (preview_ == nullptr)
         return tr("Alignment measures the Viewer's frame, and no Viewer preview is running");
     const auto state = preview_->state();
@@ -235,20 +271,38 @@ QString LayerAlignmentActions::unavailableReason(const LayerArrangement arrangem
 }
 
 void LayerAlignmentActions::refresh() {
+    // #713: an action changes (and its buttons repaint) only when what it shows changes.
+    bool anyChanged = false;
     const auto key = keyLayerName();
     for (std::size_t index = 0; index < actions_.size(); ++index) {
-        const auto reason = unavailableReason(kArrangements[index]);
+        const auto reason = selectionReason(kArrangements[index]);
         auto* action = actions_[index];
-        action->setEnabled(reason.isEmpty());
         // An unavailable action keeps its slot and says why.
-        action->setToolTip(reason.isEmpty() ? action->text()
-                                            : action->text() + QLatin1Char('\n') + reason);
+        const auto tip =
+            reason.isEmpty() ? action->text() : action->text() + QLatin1Char('\n') + reason;
+        if (action->isEnabled() != reason.isEmpty()) {
+            action->setEnabled(reason.isEmpty());
+            anyChanged = true;
+        }
+        if (action->toolTip() != tip) {
+            action->setToolTip(tip);
+            anyChanged = true;
+        }
     }
     const auto target = session_.tools().alignmentTarget();
     for (std::size_t index = 0; index < targets_.size(); ++index)
-        targets_[index]->setChecked(kTargets[index] == target);
-    targets_[2]->setText(key.isEmpty() ? tr("Key Object") : tr("Key Object (%1)").arg(key));
-    emit changed();
+        if (targets_[index]->isChecked() != (kTargets[index] == target)) {
+            targets_[index]->setChecked(kTargets[index] == target);
+            anyChanged = true;
+        }
+    const auto keyText = key.isEmpty() ? tr("Key Object") : tr("Key Object (%1)").arg(key);
+    if (targets_[2]->text() != keyText) {
+        targets_[2]->setText(keyText);
+        anyChanged = true;
+    }
+    if (anyChanged || !refreshed_)
+        emit changed();
+    refreshed_ = true;
 }
 
 bool LayerAlignmentActions::run(const LayerArrangement arrangement) {

@@ -55,10 +55,16 @@ class LayerAlignmentActions final : public QObject {
     void changed();
 
   private:
+    [[nodiscard]] QString selectionReason(commands::LayerArrangement arrangement) const;
+    [[nodiscard]] QString frameReason() const;
+
     CompositionSession& session_;
     CompositionPreviewController* preview_;
     std::array<QAction*, 8> actions_{};
     std::array<QAction*, 3> targets_{};
+    // #713: an arrangement clicked while the Viewer was catching up; it runs on the current frame.
+    std::optional<commands::LayerArrangement> pending_;
+    bool refreshed_ = false;
 };
 
 [[nodiscard]] QString layerArrangementName(commands::LayerArrangement arrangement);

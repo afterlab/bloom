@@ -40,6 +40,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 
 namespace {
 using namespace bloom;
@@ -630,7 +631,9 @@ void testAlignOnSvgLayerAndParts() {
             fixture.session.selectLayer(found.front());
             QElapsedTimer timer;
             timer.start();
-            while (!actions.action(commands::LayerArrangement::AlignLeft)->isEnabled() && timer.elapsed() < 10000)
+            // #713: the button follows the selection; the run needs the Viewer's current frame.
+            while (!actions.unavailableReason(commands::LayerArrangement::AlignLeft).isEmpty() &&
+                   timer.elapsed() < 10000)
                 settle(20);
             auto* alignLeft = actions.action(commands::LayerArrangement::AlignLeft);
             expect(alignLeft->isEnabled(),
@@ -801,6 +804,105 @@ void testImagePreviewPlaybackRepaints() {
     }
 }
 
+// #713: while a layer is dragged, every step is an edit the Viewer has to catch up with. The
+// alignment buttons depend on the selection, not on that, so they neither change nor repaint.
+void testAlignButtonsDoNotRepaintDuringDrag() {
+    const auto svg = std::filesystem::temp_directory_path() / "g1-align-drag.svg";
+    std::ofstream(svg, std::ios::binary)
+        << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><circle cx="60" cy="60" r="44" fill="#ee3377"/><rect x="110" y="26" width="72" height="68" rx="10" fill="#3377dd"/></svg>)svg";
+    test::WindowFixture fixture([&](test::WindowFixture& f) {
+        commands::Transaction transaction("Import SVG", f.session.snapshot().revision());
+        transaction
+            .emplace<commands::AddSvgArtwork>(f.session.compositionId(), nullptr, svg, "logo", true,
+                                              commands::SvgImportMode::Layer)
+            .withProjectDirectory(svg.parent_path());
+        expect(f.session.executeTransaction(std::move(transaction)).succeeded(), "the SVG imports");
+    });
+    auto* bar = fixture.window->contextBar();
+    auto& actions = bar->alignment();
+    std::optional<document::LayerId> logo;
+    for (const auto& layer : fixture.session.composition()->graph().layerOutputs())
+        if (layer.name == "logo")
+            logo = layer.layerId;
+    expect(logo.has_value(), "the SVG layer exists");
+    if (!logo)
+        return;
+    fixture.session.selectLayer(*logo);
+    QElapsedTimer timer;
+    timer.start();
+    while (!actions.unavailableReason(commands::LayerArrangement::AlignLeft).isEmpty() &&
+           timer.elapsed() < 10000)
+        settle(20);
+    auto* alignLeft = actions.action(commands::LayerArrangement::AlignLeft);
+    expect(alignLeft->isEnabled(), "Align is offered for the selected SVG layer");
+    settle(200);
+
+    int actionChanges = 0;
+    std::vector<QMetaObject::Connection> connections;
+    for (const auto arrangement :
+         {commands::LayerArrangement::AlignLeft, commands::LayerArrangement::AlignHorizontalCentre,
+          commands::LayerArrangement::AlignRight, commands::LayerArrangement::AlignTop,
+          commands::LayerArrangement::AlignVerticalMiddle, commands::LayerArrangement::AlignBottom,
+          commands::LayerArrangement::DistributeHorizontalCentres,
+          commands::LayerArrangement::DistributeVerticalCentres})
+        connections.push_back(QObject::connect(actions.action(arrangement), &QAction::changed,
+                                               [&actionChanges] { ++actionChanges; }));
+    int groupChanges = 0;
+    connections.push_back(QObject::connect(&actions, &ui::LayerAlignmentActions::changed,
+                                           [&groupChanges] { ++groupChanges; }));
+    PaintCounter counter;
+    for (const char* name : {"contextBarAlign", "contextBarDistribute", "contextBarAlignTarget"})
+        counter.roots.push_back(bar->findChild<QWidget*>(QString::fromLatin1(name)));
+    expect(std::ranges::none_of(counter.roots, [](QWidget* root) { return root == nullptr; }),
+           "the Align, Distribute and Align To groups exist");
+    qApp->installEventFilter(&counter);
+    constexpr int kSteps = 20;
+    bool everBehind = false;
+    for (int step = 1; step <= kSteps; ++step) {
+        expect(fixture.session.setSelectedPosition(100.0 + 7.0 * step, 80.0 + 3.0 * step),
+               "a drag step moves the layer");
+        everBehind = everBehind ||
+                     !actions.unavailableReason(commands::LayerArrangement::AlignLeft).isEmpty();
+        settle(30);
+    }
+    settle(300);
+    qApp->removeEventFilter(&counter);
+    for (const auto& connection : connections)
+        QObject::disconnect(connection);
+    expect(everBehind, "the Viewer was behind the edit during the drag (the test saw the old cause)");
+    expect(actionChanges == 0 && groupChanges == 0,
+           ("#713: no alignment action changes during a drag (" + std::to_string(actionChanges) +
+            " action changes, " + std::to_string(groupChanges) + " group changes)")
+               .c_str());
+    for (const auto& [widget, count] : counter.counts)
+        expect(count <= 1,
+               (std::string("#713: an unchanged alignment control does not repaint during a drag: ") +
+                widget->metaObject()->className() + " '" + widget->objectName().toStdString() +
+                "' painted " + std::to_string(count) + " times over " + std::to_string(kSteps) +
+                " steps")
+                   .c_str());
+    expect(alignLeft->isEnabled(), "Align stays offered through the drag");
+
+    // A click while the Viewer is behind is not lost: it runs on the current frame.
+    const auto positionNow = [&] {
+        const auto* parameter = fixture.session.parameterForSelection(document::kPositionParameterRole);
+        const auto* constant =
+            parameter != nullptr ? std::get_if<document::ConstantValueSource>(&parameter->source) : nullptr;
+        const auto* vector = constant != nullptr ? std::get_if<document::Vec2d>(&constant->value) : nullptr;
+        return vector != nullptr ? *vector : document::Vec2d{-1e9, -1e9};
+    };
+    expect(fixture.session.setSelectedPosition(400.0, 300.0), "the layer moves once more");
+    const auto moved = positionNow();
+    alignLeft->trigger();
+    timer.restart();
+    while (positionNow().x == moved.x && timer.elapsed() < 10000)
+        settle(20);
+    expect(positionNow().x != moved.x,
+           "#713: Align Left clicked while the Viewer catches up runs once the frame is current");
+    expect(fixture.session.undo() && positionNow().x == moved.x, "and is one undo step");
+}
+
+
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName("BloomBugBatchTests");
@@ -823,6 +925,7 @@ int main(int argc, char** argv) {
     }
     testAlignOnSvgLayerAndParts();
     testPlaybackRepaints();
+    testAlignButtonsDoNotRepaintDuringDrag();
     testImagePreviewPlaybackRepaints();
     if (test::failures != 0) {
         std::cerr << test::failures << " UI bug batch checks failed\n";
