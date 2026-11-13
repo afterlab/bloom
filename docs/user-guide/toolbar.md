@@ -85,5 +85,6 @@ Workspace picker (it moves into the menu as a Workspace submenu). The tools them
 
 ## Workspace
 
-The **Workspace** field on the right picks how the panels are arranged. See
+The field at the right end of the toolbar, which shows the name of the workspace, picks how the
+panels are arranged; **Align To** sits directly left of it. See
 [Workspace presets](workspace-presets.md).

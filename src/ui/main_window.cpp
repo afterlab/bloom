@@ -1412,13 +1412,15 @@ void MainWindow::createWorkspaceActions() {
     contextBarAction_->setChecked(true);
     connect(contextBarAction_, &QAction::toggled, contextBar_, &QWidget::setVisible);
 
-    windowMenu_->addSeparator();
-    auto* resetLayoutAction = windowMenu_->addAction("Reset Workspace");
+    // #687: Reset Workspace is offered in the toolbar's workspace dropdown, under "Save current
+    // layout as…", not in this menu. The action keeps its name and what it does.
+    auto* resetLayoutAction = new QAction(tr("Reset Workspace"), this);
     resetLayoutAction->setObjectName("resetWorkspaceAction");
     connect(resetLayoutAction, &QAction::triggered, this, [this] {
         resetCompositingLayout(true);
         updateWorkspaceActions();
     });
+    connect(contextBar_, &ContextBar::resetWorkspaceRequested, resetLayoutAction, &QAction::trigger);
 
     connectWorkspaceHost(*workspaceHost_);
     updateWorkspaceActions();

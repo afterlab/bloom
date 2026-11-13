@@ -370,16 +370,19 @@ Workspace field on the right:
   nothing until something is drawn. Hand, Zoom and the eyedropper have no options. There is no
   transform-gizmo mode and no snapping in the Viewer, so Select has no slot for them.
 - **Selection actions**, in the center of the row: Align (left edges, horizontal centers, right
-  edges; top edges, vertical middles, bottom edges), Distribute (horizontally, vertically) and
-  an "Align To" dropdown (Composition, Selection, Key Object). Align To starts on Composition
+  edges; top edges, vertical middles, bottom edges) and Distribute (horizontally, vertically). The
+  "Align To" dropdown (Composition, Selection, Key Object) sits at the right of the row, directly
+  left of the Workspace field (#699). Align To starts on Composition
   (`ToolController`'s session default). Key Object is the primary selected
   layer, named in the dropdown ("Key Object (Title)") and its tooltip. These are the same actions as
   Composition > Align.
 
 - **Workspace**, against the right edge: a `KDropdown` styled like Align To (`DropdownWidthWorkspace`)
-  with a "Workspace" label. Its list is the built-in presets (Default, Node, Export, Animation), a
+  with no label beside it (#700); its accessible name is "Workspace" and its tooltip names it. Its
+  list is the built-in presets (Default, Node, Export, Animation), a
   separator, the artist's saved presets, a separator, then "Save current layout as…" (a
-  `kit::promptText` for the name) and, while a saved preset is active, "Update ‘name’" and
+  `kit::promptText` for the name), "Reset Workspace" directly under it (#687; it is not in the
+  Window menu) and, while a saved preset is active, "Update ‘name’" and
   "Delete ‘name’…" (a `kit::confirm`). The field reads the active preset, "Node (edited)" after the
   arrangement changed by hand, or "Custom".
   It is the last group to fold into the overflow menu, where it is a Workspace submenu.
@@ -891,7 +894,8 @@ receives window geometry, so early minimum-size clamping cannot change the inten
 
 Assets is included in both the default and migrated layouts; editor areas remain replaceable.
 Validated version-1 application layouts reset to this complete default. Generic WorkspaceHost
-version-1 and earlier version-2 trees remain restorable. `Window → Reset Workspace` restores these
+version-1 and earlier version-2 trees remain restorable. Reset Workspace (in the toolbar's Workspace
+field) restores these
 weights, resets the Timeline divider to 37%, and persists both results. Future schema versions are
 preserved and not overwritten.
 See [Workspace Layout](../architecture/workspace-layout.md) for the migration contract.

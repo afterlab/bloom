@@ -122,7 +122,8 @@ restores unchanged; only a schema-1 layout is replaced with the Default preset.
 
 ## Authored default and Version 2 migration
 
-The first-run and `Window → Reset Workspace` arrangement is the built-in **Default** workspace
+The first-run and Reset Workspace (the toolbar's Workspace field) arrangement is the built-in
+**Default** workspace
 preset (owner, 2026-10-31), authored in `WorkspacePresets` as normalized split weights and applied
 through `WorkspaceHost::applyArrangement()`:
 

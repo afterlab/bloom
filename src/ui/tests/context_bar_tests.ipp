@@ -402,6 +402,58 @@ void testContextBarWorkspaceField(Expectations& expectations) {
                             field->mapTo(&bar, QPoint()).x() > bar.width() / 2 &&
                             field->currentText().startsWith(QStringLiteral("Default")),
                         "the Workspace field sits at the right and starts on Default");
+    // #700: no "Workspace" label beside the field; its accessible name and tool tip say what it is.
+    auto* workspaceGroup = bar.findChild<QWidget*>("contextBarWorkspace");
+    bool labelled = false;
+    if (workspaceGroup != nullptr)
+        for (const auto* label : workspaceGroup->findChildren<QLabel*>())
+            labelled = labelled || (label->parentWidget() == workspaceGroup &&
+                                    label->text() == QStringLiteral("Workspace"));
+    expectations.expect(workspaceGroup != nullptr && !labelled &&
+                            field->accessibleName() == QStringLiteral("Workspace") &&
+                            field->toolTip().contains(QStringLiteral("Workspace")),
+                        "#700: the Workspace field has no label, and keeps its accessible name and "
+                        "a tool tip that names it");
+    // #699: Align To sits on the right, next to the workspace field, at wide and narrow widths.
+    auto* alignTo = bar.findChild<QWidget*>("contextBarAlignTarget");
+    auto* alignGroup = bar.findChild<QWidget*>("contextBarAlign");
+    const auto leftOf = [&](const QWidget* widget) { return widget->mapTo(&bar, QPoint()).x(); };
+    expectations.expect(alignTo != nullptr && alignGroup != nullptr && alignTo->isVisible() &&
+                            leftOf(alignTo) > bar.width() / 2 &&
+                            leftOf(alignTo) + alignTo->width() <= leftOf(workspaceGroup) &&
+                            leftOf(workspaceGroup) - (leftOf(alignTo) + alignTo->width()) <=
+                                ui::kit::px(ui::kit::Spacing::ChromeGroupGap) &&
+                            leftOf(alignGroup) + alignGroup->width() < leftOf(alignTo),
+                        "#699: Align To sits at the right of the bar, against the workspace field, "
+                        "away from the Align buttons in the middle");
+    for (const int width : {1100, 900, 700, 520}) {
+        bar.resize(width, bar.height());
+        QCoreApplication::processEvents();
+        QCoreApplication::processEvents();
+        std::vector<const QWidget*> shown;
+        for (const char* name : {"contextBarTools", "contextBarAlign", "contextBarDistribute",
+                                 "contextBarAlignTarget", "contextBarWorkspace"})
+            if (const auto* group = bar.findChild<QWidget*>(name);
+                group != nullptr && group->isVisible() && group->width() > 0)
+                shown.push_back(group);
+        bool tidy = true;
+        for (std::size_t index = 0; index < shown.size(); ++index) {
+            tidy = tidy && leftOf(shown[index]) >= 0 &&
+                   leftOf(shown[index]) + shown[index]->width() <= bar.width();
+            for (std::size_t other = index + 1; other < shown.size(); ++other)
+                tidy = tidy && (leftOf(shown[index]) + shown[index]->width() <= leftOf(shown[other]) ||
+                                leftOf(shown[other]) + shown[other]->width() <= leftOf(shown[index]));
+        }
+        const bool alignToRight =
+            !alignTo->isVisible() || !workspaceGroup->isVisible() ||
+            leftOf(alignTo) + alignTo->width() <= leftOf(workspaceGroup);
+        expectations.expect(tidy && alignToRight,
+                            "#699: at " + std::to_string(width) +
+                                " px the bar's groups stay inside it without overlapping, Align To "
+                                "left of the workspace field");
+    }
+    bar.resize(1400, bar.height());
+    QCoreApplication::processEvents();
     const auto indexOf = [&](const QString& text) {
         for (int index = 0; index < field->count(); ++index)
             if (field->itemText(index) == text)
@@ -414,6 +466,17 @@ void testContextBarWorkspaceField(Expectations& expectations) {
                             indexOf(QStringLiteral("Custom")) < 0 &&
                             indexOf(QStringLiteral("Save current layout as…")) > 0,
                         "choosing a preset applies it and the field names it");
+    // #687: Reset Workspace sits directly under "Save current layout as…" and asks the window.
+    int resets = 0;
+    const auto resetConnection = QObject::connect(&bar, &ui::ContextBar::resetWorkspaceRequested,
+                                                  [&resets] { ++resets; });
+    expectations.expect(indexOf(QStringLiteral("Reset Workspace")) ==
+                            indexOf(QStringLiteral("Save current layout as…")) + 1,
+                        "#687: Reset Workspace is listed directly under Save current layout as…");
+    field->chooseIndex(indexOf(QStringLiteral("Reset Workspace")));
+    expectations.expect(resets == 1 && field->currentText() == QStringLiteral("Node"),
+                        "#687: choosing Reset Workspace asks the window to reset, once");
+    QObject::disconnect(resetConnection);
     (void)host.splitActiveArea(Qt::Horizontal);
     expectations.expect(field->currentText() == QStringLiteral("Node (edited)"),
                         "a manual change shows \"Node (edited)\"");

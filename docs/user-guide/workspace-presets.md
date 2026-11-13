@@ -23,7 +23,8 @@ which removes the layout (the panels on screen stay as they are).
 
 When you change the arrangement after choosing a preset (drag a divider, split or close a panel,
 change a panel's editor) the field reads **Default (edited)**, for instance. A new Bloom starts on
-**Default**, and **Window → Reset Workspace** applies it again. The field reads **Custom** after you
+**Default**, and **Reset Workspace**, in the Workspace field under **Save current layout as…**,
+applies it again. The field reads **Custom** after you
 delete the saved layout you were on.
 
 Workspace presets belong to this computer's Bloom preferences, not to a project: they are the same

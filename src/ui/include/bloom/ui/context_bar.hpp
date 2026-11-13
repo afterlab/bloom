@@ -57,6 +57,8 @@ class ContextBar final : public QWidget {
   signals:
     // A status line for the window: layers an alignment skipped, and why.
     void notice(const QString& message);
+    // #687: Reset Workspace was chosen in the workspace dropdown (or the narrow bar's overflow).
+    void resetWorkspaceRequested();
 
   protected:
     void keyPressEvent(QKeyEvent* event) override;

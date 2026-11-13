@@ -124,9 +124,9 @@ ContextBar::ContextBar(CompositionSession& session, CompositionPreviewController
     auto* target = buildAlignTarget(this);
     spec.addWidget(align);
     spec.addWidget(distribute);
-    spec.addWidget(target);
-    // Right: the Workspace preset picker, against the edge.
+    // Right: Align To (#699), then the workspace preset picker against the edge.
     spec.addStretch();
+    spec.addWidget(target);
     workspaceGroup_ = buildWorkspace(this);
     spec.addWidget(workspaceGroup_);
     const auto submenu = [this](const QString& title, const std::vector<QAction*>& actions) {
@@ -328,15 +328,14 @@ QWidget* ContextBar::buildWorkspace(QWidget* parent) {
     auto* widget = group(parent, QStringLiteral("contextBarWorkspace"));
     auto* layout = static_cast<QHBoxLayout*>(widget->layout());
     layout->addSpacing(kit::px(kit::Spacing::ChromeGroupGap) - kit::px(kit::Spacing::ChromeGap));
-    auto* label = new kit::KLabel(tr("Workspace"), widget, kit::TypeRole::UiSmall);
-    label->setTone(kit::Color::Muted);
+    // #700: no label beside it; the field shows the workspace's name, and its accessible name and
+    // tool tip say what it is.
     workspace_ = new kit::KDropdown(widget);
     workspace_->setObjectName(QStringLiteral("contextBarWorkspaceDropdown"));
     workspace_->setAccessibleName(tr("Workspace"));
     workspace_->setFocusPolicy(Qt::ClickFocus);
     workspace_->setWidthFloor(kit::px(kit::Size::DropdownWidthWorkspace));
     workspace_->setFixedWidth(kit::px(kit::Size::DropdownWidthWorkspace));
-    layout->addWidget(label);
     layout->addWidget(workspace_);
     widget->setProperty("chromeSuppressed", true);
     connect(workspace_, &kit::KDropdown::activated, this, [this](const int index) {
@@ -344,6 +343,8 @@ QWidget* ContextBar::buildWorkspace(QWidget* parent) {
         if (presets_ != nullptr) {
             if (choice == QStringLiteral("@save"))
                 presets_->promptSaveAs(*window());
+            else if (choice == QStringLiteral("@reset"))
+                emit resetWorkspaceRequested();
             else if (choice == QStringLiteral("@update"))
                 presets_->updateActive();
             else if (choice == QStringLiteral("@delete"))
@@ -396,13 +397,15 @@ void ContextBar::refreshWorkspace() {
     }
     workspace_->addSeparator();
     workspace_->addItem(tr("Save current layout as…"), QStringLiteral("@save"));
+    // #687: Reset Workspace sits with the other workspace actions, directly under Save.
+    workspace_->addItem(tr("Reset Workspace"), QStringLiteral("@reset"));
     if (presets_->activeIsUser()) {
         workspace_->addItem(tr("Update ‘%1’").arg(presets_->activeName()), QStringLiteral("@update"));
         workspace_->addItem(tr("Delete ‘%1’…").arg(presets_->activeName()), QStringLiteral("@delete"));
     }
     if (current >= 0)
         workspace_->setCurrentIndex(current);
-    workspace_->setToolTip(tr("The panel arrangement of the window"));
+    workspace_->setToolTip(tr("Workspace: the panel arrangement of the window"));
     // The same list, as a submenu of the overflow menu when the bar is narrow.
     workspaceOverflow_->clear();
     for (const auto& preset : presets_->builtInPresets())
@@ -415,6 +418,10 @@ void ContextBar::refreshWorkspace() {
         workspaceOverflow_->addAction(preset.name, this, [this, name = preset.name] {
             presets_->apply(name);
         });
+    // #687: Reset Workspace left the Window menu, so the narrow bar's overflow offers it too.
+    workspaceOverflow_->addSeparator();
+    workspaceOverflow_->addAction(tr("Reset Workspace"), this,
+                                  [this] { emit resetWorkspaceRequested(); });
 }
 
 void ContextBar::setViewer(ViewerEditor* viewer) {

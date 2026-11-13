@@ -235,7 +235,25 @@ void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expe
             fixture.window->findChild<QAction*>(QStringLiteral("resetWorkspaceAction"));
         expectations.expect(resetAction != nullptr &&
                                 resetAction->text() == QStringLiteral("Reset Workspace"),
-                            "reset workspace: Window menu carries the Reset Workspace action");
+                            "reset workspace: the Reset Workspace action keeps its name");
+        // #687: it is offered in the toolbar's workspace dropdown, directly under "Save current
+        // layout as…", and no longer in the Window menu.
+        bool inAMenu = false;
+        for (const auto* menu : fixture.window->findChildren<QMenu*>())
+            inAMenu = inAMenu || (resetAction != nullptr && menu->actions().contains(resetAction));
+        expectations.expect(!inAMenu, "reset workspace: no menu of the window lists the action");
+        auto* workspaceField = fixture.window->contextBar()->workspaceDropdownForTest();
+        int saveIndex = -1;
+        int resetIndex = -1;
+        for (int index = 0; workspaceField != nullptr && index < workspaceField->count(); ++index) {
+            if (workspaceField->itemText(index) == QStringLiteral("Save current layout as…"))
+                saveIndex = index;
+            if (workspaceField->itemText(index) == QStringLiteral("Reset Workspace"))
+                resetIndex = index;
+        }
+        expectations.expect(saveIndex >= 0 && resetIndex == saveIndex + 1,
+                            "reset workspace: the workspace dropdown lists Reset Workspace directly "
+                            "under Save current layout as…");
 
         const auto visibleArea = [&fixture](const std::string_view editorId) {
             for (auto* area : fixture.window->workspaceHost()->findChildren<EditorArea*>()) {
@@ -296,7 +314,9 @@ void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expe
         expectations.expect(timeline->layerColumnWidthForTest() != originalTimelineWidth,
                             "reset workspace: dragging changes the timeline divider");
 
-        resetAction->trigger();
+        // #687: chosen from the workspace dropdown, as an artist does.
+        if (workspaceField != nullptr && resetIndex >= 0)
+            workspaceField->chooseIndex(resetIndex);
         QCoreApplication::processEvents();
         QCoreApplication::processEvents();
         topRow = viewerNodesRow();
