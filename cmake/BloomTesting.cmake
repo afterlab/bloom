@@ -2,9 +2,26 @@ include_guard(GLOBAL)
 
 include(BloomVulkanRuntime)
 
+# Tests prove one behavior at the smallest size that shows it. Three kinds of run are not part of
+# the default suite and are registered only when asked for:
+#   STRESS      large sizes, long fills, soaks, real-machine memory (label `stress`)
+#   BENCH       benchmark programs kept runnable (label `bench`)
+#   COMPOSITOR  tests that need a private compositor session and would otherwise exit as skipped
+#               (label `compositor`)
+option(BLOOM_ENABLE_STRESS_TESTS "Register stress tests (large sizes, soaks, real-machine memory)" OFF)
+option(BLOOM_ENABLE_BENCH_TESTS "Register benchmark smoke runs as tests" OFF)
+option(BLOOM_ENABLE_COMPOSITOR_TESTS
+       "Register tests that need a private compositor session (run them inside one)" OFF)
+
+# bloom_add_test(NAME <name> COMMAND <program> [args...]
+#                [LABELS ...] [ENVIRONMENT ...] [TIMEOUT <seconds>] [WORKING_DIRECTORY <dir>]
+#                [SKIP_RETURN_CODE <code>] [RUN_SERIAL] [STRESS] [BENCH] [COMPOSITOR])
+# A test marked STRESS, BENCH or COMPOSITOR is not registered unless its option is on; set its
+# properties through this function's arguments (or guard with `if(TEST <name>)`), because
+# set_tests_properties fails for a test that is not registered.
 function(bloom_add_test)
-    set(options)
-    set(one_value_args NAME TIMEOUT WORKING_DIRECTORY)
+    set(options STRESS BENCH COMPOSITOR RUN_SERIAL)
+    set(one_value_args NAME TIMEOUT WORKING_DIRECTORY SKIP_RETURN_CODE)
     set(multi_value_args COMMAND LABELS ENVIRONMENT)
     cmake_parse_arguments(PARSE_ARGV 0 ARG "${options}" "${one_value_args}" "${multi_value_args}")
 
@@ -18,8 +35,6 @@ function(bloom_add_test)
         set(ARG_TIMEOUT 30)
     endif()
 
-    add_test(NAME "${ARG_NAME}" COMMAND ${ARG_COMMAND})
-    set_tests_properties("${ARG_NAME}" PROPERTIES TIMEOUT "${ARG_TIMEOUT}")
 
     # Production targets are the always-on static-analysis boundary. Tests retain strict compiler
     # warnings, formatting, hygiene, and sanitizer coverage; their broader clang-tidy sweep is an
@@ -33,6 +48,34 @@ function(bloom_add_test)
     list(GET ARG_COMMAND 0 bloom_test_program)
     bloom_stage_test_vulkan_runtime("${bloom_test_program}")
 
+    # The program still builds when its test is opt-in, so it cannot rot unnoticed.
+    if(ARG_STRESS)
+        list(APPEND ARG_LABELS stress)
+        if(NOT BLOOM_ENABLE_STRESS_TESTS)
+            return()
+        endif()
+    endif()
+    if(ARG_BENCH)
+        list(APPEND ARG_LABELS bench)
+        if(NOT BLOOM_ENABLE_BENCH_TESTS)
+            return()
+        endif()
+    endif()
+    if(ARG_COMPOSITOR)
+        list(APPEND ARG_LABELS compositor)
+        if(NOT BLOOM_ENABLE_COMPOSITOR_TESTS)
+            return()
+        endif()
+    endif()
+
+    add_test(NAME "${ARG_NAME}" COMMAND ${ARG_COMMAND})
+    set_tests_properties("${ARG_NAME}" PROPERTIES TIMEOUT "${ARG_TIMEOUT}")
+    if(ARG_SKIP_RETURN_CODE)
+        set_tests_properties("${ARG_NAME}" PROPERTIES SKIP_RETURN_CODE "${ARG_SKIP_RETURN_CODE}")
+    endif()
+    if(ARG_RUN_SERIAL)
+        set_tests_properties("${ARG_NAME}" PROPERTIES RUN_SERIAL TRUE)
+    endif()
     if(ARG_LABELS)
         set_tests_properties("${ARG_NAME}" PROPERTIES LABELS "${ARG_LABELS}")
     endif()

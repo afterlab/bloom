@@ -1115,8 +1115,9 @@ bloom_add_test(
     COMMAND bloom_runtime_gpu_svg_artwork_node_bench --smoke
     LABELS runtime native gpu
     TIMEOUT 300
+    SKIP_RETURN_CODE 77
+    BENCH
 )
-set_tests_properties(bloom.runtime.gpu_svg_artwork_node_bench_smoke PROPERTIES SKIP_RETURN_CODE 77)
 
 # #344 #530 #509: the path processing nodes on the production GPU route against the CPU reference,
 # with cache identity, invalidation, animation, HDR and alpha, data window, region of interest, the
@@ -1275,8 +1276,9 @@ bloom_add_test(
     COMMAND bloom_runtime_gpu_matte_node_bench --smoke
     LABELS runtime native gpu
     TIMEOUT 300
+    SKIP_RETURN_CODE 77
+    BENCH
 )
-set_tests_properties(bloom.runtime.gpu_matte_node_bench_smoke PROPERTIES SKIP_RETURN_CODE 77)
 
 # #483 depth effect GPU cost benchmark (tools/bench/run_bench.py nodes): Z Defocus and Depth Fog
 # against a Grade and the closest existing nodes, timed cold, warm and per frame; the CTest is a
@@ -1297,8 +1299,9 @@ bloom_add_test(
     COMMAND bloom_runtime_gpu_depth_node_bench --smoke
     LABELS runtime native gpu
     TIMEOUT 300
+    SKIP_RETURN_CODE 77
+    BENCH
 )
-set_tests_properties(bloom.runtime.gpu_depth_node_bench_smoke PROPERTIES SKIP_RETURN_CODE 77)
 
 # #507 Lens Flare GPU cost benchmark (tools/bench/run_bench.py nodes): the element stack against a
 # Grade, a Vignette and a Glow, timed cold, warm and per frame; the CTest is a 64x64 smoke run of
@@ -1319,8 +1322,9 @@ bloom_add_test(
     COMMAND bloom_runtime_gpu_lens_flare_node_bench --smoke
     LABELS runtime native gpu
     TIMEOUT 300
+    SKIP_RETURN_CODE 77
+    BENCH
 )
-set_tests_properties(bloom.runtime.gpu_lens_flare_node_bench_smoke PROPERTIES SKIP_RETURN_CODE 77)
 # #484 motion blur GPU cost benchmark (tools/bench/run_bench.py nodes): every motion-blur node against
 # a Grade and the closest existing node, timed cold, warm and per frame; the CTest is a 64x64 smoke
 # run of every case.
@@ -1340,8 +1344,9 @@ bloom_add_test(
     COMMAND bloom_runtime_gpu_motion_node_bench --smoke
     LABELS runtime native gpu
     TIMEOUT 300
+    SKIP_RETURN_CODE 77
+    BENCH
 )
-set_tests_properties(bloom.runtime.gpu_motion_node_bench_smoke PROPERTIES SKIP_RETURN_CODE 77)
 
 # #486 Film Grain GPU cost benchmark (tools/bench/run_bench.py nodes): grain at its sizes against a
 # Grade, a Vignette and a procedural Noise, timed cold, warm and per frame; the CTest is a 64x64
@@ -1362,8 +1367,9 @@ bloom_add_test(
     COMMAND bloom_runtime_gpu_film_grain_node_bench --smoke
     LABELS runtime native gpu
     TIMEOUT 300
+    SKIP_RETURN_CODE 77
+    BENCH
 )
-set_tests_properties(bloom.runtime.gpu_film_grain_node_bench_smoke PROPERTIES SKIP_RETURN_CODE 77)
 
 # #486 Sharpen GPU cost benchmark (tools/bench/run_bench.py nodes): the unsharp mask at its radii
 # against a Grade and a Gaussian Blur of the same radius, timed cold, warm and per frame; the CTest is
@@ -1384,8 +1390,9 @@ bloom_add_test(
     COMMAND bloom_runtime_gpu_sharpen_node_bench --smoke
     LABELS runtime native gpu
     TIMEOUT 300
+    SKIP_RETURN_CODE 77
+    BENCH
 )
-set_tests_properties(bloom.runtime.gpu_sharpen_node_bench_smoke PROPERTIES SKIP_RETURN_CODE 77)
 
 # #514 Denoise & Smooth GPU cost benchmark (tools/bench/run_bench.py nodes): every mode at its radii
 # against a Grade and a Gaussian Blur of the same radius, timed cold, warm and per frame; the CTest is
@@ -1406,8 +1413,9 @@ bloom_add_test(
     COMMAND bloom_runtime_gpu_denoise_node_bench --smoke
     LABELS runtime native gpu
     TIMEOUT 300
+    SKIP_RETURN_CODE 77
+    BENCH
 )
-set_tests_properties(bloom.runtime.gpu_denoise_node_bench_smoke PROPERTIES SKIP_RETURN_CODE 77)
 
 # ADR 0028 animated masks: a path keyed on 24 frames is prepared by the production builder through
 # the shared preparer from THIS target's packaged shader tools and must compile at most one shader

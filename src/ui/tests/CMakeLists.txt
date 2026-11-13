@@ -1890,7 +1890,8 @@ set_tests_properties(bloom.ui.asset_validity PROPERTIES
 # sequence through Assets, node cards, Properties and the Viewer preview.
 add_executable(bloom_cryptomatte_sidecar_ui_test cryptomatte_sidecar_ui_tests.cpp)
 target_include_directories(bloom_cryptomatte_sidecar_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..
-    ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS} "${PROJECT_SOURCE_DIR}/src/runtime/tests")
+    ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS} "${PROJECT_SOURCE_DIR}/src/runtime/tests"
+    "${PROJECT_SOURCE_DIR}/tests/support")
 target_link_libraries(bloom_cryptomatte_sidecar_ui_test PRIVATE bloom_ui bloom_runtime_compiler
     bloom_runtime_evaluator bloom_commands OpenEXR::OpenEXR Qt6::Test)
 bloom_enable_warnings(bloom_cryptomatte_sidecar_ui_test)
@@ -2178,41 +2179,39 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         COMMAND bloom_ui_gpu_presentation_coordinator_test ${bloom_ui_vulkan_loader_args}
         LABELS ui integration gpu presentation TIMEOUT 300
         ENVIRONMENT "QT_QPA_PLATFORM=wayland"
+        SKIP_RETURN_CODE 77 COMPOSITOR
     )
     bloom_add_test(
         NAME bloom.ui.gpu_preview_display_service_presentation
         COMMAND bloom_ui_gpu_preview_display_service_presentation_test ${bloom_ui_vulkan_loader_args}
         LABELS ui integration gpu presentation TIMEOUT 300
         ENVIRONMENT "QT_QPA_PLATFORM=wayland"
+        SKIP_RETURN_CODE 77 COMPOSITOR
     )
     bloom_add_test(
         NAME bloom.ui.gpu_preview_display_service_resident
         COMMAND bloom_ui_gpu_preview_display_service_resident_test ${bloom_ui_vulkan_loader_args}
         LABELS ui integration gpu presentation TIMEOUT 300
         ENVIRONMENT "QT_QPA_PLATFORM=wayland"
+        SKIP_RETURN_CODE 77 COMPOSITOR
     )
     bloom_add_test(
         NAME bloom.ui.viewer_gpu_presenter
         COMMAND bloom_ui_viewer_gpu_presenter_test ${bloom_ui_vulkan_loader_args}
         LABELS ui integration gpu presentation TIMEOUT 180
         ENVIRONMENT "QT_QPA_PLATFORM=wayland"
+        SKIP_RETURN_CODE 77 COMPOSITOR
     )
     bloom_add_test(
         NAME bloom.ui.viewer_gpu_presenter_native
         COMMAND bloom_ui_viewer_gpu_presenter_native_test ${bloom_ui_vulkan_loader_args}
         LABELS ui integration gpu presentation TIMEOUT 300
         ENVIRONMENT "QT_QPA_PLATFORM=wayland"
+        SKIP_RETURN_CODE 77 COMPOSITOR
     )
-    # The five fixtures above share the pre-QApplication native Wayland environment gate and exit
-    # with 77 when it is unavailable; register that code as a skip so CTest lists them as Skipped.
-    set_tests_properties(
-        bloom.ui.gpu_presentation_coordinator
-        bloom.ui.gpu_preview_display_service_presentation
-        bloom.ui.gpu_preview_display_service_resident
-        bloom.ui.viewer_gpu_presenter
-        bloom.ui.viewer_gpu_presenter_native
-        PROPERTIES SKIP_RETURN_CODE 77
-    )
+    # The five fixtures above need a private Wayland session, so they are COMPOSITOR tests:
+    # registered only with BLOOM_ENABLE_COMPOSITOR_TESTS and run inside that session. Without it
+    # they would only exit with 77, and a green run would say nothing about them.
 endif()
 
 # Host retire-before-mutation gate. The first target is a CPU-only, archive-free test of the
@@ -2542,8 +2541,8 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     bloom_enable_warnings(bloom_ui_gpu_processing_phase_native_test)
     bloom_add_test(NAME bloom.ui.gpu_processing_phase_native
         COMMAND bloom_ui_gpu_processing_phase_native_test LABELS ui gpu memory
-        TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-    set_tests_properties(bloom.ui.gpu_processing_phase_native PROPERTIES SKIP_RETURN_CODE 77)
+        TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        SKIP_RETURN_CODE 77 COMPOSITOR)
 
     add_executable(bloom_ui_gpu_packed_viewer_test gpu_packed_viewer_tests.cpp)
     target_include_directories(bloom_ui_gpu_packed_viewer_test
@@ -2608,20 +2607,26 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         else()
             set(packed_args)
         endif()
+        if(packed_case MATCHES "gib$")
+            # A modelled card is the only limit the case measures, so it runs with the device to
+            # itself: other tests holding device memory would make it a smaller card than modelled.
+            # A real 100-frame fill is a stress run; the small-card plan itself is proven without a
+            # device in bloom.runtime.gpu_processing_phase_policy.
+            set(packed_kind STRESS RUN_SERIAL)
+        elseif(packed_case MATCHES "100|partial")
+            set(packed_kind)
+        else()
+            # Presentation cases need a private compositor session.
+            set(packed_kind COMPOSITOR)
+        endif()
         bloom_add_test(
             NAME bloom.ui.gpu_packed_viewer_${packed_case}
             COMMAND bloom_ui_gpu_packed_viewer_test
                     ${bloom_ui_gpu_viewer_service_chain_loader_args} ${packed_args}
             LABELS ui gpu viewer packed native
             TIMEOUT 150
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-        set_tests_properties(bloom.ui.gpu_packed_viewer_${packed_case}
-            PROPERTIES SKIP_RETURN_CODE 77)
-        if(packed_case MATCHES "gib$")
-            # A modelled card is the only limit the case measures, so it runs with the device to
-            # itself: other tests holding device memory would make it a smaller card than modelled.
-            set_tests_properties(bloom.ui.gpu_packed_viewer_${packed_case} PROPERTIES RUN_SERIAL TRUE)
-        endif()
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            SKIP_RETURN_CODE 77 ${packed_kind})
     endforeach()
 
     bloom_add_test(
@@ -2630,8 +2635,8 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                 ${bloom_ui_gpu_viewer_service_chain_loader_args}
         LABELS ui gpu viewer memory soak device
         TIMEOUT 600
-        ENVIRONMENT QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=generic BLOOM_REDUCED_MOTION=1)
-    set_tests_properties(bloom.ui.window_surface_memory_soak PROPERTIES SKIP_RETURN_CODE 77)
+        ENVIRONMENT QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=generic BLOOM_REDUCED_MOTION=1
+        SKIP_RETURN_CODE 77 STRESS)
 
     bloom_add_test(
         NAME bloom.ui.gpu_viewer_service_chain
@@ -2844,9 +2849,8 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         LABELS ui gpu viewer resident interaction native
         TIMEOUT 300
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        SKIP_RETURN_CODE 77 COMPOSITOR
     )
-    set_tests_properties(bloom.ui.viewer_resident_interaction_native
-        PROPERTIES SKIP_RETURN_CODE 77)
 
     # These native modes use real EditorArea controls and real submitted-work barriers. Device-free
     # CTest skips explicitly; native required-device supervision executes them with validation.
@@ -2861,9 +2865,8 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                     ${bloom_ui_gpu_viewer_service_chain_loader_args} ${resident_transition_args}
             LABELS ui gpu viewer resident interaction native
             TIMEOUT 150
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-        set_tests_properties(bloom.ui.viewer_resident_transitions_${resident_transition_arm}
-            PROPERTIES SKIP_RETURN_CODE 77)
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            SKIP_RETURN_CODE 77 COMPOSITOR)
     endforeach()
     # #645: native double-clicks drill three groups deep into imported SVG shapes on the resident
     # route; every level is a resident frame with that level's isolation, picks read its geometry.
@@ -2873,16 +2876,16 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                 ${bloom_ui_gpu_viewer_service_chain_loader_args} --drill
         LABELS ui gpu viewer resident interaction native
         TIMEOUT 150
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-    set_tests_properties(bloom.ui.viewer_resident_drill_native PROPERTIES SKIP_RETURN_CODE 77)
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        SKIP_RETURN_CODE 77 COMPOSITOR)
     bloom_add_test(
         NAME bloom.ui.viewer_resident_shutdown_inflight
         COMMAND bloom_ui_viewer_resident_interaction_native_test
                 ${bloom_ui_gpu_viewer_service_chain_loader_args} --shutdown-in-flight
         LABELS ui gpu viewer resident native
         TIMEOUT 150
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-    set_tests_properties(bloom.ui.viewer_resident_shutdown_inflight PROPERTIES SKIP_RETURN_CODE 77)
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        SKIP_RETURN_CODE 77 COMPOSITOR)
 
     # Bounded native acceptance for the resident viewer surface across a DOCUMENT REPLACEMENT
     # (File > Open / New) while a live native target exists: genuine applied present for the swapped
@@ -2906,9 +2909,8 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         LABELS ui gpu viewer resident native
         TIMEOUT 300
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        SKIP_RETURN_CODE 77 COMPOSITOR
     )
-    set_tests_properties(bloom.ui.viewer_resident_project_swap_native
-        PROPERTIES SKIP_RETURN_CODE 77)
 
     # Final contract dependency order: the runtime native acceptance gate lists these two writer
     # fixtures in its own FIXTURES_REQUIRED (src/runtime/tests/CMakeLists.txt), because a test may
