@@ -359,6 +359,11 @@ if(BUILD_TESTING)
         bloom_enable_warnings(bloom_host_sequence_export_runner_test)
         bloom_add_test(NAME bloom.host.sequence-export COMMAND bloom_host_sequence_export_runner_test
                        "${CMAKE_CURRENT_BINARY_DIR}/sequence-export-fixtures" LABELS unit host media output TIMEOUT 420)
+        # The 512-frame export against the real machine, bounding resident-set growth: a soak.
+        bloom_add_test(NAME bloom.host.sequence-export-streaming-soak
+                       COMMAND bloom_host_sequence_export_runner_test
+                       "${CMAKE_CURRENT_BINARY_DIR}/sequence-export-soak-fixtures" --streaming-soak
+                       LABELS host media output TIMEOUT 420 STRESS)
 
         add_executable(bloom_host_export_queue_service_test tests/export_queue_service_tests.cpp)
         target_link_libraries(bloom_host_export_queue_service_test PRIVATE bloom_host bloom_commands)
@@ -474,7 +479,7 @@ if(BUILD_TESTING)
             NAME bloom.host.export-route-proof.video
             COMMAND bloom_host_sequence_export_runner_test
                     "${CMAKE_CURRENT_BINARY_DIR}/sequence-export-proof-fixtures"
-                    --route-proof-dir "${BLOOM_GPU_ROUTE_PROOF_DIR}"
+                    --route-proof-dir "${BLOOM_GPU_ROUTE_PROOF_DIR}" --proof-only
             LABELS unit host media output gpu contract
             ENVIRONMENT ${BLOOM_HOST_ROUTE_PROOF_LOADER_ENV}
             TIMEOUT 300

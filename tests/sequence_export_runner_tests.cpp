@@ -1,4 +1,5 @@
 #include "gpu_route_proof_export_support.hpp"
+#include "fixed_memory_budget.hpp"
 #include "process_probe.hpp"
 
 #include <algorithm>
@@ -1043,12 +1044,19 @@ void testRejectedRetirementWithLiveEncoder(Fixture& f, const std::filesystem::pa
 // - otherwise the default headroom: the export is a linear pass, so the single-use frames do not
 //   fill the reusable caches (their retained bytes stay flat) and resident-set growth stays inside
 //   the bound.
-void testExportStreamsWithBoundedMemory(const std::filesystem::path& directory,
-                                        const bool starved) {
+//
+// The default run is short and small (24 frames at 256x128) against a fixed machine reading, and
+// asserts what does not depend on the machine: the export completes and the caches' retained bytes
+// stay flat, within two frames of output. `soak` is the stress run: 512 frames at 1024x512 against
+// the real machine, which also bounds the process's resident-set growth.
+void testExportStreamsWithBoundedMemory(const std::filesystem::path& directory, const bool starved,
+                                        const bool soak) {
     constexpr std::uint64_t mib = 1024ULL * 1024;
     constexpr std::uint64_t bound = 1024 * mib;
-    constexpr std::uint64_t retainedBound = 64 * mib;
-    constexpr std::uint32_t width = 1024, height = 512, frames = 512;
+    const std::uint32_t width = soak ? 1024 : 256, height = soak ? 512 : 128,
+                        frames = soak ? 512 : 24;
+    const std::uint64_t frameBytes = std::uint64_t{width} * height * 16;
+    const std::uint64_t retainedBound = soak ? 64 * mib : 2 * frameBytes;
     const auto duration = core::RationalTime::fromInteger(frames / 24 + 1);
     Fixture f(directory);
     auto project = document::makeNewProject(
@@ -1064,7 +1072,8 @@ void testExportStreamsWithBoundedMemory(const std::filesystem::path& directory,
             return result;
         };
         const auto solid = apply.operator()<commands::AddSolidLayer>(
-            "Moving", core::Color4d{0.25, 0.5, 0.75, 1}, document::Vec2d{512, 256});
+            "Moving", core::Color4d{0.25, 0.5, 0.75, 1},
+            document::Vec2d{static_cast<double>(width) / 2, static_cast<double>(height) / 2});
         const auto position = need(
             solid.outputId<document::ParameterId>(commands::kAddSolidLayerPositionParameterOutput));
         const auto animation =
@@ -1072,31 +1081,44 @@ void testExportStreamsWithBoundedMemory(const std::filesystem::path& directory,
         const auto curve =
             need(animation.outputId<document::AnimationCurveId>(commands::kAnimationCurveOutput));
         (void)apply.operator()<commands::InsertVec2Keyframe>(
-            curve, need(core::RationalTime::create(frames - 1, 24)), document::Vec2d{1024, 512});
+            curve, need(core::RationalTime::create(frames - 1, 24)),
+            document::Vec2d{static_cast<double>(width), static_cast<double>(height)});
     }
-    const std::uint64_t pixelBytes = std::uint64_t{frames} * width * height * 16;
-    check(pixelBytes >= 4 * bound, "streaming: the output is at least four times the bound");
+    const std::uint64_t pixelBytes = frames * frameBytes;
+    if (soak)
+        check(pixelBytes >= 4 * bound, "streaming: the output is at least four times the bound");
+    else
+        check(pixelBytes >= 4 * retainedBound,
+              "streaming: the output is at least four times the retained bound");
     auto& ledger = runtime::processMemoryBudgetLedger();
-    const auto machine = runtime::machineMemorySample();
+    // The machine reading the ledger is polled with: the real one for the soak, a constant
+    // otherwise, so the default run never depends on what this machine has free.
+    const auto machineNow = [soak] {
+        return soak ? runtime::machineMemorySample()
+                    : bloom::test_support::fixedMemoryBudgetSample().machine;
+    };
+    const auto machine = machineNow();
     const auto available = machine.availableBytes.value_or(0);
     // Starved: the headroom is everything but 256 MiB of available memory.
     if (starved)
         ledger.setRamHeadroom(available > 256 * mib ? available - 256 * mib : 0);
     const auto retainedBaseline = ledger.poll(machine).retainedBytes;
-    runtime::releaseFreedHostMemory();
-    const auto baseline = runtime::processResidentBytes();
+    if (soak)
+        runtime::releaseFreedHostMemory();
+    const auto baseline = soak ? runtime::processResidentBytes() : std::optional<std::size_t>{};
     std::atomic<std::size_t> peak{baseline.value_or(0)};
     std::atomic<std::size_t> retainedPeak{retainedBaseline};
     std::atomic<bool> sampling{true};
     std::thread sampler([&] {
         for (unsigned tick = 0; sampling.load(); ++tick) {
-            if (const auto now = runtime::processResidentBytes())
-                peak.store(std::max(peak.load(), *now));
-            if (tick % 10 == 0)
+            if (soak) {
+                if (const auto now = runtime::processResidentBytes())
+                    peak.store(std::max(peak.load(), *now));
+            }
+            if (!soak || tick % 10 == 0)
                 retainedPeak.store(
-                    std::max(retainedPeak.load(),
-                             ledger.poll(runtime::machineMemorySample()).retainedBytes));
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    std::max(retainedPeak.load(), ledger.poll(machineNow()).retainedBytes));
+            std::this_thread::sleep_for(std::chrono::milliseconds(soak ? 10 : 1));
         }
     });
     host::SequenceExportRequestV1 request{
@@ -1115,6 +1137,7 @@ void testExportStreamsWithBoundedMemory(const std::filesystem::path& directory,
     sampling = false;
     sampler.join();
     ledger.setRamHeadroom(runtime::defaultRamHeadroomBytes());
+    retainedPeak.store(std::max(retainedPeak.load(), ledger.poll(machineNow()).retainedBytes));
     const std::string label = starved ? "streaming (starved): " : "streaming: ";
     check(result.published() && result.encodedFrames == frames,
           label + "the long export completes: " +
@@ -1126,7 +1149,9 @@ void testExportStreamsWithBoundedMemory(const std::filesystem::path& directory,
     std::cout << "STREAMING_RSS starved=" << starved << " frames=" << frames
               << " seconds=" << seconds << " outputPixelMiB=" << pixelBytes / mib
               << " baselineMiB=" << baseline.value_or(0) / mib << " peakGrowthMiB=" << growth / mib
-              << " cacheRetainedGrowthMiB=" << retainedGrowth / mib << '\n';
+              << " cacheRetainedGrowthMiB=" << retainedGrowth / mib
+              << " cacheRetainedGrowthBytes=" << retainedGrowth
+              << " retainedBoundBytes=" << retainedBound << '\n';
     if (baseline)
         check(growth < bound, label + "resident-set growth stays inside the bound while the "
                                       "output is four times larger");
@@ -1139,8 +1164,8 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
                       const std::filesystem::path& proofDirectory) {
     std::filesystem::remove_all(directory);
     std::filesystem::create_directories(directory);
-    testExportStreamsWithBoundedMemory(directory, false);
-    testExportStreamsWithBoundedMemory(directory, true);
+    testExportStreamsWithBoundedMemory(directory, false, false);
+    testExportStreamsWithBoundedMemory(directory, true, false);
     Fixture f(directory);
     std::filesystem::path cpuProResPath;
     for (const auto preset :
@@ -1342,28 +1367,67 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
     testRejectedRetirementWithLiveEncoder(f, directory);
     return proof;
 }
+
+// --proof-only: the GPU video route proof and nothing else. One CPU ProRes export is the
+// reference the GPU export is compared with; the rest of the suite above runs once, in
+// bloom.host.sequence-export, not a second time here.
+GpuProofOutcome videoRouteProof(const std::filesystem::path& directory, const bool requireDevice,
+                                const std::filesystem::path& proofDirectory) {
+    std::filesystem::remove_all(directory);
+    std::filesystem::create_directories(directory);
+    Fixture f(directory);
+    const auto cpuProResPath = directory / "motion.mov";
+    const auto reference = f.run(f.request(cpuProResPath, output::OutputPresetV1::ProResMovV1));
+    verify(reference, cpuProResPath, true);
+    check(reference.encodedFrames == 48 && reference.gpuEvaluatedFrames == 0 &&
+              reference.gpuNativeDispatches == 0 && reference.gpuReadbacks == 0,
+          "the reference export is complete CPU output with no GPU provenance");
+    return testGpuVideoProvenance(f, directory, cpuProResPath, proofDirectory, requireDevice);
+}
 } // namespace
 int main(int argc, char** argv) {
     try {
         std::filesystem::path directory;
         std::filesystem::path proofDirectory;
         bool requireDevice = false;
+        bool proofOnly = false;
+        bool streamingSoak = false;
         for (int index = 1; index < argc; ++index) {
             const std::string_view argument{argv[index]};
             if (argument == "--require-device") {
                 requireDevice = true;
+            } else if (argument == "--proof-only") {
+                proofOnly = true;
+            } else if (argument == "--streaming-soak") {
+                streamingSoak = true;
             } else if (argument == "--route-proof-dir" && index + 1 < argc) {
                 proofDirectory = argv[++index];
             } else if (directory.empty()) {
                 directory = argv[index];
             } else {
                 throw std::runtime_error("usage: <fixture-directory> [--require-device] "
-                                         "[--route-proof-dir <dir>]");
+                                         "[--route-proof-dir <dir>] [--proof-only] "
+                                     "[--streaming-soak]");
             }
         }
         if (directory.empty()) {
             throw std::runtime_error("usage: <fixture-directory> [--require-device] "
-                                     "[--route-proof-dir <dir>]");
+                                     "[--route-proof-dir <dir>] [--proof-only] "
+                                     "[--streaming-soak]");
+        }
+        if (streamingSoak) {
+            // The stress run: the long export against the real machine, with the resident-set bound.
+            std::filesystem::remove_all(directory);
+            std::filesystem::create_directories(directory);
+            testExportStreamsWithBoundedMemory(directory, false, true);
+            testExportStreamsWithBoundedMemory(directory, true, true);
+            return 0;
+        }
+        if (proofOnly) {
+            return videoRouteProof(directory, requireDevice, proofDirectory) ==
+                           GpuProofOutcome::Skipped
+                       ? 77
+                       : 0;
         }
         testRootedQueueAdmission();
         testRetentionOnlyCapacityWaitStalls();
