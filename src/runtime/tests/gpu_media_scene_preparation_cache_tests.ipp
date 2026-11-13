@@ -219,6 +219,13 @@ void testSourceMirrorServesScenePreparation(Expectations& expectations,
                             "a frame served from the mirror does not read the source");
         expectations.expect(mirror->statistics().diskHits == hitsBefore + 1,
                             "the mirror served the source bytes");
+        // CPU/GPU parity from the mirror: the scene prepared from the mirror's bytes and the
+        // uncached CPU frame of the same evaluator agree in identity, bounds, descriptor and every
+        // pixel, and neither reads the source: an uncached evaluation decodes again, from the
+        // mirror's bytes.
+        checkMediaParity(expectations, reader, plan, requestFor(*plan), "mirror-served source");
+        expectations.expect(fullReads() == before,
+                            "CPU and GPU parity from the mirror does not read the source");
         // A gesture build and an explicit bypass still prepare; the gesture reuses the revision
         // the evaluator holds, and neither writes anything new to the mirror.
         auto interactiveDefinition = plan->copyDefinition();

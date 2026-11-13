@@ -132,7 +132,9 @@ imageSequenceReadAheadTargets(const CompiledImageSource& source, core::RationalT
     MediaSourceRevisionPolicy revisionPolicy = MediaSourceRevisionPolicy::Revalidate,
     std::size_t hostByteBudget = media::kMaxImageStorageBytes, bool allowRevisionInsertion = true,
     LinearPassRetention* linearPass = nullptr, ImageSourceRevisionMemo* buildRevisions = nullptr,
-    ImageSequenceReadAhead* readAhead = nullptr);
+    ImageSequenceReadAhead* readAhead = nullptr,
+    // #718: the local mirror a call without `revisionCache` asks; null means the process's store.
+    const std::shared_ptr<platform::SourceStore>& uncachedSourceStore = nullptr);
 // CACHE-1: how evaluateImageSource() may use the evaluator's shared memory cache for an
 // already-verified, immutable native decoded still-image. This governs only the source decode
 // entry; derived operation memoization is gated separately by the evaluator's own `cache` pointer.

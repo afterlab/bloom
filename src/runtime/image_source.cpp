@@ -250,7 +250,8 @@ ImageSourceSelection selectImageSource(
     const EvaluationColorIntent& colorIntent, OperationCache* revisionCache,
     const MediaSourceRevisionPolicy revisionPolicy, const std::size_t hostByteBudget,
     const bool allowRevisionInsertion, LinearPassRetention* const linearPass,
-    ImageSourceRevisionMemo* const buildRevisions, ImageSequenceReadAhead* const readAhead) {
+    ImageSourceRevisionMemo* const buildRevisions, ImageSequenceReadAhead* const readAhead,
+    const std::shared_ptr<platform::SourceStore>& uncachedSourceStore) {
     ImageSourceSelection selected;
     if (!source.asset) {
         selected.warning = "Image asset is missing; choose an asset or relink in Assets";
@@ -393,9 +394,14 @@ ImageSourceSelection selectImageSource(
             const auto foreground = readAhead != nullptr ? readAhead->foregroundRead()
                                                          : ImageSequenceReadAhead::ForegroundRead{};
             // #718: memory missed, so the local mirror is asked before the source is read, and
-            // is handed what a source read brings. The store outlives the capture: the cache
-            // holds it, and the mirror's own writer keeps the revision it is writing.
-            const auto sourceStore = revisionCache ? revisionCache->sourceStore() : nullptr;
+            // is handed what a source read brings. The store outlives the capture: it is held
+            // here, and the mirror's own writer keeps the revision it is writing. A call without
+            // a cache (the explicit evaluation bypass, a channel listing) still asks the mirror:
+            // the mirror holds the file's own bytes under an identity check, not a result, so an
+            // uncached decode from it is the same decode and the network is not read again.
+            const auto sourceStore = revisionCache        ? revisionCache->sourceStore()
+                                     : uncachedSourceStore ? uncachedSourceStore
+                                                           : platform::processSourceStore();
             capture = media::captureImageSourceRevision(
                 selected.path, hostByteBudget, [&] { return cancel.isCancellationRequested(); },
                 selected.recordedDigest, selected.expectedStamp,

@@ -3309,7 +3309,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     (explicitBypass || request.requireVerifiedMediaSources)
                         ? MediaSourceRevisionPolicy::Revalidate
                         : request.mediaSourceRevisionPolicy,
-                    remainingPixelBudget(), /*allowRevisionInsertion=*/true, request.linearPass.get());
+                    remainingPixelBudget(), /*allowRevisionInsertion=*/true, request.linearPass.get(),
+                    /*buildRevisions=*/nullptr, /*readAhead=*/nullptr, cache_->sourceStore());
                 if (selectedImage->cancelled)
                     return EvaluationResult::cancelled();
                 if (request.requireVerifiedMediaSources && !selectedImage->available)

@@ -1313,7 +1313,10 @@ are any.
 **Gestures.** A source's bytes do not depend on a parameter override, so a plan compiled for an
 interactive override reads through the store like any other; only the decoded-frame memory
 entries below keep their gesture rules. An explicit evaluation bypass
-(`request.bypassOperationCache`) reads the source directly and touches no cache.
+(`request.bypassOperationCache`, used by the point tracker) keeps nothing in memory and decodes
+again, but it still asks the store before the source: the store holds the file's own bytes under
+its identity check, so the decode is the same and a tracked sequence on a share is not read from
+the network a second time.
 
 **Read-only decoded-image exception (CACHE-1).** The evaluator's memory cache now distinguishes the
 two bypasses that used to share one switch. An explicit evaluation bypass
