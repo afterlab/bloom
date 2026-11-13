@@ -12,11 +12,15 @@
 
 #include "export_job_lines.hpp"
 #include "export_render_list.hpp"
+#include "preferences_window.hpp"
 
 #include <QContextMenuEvent>
 #include <QDir>
 #include <QFile>
 #include <QImage>
+#include <QListWidget>
+#include <bloom/ui/kit/tokens.hpp>
+#include <set>
 #include <QPainter>
 #include <QStandardPaths>
 #include <QTextStream>
@@ -31,6 +35,7 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <filesystem>
 #include <fstream>
+#include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/context_bar.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
@@ -646,6 +651,58 @@ void captureDriverMenu() {
 
 } // namespace
 
+// Lane captures of the main window (#687, #700 the top strip with the workspace dropdown; #712 an
+// SVG layer selected in the Viewer; #716 the status bar after the Output node is deleted) and of
+// the Preferences Shortcuts page (#688).
+void captureLaneWindow() {
+    const auto svg = std::filesystem::temp_directory_path() / "lane-capture-logo.svg";
+    std::ofstream(svg, std::ios::binary)
+        << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><circle cx="60" cy="60" r="44" fill="#ee3377"/><rect x="110" y="26" width="70" height="60" fill="#3377ee"/></svg>)svg";
+    test::WindowFixture fixture([&](test::WindowFixture& f) {
+        commands::Transaction transaction("Import SVG", f.session.snapshot().revision());
+        transaction
+            .emplace<commands::AddSvgArtwork>(f.session.compositionId(), nullptr, svg, "logo", true,
+                                              commands::SvgImportMode::Layer)
+            .withProjectDirectory(svg.parent_path());
+        (void)f.session.executeTransaction(std::move(transaction));
+    });
+    settle(300);
+    for (const auto& layer : fixture.session.composition()->graph().layerOutputs())
+        if (layer.name == "logo")
+            fixture.session.selectLayer(layer.layerId);
+    settle(600);
+    const QImage window = fixture.window->grab().toImage();
+    save(window, QStringLiteral("687"), QStringLiteral("window"));
+    const int strip = static_cast<int>(kit::px(kit::Size::Control) * 3 * window.devicePixelRatio());
+    save(window.copy(0, 0, window.width(), std::min(strip, window.height())), QStringLiteral("687"),
+         QStringLiteral("top-strip"));
+    for (auto* area : fixture.window->findChildren<EditorArea*>())
+        if (area->editorId() == "bloom.viewer")
+            save(area->grab().toImage(), QStringLiteral("712"), QStringLiteral("svg-layer-selected"));
+    // #716: with the Output node deleted the status bar says nothing can play or export.
+    if (const auto output = fixture.session.composition()->graph().compositionOutput()) {
+        commands::Transaction remove("Delete", fixture.session.snapshot().revision());
+        remove.emplace<commands::RemoveNodes>(fixture.session.compositionId(),
+                                              std::set<document::NodeId>{output->nodeId});
+        (void)fixture.session.executeTransaction(std::move(remove));
+        settle(200);
+        if (auto* bar = fixture.window->findChild<WindowStatusBar*>())
+            save(grabWidget(bar), QStringLiteral("716"), QStringLiteral("no-output-status-bar"));
+    }
+    // #688: the Shortcuts page.
+    PreferencesWindow preferences(*fixture.window, defaultApplicationPreferences());
+    preferences.show();
+    settle();
+    if (auto* rail = preferences.findChild<QListWidget*>(QStringLiteral("preferencesCategoryRail")))
+        for (int row = 0; row < rail->count(); ++row)
+            if (rail->item(row)->text() == QStringLiteral("Shortcuts")) {
+                rail->setCurrentRow(row);
+                settle();
+                save(preferences.grab().toImage(), QStringLiteral("688"),
+                     QStringLiteral("preferences-shortcuts"));
+            }
+}
+
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName("BloomBugBatchCapture");
@@ -690,5 +747,7 @@ int main(int argc, char** argv) {
         captureDriverMenu();
     if (wanted("window"))
         captureWindowSurfaces();
+    if (wanted("lane"))
+        captureLaneWindow();
     return gFailures == 0 ? 0 : 1;
 }
