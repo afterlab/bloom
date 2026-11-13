@@ -13,6 +13,10 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <functional>
+#include <optional>
+#include <span>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -531,7 +535,40 @@ void playbackWindowsFollowTheCompositionsInUse() {
     expect(set->windowCount() == 2, "the window outlives its last request until another begins");
 }
 
+// #718: a cache made while the process has a source store reads through it; one made before or
+// after does not, and a host can still give a cache another store.
+void newCachesAdoptTheProcessSourceStore() {
+    class Store final : public bloom::platform::SourceStore {
+      public:
+        [[nodiscard]] bool keeps(const std::filesystem::path&, const bloom::platform::FileIdentity&,
+                                 bloom::platform::LocalCopyOverride) const override {
+            return false;
+        }
+        [[nodiscard]] std::optional<bloom::platform::StoredSourceBytes>
+        find(const std::filesystem::path&, const bloom::platform::FileIdentity&,
+             const std::function<bool()>&) override {
+            return std::nullopt;
+        }
+        void keep(const std::filesystem::path&, const bloom::platform::FileIdentity&,
+                  std::shared_ptr<const void>, std::span<const std::byte>) override {}
+        [[nodiscard]] bool underPressure() const override { return false; }
+    };
+    bloom::runtime::MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
+    const bloom::runtime::OperationCache before(1024, ledger);
+    const auto store = std::make_shared<Store>();
+    bloom::platform::setProcessSourceStore(store);
+    bloom::runtime::OperationCache during(1024, ledger);
+    bloom::platform::setProcessSourceStore(nullptr);
+    const bloom::runtime::OperationCache after(1024, ledger);
+    expect(before.sourceStore() == nullptr && during.sourceStore() == store &&
+               after.sourceStore() == nullptr && bloom::platform::processSourceStore() == nullptr,
+           "a cache adopts the process source store that is set when it is made");
+    during.setSourceStore(nullptr);
+    expect(during.sourceStore() == nullptr, "a host can replace a cache's source store");
+}
+
 int main() try {
+    newCachesAdoptTheProcessSourceStore();
     sharedStorageIsChargedOnce();
     pendingRetirementIsNeitherLostNorDoubled();
     ledgerHostTotalsNeverExceedAllocation();

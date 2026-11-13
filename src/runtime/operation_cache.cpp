@@ -186,6 +186,8 @@ OperationCache::Entry::~Entry() {
 }
 OperationCache::OperationCache(const std::size_t budget, MemoryBudgetLedger& ledger)
     : ledger_(ledger), accounting_(std::make_shared<Accounting>()) {
+    // #718: a cache made in a process that has a source store reads through it from the start.
+    sourceStore_ = platform::processSourceStore();
     accounting_->budget = budget;
     const auto apply = [this](const std::size_t bytes) {
         // The ledger serializes callbacks. Read it before taking the cache mutex, never inverse.

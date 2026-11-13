@@ -241,6 +241,14 @@ int main(int argc, char* argv[]) try {
     // #718: memory, then the local mirror, then the source, for every route this evaluator's
     // cache serves (Viewer, RAM Preview, exports, thumbnails share the one mirror).
     cpuEvaluator.setSourceStore(mediaDiskCache);
+    // Evaluators made later for one measurement or one export read through the same mirror.
+    bloom::platform::setProcessSourceStore(mediaDiskCache);
+    const struct ProcessSourceStoreScope final {
+        ProcessSourceStoreScope() = default;
+        ProcessSourceStoreScope(const ProcessSourceStoreScope&) = delete;
+        ProcessSourceStoreScope& operator=(const ProcessSourceStoreScope&) = delete;
+        ~ProcessSourceStoreScope() { bloom::platform::setProcessSourceStore(nullptr); }
+    } processSourceStoreScope;
     // The panels that evaluate on their own workers (anchor grid, driven values) share this
     // evaluator's cache and store: a copy is a handle onto the same state.
     compositionSession.setSharedEvaluator(

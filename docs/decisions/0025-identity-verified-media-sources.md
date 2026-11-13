@@ -2,7 +2,8 @@
 
 Status: accepted
 
-Date: 2026-10-23; amended 2026-11-04 (digests leave the frame path, issue #495)
+Date: 2026-10-23; amended 2026-11-04 (digests leave the frame path, issue #495) and 2026-11-13
+(verified identities persist, issue #718)
 
 ## Context
 
@@ -97,6 +98,25 @@ Residual risk, accepted with the decision: until the background pass reaches it,
 content changed between sessions without a recorded identity (a project saved before 1.36, or a
 still image) is decoded from its current bytes at first use; the pass then reports it, purges what
 was rendered from it, and later uses show the relink diagnostic.
+
+## Amendment (2026-11-13): verified identities persist
+
+The memo lived for one run of the application, so every restart hashed each source again the
+first time something needed it verified: a whole read of every file, which on a network share is
+the cost issue #718 removes. The memo's verified entries now persist in a small per-user file
+beside the disk cache (`verified-sources.v1`, path and identity to digest).
+
+- A persisted entry stands for a file of the same size, modification time, status-change time
+  and file id. The volume id is left out of that comparison: a network share is given a new one
+  at every mount, and comparing it would empty the record at each restart. Within one run the
+  full identity, volume included, is compared as before.
+- Admitted (never hashed) identities do not persist: they vouch for no digest.
+- A path observed under another identity, or forgotten, is removed from the record, so a changed
+  file is hashed again exactly as in the original decision.
+- The record is advisory in the same way the memo is: it can only skip a hash for a file whose
+  identity did not change. A file rewritten in place with every one of those identity fields
+  restored is the residual risk this decision already accepted, now across runs as well as
+  within one.
 
 ## Related
 

@@ -453,7 +453,7 @@ if(BLOOM_MEDIA_FIXTURE_TESTS)
     set_tests_properties(bloom.media.video-session PROPERTIES FIXTURES_REQUIRED media3)
     add_executable(bloom_media_video_source_revision_test "${PROJECT_SOURCE_DIR}/src/media/video/tests/source_revision_tests.cpp")
     target_include_directories(bloom_media_video_source_revision_test PRIVATE "${PROJECT_SOURCE_DIR}/src/render")
-    target_link_libraries(bloom_media_video_source_revision_test PRIVATE bloom_media_video)
+    target_link_libraries(bloom_media_video_source_revision_test PRIVATE bloom_media_video bloom_media_cache)
     bloom_enable_warnings(bloom_media_video_source_revision_test)
     add_dependencies(bloom_media_video_source_revision_test bloom-media-worker bloom_media_generate_fixtures)
     bloom_add_test(NAME bloom.media.video-source-revision COMMAND bloom_media_video_source_revision_test

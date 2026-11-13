@@ -338,7 +338,7 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
                                        const EvaluationColorIntent& colorIntent,
                                        const MediaSourceRevisionPolicy revisionPolicy,
                                        const bool allowInsertion,
-                                       const std::size_t hostByteBudget) {
+                                       const std::size_t hostByteBudget, const bool storeDecoded) {
     VideoSourceSelection selection;
     if (!source.asset || source.asset->kind != document::AssetKind::Video) {
         selection.warning = "Video asset is missing; choose an asset or relink in Assets";
@@ -456,7 +456,8 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
                         &selection.sourceWork,
                         &selection.retainedRevision,
                         {},
-                        hostByteBudget},
+                        hostByteBudget,
+                        storeDecoded},
                        {true, &decodeProvenance});
     if (const auto* error = std::get_if<media::provider::Unavailable>(&product)) {
         selection.warning = error->detail;

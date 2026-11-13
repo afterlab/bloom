@@ -57,10 +57,20 @@ class SourceStore {
     // `owner` keeps `bytes` alive until then.
     virtual void keep(const std::filesystem::path& source, const FileIdentity& identity,
                       std::shared_ptr<const void> owner, std::span<const std::byte> bytes) = 0;
+    // Drops whatever the store holds of `source`: its bytes turned out not to be the recorded
+    // source (a range-filled copy that failed its hash). Only that source's entries go.
+    virtual void forget(const std::filesystem::path& source) { static_cast<void>(source); }
     // True while the store has a backlog of writes: a background fill (the read-ahead) holds off
     // until it clears, so the copy never competes with the frames being shown or exported.
     [[nodiscard]] virtual bool underPressure() const = 0;
 };
+// The process's own store of source media (#718): the one a host opened for its user. An
+// evaluator's cache made while it is set reads through it without being handed it, so the
+// evaluators that live for one measurement or one export (layer alignment, tracking, scripted
+// queries, an export's CPU fallback) use the same local copies as the Viewer. Null until a host
+// sets it; a host that owns the store clears it before the store goes away.
+void setProcessSourceStore(std::shared_ptr<SourceStore> store);
+[[nodiscard]] std::shared_ptr<SourceStore> processSourceStore();
 // How one read may use a store: which store (none: read the source directly) and what the asset
 // being read says about local copies.
 struct SourceStoreAccess final {

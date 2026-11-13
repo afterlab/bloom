@@ -151,10 +151,14 @@ QString operationCacheText(const runtime::OperationCache& operationCache) {
     const auto statistics = operationCache.statistics();
     if (statistics.hits == 0 && statistics.misses == 0 && operationCache.retainedBytes() == 0)
         return {};
-    return WindowStatusBar::tr("Operation cache: %1 hits · %2 misses · %3 / %4")
+    // #718: the decoded source media (source revisions, decoded samples and channels) is the RAM
+    // tier in front of the disk cache; it shares this cache's budget, shown beside it.
+    return WindowStatusBar::tr("Operation cache: %1 hits · %2 misses · %3 / %4 · Source media %5")
         .arg(statistics.hits)
         .arg(statistics.misses)
-        .arg(formatBytes(operationCache.retainedBytes()), formatBytes(operationCache.byteBudget()));
+        .arg(formatBytes(operationCache.retainedBytes()), formatBytes(operationCache.byteBudget()),
+             formatBytes(
+                 operationCache.retainedBytes(runtime::OperationCacheEntryKind::DecodedMedia)));
 }
 
 // #718 (docs/architecture/media-io.md "Disk cache"): the disk cell reports the state of the

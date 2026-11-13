@@ -15,6 +15,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -82,6 +83,10 @@ struct SourceMirrorConfig final {
 struct SourceMirrorStatistics final {
     // Sources served from the local copy, and the lookups that found none.
     std::uint64_t diskHits = 0, diskHitBytes = 0, diskMisses = 0;
+    // Byte ranges of large sources (video containers) served from local chunks, and the ranges
+    // kept after they were read from the source. A served range is also a disk hit, and a kept
+    // one a network (or other slow) read, like a whole file's.
+    std::uint64_t rangeHits = 0, rangeHitBytes = 0, rangeWrites = 0;
     // Whole reads of a source that were handed to the mirror afterwards, by where the source
     // lives: a network volume, or other slow (or always-copied) storage.
     std::uint64_t networkReads = 0, networkReadBytes = 0;
@@ -139,6 +144,13 @@ class SourceMirror final : public platform::SourceStore {
          const std::function<bool()>& cancel) override;
     void keep(const std::filesystem::path& source, const platform::FileIdentity& identity,
               std::shared_ptr<const void> owner, std::span<const std::byte> bytes) override;
+    // The byte ranges of one large source: a sparse local file of 1 MiB chunks, each checked
+    // against its own hash when it is read back, under the same identity check as a whole entry.
+    // Opening it is local file I/O on the calling worker. Null when the mirror is disabled or
+    // the source could never fit the byte budget. The returned store outlives the mirror safely
+    // (it then holds nothing and keeps nothing).
+    [[nodiscard]] std::shared_ptr<platform::SourceChunkStore>
+    chunks(const std::filesystem::path& source, const platform::FileIdentity& identity) override;
 
     // Whether a source on this volume gets a local copy under the current policy. `volume` is the
     // source's FileIdentity::volume. Cheap after the first look at a volume.
@@ -151,7 +163,7 @@ class SourceMirror final : public platform::SourceStore {
     // and the status bar.
     [[nodiscard]] LocalCopyState localCopyState(const std::filesystem::path& source) const;
     // Drops the entries of one source (a changed or removed file purges only its own).
-    void forget(const std::filesystem::path& source);
+    void forget(const std::filesystem::path& source) override;
     // Removes every entry and resets statistics ("Purge media cache").
     void clear();
     // Blocks until the index is loaded and every write requested so far has been applied or
@@ -175,15 +187,25 @@ class SourceMirror final : public platform::SourceStore {
 
     // Test-only: the on-disk path of `source`'s entry, so a corruption test can flip a byte.
     [[nodiscard]] std::filesystem::path entryPathForTest(const std::filesystem::path& source) const;
+    // Test-only: the on-disk path of `source`'s chunk file and where chunk `index` starts in it.
+    [[nodiscard]] std::filesystem::path chunkPathForTest(const std::filesystem::path& source) const;
+    [[nodiscard]] static std::uint64_t chunkDataOffsetForTest(std::uint64_t sourceSize,
+                                                              std::uint64_t index);
     // Test-only: holds the background writer before its next write, so a test can fill the queue
     // and observe its policy without racing the disk.
     void setWriterPausedForTest(bool paused);
 
   private:
+    // Keyed by the source key for a whole entry and by the source key plus "c" for a chunk file.
     struct IndexEntry final {
         std::uint64_t bytes = 0;
         std::int64_t lastUseNanos = 0;
+        // A chunk file's size once every chunk is local; 0 for a whole entry.
+        std::uint64_t wholeBytes = 0;
     };
+    class ChunkFile;
+    // What a chunk file reaches the mirror through: cleared when the mirror goes away.
+    struct Hub;
     struct PendingWrite final {
         std::string key;
         platform::FileIdentity identity;
@@ -192,8 +214,20 @@ class SourceMirror final : public platform::SourceStore {
         std::uint64_t generation = 0;
     };
 
+    // The file of an index key: "<key>.src", or "<key>.chunks" for a chunk file's key.
     [[nodiscard]] std::filesystem::path entryPath(const std::string& key) const;
+    // Caller holds mutex_: a chunk file that is open stops reading and keeping.
+    void retireOpenChunks(const std::string& indexKey);
+    // Accounting for a chunk file, called by it: bytes that became local (`kept` when they were
+    // just read from the source) or were dropped as corrupt, and a read served from it.
+    void chunksGrew(const std::string& indexKey, std::uint64_t wholeBytes, std::uint64_t bytes,
+                    bool kept, bool network);
+    void chunksCorrupt(const std::string& indexKey, std::uint64_t bytes);
+    void chunksServed(const std::string& indexKey, std::uint64_t bytes);
+    void chunksRefusedForDiskSpace();
     [[nodiscard]] std::filesystem::path indexPath() const;
+    // Where the verified source identities persist (platform::VerifiedSourceDigests).
+    [[nodiscard]] std::filesystem::path verifiedSourcesPath() const;
     void writerLoop();
     void loadIndex();
     void writeEntry(const PendingWrite& write);
@@ -205,6 +239,7 @@ class SourceMirror final : public platform::SourceStore {
     [[nodiscard]] bool diskHasRoomFor(std::uint64_t bytes);
 
     runtime::MemoryBudgetLedger& ledger_;
+    const std::shared_ptr<Hub> hub_;
     const std::filesystem::path root_;
     const std::uint64_t maxEntryCount_;
     const std::uint64_t freeSpaceReserve_;
@@ -219,6 +254,7 @@ class SourceMirror final : public platform::SourceStore {
     // Index, policy and statistics. Never held across file I/O.
     mutable std::mutex mutex_;
     std::unordered_map<std::string, IndexEntry> index_;
+    std::unordered_map<std::string, std::weak_ptr<ChunkFile>> openChunks_;
     std::uint64_t storedBytes_ = 0;
     std::uint64_t byteBudget_;
     std::size_t indexChanges_ = 0;

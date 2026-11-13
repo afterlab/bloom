@@ -157,6 +157,18 @@ std::shared_ptr<SourceMirror> openUserSourceMirror() {
     // its single writer.
     static const std::shared_ptr<SourceMirror> mirror =
         makeSourceMirror(publishedSourceMirrorSettings());
+    // It is the process's store from here on: every evaluator made afterwards reads through it.
+    // The process store lets go of it before `mirror` above does, so the mirror is released
+    // (and saves its index) where it always was: when that static goes.
+    struct Published final {
+        explicit Published(const std::shared_ptr<SourceMirror>& store) {
+            platform::setProcessSourceStore(store);
+        }
+        Published(const Published&) = delete;
+        Published& operator=(const Published&) = delete;
+        ~Published() { platform::setProcessSourceStore(nullptr); }
+    };
+    static const Published published(mirror);
     return mirror;
 }
 

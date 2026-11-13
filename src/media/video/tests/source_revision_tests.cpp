@@ -1,6 +1,7 @@
 #include "packed_host_retirement_private.hpp"
 #include <array>
 #include <atomic>
+#include <bloom/media/cache/source_mirror.hpp>
 #include <bloom/media/video/audio.hpp>
 #include <bloom/media/video/session.hpp>
 #include <bloom/platform/source_identity.hpp>
@@ -668,6 +669,7 @@ class RangeStore final : public bloom::platform::SourceStore {
     void keep(const std::filesystem::path&, const bloom::platform::FileIdentity&,
               std::shared_ptr<const void>, std::span<const std::byte>) override {}
     [[nodiscard]] bool underPressure() const override { return pressure.load(); }
+    void forget(const std::filesystem::path&) override { ++forgotten; }
     [[nodiscard]] std::shared_ptr<bloom::platform::SourceChunkStore>
     chunks(const std::filesystem::path&, const bloom::platform::FileIdentity&) override {
         ++opened;
@@ -675,7 +677,7 @@ class RangeStore final : public bloom::platform::SourceStore {
     }
     bool keepsSources = true;
     std::atomic<std::uint64_t> keptBytes{0};
-    std::atomic<int> opened{0};
+    std::atomic<int> opened{0}, forgotten{0};
     // Held high so the background fill waits and only the decoder's own ranges arrive.
     std::atomic_bool pressure{true};
 };
@@ -763,6 +765,8 @@ void progressiveSource(const std::filesystem::path& fixtures,
         failure = std::get_if<provider::Unavailable>(&again);
         check(failure != nullptr && failure->reason == provider::Error::SourceChanged,
               "the changed source stays refused");
+        check(other->forgotten.load() == 1,
+              "the local ranges of a source that failed its hash are purged, once");
     }
     video::releaseRetainedSourceSnapshots();
     {
@@ -782,6 +786,90 @@ void progressiveSource(const std::filesystem::path& fixtures,
     }
     video::releaseRetainedSourceSnapshots();
 }
+// #718 end to end with the real mirror: the first pass reads the source once, by range, and
+// every later pass (another session, another run of the application) is served from the local
+// chunks. The second pass proves it by decoding while the source holds different bytes under
+// the same size, modification time and file id.
+void mirroredSource(const std::filesystem::path& fixtures, const std::filesystem::path& scratch) {
+    namespace cache = bloom::media::cache;
+    const auto source = fixtures / "long-h264.mp4";
+    const auto size = std::filesystem::file_size(source);
+    provider::ProbeResult probe;
+    std::shared_ptr<const provider::FrameProduct> first, last;
+    {
+        video::VideoDecodeSession whole(source, video::VideoDecodeSession::defaultWorker(), {},
+                                        scratch / "mirrored-reference-spool");
+        probe = product(whole.probe());
+        first = product(whole.frame(probe, 0, 0, 0, nullptr));
+        last = product(whole.frame(probe, 0, probe.streams[0].frameCount - 1, 0, nullptr));
+    }
+    video::releaseRetainedSourceSnapshots();
+    const auto copy = scratch / "mirrored.mp4";
+    std::filesystem::copy_file(source, copy, std::filesystem::copy_options::overwrite_existing);
+    cache::SourceMirrorConfig config;
+    config.rootDirectory = scratch / "mirror";
+    // The scratch folder is fast local storage: the preference stands in for a network share.
+    config.policy.preference = cache::LocalCopyPreference::Always;
+    bloom::platform::FileSnapshotStatistics work;
+    bool retained = false;
+    const video::SourceRevisionAccess interactive{
+        video::SourceRevisionPolicy::Retained, true, &work, &retained, {}};
+    const video::SourceRevisionAccess revalidate{
+        video::SourceRevisionPolicy::Revalidate, true, &work, &retained, {}};
+    const auto sourceBytes = [](const cache::SourceMirror& mirror) {
+        const auto statistics = mirror.statistics();
+        return statistics.networkReadBytes + statistics.otherSourceReadBytes;
+    };
+    {
+        const auto mirror = std::make_shared<cache::SourceMirror>(config);
+        mirror->flush();
+        video::VideoDecodeSession session(copy, video::VideoDecodeSession::defaultWorker(), {},
+                                          scratch / "mirrored-spool");
+        session.setSourceStore(mirror);
+        check(equal(*product(session.frame(probe, 0, 0, 0, nullptr, {}, {}, {}, {}, interactive)),
+                    *first),
+              "the first frame through the mirror is exact");
+        check(mirror->localCopyState(copy) != cache::LocalCopyState::NotCached,
+              "a source that is arriving has a local copy on record");
+        check(equal(*product(session.frame(probe, 0, probe.streams[0].frameCount - 1, 0, nullptr,
+                                           {}, {}, {}, {}, revalidate)),
+                    *last),
+              "the last frame through the mirror is exact");
+        check(sourceBytes(*mirror) == size && mirror->statistics().rangeHits == 0 &&
+                  mirror->localCopyState(copy) == cache::LocalCopyState::Cached,
+              "the first pass reads every byte of the source exactly once and keeps it");
+        mirror->flush();
+    }
+    video::releaseRetainedSourceSnapshots();
+    // Different bytes in place, under the identity the mirror checks.
+    const auto modified = std::filesystem::last_write_time(copy);
+    {
+        std::fstream file(copy, std::ios::binary | std::ios::in | std::ios::out);
+        const std::string noise(4096, '\x5a');
+        for (std::uintmax_t offset = 0; offset + noise.size() <= size; offset += noise.size())
+            file.write(noise.data(), static_cast<std::streamsize>(noise.size()));
+    }
+    std::filesystem::last_write_time(copy, modified);
+    for (int run = 0; run < 2; ++run) {
+        // A new mirror object is a restart of the application.
+        const auto mirror = std::make_shared<cache::SourceMirror>(config);
+        mirror->flush();
+        check(mirror->localCopyState(copy) == cache::LocalCopyState::Cached,
+              "a restart finds the whole local copy");
+        video::VideoDecodeSession session(copy, video::VideoDecodeSession::defaultWorker(), {},
+                                          scratch / ("mirrored-again-spool-" + std::to_string(run)));
+        session.setSourceStore(mirror);
+        check(equal(*product(session.frame(probe, 0, 0, 0, nullptr, {}, {}, {}, {}, interactive)),
+                    *first) &&
+                  equal(*product(session.frame(probe, 0, probe.streams[0].frameCount - 1, 0,
+                                               nullptr, {}, {}, {}, {}, revalidate)),
+                        *last),
+              "frames after a restart come from the local copy, exact and verified");
+        check(sourceBytes(*mirror) == 0 && mirror->statistics().rangeHitBytes == size,
+              "a later pass reads nothing from the source");
+        video::releaseRetainedSourceSnapshots();
+    }
+}
 int main(int argc, char** argv) {
     try {
         check(argc == 2, "fixture directory");
@@ -800,6 +888,7 @@ int main(int argc, char** argv) {
         audioOnePass(fixtures, scratch.path);
 #endif
         progressiveSource(fixtures, scratch.path);
+        mirroredSource(fixtures, scratch.path);
         retirement(source, scratch.path / "retirement-spool");
         std::cout << "PASS: immutable disk-backed video source revisions\n";
     } catch (const std::exception& error) {

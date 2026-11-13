@@ -122,6 +122,7 @@ void hashAll(const std::vector<FootageVerificationItem>& items, const std::funct
         if (!item.recorded || hash.digest == *item.recorded)
             continue;
         ++report.changed;
+        report.changedPaths.push_back(item.path);
         const auto what =
             item.frame ? item.asset + " frame " + std::to_string(*item.frame) : item.asset;
         const auto path = item.path.u8string();

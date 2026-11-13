@@ -47,6 +47,8 @@ struct FootageVerificationReport final {
     bool cancelled = false;
     // One Warning per changed file, naming the asset (and frame) with the relink suggestion.
     std::vector<runtime::TaskDiagnostic> diagnostics;
+    // The changed files (#718): each one's local copy is purged, and nothing else.
+    std::vector<std::filesystem::path> changedPaths;
 };
 
 using FootageVerificationProgress =

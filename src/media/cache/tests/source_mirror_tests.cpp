@@ -1,6 +1,7 @@
 // bloom.media.source-mirror (#718): the local mirror of source media on slow storage. Covers the
 // metadata identity check, the local-copy policy, write-through and its queue, eviction,
-// corruption, restart, cancellation and shutdown. No test here reads a source through the mirror:
+// corruption, restart, cancellation and shutdown, and the byte ranges of large sources (chunk
+// files). No test here reads a source through the mirror:
 // the mirror never opens a source, which the tests prove by deleting it.
 #include <bloom/core/sha256.hpp>
 #include <bloom/media/cache/source_mirror.hpp>
@@ -135,7 +136,6 @@ void testIdentity() {
     const auto original = writeSource(scratch, "plate.png", 4'000, 2);
     keep(mirror, original);
     mirror.flush();
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
     const auto rewritten = writeSource(scratch, "plate.png", 4'100, 3);
     expect(!mirror.find(rewritten.path, rewritten.identity, {}).has_value(),
            "a rewritten source is not served from its old mirror");
@@ -307,7 +307,6 @@ void testEviction() {
         sources.push_back(writeSource(scratch, "f" + std::to_string(i) + ".exr", 1'000, i));
         keep(mirror, sources.back());
         mirror.flush();
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     const auto statistics = mirror.statistics();
     expect(statistics.storedBytes <= 6'000, "the mirror stays inside its byte budget");
@@ -489,7 +488,201 @@ void testConcurrency() {
 }
 } // namespace
 
+// Byte ranges of a large source (a video container): kept and served by whole 1 MiB chunks.
+void testChunks() {
+    constexpr std::size_t kChunk = std::size_t{1} << 20U;
+    const Scratch scratch("chunks");
+    const auto source = writeSource(scratch, "clip.mov", kChunk * 2 + kChunk / 2, 21);
+    const auto range = [&](const std::size_t index) {
+        const auto begin = index * kChunk;
+        return std::span<const std::byte>(source.bytes->data() + begin,
+                                          std::min(kChunk, source.bytes->size() - begin));
+    };
+    const auto serves = [&](platform::SourceChunkStore& store, const std::size_t index) {
+        Bytes read(range(index).size());
+        return store.read(index * kChunk, read) &&
+               std::equal(read.begin(), read.end(), range(index).begin());
+    };
+    std::filesystem::path chunkPath;
+    {
+        cache::SourceMirror mirror(config(scratch));
+        mirror.flush();
+        const auto store = mirror.chunks(source.path, source.identity);
+        expect(store != nullptr, "a kept source has a chunk store");
+        if (!store)
+            return;
+        expect(mirror.chunks(source.path, source.identity) == store,
+               "one chunk store object serves a source");
+        Bytes scratchBytes(kChunk);
+        expect(!store->read(0, scratchBytes), "a chunk that was never kept is not served");
+        store->keep(0, range(0));
+        store->keep(2 * kChunk, range(2));
+        // The mirror never opens the source: everything below is served without it.
+        std::filesystem::remove(source.path);
+        expect(serves(*store, 0) && serves(*store, 2), "kept chunks are served exactly");
+        expect(!store->read(kChunk, scratchBytes), "a missing chunk between kept ones is a miss");
+        Bytes two(kChunk * 2);
+        expect(!store->read(0, two), "a range with a missing chunk is not served");
+        Bytes unaligned(kChunk);
+        expect(!store->read(17, unaligned), "only whole chunks at chunk boundaries are served");
+        expect(mirror.localCopyState(source.path) == cache::LocalCopyState::Partial,
+               "a source with some chunks reads Partial");
+        const auto statistics = mirror.statistics();
+        expect(statistics.rangeWrites == 2 && statistics.rangeHits == 2 &&
+                   statistics.rangeHitBytes == range(0).size() + range(2).size(),
+               "range writes and hits are counted");
+        expect(statistics.networkReadBytes + statistics.otherSourceReadBytes ==
+                   range(0).size() + range(2).size(),
+               "bytes kept from the source count as source reads");
+        expect(statistics.storedBytes >= range(0).size() + range(2).size() &&
+                   statistics.storedBytes < source.bytes->size(),
+               "a sparse chunk file is charged for the chunks it holds");
+        chunkPath = mirror.chunkPathForTest(source.path);
+        mirror.flush();
+    }
+    {
+        // Restart: the chunk file's own table says what it holds.
+        cache::SourceMirror mirror(config(scratch));
+        mirror.flush();
+        expect(mirror.localCopyState(source.path) == cache::LocalCopyState::Partial,
+               "a restart finds the partly copied source");
+        expect(mirror.statistics().storedBytes >= range(0).size() + range(2).size(),
+               "a restart counts the chunks on disk");
+        const auto store = mirror.chunks(source.path, source.identity);
+        expect(store && serves(*store, 0) && serves(*store, 2), "chunks survive a restart");
+        if (!store)
+            return;
+        store->keep(kChunk, range(1));
+        Bytes whole(source.bytes->size());
+        expect(store->read(0, whole) && whole == *source.bytes,
+               "a source whose every chunk is local is served whole");
+        expect(mirror.localCopyState(source.path) == cache::LocalCopyState::Cached,
+               "a source with every chunk reads Cached");
+        // Corruption: one flipped byte fails that chunk only, and it can be kept again.
+        {
+            std::fstream file(chunkPath, std::ios::binary | std::ios::in | std::ios::out);
+            const auto at = static_cast<std::streamoff>(
+                cache::SourceMirror::chunkDataOffsetForTest(source.bytes->size(), 1) + 5);
+            file.seekg(at);
+            char value = 0;
+            file.get(value);
+            file.seekp(at);
+            file.put(static_cast<char>(value ^ 0x40));
+        }
+        Bytes scratchBytes(kChunk);
+        expect(!store->read(kChunk, scratchBytes), "a corrupt chunk is never served");
+        expect(mirror.statistics().corruptDropped == 1, "a corrupt chunk is counted");
+        expect(serves(*store, 0) && serves(*store, 2), "the other chunks are untouched");
+        expect(mirror.localCopyState(source.path) == cache::LocalCopyState::Partial,
+               "a dropped chunk makes the source Partial again");
+        store->keep(kChunk, range(1));
+        expect(serves(*store, 1), "a dropped chunk is kept again from the source");
+        // The source changed: its chunk file is purged, and the old store serves nothing.
+        auto changed = source.identity;
+        changed.modifiedNanoseconds += 1'000'000;
+        const auto fresh = mirror.chunks(source.path, changed);
+        expect(fresh && fresh != store, "a changed source gets a new chunk store");
+        expect(!store->read(0, scratchBytes), "the old identity's store serves nothing");
+        expect(fresh && !fresh->read(0, scratchBytes), "the new identity starts with no chunks");
+        expect(mirror.statistics().staleDropped == 1, "a changed source's chunks are counted stale");
+        // Purge: an open store stops serving and keeping.
+        if (fresh)
+            fresh->keep(0, range(0));
+        mirror.clear();
+        expect(fresh && !fresh->read(0, scratchBytes), "a purge empties an open chunk store");
+        if (fresh)
+            fresh->keep(0, range(0));
+        expect(!std::filesystem::exists(chunkPath), "a purged chunk store writes nothing more");
+    }
+    {
+        // Budget: the least recently used chunk file goes whole; a source that could never fit
+        // is refused; a store that outlives the mirror holds nothing.
+        auto small = config(scratch);
+        small.byteBudget = kChunk * 3;
+        std::shared_ptr<platform::SourceChunkStore> outliving;
+        const auto first = writeSource(scratch, "first.mov", kChunk * 2, 22);
+        const auto second = writeSource(scratch, "second.mov", kChunk * 2, 23);
+        Bytes scratchBytes(kChunk);
+        {
+            cache::SourceMirror mirror(small);
+            mirror.flush();
+            const auto a = mirror.chunks(first.path, first.identity);
+            const auto b = mirror.chunks(second.path, second.identity);
+            expect(a && b, "two sources that each fit get chunk stores");
+            if (!a || !b)
+                return;
+            const auto piece = [](const Source& from, const std::size_t index) {
+                return std::span<const std::byte>(from.bytes->data() + index * kChunk, kChunk);
+            };
+            a->keep(0, piece(first, 0));
+            a->keep(kChunk, piece(first, 1));
+            b->keep(0, piece(second, 0));
+            b->keep(kChunk, piece(second, 1));
+            expect(!a->read(0, scratchBytes), "the least recently used chunk file is evicted");
+            expect(b->read(0, scratchBytes), "the chunk file in use stays");
+            expect(mirror.localCopyState(first.path) == cache::LocalCopyState::NotCached &&
+                       !std::filesystem::exists(mirror.chunkPathForTest(first.path)),
+                   "an evicted chunk file is removed");
+            expect(mirror.statistics().evictions >= 1 &&
+                       mirror.statistics().storedBytes <= small.byteBudget,
+                   "chunk files stay within the byte budget");
+            auto huge = first.identity;
+            huge.size = kChunk * 8;
+            expect(mirror.chunks(first.path, huge) == nullptr,
+                   "a source larger than the whole budget gets no chunk store");
+            outliving = b;
+        }
+        expect(!outliving->read(0, scratchBytes), "a store that outlives the mirror serves nothing");
+        outliving->keep(0, std::span<const std::byte>(second.bytes->data(), kChunk));
+        expect(!outliving->underPressure(), "a store that outlives the mirror reports no pressure");
+    }
+    {
+        // A cache volume short of space keeps nothing and says so.
+        auto full = config(scratch);
+        full.freeSpaceReserveBytes = ~std::uint64_t{0} / 4;
+        cache::SourceMirror mirror(full);
+        mirror.flush();
+        const auto other = writeSource(scratch, "full.mov", kChunk, 24);
+        expect(mirror.chunks(other.path, other.identity) == nullptr &&
+                   mirror.statistics().refusedForDiskSpace == 1,
+               "a cache volume short of space starts no chunk file");
+    }
+    {
+        // Several workers fill and read one source at once.
+        cache::SourceMirror mirror(config(scratch));
+        mirror.flush();
+        const auto wide = writeSource(scratch, "wide.mov", kChunk * 3, 25);
+        const auto store = mirror.chunks(wide.path, wide.identity);
+        expect(store != nullptr, "a chunk store for the concurrent fill");
+        if (!store)
+            return;
+        std::atomic<int> wrong{0};
+        std::vector<std::thread> workers;
+        for (unsigned worker = 0; worker < 3; ++worker)
+            workers.emplace_back([&, worker] {
+                for (std::size_t step = 0; step < 6; ++step) {
+                    const auto index = (step + worker) % 3;
+                    const std::span<const std::byte> piece(wide.bytes->data() + index * kChunk,
+                                                           kChunk);
+                    Bytes read(kChunk);
+                    if (store->read(index * kChunk, read)) {
+                        if (!std::equal(read.begin(), read.end(), piece.begin()))
+                            ++wrong;
+                    } else {
+                        store->keep(index * kChunk, piece);
+                    }
+                }
+            });
+        for (auto& worker : workers)
+            worker.join();
+        Bytes whole(wide.bytes->size());
+        expect(wrong.load() == 0 && store->read(0, whole) && whole == *wide.bytes,
+               "concurrent fills and reads agree with the source");
+    }
+}
+
 int main() {
+    testChunks();
     testIdentity();
     testRestartAndIndex();
     testCorruption();

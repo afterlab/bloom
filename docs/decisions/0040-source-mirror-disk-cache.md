@@ -54,11 +54,34 @@ again:
 8. **The thumbnail job runs when its inputs change.** It reruns only when the asset set, an
    interpretation, the color setup or the frame rate changes, or after a footage verification
    pass. A run checks its in-memory thumbnail first and probes files by metadata.
+9. **Video is mirrored by byte range and never copied first.** A movie the mirror keeps is
+   opened as a progressive snapshot: the sandboxed worker gets its one read-only handle to an
+   unnamed local file at once and asks the host for the ranges a decode touches. Each range
+   comes from the mirror's sparse chunk file when it is there and from the source otherwise, and
+   what the source gave is kept. The rest of the file fills at idle priority. The snapshot
+   carries the digest the asset records until the fill completes and the whole local file is
+   hashed; a request that needs verified sources waits for that, an interactive frame does not.
+   The worker still never receives a path or a writable handle.
+10. **One store per process.** The host that opens the mirror names it the process's source
+    store, and a new operation cache starts with it. An evaluator made for one measurement or
+    one export therefore reads through the mirror without each call site being wired; a test or
+    a host that wants none, or another, sets it on the cache. This is one typed process-wide
+    default beside the memory ledger and the verified-source memo, not a general locator.
+11. **The playhead frame's decode stays in memory.** The native samples a frame decodes for
+    itself are kept as decoded media under the key the read-ahead uses, for stills and sequence
+    members alike, within the operation cache's budget and the playback window.
 
 ## Consequences
 
 - A network source is read once. Playback, scrubbing, RAM Preview, exports, thumbnails and a
   restart all read the local copy, whatever the interpretation or color setup.
+- A movie on a share plays from its first frame while it arrives, and a later session or a
+  restart decodes from the local chunks without reading the share.
+- Until a movie's fill completes its frames are shown on the strength of the recorded digest and
+  the file's identity. A file whose bytes do not hash to that digest is refused when the fill
+  completes, and before any export or final render uses it.
+- A movie is written twice on the cache volume while a session holds it: the chunk file, which
+  persists, and the worker's unnamed snapshot, which is released with the session.
 - A warm frame still pays its decode. Decoding from a local solid-state copy is far cheaper than a
   network read, and the decoded frame stays in memory while it is in use.
 - The byte budget covers many more frames, since entries are file-sized.

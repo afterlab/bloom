@@ -199,6 +199,8 @@ struct VideoDecodeSession::State {
     std::shared_ptr<platform::SourceStore> sourceStore;
     platform::LocalCopyOverride localCopies = platform::LocalCopyOverride::Inherit;
     bool progressiveRefused = false;
+    // The store was told to forget this source's local ranges after they failed their hash.
+    bool localRangesPurged = false;
     // The platform media framework reads the snapshot's handle itself, without asking for
     // ranges. A session that started on a source that was not whole stays with FFmpeg.
     std::atomic_bool nativeDeferred{false};
@@ -602,11 +604,18 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
     // #718: a range-filled revision whose bytes did not hash to the digest it was opened under
     // is not the recorded source. It is dropped, and the source is captured whole from now on
     // (which reports the change at once).
+    // The local ranges of a file that failed its hash are not the recorded source either: they
+    // are purged at once, and nothing else in the store is touched.
+    const auto purgeLocalRanges = [&] {
+        if (state_->sourceStore && !std::exchange(state_->localRangesPurged, true))
+            state_->sourceStore->forget(state_->path);
+    };
     if (state_->revision &&
         state_->revision->verification() == platform::SnapshotVerification::Failed) {
         state_->releaseRetainedWorkers();
         state_->revision.reset();
         state_->progressiveRefused = true;
+        purgeLocalRanges();
         return sourceChanged();
     }
     // A final or revalidating request needs bytes that were hashed: a revision that is still
@@ -626,6 +635,7 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
                                    : Error::Io,
                                "Video source could not be read; check the drive or relink the "
                                "asset in Assets"};
+        purgeLocalRanges();
         return sourceChanged();
     };
     if (access.policy == SourceRevisionPolicy::Retained && state_->revision &&
@@ -691,6 +701,7 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
         request.sourceLimit = Limits::sourceBytes;
         request.claimed = *expected;
         request.chunks = state_->sourceStore->chunks(state_->path, *observed.identity);
+        state_->localRangesPurged = false;
         return platform::ReadOnlyFileSnapshot::captureProgressive(request);
     };
     // Every decoder lane of one source shares one range-filled snapshot: the file is read once.
@@ -978,7 +989,7 @@ Result<std::shared_ptr<const FrameProduct>> VideoDecodeSession::frame(
         } else {
             auto frame =
                 std::make_shared<const FrameProduct>(std::get<FrameProduct>(std::move(decoded)));
-            if (cache && revisionAccess.allowRetention) {
+            if (cache && revisionAccess.allowRetention && revisionAccess.storeDecoded) {
                 auto stored = key;
                 stored.hardware = usedHardware;
                 cache->store(stored, frame);

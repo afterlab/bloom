@@ -353,7 +353,8 @@ ImageResult<std::shared_ptr<const ImageSourceRevision>> captureImageSourceRevisi
         bool verified = false;
         // The memo knowing this path under another identity is a changed identity too.
         const auto known =
-            unchanged ? platform::verifiedSourceDigests().knownIdentity(path) : std::nullopt;
+            unchanged ? platform::verifiedSourceDigests().knownIdentity(path, &*observedAfter)
+                      : std::nullopt;
         const bool identityChanged = known && *known != *observedAfter;
         if (storedDigest) {
             // The mirror hashed these bytes on this read: they are verified content, and the

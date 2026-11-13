@@ -240,10 +240,11 @@ the first time it is needed and treated like a missing frame.
 
 Bloom shows footage as soon as it is imported and checks its bytes afterwards, in the background:
 **Verify footage** in **Jobs** reads each image and each frame not yet checked once, at the lowest
-priority, and steps aside while you save or import. Saving keeps what it has checked, so a reopened
-project does not read those files again. Footage whose bytes no longer match what was imported is
-listed on that job ("plate frame 12 changed since it was imported") and its cached frames are
-purged; relink or reload it in Assets.
+priority, and steps aside while you save or import. Saving keeps what it has checked, and Bloom
+also remembers on this computer which files it has checked, so a reopened project or a restart
+does not read those files again: only footage that is new or has changed is read. Footage whose bytes no longer match what was imported is
+listed on that job ("plate frame 12 changed since it was imported"), its cached frames and its
+local copy are purged, and nothing else is; relink or reload it in Assets.
 
 A ProRes asset's tooltip states: “Decoded by FFmpeg; not an Apple-authorized ProRes implementation”.
 This preview workflow carries no Apple authorization or ProRes delivery qualification.

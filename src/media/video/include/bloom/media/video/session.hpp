@@ -42,6 +42,10 @@ struct SourceRevisionAccess final {
     bool* retained = nullptr;
     platform::ReadOnlyFileSnapshot::Progress progress{};
     std::size_t hostByteBudget = std::numeric_limits<std::size_t>::max();
+    // False for an interactive gesture frame (#718): the source revision, the session and its
+    // decoder are kept, since no parameter changes a file's bytes, but the decoded frame is not
+    // stored in the cache.
+    bool storeDecoded = true;
 };
 struct FrameKey {
     provider::Digest content;

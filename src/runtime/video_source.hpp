@@ -150,7 +150,10 @@ class VideoSourceContext final {
     const EvaluationColorIntent& colorIntent = EvaluationColorIntent::LinearRec709Scene,
     MediaSourceRevisionPolicy revisionPolicy = MediaSourceRevisionPolicy::Revalidate,
     bool allowInsertion = true,
-    std::size_t hostByteBudget = std::numeric_limits<std::size_t>::max());
+    std::size_t hostByteBudget = std::numeric_limits<std::size_t>::max(),
+    // False for a plan compiled for an interactive override: the session and its source revision
+    // are retained like any other (allowInsertion), the decoded frame is not stored.
+    bool storeDecoded = true);
 // The selected frame in the working space at the request's proxy scales: videoToSceneLinear, or
 // with a footage pass the stored samples, the pass, the input colour and the proxy resample. The
 // CPU reference for every route.

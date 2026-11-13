@@ -157,7 +157,8 @@ class OperationCache final {
     // #718: the local store of source bytes behind this cache's source revisions. The tiers are
     // this cache (memory), the store (local disk) and then the source: a capture that misses here
     // asks the store before it reads the source, and hands the store what a source read brought.
-    // Null (the default) reads sources directly. Set once by the host that owns the evaluator.
+    // A new cache starts with the process's store (platform::processSourceStore()), null in a
+    // process that has none: sources are then read directly. A host may set another.
     void setSourceStore(std::shared_ptr<platform::SourceStore> store);
     [[nodiscard]] std::shared_ptr<platform::SourceStore> sourceStore() const;
     [[nodiscard]] OperationCacheAccessStatistics statistics() const;

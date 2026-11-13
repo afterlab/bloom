@@ -5,8 +5,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 
 namespace {
 class Expectations final {
@@ -107,6 +109,109 @@ int main() {
     expectations.expect(hashSourceFile(source, [] { return true; }).error ==
                             SourceHashError::Cancelled,
                         "cancellation is reported");
+    // #718: verified identities persist, so a source hashed in an earlier run is not read again.
+    {
+        auto& memo = verifiedSourceDigests();
+        memo.clear();
+        const auto file = directory / "cache" / "verified-sources.v1";
+        // A name with the characters the file format escapes (Windows names hold no line feed).
+#if defined(_WIN32)
+        const auto odd = directory / "50% of a clip.bin";
+#else
+        const auto odd = directory / "50% of a\nclip.bin";
+#endif
+        write(odd, original);
+        memo.persistTo(file);
+        memo.load();
+        before = sourceReadWork();
+        expectations.expect(verifySourceDigest(source, expected) == SourceCheck::Matches &&
+                                verifySourceDigest(odd, expected) == SourceCheck::Matches &&
+                                sourceReadWork().fullReads == before.fullReads + 2,
+                            "the first run hashes each source once");
+        expectations.expect(memo.persistedSize() == 2, "each verified source is on record");
+        memo.save();
+        expectations.expect(std::filesystem::is_regular_file(file),
+                            "the verified identities are saved");
+        // A new run: the memo starts empty and reads the file.
+        memo.persistTo({});
+        memo.clear();
+        expectations.expect(!observeSource(source).digest, "a run without the file knows nothing");
+        memo.persistTo(file);
+        memo.load();
+        before = sourceReadWork();
+        expectations.expect(memo.persistedSize() == 2 &&
+                                verifySourceDigest(source, expected) == SourceCheck::Matches &&
+                                verifySourceDigest(odd, expected) == SourceCheck::Matches &&
+                                sourceReadWork().fullReads == before.fullReads,
+                            "the next run verifies both sources without reading them");
+        // The volume id is not part of what persists: a share mounted again is the same file.
+        auto remounted = *observeFileIdentity(source);
+        remounted.volume += 7;
+        memo.persistTo({});
+        memo.clear();
+        memo.persistTo(file);
+        memo.load();
+        expectations.expect(memo.find(source, remounted) == expected,
+                            "a persisted identity stands under another volume id");
+        const auto known = memo.knownIdentity(source, &remounted);
+        expectations.expect(known && *known == remounted,
+                            "the known identity of a persisted file is the current one");
+        // A changed file is hashed again, and the new digest replaces the old record.
+        write(source, rewritten);
+        before = sourceReadWork();
+        expectations.expect(verifySourceDigest(source, expected) == SourceCheck::Changed &&
+                                sourceReadWork().fullReads == before.fullReads + 1,
+                            "a changed file is read and reported, once");
+        memo.save();
+        memo.persistTo({});
+        memo.clear();
+        memo.persistTo(file);
+        memo.load();
+        before = sourceReadWork();
+        expectations.expect(verifySourceDigest(source, digestOf(rewritten)) ==
+                                    SourceCheck::Matches &&
+                                sourceReadWork().fullReads == before.fullReads,
+                            "the changed file's new digest persists");
+        // A forgotten source does not come back from the file, and a damaged file is ignored.
+        memo.forget(odd);
+        memo.save();
+        memo.persistTo({});
+        memo.clear();
+        memo.persistTo(file);
+        memo.load();
+        expectations.expect(memo.persistedSize() == 1 && !observeSource(odd).digest,
+                            "a forgotten source is not on record in the next run");
+        write(file, "not a verified-sources file\n1 2 3\n");
+        memo.persistTo(file);
+        memo.load();
+        expectations.expect(memo.persistedSize() == 0, "an unreadable record is ignored");
+        // A lookup made before the record has been read waits for it instead of hashing.
+        memo.clear();
+        expectations.expect(verifySourceDigest(source, digestOf(rewritten)) ==
+                                    SourceCheck::Matches &&
+                                memo.persistedSize() == 1,
+                            "the source is hashed again for the record");
+        memo.save();
+        memo.persistTo({});
+        memo.clear();
+        memo.persistTo(file);
+        before = sourceReadWork();
+        // No clock decides this: the wait is made as long as the test, and the record is read
+        // only once the lookup is seen waiting.
+        memo.setPersistedLoadWaitForTest(24 * 60 * 60 * 1000);
+        std::optional<bloom::core::Sha256Digest> waited;
+        std::thread lookup([&] { waited = observeSource(source).digest; });
+        while (memo.persistedLoadWaitersForTest() == 0)
+            std::this_thread::yield();
+        memo.load();
+        lookup.join();
+        memo.setPersistedLoadWaitForTest(VerifiedSourceDigests::kPersistedLoadWaitMilliseconds);
+        expectations.expect(waited == digestOf(rewritten) &&
+                                sourceReadWork().fullReads == before.fullReads,
+                            "a lookup that arrives before the record is read waits for it");
+        memo.persistTo({});
+        memo.clear();
+    }
     std::filesystem::remove_all(directory);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

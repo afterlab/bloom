@@ -9,7 +9,7 @@ and gives the detailed counts.
 | Viewer | **Render** (GPU or CPU produced the frame you see), **Exposure**, **Channel**, **Dropped** (frames playback skipped; a dash when playback is not being measured), and **Decode** when the composition reads video |
 | Activity | What is happening now: a save, an import, an export, the RAM preview filling, playback preparing or waiting for frames, or a problem with the preview (with **Details** when the composition cannot render). **Idle** when nothing is |
 | Pixel | The color under the pointer in the Viewer, while it is over the frame |
-| RAM | What the caches hold against what they may use, and **Cache**, the frames held for preview. Hover for hits and misses |
+| RAM | What the caches hold against what they may use, and **Cache**, the frames held for preview. Hover for hits and misses, and for how much of it decoded source media holds |
 | Disk cache | How much the disk cache holds: the local copies Bloom keeps of source media on slow storage. Hover for RAM hits, disk hits and network reads |
 | MCP | **MCP :port** while the MCP server runs. Click it to open the MCP Server panel; it is not shown while the server is stopped |
 | Version | The running version of Bloom |

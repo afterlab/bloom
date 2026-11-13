@@ -351,6 +351,31 @@ void keepChannels(const GpuSceneMediaContext& context, const EvaluationRequest& 
                                   request.linearPass.get());
 }
 
+// #718: the native samples a frame decoded for itself stay in the operation cache as decoded
+// media, under the key the read-ahead stores its decodes under, so a frame that is prepared again
+// (an edit at the playhead, a scrub back) neither reads nor decodes its source. An interactive
+// (overridden) plan reads them but never fills the cache; an explicit bypass does neither.
+void keepSamples(const GpuSceneMediaContext& context, const EvaluationRequest& request,
+                 const std::string& decodeKey,
+                 const std::shared_ptr<const render::NativeSampleImage>& samples,
+                 const bool explicitBypass, const bool planBypass) {
+    if (explicitBypass || planBypass || !context.operationCache || !samples)
+        return;
+    // Like the read-ahead's decodes, these never evict anything: they are kept only while they
+    // fit the cache's free budget as it stands.
+    if (context.operationCache->retainedBytes() + samples->byteCount() >
+        context.operationCache->byteBudget())
+        return;
+    context.operationCache->store(decodedImageSamplesKey(decodeKey), document::Revision{},
+                                  {.image = {},
+                                   .values = {},
+                                   .bounds = {},
+                                   .sourceRevision = {},
+                                   .samples = samples},
+                                  OperationCacheEntryKind::DecodedMedia, {},
+                                  request.linearPass.get());
+}
+
 // The channels the colour decode of `part` should read beside its layer: the build's registered
 // channels of the part, unless this build or the operation cache already holds them.
 [[nodiscard]] std::vector<std::string> channelsForColourDecode(const GpuSceneMediaContext& context,
@@ -372,9 +397,11 @@ void keepChannels(const GpuSceneMediaContext& context, const EvaluationRequest& 
 // decoded colour shared under the keys that leaf looks for; null when no leaf is planned, its
 // colour is already shared, or the channels could not be read with it.
 [[nodiscard]] std::shared_ptr<const render::ChannelSetImage>
-readColourWithChannels(const GpuSceneMediaContext& context, const std::string& part,
-                       const std::vector<std::string>& channels, const std::size_t budget,
-                       const CancellationToken& cancel, GpuSceneMediaStatistics& statistics) {
+readColourWithChannels(const GpuSceneMediaContext& context, const EvaluationRequest& request,
+                       const std::string& part, const std::vector<std::string>& channels,
+                       const std::size_t budget, const CancellationToken& cancel,
+                       GpuSceneMediaStatistics& statistics, const bool explicitBypass,
+                       const bool planBypass) {
     const auto colour = context.buildUploads ? context.buildUploads->findColour(part) : nullptr;
     if (!colour)
         return nullptr;
@@ -396,6 +423,8 @@ readColourWithChannels(const GpuSceneMediaContext& context, const std::string& p
     addMediaWork(statistics.imageDecodeNanoseconds, decodeStatistics.decodeNanoseconds);
     if (samples.value && *samples.value) {
         shareSamples(context, samplesKey, *samples.value);
+        keepSamples(context, request, colour->decodeKey, *samples.value, explicitBypass,
+                    planBypass);
     } else if (samples.code == media::ImageDiagnosticCode::NativeSamplesUnavailable) {
         auto image = decodeRawImageSource(*colour, budget, cancel, &decodeStatistics, &alongside);
         addMediaWork(statistics.imageDecodeNanoseconds, decodeStatistics.decodeNanoseconds);
@@ -444,7 +473,8 @@ readColourWithChannels(const GpuSceneMediaContext& context, const std::string& p
         // A channel read prepared before the part's Image leaf decodes the leaf's colour layer in
         // the same read and shares it with the leaf.
         if (auto colour =
-                readColourWithChannels(context, part, channels, budget, cancel, statistics)) {
+                readColourWithChannels(context, request, part, channels, budget, cancel,
+                                       statistics, explicitBypass, planBypass)) {
             keepChannels(context, request, part, channels, colour, explicitBypass, planBypass);
             return {std::move(colour), {}};
         }
@@ -919,7 +949,7 @@ prepareVideoUpload(const CompiledVideoSource& source, const EvaluationRequest& r
         (explicitBypass || request.requireVerifiedMediaSources)
             ? MediaSourceRevisionPolicy::Revalidate
             : request.mediaSourceRevisionPolicy,
-        !planBypass && !explicitBypass, byteBudget(pixelBudget));
+        !explicitBypass, byteBudget(pixelBudget), !planBypass);
     recordSourceRevisionWork(selection, statistics);
     if (selection.cancelled) {
         outcome.cancelled = true;
@@ -1012,10 +1042,11 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
     const auto samplesKey = rawDecodeUploadKey("image-samples", selection.decodeKey);
     ++statistics.uploadKeyConstructions;
     outcome.samples = findSharedSamples(context, samplesKey);
-    // #386: a sequence member the read-ahead decoded before this frame needed it.
-    if (outcome.samples == nullptr && !selection.missingFrame && !explicitBypass && !planBypass &&
-        !request.linearPass && context.sequenceReadAhead && selection.sourceRevision != nullptr &&
-        source.asset && source.asset->kind == document::AssetKind::Sequence)
+    // #386: a sequence member the read-ahead decoded before this frame needed it; #718: or the
+    // samples an earlier preparation of this frame decoded (a still or a member alike). A plan
+    // compiled for an interactive override may read them.
+    if (outcome.samples == nullptr && !selection.missingFrame && !explicitBypass &&
+        context.operationCache && selection.sourceRevision != nullptr)
         if (auto cached = context.operationCache->find(decodedImageSamplesKey(selection.decodeKey),
                                                        document::Revision{},
                                                        OperationCacheEntryKind::DecodedMedia);
@@ -1064,6 +1095,9 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
             outcome.samples = std::move(*native.value);
             outcome.converted = true;
             shareSamples(context, samplesKey, outcome.samples);
+            if (selection.sourceRevision != nullptr)
+                keepSamples(context, request, selection.decodeKey, outcome.samples,
+                            explicitBypass, planBypass);
         } else if (native.code == media::ImageDiagnosticCode::NoColourChannels) {
             ++statistics.imageConversions;
             outcome.noColourLayer = true;
@@ -1450,7 +1484,7 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
         (explicitBypass || request.requireVerifiedMediaSources)
             ? MediaSourceRevisionPolicy::Revalidate
             : request.mediaSourceRevisionPolicy,
-        !planBypass && !explicitBypass, byteBudget(pixelBudget));
+        !explicitBypass, byteBudget(pixelBudget), !planBypass);
     recordSourceRevisionWork(selection, statistics);
     if (selection.cancelled) {
         outcome.cancelled = true;

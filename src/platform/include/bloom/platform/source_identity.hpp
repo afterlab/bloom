@@ -46,15 +46,37 @@ class VerifiedSourceDigests final {
                                                          const FileIdentity& identity) const;
     void record(const std::filesystem::path& path, const FileIdentity& identity,
                 const core::Sha256Digest& digest);
-    // The identity the memo last saw for `path` (verified or admitted), if any.
+    // The identity the memo last saw for `path` (verified or admitted), if any. With `current`,
+    // an identity that persisted from an earlier run and names the same file is `current`.
     [[nodiscard]] std::optional<FileIdentity>
-    knownIdentity(const std::filesystem::path& path) const;
+    knownIdentity(const std::filesystem::path& path, const FileIdentity* current = nullptr) const;
     // Remembers that `identity` admitted bytes without a full hash; keeps a verified entry of the
     // same identity.
     void admit(const std::filesystem::path& path, const FileIdentity& identity);
     void forget(const std::filesystem::path& path);
     void clear();
     [[nodiscard]] std::size_t size() const;
+
+    // #718: verified entries persist in a local file, so a source hashed in an earlier run is
+    // not read again to be hashed in this one. An entry that came from the file stands for a
+    // file of the same size, modification and status-change times and file id; the volume id
+    // is not compared, since a network share gets a new one each time it is mounted.
+    // persistTo() names the file and returns at once; load() and save() are blocking file I/O
+    // for a worker thread. A lookup that misses while the load is still to come waits for it
+    // briefly (kPersistedLoadWaitMilliseconds at most) instead of hashing a source the file already knows.
+    static constexpr std::size_t kPersistedEntryLimit = 32768;
+    static constexpr int kPersistedLoadWaitMilliseconds = 250;
+    void persistTo(const std::filesystem::path& file);
+    void load();
+    // Writes the file when an entry changed since the last save; entries another process
+    // wrote meanwhile are kept.
+    void save();
+    [[nodiscard]] std::filesystem::path persistedFile() const;
+    // Test-only: how long a lookup waits for load() (the default is the constant above), and
+    // how many lookups are waiting for it now, so a test orders the two without a clock.
+    void setPersistedLoadWaitForTest(int milliseconds);
+    [[nodiscard]] std::size_t persistedLoadWaitersForTest() const;
+    [[nodiscard]] std::size_t persistedSize() const;
 };
 [[nodiscard]] VerifiedSourceDigests& verifiedSourceDigests() noexcept;
 

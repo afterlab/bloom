@@ -825,18 +825,23 @@ QString AssetController::sourceStorageText(const document::AssetId id) const {
     if (mediaDiskCache_ == nullptr || !mediaDiskCache_->enabled())
         return tr("%1 · disk cache off").arg(place);
     const auto& paths = *found->second.sourcePaths;
-    std::size_t cached = 0;
+    std::size_t cached = 0, partial = 0;
     for (const auto& path : paths)
         switch (mediaDiskCache_->localCopyState(path)) {
         case media::cache::LocalCopyState::Unknown:
             return tr("%1 · disk cache starting").arg(place);
-        case media::cache::LocalCopyState::Cached:
         case media::cache::LocalCopyState::Partial:
+            // A movie whose byte ranges are still arriving: usable, not yet whole.
+            ++partial;
+            [[fallthrough]];
+        case media::cache::LocalCopyState::Cached:
             ++cached;
             break;
         case media::cache::LocalCopyState::NotCached:
             break;
         }
+    if (partial != 0)
+        return tr("%1 · partly copied locally").arg(place);
     if (cached == paths.size())
         return tr("%1 · local copy kept").arg(place);
     if (cached != 0)
@@ -2712,7 +2717,9 @@ void AssetController::verifyFootage() {
             "Verify footage",
             {.kind = runtime::TaskOwnerKind::Project, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Background, runtime::TaskExecutor::BlockingIo),
-        [snapshot, directory = baseDirectory()](runtime::TaskContext& context) {
+        [snapshot, directory = baseDirectory(),
+         sourceStore = static_cast<platform::SourceStore*>(mediaDiskCache_)](
+            runtime::TaskContext& context) {
             const auto cancel = [&context] { return context.isCancellationRequested(); };
             context.reportProgress({.phase = "Verifying footage",
                                     .subphase = {},
@@ -2730,6 +2737,12 @@ void AssetController::verifyFootage() {
                                             .completed = completed,
                                             .total = static_cast<std::uint64_t>(total)});
                 });
+            // #718: a file whose bytes changed loses its own local copy and nothing else; what
+            // the pass hashed is on record for the next run, so that run does not read it again.
+            if (sourceStore != nullptr)
+                for (const auto& changed : result->report.changedPaths)
+                    sourceStore->forget(changed);
+            platform::verifiedSourceDigests().save();
             if (result->report.cancelled || context.isCancellationRequested())
                 return runtime::TaskResult<std::shared_ptr<FootageVerificationResult>>::cancelled();
             auto diagnostics = result->report.diagnostics;

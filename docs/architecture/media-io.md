@@ -1114,7 +1114,20 @@ decodes a still goes through it with the process's one store: the CPU evaluator
 (which fills the store ahead of the playhead), the Assets thumbnails, RAM Preview, still,
 sequence and video export, and headless and scripted renders (`bloom-cli`, `bloom-mcp`). The
 interface lives in `bloom/platform/source_store.hpp` so the media and runtime modules do not
-depend on the cache module.
+depend on the cache module. The host that opens the store also names it the process's store
+(`platform::setProcessSourceStore()`), and every operation cache made afterwards starts with it:
+the evaluators that live for one measurement or one export (layer alignment, the point tracker,
+scripted bounds and node queries, an export's CPU fallback) read through the same local copies
+without being handed the store.
+
+**The RAM tier in front of it.** The operation cache's decoded-media entries are the first tier:
+a source revision (the encoded bytes), and the native samples and channel sets decoded from it.
+The read-ahead stores the samples it decodes ahead of the playhead, and a frame that decodes its
+own source stores them the same way and under the same key (`decodedImageSamplesKey()`), for a
+still as well as a sequence member, so preparing that frame again (an edit at the playhead, a
+scrub back) neither reads nor decodes. The entries follow the playback window and share the
+operation cache's budget; the status bar's RAM tooltip shows that budget and how much of it
+source media holds.
 
 **Which sources get a copy.** `keepsLocalCopy()` decides, in this order: the asset's own
 `localCopies` interpretation (`always` or `never`); the longest matching folder rule from the
@@ -1141,6 +1154,39 @@ entry. The payload digest is verified on every read, outside the store's lock, s
 damaged entry is an ordinary miss and is removed: corruption never reaches a caller. The verified
 digest is the same source digest a direct read would have computed, so cache keys and relink
 detection do not change with the route.
+
+**Video containers.** A movie is too large to read before its first frame, so it is mirrored by
+byte range. `SourceMirror::chunks()` opens `sources/<aa>/<sha256 of the source path>.chunks`: a
+64-byte header (the same identity: size, modification time and file id), one 8-byte slot per
+1 MiB chunk (the first eight bytes of the chunk's SHA-256, zero while the chunk is missing), and
+the chunks at their offsets in the source. The file is sparse, so it takes the room of the chunks
+it holds, and that is what the byte budget is charged. A chunk's bytes are written before its
+slot; a chunk is checked against its slot every time it is read back, and one that fails is
+cleared and read from the source again. A changed source drops its chunk file, eviction removes
+a chunk file whole, and a source that could never fit the byte budget gets none. The Assets
+panel reads such a source as partly local until every chunk is there.
+
+A video session whose source the mirror keeps (`VideoDecodeSession::setSourceStore()`) opens a
+**progressive snapshot** (`platform::ReadOnlyFileSnapshot::captureProgressive()`) instead of
+copying the file first. The worker gets the same single read-only handle to an unnamed local
+file of the source's full length, at once. When a decode touches a range the worker has not
+been told is local it sends `NeedRange` inside the call; the host brings the range in
+(`ensureRange()`: from the chunk file when it holds it, from the source otherwise, keeping what
+the source gave) and answers `RangeReady` with the extent that is now local, which the worker
+remembers. A thread at idle priority fills the rest of the file, yields to any range a decode is
+waiting for, holds no lock across I/O, stops with the session and waits while the mirror has a
+write backlog or the cache volume is short of space. A partly filled source is always usable.
+
+The snapshot carries the digest the asset records. It is proved when the fill completes: the
+local file is hashed and compared, and the identity is recorded in the verified-source memo
+(ADR 0025). Interactive frames are shown before that; a request that needs verified sources
+(export, final render, footage verification) waits for the fill and the hash. A mismatch reports
+the source as changed with the relink diagnostic and the revision is dropped. Import has no
+recorded digest yet and reads the file whole, which is its first read; fast local media and a
+source the policy does not keep use the ordinary capture. The platform framework readers
+(VideoToolbox, Media Foundation) take a whole file, so a source that is still arriving is
+decoded by FFmpeg and the session stays with it; when FFmpeg does not declare the stream the
+whole file is brought in first.
 
 **Writes.** Write-through and never in the frame's way: the read that missed returns its bytes to
 the caller at once and shares them with one background writer thread at idle priority. An entry
@@ -1178,12 +1224,13 @@ color-processor caches. A plan compiled for an interactive parameter override
 already-verified, immutable native decoded STILL-IMAGE entry under its EXISTING content-addressed
 memory source key (`selected.cacheKey`: asset digest, member/frame, interpretation, alpha, input
 processor/color-space id, OCIO identity, plus the resolved path/relink/availability that key already
-carried). It never inserts a DECODED entry on a gesture miss, so gesture data cannot land under an
+carried), and the native samples a frame decoded for itself (#718). It never inserts a DECODED entry on a gesture miss, so gesture data cannot land under an
 unchanged source key. The source revision (the file's encoded bytes, which no parameter changes)
 is retained on a gesture miss like on any other (#718), and is read through the disk cache, so an
 interactive miss decodes again but does not read the file again. Source verification follows the immutable revision contracts below. Motion video uses
-its own decoded-frame cache and disk-backed source revision, with the same read-only gesture and
-explicit bypass lookup/insertion gates. Nested
+its own decoded-frame cache and disk-backed source revision under the same rule (#718): a gesture
+miss keeps the decode session, its decoder and its source revision, so the next gesture frame
+reads nothing again, and stores no decoded frame; an explicit bypass keeps nothing. Nested
 compositions remain conservatively fully bypassed on an override (no read-only reuse in the child)
 for this slice.
 
@@ -1200,6 +1247,19 @@ process-wide `platform::VerifiedSourceDigests` memo. While a later observation o
 identical, the recorded digest stands for the bytes; any difference forces a full rehash, and a
 changed digest still reports `SourceChanged` and the relink diagnostic. A pathname or size alone
 never proves content. Whole-file reads are counted by `platform::sourceReadWork()`.
+
+The memo's verified entries **persist** (#718) in `verified-sources.v1` beside the disk cache
+root (at most 32,768 paths), so a source that an earlier run hashed is not read again to be
+hashed in this one: a still, a movie or a sequence member on a share is verified by one metadata
+query after a restart, and **Verify footage** hashes only the files that are new or changed since
+the last pass. A persisted entry stands for a file of the same size, modification and
+status-change times and file id; the volume id is not compared, because a network share gets a
+new one each time it is mounted. The disk cache's thread reads the file at startup and writes it
+when idle and at shutdown (a temporary file renamed into place; entries another process saved
+meanwhile are kept), and a finished verification pass writes it at once. A lookup that arrives
+before the file has been read waits for it for at most 250 ms instead of hashing a source the
+file already knows. A path seen under another identity, or forgotten, leaves the record. A file
+the verification pass finds changed loses its own local copy in the disk cache and nothing else.
 
 **Image-sequence read-ahead.** Each evaluator owns a `runtime::ImageSequenceReadAhead`, carried
 in its `GpuSceneMediaContext`, so preview, playback and export requests sharing the evaluator
@@ -1284,8 +1344,9 @@ or changed and never substitutes the retained source for the missing/changed byt
 
 Tickets share the evaluator's existing decoded-media LRU and live host retention assignment.
 Encoded bytes, probe strings and entry/key metadata are charged; there is no separate owning cache.
-Interactive override plans may read an existing ticket but never insert one on a gesture miss;
-uncached captured bytes remain transient. Source tickets are accepted only as typed decoded-media
+Interactive override plans read an existing ticket and, since #718, insert one on a gesture miss
+(a file's bytes do not depend on a parameter); only an explicit evaluation bypass leaves captured
+bytes transient. Source tickets are accepted only as typed decoded-media
 entries, so operation purge/retirement cannot fold their debit through the wrong accounting class.
 Rooted tickets use the pool's explicit host retirement owner (`OperationCache::bindHostRetirement`). Eviction and purge
 detach the ticket, then the worker drops its backing and metadata before folding back the decoded
@@ -1354,7 +1415,8 @@ retention. Exhaustion returns typed `Oversized` rather than overcommitting or re
 Capture exposes chunk cancellation/progress and numeric read/hash stage costs. Source-key identity
 contains asset digest, locator/relink hint and base directory. `Retained` can reuse captured bytes for
 interactive edits, including uncached frame decode when the artist path disappears, with zero source
-I/O/hash. Read-only gestures may look up existing sessions/revisions/frames but cannot insert new ones.
+I/O/hash. Gestures look up existing sessions, revisions and frames, and since #718 insert a new session and
+revision on a miss; they never insert a decoded frame.
 `Revalidate` observes the original's identity before decoded/prepared cache lookup and recaptures
 only when it changed or is unknown; production final preparation forces it even for an explicitly
 copied `Retained` request. A changed digest or missing original is

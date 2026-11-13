@@ -152,6 +152,7 @@ void passHashesReportsAndRecords(const fs::path& directory) {
            "every listed file is hashed");
     expect(lastCompleted == work.size() && lastTotal == work.size(),
            "progress reaches the total number of files");
+    expect(report.changedPaths.size() == 1, "the changed file's path is reported for its purge");
     expect(report.changed == 1 && report.diagnostics.size() == 1 &&
                report.diagnostics.front().severity == runtime::DiagnosticSeverity::Warning &&
                report.diagnostics.front().code == "bloom.media.footage-changed" &&

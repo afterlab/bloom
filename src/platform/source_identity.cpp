@@ -3,12 +3,18 @@
 #include <atomic>
 #include <bloom/platform/source_identity.hpp>
 #include <bloom/platform/source_store.hpp>
+#include <chrono>
+#include <condition_variable>
 #include <fstream>
 #include <limits>
 #include <map>
 #include <mutex>
+#include <set>
 #include <span>
+#include <sstream>
 #include <string>
+#include <thread>
+#include <utility>
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -82,10 +88,139 @@ struct MemoState final {
     mutable std::mutex mutex;
     std::map<std::string, MemoEntry, std::less<>> entries;
     mutable std::uint64_t clock = 0;
+    // #718: verified entries that persist across runs (see persistTo()). `removed` are the
+    // paths dropped in this run, so a save does not bring them back from the file.
+    std::map<std::string, MemoEntry, std::less<>> persisted;
+    std::set<std::string, std::less<>> removed;
+    std::filesystem::path file;
+    bool loading = false, changed = false;
+    std::condition_variable loaded;
+    int loadWaitMilliseconds = VerifiedSourceDigests::kPersistedLoadWaitMilliseconds;
+    std::size_t loadWaiters = 0;
 };
+constexpr std::string_view kPersistedHeader = "bloom-verified-sources 1";
+// Whether two observations name the same unchanged file, whatever volume id it is mounted under.
+bool sameFile(const FileIdentity& a, const FileIdentity& b) noexcept {
+    return a.size == b.size && a.modifiedNanoseconds == b.modifiedNanoseconds &&
+           a.changedNanoseconds == b.changedNanoseconds && a.fileIdHigh == b.fileIdHigh &&
+           a.fileIdLow == b.fileIdLow;
+}
+// Caller holds the mutex. Remembers a verified entry for the next run, within the limit.
+void persistLocked(MemoState& state, const std::string& key, const MemoEntry& entry) {
+    if (state.file.empty())
+        return;
+    state.removed.erase(key);
+    state.persisted.insert_or_assign(key, entry);
+    if (state.persisted.size() > VerifiedSourceDigests::kPersistedEntryLimit)
+        state.persisted.erase(std::ranges::min_element(
+            state.persisted, {}, [](const auto& item) { return item.second.used; }));
+    state.changed = true;
+}
+// Caller holds the mutex. The path is known under another identity now, or forgotten.
+void unpersistLocked(MemoState& state, const std::string& key) {
+    if (state.file.empty())
+        return;
+    if (state.persisted.erase(key) != 0)
+        state.changed = true;
+    state.removed.insert(key);
+}
+// Caller holds `lock`. When the path has no entry of this run, takes the one an earlier run
+// persisted for the same file: it becomes an ordinary verified entry under `current`.
+void adoptPersistedLocked(MemoState& state, std::unique_lock<std::mutex>& lock,
+                          const std::string& key, const FileIdentity& current) {
+    if (state.file.empty() || state.entries.contains(key))
+        return;
+    if (state.loading) {
+        ++state.loadWaiters;
+        state.loaded.wait_for(lock, std::chrono::milliseconds(state.loadWaitMilliseconds),
+                              [&] { return !state.loading; });
+        --state.loadWaiters;
+    }
+    if (state.entries.contains(key))
+        return;
+    const auto found = state.persisted.find(key);
+    if (found == state.persisted.end() || !sameFile(found->second.identity, current))
+        return;
+    found->second.used = ++state.clock;
+    state.entries.insert_or_assign(key,
+                                   MemoEntry{current, found->second.digest, state.clock, true});
+    if (state.entries.size() > VerifiedSourceDigests::kEntryLimit)
+        state.entries.erase(std::ranges::min_element(
+            state.entries, {}, [](const auto& item) { return item.second.used; }));
+}
+// One line per entry: the identity's numbers, the digest, and the path with '%', line feed and
+// carriage return written as %25, %0A and %0D (a file name may hold any of them).
+std::string persistedLine(const std::string& key, const MemoEntry& entry) {
+    std::ostringstream out;
+    const auto hex = entry.digest.toLowercaseHex();
+    out << entry.identity.size << ' ' << entry.identity.modifiedNanoseconds << ' '
+        << entry.identity.changedNanoseconds << ' ' << entry.identity.fileIdHigh << ' '
+        << entry.identity.fileIdLow << ' ' << std::string_view(hex.data(), hex.size()) << ' ';
+    for (const char value : key)
+        if (value == '%')
+            out << "%25";
+        else if (value == '\n')
+            out << "%0A";
+        else if (value == '\r')
+            out << "%0D";
+        else
+            out << value;
+    return out.str();
+}
+bool parsePersistedLine(const std::string& line, std::string& key, MemoEntry& entry) {
+    std::istringstream in(line);
+    std::string hex;
+    if (!(in >> entry.identity.size >> entry.identity.modifiedNanoseconds >>
+          entry.identity.changedNanoseconds >> entry.identity.fileIdHigh >>
+          entry.identity.fileIdLow >> hex) ||
+        in.get() != ' ')
+        return false;
+    const auto digest = core::Sha256Digest::fromLowercaseHex(hex);
+    if (!digest)
+        return false;
+    entry.digest = *digest;
+    entry.verified = true;
+    entry.used = 0;
+    std::string escaped;
+    std::getline(in, escaped);
+    key.clear();
+    for (std::size_t i = 0; i < escaped.size(); ++i) {
+        if (escaped[i] != '%') {
+            key.push_back(escaped[i]);
+            continue;
+        }
+        const auto code = std::string_view(escaped).substr(i, 3);
+        if (code == "%25")
+            key.push_back('%');
+        else if (code == "%0A")
+            key.push_back('\n');
+        else if (code == "%0D")
+            key.push_back('\r');
+        else
+            return false;
+        i += 2;
+    }
+    return !key.empty();
+}
+std::map<std::string, MemoEntry, std::less<>> readPersisted(const std::filesystem::path& file) {
+    std::map<std::string, MemoEntry, std::less<>> result;
+    std::ifstream in(file, std::ios::binary);
+    std::string line;
+    if (!in || !std::getline(in, line) || line != kPersistedHeader)
+        return result;
+    while (result.size() < VerifiedSourceDigests::kPersistedEntryLimit && std::getline(in, line)) {
+        std::string key;
+        MemoEntry entry;
+        if (parsePersistedLine(line, key, entry))
+            result.insert_or_assign(std::move(key), entry);
+    }
+    return result;
+}
 MemoState& memoState() noexcept {
-    static MemoState state;
-    return state;
+    // Never destroyed: a source store that is released while the process exits still saves the
+    // record, whatever order the process's other statics go in.
+    static auto* const state = new MemoState; // NOLINT(cppcoreguidelines-owning-memory)
+    return *state;
 }
 } // namespace
 
@@ -185,6 +320,31 @@ void recordFullSourceRead(const std::uint64_t bytes) noexcept {
     saturatingAdd(counters().fullReads, 1);
     saturatingAdd(counters().fullReadBytes, bytes);
 }
+namespace {
+struct ProcessStore final {
+    std::mutex mutex;
+    std::shared_ptr<SourceStore> store;
+};
+ProcessStore& processStore() {
+    static ProcessStore value;
+    return value;
+}
+} // namespace
+void setProcessSourceStore(std::shared_ptr<SourceStore> store) {
+    auto& value = processStore();
+    // The previous store is released outside the lock: releasing the last reference joins the
+    // store's own thread.
+    std::shared_ptr<SourceStore> previous;
+    {
+        const std::lock_guard lock(value.mutex);
+        previous = std::exchange(value.store, std::move(store));
+    }
+}
+std::shared_ptr<SourceStore> processSourceStore() {
+    auto& value = processStore();
+    const std::lock_guard lock(value.mutex);
+    return value.store;
+}
 SourceTierWork sourceTierWork() noexcept {
     auto& value = counters();
     return {value.memoryHits.load(std::memory_order_relaxed),
@@ -201,7 +361,8 @@ std::optional<core::Sha256Digest> VerifiedSourceDigests::find(const std::filesys
                                                               const FileIdentity& identity) const {
     auto& state = memoState();
     const auto key = memoKey(path);
-    const std::lock_guard lock(state.mutex);
+    std::unique_lock lock(state.mutex);
+    adoptPersistedLocked(state, lock, key, identity);
     const auto found = state.entries.find(key);
     if (found == state.entries.end() || found->second.identity != identity ||
         !found->second.verified)
@@ -210,10 +371,13 @@ std::optional<core::Sha256Digest> VerifiedSourceDigests::find(const std::filesys
     return found->second.digest;
 }
 std::optional<FileIdentity>
-VerifiedSourceDigests::knownIdentity(const std::filesystem::path& path) const {
+VerifiedSourceDigests::knownIdentity(const std::filesystem::path& path,
+                                     const FileIdentity* const current) const {
     auto& state = memoState();
     const auto key = memoKey(path);
-    const std::lock_guard lock(state.mutex);
+    std::unique_lock lock(state.mutex);
+    if (current != nullptr)
+        adoptPersistedLocked(state, lock, key, *current);
     const auto found = state.entries.find(key);
     if (found == state.entries.end())
         return {};
@@ -223,10 +387,15 @@ VerifiedSourceDigests::knownIdentity(const std::filesystem::path& path) const {
 void VerifiedSourceDigests::admit(const std::filesystem::path& path, const FileIdentity& identity) {
     auto& state = memoState();
     auto key = memoKey(path);
-    const std::lock_guard lock(state.mutex);
+    std::unique_lock lock(state.mutex);
+    adoptPersistedLocked(state, lock, key, identity);
     if (const auto found = state.entries.find(key);
         found != state.entries.end() && found->second.identity == identity)
         return; // never downgrade a verified entry of the same identity
+    // What an earlier run verified for this path stands while it names the same file.
+    if (const auto kept = state.persisted.find(key);
+        kept != state.persisted.end() && !sameFile(kept->second.identity, identity))
+        unpersistLocked(state, key);
     state.entries.insert_or_assign(std::move(key),
                                    MemoEntry{identity, core::Sha256Digest{}, ++state.clock, false});
     if (state.entries.size() > kEntryLimit) {
@@ -240,8 +409,12 @@ void VerifiedSourceDigests::record(const std::filesystem::path& path, const File
     auto& state = memoState();
     auto key = memoKey(path);
     const std::lock_guard lock(state.mutex);
-    state.entries.insert_or_assign(std::move(key),
-                                   MemoEntry{identity, digest, ++state.clock, true});
+    const MemoEntry entry{identity, digest, ++state.clock, true};
+    if (const auto kept = state.persisted.find(key);
+        kept == state.persisted.end() || kept->second.digest != digest ||
+        !sameFile(kept->second.identity, identity))
+        persistLocked(state, key, entry);
+    state.entries.insert_or_assign(std::move(key), entry);
     if (state.entries.size() > kEntryLimit) {
         const auto oldest = std::ranges::min_element(
             state.entries, {}, [](const auto& entry) { return entry.second.used; });
@@ -253,11 +426,116 @@ void VerifiedSourceDigests::forget(const std::filesystem::path& path) {
     const auto key = memoKey(path);
     const std::lock_guard lock(state.mutex);
     state.entries.erase(key);
+    unpersistLocked(state, key);
 }
 void VerifiedSourceDigests::clear() {
     auto& state = memoState();
     const std::lock_guard lock(state.mutex);
     state.entries.clear();
+    for (const auto& [key, entry] : state.persisted)
+        state.removed.insert(key);
+    if (!state.persisted.empty())
+        state.changed = true;
+    state.persisted.clear();
+}
+void VerifiedSourceDigests::persistTo(const std::filesystem::path& file) {
+    auto& state = memoState();
+    {
+        const std::lock_guard lock(state.mutex);
+        state.file = file;
+        state.persisted.clear();
+        state.removed.clear();
+        state.changed = false;
+        state.loading = !file.empty();
+    }
+    state.loaded.notify_all();
+}
+void VerifiedSourceDigests::load() {
+    auto& state = memoState();
+    std::filesystem::path file;
+    {
+        const std::lock_guard lock(state.mutex);
+        file = state.file;
+    }
+    auto read = file.empty() ? std::map<std::string, MemoEntry, std::less<>>{}
+                             : readPersisted(file);
+    {
+        const std::lock_guard lock(state.mutex);
+        if (state.file == file) {
+            // What this run already recorded or dropped is newer than the file.
+            for (auto& [key, entry] : read)
+                if (!state.removed.contains(key))
+                    state.persisted.try_emplace(key, entry);
+            state.loading = false;
+        }
+    }
+    state.loaded.notify_all();
+}
+void VerifiedSourceDigests::save() {
+    auto& state = memoState();
+    std::filesystem::path file;
+    std::map<std::string, MemoEntry, std::less<>> entries;
+    std::set<std::string, std::less<>> removed;
+    {
+        const std::lock_guard lock(state.mutex);
+        if (state.file.empty() || state.loading || !state.changed)
+            return;
+        state.changed = false;
+        file = state.file;
+        entries = state.persisted;
+        removed = state.removed;
+    }
+    // Another process of the same user may have saved since this one loaded: its entries stay.
+    for (auto& [key, entry] : readPersisted(file))
+        if (entries.size() < kPersistedEntryLimit && !removed.contains(key))
+            entries.try_emplace(key, entry);
+    std::error_code ignored;
+    std::filesystem::create_directories(file.parent_path(), ignored);
+    std::ostringstream suffix;
+    suffix << ".tmp-" << std::this_thread::get_id() << '-'
+           << std::chrono::steady_clock::now().time_since_epoch().count();
+    auto temporary = file;
+    temporary += suffix.str();
+    {
+        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+        out << kPersistedHeader << '\n';
+        for (const auto& [key, entry] : entries)
+            out << persistedLine(key, entry) << '\n';
+        out.flush();
+        if (!out) {
+            out.close();
+            std::filesystem::remove(temporary, ignored);
+            const std::lock_guard lock(state.mutex);
+            state.changed = true;
+            return;
+        }
+    }
+    std::filesystem::rename(temporary, file, ignored);
+    if (ignored) {
+        std::filesystem::remove(temporary, ignored);
+        const std::lock_guard lock(state.mutex);
+        state.changed = true;
+    }
+}
+std::filesystem::path VerifiedSourceDigests::persistedFile() const {
+    auto& state = memoState();
+    const std::lock_guard lock(state.mutex);
+    return state.file;
+}
+void VerifiedSourceDigests::setPersistedLoadWaitForTest(const int milliseconds) {
+    auto& state = memoState();
+    const std::lock_guard lock(state.mutex);
+    state.loadWaitMilliseconds = milliseconds;
+}
+std::size_t VerifiedSourceDigests::persistedLoadWaitersForTest() const {
+    auto& state = memoState();
+    const std::lock_guard lock(state.mutex);
+    return state.loadWaiters;
+}
+std::size_t VerifiedSourceDigests::persistedSize() const {
+    auto& state = memoState();
+    const std::lock_guard lock(state.mutex);
+    return state.persisted.size();
 }
 std::size_t VerifiedSourceDigests::size() const {
     auto& state = memoState();

@@ -283,6 +283,26 @@ void testVideoBypassMatrix(Expectations& expectations, const CpuCompositionEvalu
     expectations.expect(explicitBuild.hasValue() &&
                             explicitBuild.scene->mediaStatistics().videoConversions == 1,
                         "an explicit bypass reconverts");
+
+    // #718: a gesture on a source nothing has opened yet keeps the decode session and its source
+    // revision (a file's bytes do not depend on a parameter), so the next gesture frame reads
+    // nothing again. The decoded frame itself is still not stored.
+    const CpuCompositionEvaluator coldEvaluator;
+    auto coldContext = deterministicMediaContext(coldEvaluator);
+    const CpuGpuSceneBuilder coldBuilder(nullptr, coldContext);
+    const auto residentBefore = coldContext.videoContext->cache.residentBytes();
+    const auto coldGesture = coldBuilder.build(interactive, requestFor(*interactive));
+    expectations.expect(coldGesture.hasValue() &&
+                            coldContext.videoContext->retainedSessionCount() == 1,
+                        "a gesture on a video source nothing has opened keeps the session");
+    const auto nextGesture = coldBuilder.build(interactive, requestFor(*interactive, frameTwelve));
+    expectations.expect(nextGesture.hasValue() &&
+                            nextGesture.scene->mediaStatistics().sourceRevisionCaptures == 0 &&
+                            nextGesture.scene->mediaStatistics().sourceBytesRead == 0 &&
+                            nextGesture.scene->mediaStatistics().videoConversions == 1,
+                        "the next gesture frame decodes without reading the source again");
+    expectations.expect(coldContext.videoContext->cache.residentBytes() == residentBefore,
+                        "gesture frames store no decoded video frame");
 }
 
 // Real affine and all-mode blend coverage on a decoded video source: rotation, nonuniform/signed
