@@ -336,6 +336,11 @@ int main(int argc, char** argv) {
                                 }),
                                 "the first setting is measured again");
             const auto current = controller.reading().scopes;
+            expectations.expect(first != nullptr && current != nullptr && current != first &&
+                                    current->tables == first->tables &&
+                                    current->area == first->area,
+                                "a cached frame measured again has the tables of its first "
+                                "measure");
 
             // Another frame: the earlier tables are on show, labeled, until its own arrive.
             controller.showFrame(frame1, {});
@@ -430,6 +435,39 @@ int main(int argc, char** argv) {
                                         controller.reading().scopes ==
                                             cache->scopesFor(keyOf(frame4), identityOf(settings)),
                                     "a warm frame shows its scopes without measuring");
+            }
+            // An edit of the document: the frame of the new revision is another cache entry, with
+            // no sidecar, and is measured; the earlier revision's sidecar stays with its own frame.
+            {
+                const auto edited = oneSolidPlan(kProjectId, document::Revision::fromRaw(8));
+                const auto editedFrame = cpuFrame(edited, 7, 0);
+                expectations.expect(editedFrame != nullptr, "the edited frame is built");
+                if (editedFrame != nullptr) {
+                    expectations.expect(
+                        !(keyOf(editedFrame) == keyOf(frame0)) &&
+                            cache->insert(editedFrame).retained() &&
+                            cache->scopesFor(keyOf(editedFrame), identityOf(settings)) == nullptr,
+                        "an edited document's frame has no sidecar");
+                    const auto started = controller.measuresStarted();
+                    controller.showFrame(editedFrame, {});
+                    expectations.expect(
+                        controller.reading().state == ScopesReading::State::Measuring &&
+                            controller.reading().behind,
+                        "the earlier revision's tables are behind the edited frame");
+                    expectations.expect(waitUntil([&] {
+                                            return controller.reading().state ==
+                                                   ScopesReading::State::Ready;
+                                        }),
+                                        "the edited frame is measured");
+                    expectations.expect(
+                        controller.measuresStarted() == started + 1 &&
+                            !controller.reading().behind &&
+                            controller.reading().scopes ==
+                                cache->scopesFor(keyOf(editedFrame), identityOf(settings)) &&
+                            controller.reading().scopes !=
+                                cache->scopesFor(keyOf(frame0), identityOf(settings)),
+                        "the edited frame has its own sidecar");
+                }
             }
             expectations.expect(changes > 0, "the panel is told when the reading changes");
             expectations.expect(!gate->onInterfaceThread.load(),
