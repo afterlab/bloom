@@ -608,6 +608,7 @@ target_sources(
         gradient_parameter_row.cpp
         hue_saturation_widget.cpp
         scalar_slider_widget.cpp
+        color_matrix_widget.cpp
         levels_graph.cpp
         node_card_widget.cpp
         node_controls_widget.cpp
@@ -830,6 +831,7 @@ target_sources(
             include/bloom/ui/node_controls_widget.hpp
             include/bloom/ui/hue_saturation_widget.hpp
             include/bloom/ui/scalar_slider_widget.hpp
+            include/bloom/ui/color_matrix_widget.hpp
             include/bloom/ui/levels_graph.hpp
             include/bloom/ui/node_card_widget.hpp
             include/bloom/ui/image_preview_controller.hpp

@@ -28,6 +28,14 @@ none adds an image lowering to the GPU coverage contract and none needs an excep
 | Flattening tolerance of Offset, Boolean and Merge | 0.001 to 1000 pixels (default 0.25) |
 | Anchors per contour, anchors per value, contours | The Path value's own caps |
 
+On the node card and in Properties (#638) every distance reads in pixels and every share in percent,
+and each has a slider: Trim Path's and Path Stroke's Start and End are the two ends of one range,
+with Offset on a slider from -100 to 100 percent; Offset Path's Amount, Round Corners' Radius and
+Path Stroke's width, tapers, dashes, spacing, wiggle and core width are sliders over their usual
+span (a typed number may lie outside it). A tolerance reads in pixels and keeps to its number. The
+units are named by the controls (`node_controls_widget.cpp`): the operands stay plain scalars, so
+no stored schema changes. A drag is one command.
+
 A non-finite operand, a coordinate beyond the bound, a tolerance outside its range, a result with a
 contour over the anchor cap (raise the tolerance), or a path too detailed to flatten fails the
 evaluation with a diagnostic and answers the empty path. Nothing is clamped silently except the miter

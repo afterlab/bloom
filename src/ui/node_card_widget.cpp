@@ -15,6 +15,7 @@
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
+#include <bloom/ui/color_matrix_widget.hpp>
 #include <bloom/ui/colorize_widget.hpp>
 #include <bloom/ui/curve_graph.hpp>
 #include <bloom/ui/depth_effect_widget.hpp>
@@ -46,6 +47,7 @@ bool hasNodeCardWidget(const std::string_view typeId) noexcept {
            document::isDepthEffectNodeType(typeId) || typeId == document::kLensFlareNodeType ||
            typeId == document::kFilmGrainNodeType || typeId == document::kSharpenNodeType ||
            typeId == document::kDitherNodeType ||
+           typeId == document::kColorMatrixNodeType ||
            typeId == document::kCodecDegradeNodeType ||
            typeId == document::kLensDistortionNodeType ||
            typeId == document::kChromaticAberrationNodeType ||
@@ -79,6 +81,8 @@ NodeCardWidget* makeNodeCardWidget(CompositionSession& session, const document::
         return new FilmGrainCardWidget(session, node, card, parent);
     if (typeId == document::kDitherNodeType)
         return new DitherCardWidget(session, node, card, parent);
+    if (typeId == document::kColorMatrixNodeType)
+        return new ColorMatrixCardWidget(session, node, card, parent);
     if (typeId == document::kSharpenNodeType)
         return new SharpenCardWidget(session, node, card, parent);
     if (typeId == document::kCodecDegradeNodeType)

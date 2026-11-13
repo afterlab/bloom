@@ -14,6 +14,8 @@ Connect a path to Path Stroke's **Path**, and its **Path** output to a Shape nod
 - **Width** is the stroke's width in pixels; **Cap** and **Join** shape its ends and corners.
 - **Start**, **End** and **Offset** keep part of the path, in percent of its length. Key **End** from
   0 to 100 to write the stroke on.
+  Start and End are the two ends of one range you can drag, and every distance (pixels) and share
+  (percent) below has a slider as well as its number.
 - **Taper Start** and **Taper End** narrow the stroke to a point over that share of it.
 - **Dash Length**, **Dash Gap** and **Dash Offset** cut it into dashes; animate **Dash Offset** to make
   them run.

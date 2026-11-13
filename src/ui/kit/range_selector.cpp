@@ -8,9 +8,11 @@
 #include <QEnterEvent>
 #include <QEvent>
 #include <QFocusEvent>
+#include <QImage>
 #include <QKeyEvent>
 #include <QLinearGradient>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPen>
 #include <QSignalBlocker>
 #include <QMouseEvent>
@@ -59,7 +61,8 @@ double KRangeSelector::upperValue() const noexcept { return upper_; }
 void KRangeSelector::setLowerValue(const double value) {
     // Clamped to the upper handle, never swapped past it: a swap would silently change which
     // handle the artist believes they are holding.
-    const double clamped = std::clamp(value, minimum_, cross_ ? maximum_ : upper_);
+    const double clamped = wraps_ ? std::clamp(value, upper_ - (maximum_ - minimum_), upper_)
+                                  : std::clamp(value, minimum_, cross_ ? maximum_ : upper_);
     if (clamped == lower_) {
         return;
     }
@@ -69,7 +72,8 @@ void KRangeSelector::setLowerValue(const double value) {
 }
 
 void KRangeSelector::setUpperValue(const double value) {
-    const double clamped = std::clamp(value, cross_ ? minimum_ : lower_, maximum_);
+    const double clamped = wraps_ ? std::clamp(value, lower_, lower_ + (maximum_ - minimum_))
+                                  : std::clamp(value, cross_ ? minimum_ : lower_, maximum_);
     if (clamped == upper_) {
         return;
     }
@@ -79,9 +83,10 @@ void KRangeSelector::setUpperValue(const double value) {
 }
 
 void KRangeSelector::setValues(const double lower, const double upper) {
-    const double newLower = std::clamp(lower, minimum_, maximum_);
+    const double newLower = wraps_ ? lower : std::clamp(lower, minimum_, maximum_);
     const double newUpper =
-        std::clamp(cross_ ? upper : std::max(upper, newLower), minimum_, maximum_);
+        wraps_ ? std::clamp(upper, newLower, newLower + (maximum_ - minimum_))
+               : std::clamp(cross_ ? upper : std::max(upper, newLower), minimum_, maximum_);
     if (newLower != lower_) {
         lower_ = newLower;
         Q_EMIT lowerValueChanged(lower_);
@@ -103,8 +108,41 @@ void KRangeSelector::setLumaStrip(const bool strip) {
     update();
 }
 
+void KRangeSelector::setStripGradient(QGradientStops stops) {
+    stripStops_ = std::move(stops);
+    update();
+}
+
+void KRangeSelector::setSoftness(const double softness) {
+    const double next = std::isfinite(softness) ? std::max(0.0, softness) : 0.0;
+    if (next == softness_)
+        return;
+    softness_ = next;
+    update();
+}
+
+void KRangeSelector::setWraps(const bool wraps) {
+    if (wraps_ == wraps)
+        return;
+    wraps_ = wraps;
+    setValues(lower_, upper_);
+}
+
+double KRangeSelector::wrapped(const double value) const {
+    const double turn = maximum_ - minimum_;
+    double offset = std::fmod(value - minimum_, turn);
+    if (offset < 0.0)
+        offset += turn;
+    return minimum_ + offset;
+}
+
+double KRangeSelector::nearestTurn(const double target, const double current) const {
+    const double turn = maximum_ - minimum_;
+    return target + std::round((current - target) / turn) * turn;
+}
+
 double KRangeSelector::normalized(const double value) const {
-    return (value - minimum_) / (maximum_ - minimum_);
+    return ((wraps_ ? wrapped(value) : value) - minimum_) / (maximum_ - minimum_);
 }
 
 QRectF KRangeSelector::trackRect() const {
@@ -115,6 +153,14 @@ QRectF KRangeSelector::trackRect() const {
 
 QRectF KRangeSelector::spanRect() const {
     const QRectF track = trackRect();
+    if (wraps_) {
+        // The part of the span from its start to the end of the track; what runs past the end
+        // comes back at the start and is painted there.
+        const double start = normalized(lower_);
+        const double extent = (upper_ - lower_) / (maximum_ - minimum_);
+        const qreal left = track.left() + track.width() * start;
+        return {left, track.top(), track.width() * std::min(extent, 1.0 - start), track.height()};
+    }
     const qreal left = track.left() + track.width() * normalized(std::min(lower_, upper_));
     const qreal right = track.left() + track.width() * normalized(std::max(lower_, upper_));
     return {left, track.top(), std::max(0.0, right - left), track.height()};
@@ -241,9 +287,11 @@ void KRangeSelector::mousePressEvent(QMouseEvent* event) {
         // A press on bare track moves whichever handle is nearer, rather than doing nothing: the
         // artist pointed at a boundary they want moved.
         const double target = valueForPosition(event->position().x());
-        grabbed_ =
-            std::abs(target - lower_) <= std::abs(target - upper_) ? Handle::Lower : Handle::Upper;
-        moveHandle(grabbed_, target);
+        const double toLower = wraps_ ? nearestTurn(target, lower_) : target;
+        const double toUpper = wraps_ ? nearestTurn(target, upper_) : target;
+        grabbed_ = std::abs(toLower - lower_) <= std::abs(toUpper - upper_) ? Handle::Lower
+                                                                            : Handle::Upper;
+        moveHandle(grabbed_, grabbed_ == Handle::Lower ? toLower : toUpper);
     }
     active_ = grabbed_;
     update();
@@ -257,11 +305,18 @@ void KRangeSelector::mouseMoveEvent(QMouseEvent* event) {
                 event->accept();
                 return;
             }
-            grabbed_ = event->position().x() < pressX_ ? Handle::Lower : Handle::Upper;
+            // A whole turn's handles also sit on each other, and there only the far one can move:
+            // the upper end comes back to the left, the lower end goes on to the right.
+            const bool left = event->position().x() < pressX_;
+            const bool wholeTurn = wraps_ && upper_ - lower_ >= 0.5 * (maximum_ - minimum_);
+            grabbed_ = left != wholeTurn ? Handle::Lower : Handle::Upper;
             active_ = grabbed_;
             undecided_ = false;
         }
-        moveHandle(grabbed_, valueForPosition(event->position().x()));
+        const double target = valueForPosition(event->position().x());
+        moveHandle(grabbed_, wraps_ ? nearestTurn(target, grabbed_ == Handle::Lower ? lower_
+                                                                                     : upper_)
+                                    : target);
         event->accept();
         return;
     }
@@ -430,11 +485,16 @@ void KRangeSelector::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     const State state = visualState();
 
-    if (strip_) {
-        // The luma strip: the track runs from black to white, so the handles read as values.
+    if (stripShown()) {
+        // The strip: the track runs from black to white (luma) or through its own colours, so the
+        // handles read as values.
         QLinearGradient ramp(trackRect().left(), 0.0, trackRect().right(), 0.0);
-        ramp.setColorAt(0.0, QColor(0, 0, 0));
-        ramp.setColorAt(1.0, QColor(255, 255, 255));
+        if (stripStops_.isEmpty()) {
+            ramp.setColorAt(0.0, QColor(0, 0, 0));
+            ramp.setColorAt(1.0, QColor(255, 255, 255));
+        } else {
+            ramp.setStops(stripStops_);
+        }
         painter.setRenderHint(QPainter::Antialiasing, true);
         painter.setPen(QPen(color(borderForState(state)), 1.0));
         painter.setBrush(ramp);
@@ -452,10 +512,73 @@ void KRangeSelector::paintEvent(QPaintEvent* event) {
     } else if (state == State::Disabled) {
         accent = withOpacity(accent, kDisabledOpacity);
     }
-    const QRectF span = spanRect();
-    if (span.width() > 0.0) {
-        fillRoundedSurface(painter, span, strip_ ? withOpacity(accent, 0.55) : accent, {},
-                           Radius::Full);
+    const QColor band = stripShown() ? withOpacity(accent, 0.55) : accent;
+    if (!wraps_ && softness_ <= 0.0 && stripStops_.isEmpty()) {
+        const QRectF span = spanRect();
+        if (span.width() > 0.0) {
+            fillRoundedSurface(painter, span, band, {}, Radius::Full);
+        }
+    } else {
+        // #638: the span with its feather, and round the circle when the range is one: each piece
+        // is drawn where it falls and once more a turn either side, inside the track's own shape.
+        const QRectF track = trackRect();
+        const double turn = maximum_ - minimum_;
+        const double from = wraps_ ? wrapped(lower_) : std::min(lower_, upper_);
+        const double to = wraps_ ? from + (upper_ - lower_) : std::max(lower_, upper_);
+        const auto x = [&](const double value) {
+            return track.left() + track.width() * (value - minimum_) / turn;
+        };
+        const auto paintSpan = [&](QPainter& target, const QColor& fill) {
+            QColor clear = fill;
+            clear.setAlphaF(0.0);
+            for (const double shift : {-turn, 0.0, turn}) {
+                if (!wraps_ && shift != 0.0)
+                    continue;
+                if (to > from)
+                    target.fillRect(QRectF(QPointF(x(from + shift), track.top()),
+                                           QPointF(x(to + shift), track.bottom())),
+                                    fill);
+                // A whole turn has no edges to feather.
+                if (softness_ <= 0.0 || (wraps_ && to - from >= turn))
+                    continue;
+                QLinearGradient rise(x(from - softness_ + shift), 0.0, x(from + shift), 0.0);
+                rise.setColorAt(0.0, clear);
+                rise.setColorAt(1.0, fill);
+                target.fillRect(QRectF(QPointF(x(from - softness_ + shift), track.top()),
+                                       QPointF(x(from + shift), track.bottom())),
+                                rise);
+                QLinearGradient fall(x(to + shift), 0.0, x(to + softness_ + shift), 0.0);
+                fall.setColorAt(0.0, fill);
+                fall.setColorAt(1.0, clear);
+                target.fillRect(QRectF(QPointF(x(to + shift), track.top()),
+                                       QPointF(x(to + softness_ + shift), track.bottom())),
+                                fall);
+            }
+        };
+        painter.save();
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        QPainterPath shape;
+        shape.addRoundedRect(track, track.height() / 2.0, track.height() / 2.0);
+        painter.setClipPath(shape);
+        painter.setPen(Qt::NoPen);
+        if (stripStops_.isEmpty()) {
+            paintSpan(painter, band);
+        } else {
+            // A strip of colours keeps them where it is selected: what lies outside the span is
+            // shaded instead, and the feather is where the shade comes in.
+            const qreal ratio = devicePixelRatioF();
+            QImage shade((QSizeF(size()) * ratio).toSize(), QImage::Format_ARGB32_Premultiplied);
+            shade.setDevicePixelRatio(ratio);
+            shade.fill(withOpacity(color(Color::Canvas), 0.8));
+            {
+                QPainter cut(&shade);
+                cut.setCompositionMode(QPainter::CompositionMode_DestinationOut);
+                cut.setPen(Qt::NoPen);
+                paintSpan(cut, QColor(0, 0, 0, 255));
+            }
+            painter.drawImage(QPointF(0.0, 0.0), shade);
+        }
+        painter.restore();
     }
 
     QColor handleFill = color(Color::Foreground);

@@ -1311,6 +1311,40 @@ void colorCleanupRows() {
                            "Tone Map presents its roll-off range");
                     continue;
                 }
+                // #638: HSL Qualifier's windows and their softness are the card widget's three
+                // range rows, and Color Matrix's elements are its grid, where a 3 x 3 matrix (the
+                // default) has no alpha row and no alpha column.
+                if (type == document::kHslQualifierNodeType && spec.role != "invert") {
+                    const std::string_view role = spec.role;
+                    const char* owner = role.starts_with("hue")   ? "rangeRow.hueCenter"
+                                        : role.starts_with("sat") ? "rangeRow.satLow"
+                                                                  : "rangeRow.lumaLow";
+                    auto* range = properties.findChild<QWidget*>(owner);
+                    auto* value = range != nullptr
+                                      ? range->findChild<QWidget*>(
+                                            QStringLiteral("gradingRow.") +
+                                            QString::fromLatin1(role.data(),
+                                                                static_cast<int>(role.size())))
+                                      : nullptr;
+                    expect(value != nullptr && value->isVisibleTo(&properties),
+                           "HSL Qualifier presents every window value on its range rows");
+                    continue;
+                }
+                if (type == document::kColorMatrixNodeType && spec.role.size() == 2) {
+                    auto* cell = properties.findChild<ui::kit::KValueField*>(
+                        QStringLiteral("colorMatrixCell.") +
+                        QString::fromLatin1(spec.role.data(), 2));
+                    const bool alpha = spec.role[0] == 'a' || spec.role[1] == 'a';
+                    expect(cell != nullptr && cell->isVisibleTo(&properties) == !alpha &&
+                               (alpha || (!cell->paintedText().contains(QChar(0x2026)) &&
+                                          !cell->isDisplayRounded())),
+                           "Color Matrix presents the elements its size reads in its grid, whole");
+                    expect(row(properties, std::string(spec.role).c_str()) == nullptr ||
+                               !row(properties, std::string(spec.role).c_str())
+                                    ->isVisibleTo(&properties),
+                           "a Color Matrix element has no row of its own beside the grid");
+                    continue;
+                }
                 auto* found = row(properties, std::string(spec.role).c_str());
                 expect(found != nullptr && found->isVisibleTo(&properties),
                        "a color cleanup node presents every value");

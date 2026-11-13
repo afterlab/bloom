@@ -2,6 +2,7 @@
 
 #include <bloom/ui/kit/tokens.hpp>
 
+#include <QBrush>
 #include <QRectF>
 #include <QSize>
 #include <QWidget>
@@ -55,6 +56,19 @@ class KRangeSelector final : public QWidget {
     // and the span between the handles is a translucent band on it. Off by default.
     void setLumaStrip(bool strip);
     [[nodiscard]] bool lumaStrip() const noexcept { return strip_; }
+    // #638: the track is a strip of these colours over the range (a hue circle, a saturation
+    // ramp); empty for none. The span is a translucent band on it, as on the luma strip.
+    void setStripGradient(QGradientStops stops);
+    [[nodiscard]] const QGradientStops& stripGradient() const noexcept { return stripStops_; }
+    // #638: a feather past each end of the span, in the range's units: the band fades out over
+    // it. Display only; the handles stay the span's ends. 0 (the default) draws none.
+    void setSoftness(double softness);
+    [[nodiscard]] double softness() const noexcept { return softness_; }
+    // #638: the range is a circle (a hue): the values are not held inside it, the span may run
+    // past the end and come back at the start, and it is never wider than one turn. A handle sits
+    // where its value falls on the circle. Off by default.
+    void setWraps(bool wraps);
+    [[nodiscard]] bool wraps() const noexcept { return wraps_; }
 
     [[nodiscard]] QRectF trackRect() const;
     [[nodiscard]] QRectF spanRect() const;
@@ -95,6 +109,11 @@ class KRangeSelector final : public QWidget {
   private:
     [[nodiscard]] double valueForPosition(double x) const;
     [[nodiscard]] double normalized(double value) const;
+    // wraps: `value` brought onto the circle, and the value equal to `target` on the circle that
+    // lies nearest to `current`.
+    [[nodiscard]] double wrapped(double value) const;
+    [[nodiscard]] double nearestTurn(double target, double current) const;
+    [[nodiscard]] bool stripShown() const noexcept { return strip_ || !stripStops_.isEmpty(); }
     [[nodiscard]] Handle handleAt(const QPointF& point) const;
     void moveHandle(Handle handle, double value);
     void beginInteraction();
@@ -116,6 +135,9 @@ class KRangeSelector final : public QWidget {
     double upperBase_ = 0.0;
     bool cross_ = false;
     bool strip_ = false;
+    QGradientStops stripStops_;
+    double softness_ = 0.0;
+    bool wraps_ = false;
 };
 
 } // namespace bloom::ui::kit

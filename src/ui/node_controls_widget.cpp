@@ -18,6 +18,7 @@
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/document/warp_nodes.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/curve_graph.hpp>
@@ -30,6 +31,7 @@
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 
+#include <QColor>
 #include <QCoreApplication>
 #include <QFontMetrics>
 #include <QSignalBlocker>
@@ -194,6 +196,26 @@ RangeRow::RangeRow(CompositionSession& session, const document::NodeId node, Spe
     selector_->setHandlesMayCross(spec_.mayCross);
     selector_->setRange(spec_.minimum, spec_.maximum);
     selector_->setLumaStrip(spec_.lumaStrip);
+    selector_->setStripGradient(spec_.strip);
+    selector_->setWraps(spec_.wraps);
+    if (!spec_.unit.isEmpty()) {
+        low_->field()->setUnit(spec_.unit);
+        high_->field()->setUnit(spec_.unit);
+    }
+    if (!spec_.softnessRole.empty()) {
+        const double neutral = defaultScalar(session_, node_, spec_.softnessRole);
+        soft_ = new GradingValueRow(session_, node_, spec_.softnessRole, spec_.softnessSchemaKey,
+                                    parameterRowLabel(spec_.softnessSchemaKey, spec_.softnessRole),
+                                    neutral, this);
+        if (!spec_.unit.isEmpty())
+            soft_->field()->setUnit(spec_.unit);
+        GradingSliderSpec slider;
+        slider.mode = kit::KSlider::DragMode::Absolute;
+        slider.minimum = 0.0;
+        slider.maximum = spec_.softnessMaximum;
+        slider.neutral = neutral;
+        soft_->setSlider(slider);
+    }
     selector_->setToolTip(tr("Drag either end of %1; the numbers above take exact values")
                               .arg(spec_.name.toLower()));
     connect(selector_, &kit::KRangeSelector::editStarted, this, [this] {
@@ -236,6 +258,12 @@ RangeRow::RangeRow(CompositionSession& session, const document::NodeId node, Spe
             (lower ? trackLow_ : trackHigh_) = v;
             editLow_ = 0.5 * (trackLow_ + trackHigh_);
             editHigh_ = std::max(0.0, trackHigh_ - trackLow_);
+            if (spec_.wraps) {
+                // A hue: the centre is kept on the circle, where the document holds it.
+                const double turn = spec_.maximum - spec_.minimum;
+                editLow_ = spec_.minimum + std::fmod(std::fmod(editLow_ - spec_.minimum, turn) + turn, turn);
+                editHigh_ = std::min(editHigh_, turn);
+            }
         } else {
             (lower ? editLow_ : editHigh_) = v;
         }
@@ -278,24 +306,30 @@ RangeRow::RangeRow(CompositionSession& session, const document::NodeId node, Spe
 }
 
 bool RangeRow::draws(const std::string_view role) const {
-    return role == spec_.lowRole || role == spec_.highRole;
+    return role == spec_.lowRole || role == spec_.highRole ||
+           (soft_ != nullptr && role == spec_.softnessRole);
 }
 
 void RangeRow::setLabelWidth(const int width) {
     low_->setLabelWidth(width);
     high_->setLabelWidth(width);
+    if (soft_ != nullptr)
+        soft_->setLabelWidth(width);
 }
 
 int RangeRow::labelWidthHint() const {
-    return std::max(low_->labelWidthHint(), high_->labelWidthHint());
+    return std::max({low_->labelWidthHint(), high_->labelWidthHint(),
+                     soft_ != nullptr ? soft_->labelWidthHint() : 0});
 }
 
 int RangeRow::heightHint() const {
-    return low_->heightHint() + small() + high_->heightHint() + small() + control();
+    return low_->heightHint() + small() + high_->heightHint() + small() + control() +
+           (soft_ != nullptr ? small() + soft_->heightHint() : 0);
 }
 
 int RangeRow::minimumWidthHint() const {
-    return std::max(low_->minimumWidthHint(), high_->minimumWidthHint());
+    return std::max({low_->minimumWidthHint(), high_->minimumWidthHint(),
+                     soft_ != nullptr ? soft_->minimumWidthHint() : 0});
 }
 
 std::optional<int> RangeRow::socketY(const std::string_view role) const {
@@ -303,6 +337,8 @@ std::optional<int> RangeRow::socketY(const std::string_view role) const {
         return low_->y() + low_->socketY();
     if (role == spec_.highRole)
         return high_->y() + high_->socketY();
+    if (soft_ != nullptr && role == spec_.softnessRole)
+        return soft_->y() + soft_->socketY();
     return std::nullopt;
 }
 
@@ -318,6 +354,10 @@ void RangeRow::place() {
     high_->setGeometry(0, y, width(), high_->heightHint());
     y += high_->heightHint() + small();
     selector_->setGeometry(0, y, width(), control());
+    if (soft_ != nullptr) {
+        y += control() + small();
+        soft_->setGeometry(0, y, width(), soft_->heightHint());
+    }
 }
 
 void RangeRow::refresh(const bool locked) {
@@ -327,6 +367,11 @@ void RangeRow::refresh(const bool locked) {
     const auto high = high_->parameter();
     selector_->setEnabled(low && high && !locked && scalarEditable(session_, *low) &&
                           scalarEditable(session_, *high));
+    if (soft_ != nullptr) {
+        soft_->refresh(locked);
+        const auto id = soft_->parameter();
+        selector_->setSoftness(id ? liveScalar(session_, *id).value_or(0.0) : 0.0);
+    }
     if (selector_->hasLiveEdit())
         return;
     const auto lowValue = low ? liveScalar(session_, *low) : std::nullopt;
@@ -502,6 +547,10 @@ struct Controls final {
         double maximum = 100.0;
         double neutral = 0.0;
         double ticks = 0.0;
+        // #638: the number's unit, for a value whose schema names none, and whether the row has
+        // a track at all (a tolerance reads its unit and keeps to its number).
+        QString unit{};
+        bool track = true;
     };
     std::vector<ValueSlider> sliders;
     std::vector<GradientParameterRow::Spec> gradients;
@@ -681,6 +730,77 @@ struct Controls final {
         controls.sliders.push_back({"skew", std::string(document::kPathSkewSchemaKey),
                                     -document::kMaximumPathSkewDegrees,
                                     document::kMaximumPathSkewDegrees, 0.0, 15.0});
+    } else if (typeId == document::kTrimPathNodeType || typeId == document::kPathStrokeNodeType ||
+               typeId == document::kOffsetPathNodeType ||
+               typeId == document::kRoundCornersNodeType) {
+        // #638: the path nodes' distances and shares on tracks, with their units. Their values are
+        // plain scalar operands, so the unit is named here: pixels for a distance, percent for a
+        // share of the length or of the width (docs/architecture/path-processing.md).
+        const std::string operand = "bloom.operand.scalar";
+        const auto percent = QStringLiteral("%");
+        const auto pixels = QStringLiteral("px");
+        const auto trim = [&] {
+            RangeRow::Spec spec{"start", "end", operand, operand,
+                                QCoreApplication::translate("NodeControls", "Trim range"), 0.0,
+                                100.0, true};
+            spec.unit = percent;
+            controls.ranges.push_back(std::move(spec));
+            controls.sliders.push_back({"offset", operand, -100.0, 100.0, 0.0, 50.0, percent});
+        };
+        if (typeId == document::kTrimPathNodeType) {
+            trim();
+        } else if (typeId == document::kOffsetPathNodeType) {
+            controls.sliders.push_back({"amount", operand, -100.0, 100.0, 10.0, 50.0, pixels});
+            controls.sliders.push_back({"miterLimit", operand, 1.0, 20.0, 4.0, 0.0});
+            controls.sliders.push_back({"tolerance", operand, 0.0, 4.0, 0.25, 0.0, pixels, false});
+        } else if (typeId == document::kRoundCornersNodeType) {
+            controls.sliders.push_back({"radius", operand, 0.0, 200.0, 10.0, 50.0, pixels});
+        } else {
+            controls.sliders.push_back({"width", operand, 0.0, 100.0, 8.0, 25.0, pixels});
+            trim();
+            controls.sliders.push_back({"taperStart", operand, 0.0, 100.0, 0.0, 25.0, percent});
+            controls.sliders.push_back({"taperEnd", operand, 0.0, 100.0, 0.0, 25.0, percent});
+            controls.sliders.push_back({"dashLength", operand, 0.0, 200.0, 0.0, 50.0, pixels});
+            controls.sliders.push_back({"dashGap", operand, 0.0, 200.0, 8.0, 50.0, pixels});
+            controls.sliders.push_back({"dashOffset", operand, -200.0, 200.0, 0.0, 100.0, pixels});
+            controls.sliders.push_back({"spacing", operand, 0.0, 200.0, 0.0, 50.0, pixels});
+            controls.sliders.push_back({"wiggle", operand, 0.0, 100.0, 0.0, 25.0, pixels});
+            controls.sliders.push_back({"wiggleFrequency", operand, 0.0, 20.0, 2.0, 5.0});
+            controls.sliders.push_back({"coreWidth", operand, 0.0, 100.0, 0.0, 25.0, percent});
+            controls.sliders.push_back({"tolerance", operand, 0.0, 4.0, 0.25, 0.0, pixels, false});
+        }
+    } else if (typeId == document::kHslQualifierNodeType) {
+        // #638: each window on a strip of what it selects, with its feather drawn past both ends
+        // and on a slider under it. The hue is a centre and a width on the hue circle, and its
+        // window runs past 360 and comes back.
+        const auto key = [&](const std::string_view role) {
+            return document::colorCleanupSchemaKey(typeId, role);
+        };
+        RangeRow::Spec hue{"hueCenter", "hueWidth", key("hueCenter"), key("hueWidth"),
+                           QCoreApplication::translate("NodeControls", "Hue window"), 0.0, 360.0,
+                           false};
+        hue.centreWidth = true;
+        hue.wraps = true;
+        for (int step = 0; step <= 6; ++step)
+            hue.strip.append({step / 6.0, QColor::fromHsv(step == 6 ? 0 : step * 60, 255, 255)});
+        hue.softnessRole = "hueSoftness";
+        hue.softnessSchemaKey = key("hueSoftness");
+        hue.softnessMaximum = 180.0;
+        controls.ranges.push_back(std::move(hue));
+        RangeRow::Spec saturation{"satLow", "satHigh", key("satLow"), key("satHigh"),
+                                  QCoreApplication::translate("NodeControls", "Saturation window"),
+                                  0.0, 1.0, false};
+        saturation.strip = {{0.0, QColor::fromHsv(0, 0, 190)}, {1.0, QColor::fromHsv(0, 255, 230)}};
+        saturation.softnessRole = "satSoftness";
+        saturation.softnessSchemaKey = key("satSoftness");
+        controls.ranges.push_back(std::move(saturation));
+        RangeRow::Spec luma{"lumaLow", "lumaHigh", key("lumaLow"), key("lumaHigh"),
+                            QCoreApplication::translate("NodeControls", "Luma window"), 0.0, 1.0,
+                            false};
+        luma.lumaStrip = true;
+        luma.softnessRole = "lumaSoftness";
+        luma.softnessSchemaKey = key("lumaSoftness");
+        controls.ranges.push_back(std::move(luma));
     } else if (typeId == "bloom.luma-key") {
         controls.ranges.push_back({"low", "high", "bloom.luma-key.low", "bloom.luma-key.high",
                                    QCoreApplication::translate("NodeControls", "Key range"), 0.0,
@@ -868,13 +988,17 @@ NodeControlsCardWidget::NodeControlsCardWidget(CompositionSession& session,
         auto* row = new GradingValueRow(session_, node_, slider.role, slider.schemaKey,
                                         parameterRowLabel(slider.schemaKey, slider.role),
                                         slider.neutral, this);
-        GradingSliderSpec spec;
-        spec.mode = kit::KSlider::DragMode::Absolute;
-        spec.minimum = slider.minimum;
-        spec.maximum = slider.maximum;
-        spec.neutral = slider.neutral;
-        spec.ticks = slider.ticks;
-        row->setSlider(spec);
+        if (!slider.unit.isEmpty())
+            row->field()->setUnit(slider.unit);
+        if (slider.track) {
+            GradingSliderSpec spec;
+            spec.mode = kit::KSlider::DragMode::Absolute;
+            spec.minimum = slider.minimum;
+            spec.maximum = slider.maximum;
+            spec.neutral = slider.neutral;
+            spec.ticks = slider.ticks;
+            row->setSlider(spec);
+        }
         sliders_.push_back(row);
     }
     for (auto& curve : controls.curves) {

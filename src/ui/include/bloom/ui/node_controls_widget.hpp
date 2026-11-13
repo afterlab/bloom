@@ -26,6 +26,7 @@
 #include <bloom/document/ids.hpp>
 #include <bloom/ui/node_card_widget.hpp>
 
+#include <QBrush>
 #include <QImage>
 #include <QPointF>
 #include <QRectF>
@@ -115,6 +116,18 @@ class RangeRow final : public QWidget {
         // drag writes the falloff (the lower end) or the radius (the upper end, the fade's share
         // kept).
         bool falloffBand = false;
+        // #638: the unit the two numbers read in, for values whose schema names none (a path
+        // node's percent of length).
+        QString unit{};
+        // #638: the track is a strip of these colours (a hue circle, a saturation ramp).
+        QGradientStops strip{};
+        // #638: the range is a circle (a hue): the span runs past the end and comes back.
+        bool wraps = false;
+        // #638: a third value, the feather past each end of the span, drawn on the track and as
+        // its own row with a slider under it. Empty for none.
+        std::string softnessRole{};
+        std::string softnessSchemaKey{};
+        double softnessMaximum = 1.0;
     };
 
     RangeRow(CompositionSession& session, document::NodeId node, Spec spec,
@@ -122,6 +135,7 @@ class RangeRow final : public QWidget {
 
     [[nodiscard]] GradingValueRow* lowRow() const noexcept { return low_; }
     [[nodiscard]] GradingValueRow* highRow() const noexcept { return high_; }
+    [[nodiscard]] GradingValueRow* softnessRow() const noexcept { return soft_; }
     [[nodiscard]] kit::KRangeSelector* selector() const noexcept { return selector_; }
     [[nodiscard]] bool draws(std::string_view role) const;
     [[nodiscard]] const std::string& lowRole() const noexcept { return spec_.lowRole; }
@@ -142,6 +156,7 @@ class RangeRow final : public QWidget {
     Spec spec_;
     GradingValueRow* low_ = nullptr;
     GradingValueRow* high_ = nullptr;
+    GradingValueRow* soft_ = nullptr;
     kit::KRangeSelector* selector_ = nullptr;
     // The values a selector gesture writes: the end not dragged keeps its own (perhaps outside the
     // track) value rather than the clamped one the track shows.

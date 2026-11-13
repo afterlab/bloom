@@ -22,6 +22,8 @@
 #include <QPainter>
 #include <QRegularExpression>
 #include <QStyleOptionGraphicsItem>
+#include <bloom/ui/color_matrix_widget.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -3575,6 +3577,290 @@ void ditherCard() {
            "at amplitude 0 the dithered half is the plain one");
 }
 
+// #638: the widget rule on the path nodes, HSL Qualifier and Color Matrix. Each control reads the
+// document and writes through the session, and a drag is one command that one undo restores.
+void widgetRuleCards() {
+    const auto controls = [](CardFixture& fixture) {
+        return fixture.item ? qobject_cast<ui::NodeControlsCardWidget*>(fixture.item->cardWidget())
+                            : nullptr;
+    };
+    const auto slider = [](ui::NodeControlsCardWidget& card, const std::string_view role)
+        -> ui::GradingValueRow* {
+        for (auto* row : card.sliderRows())
+            if (row->role() == role)
+                return row;
+        return nullptr;
+    };
+    // Drags `row`'s track from `from` to `to` (stored units) and answers whether it was one command.
+    // One gesture is one command: the history grows by one, or, right after an undo, the new
+    // command takes the undone one's place and the history keeps its size.
+    bool undone = false;
+    const auto oneCommand = [&undone](CardFixture& fixture, const std::size_t before) {
+        const bool one = fixture.stack.size() == before + (undone ? 0U : 1U);
+        undone = false;
+        return one;
+    };
+    const auto undo = [&undone](CardFixture& fixture) {
+        undone = fixture.session.undo();
+        return undone;
+    };
+    const auto dragTrack = [&oneCommand](CardFixture& fixture, ui::GradingValueRow& row,
+                                         const double from, const double to) {
+        auto& track = *row.slider();
+        const auto commands = fixture.stack.size();
+        const QPointF start(track.positionOf(from), track.height() / 2.0);
+        const QPointF end(track.positionOf(to), track.height() / 2.0);
+        mouse(track, QEvent::MouseButtonPress, start);
+        mouse(track, QEvent::MouseMove, (start + end) / 2.0);
+        mouse(track, QEvent::MouseMove, end);
+        mouse(track, QEvent::MouseButtonRelease, end);
+        return oneCommand(fixture, commands);
+    };
+    // The path nodes: every distance and share has its unit and a track; Start and End are one range.
+    struct PathNode final {
+        std::string_view type;
+        std::vector<std::pair<const char*, const char*>> sliders; // role, unit
+        bool trim;
+    };
+    const std::vector<PathNode> paths{
+        {document::kTrimPathNodeType, {{"offset", "%"}}, true},
+        {document::kOffsetPathNodeType, {{"amount", "px"}, {"miterLimit", ""}}, false},
+        {document::kRoundCornersNodeType, {{"radius", "px"}}, false},
+        {document::kPathStrokeNodeType,
+         {{"width", "px"}, {"offset", "%"}, {"taperStart", "%"}, {"taperEnd", "%"},
+          {"dashLength", "px"}, {"dashGap", "px"}, {"dashOffset", "px"}, {"spacing", "px"},
+          {"wiggle", "px"}, {"wiggleFrequency", ""}, {"coreWidth", "%"}},
+         true}};
+    for (const auto& path : paths) {
+        CardFixture fixture(path.type);
+        undone = false;
+        auto* card = controls(fixture);
+        const std::string name(path.type);
+        if (card == nullptr) {
+            expect(false, (name + " draws its controls").c_str());
+            continue;
+        }
+        QApplication::processEvents();
+        for (const auto& [role, unit] : path.sliders) {
+            auto* row = slider(*card, role);
+            const std::string what = name + " " + role;
+            expect(row != nullptr && row->slider() != nullptr &&
+                       row->field()->unit() == QString::fromUtf8(unit) && !card->showsRole(role) &&
+                       card->socketY(role).has_value(),
+                   (what + " is a row with its unit, a track and its socket").c_str());
+            if (row == nullptr || row->slider() == nullptr)
+                continue;
+            const auto before = stored(fixture.session, fixture.node, role);
+            const double low = row->slider()->minimum();
+            const double high = row->slider()->maximum();
+            const double target = low + 0.75 * (high - low);
+            expect(dragTrack(fixture, *row, low + 0.25 * (high - low), target),
+                   (what + ": a drag is one command").c_str());
+            const auto after = stored(fixture.session, fixture.node, role);
+            expect(after && std::abs(*after - target) < 0.02 * (high - low),
+                   (what + ": the drag writes the value under the pointer").c_str());
+            expect(undo(fixture) && stored(fixture.session, fixture.node, role) == before,
+                   (what + ": one undo restores it").c_str());
+            QApplication::processEvents();
+        }
+        // The tolerance keeps to its number and reads in pixels.
+        if (path.type == document::kOffsetPathNodeType || path.type == document::kPathStrokeNodeType) {
+            auto* tolerance = slider(*card, "tolerance");
+            expect(tolerance != nullptr && tolerance->slider() == nullptr &&
+                       tolerance->field()->unit() == QStringLiteral("px"),
+                   (name + " tolerance reads in pixels and has no track").c_str());
+        }
+        expect(card->rangeRows().size() == (path.trim ? 1U : 0U),
+               (name + " draws Start and End as one range exactly when it trims").c_str());
+        if (path.trim && !card->rangeRows().empty()) {
+            auto* row = card->rangeRows().front();
+            auto& range = *row->selector();
+            expect(row->lowRow()->field()->unit() == QStringLiteral("%") &&
+                       row->highRow()->field()->unit() == QStringLiteral("%") &&
+                       !card->showsRole("start") && !card->showsRole("end"),
+                   (name + " Start and End read in percent on the range row").c_str());
+            const auto commands = fixture.stack.size();
+            const auto handle = range.handleRect(ui::kit::KRangeSelector::Handle::Upper).center();
+            const QPointF to = handle - QPointF(range.trackRect().width() * 0.5, 0.0);
+            mouse(range, QEvent::MouseButtonPress, handle);
+            mouse(range, QEvent::MouseMove, to);
+            mouse(range, QEvent::MouseButtonRelease, to);
+            const auto end = stored(fixture.session, fixture.node, "end");
+            const auto start = stored(fixture.session, fixture.node, "start");
+            expect(oneCommand(fixture, commands) && end && std::abs(*end - 50.0) < 2.0 &&
+                       start && *start == 0.0,
+                   (name + ": dragging the End handle writes End alone, as one command").c_str());
+            expect(undo(fixture) && stored(fixture.session, fixture.node, "end") == 100.0,
+                   (name + ": one undo restores End").c_str());
+            QApplication::processEvents();
+        }
+        expect(paintsInsideCard(*fixture.item), (name + " paints inside its card").c_str());
+        if (!cardContentFits(*fixture.item, name.c_str()))
+            ++failures;
+        capture(fixture, QStringLiteral("638-") + QString::fromStdString(name.substr(6)));
+    }
+
+    // HSL Qualifier: three windows on their strips, each with its feather.
+    {
+        CardFixture fixture(document::kHslQualifierNodeType);
+        undone = false;
+        auto* card = controls(fixture);
+        if (card == nullptr || card->rangeRows().size() != 3)
+            return expect(false, "HSL Qualifier draws its three windows");
+        QApplication::processEvents();
+        auto* hue = card->rangeRows()[0];
+        auto* saturation = card->rangeRows()[1];
+        auto* luma = card->rangeRows()[2];
+        expect(hue->selector()->wraps() && !hue->selector()->stripGradient().isEmpty() &&
+                   !saturation->selector()->stripGradient().isEmpty() &&
+                   luma->selector()->lumaStrip(),
+               "the hue window is on a hue circle, saturation on its ramp, luma on a luma strip");
+        for (const char* role : {"hueCenter", "hueWidth", "hueSoftness", "satLow", "satHigh",
+                                 "satSoftness", "lumaLow", "lumaHigh", "lumaSoftness"})
+            expect(!card->showsRole(role) && card->socketY(role).has_value(),
+                   (std::string("HSL Qualifier draws ") + role + " itself, with its socket").c_str());
+        expect(hue->softnessRow() != nullptr && saturation->softnessRow() != nullptr &&
+                   luma->softnessRow() != nullptr && hue->selector()->softness() == 20.0 &&
+                   std::abs(saturation->selector()->softness() - 0.1) < 1e-9,
+               "each window has its softness row and draws the feather on its track");
+        // The default hue window is the whole circle. Pulling its upper end back by a quarter of
+        // the track leaves 270 degrees, centred 45 degrees earlier, on the circle.
+        auto& range = *hue->selector();
+        auto commands = fixture.stack.size();
+        const auto handle = range.handleRect(ui::kit::KRangeSelector::Handle::Upper).center();
+        const QPointF to = handle - QPointF(range.trackRect().width() * 0.25, 0.0);
+        mouse(range, QEvent::MouseButtonPress, handle);
+        mouse(range, QEvent::MouseMove, (handle + to) / 2.0);
+        mouse(range, QEvent::MouseMove, to);
+        mouse(range, QEvent::MouseButtonRelease, to);
+        const auto centre = stored(fixture.session, fixture.node, "hueCenter");
+        const auto width = stored(fixture.session, fixture.node, "hueWidth");
+        expect(oneCommand(fixture, commands) && centre && width &&
+                   std::abs(*width - 270.0) < 4.0 && std::abs(*centre - 315.0) < 4.0,
+               ("a hue handle drag writes the centre and the width as one command, on the circle (" +
+                std::to_string(centre.value_or(-1.0)) + ", " + std::to_string(width.value_or(-1.0)) +
+                ")")
+                   .c_str());
+        QApplication::processEvents();
+        // The window runs past 360 and comes back: both handles are on the track.
+        const QRectF track = range.trackRect().adjusted(-1, -100, 1, 100);
+        expect(track.contains(range.handleRect(ui::kit::KRangeSelector::Handle::Lower).center()) &&
+                   track.contains(range.handleRect(ui::kit::KRangeSelector::Handle::Upper).center()),
+               "a hue window that wraps keeps both handles on the track");
+        capture(fixture, QStringLiteral("638-hsl-qualifier-window"));
+        expect(undo(fixture) && stored(fixture.session, fixture.node, "hueCenter") == 0.0 &&
+                   stored(fixture.session, fixture.node, "hueWidth") == 360.0,
+               "one undo restores the hue window");
+        QApplication::processEvents();
+        // Saturation: the lower end.
+        auto& sat = *saturation->selector();
+        commands = fixture.stack.size();
+        const auto lower = sat.handleRect(ui::kit::KRangeSelector::Handle::Lower).center();
+        const QPointF satTo = lower + QPointF(sat.trackRect().width() * 0.5, 0.0);
+        mouse(sat, QEvent::MouseButtonPress, lower);
+        mouse(sat, QEvent::MouseMove, satTo);
+        mouse(sat, QEvent::MouseButtonRelease, satTo);
+        const auto satLow = stored(fixture.session, fixture.node, "satLow");
+        expect(oneCommand(fixture, commands) && satLow && std::abs(*satLow - 0.5) < 0.02 &&
+                   stored(fixture.session, fixture.node, "satHigh") == 1.0,
+               "a saturation handle drag is one command");
+        expect(undo(fixture), "the saturation drag undoes");
+        QApplication::processEvents();
+        // A softness slider: one command, and the track's feather follows it.
+        auto* soft = luma->softnessRow();
+        expect(dragTrack(fixture, *soft, 0.1, 0.6), "a softness drag is one command");
+        QApplication::processEvents();
+        const auto lumaSoftness = stored(fixture.session, fixture.node, "lumaSoftness");
+        expect(lumaSoftness && std::abs(*lumaSoftness - 0.6) < 0.02 &&
+                   std::abs(luma->selector()->softness() - *lumaSoftness) < 1e-9,
+               "the luma feather on the track is the stored softness");
+        expect(undo(fixture), "the softness drag undoes");
+        QApplication::processEvents();
+        expect(paintsInsideCard(*fixture.item), "HSL Qualifier paints inside its card");
+        if (!cardContentFits(*fixture.item, "bloom.hsl-qualifier"))
+            ++failures;
+        capture(fixture, QStringLiteral("638-hsl-qualifier"));
+    }
+
+    // Color Matrix: a grid with only the rows and columns the size reads.
+    {
+        CardFixture fixture(document::kColorMatrixNodeType);
+        undone = false;
+        auto* card = fixture.item ? qobject_cast<ui::ColorMatrixCardWidget*>(fixture.item->cardWidget())
+                                  : nullptr;
+        if (card == nullptr)
+            return expect(false, "Color Matrix draws its grid");
+        QApplication::processEvents();
+        const auto shown = [&] {
+            int count = 0;
+            for (int row = 0; row < 4; ++row)
+                for (int column = 0; column < 4; ++column)
+                    count += card->cell(row, column)->isVisibleTo(card) ? 1 : 0;
+            return count;
+        };
+        expect(card->side() == 3 && shown() == 9 && !card->cell(3, 0)->isVisibleTo(card) &&
+                   !card->cell(0, 3)->isVisibleTo(card),
+               "3 x 3 shows nine cells: no alpha row and no alpha column");
+        expect(card->cell(0, 0)->value() == 1.0 && card->cell(0, 1)->value() == 0.0 &&
+                   card->cell(2, 2)->value() == 1.0,
+               "the grid reads the document: a new matrix is the identity");
+        expect(!card->showsRole("rg") && !card->showsRole("aa") && card->showsRole("preset") &&
+                   card->showsRole("matrixSize"),
+               "the elements' rows wait behind the grid; the choices keep their rows");
+        // One edit of a cell (a scrub, a typed number) is one command.
+        auto* cell = card->cell(0, 1);
+        const auto commands = fixture.stack.size();
+        emit cell->editStarted();
+        cell->setValue(0.25);
+        cell->setValue(0.5);
+        emit cell->editFinished();
+        expect(oneCommand(fixture, commands) &&
+                   stored(fixture.session, fixture.node, "rg") == 0.5,
+               "editing a cell writes Red from green as one command");
+        expect(undo(fixture) && stored(fixture.session, fixture.node, "rg") == 0.0,
+               "one undo restores the element");
+        QApplication::processEvents();
+        expect(card->cell(0, 1)->value() == 0.0, "the cell follows the undo");
+        capture(fixture, QStringLiteral("638-color-matrix-3x3"));
+        expect(fixture.session.setNodeParameterValue(fixture.node, "matrixSize",
+                                                     document::kColorMatrixSize4,
+                                                     QStringLiteral("Set")),
+               "the size is set through a command");
+        QApplication::processEvents();
+        expect(card->side() == 4 && shown() == 16 && card->cell(3, 3)->value() == 1.0,
+               "4 x 4 shows all sixteen cells");
+        expect(paintsInsideCard(*fixture.item), "Color Matrix paints inside its card");
+        if (!cardContentFits(*fixture.item, "bloom.color-matrix"))
+            ++failures;
+        capture(fixture, QStringLiteral("638-color-matrix-4x4"));
+        // The Values button opens the elements' own rows, for keys and links.
+        card->valuesButton()->click();
+        QApplication::processEvents();
+        expect(card->showsRole("rg") && card->showsRole("aa"),
+               "Values shows the elements' rows with their sockets");
+        card->valuesButton()->click();
+        expect(fixture.session.setNodeParameterValue(fixture.node, "matrixSize",
+                                                     document::kColorMatrixSize3,
+                                                     QStringLiteral("Set")),
+               "the size is set back");
+        card->valuesButton()->click();
+        QApplication::processEvents();
+        expect(card->showsRole("rg") && !card->showsRole("aa") && !card->showsRole("ra"),
+               "in 3 x 3 the alpha elements have no rows either");
+        card->valuesButton()->click();
+        // A preset: the elements are not read, and the grid says so and is not editable.
+        expect(fixture.session.setNodeParameterValue(fixture.node, "preset", std::int64_t{2},
+                                                     QStringLiteral("Set")),
+               "a preset is chosen");
+        QApplication::processEvents();
+        auto* note = card->findChild<QLabel*>(QStringLiteral("colorMatrixPresetNote"));
+        expect(!card->cell(0, 0)->isEnabled() && note != nullptr && note->isVisibleTo(card),
+               "with a preset the grid is not editable and says why");
+        expect(paintsInsideCard(*fixture.item), "Color Matrix with a preset paints inside its card");
+        capture(fixture, QStringLiteral("638-color-matrix-preset"));
+    }
+}
+
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     ui::kit::installAfterlabTheme(application);
@@ -3592,6 +3878,13 @@ int main(int argc, char** argv) {
         if (failures != 0)
             return 1;
         std::cout << "PASS: Procedural Warp cards\n";
+        return 0;
+    }
+    if (qEnvironmentVariable("BLOOM_GRADING_CARDS_ONLY") == QStringLiteral("widget-rule")) {
+        widgetRuleCards();
+        if (failures != 0)
+            return 1;
+        std::cout << "PASS: widget rule cards\n";
         return 0;
     }
     if (qEnvironmentVariable("BLOOM_GRADING_CARDS_ONLY") == QStringLiteral("quantize")) {
@@ -3630,6 +3923,7 @@ int main(int argc, char** argv) {
     depthEffectCards();
     motionBlurCards();
     nodeControlCards();
+    widgetRuleCards();
     denoiseCard();
     linkedGradientStop();
     gradientBlendModes();

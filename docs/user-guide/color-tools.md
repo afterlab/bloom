@@ -54,6 +54,11 @@ its Mask to another node's **Mask** input. The formulas are in
 - **Saturation from** and **to**, and **Luma from** and **to**, limit the selection to a range of
   colorfulness and brightness. Luma can go above 1 to reach bright HDR values. Each has a softness.
 - **Invert selection** selects everything else. The Mask is as strong as the pixel is opaque.
+- On the node card and in Properties each window is a range on a strip of what it selects: the hue
+  circle, a saturation ramp and a luma ramp. Drag either end of a window; the part outside it is
+  shaded, and the softness shows as the shade fading in past each end. The hue window runs past
+  360 and comes back at 0. Each softness has a slider under its strip, and every number can still
+  be typed. A drag is one undo step.
 - To shift or scale hues without selecting, use the hue curves in Curves; the qualifier only selects.
 
 ## Color Matrix
@@ -73,4 +78,11 @@ models. Find it under **Color Correction** in the Add menu. The formulas are in
   1; HSL works on 0 to 1. Hue is a fraction of a turn; Lab's channels are divided by 100.
 - Color is mixed as straight color, so a soft edge keeps its color. A pixel with alpha 0 is not changed.
 
-Every element can be keyed or driven through its socket.
+The elements are shown as a grid on the node card and in Properties: a row for each result channel
+and a column for each channel it is made from. A 3 x 3 matrix shows no alpha row and no alpha
+column. Drag or type a number in a cell; each edit is one undo step. With a preset chosen the grid
+is not editable and says so.
+
+Every element can be keyed or driven through its socket. Right-click a cell to add or remove a key,
+or open **Values** under the grid to show each element as a row with its keyframe diamond and its
+socket.
