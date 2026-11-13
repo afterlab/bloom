@@ -23,7 +23,6 @@
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
-#include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/output/export_audio_sources.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
@@ -32,6 +31,8 @@
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+
+#include "playback_mix_reference.hpp"
 
 #include <algorithm>
 #include <array>
@@ -586,8 +587,6 @@ void testEffectChainExportsAsPlayback() {
     for (std::size_t frame = 0; frame < frames; ++frame)
         plane[frame] = static_cast<float>(
             0.25 * std::sin(2.0 * 3.141592653589793 * 440.0 * static_cast<double>(frame) / 48000.0));
-    const auto buffer = std::make_shared<const media::audio::AudioBuffer>(
-        media::audio::AudioBuffer{48000, 2, frames, {plane, plane}});
     const auto compiled = f.compiler.compile({currentSnapshot(f.session), f.composition()}, {});
     expect(compiled.plan != nullptr, "effects: the composition compiles");
     if (!compiled.plan)
@@ -598,29 +597,12 @@ void testEffectChainExportsAsPlayback() {
            "effects: the mix carries the layer's three effects");
     if (!mix || mix->clips.size() != 1)
         return;
-    const auto& description = mix->clips.front();
-    media::audio::playback::AudioClip clip{.buffer = buffer,
-                                           .startTime = description.startTime,
-                                           .level = static_cast<float>(description.level),
-                                           .muted = description.muted,
-                                           .solo = description.solo,
-                                           .endTime = description.endTime,
-                                           .mapTime = {}};
-    clip.effectKey = 1;
-    for (const auto& effect : description.effects)
-        clip.effects.push_back(media::audio::effects::makeEffectSettings(
-            static_cast<media::audio::effects::EffectKind>(effect.kind), effect.values,
-            effect.values));
-    auto backend = std::make_unique<media::audio::playback::NullBackend>();
-    auto* sink = backend.get();
-    media::audio::playback::AudioEngine engine(std::move(backend), {48000, 2, 16384});
-    engine.replaceClips({std::move(clip)});
-    expect(!engine.play(core::RationalTime{}) && !engine.renderForTesting(frames),
-           "effects: the playback mixer renders the programme");
-    const auto played = sink->captured();
-    expect(played.size() == 2 * frames, "effects: the playback mixer gives every frame");
-    if (played.size() != 2 * frames)
+    const auto reference = test::playbackMixReference(*mix, plane, 48000, frames);
+    expect(reference.has_value() && reference->size() == 2 * frames,
+           "effects: the playback mixer renders every frame of the programme");
+    if (!reference || reference->size() != 2 * frames)
         return;
+    const auto& played = *reference;
     double worst = 0.0, changed = 0.0;
     for (std::size_t index = 0; index < samples.size(); ++index) {
         worst = std::max(worst, std::abs(samples[index] - static_cast<double>(played[index])));

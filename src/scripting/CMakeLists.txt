@@ -163,13 +163,26 @@ if(BUILD_TESTING)
     # bytes as the previous direct attempt/publication route, kept verbatim in the test.
     add_executable(bloom_scripting_render_parity_test tests/render_parity_tests.cpp)
     target_include_directories(bloom_scripting_render_parity_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
-    target_link_libraries(bloom_scripting_render_parity_test PRIVATE bloom_scripting bloom_media_cache)
+    target_link_libraries(bloom_scripting_render_parity_test PRIVATE bloom_scripting)
     add_dependencies(bloom_scripting_render_parity_test bloom-media-worker)
     bloom_enable_warnings(bloom_scripting_render_parity_test)
     bloom_add_test(
         NAME bloom.scripting.render-parity
         COMMAND bloom_scripting_render_parity_test
         LABELS unit scripting host output
+        TIMEOUT 300
+    )
+    # #718: a render through the local source mirror. It spans scripting and the media cache, so
+    # its source is under tests/integration.
+    add_executable(bloom_scripting_render_source_mirror_test
+                   "${PROJECT_SOURCE_DIR}/tests/integration/render_source_mirror_tests.cpp")
+    target_link_libraries(bloom_scripting_render_source_mirror_test PRIVATE bloom_scripting
+                                                                            bloom_media_cache)
+    bloom_enable_warnings(bloom_scripting_render_source_mirror_test)
+    bloom_add_test(
+        NAME bloom.scripting.render-source-mirror
+        COMMAND bloom_scripting_render_source_mirror_test
+        LABELS unit scripting host output media
         TIMEOUT 300
     )
     # Project color settings: an external or project-relative OCIO configuration is selected, read

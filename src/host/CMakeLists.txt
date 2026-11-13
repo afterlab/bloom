@@ -381,6 +381,9 @@ if(BUILD_TESTING)
         target_include_directories(bloom_host_export_audio_formats_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
         target_link_libraries(bloom_host_export_audio_formats_test PRIVATE bloom_host
                                                                            bloom_commands)
+        # The playback mixer reference the effect chain test compares its export with.
+        target_include_directories(bloom_host_export_audio_formats_test PRIVATE
+            "${PROJECT_SOURCE_DIR}/tests/support")
         add_dependencies(bloom_host_export_audio_formats_test bloom-media-worker)
         # The movie with AAC written by the macOS encoder (tests/data/provenance.md).
         target_compile_definitions(bloom_host_export_audio_formats_test PRIVATE
