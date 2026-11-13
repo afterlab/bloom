@@ -232,6 +232,7 @@ target_sources(
         histogram_image_effect.cpp
         scope_frame_measure.cpp
         scope_measure.cpp
+        scope_trace_map.cpp
         statistics_image_effect.cpp
         audio_analysis.cpp
         audio_mix_render.cpp
@@ -374,6 +375,7 @@ target_sources(
             include/bloom/runtime/gpu_process_frame.hpp
             include/bloom/runtime/gpu_scope_measure.hpp
             include/bloom/runtime/scope_frame_measure.hpp
+            include/bloom/runtime/scope_picture.hpp
             include/bloom/runtime/gpu_processing_phase_policy.hpp
             include/bloom/runtime/packed_host_retirement.hpp
             include/bloom/runtime/gpu_ocio_wrapper.hpp

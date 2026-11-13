@@ -1,9 +1,11 @@
 #pragma once
 
 // #724 Scopes: the mapping from count tables to trace images (docs/architecture/scopes.md and the
-// Scopes specification, "Drawing the counts"). The tables are the truth; these functions are
-// presentation and have no effect on them. They are pure: they read a packed table and return an
-// image, so the panel runs them in a cancellable task on a worker and the interface thread only
+// Scopes specification, "Drawing the counts"). The mapping itself is Qt-free and lives in
+// runtime/scope_picture.hpp, where the headless scope image uses it too; this header wraps its
+// premultiplied 8-bit buffers in QImage for the panel. The tables are the truth; these functions
+// are presentation and have no effect on them. They are pure: they read a packed table and return
+// an image, so the panel runs them in a cancellable task on a worker and the interface thread only
 // paints the finished image.
 //
 // Trace brightness of a cell with count n and the largest count m of its table is
@@ -16,12 +18,12 @@
 
 #include <bloom/runtime/scope_frame_measure.hpp>
 #include <bloom/runtime/scope_measure.hpp>
+#include <bloom/runtime/scope_picture.hpp>
 
 #include <QImage>
 #include <QRgb>
 #include <QSize>
 
-#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -29,47 +31,26 @@
 
 namespace bloom::ui::scopes {
 
-enum class Kind : std::uint8_t { Waveform, Parade, Vectorscope, Histogram, Chromaticity };
-inline constexpr int kKindCount = 5;
+using runtime::scopes::Cancelled;
+using runtime::scopes::ClipSummary;
+using runtime::scopes::histogramChannelList;
+using runtime::scopes::HistogramChannels;
+using runtime::scopes::HistogramScale;
+using runtime::scopes::kChromaticityAxisMaximum;
+using runtime::scopes::kChromaticityXMaximum;
+using runtime::scopes::kChromaticityYMaximum;
+using runtime::scopes::Kind;
+using runtime::scopes::kKindCount;
+using runtime::scopes::kTraceFloor;
+using runtime::scopes::kVectorscopeCellLuma;
+using runtime::scopes::traceBrightness;
+using runtime::scopes::traceBrightnessGainDefault;
+using runtime::scopes::TraceColors;
+using runtime::scopes::waveformChannelList;
+using runtime::scopes::WaveformChannels;
 
-enum class WaveformChannels : std::uint8_t { Rgb, Luma };
-enum class HistogramChannels : std::uint8_t { Rgb, Luma, RgbAndLuma };
-enum class HistogramScale : std::uint8_t { Linear, Logarithmic };
-
-// The least brightness of a cell that holds at least one pixel.
-inline constexpr float kTraceFloor = 0.15F;
-// The Chromaticity table's extent in x and y; the scope's axes run 0 to 1.
-inline constexpr double kChromaticityXMaximum = 0.8;
-inline constexpr double kChromaticityYMaximum = 0.9;
-inline constexpr double kChromaticityAxisMaximum = 1.0;
-// The luma at which the Vectorscope's cells take their color.
-inline constexpr float kVectorscopeCellLuma = 0.7F;
-
-// Red, green, blue and luma trace colors.
-struct TraceColors final {
-    std::array<QRgb, 4> channel{};
-};
-
-[[nodiscard]] constexpr float traceBrightnessGainDefault() noexcept { return 1.0F; }
-
-// 0 for a cell with no pixel; otherwise in [kTraceFloor, 1].
-[[nodiscard]] float traceBrightness(std::uint32_t count, std::uint32_t largest,
-                                    float gain) noexcept;
-
-using Cancelled = std::function<bool()>;
-
-// What the tables say about clipping, for the clip ticks and markers the panel draws.
-struct ClipSummary final {
-    // Histogram: red, green, blue, luma.
-    std::array<std::uint32_t, 4> under{};
-    std::array<std::uint32_t, 4> over{};
-    // Waveform: per table column, bit 0 under and bit 1 over, for the channels drawn.
-    std::vector<std::uint8_t> columns;
-};
-
-// The channels each choice draws.
-[[nodiscard]] std::vector<std::uint32_t> waveformChannelList(WaveformChannels channels);
-[[nodiscard]] std::vector<std::uint32_t> histogramChannelList(HistogramChannels channels);
+// A premultiplied buffer of the Qt-free mapping as a QImage (a copy; null for an empty buffer).
+[[nodiscard]] QImage toQImage(const runtime::scopes::ScopeImage& image);
 
 // `size` is the image's size in pixels. A null image comes back for a cancelled call, a table that
 // was not measured or an empty size.
