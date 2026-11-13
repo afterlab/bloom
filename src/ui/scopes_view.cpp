@@ -310,7 +310,11 @@ void ScopeView::paintEvent(QPaintEvent* const event) {
         painter.drawText(toQRectF(graticule.plot)
                              .adjusted(kit::px(kit::Spacing::XS), kit::px(kit::Spacing::XS),
                                        -kit::px(kit::Spacing::XS), 0),
-                         Qt::AlignLeft | Qt::AlignTop, tr("Behind"));
+                         // The Histogram's rows carry their channel letters at the top left.
+                         kind_ == scopes::Kind::Histogram
+                             ? static_cast<int>(Qt::AlignRight | Qt::AlignTop)
+                             : static_cast<int>(Qt::AlignLeft | Qt::AlignTop),
+                         tr("Behind"));
     }
 }
 

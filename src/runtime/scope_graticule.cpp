@@ -132,8 +132,12 @@ class Builder final {
         case Kind::Chromaticity: {
             const double left = measure("1.0", LabelFont::Numeric).width + small * 2;
             const double bottom = std::ceil(labelHeight) + small * 2;
-            const double side = std::max(1.0, std::min(width - left - pad, height - bottom - pad));
-            plan_.plot = Rect{left + (width - left - pad - side) / 2, pad, side, side};
+            // The last x label is centered on the plot's right edge: keep room for half of it.
+            const double right =
+                std::max(pad, std::ceil(measure("1.0", LabelFont::Numeric).width / 2) + small);
+            const double side =
+                std::max(1.0, std::min(width - left - right, height - bottom - pad));
+            plan_.plot = Rect{left + (width - left - right - side) / 2, pad, side, side};
             plan_.image =
                 Rect{plan_.plot.left(), plan_.plot.bottom() - side * kChromaticityYMaximum,
                      side * kChromaticityXMaximum, side * kChromaticityYMaximum};
