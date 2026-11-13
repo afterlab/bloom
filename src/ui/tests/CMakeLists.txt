@@ -2298,6 +2298,17 @@ bloom_add_test(
 # re-stamp) and other-project retention under a standalone no-policy cache, while same-project older
 # revisions are still dropped. It builds genuine CPU reference frames and never creates a GPU device,
 # so it registers unconditionally and always runs.
+# #724 Scopes: the controller behind the Scopes panel over genuine CPU frames; no device.
+add_executable(bloom_ui_scopes_controller_test scopes_controller_tests.cpp)
+target_link_libraries(bloom_ui_scopes_controller_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_scopes_controller_test)
+bloom_add_test(
+    NAME bloom.ui.scopes-controller
+    COMMAND bloom_ui_scopes_controller_test
+    LABELS ui unit cache
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
 add_executable(bloom_ui_preview_frame_cache_cpu_edge_test preview_frame_cache_cpu_edge_tests.cpp)
 add_executable(bloom_ui_preview_frame_trace_test preview_frame_trace_tests.cpp)
 target_link_libraries(bloom_ui_preview_frame_trace_test PRIVATE bloom_ui)

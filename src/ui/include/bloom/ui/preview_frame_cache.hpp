@@ -4,6 +4,8 @@
 
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
+#include <bloom/runtime/scope_frame_measure.hpp>
+#include <bloom/runtime/scope_measure.hpp>
 
 #include <QObject>
 #include <QTimer>
@@ -74,6 +76,42 @@ struct PreviewFrameCacheKey final {
 };
 
 using PreparedPreviewFrameHandle = std::shared_ptr<const runtime::PreparedPreviewFrame>;
+
+// #724 Scopes: what a scope measure of a frame depends on besides the frame's own key. The
+// Viewer's exposure and gamma are here because a cached frame is always the neutral one: the
+// adjusted picture the Viewer shows is derived from it and never cached.
+struct PreviewScopeIdentity final {
+    runtime::ScopeMeasureSettings settings;
+    runtime::ViewAdjust viewAdjust{};
+
+    friend bool operator==(const PreviewScopeIdentity&, const PreviewScopeIdentity&) = default;
+};
+
+// The scope count tables of one cached frame (docs/architecture/scopes.md): a sidecar of its cache
+// entry, charged to the cache's byte budget and dropped with the frame.
+struct PreviewScopeSidecar final {
+    PreviewScopeIdentity identity;
+    runtime::ScopeTables tables; // packed; names the route that counted
+    runtime::ScopeMeasuredArea area;
+    // Why the CPU reference counted a frame of the device route; empty otherwise.
+    std::string note;
+    // The signal's color objects (shared by every frame of the signal): the luma coefficients and
+    // the primaries and white the graticules draw. Null when they could not be prepared.
+    std::shared_ptr<const runtime::ScopeSignalColor> color;
+
+    [[nodiscard]] std::size_t byteSize() const noexcept {
+        return sizeof(PreviewScopeSidecar) + tables.byteSize() + note.size();
+    }
+};
+using PreviewScopeSidecarHandle = std::shared_ptr<const PreviewScopeSidecar>;
+
+// What measuring a cached frame again needs: the request it answered, the plan it was evaluated
+// from and the route that prepared it.
+struct PreviewScopeSource final {
+    runtime::PreviewRequestIdentity identity;
+    runtime::ProcessFrameIdentity process;
+    runtime::PreviewDisplayProvider provider = runtime::PreviewDisplayProvider::CpuReference;
+};
 
 // The RAM preview cache: prepared preview frames held in memory under a byte budget, so that
 // playing a range a second time, or stepping back to a frame already rendered, costs a lookup
@@ -213,6 +251,20 @@ class PreviewFrameCache final : public QObject {
     void setFrameTrace(std::shared_ptr<PreviewFrameTrace> trace) { trace_ = std::move(trace); }
 
     [[nodiscard]] bool contains(const PreviewFrameCacheKey& key) const;
+
+    // #724 Scopes. Attaches `sidecar` to the live entry of `key`, replacing the one it had. Its
+    // bytes are charged to the byte budget: older frames are evicted for it as for a frame, and a
+    // sidecar that still does not fit is not kept. False when there is no such entry or no room.
+    // Neither the frame's pixels nor its place in the eviction order change.
+    bool attachScopes(const PreviewFrameCacheKey& key, PreviewScopeSidecarHandle sidecar);
+    // The sidecar of `key`'s live entry when it was measured under `identity`; null otherwise.
+    [[nodiscard]] PreviewScopeSidecarHandle scopesFor(const PreviewFrameCacheKey& key,
+                                                      const PreviewScopeIdentity& identity) const;
+    // The request, plan and route of `key`'s live entry; nothing when there is none.
+    [[nodiscard]] std::optional<PreviewScopeSource>
+    scopeSourceFor(const PreviewFrameCacheKey& key) const;
+    // Host bytes the sidecars hold now; part of hostBytes().
+    [[nodiscard]] std::size_t scopeSidecarBytes() const noexcept { return scopeBytes_; }
     // Cached times for exactly this project/composition/revision/resolution/display policy.
     // The probe time is ignored. UI consumers do not scan the composition's entire duration.
     [[nodiscard]] std::vector<core::RationalTime> timesFor(const PreviewFrameCacheKey& probe) const;
@@ -344,6 +396,9 @@ class PreviewFrameCache final : public QObject {
         // live only while its lease is; an invalidated lease is never a hit and never listed.
         std::shared_ptr<const runtime::PreviewResidentDisplayFrame> resident;
         std::size_t bytes = 0;
+        // #724: the frame's scope tables, host memory whatever the frame's own storage is.
+        PreviewScopeSidecarHandle scopes;
+        std::size_t scopeBytes = 0;
         EntryIterator self{};
         RangeIndex::iterator rangePosition{};
         std::optional<std::list<EntryIterator>::iterator> residentPosition{};
@@ -394,6 +449,8 @@ class PreviewFrameCache final : public QObject {
     // GPU-resident accounting, distinct from the all-entry totals above.
     std::size_t gpuResidentBytes_ = 0;
     std::size_t gpuResidentEntries_ = 0;
+    // #724: the scope sidecars' bytes, always host memory.
+    std::size_t scopeBytes_ = 0;
     std::size_t gpuResidentByteLimit_ = std::numeric_limits<std::size_t>::max();
     std::size_t gpuResidentEntryLimit_ = std::numeric_limits<std::size_t>::max();
     std::optional<bool> displayQualified_;

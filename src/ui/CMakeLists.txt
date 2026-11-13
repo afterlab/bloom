@@ -585,6 +585,7 @@ target_sources(
         qt_font_transport.hpp
         tool_controller.cpp
         composition_thumbnail_controller.cpp
+        scopes_controller.cpp
         curve_graph.cpp
         grade_wheels.cpp
         grading_controls.cpp
@@ -809,6 +810,7 @@ target_sources(
             include/bloom/ui/layer_alignment_actions.hpp
             include/bloom/ui/tool_controller.hpp
             include/bloom/ui/composition_thumbnail_controller.hpp
+            include/bloom/ui/scopes_controller.hpp
             include/bloom/ui/curve_graph.hpp
             include/bloom/ui/grade_wheels.hpp
             include/bloom/ui/grading_controls.hpp

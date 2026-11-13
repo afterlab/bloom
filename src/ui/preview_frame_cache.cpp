@@ -144,7 +144,7 @@ PreviewFrameCache::PreviewFrameCache(const std::size_t byteBudget,
         [this] {
             const auto host = hostBytes();
             return runtime::MemoryPoolHolding{.hostBytes = host,
-                                              .deviceBytes = residentBytes_ - host};
+                                              .deviceBytes = residentBytes_ + scopeBytes_ - host};
         },
         [this](const std::size_t bytes) {
             const bool pressure = ledger_.state().retentionPercent < 100;
@@ -350,8 +350,12 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
             return refuse();
         // Prepare every allocating part before changing qualification, revisions or ownership.
         allocationCheckpoint(InsertAllocation::Product);
-        Entry incoming{
-            .key = std::move(key), .frame = nullptr, .resident = nullptr, .bytes = bytes};
+        Entry incoming{.key = std::move(key),
+                       .frame = nullptr,
+                       .resident = nullptr,
+                       .bytes = bytes,
+                       .scopes = nullptr,
+                       .scopeBytes = 0};
         if (resident)
             incoming.resident = frame->residentFrame();
         else
@@ -494,6 +498,56 @@ bool PreviewFrameCache::contains(const PreviewFrameCacheKey& key) const {
     return found != exactIndex_.end() && entryIsLive(*found->second);
 }
 
+bool PreviewFrameCache::attachScopes(const PreviewFrameCacheKey& key,
+                                     PreviewScopeSidecarHandle sidecar) {
+    const auto found = exactIndex_.find(key);
+    if (sidecar == nullptr || found == exactIndex_.end() || !entryIsLive(*found->second))
+        return false;
+    const auto position = found->second;
+    const auto bytes = sidecar->byteSize();
+    scopeBytes_ -= position->scopeBytes;
+    position->scopes = std::move(sidecar);
+    position->scopeBytes = bytes;
+    scopeBytes_ += bytes;
+    // Older frames give way as they do for a frame; this entry is never its own victim.
+    while (hostBytes() > byteBudget_) {
+        const auto victim = byteBudgetVictim(position);
+        if (victim == entries_.end()) {
+            scopeBytes_ -= bytes;
+            position->scopes.reset();
+            position->scopeBytes = 0;
+            return false;
+        }
+        ++statistics_.evictions;
+        counters_.evicted(victim->bytes);
+        removeAt(victim);
+    }
+    return true;
+}
+
+PreviewScopeSidecarHandle PreviewFrameCache::scopesFor(const PreviewFrameCacheKey& key,
+                                                       const PreviewScopeIdentity& identity) const {
+    const auto found = exactIndex_.find(key);
+    if (found == exactIndex_.end() || !entryIsLive(*found->second))
+        return nullptr;
+    const auto& scopes = found->second->scopes;
+    return scopes != nullptr && scopes->identity == identity ? scopes : nullptr;
+}
+
+std::optional<PreviewScopeSource>
+PreviewFrameCache::scopeSourceFor(const PreviewFrameCacheKey& key) const {
+    const auto found = exactIndex_.find(key);
+    if (found == exactIndex_.end() || !entryIsLive(*found->second))
+        return std::nullopt;
+    const Entry& entry = *found->second;
+    if (entry.resident != nullptr)
+        return PreviewScopeSource{entry.resident->desiredIdentity(),
+                                  entry.resident->processIdentity(),
+                                  runtime::PreviewDisplayProvider::GpuResident};
+    return PreviewScopeSource{entry.frame->desiredIdentity(), entry.frame->processIdentity(),
+                              entry.frame->provenance().provider};
+}
+
 std::vector<core::RationalTime>
 PreviewFrameCache::timesFor(const PreviewFrameCacheKey& probe) const {
     const auto lastTime = core::RationalTime::fromInteger(std::numeric_limits<std::int64_t>::max());
@@ -560,6 +614,7 @@ void PreviewFrameCache::releaseForShutdown() noexcept {
     residentBytes_ = 0;
     gpuResidentBytes_ = 0;
     gpuResidentEntries_ = 0;
+    scopeBytes_ = 0;
     retentionRange_.reset();
     retentionSnapshots_.clear();
 }
@@ -577,6 +632,7 @@ void PreviewFrameCache::clear() {
     residentBytes_ = 0;
     gpuResidentBytes_ = 0;
     gpuResidentEntries_ = 0;
+    scopeBytes_ = 0;
     residentRefreshTimer_.stop();
     if (hadEntries)
         emit entriesCleared();
@@ -677,7 +733,7 @@ void PreviewFrameCache::setRetentionRange(std::optional<RetentionRange> range) {
 }
 
 std::size_t PreviewFrameCache::hostBytes() const noexcept {
-    return deviceBudgeted() ? residentBytes_ - gpuResidentBytes_ : residentBytes_;
+    return (deviceBudgeted() ? residentBytes_ - gpuResidentBytes_ : residentBytes_) + scopeBytes_;
 }
 
 PreviewFrameCache::EntryIterator PreviewFrameCache::byteBudgetVictim(const EntryIterator keep) {
@@ -714,6 +770,7 @@ void PreviewFrameCache::removeAt(const EntryIterator position) {
                            : static_cast<std::uint8_t>(entry.frame->provenance().provider));
     }
     residentBytes_ -= entry.bytes;
+    scopeBytes_ -= entry.scopeBytes;
     if (entry.resident != nullptr) {
         gpuResidentBytes_ -= entry.bytes;
         --gpuResidentEntries_;
