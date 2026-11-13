@@ -129,8 +129,14 @@ Each shape and text is then covered through the composed matrix at the output re
 parented shape layer is, on the CPU reference and the GPU alike; a gradient is still drawn in its
 own window and resampled (it is a smooth ramp, and its matte's edge is the shape's). The layer
 reports its own box: `CompiledLayerOutput::composedArtwork` names the carrier and the drawn layers,
-and both routes publish the union of their content bounds through the carrier's matrix as the
-layer's local box, polygon and anchor (`detail::publishComposedArtworkBounds`), so the Viewer's box,
+and both routes publish what the artwork shows of their content bounds through the carrier's
+matrix as the layer's local box, polygon and anchor (`detail::publishComposedArtworkBounds`). What
+it shows is read through the track mattes of the expansion (`detail::visibleArtworkBounds`): a
+shape clipped by a clip path or a mask, and a gradient painted through an outline, count only
+where they overlap their matte source, and a matte source counts for nothing by itself. So the box
+is the drawn artwork, whatever the file's viewBox and however far a clipped shape or a gradient
+reaches past it; an editable import's root layer reports the same box, plus at most the two
+pixels a track matte's data window keeps around what it shows. So the Viewer's box,
 handles and gestures see the layer as before.
 
 Only a layer the composition cannot change is composed: the node feeds it directly and nothing else

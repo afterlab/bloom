@@ -733,6 +733,92 @@ const document::DataBlockRecord& blockOf(const Fixture& fixture) {
 // One plan per revision; an animated transform renders every frame from it. A block is parsed once
 // per digest: a new revision, another layer of the same file and an edited parameter read the kept
 // scene; a different file is parsed.
+// #712: the layer's box is the artwork that is drawn, not every shape's whole outline. A shape
+// larger than its clip path or mask, a gradient larger than the outline it is painted through and
+// the matte sources themselves used to widen the box (a gradient-filled icon boxed the whole
+// frame). Each file's viewBox (512 x 512) differs from its content bounds; the composition is the
+// viewBox's size and the artwork is not fitted, so artwork coordinates are frame coordinates.
+void boxIsWhatTheArtworkShows() {
+    struct Case final {
+        std::string name;
+        std::string body;
+        runtime::ContentBounds shown; // left, top, right, bottom of the drawn artwork
+        bool matted;
+    };
+    const std::vector<Case> cases{
+        {"plain", R"svg(<rect x="156" y="206" width="200" height="100" fill="#f00"/>)svg", {156, 206, 356, 306}, false},
+        {"clip path",
+         R"svg(<defs><clipPath id="c"><rect x="100" y="100" width="300" height="300"/></clipPath></defs>
+<g clip-path="url(#c)"><rect x="-400" y="150" width="1400" height="100" fill="#00f"/></g>)svg",
+         {100, 150, 400, 250}, true},
+        {"shape inside its clip path",
+         R"svg(<defs><clipPath id="c"><rect x="50" y="50" width="400" height="400"/></clipPath></defs>
+<rect x="200" y="200" width="60" height="40" fill="#00f" clip-path="url(#c)"/>)svg",
+         {200, 200, 260, 240}, true},
+        {"gradient",
+         R"svg(<defs><linearGradient id="g"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#000"/></linearGradient></defs>
+<rect x="176" y="186" width="160" height="140" fill="url(#g)"/>)svg",
+         {176, 186, 336, 326}, true},
+        {"mask",
+         R"svg(<defs><mask id="m"><rect x="200" y="200" width="100" height="100" fill="#fff"/></mask></defs>
+<rect x="-400" y="150" width="1400" height="200" fill="#00f" mask="url(#m)"/>)svg",
+         {200, 200, 300, 300}, true},
+    };
+    const auto near = [](const runtime::ContentBounds& a, const runtime::ContentBounds& b, const double slack) {
+        return std::abs(a.left - b.left) <= slack && std::abs(a.top - b.top) <= slack &&
+               std::abs(a.right - b.right) <= slack && std::abs(a.bottom - b.bottom) <= slack;
+    };
+    for (const auto& item : cases) {
+        const auto label = "box (" + item.name + ")";
+        const auto file = writeSvg("box", R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">)svg" +
+                                              item.body + "</svg>");
+        const auto boxOf = [&](Fixture& fixture, const std::string& which) -> std::optional<runtime::EvaluatedOperationBounds> {
+            const auto plan = compilePlan(fixture.document, fixture.main, label + " " + which);
+            const auto evaluated = plan ? evaluate(plan, frame(0), label + " " + which) : std::nullopt;
+            const auto* bounds = evaluated ? boundsOf(*evaluated->frame, fixture.art) : nullptr;
+            expect(bounds != nullptr && !bounds->local.empty(), label + ": the " + which + " publishes its bounds");
+            return bounds != nullptr ? std::optional(*bounds) : std::nullopt;
+        };
+        Fixture layer(file, commands::SvgImportMode::Layer, 512, 512, false);
+        Fixture shapes(file, commands::SvgImportMode::Shapes, 512, 512, false);
+        const auto one = boxOf(layer, "layer");
+        const auto editable = boxOf(shapes, "editable import");
+        if (!one || !editable)
+            continue;
+        expect(near(one->local, item.shown, 1e-6) && near(one->output, item.shown, 1e-6),
+               label + ": the layer's box is the drawn artwork, not its viewBox or its unclipped shapes (" +
+                   std::to_string(one->local.left) + ", " + std::to_string(one->local.top) + ", " +
+                   std::to_string(one->local.right) + ", " + std::to_string(one->local.bottom) + ")");
+        // The editable import's root layer reports its picture's data window. Unmatted that is the
+        // same box exactly; a track matte's window keeps a margin of at most two pixels around what
+        // it shows, so there the two imports agree to within that margin and never by more.
+        expect(near(editable->output, one->output, item.matted ? 2.0 : 1e-6) &&
+                   editable->output.left <= one->output.left + 1e-6 && editable->output.top <= one->output.top + 1e-6 &&
+                   editable->output.right >= one->output.right - 1e-6 && editable->output.bottom >= one->output.bottom - 1e-6,
+               label + ": one layer and editable shapes give the same overall box (" +
+                   std::to_string(editable->output.left) + ", " + std::to_string(editable->output.top) + ", " +
+                   std::to_string(editable->output.right) + ", " + std::to_string(editable->output.bottom) + ")");
+
+        // Turned and scaled, the layer's own box is unchanged and its polygon is that box through
+        // the layer's matrix: the box follows the artwork, it does not grow to a turned picture's.
+        setTransform(layer, layer.art, {1.5, 0.75}, 33.0);
+        const auto turned = boxOf(layer, "turned layer");
+        if (!turned)
+            continue;
+        expect(near(turned->local, item.shown, 1e-6), label + ": a turned layer keeps the artwork's own box");
+        const double width = item.shown.right - item.shown.left;
+        const double height = item.shown.bottom - item.shown.top;
+        const double radians = 33.0 * 3.14159265358979323846 / 180.0;
+        const auto edge = [&](const std::size_t from, const std::size_t to) {
+            return std::hypot(turned->polygon[to].x - turned->polygon[from].x, turned->polygon[to].y - turned->polygon[from].y);
+        };
+        expect(std::abs(edge(0, 1) - width * 1.5) < 1e-6 && std::abs(edge(0, 3) - height * 0.75) < 1e-6 &&
+                   std::abs(std::atan2(turned->polygon[1].y - turned->polygon[0].y, turned->polygon[1].x - turned->polygon[0].x) -
+                            radians) < 1e-9,
+               label + ": the turned polygon is the artwork's box scaled and turned with the layer");
+    }
+}
+
 void oneCompilePerRevisionAndOneParsePerFile() {
     const auto file = writeSvg("identity", kComposite);
     const auto other = writeSvg("identity-other", kIcon);
@@ -2455,6 +2541,7 @@ int main() {
         savedAndReopenedWithTheFileGone();
         sharpWhenScaledAndTurned();
         boundsFollowTheLayer();
+        boxIsWhatTheArtworkShows();
         oneCompilePerRevisionAndOneParsePerFile();
         cancellation();
         budgetAdmissionAndRetirement();
