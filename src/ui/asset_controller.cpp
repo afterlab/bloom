@@ -2563,6 +2563,7 @@ void AssetController::startThumbnails() {
         });
     if (submission.accepted()) {
         preview_ = std::move(submission.handle);
+        ++thumbnailJobsStarted_;
         previewPending_ = true;
         previewDirty_ = false;
         assetsDirty_ = false;

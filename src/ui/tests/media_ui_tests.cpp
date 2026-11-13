@@ -617,9 +617,19 @@ void run() {
     require(QFile::remove(directory.filePath("still.png")), "remove fixture media file");
     // Freshness never follows the playhead (bug #401), and an edit that leaves the assets alone
     // looks at no file either (#718): Verify footage is what notices the missing file.
-    setSource("loopMode", std::int64_t{1});
-    QTest::qWait(200);
-    require(!controller.missing(still), "an unrelated edit probes no source file");
+    // The controller decides what a revision needs when it is published, so the proof is that
+    // nothing was asked of the worker: no job started, none is pending, and no file was looked at.
+    {
+        const auto jobs = controller.thumbnailJobsStarted();
+        const auto work = platform::sourceReadWork();
+        setSource("loopMode", std::int64_t{1});
+        QApplication::processEvents();
+        const auto settled = platform::sourceReadWork();
+        require(controller.thumbnailJobsStarted() == jobs && !controller.thumbnailsPending() &&
+                    !controller.busy() && settled.identityChecks == work.identityChecks &&
+                    settled.fullReads == work.fullReads && !controller.missing(still),
+                "an unrelated edit probes no source file");
+    }
     controller.verifyFootage();
     timer.restart();
     while (!controller.missing(still) && timer.elapsed() < 15000)
@@ -708,15 +718,14 @@ void playbackStartsNoMediaJobs() {
         commands::Transaction more("Add Layer", session.snapshot().revision());
         more.emplace<commands::AddImageLayer>(session.compositionId(),
                                               session.snapshot().project().assets().front().id);
+        // The decision is made when the revision is published: no job is handed to the worker
+        // and none is left pending, so nothing can read a file afterwards.
+        const auto jobs = controller.thumbnailJobsStarted();
         require(session.executeTransaction(std::move(more)).succeeded(), "one more layer");
-        bool job = false;
-        timer.restart();
-        while (timer.elapsed() < 600) {
-            QTest::qWait(20);
-            job = job || controller.thumbnailsPending();
-        }
+        QApplication::processEvents();
         const auto settled = platform::sourceReadWork();
-        require(!job && settled.fullReads == edit.fullReads &&
+        require(controller.thumbnailJobsStarted() == jobs && !controller.thumbnailsPending() &&
+                    !controller.busy() && settled.fullReads == edit.fullReads &&
                     settled.identityChecks == edit.identityChecks,
                 "an edit that leaves the assets alone starts no thumbnail job (#718)");
     }

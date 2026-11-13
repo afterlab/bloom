@@ -267,6 +267,12 @@ class AssetController final : public QObject {
     [[nodiscard]] bool thumbnailsPending() const noexcept {
         return previewPending_ || previewDirty_;
     }
+    // How many thumbnail jobs have been handed to the worker. A document revision decides at once,
+    // on the UI thread, whether it needs one (refresh()), so an edit that needs none leaves this
+    // and thumbnailsPending() as they were the moment the edit returns.
+    [[nodiscard]] std::uint64_t thumbnailJobsStarted() const noexcept {
+        return thumbnailJobsStarted_;
+    }
     void cancel();
     // Prevent thumbnail decode submissions while an application cache purge drains its old
     // generation. Import/probe work does not access the shared decoded-frame store.
@@ -472,6 +478,7 @@ class AssetController final : public QObject {
     bool assetsDirty_ = true;
     bool previewIncludesAssets_ = false;
     std::uint64_t contentGeneration_ = 0;
+    std::uint64_t thumbnailJobsStarted_ = 0;
     std::uint64_t previewContentGeneration_ = 0;
 };
 } // namespace bloom::ui

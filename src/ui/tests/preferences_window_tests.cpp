@@ -951,7 +951,11 @@ void testCaptureGeneralPage(Expectations&) {
             rail->setCurrentRow(row);
     window.addLocalCopyFolder(QDir::rootPath() + QStringLiteral("projects/shots"));
     window.resize(900, window.height());
-    QTest::qWait(100);
+    // The page is laid out and polished before it is captured: the posted layout requests are
+    // delivered, not waited for.
+    window.ensurePolished();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+    QCoreApplication::processEvents();
     (void)window.grab().save(QDir(directory).filePath(
         QStringLiteral("preferences-memory-%1.png")
             .arg(window.devicePixelRatioF() > 1.0 ? QStringLiteral("dpr15")
