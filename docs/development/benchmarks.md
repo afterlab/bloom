@@ -637,6 +637,9 @@ Recorded runs: [RTX 4090 / Ryzen 7 9700X / 64 GB, main 8626d3918, after #544 and
 
 ## Node cost
 
+The `*_node_bench_smoke` CTest runs named below are registered only with
+`-DBLOOM_ENABLE_BENCH_TESTS=ON` (label `bench`); the benchmark programs are always built.
+
 Every new processing node ships with a cost case: `run_bench.py nodes` runs each native node
 bench listed in `bench_spec.NODE_BENCHES` under the GPU lock and writes
 `<work-dir>/results/<UTC timestamp>-nodes[-label].json` and `.md`. A node bench builds each case

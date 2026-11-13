@@ -1383,7 +1383,8 @@ retention paths (a silently replaced surface, an unproven retirement, a surface 
 target is live) keep at most one record per presenter and at most `kMaxQuarantinedTargets`
 generations per process, and the quarantine fuse then refuses new native targets.
 
-`bloom.ui.window_surface_memory_soak` qualifies this on the application-shaped workspace, the
+The stress test `bloom.ui.window_surface_memory_soak` (registered with
+`BLOOM_ENABLE_STRESS_TESTS`) qualifies this on the application-shaped workspace, the
 GPU-prepared packed service and a 2048x858 composition of four 16-bit RGBA PNG sequence layers. Each
 cycle moves the window to a 1.5x screen (Auto selects Full) and back to a 1x screen (Half), then
 resizes, maximizes and hides it, with the pointer resting over the Viewer a few pixels from its
@@ -1638,9 +1639,12 @@ sample the parked storage and the scene cache give back the difference before th
 Only reusable retention gives way for that reserve, never finished frames. The retention ceilings are
 planned against the device memory less the VRAM headroom. `render::GpuDeviceCreationOptions::
 device_memory_limit_bytes` caps every device-local heap in the allocator, so a test plans for a small
-card on any machine: `bloom.ui.gpu_packed_viewer_full100_12gib`, `_8gib` and `_6gib` fill the
-100-frame range at Full on a modelled 12, 8 and 6 GiB card with about one admitted phase per frame,
-and Bloom never owns more than the card. Before the change the 12 GiB run admitted 2433 phases for
+card on any machine. `bloom.runtime.gpu_admission_pressure` proves the plan for a 12, 8 and 6 GiB
+card with no device: a 100-frame fill never claims or owns more than the card, a frame that finds
+the card full waits, asks the caches for exactly its shortfall and is admitted once they gave it
+back, and no frame waits when the owner keeps the reserve free. The stress tests
+`bloom.ui.gpu_packed_viewer_full100_12gib`, `_8gib` and `_6gib` (`BLOOM_ENABLE_STRESS_TESTS`) fill
+the 100-frame range at Full on the modelled card and assert that Bloom never owns more than it. Before the change the 12 GiB run admitted 2433 phases for
 87 frames and did not finish.
 An export frame boundary reads the same rule (#709): a frame waiting for device room while the
 measured room is below the device ceiling waits, because the memory other programs hold can come

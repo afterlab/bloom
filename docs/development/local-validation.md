@@ -99,6 +99,37 @@ nonzero. Timeouts terminate the process group. The runner has no remote executio
 dispatch path: it rejects non-ccache compiler launchers and known remote compiler wrappers, and
 clears ccache remote-storage and prefix-command settings for commands it launches.
 
+## What belongs in the default suite
+
+A test proves one behavior at the smallest size that shows it. CPU/GPU parity is checked on a few
+small frames; a large size is used only where the size itself is the behavior. The default suite
+has no stress runs, no benchmarks, no assertions on elapsed wall time and no test whose result
+depends on the memory this machine happens to have free. A test that fails only sometimes is
+testing the wrong thing: test the logic directly with the budget, clock or asynchronous step
+injected.
+
+`bloom_add_test` (`cmake/BloomTesting.cmake`) registers three kinds of test only when asked:
+
+| Argument | Label | Configure option | For |
+|---|---|---|---|
+| `STRESS` | `stress` | `BLOOM_ENABLE_STRESS_TESTS` | large sizes, long fills, soaks, real-machine memory |
+| `BENCH` | `bench` | `BLOOM_ENABLE_BENCH_TESTS` | benchmark programs kept runnable at a smoke size |
+| `COMPOSITOR` | `compositor` | `BLOOM_ENABLE_COMPOSITOR_TESTS` | tests that need a private compositor session |
+
+All three options are off by default and the programs still build. A `COMPOSITOR` test would only
+exit as skipped without its session, so it is not registered at all unless the session is provided:
+a green default run says nothing about those tests, and does not pretend to.
+
+Shared test support lives in `tests/support`:
+
+- `fixed_memory_budget.hpp`: a constant host memory reading (16 GiB physical, 8 GiB available) in
+  the shape of the `HostMemorySampler` seam, and the size of the card a small GPU test plans for.
+- `await.hpp` and `await_qt.hpp`: `awaitCondition(name, predicate, limit)` and
+  `awaitQtCondition`. The result must be used; a timeout prints the condition's name and counts as
+  a failure through `awaitFailureCount()`.
+- `manual_clock.hpp`: a clock that moves only when the test moves it, for code that takes its time
+  source as a callable.
+
 The runner itself has a small local test suite:
 
 ```sh
