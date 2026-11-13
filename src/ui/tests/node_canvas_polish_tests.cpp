@@ -614,9 +614,10 @@ void testGlowingPathPresets() {
            ("undone, the card names the target again (" + colorLabel().toStdString() + ")").c_str());
 }
 
-// #509, #702: the canvas menu offers "Stroke Selected Text" and "Stroke Selected Layer's Masks". They
-// are disabled, saying why, until a layer that shows text (or has a path mask) is selected; then one
-// adds the stroke on its own layer, parented to the text's layer at the identity, in one undo step.
+// #509, #702: stroking a layer's letters or masks in place is a command on the selection. It is
+// offered on the node's own menu when the selected layer shows text (or has a path mask), and it is
+// not in the canvas menu, which adds nodes. One adds the stroke on its own layer, parented to the
+// text's layer at the identity, in one undo step.
 void testOutlineStrokeMenu() {
     Fixture f;
     const auto added = f.edit<commands::AddTextLayer>("Title", "Ag");
@@ -629,21 +630,32 @@ void testOutlineStrokeMenu() {
     const auto find = [&](QMenu* menu, const char* name) {
         return menu != nullptr ? menu->findChild<QAction*>(QString::fromUtf8(name)) : nullptr;
     };
-    f.session.clearSelection();
-    std::unique_ptr<QMenu> before(f.editor.contextMenuForTest());
-    auto* text = find(before.get(), "nodeAddOutlineStroke.text");
-    auto* masks = find(before.get(), "nodeAddOutlineStroke.masks");
-    expect(text != nullptr && masks != nullptr && !text->isEnabled() && !masks->isEnabled() &&
-               text->toolTip() == QStringLiteral("Select a layer first"),
-           "with nothing selected both strokes are offered disabled, saying why");
     f.session.selectNode(*textNode);
-    std::unique_ptr<QMenu> menu(f.editor.contextMenuForTest());
-    text = find(menu.get(), "nodeAddOutlineStroke.text");
-    masks = find(menu.get(), "nodeAddOutlineStroke.masks");
-    expect(text != nullptr && text->isEnabled(), "the selected text can be stroked");
-    expect(masks != nullptr && !masks->isEnabled() &&
-               masks->toolTip() == QStringLiteral("The selected layer has no path mask"),
-           "a text layer without masks has no masks to stroke");
+    {
+        // #702: the canvas menu (right-click on empty space) carries no stroke entry at all.
+        std::unique_ptr<QMenu> canvas(f.editor.contextMenuForTest());
+        bool strokes = false;
+        for (const auto* entry : canvas->findChildren<QAction*>())
+            strokes = strokes || entry->text().contains(QStringLiteral("Stroke Text")) ||
+                      entry->text().contains(QStringLiteral("selected"), Qt::CaseInsensitive) ||
+                      entry->objectName().startsWith(QStringLiteral("nodeAddOutlineStroke"));
+        expect(!strokes, "#702: the canvas menu has no stroke-the-selection entry");
+    }
+    std::unique_ptr<QMenu> menu(f.editor.contextMenuForTest(true));
+    auto* text = find(menu.get(), "nodeStrokeTextAction");
+    auto* masks = find(menu.get(), "nodeStrokeMasksAction");
+    expect(text != nullptr && text->isEnabled() && text->text() == QStringLiteral("Stroke Text"),
+           "the selected text's node offers Stroke Text");
+    expect(masks == nullptr, "a text layer without masks is not offered Stroke Masks");
+    {
+        const auto solid = f.add(document::kSolidSourceNodeType, {0, 600});
+        f.session.selectNode(solid);
+        std::unique_ptr<QMenu> other(f.editor.contextMenuForTest(true));
+        expect(find(other.get(), "nodeStrokeTextAction") == nullptr &&
+                   find(other.get(), "nodeStrokeMasksAction") == nullptr,
+               "a node whose layer shows no text and has no mask is offered neither");
+        f.session.selectNode(*textNode);
+    }
     if (text == nullptr)
         return;
     const auto layers = f.session.composition()->graph().layerOutputs().size();

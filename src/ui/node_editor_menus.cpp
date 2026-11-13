@@ -799,6 +799,36 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
                            });
             }
         }
+        // #509, #702: stroking the selected layer's letters or masks in place is a command on the
+        // selection, so it is offered here, on the node, when that layer shows text or has a path
+        // mask. It is not an entry of any menu that adds nodes: those list node names only. One
+        // undo step (commands::StrokeLayerOutline): the stroke's layer is parented to the layer at
+        // the identity, so it lies on them however the layer is placed.
+        for (const auto source :
+             {commands::OutlineStrokeSource::Text, commands::OutlineStrokeSource::Masks}) {
+            if (!outlineStrokeRefusal(scene_->canSubmit(), session_, source).isEmpty())
+                continue;
+            const bool text = source == commands::OutlineStrokeSource::Text;
+            action(text ? tr("Stroke Text") : tr("Stroke Masks"),
+                   text ? QStringLiteral("nodeStrokeTextAction")
+                        : QStringLiteral("nodeStrokeMasksAction"),
+                   [this, source, text] {
+                       const auto layer = session_.selection().contextualLayer;
+                       if (!layer ||
+                           !outlineStrokeRefusal(scene_->canSubmit(), session_, source).isEmpty())
+                           return;
+                       commands::Transaction transaction(text ? "Stroke Text" : "Stroke Masks",
+                                                         session_.snapshot().revision());
+                       transaction.emplace<commands::StrokeLayerOutline>(session_.compositionId(),
+                                                                         *layer, source);
+                       const auto result = scene_->submit(std::move(transaction));
+                       if (const auto id = result.outputId<document::NodeId>(
+                               commands::kOutlineStrokeStrokeOutput);
+                           result.succeeded() && id)
+                           session_.selectNode(*id);
+                       view_->setFocus(Qt::PopupFocusReason);
+                   });
+        }
         if (commands::canGroupNodes(graphComposition, session_.snapshot().ids(), nodes,
                                     commands::kDefaultNodeGroupName))
             action(tr("Group"), QStringLiteral("nodeGroupAction"),
@@ -845,39 +875,6 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
     addMenu->setObjectName(QStringLiteral("nodeAddMenu"));
     addMenu->setEnabled(session_.composition() != nullptr);
     populateAddMenu(addMenu);
-    // #509, #702: stroking the selected layer's letters or masks in place is an action on the
-    // selection, not a node, so it sits beside the Add Node submenu instead of among the node
-    // entries, whose rows carry only the node name. One undo step
-    // (commands::StrokeLayerOutline): the stroke's layer is parented to the layer at the identity,
-    // so it lies on them however the layer is placed.
-    for (const auto source :
-         {commands::OutlineStrokeSource::Text, commands::OutlineStrokeSource::Masks}) {
-        const bool text = source == commands::OutlineStrokeSource::Text;
-        auto* item = action(text ? tr("Stroke Selected Text") : tr("Stroke Selected Layer's Masks"),
-                            text ? QStringLiteral("nodeAddOutlineStroke.text")
-                                 : QStringLiteral("nodeAddOutlineStroke.masks"),
-                            [this, source, text] {
-                                const auto layer = session_.selection().contextualLayer;
-                                if (!layer || !outlineStrokeRefusal(scene_->canSubmit(), session_,
-                                                                    source)
-                                                   .isEmpty())
-                                    return;
-                                commands::Transaction transaction(text ? "Stroke Text"
-                                                                       : "Stroke Masks",
-                                                                  addRevision_);
-                                transaction.emplace<commands::StrokeLayerOutline>(
-                                    session_.compositionId(), *layer, source);
-                                const auto result = scene_->submit(std::move(transaction));
-                                if (const auto id = result.outputId<document::NodeId>(
-                                        commands::kOutlineStrokeStrokeOutput);
-                                    result.succeeded() && id)
-                                    session_.selectNode(*id);
-                                view_->setFocus(Qt::PopupFocusReason);
-                            });
-        const auto refusal = outlineStrokeRefusal(scene_->canSubmit(), session_, source);
-        item->setToolTip(refusal);
-        item->setEnabled(refusal.isEmpty());
-    }
     menu->addSeparator();
     auto* organize = menu->addMenu(tr("Organize"));
     organize->setObjectName(QStringLiteral("nodeOrganizeMenu"));

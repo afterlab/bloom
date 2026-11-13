@@ -519,9 +519,10 @@ request to play or export the composition; add an Output node (or undo) to play 
 composition without any Merge has nowhere to put a new layer, and adding one is refused with that
 reason until a Merge node is added.
 
-The node context menu's **Add Node** submenu lists nodes by name only; stroking the selected
-layer's letters or masks (#509) is an action beside it, **Stroke Selected Text** and **Stroke
-Selected Layer's Masks** (#702).
+The canvas menu's **Add Node** submenu and the header's **Add** menu list nodes by name only, and
+nothing else in the canvas menu acts on the selection (#702). Stroking a layer's letters or masks
+in place (#509) is a command of the node's own menu: **Stroke Text** when the selected layer shows
+text and **Stroke Masks** when it has a path mask, each one undo step.
 
 Mute, collapse, and dissolve are context-menu commands in this editor and bind no key; collapse is
 also the caret at the head of every card's title. The footer's Arrange button runs Arrange All, and the Delete Unused button beside it runs Delete

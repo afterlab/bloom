@@ -691,8 +691,10 @@ void testSearchKeyboardAndMenus() {
                  "and maps");
         hasGroup("Tracking & Analysis", {"Histogram", "Image Compare", "Image Statistics", "Audio Amplitude", "Audio Waveform", "Audio Spectrum"},
                  "Tracking & Analysis holds the analysis nodes");
-        // #702: every leaf under Add Node is a node (or preset) name; no row carries a
-        // descriptive sentence, and the in-place strokes sit beside the submenu, not in it.
+        // #702: every leaf of every menu that adds nodes (the canvas menu's Add Node submenu and
+        // the header's Add menu) is a node (or preset) name; no row carries a descriptive
+        // sentence, and neither menu, nor the canvas menu around the submenu, offers the in-place
+        // strokes (they are on the node's own menu).
         {
             std::function<void(QMenu*)> walk = [&](QMenu* parent) {
                 for (auto* entry : parent->actions()) {
@@ -710,10 +712,26 @@ void testSearchKeyboardAndMenus() {
                 }
             };
             walk(addMenu);
-            auto* strokeText = named(menu, "nodeAddOutlineStroke.text");
-            expect(strokeText != nullptr &&
-                       strokeText->text() == QStringLiteral("Stroke Selected Text"),
-                   "the in-place stroke is a separate action beside Add Node");
+            auto* headerAdd = f.editor.headerMenuForTest("add");
+            expect(headerAdd != nullptr && !headerAdd->actions().isEmpty(),
+                   "the header has an Add menu");
+            if (headerAdd != nullptr)
+                walk(headerAdd);
+            int leaves = 0;
+            for (auto* root : {addMenu, headerAdd})
+                if (root != nullptr)
+                    for (const auto* entry : root->findChildren<QAction*>())
+                        if (entry->menu() == nullptr && !entry->isSeparator() &&
+                            !entry->text().isEmpty())
+                            ++leaves;
+            expect(leaves > 200, "both Add menus were walked in full");
+            for (const auto* entry : menu->findChildren<QAction*>())
+                expect(!entry->text().contains(QStringLiteral("Stroke Selected")) &&
+                           !entry->text().contains(QStringLiteral("selected"), Qt::CaseInsensitive) &&
+                           !entry->objectName().startsWith(QStringLiteral("nodeAddOutlineStroke")),
+                       ("#702: the canvas menu has no stroke-the-selection entry: " +
+                        entry->text().toStdString())
+                           .c_str());
         }
         for (const auto* empty : {"Instances & Particles"})
             expect(addMenu->findChild<QMenu*>(QStringLiteral("nodeAddCategoryMenu.") +
