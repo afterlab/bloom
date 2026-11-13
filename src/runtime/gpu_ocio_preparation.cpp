@@ -283,9 +283,10 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
         return failure(GpuOcioPreparationError::InvalidRequest,
                        "the view adjustment is non-finite or out of domain");
     }
-    if (transform.kind != GpuOcioTransformKind::Display && !transform.viewAdjust.neutral()) {
+    if (transform.kind != GpuOcioTransformKind::Display &&
+        transform.kind != GpuOcioTransformKind::ScopeDisplay && !transform.viewAdjust.neutral()) {
         return failure(GpuOcioPreparationError::InvalidRequest,
-                       "a non-neutral view adjustment is only valid for the display kind");
+                       "a non-neutral view adjustment is only valid for the display kinds");
     }
     if (cancel && cancel()) {
         return failure(GpuOcioPreparationError::CompileCancelled, "cancelled before extraction");
@@ -317,6 +318,11 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
         case GpuOcioTransformKind::DisplayEffect:
             return color::buildOcioGpuProgramForDisplayEffect(config, transform.display,
                                                               transform.view);
+        case GpuOcioTransformKind::ScopeDisplay:
+            return color::buildOcioGpuProgramForScopeDisplay(config, transform.display,
+                                                             transform.view);
+        case GpuOcioTransformKind::ScopeXyz:
+            return color::buildOcioGpuProgramForScopeXyz(config, transform.fromId);
         case GpuOcioTransformKind::ExposureContrast:
             return color::buildOcioGpuProgramForExposureContrast(
                 config, transform.fromId, transform.exposure, transform.contrast);
@@ -325,11 +331,11 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
                 config, *transform.lutFile, transform.interpolation, transform.direction,
                 transform.processSpaceId, transform.workingSpaceId, {}, cancel);
         case GpuOcioTransformKind::SeparableBlur:
-            return detail::buildSeparableBlurProgram(transform.blurWeights, transform.blurVertical,
-                                                     static_cast<BlurEdgeMode>(transform.blurEdge),
-                                                     transform.blurCoverage ? BlurChannels::Coverage
-                                                                            : BlurChannels::Rgba,
-                                                     static_cast<SeparableBlurKind>(transform.blurKind));
+            return detail::buildSeparableBlurProgram(
+                transform.blurWeights, transform.blurVertical,
+                static_cast<BlurEdgeMode>(transform.blurEdge),
+                transform.blurCoverage ? BlurChannels::Coverage : BlurChannels::Rgba,
+                static_cast<SeparableBlurKind>(transform.blurKind));
         case GpuOcioTransformKind::LumaKey:
             return detail::buildLumaKeyProgram(transform.lumaKey);
         case GpuOcioTransformKind::ColorGrade:

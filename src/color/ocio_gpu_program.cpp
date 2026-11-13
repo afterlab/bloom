@@ -228,6 +228,15 @@ buildOcioGpuProgramForDisplayEffect(const ResolvedBloomNeutralConfig& resolved,
 }
 
 render::OcioGpuProgramResult
+buildOcioGpuProgramForScopeDisplay(const ResolvedBloomNeutralConfig& resolved,
+                                   const std::string_view display, const std::string_view view,
+                                   const render::OcioGpuProgramLimits& limits) noexcept {
+    return buildDisplayProgram(resolved, display, view, limits,
+                               render::OcioGpuProgramStage::ProcessEffect,
+                               kOcioGpuScopeDisplaySemanticsId);
+}
+
+render::OcioGpuProgramResult
 buildOcioGpuProgramForCst(const ResolvedBloomNeutralConfig& resolved, const std::string_view fromId,
                           const std::string_view toId,
                           const render::OcioGpuProgramLimits& limits) noexcept {
@@ -303,10 +312,9 @@ buildOcioGpuProgramForScopeXyz(const ResolvedBloomNeutralConfig& resolved,
                                  kOcioGpuScopeXyzSemanticsId, std::move(semanticBytes),
                                  resolved.expectedRevision(), limits);
         }
-        const auto built =
-            detail::buildScopeXyzProcessor(resolved.impl().config(),
-                                           detail::isBloomNeutralConfig(resolved), colorSpaceId,
-                                           OCIO::Context::Create());
+        const auto built = detail::buildScopeXyzProcessor(resolved.impl().config(),
+                                                          detail::isBloomNeutralConfig(resolved),
+                                                          colorSpaceId, OCIO::Context::Create());
         switch (built.error) {
         case detail::ScopeXyzBuildError::None:
             break;

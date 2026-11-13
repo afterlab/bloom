@@ -80,6 +80,11 @@ enum class GpuOcioTransformKind : std::uint8_t {
     // #514 Denoise & Smooth: the one fixed neighborhood program over the input; `denoise`
     // (detail::denoiseProgramData) is its storage-buffer data.
     Denoise = 15,
+    // #724 Scopes. ScopeDisplay: `display`/`view` as a float effect to which `viewAdjust` is
+    // applied unquantized (the Display signal). ScopeXyz: `fromId` to CIE XYZ D65, applied to the
+    // stored color as it is.
+    ScopeDisplay = 16,
+    ScopeXyz = 17,
 };
 
 struct GpuOcioTransformSpec final {

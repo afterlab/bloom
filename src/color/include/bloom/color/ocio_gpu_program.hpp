@@ -26,6 +26,11 @@ inline constexpr std::string_view kOcioGpuCstSemanticsId = "bloom.color.ocio-pro
 // media delivery that quantizes beyond 8 bits at the codec boundary.
 inline constexpr std::string_view kOcioGpuDisplayEffectSemanticsId =
     "bloom.color.ocio-display-effect-gpu.v1";
+// The display/view transform of kOcioGpuDisplayEffectSemanticsId for the scopes' Display signal
+// (#724): the same float ProcessEffect body, whose wrapper also applies the Viewer's exposure and
+// gamma to the float result, unquantized.
+inline constexpr std::string_view kOcioGpuScopeDisplaySemanticsId =
+    "bloom.color.ocio-scope-display-gpu.v1";
 // The scopes' transform from a color space to CIE XYZ with a D65 white (scope_colorimetry.hpp).
 inline constexpr std::string_view kOcioGpuScopeXyzSemanticsId =
     "bloom.color.ocio-process-scope-xyz.v1";
@@ -106,6 +111,13 @@ buildOcioGpuProgramForDisplayEffect(const ResolvedBloomNeutralConfig& resolved,
                                     std::string_view display, std::string_view view,
                                     const render::OcioGpuProgramLimits& limits = {}) noexcept;
 
+// buildOcioGpuProgramForDisplayEffect under kOcioGpuScopeDisplaySemanticsId: the scopes' Display
+// signal, to which the wrapper may apply a view adjustment.
+[[nodiscard]] render::OcioGpuProgramResult
+buildOcioGpuProgramForScopeDisplay(const ResolvedBloomNeutralConfig& resolved,
+                                   std::string_view display, std::string_view view,
+                                   const render::OcioGpuProgramLimits& limits = {}) noexcept;
+
 // Colour space transform extraction. Both ids must resolve to non-data spaces in the exact config;
 // an equal source/destination is reported as IdentityTransform (the caller keeps its CPU identity
 // path rather than compiling a fabricated passthrough).
@@ -116,8 +128,9 @@ buildOcioGpuProgramForCst(const ResolvedBloomNeutralConfig& resolved, std::strin
 
 // The scopes' transform from `colorSpaceId` (a display color space for the Display signal, the
 // working space for the Working signal) to CIE XYZ D65, as a ProcessEffect program: the same OCIO
-// processor ScopeXyzProcessor::prepare runs on the CPU. The wrapper un-associates alpha around the
-// body, so the caller feeds alpha 1 with the signal already taken over black. A missing or data
+// processor ScopeXyzProcessor::prepare runs on the CPU. The Bloom wrapper of this semantics id
+// applies the body to the stored red, green and blue as they are (the signal over black), with no
+// division by alpha, and keeps alpha. A missing or data
 // space is UnsupportedColorSpace, a config without an XYZ route TransformBuildFailed, and a space
 // that already is the XYZ interchange IdentityTransform.
 [[nodiscard]] render::OcioGpuProgramResult

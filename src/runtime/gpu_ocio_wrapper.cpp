@@ -136,10 +136,16 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
         if (!display && !effect && !neighborhood) {
             return failure(GpuOcioWrapperError::UnsupportedStage);
         }
-        if ((effect || neighborhood) && !viewAdjust.neutral()) {
+        // #724: the scopes' Display signal is the display transform as a float effect with the
+        // Viewer's adjustment applied unquantized; the scopes' XYZ step transforms the stored
+        // color as it is. Every other effect keeps its text.
+        const bool scopeDisplay =
+            effect && program.semanticsId == color::kOcioGpuScopeDisplaySemanticsId;
+        const bool scopeXyz = effect && program.semanticsId == color::kOcioGpuScopeXyzSemanticsId;
+        if ((effect || neighborhood) && !scopeDisplay && !viewAdjust.neutral()) {
             return failure(GpuOcioWrapperError::UnsupportedViewAdjust);
         }
-        const bool adjusted = display && !viewAdjust.neutral();
+        const bool adjusted = (display || scopeDisplay) && !viewAdjust.neutral();
 
         // Shared versioned per-sampler precise-sampling adapter. OCIO's generated body samples LUT
         // resources with the built-in texture(), whose hardware filtering is not full precision;
@@ -209,6 +215,13 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
             out << "  if (any(isnan(t.rgb)) || any(isinf(t.rgb))) { "
                    "bloom_ocio_status.flags[0] = 1u; return; }\n";
             out << "  imageStore(bloom_ocio_output, c, vec4(t.rgb, p.a));\n";
+        } else if (scopeXyz) {
+            // The signal over black is transformed as stored: no division by alpha. A pixel
+            // whose XYZ is not finite has no chromaticity, which the measure counts from a zero.
+            out << "  vec4 p = imageLoad(bloom_ocio_input, c);\n";
+            out << "  vec4 t = " << program.functionName << "(vec4(p.rgb, 1.0));\n";
+            out << "  if (any(isnan(t.rgb)) || any(isinf(t.rgb))) { t = vec4(0.0); }\n";
+            out << "  imageStore(bloom_ocio_output, c, vec4(t.rgb, p.a));\n";
         } else {
             out << "  vec4 p = imageLoad(bloom_ocio_input, c);\n";
             out << "  float a = p.a;\n";
@@ -248,6 +261,10 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
             } else {
                 // The CPU reference validates the stored premultiplied pixel, not just the
                 // straight-RGB intermediate. Never publish a non-finite resident process pixel.
+                if (adjusted) {
+                    out << "  t.rgb = vec3(bloom_ocio_view_adjust(t.r), "
+                           "bloom_ocio_view_adjust(t.g), bloom_ocio_view_adjust(t.b));\n";
+                }
                 out << "  vec3 premultiplied = bloom_ocio_cpu_premul(t.rgb, a);\n";
                 out << "  if (any(isnan(premultiplied)) || any(isinf(premultiplied))) { "
                        "bloom_ocio_status.flags[0] = 1u; return; }\n";

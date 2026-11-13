@@ -1,5 +1,6 @@
 #include <bloom/runtime/gpu_ocio_command.hpp>
 
+#include <bloom/color/ocio_gpu_program.hpp>
 #include <bloom/runtime/gpu_ocio_wrapper.hpp>
 
 #include <algorithm>
@@ -167,6 +168,7 @@ GpuOcioCommandResult PreparedGpuOcioCommand::prepare(render::OcioGpuProgramDesc 
         return failure(GpuOcioCommandError::InvalidViewAdjust);
     }
     if (program.stage != render::OcioGpuProgramStage::DisplayPacking &&
+        program.semanticsId != color::kOcioGpuScopeDisplaySemanticsId &&
         !binding.viewAdjust.neutral()) {
         return failure(GpuOcioCommandError::UnsupportedViewAdjust);
     }

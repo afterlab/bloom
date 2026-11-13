@@ -130,17 +130,15 @@ void testWrapper(Expectations& expectations) {
                         "the effect wrapper binds the resident input at set 1 binding 0");
     // The accepted precise-sampling wrapper premultiplies through the shared precise
     // bloom_ocio_cpu_premul helper (a precise stored-variable multiply), not an inline `t.rgb * a`.
-    expectations.expect(contains(effect.source,
-                                 "vec3 premultiplied = bloom_ocio_cpu_premul(t.rgb, a);") &&
-                            contains(effect.source,
-                                     "imageStore(bloom_ocio_output, c, vec4(premultiplied, a));"),
-                        "the effect wrapper publishes premultiplied RGBA32F through the precise "
-                        "premultiply helper");
     expectations.expect(
-        contains(effect.source,
-                 "if (any(isnan(premultiplied)) || any(isinf(premultiplied))) { "
-                 "bloom_ocio_status.flags[0] = 1u; return; }"),
-        "the effect wrapper refuses a non-finite stored premultiplied pixel");
+        contains(effect.source, "vec3 premultiplied = bloom_ocio_cpu_premul(t.rgb, a);") &&
+            contains(effect.source, "imageStore(bloom_ocio_output, c, vec4(premultiplied, a));"),
+        "the effect wrapper publishes premultiplied RGBA32F through the precise "
+        "premultiply helper");
+    expectations.expect(contains(effect.source,
+                                 "if (any(isnan(premultiplied)) || any(isinf(premultiplied))) { "
+                                 "bloom_ocio_status.flags[0] = 1u; return; }"),
+                        "the effect wrapper refuses a non-finite stored premultiplied pixel");
     expectations.expect(
         contains(effect.source, "precise vec3 bloom_ocio_cpu_premul(vec3 rgb, float a)"),
         "the premultiply helper is a precise stored-variable multiply");
@@ -207,6 +205,50 @@ void testWrapper(Expectations& expectations) {
     expectations.expect(bloom::runtime::buildGpuOcioWrapperGlsl(foreignSet).error ==
                             GpuOcioWrapperError::UnsupportedDescriptorSet,
                         "a non-zero OCIO descriptor set is refused");
+}
+
+// #724: the scopes' two effect arms. The Display signal's wrapper takes the Viewer's adjustment
+// on the float result; the XYZ wrapper transforms the stored color without dividing by alpha.
+void testScopeWrappers(Expectations& expectations) {
+    auto display = syntheticProgram(OcioGpuProgramStage::ProcessEffect);
+    display.semanticsId = std::string(bloom::color::kOcioGpuScopeDisplaySemanticsId);
+    const ViewAdjust adjust{.exposure = 1.0, .gamma = 2.0};
+    const auto neutral = bloom::runtime::buildGpuOcioWrapperGlsl(display);
+    const auto adjusted = bloom::runtime::buildGpuOcioWrapperGlsl(display, adjust);
+    expectations.expect(neutral.succeeded() && adjusted.succeeded(),
+                        "the scope display wrapper builds with and without an adjustment");
+    expectations.expect(!contains(neutral.source, "bloom_ocio_view_adjust"),
+                        "a neutral scope display wrapper has no adjustment code");
+    expectations.expect(contains(adjusted.source, "t.rgb = vec3(bloom_ocio_view_adjust(t.r)"),
+                        "the scope display wrapper adjusts the float result");
+    expectations.expect(!contains(adjusted.source, "bloom_ocio_quantize") &&
+                            contains(adjusted.source, "bloom_ocio_cpu_premul(t.rgb, a)"),
+                        "the scope display wrapper stays float and premultiplied");
+    expectations.expect(neutral.sourceDigest != adjusted.sourceDigest,
+                        "the adjustment changes the wrapper's identity");
+    const auto plain = bloom::runtime::buildGpuOcioWrapperGlsl(
+        syntheticProgram(OcioGpuProgramStage::ProcessEffect));
+    expectations.expect(plain.source == neutral.source,
+                        "a neutral scope display wrapper is the effect wrapper");
+
+    auto xyz = syntheticProgram(OcioGpuProgramStage::ProcessEffect);
+    xyz.semanticsId = std::string(bloom::color::kOcioGpuScopeXyzSemanticsId);
+    const auto wrapper = bloom::runtime::buildGpuOcioWrapperGlsl(xyz);
+    expectations.expect(wrapper.succeeded(), "the scope XYZ wrapper builds");
+    expectations.expect(contains(wrapper.source, "bloom_ocio_transform(vec4(p.rgb, 1.0))") &&
+                            contains(wrapper.source, "vec4(t.rgb, p.a)"),
+                        "the scope XYZ wrapper transforms the stored color and keeps alpha");
+    expectations.expect(!contains(wrapper.source, "bloom_ocio_cpu_div(p.r, a)"),
+                        "the scope XYZ wrapper does not divide by alpha");
+    expectations.expect(bloom::runtime::buildGpuOcioWrapperGlsl(xyz, adjust).error ==
+                            GpuOcioWrapperError::UnsupportedViewAdjust,
+                        "the scope XYZ wrapper refuses an adjustment");
+
+    const GpuOcioCommandGeometry geometry{4, 3};
+    expectations.expect(PreparedGpuOcioCommand::prepare(display, syntheticArtifact(display, adjust),
+                                                        geometry, syntheticBinding(display, adjust))
+                            .hasValue(),
+                        "an adjusted scope display command is accepted");
 }
 
 void testIdentity(Expectations& expectations) {
@@ -526,9 +568,9 @@ void testPreparer(Expectations& expectations,
     expectations.expect(hurriedResult.error == GpuOcioPreparationError::CompileUnavailable &&
                             hurriedResult.command == nullptr,
                         "a compile that misses its deadline is unavailable, not failed");
-    expectations.expect(hurried.prepare(cstConfig, cst, GpuOcioCommandGeometry{9, 5}, options)
-                            .hasValue(),
-                        "the same program compiles when the compiler has time");
+    expectations.expect(
+        hurried.prepare(cstConfig, cst, GpuOcioCommandGeometry{9, 5}, options).hasValue(),
+        "the same program compiles when the compiler has time");
 
     // Cancellation before publication retains nothing.
     GpuOcioProgramPreparer cancelled;
@@ -620,6 +662,7 @@ void testPreparer(Expectations& expectations,
 int main() {
     Expectations expectations;
     testWrapper(expectations);
+    testScopeWrappers(expectations);
     testIdentity(expectations);
     testPreparedCommand(expectations);
 
