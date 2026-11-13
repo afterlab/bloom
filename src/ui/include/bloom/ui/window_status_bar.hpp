@@ -151,6 +151,8 @@ class WindowStatusBar final : public kit::KSurface {
     void pollMemoryPressureForTest(runtime::MachineMemorySample sample,
                                    runtime::MemoryBudgetLedger::Clock::time_point now);
     [[nodiscard]] QString cacheToolTipForTest() const;
+    // Shows `readout` in the activity cell as the background work poll would (#630, #636).
+    void showBackgroundWorkForTest(BackgroundWorkReadout readout);
     [[nodiscard]] std::size_t memoryReserveBytesForTest() const noexcept {
         return memoryReserveBytes_;
     }

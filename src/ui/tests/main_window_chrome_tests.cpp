@@ -1319,6 +1319,25 @@ void testWindowStatusBarMessagesClearThemselves(Expectations& expectations) {
     expectations.expect(baking.text == QStringLiteral("Baking keyframes · 24 of 96") &&
                             baking.done == 24 && baking.total == 96,
                         "background work: a bake shows the frames it has read");
+    // The cell shows it when nothing more urgent is there, and a notice still comes first. The
+    // label elides in a narrow cell; its accessible name is the whole text.
+    const auto* cell = strip->findChild<QWidget*>(QStringLiteral("windowStatusBarMessage"));
+    const auto* bar = strip->findChild<QWidget*>(QStringLiteral("windowStatusBarActivityProgress"));
+    expectations.expect(cell != nullptr && bar != nullptr, "background work: the cell is there");
+    if (cell != nullptr && bar != nullptr) {
+        strip->showBackgroundWorkForTest(baking);
+        expectations.expect(cell->accessibleName() == baking.text && !bar->isHidden(),
+                            "background work: the activity cell shows the bake with its bar");
+        strip->setPersistentMessage(QStringLiteral("Saving…"));
+        expectations.expect(cell->accessibleName() == QStringLiteral("Saving…") && bar->isHidden(),
+                            "background work: a notice comes before it");
+        strip->setPersistentMessage(QString{});
+        expectations.expect(cell->accessibleName() == baking.text && !bar->isHidden(),
+                            "background work: and the bake shows again when the notice goes");
+        strip->showBackgroundWorkForTest({});
+        expectations.expect(cell->accessibleName() != baking.text && bar->isHidden(),
+                            "background work: the cell lets go when the work ends");
+    }
 }
 
 // A refused command reaches the strip as a notice. CompositionSession::commandRejected() is the one

@@ -660,6 +660,12 @@ void WindowStatusBar::refreshActivity() {
     activitySegment_->setSegmentToolTip(idle ? tip : tip + QLatin1Char('\n') + text);
 }
 
+void WindowStatusBar::showBackgroundWorkForTest(BackgroundWorkReadout readout) {
+    backgroundWorkTimer_->stop();
+    backgroundWork_ = std::move(readout);
+    refreshActivity();
+}
+
 void WindowStatusBar::refreshMemoryCell() {
     std::size_t resident = 0;
     std::size_t budget = 0;
