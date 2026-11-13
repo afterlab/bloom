@@ -187,6 +187,7 @@ target_sources(bloom_platform_process PUBLIC FILE_SET HEADERS BASE_DIRS include
                      include/bloom/platform/private_temporary_directory.hpp
                      include/bloom/platform/shared_frame_arena.hpp
                      include/bloom/platform/source_identity.hpp
+                     include/bloom/platform/source_store.hpp
                      include/bloom/platform/thread_priority.hpp
                      include/bloom/platform/storage_class.hpp)
 target_compile_features(bloom_platform_process PUBLIC cxx_std_20)

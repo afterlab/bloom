@@ -5,12 +5,14 @@ target_sources(
     PRIVATE
         media_disk_cache.cpp
         media_disk_cache_decode.cpp
+        source_mirror.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
             include/bloom/media/cache/media_disk_cache.hpp
             include/bloom/media/cache/media_disk_cache_decode.hpp
+            include/bloom/media/cache/source_mirror.hpp
 )
 
 target_compile_features(bloom_media_cache PUBLIC cxx_std_20)
@@ -33,4 +35,10 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_media_cache_test)
     bloom_add_test(NAME bloom.media.cache COMMAND bloom_media_cache_test LABELS unit media cache
                   TIMEOUT 60)
+    # #718: the local mirror of source media on slow storage.
+    add_executable(bloom_media_source_mirror_test tests/source_mirror_tests.cpp)
+    target_link_libraries(bloom_media_source_mirror_test PRIVATE bloom_media_cache)
+    bloom_enable_warnings(bloom_media_source_mirror_test)
+    bloom_add_test(NAME bloom.media.source-mirror COMMAND bloom_media_source_mirror_test
+                   LABELS unit media cache TIMEOUT 120)
 endif()
