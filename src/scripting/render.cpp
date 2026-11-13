@@ -1,5 +1,6 @@
 #include <bloom/scripting/render.hpp>
 
+#include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/core/file_uri.hpp>
 #include <bloom/host/export_job_runner.hpp>
 #include <bloom/host/export_presets.hpp>
@@ -7,6 +8,7 @@
 #include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -123,6 +125,54 @@ captureRenderColorIntent(const SessionRenderSourceSnapshot& source,
                                     : std::string_view(settings.processColorSpaceId),
          .ocioConfigRevision = settings.ocioConfig.expectedRevision.digest,
          .ocioConfigUri = uri});
+}
+
+std::vector<MissingColorSpaceWarning>
+missingEffectColorSpaces(const SessionRenderSourceSnapshot& source,
+                         const document::Composition& composition) {
+    std::vector<MissingColorSpaceWarning> warnings;
+    const auto intent = captureRenderColorIntent(source, composition);
+    if (!intent)
+        return warnings;
+    // Never waits: a built-in configuration resolves at once, an external one only when it is
+    // already held. An unreadable configuration says nothing about a single space.
+    auto resolution = color::resolveOcioConfigIfKept(
+        intent->ocioConfigUri, intent->ocioConfigRevision, intent->workingColorSpaceId);
+    if (!resolution.ready())
+        return warnings;
+    const auto config = std::move(resolution).takeResolved();
+    if (!config)
+        return warnings;
+    for (const auto& node : composition.graph().nodes()) {
+        const bool lut = node.typeId == "bloom.ocio-file-transform";
+        if (!lut && node.typeId != "bloom.ocio-colour-space-transform")
+            continue;
+        for (const auto& binding : node.parameters) {
+            const char* label = binding.role == "processSpace" ? "Process Space"
+                                : binding.role == "from"       ? "From"
+                                : binding.role == "to"         ? "To"
+                                                               : nullptr;
+            if (label == nullptr)
+                continue;
+            const auto* parameter = composition.parameters().find(binding.parameterId);
+            const auto* constant =
+                parameter != nullptr
+                    ? std::get_if<document::ConstantValueSource>(&parameter->source)
+                    : nullptr;
+            const auto* id = constant != nullptr ? std::get_if<std::string>(&constant->value) : nullptr;
+            if (id == nullptr || id->empty() ||
+                std::ranges::any_of(config->colorSpaces(),
+                                    [&](const auto& space) { return space.id == *id; }))
+                continue;
+            warnings.push_back(
+                {node.id, binding.parameterId,
+                 std::string(lut ? "Apply LUT" : "Color Space Transform") + ": " + label + " \"" +
+                     *id +
+                     "\" is not a color space of this project's color configuration, so the node "
+                     "leaves the image unchanged"});
+        }
+    }
+    return warnings;
 }
 
 namespace {

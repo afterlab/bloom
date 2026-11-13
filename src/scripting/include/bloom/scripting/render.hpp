@@ -90,6 +90,23 @@ struct RenderResult final {
 captureRenderColorIntent(const SessionRenderSourceSnapshot& source,
                          const document::Composition& composition);
 
+// #610: a stored color space the project's color configuration does not have, on an Apply LUT
+// (Process Space) or a Color Space Transform (From, To). Such a node leaves the image unchanged, so
+// the edit that stored it says so: MCP transact in compileWarnings, a script's transact in
+// compile_warnings. The edit is not refused, because a project moved to another configuration
+// must stay editable. Empty when every space is known, or the configuration cannot be read here.
+struct MissingColorSpaceWarning final {
+    document::NodeId node;
+    document::ParameterId parameter;
+    // One plain sentence naming the space.
+    std::string detail;
+};
+inline constexpr std::string_view kMissingColorSpaceWarningCode =
+    "bloom.runtime.evaluation.color-space-missing";
+[[nodiscard]] std::vector<MissingColorSpaceWarning>
+missingEffectColorSpaces(const SessionRenderSourceSnapshot& source,
+                         const document::Composition& composition);
+
 class Render final {
   public:
     // The caller owns/injects one provider shared across concurrent/still/range requests and

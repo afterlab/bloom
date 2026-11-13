@@ -238,6 +238,25 @@ class AgentFeedback(unittest.TestCase):
         self.assertIn('Gone Face', warning['detail'])
         self.assertEqual(warning['subject']['parameter'], font)
 
+    def test_color_space_missing_from_the_config_is_a_warning(self):
+        # #610: Apply LUT holding a Process Space the project's color configuration lacks leaves
+        # the image unchanged; the transact that stores it says so and names the space.
+        server = self.server
+        added = server.transact(('bloom.node.add', {'composition': 1,
+                                                    'nodeType': 'bloom.ocio-file-transform'}))
+        self.assertTrue(added['succeeded'], added)
+        space = server.role('processSpace')
+        listed = server.transact(set_source(space, value='srgb_rec709_display'))
+        self.assertTrue(listed['succeeded'], listed)
+        self.assertEqual(listed['compileWarnings'], [])
+        result = server.transact(set_source(space, value='ACEScct'))
+        self.assertTrue(result['succeeded'], result)
+        self.assertEqual(len(result['compileWarnings']), 1, result)
+        warning = result['compileWarnings'][0]
+        self.assertEqual(warning['code'], 'bloom.runtime.evaluation.color-space-missing')
+        self.assertIn('ACEScct', warning['detail'])
+        self.assertEqual(warning['subject']['parameter'], space)
+
     def test_rejections_carry_operation_index_and_reason(self):
         server = self.server
         server.transact(('bloom.layer.add-solid', {'composition': 1, 'name': 'S',

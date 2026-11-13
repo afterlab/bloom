@@ -498,6 +498,12 @@ drawn in a fallback face chosen by category (`bloom.runtime.compile.font-missing
 that is not installed or cached is downloaded into the per-user cache like the desktop application
 does, and an export waits for it; offline, the font is reported missing and drawn in the fallback.
 
+A transact that leaves an Apply LUT's Process Space, or a Color Space Transform's From or To, on a
+color space the project's color configuration does not have still succeeds (a project moved to
+another configuration must stay editable), and says so in `compileWarnings`: code
+`bloom.runtime.evaluation.color-space-missing`, a `detail` naming the space, and the node and
+parameter as the subject. The node leaves the image unchanged until a listed space is chosen.
+
 **Events.** Besides command events (`kind` `revision`, `history` or `rejected`), `events` reports
 `{kind, revision, message, composition?, subject?, path?, projectName?, sequence}` records for
 `composition.compile-failed`, `project.saved`, `project.opened`, `project.created`,

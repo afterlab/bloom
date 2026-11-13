@@ -8,6 +8,7 @@
 #include <bloom/scripting/command_diagnostics.hpp>
 #include <bloom/scripting/operation_reference.hpp>
 #include <bloom/scripting/operation_registry.hpp>
+#include <bloom/scripting/render.hpp>
 
 #include <algorithm>
 #include <array>
@@ -589,7 +590,8 @@ yyjson_mut_val* compileFailures(McpServerCore::State& core, Json& out, McpCall& 
                 subject.parameterId ? out.number(subject.parameterId->value()) : out.null());
         return record;
     };
-    const auto snapshot = call.session.snapshot();
+    const auto source = call.session.renderSourceSnapshot();
+    const auto& snapshot = source.snapshot;
     std::vector<document::CompositionId> edited;
     if (command.affectedComposition) {
         edited.push_back(*command.affectedComposition);
@@ -618,6 +620,22 @@ yyjson_mut_val* compileFailures(McpServerCore::State& core, Json& out, McpCall& 
             out.set(warning, "subject", subjectRecord(diagnostic.subject));
             out.append(warnings, warning);
         }
+        // #610: a stored color space the project's color configuration lacks is a warning of the
+        // edit that stored it (the node leaves the image unchanged).
+        if (const auto* edit = snapshot.project().findComposition(composition); edit != nullptr)
+            for (const auto& missing : scripting::missingEffectColorSpaces(source, *edit)) {
+                auto* warning = out.object();
+                out.set(warning, "composition", out.number(composition.value()));
+                out.set(warning, "code",
+                        out.text(std::string(scripting::kMissingColorSpaceWarningCode)));
+                out.set(warning, "detail", out.text(missing.detail));
+                runtime::CompileSubject subject;
+                subject.compositionId = composition;
+                subject.nodeId = missing.node;
+                subject.parameterId = missing.parameter;
+                out.set(warning, "subject", subjectRecord(subject));
+                out.append(warnings, warning);
+            }
         const auto failure = runtime::compileFailureSummary(compiled, composition);
         if (!failure)
             continue;

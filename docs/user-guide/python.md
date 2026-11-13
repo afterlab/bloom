@@ -132,6 +132,9 @@ in `compileWarnings`. For example a text layer whose font is not installed and n
 drawn in a fallback face and reports `bloom.runtime.compile.font-missing`. A Google font that is not
 installed or cached is downloaded into the per-user cache the first time a render or export needs
 it, and that render waits for it; offline, it is drawn in the fallback face with the same warning.
+An Apply LUT or Color Space Transform left on a color space the project's color configuration
+does not have reports `bloom.runtime.evaluation.color-space-missing`, naming the space; the edit
+still succeeds and the node leaves the image unchanged.
 Set a text `font` with `bloom.parameter.set-source` and a font ID string such as
 `source=google;family=Roboto;style=Bold;weight=700;italic=false`. An empty list means nothing
 degrades.

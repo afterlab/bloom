@@ -161,7 +161,8 @@ ACEScct in a Bloom Neutral project, set by a script or left by a change of confi
 is not applied and the image passes through unchanged. Bloom says so in three places: the Process
 Space field reads "ACEScct (not in this project's color configuration)" in the error color, the
 node card shows a warning badge with the reason in its tooltip, and the render reports
-`bloom.runtime.evaluation.color-space-missing`. Choose a space from the list to clear it. Color
+`bloom.runtime.evaluation.color-space-missing`. A script or an MCP `transact` that stores such a
+space succeeds and carries the same code, naming the space, in its compile warnings. Choose a space from the list to clear it. Color
 Space Transform reports a missing From or To space the same way.
 
 **Color Space Transform** offers explicit **From** and **To** selectors from the project

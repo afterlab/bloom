@@ -483,7 +483,9 @@ namespace {
 // fallback face because its Font asset is gone, tells the caller, as MCP transact does in
 // compileWarnings. Each row has composition, code, detail and subject (composition, node and
 // parameter, None when the warning is not about one).
-nb::list compileWarnings(const document::Snapshot& snapshot, const commands::CommandResult& command) {
+nb::list compileWarnings(const SessionRenderSourceSnapshot& source,
+                         const commands::CommandResult& command) {
+    const auto& snapshot = source.snapshot;
     nb::list warnings;
     if (!command.changed())
         return warnings;
@@ -519,6 +521,20 @@ nb::list compileWarnings(const document::Snapshot& snapshot, const commands::Com
             subject["parameter"] = diagnostic.subject.parameterId
                                        ? nb::cast(diagnostic.subject.parameterId->value())
                                        : nb::none();
+            row["subject"] = subject;
+            warnings.append(row);
+        }
+        // #610: a stored color space the project's color configuration lacks.
+        for (const auto& missing : missingEffectColorSpaces(
+                 source, *snapshot.project().findComposition(composition))) {
+            nb::dict row;
+            row["composition"] = composition.value();
+            row["code"] = std::string(kMissingColorSpaceWarningCode);
+            row["detail"] = missing.detail;
+            nb::dict subject;
+            subject["composition"] = composition.value();
+            subject["node"] = missing.node.value();
+            subject["parameter"] = missing.parameter.value();
             row["subject"] = subject;
             warnings.append(row);
         }
@@ -589,7 +605,7 @@ nb::dict NativeHost::transact(const nb::list& operations, const std::string& lab
                                                  "Session cannot edit"});
     }
     auto row = commandResult(*result.command);
-    row["compile_warnings"] = compileWarnings(facade_->query.snapshot(), *result.command);
+    row["compile_warnings"] = compileWarnings(session_->renderSourceSnapshot(), *result.command);
     return row;
 }
 

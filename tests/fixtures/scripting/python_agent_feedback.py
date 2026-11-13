@@ -143,5 +143,23 @@ class AgentFeedback(unittest.TestCase):
         self.assertEqual(len(again['compile_warnings']), 0)
 
 
+    def test_color_space_missing_from_the_config_is_a_warning(self):
+        # #610: Apply LUT holding a Process Space the project's color configuration lacks leaves
+        # the image unchanged; the edit that stores it says so and names the space.
+        added = bloom.ops.node.add(nodeType='bloom.ocio-file-transform')
+        self.assertTrue(added['succeeded'], added)
+        row = next(c for c in bloom.data.snapshot()['compositions']
+                   if c['id'] == int(bloom.context.composition))
+        space = next(n['parameters']['processSpace'] for n in row['nodes']
+                     if 'processSpace' in n['parameters'])
+        result = bloom.ops.parameter.set_source(parameter=space, value='ACEScct')
+        self.assertTrue(result['succeeded'], result)
+        self.assertEqual(len(result['compile_warnings']), 1, result)
+        warning = result['compile_warnings'][0]
+        self.assertEqual(warning['code'], 'bloom.runtime.evaluation.color-space-missing')
+        self.assertIn('ACEScct', warning['detail'])
+        self.assertEqual(warning['subject']['parameter'], space)
+
+
 if __name__ == '__main__':
     unittest.main()

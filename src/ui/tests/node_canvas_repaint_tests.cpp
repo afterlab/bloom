@@ -14,6 +14,7 @@
 #include <QImage>
 #include <QWindow>
 #include <bloom/commands/node_operations.hpp>
+#include <bloom/commands/node_editor_operations.hpp>
 #include <cmath>
 #include <string>
 
@@ -109,8 +110,9 @@ void testMarqueeLeavesNothingBehind() {
 
 // A node added from the Add placement with the pointer over an existing card, then undone. The
 // preview is drawn over the card while it follows the pointer; the click lands the new card on
-// free canvas beside it (the canvas never leaves two cards overlapping), and the undo takes it
-// away. Nothing of the preview or the new card stays, and the card beneath is fully drawn.
+// free canvas beside it, and the undo takes it away. Then the node is placed by the command at a
+// position on top of the card, so the two really overlap, and undone. Nothing of the preview or of
+// either new card stays, and the card beneath is fully drawn.
 void testUndonePlacementLeavesTheCardBeneath() {
     for (const double zoom : {0.5, 1.0, 2.0}) {
         Fixture f;
@@ -141,7 +143,40 @@ void testUndonePlacementLeavesTheCardBeneath() {
                at(zoom, "the placed card is drawn whole").c_str());
         expect(f.session.undo() && f.session.composition()->graph().nodes().size() == nodes,
                at(zoom, "undo takes the placed node away").c_str());
-        const int stale = stalePixels(f, zoom == 1.0 ? "721-placement-undone" : nullptr);
+        int stale = stalePixels(f, zoom == 1.0 ? "721-placement-undone" : nullptr);
+        expect(stale == 0, (at(zoom, "after the undo nothing of the placed card is left") + " (" +
+                            std::to_string(stale) + " stale pixels)")
+                               .c_str());
+
+        // The same node placed by the command at a position on top of the card, where nothing
+        // moves it aside: the two cards really overlap, and the undo removes the upper one.
+        const QRectF beneathRect = f.card(beneath)->sceneBoundingRect();
+        // The command keeps a new card clear of the extents it is told the others have; told they
+        // are a point each, it puts the card exactly where it is asked to.
+        document::NodeCardSizes points;
+        for (const auto* item : f.scene()->nodeItems())
+            points.emplace(item->id(), document::NodeCardSize{1.0, 1.0});
+        commands::Transaction place("Add Node", f.session.snapshot().revision());
+        place.emplace<commands::AddEditorNode>(
+            f.session.compositionId(), std::string(document::kSolidSourceNodeType),
+            document::Vec2d{beneathRect.left() + 60.0, beneathRect.top() + 40.0}, std::nullopt,
+            std::nullopt, std::move(points));
+        const auto placed = f.scene()->submit(std::move(place));
+        const auto above = placed.outputId<document::NodeId>("editorNode");
+        settle();
+        expect(placed.succeeded() && above && f.card(*above) != nullptr &&
+                   f.card(beneath) != nullptr &&
+                   f.card(*above)->sceneBoundingRect().intersects(
+                       f.card(beneath)->sceneBoundingRect()),
+               at(zoom, "the node placed by the command lies over the card").c_str());
+        expect(f.card(beneath) != nullptr &&
+                   f.card(beneath)->sceneBoundingRect() == beneathRect,
+               at(zoom, "the card beneath stays where it was").c_str());
+        expect(stalePixels(f, zoom == 1.0 ? "721-overlap-placed" : nullptr) == 0,
+               at(zoom, "the card placed over another is drawn whole").c_str());
+        expect(f.session.undo() && f.session.composition()->graph().nodes().size() == nodes,
+               at(zoom, "undo takes the overlapping node away").c_str());
+        stale = stalePixels(f, zoom == 1.0 ? "721-overlap-undone" : nullptr);
         expect(stale == 0, (at(zoom, "after the undo the card beneath is fully drawn") + " (" +
                             std::to_string(stale) + " stale pixels)")
                                .c_str());
