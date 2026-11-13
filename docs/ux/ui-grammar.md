@@ -877,8 +877,8 @@ with a closed set (an enum, a choice presentation, the audio stream) must never 
 | Node | Parameter | Kind | Old | New |
 | --- | --- | --- | --- | --- |
 | Color Transform | From, To | color space (string) | text field | dropdown |
-| OCIO File Transform | Process space | color space (string) | text field | dropdown |
-| OCIO File Transform | LUT | asset (int) | value field | dropdown |
+| Apply LUT | Process space | color space (string) | text field | dropdown |
+| Apply LUT | LUT | asset (int) | value field | dropdown |
 | Image source, Video source | Input color space | color space (string) | text field | dropdown |
 | Audio source | Asset | asset (string) | text field | dropdown |
 | Text source | Vertical alignment (Top, Middle, Bottom) | enum (int) | value field | dropdown |
@@ -1224,7 +1224,7 @@ group is waiting for:
 | Light & Shadow | Glow, Light Wrap, Drop Shadow, Depth Fog, Lens Flare, Light Rays, + Inner Shadow, + Inner Glow |
 | Stylize | Vignette, Film Grain, Codec Degrade, Quantize, Dither |
 | Color Correction | Grade, Levels, Curves, Hue/Saturation, Exposure, Offset, Multiply, Invert, Colorize, Auto Exposure, Tone Map, Color Matrix |
-| Color Management | OCIO Color Space Transform, OCIO File Transform |
+| Color Management | Apply LUT, Color Space Transform |
 | Time | Echo, Frame Rate Hold, + Time Offset, + Frame Hold, + Time Remap, + Flow Retime |
 | Text & Paths | Text Source, the shape presets (Shape Source), + SVG Vector Source, + Text Layout, + Text Animator, + Text On Path, + Text To Shape, + Transform Path, + Trim Path, + Offset Path, + Boolean/Merge Paths, + Round Corners, + Resample Path, + Warp Path, + Warp Path (Function), + Shape Morph, + Path Stroke |
 | Instances & Particles | + Point, + Grid, + Scatter, + Points Along Path, + Shape To Points, + Text To Points, + Clone To Points, + Draw Instances, + Particle System |

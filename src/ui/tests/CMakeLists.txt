@@ -1065,6 +1065,15 @@ target_link_libraries(bloom_node_view_controls_test PRIVATE bloom_ui bloom_proje
 bloom_enable_warnings(bloom_node_view_controls_test)
 bloom_add_test(NAME bloom.ui.node-view-controls COMMAND bloom_node_view_controls_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# #609: a project saved with the two OCIO nodes opens with both under their unchanged type ids and
+# shows them as Apply LUT and Color Space Transform.
+add_executable(bloom_node_rename_fixture_test node_rename_fixture_tests.cpp)
+target_include_directories(bloom_node_rename_fixture_test PRIVATE .. ${PROJECT_SOURCE_DIR}/src/ui)
+target_link_libraries(bloom_node_rename_fixture_test PRIVATE bloom_ui bloom_project Qt6::Test)
+target_compile_definitions(bloom_node_rename_fixture_test PRIVATE BLOOM_COLOR_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures/color")
+bloom_enable_warnings(bloom_node_rename_fixture_test)
+bloom_add_test(NAME bloom.ui.node-rename-fixture COMMAND bloom_node_rename_fixture_test LABELS ui integration TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # #721: the canvas leaves no stale pixels (a marquee that grows and shrinks; a placed node undone
 # over a card), at display scales 1, 1.5 and 2.
 add_executable(bloom_node_canvas_repaint_test node_canvas_repaint_tests.cpp)
@@ -2362,7 +2371,7 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
-# Issue #608: OCIO File Transform (a channel-rotating 3D LUT) through the Viewer, a cold and warm
+# Issue #608: Apply LUT (a channel-rotating 3D LUT) through the Viewer, a cold and warm
 # RAM preview at Half, and the still, range and movie export routes, with the transform's bypassed
 # and no-LUT states. The CPU half always runs; the GPU half runs with a Vulkan loader and a
 # qualified device and prints NotRun otherwise (--require-device fails instead).

@@ -1,4 +1,4 @@
-// #608: OCIO File Transform (a LUT) on the routes an artist uses. A solid whose color is keyed goes
+// #608: Apply LUT (a LUT) on the routes an artist uses. A solid whose color is keyed goes
 // through a File Transform holding a 2-point 3D `.cube` that rotates the channels. The real Viewer
 // preview path shows it at several times, a RAM preview fills the range cold at Half and replays
 // it warm with no new work, and the real export route renders the same frames as a still, a PNG

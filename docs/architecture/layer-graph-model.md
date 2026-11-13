@@ -70,7 +70,7 @@ that same alpha before publishing RGBA32F. Alpha is unchanged; zero-alpha pixels
 transparent black. Identity and bypass share the original image without a divide/multiply round
 trip. Negative and HDR RGB are retained if finite.
 
-The first image-effect definitions are OCIO Color Space Transform and OCIO File Transform.
+The first image-effect definitions are Color Space Transform (`bloom.ocio-colour-space-transform`) and Apply LUT (`bloom.ocio-file-transform`); the type ids keep the names the nodes had before #609.
 They are listed under Color Management, after Color Correction; their registry category is Color. Neither is persisted. Each owns one
 `input` Image socket and one `image` Image output. Any image producer may feed an effect, and its
 output may feed another effect or any image consumer; ordinary graph validation still rejects

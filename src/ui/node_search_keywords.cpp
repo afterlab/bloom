@@ -125,8 +125,11 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.audio-hiss", "Noise|Hiss|Tape|Static|Room Tone"},
     {"bloom.auto-exposure", "Auto White Balance|Auto Gain|Auto Levels|Camera Hunting|AWB"},
     // Color Management
-    {"bloom.ocio-colour-space-transform", "OCIOColorSpace|Colorspace|Color Profile Converter"},
-    {"bloom.ocio-file-transform", "OCIOFileTransform|Apply Color LUT|Vectorfield"},
+    // #609: the names both nodes had before they were renamed still find them.
+    {"bloom.ocio-colour-space-transform",
+     "OCIO Color Space Transform|OCIOColorSpace|Colorspace|Color Profile Converter"},
+    {"bloom.ocio-file-transform",
+     "OCIO File Transform|OCIOFileTransform|Apply Color LUT|LUT|Vectorfield"},
     // Time
     {"bloom.echo", "TimeEcho|FrameBlend"},
     // Fields

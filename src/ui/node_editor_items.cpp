@@ -145,10 +145,12 @@ QString displayTypeName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Pixel Aspect Numerator");
     if (typeId == "pixelAspectDenominator")
         return QCoreApplication::translate("node_editor", "Pixel Aspect Denominator");
+    // #609: neither node needs an OCIO configuration chosen, so neither name says OCIO. The stored
+    // type ids keep it.
     if (typeId == "bloom.ocio-colour-space-transform")
-        return QCoreApplication::translate("node_editor", "OCIO Color Space Transform");
+        return QCoreApplication::translate("node_editor", "Color Space Transform");
     if (typeId == "bloom.ocio-file-transform")
-        return QCoreApplication::translate("node_editor", "OCIO File Transform");
+        return QCoreApplication::translate("node_editor", "Apply LUT");
     if (typeId == "processSpace")
         return QCoreApplication::translate("node_editor", "Process Space");
     if (typeId == "lut")

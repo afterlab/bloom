@@ -478,6 +478,58 @@ void colourEffectRows() {
            "Color effect card definition has the image socket pair");
 }
 
+// #609: Properties names the two renamed nodes Apply LUT and Color Space Transform, with every row
+// inside the panel at the widths of a wide, a normal and a narrow panel. With
+// BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written at each width.
+void renamedColorNodeRows() {
+    struct Renamed final {
+        const char* type;
+        const char* name;
+    };
+    for (const auto& [type, name] : {Renamed{"bloom.ocio-file-transform", "Apply LUT"},
+                                     Renamed{"bloom.ocio-colour-space-transform",
+                                             "Color Space Transform"}}) {
+        auto project =
+            document::makeNewProject("Renamed", "Main", core::RationalTime::fromInteger(10));
+        document::Document document(std::move(project.project));
+        commands::CommandStack stack(document);
+        ui::CompositionSession session(document, stack, project.initialCompositionId);
+        ui::PropertiesEditor properties(session);
+        const auto node = addNode(session, type);
+        session.selectNode(node);
+        const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+        const QString suffix = QGuiApplication::primaryScreen()->devicePixelRatio() == 1.0
+                                   ? QStringLiteral("dpr1")
+                                   : QStringLiteral("dpr15");
+        for (const int width : {2000, 900, 420}) {
+            properties.resize(width, 900);
+            properties.show();
+            QCoreApplication::processEvents();
+            bool named = false;
+            bool oldName = false;
+            for (const auto* label : properties.findChildren<QLabel*>()) {
+                if (!label->isVisibleTo(&properties))
+                    continue;
+                named = named || label->text().contains(QLatin1String(name));
+                oldName = oldName || label->text().contains(QStringLiteral("OCIO"));
+            }
+            expect(named && !oldName, "Properties shows the renamed node under its new name");
+            if (auto* scroll = properties.findChild<QScrollArea*>())
+                expect(scroll->widget()->width() <= scroll->viewport()->width(),
+                       "a renamed node's rows never exceed the panel's width");
+            if (!directory.isEmpty()) {
+                QDir().mkpath(directory);
+                if (!properties.grab().save(directory + QStringLiteral("/") +
+                                            QString::fromLatin1(type) +
+                                            QStringLiteral("-properties-") +
+                                            QString::number(width) + QLatin1Char('-') + suffix +
+                                            QStringLiteral(".png")))
+                    std::cerr << "could not write the " << type << " Properties capture\n";
+            }
+        }
+    }
+}
+
 void upstreamRows() {
     auto project =
         document::makeNewProject("Upstream", "Main", core::RationalTime::fromInteger(10));
@@ -3441,6 +3493,7 @@ int main(int argc, char** argv) try {
     frameRateHoldRows();
     autoExposureRows();
     colorCleanupRows();
+    renamedColorNodeRows();
     edgeExtendRows();
     lineEndRows();
     extensionPropertiesRows();

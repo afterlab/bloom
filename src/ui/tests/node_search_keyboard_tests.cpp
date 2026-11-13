@@ -370,6 +370,14 @@ void testSearchKeyboardAndMenus() {
              {"Arithmetic", "bloom.image-math"},
              {"Fill", document::kColorizeNodeType},
              {"Tint", document::kColorizeNodeType},
+             // #609: the renamed nodes, by their old names, their old keywords and "LUT".
+             {"OCIO File Transform", "bloom.ocio-file-transform"},
+             {"OCIOFileTransform", "bloom.ocio-file-transform"},
+             {"Apply Color LUT", "bloom.ocio-file-transform"},
+             {"Apply LUT", "bloom.ocio-file-transform"},
+             {"LUT", "bloom.ocio-file-transform"},
+             {"OCIO Color Space Transform", "bloom.ocio-colour-space-transform"},
+             {"Color Space Transform", "bloom.ocio-colour-space-transform"},
          })) {
         field->setText(QString::fromUtf8(query));
         QModelIndex first;
@@ -669,8 +677,8 @@ void testSearchKeyboardAndMenus() {
                  {"Auto Exposure", "Color Matrix", "Colorize", "Curves", "Exposure", "Grade",
                   "Hue/Saturation", "Invert", "Levels", "Multiply", "Offset", "Tone Map"},
                  "Color Correction offers the image grades");
-        hasGroup("Color Management", {"OCIO Color Space Transform", "OCIO File Transform"},
-                 "Color Management offers only the OCIO transforms");
+        hasGroup("Color Management", {"Apply LUT", "Color Space Transform"},
+                 "Color Management offers only the two color transforms");
         hasGroup("Time", {"Echo", "Frame Rate Hold"}, "Time holds Echo and Frame Rate Hold until the retimers land");
         hasGroup(
             "Text & Paths",

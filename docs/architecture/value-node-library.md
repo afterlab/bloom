@@ -632,8 +632,8 @@ Color value nodes. They appear under Add → Color Management, after Color Corre
 
 | Node | Image ports | Constant parameters | Behavior |
 | --- | --- | --- | --- |
-| OCIO Color Space Transform (`bloom.ocio-colour-space-transform`) | `input` → `image` | `from`, `to` (String, empty working space); `bypass` (false) | Exact-config non-data source/destination conversion |
-| OCIO File Transform (`bloom.ocio-file-transform`) | `input` → `image` | `lut` (Integer asset id, 0 unset); `interpolation` (Linear/Tetrahedral/Best, Linear default); `direction` (Forward/Inverse, Forward default); `processSpace` (String, empty working space); `bypass`, `look` (false) | Working → process space → LUT → working; digest-verified external LUT |
+| Color Space Transform (`bloom.ocio-colour-space-transform`) | `input` → `image` | `from`, `to` (String, empty working space); `bypass` (false) | Exact-config non-data source/destination conversion |
+| Apply LUT (`bloom.ocio-file-transform`) | `input` → `image` | `lut` (Integer asset id, 0 unset); `interpolation` (Linear/Tetrahedral/Best, Linear default); `direction` (Forward/Inverse, Forward default); `processSpace` (String, empty working space); `bypass`, `look` (false) | Working → process space → LUT → working; digest-verified external LUT |
 
 Missing or refused processing yields a typed warning and the unchanged input image. The look flag
 marks a File Transform for request-level bypass; it does not alter its saved wiring. See

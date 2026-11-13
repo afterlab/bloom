@@ -1,4 +1,4 @@
-"""A scripted render through OCIO File Transform runs on the GPU and matches the CPU reference.
+"""A scripted render through Apply LUT (`bloom.ocio-file-transform`) runs on the GPU and matches the CPU reference.
 
 Issue #608: `bloom.render.frame` on a composition with an active LUT took the CPU reference path
 while the same composition without the LUT rendered on the device. A red solid goes through a

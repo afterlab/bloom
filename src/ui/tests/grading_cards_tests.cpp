@@ -1531,6 +1531,11 @@ void pixelAndMotionCards() {
         {"bloom.displace", {"bloom.lens-distortion", "bloom.st-map", "bloom.rolling-shutter"}},
         {"bloom.stabilize", {"bloom.transform-2d", "bloom.camera-shake", "bloom.corner-pin"}},
         {"bloom.tone-map", {"bloom.exposure", "bloom.colorize", "bloom.hue-saturation"}},
+        // #609: Apply LUT and Color Space Transform, beside each other and two grades.
+        {"bloom.ocio-file-transform",
+         {"bloom.ocio-colour-space-transform", "bloom.exposure", "bloom.tone-map"}},
+        {"bloom.ocio-colour-space-transform",
+         {"bloom.ocio-file-transform", "bloom.exposure", "bloom.tone-map"}},
         {"bloom.color-matrix", {"bloom.exposure", "bloom.colorize", "bloom.hue-saturation"}},
         {"bloom.edge-extend", {"bloom.alpha-association", "bloom.set-alpha", "bloom.image-mix"}},
         {"bloom.hsl-qualifier", {"bloom.luma-key", "bloom.matte-blur", "bloom.hue-saturation"}},
