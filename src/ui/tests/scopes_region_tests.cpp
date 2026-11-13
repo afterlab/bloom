@@ -359,13 +359,21 @@ void moveAndResize(Expectations& e, Fixture& f, const std::string& where) {
     const auto key = f.key();
     // Move by the body: whole pixels, and kept whole inside the frame.
     f.store.setRegion(key, Region{10, 10, 20, 20});
+    // Not armed, the body belongs to what is under it: the region stays.
+    drag(f.viewer, {20.0, 20.0}, {25.4, 23.1});
+    e.expect(f.store.region(key) == Region{10, 10, 20, 20},
+             where + ": not armed, the body does not move the region, got " +
+                 text(f.store.region(key)));
+    f.session.clearSelection();
+    f.store.setArmed(true);
     drag(f.viewer, {20.0, 20.0}, {25.4, 23.1});
     e.expect(f.store.region(key) == Region{15, 13, 20, 20},
              where + ": the body moves by whole pixels, got " + text(f.store.region(key)));
     drag(f.viewer, {25.0, 25.0}, {125.0, 125.0});
     e.expect(f.store.region(key) == Region{44, 44, 20, 20},
              where + ": a move stays inside the frame, got " + text(f.store.region(key)));
-    e.expect(!f.store.armed(), where + ": moving does not arm");
+    e.expect(f.store.armed(), where + ": moving leaves the toggle armed");
+    f.store.setArmed(false);
 
     // Each handle resizes: x and y floored, the far edge raised.
     const double dx = 3.3;

@@ -5,9 +5,9 @@
 // dashed hairline in Foreground over a Canvas underlay, square handles), distinct from the region
 // of interest's Accent outline and dimming. It takes input only while the Region toggle arms it
 // (a drag draws a rectangle; one drag per arming) or when the press lands on the region's handles
-// or body (move and resize); anywhere else the press reaches the Viewer's other gestures. A drag
-// only updates the store (on release); the panel's controller does the measuring. Escape cancels a
-// drag and leaves the previous region, and disarms the toggle when no drag runs.
+// (resize; the body moves it only while armed); anywhere else the press reaches the Viewer's other
+// gestures. A drag only updates the store (on release); the panel's controller does the measuring.
+// Escape cancels a drag and leaves the previous region, and disarms the toggle when no drag runs.
 //
 // The rectangle is whole composition pixels: x and y floored, the far edge raised, clipped to the
 // frame, so it is the same at every zoom, pan and preview resolution. The overlay is drawn in
@@ -177,7 +177,9 @@ bool ViewerEditor::scopesRegionPress(QMouseEvent* event) {
             gesture.edges = edges;
             gesture.start = *region;
             hit = true;
-        } else if (area.contains(at)) {
+        } else if (armed && area.contains(at)) {
+            // The body moves the region only while armed: unarmed, a press inside it belongs to
+            // the layer under it.
             gesture.kind = ScopeRegionGesture::Kind::Move;
             gesture.start = *region;
             hit = true;

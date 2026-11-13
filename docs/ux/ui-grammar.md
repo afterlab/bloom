@@ -1927,8 +1927,8 @@ underlay (one device pixel at every zoom and display scale), eight `GizmoHandle`
 corner (inside the corner when there is no room above). It is deliberately unlike the region of
 interest, which is an `Accent` outline with the rest of the frame dimmed, and unlike the selection's
 `Accent` gizmo. With the Region toggle armed, a drag in the Viewer draws a rectangle (one drag per
-arming; the toggle clears afterwards); a press on the region's body or a handle moves or resizes it
-even when not armed. Escape cancels a drag in flight and leaves the previous region, and with no
+arming; the toggle clears afterwards); a press on the region's body while armed moves it, and a press on a handle resizes it
+even when not armed, so a layer inside the region stays reachable. Escape cancels a drag in flight and leaves the previous region, and with no
 drag disarms the toggle. The rectangle is whole composition pixels (x and y floored, the far edge
 raised) clipped to the frame; an empty result is ignored. Anywhere else, and with no visible Scopes
 panel, the overlay is not drawn and takes no input, so layer moves, marquee selection and the
