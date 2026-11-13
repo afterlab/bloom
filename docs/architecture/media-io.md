@@ -2244,7 +2244,13 @@ is given its stream's packet time base, so a first frame the container's edit tr
 written by the macOS encoder: 2112 priming sample frames, the last 64 inside the first packet of
 the edit) is timed at the edit's start; without it that frame kept its packet's earlier time and
 the request from sample 0 failed with "Audio timestamp gap" (#370; `bloom.media.ffmpeg` reads two
-Apple-written files from `tests/data`). A retained worker
+Apple-written files from `tests/data`). A container whose time base is coarser than a sample
+(Matroska and WebM count milliseconds) rounds every packet's time, so a frame within one tick of
+the previous frame's end continues it; a time base that names samples exactly keeps the strict
+rule. A container's duration covers its longest stream and may be rounded up, so a block that
+runs past the audio stream's last sample is completed with silence; a stream that gives no audio
+at all is still refused. Before this, the Opus audio of a WebM movie failed on its second packet
+and the layer was silent. A retained worker
 keeps a separate audio reader and its decode position: a block that starts where the previous
 block ended continues the same pass, including samples already decoded past that end, so N
 sequential blocks decode the stream once. Any other start reopens the reader and decodes from the

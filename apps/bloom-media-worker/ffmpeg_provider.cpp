@@ -1146,7 +1146,14 @@ AudioBlock audio(AudioCursor& cursor, const CallRequest& request) {
         require((origin >= 0 || absolute <= std::numeric_limits<std::int64_t>::max() + origin) &&
                     (origin <= 0 || absolute >= std::numeric_limits<std::int64_t>::min() + origin),
                 "Audio timestamp origin exceeds limits", Error::Oversized);
-        const auto begin = absolute - origin;
+        auto begin = absolute - origin;
+        // A time base coarser than a sample rounds every timestamp (Matroska and WebM count
+        // milliseconds: 48 samples at 48 kHz). A frame within one tick of the previous frame's
+        // end continues it; a time base that names samples exactly keeps the strict rule.
+        if (const auto tick = av_rescale_q_rnd(1, stream.time_base, {1, rate}, AV_ROUND_UP);
+            tick > 1 && cursor.previousEnd && begin - *cursor.previousEnd <= tick &&
+            *cursor.previousEnd - begin <= tick)
+            begin = *cursor.previousEnd;
         require(!cursor.previousEnd || begin >= *cursor.previousEnd,
                 "Overlapping audio timestamps");
         require(begin <= std::numeric_limits<std::int64_t>::max() - f.nb_samples,
@@ -1178,7 +1185,14 @@ AudioBlock audio(AudioCursor& cursor, const CallRequest& request) {
         if (deliver(begin, planes))
             return complete();
     }
-    throw Unavailable{Error::Unavailable, "Audio block is outside the stream duration"};
+    // The audio ended inside the duration the probe reports: a container's duration covers its
+    // longest stream and may be rounded up (WebM states milliseconds), so what follows the
+    // stream's last sample is silence. A stream that gave no audio at all is still refused.
+    require(cursor.previousEnd.has_value(), "Audio block is outside the stream duration",
+            Error::Unavailable);
+    for (auto& channel : result.channels)
+        channel.resize(request.samples, 0.0F);
+    return complete();
 }
 std::unique_ptr<Input> openInput(const CallRequest& request) {
     auto input = std::make_unique<Input>();
