@@ -88,7 +88,14 @@ void ViewerEditor::refreshProbe(QPointF position) {
         return;
     }
     if (actual->channel != ViewerChannel::Rgba || state.freshness != FrameFreshness::Current) {
-        clearProbe();
+        // #715: no value is shown for a frame that is not the current one, but a readout that
+        // only waits for that frame says so, so the status bar does not blink once per frame.
+        const bool awaitingFrame = actual->channel == ViewerChannel::Rgba;
+        probeReadout_ = {};
+        probeReadout_.awaitingFrame = awaitingFrame;
+        if (probeTask_)
+            probeTask_->cancel();
+        emit probeChanged(probeReadout_);
         probePosition_ = position; // keep the cursor location so real publication can refresh it
         return;
     }

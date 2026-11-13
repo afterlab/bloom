@@ -197,6 +197,7 @@ class WindowStatusBar final : public kit::KSurface {
     void applyNarrowLayout();
     void refreshPreviewCells();
     void refreshProbeCell(const ProbeReadout& readout);
+    void showProbeReadout(const ProbeReadout& readout);
     void refreshMediaDiskCacheCell();
     void refreshMessage();
     void applyCompileFailure(std::optional<CompileFailure> failure);
@@ -277,6 +278,10 @@ class WindowStatusBar final : public kit::KSurface {
     std::uint64_t observedMemorySerial_ = 0;
     ProbeReadout probeReadout_{};
     bool probeFloatFormat_ = false;
+    // #715: a readout that only waits for the current frame or its sample, held while the shown
+    // one stays up.
+    std::optional<ProbeReadout> heldProbeReadout_;
+    QTimer* probeHoldTimer_ = nullptr;
 };
 
 } // namespace bloom::ui

@@ -24,6 +24,9 @@ struct ProbeReadout final {
     QString displayName{};
     bool pending = false;
     QString diagnostic{};
+    // #715: not valid only because the Viewer has not shown the current frame yet; the pointer is
+    // still over the image and a readout follows with that frame.
+    bool awaitingFrame = false;
 };
 } // namespace bloom::ui
 Q_DECLARE_METATYPE(bloom::ui::ProbeReadout)

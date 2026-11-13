@@ -887,6 +887,34 @@ QString WindowStatusBar::versionTextForTest() const { return version_->text(); }
 ViewerEditor* WindowStatusBar::displayedViewerForTest() const noexcept { return displayedViewer_; }
 
 void WindowStatusBar::refreshProbeCell(const ProbeReadout& readout) {
+    // #715: during playback every frame is briefly not the current one and its value is briefly
+    // being sampled. A readout that is only waiting keeps the shown one for the delay #685 gives
+    // "Rendering", so the group repaints when its text changes and not twice per frame.
+    const bool waiting = readout.valid ? readout.pending && !readout.working : readout.awaitingFrame;
+    if (waiting && holdRenderingNotice_ && displayedViewer_ != nullptr && probeReadout_.valid) {
+        heldProbeReadout_ = readout;
+        if (probeHoldTimer_ == nullptr) {
+            probeHoldTimer_ = new QTimer(this);
+            probeHoldTimer_->setSingleShot(true);
+            connect(probeHoldTimer_, &QTimer::timeout, this, [this] {
+                if (!heldProbeReadout_)
+                    return;
+                const auto held = *heldProbeReadout_;
+                heldProbeReadout_.reset();
+                showProbeReadout(held);
+            });
+        }
+        if (!probeHoldTimer_->isActive())
+            probeHoldTimer_->start(kRenderingNoticeDelayMs);
+        return;
+    }
+    heldProbeReadout_.reset();
+    if (probeHoldTimer_ != nullptr)
+        probeHoldTimer_->stop();
+    showProbeReadout(readout);
+}
+
+void WindowStatusBar::showProbeReadout(const ProbeReadout& readout) {
     probeReadout_ = readout;
     if (!readout.valid) {
         probe_->setElidedText({});
@@ -923,14 +951,17 @@ void WindowStatusBar::refreshProbeCell(const ProbeReadout& readout) {
                           .arg(readout.coordinate.y, 0, 'f', 2)
                           .arg(working, display);
     probe_->setElidedText(text);
-    probe_->setAccessibleName(text);
+    if (probe_->accessibleName() != text)
+        probe_->setAccessibleName(text);
     statusbar::setToolTipIfChanged(probe_, tr("Working space: %1\nDisplay: %2\nCtrl-click to show %3 values")
                            .arg(QString::fromUtf8(host::workingColorSpaceLabel(
                                     readout.workingColorSpaceId.toStdString())),
                                 readout.displayName,
                                 probeFloatFormat_ ? tr("float pre-encode") : tr("8-bit encoded")));
-    probeSegment_->setVisible(true);
-    applyNarrowLayout();
+    // #715: the layout is fitted again only when the group is not showing, and the fit alone
+    // decides whether it shows (a narrow window drops it), so nothing is shown and hidden again.
+    if (probeSegment_->isHidden())
+        applyNarrowLayout();
 }
 
 bool WindowStatusBar::cachePollActiveForTest() const {

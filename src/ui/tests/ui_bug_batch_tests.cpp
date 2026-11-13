@@ -34,6 +34,7 @@
 #include <bloom/ui/timeline_ruler.hpp>
 #include <bloom/ui/tool_controller.hpp>
 #include <bloom/ui/viewer_editor.hpp>
+#include <bloom/ui/viewer_editor_probe.hpp>
 #include <bloom/ui/viewer_overlays.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 
@@ -903,6 +904,100 @@ void testAlignButtonsDoNotRepaintDuringDrag() {
 }
 
 
+// #715: the pixel readout group repaints only when its text changes. During playback every frame
+// is briefly not the current one and then briefly being sampled; neither blinks the group.
+void testPixelReadoutRepaintsOnlyOnTextChange() {
+    test::WindowFixture fixture;
+    auto* statusBar = fixture.window->findChild<WindowStatusBar*>();
+    expect(statusBar != nullptr, "the status bar exists");
+    if (statusBar == nullptr)
+        return;
+    settle(300);
+    auto* viewer = statusBar->displayedViewerForTest();
+    auto* group = statusBar->findChild<QWidget*>(QStringLiteral("windowStatusBarPixel"));
+    auto* probe = statusBar->findChild<QWidget*>(QStringLiteral("windowStatusBarProbe"));
+    expect(viewer != nullptr && group != nullptr && probe != nullptr,
+           "the status bar shows a Viewer and has a pixel readout group");
+    if (viewer == nullptr || group == nullptr || probe == nullptr)
+        return;
+    const auto readout = [](const double red) {
+        ui::ProbeReadout value;
+        value.valid = true;
+        value.coordinate = {120.0, 80.0};
+        value.reference = core::Color4d{red, 0.25, 0.5, 1.0};
+        value.working = core::Color4d{red, 0.25, 0.5, 1.0};
+        value.workingColorSpaceId = QStringLiteral("scene-linear");
+        value.displayName = QStringLiteral("sRGB");
+        return value;
+    };
+    ui::ProbeReadout awaiting;
+    awaiting.awaitingFrame = true;
+    auto sampling = readout(0.5);
+    sampling.reference.reset();
+    sampling.working.reset();
+    sampling.pending = true;
+
+    emit viewer->probeChanged(readout(0.5));
+    settle(100);
+    expect(!group->isHidden(), "a readout shows the pixel group");
+    PaintCounter counter;
+    counter.roots = {group};
+    qApp->installEventFilter(&counter);
+    constexpr int kFrames = 24;
+    bool everHidden = false;
+    // The pointer rests on a pixel whose value does not change while the frames go by.
+    for (int frame = 0; frame < kFrames; ++frame) {
+        emit viewer->probeChanged(awaiting);
+        everHidden = everHidden || group->isHidden();
+        settle(5);
+        emit viewer->probeChanged(sampling);
+        settle(5);
+        emit viewer->probeChanged(readout(0.5));
+        settle(20);
+    }
+    for (const auto& [widget, count] : counter.counts)
+        expect(count <= 1,
+               (std::string("#715: unchanged pixel text does not repaint: ") +
+                widget->metaObject()->className() + " '" + widget->objectName().toStdString() +
+                "' painted " + std::to_string(count) + " times over " + std::to_string(kFrames) +
+                " frames")
+                   .c_str());
+    expect(!everHidden && !group->isHidden(), "#715: the pixel group stays up between frames");
+    // A value that changes every frame repaints once per change, never for the waits between.
+    counter.counts.clear();
+    for (int frame = 0; frame < kFrames; ++frame) {
+        emit viewer->probeChanged(awaiting);
+        settle(5);
+        emit viewer->probeChanged(sampling);
+        settle(5);
+        emit viewer->probeChanged(readout(0.5 + 0.01 * (frame + 1)));
+        settle(20);
+    }
+    qApp->removeEventFilter(&counter);
+    const int probePaints = counter.counts.contains(probe) ? counter.counts.at(probe) : 0;
+    expect(probePaints >= kFrames / 2 && probePaints <= kFrames + 1,
+           ("#715: changed pixel text repaints once per change (" + std::to_string(probePaints) +
+            " paints for " + std::to_string(kFrames) + " changes)")
+               .c_str());
+    // The group behind the value is painted where the value changed; nothing beside it is.
+    for (const auto& [widget, count] : counter.counts)
+        expect(widget == probe || widget == group || count <= 1,
+               (std::string("#715: only the value repaints when it changes: ") +
+                widget->metaObject()->className() + " painted " + std::to_string(count))
+                   .c_str());
+    // A wait that outlasts the delay is shown, and leaving the image hides the group at once.
+    emit viewer->probeChanged(sampling);
+    settle(600);
+    expect(!group->isHidden() &&
+               probe->property("text").toString().contains(QStringLiteral("Sampling")),
+           "a sample that takes longer than the delay says it is sampling");
+    emit viewer->probeChanged(readout(0.5));
+    settle(50);
+    emit viewer->probeChanged(ui::ProbeReadout{});
+    settle(20);
+    expect(group->isHidden(), "#715: the pointer leaving the image hides the pixel group at once");
+}
+
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName("BloomBugBatchTests");
@@ -926,6 +1021,7 @@ int main(int argc, char** argv) {
     testAlignOnSvgLayerAndParts();
     testPlaybackRepaints();
     testAlignButtonsDoNotRepaintDuringDrag();
+    testPixelReadoutRepaintsOnlyOnTextChange();
     testImagePreviewPlaybackRepaints();
     if (test::failures != 0) {
         std::cerr << test::failures << " UI bug batch checks failed\n";
