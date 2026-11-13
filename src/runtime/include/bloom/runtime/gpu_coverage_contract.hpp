@@ -635,6 +635,20 @@ struct GpuCoverageContractDiagnostic final {
             "A statistic has to reach the value graph from a frame's pixels. The device computes "
             "it into a fixed two-pixel result and only that result is read back, never a "
             "full frame or a per-node full-frame roundtrip."},
+        // Decision O1 of the Scopes specification (#724), recorded in
+        // docs/architecture/scopes.md; it lands only with the owner's approval. One named, bounded
+        // readback: the count tables of one scope measure (at most 6,324,288 bytes whatever the
+        // picture's size), on the final-render device route. The frame, the display transform, the
+        // conversion to XYZ and the counting are device work, and no picture and no per-node
+        // full-frame roundtrip is ever read back.
+        GpuCoverageEntry{
+            "prep.scopes.result_readback",
+            "bounded readback of the count tables of a scope measure so the Scopes panel and the "
+            "scope reads can show them",
+            GpuCoverageDisposition::ApprovedCpuHostPreparation, "docs/architecture/scopes.md",
+            "A scope shows counts of a frame's pixels. The device counts them into fixed-size "
+            "tables and only those tables are read back, never a full frame or a per-node "
+            "full-frame roundtrip."},
     };
 }
 

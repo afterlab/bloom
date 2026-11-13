@@ -3807,6 +3807,19 @@ int run(int argc, char** argv) {
             }) != 1)
             failures.push_back("the statistics readback is not one narrow typed entry naming its "
                                "owning document");
+        const auto scopes = std::ranges::find_if(preparation, [](const auto& entry) {
+            return entry.id == "prep.scopes.result_readback";
+        });
+        if (scopes == preparation.end() ||
+            scopes->disposition !=
+                bloom::runtime::GpuCoverageDisposition::ApprovedCpuHostPreparation ||
+            scopes->approvalReference != "docs/architecture/scopes.md" ||
+            scopes->rationale.empty() || scopes->label.empty() ||
+            std::ranges::count_if(preparation, [](const auto& entry) {
+                return entry.id.starts_with("prep.scopes.");
+            }) != 1)
+            failures.push_back("the scope table readback is not one narrow typed entry naming its "
+                               "owning document");
         const auto effects = bloom::runtime::gpuImageEffectCoverage();
         const auto kernel = std::ranges::find_if(effects, [](const auto& entry) {
             return entry.id == "effect.StatisticsKernel";

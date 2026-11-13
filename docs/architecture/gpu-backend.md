@@ -364,6 +364,15 @@ CPU. [Image Statistics](image-statistics.md#routes) owns the details;
 `bloom.ui.gpu_ram_preview_image_statistics` proves the viewer and RAM preview frames GPU-resident
 against the CPU oracle with each frame measured once on the device.
 
+Scope measure. The Scopes panel's count tables are measured as a job of the same final-render
+evaluator (`GpuProcessFrameEvaluator::measureScopes`): the frame's scene runs on the device, the
+resident picture is converted to the measured signal and to CIE XYZ by two OCIO programs, the
+fixed kernel `ScopeTablesV1` counts it, and only the tables are read back
+(`prep.scopes.result_readback`), never the picture. A frame the device cannot count is counted by
+the CPU reference and labeled CPU. [Scopes](scopes.md) owns the details;
+`bloom.runtime.scope_frame_measure_native` proves the device tables against the CPU reference with
+one table readback and no picture readback.
+
 Resident preview product and service. The closed `PreparedPreviewFrame` display variant has a fourth,
 GPU-resident arm, `PreviewResidentDisplayFrame`, built only by the validating owner-thread factory in
 `gpu_resident_preview_product.hpp`. Its only pixel storage is the opaque, owner-bound
