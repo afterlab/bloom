@@ -811,6 +811,14 @@ class PaintCounter final : public QObject {
     }
 };
 
+// The pace of the simulated playback below: a frame every 30 ms. Not a wait for anything: the
+// bound that test checks is repaints against frames and against the status bar's own 250 ms
+// clock, so the frames have to arrive at a playback rate.
+void playbackPace(const int ms) {
+    QApplication::processEvents();
+    QTest::qWait(ms);
+}
+
 // While the playhead advances, nothing repaints more than once per frame, and what shows the same
 // thing before and after (the status message, the Viewer cells, the anchor grid, a node card)
 // does not repaint for it.
@@ -829,7 +837,7 @@ void testPlaybackRepaints() {
            "the status bar, Nodes and Properties exist");
     if (statusBar == nullptr || nodes == nullptr || properties == nullptr)
         return;
-    settleIdle(fixture);
+    playbackPace(300);
     PaintCounter counter;
     counter.roots = {statusBar, nodes, properties};
     qApp->installEventFilter(&counter);
@@ -839,7 +847,7 @@ void testPlaybackRepaints() {
     for (int frame = 1; frame <= kFrames; ++frame) {
         if (const auto time = core::RationalTime::create(frame, 24))
             static_cast<void>(fixture.session.setCurrentTime(*time));
-        settleIdle(fixture);
+        playbackPace(30);
     }
     qApp->removeEventFilter(&counter);
     // The Memory and Cache readouts also refresh on their own 250 ms clock, whatever the frame
