@@ -363,6 +363,13 @@ bool GpuExportProvider::deviceAvailable() const {
     return handle != nullptr && handle->gpuAvailable();
 }
 
+std::shared_ptr<const runtime::GpuSceneOcioContext> GpuExportProvider::sceneOcioContext() const {
+    if (state_ == nullptr)
+        return nullptr;
+    const std::lock_guard lock(state_->displayMutex);
+    return state_->ocioContext;
+}
+
 std::shared_ptr<runtime::GpuProcessingPhasePolicy>
 GpuExportProvider::processingPhasePolicy() const noexcept {
     return state_ ? state_->options.processingPhasePolicy : nullptr;

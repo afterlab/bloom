@@ -93,6 +93,10 @@ class GpuExportProvider final {
     [[nodiscard]] bool bootstrapPending() const noexcept;
     // True only when the published evaluator genuinely reports an available device.
     [[nodiscard]] bool deviceAvailable() const;
+    // The shared immutable OCIO context the bootstrap resolved from the injected resolver; null
+    // before the bootstrap ends, without a resolver and when the packaged tools are unavailable.
+    // The scope measure (#724) hands it to the device route.
+    [[nodiscard]] std::shared_ptr<const runtime::GpuSceneOcioContext> sceneOcioContext() const;
 
     [[nodiscard]] std::shared_ptr<runtime::GpuProcessingPhasePolicy>
     processingPhasePolicy() const noexcept;

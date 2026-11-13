@@ -358,7 +358,7 @@ void outputsAndSideEffectsAreDeclared() {
     // The new query kinds, the origin and the export script's format are in the reference.
     for (const auto* name : {"query:text-metrics", "query:layer-bounds", "query:history",
                              "query:viewer", "query:preview-cache", "query:jobs", "query:pixels",
-                             "query:render-route"})
+                             "query:render-route", "query:scopes", "bloom.scopes"})
         expect(reference.find(name) != nullptr, std::string(name) + " is in the reference");
     // #390: an unsaved project's import is documented, and the new readings state their limits.
     const auto* import = reference.find("bloom.asset.import");

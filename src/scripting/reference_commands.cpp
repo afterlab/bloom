@@ -388,6 +388,197 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
            .unit = "composition pixels from the frame's top-left corner",
            .range = "inside the frame; width * height at most 256"}},
          R"({"name":"query","arguments":{"kind":"pixels","time":24,"region":[960,540,1,1]}})");
+    kind(
+        "scopes",
+        "The Scopes panel's count tables, a summary of them, or a picture of a scope, for a frame "
+        "or a range.",
+        "Measures the frame exactly as the Scopes panel does (the same definitions, the same GPU "
+        "and CPU routes) with no panel open, in any session, on the request's worker and not on "
+        "the application's interface; it stops when the request is cancelled. The Display signal "
+        "goes through the color configuration's default display and view (the pair capture "
+        "uses) unless `display` and `view` name another, never through an open Viewer's exposure, "
+        "gamma, channel or isolation. The Working signal is the scene-linear picture; "
+        "`axisMaximum` M sets the largest linear value the axis shows. `region` is in composition "
+        "pixels; one outside the frame answers empty:true. `result` picks what comes back. "
+        "tables: the count tables of the scopes asked for, every cell an exact pixel count: "
+        "histogram (4 channels x 1024 codes, with under and over per channel), waveform (4 "
+        "channels x columns x 512 levels, with under and over per column; columns is the "
+        "measured width, at most 512; the parade draws this table's red, green and blue), "
+        "vectorscope and chromaticity (512 x 512 each); `shape` and `order` say how `values` "
+        "reads, and encoding sparse lists only the non-zero cells as [index, count] pairs. "
+        "`counted` is the pixels counted; `counters` has notFinite, noChromaticity and the "
+        "pixels outside the vectorscope and chromaticity tables. summary: per channel (red, "
+        "green, blue, luma) min, max, mean, p1, p50 and p99 code values and the clipped counts, "
+        "and for the vectorscope the mean saturation and hue. image: a PNG of one scope or all "
+        "five, drawn as the panel draws them, at `width` (and `height` for one scope); it is "
+        "returned like capture returns a picture (embedded when small, else linked) and "
+        "written to the capture folder. Every frame reports the `route` that counted it (gpu or "
+        "cpu) and why the CPU reference counted a frame the device could not; with the "
+        "application's RAM Preview, `fromCache` says a frame's tables came from its warm "
+        "sidecar. A read covers one frame, or frame to lastFrame (at most 1000 frames; an image "
+        "range at most 16), and reports progress per frame. An answer is limited to about 1.7 "
+        "MiB of table numbers: ask for fewer scopes, the sparse encoding, a smaller region, a "
+        "summary or an image instead.",
+        "{revision, composition, compositionSize:{width, height}, settings:{scopes, signal, "
+        "axisMaximum|null, region|null, ignoreTransparent, resolution, display|null, view|null, "
+        "result, encoding?, image?, waveformChannels?, histogramChannels?, histogramScale?, "
+        "brightness?}, axis, luma:{kr, kg, kb}, primaries:{colorSpace, r:[x, y], g, b, w}, "
+        "frames:[{frame, time:[n, d], route (gpu|cpu), routeNote|null, fromCache, empty, "
+        "measuredArea:{x, y, width, height}|null, counted, note?, counters?:{notFinite, "
+        "noChromaticity|null, outside:{vectorscope|null, chromaticity|null}}, tables?:{histogram?:"
+        "{channels, shape, order, encoding, values, underOverShape, under, over}, waveform?:{... "
+        "columns}, vectorscope?:{shape, order, encoding, values}, chromaticity?:{...}}, "
+        "summary?:{codes, channels:{red|green|blue|luma:{min, max, mean, p1, p50, p99, "
+        "clippedUnder, clippedOver}|null}, vectorscope:{meanSaturation, meanHueDegrees, "
+        "units}|null}, image?:{path, bytes, digest, width, height, inline}}]}",
+        {{.name = "composition",
+          .type = "integer",
+          .summary = "The composition.",
+          .unit = "composition id (query:compositions)",
+          .range = ">= 1",
+          .defaultValue = "the current composition"},
+         {.name = "frame",
+          .type = "integer",
+          .summary = "The first (or only) frame to read.",
+          .unit = "whole frames of the composition at its frame rate",
+          .range = "inside the composition",
+          .defaultValue = "the playhead's frame (frame 0 headless)"},
+         {.name = "time",
+          .type = "integer or [numerator, denominator]",
+          .summary = "Instead of frame: an integer is a whole frame; [numerator, denominator] is "
+                     "exact seconds (concept:time). The frame nearest to it is read.",
+          .unit = "composition time"},
+         {.name = "lastFrame",
+          .type = "integer",
+          .summary = "The last frame of a range, inclusive; the answer has one entry per frame.",
+          .unit = "whole frames",
+          .range = "frame to frame + 999 (image: at most 16 frames)",
+          .defaultValue = "the first frame"},
+         {.name = "scopes",
+          .type = "array of strings",
+          .summary = "The scopes whose tables are measured: waveform, parade (the waveform "
+                     "table), vectorscope, histogram, chromaticity. A summary reads the "
+                     "histogram and the vectorscope; an image measures what it shows.",
+          .unit = "scope names",
+          .defaultValue = "all five"},
+         {.name = "signal",
+          .type = "string",
+          .summary = "display: the picture after the display and view. working: the "
+                     "scene-linear picture before them.",
+          .range = "\"display\" or \"working\"",
+          .defaultValue = "display"},
+         {.name = "axisMaximum",
+          .type = "integer",
+          .summary = "The working signal's axis maximum M: code 1023 is the value M.",
+          .unit = "linear value",
+          .range = "1, 2, 4, 8 or 16",
+          .defaultValue = "1"},
+         {.name = "region",
+          .type = "array of 4 integers",
+          .summary = "[x, y, width, height]: measure only this part of the frame.",
+          .unit = "composition pixels from the frame's top-left corner",
+          .range = "width and height at least 1; the part outside the frame is cut",
+          .defaultValue = "the whole frame"},
+         {.name = "ignoreTransparent",
+          .type = "boolean",
+          .summary = "Leave out pixels whose alpha is 0.",
+          .defaultValue = "false"},
+         {.name = "resolution",
+          .type = "string",
+          .summary = "The resolution the frame is evaluated at; a region is scaled to it.",
+          .range = "\"full\", \"half\" or \"quarter\"",
+          .defaultValue = "full"},
+         {.name = "display",
+          .type = "string",
+          .summary = "The display signal's OCIO display. A name the configuration lacks is "
+                     "refused with the valid ones.",
+          .unit = "display name of the project's color configuration",
+          .defaultValue = "the configuration's default"},
+         {.name = "view",
+          .type = "string",
+          .summary = "The display signal's OCIO view.",
+          .unit = "view name of the display",
+          .defaultValue = "the configuration's default"},
+         {.name = "result",
+          .type = "string",
+          .summary = "tables, a summary of them, or a picture.",
+          .range = "\"tables\", \"summary\" or \"image\"",
+          .defaultValue = "tables"},
+         {.name = "encoding",
+          .type = "string",
+          .summary = "For tables: dense lists every cell; sparse lists [index, count] pairs of the "
+                     "non-zero cells.",
+          .range = "\"dense\" or \"sparse\"",
+          .defaultValue = "dense"},
+         {.name = "image",
+          .type = "string",
+          .summary = "For an image: which scope to draw.",
+          .range = "\"waveform\", \"parade\", \"vectorscope\", \"histogram\", \"chromaticity\" "
+                   "or \"all\" (the five stacked in the panel's order)",
+          .defaultValue = "all"},
+         {.name = "width",
+          .type = "integer",
+          .summary = "For an image: the picture's width.",
+          .unit = "pixels",
+          .range = "128..2048",
+          .defaultValue = "640"},
+         {.name = "height",
+          .type = "integer",
+          .summary = "For an image of one scope: the picture's height. All five take their "
+                     "height from the width.",
+          .unit = "pixels",
+          .range = "128..2048",
+          .defaultValue = "the panel's height for the width"},
+         {.name = "waveformChannels",
+          .type = "string",
+          .summary = "For an image: the channels the waveform draws.",
+          .range = "\"rgb\" or \"luma\"",
+          .defaultValue = "rgb"},
+         {.name = "histogramChannels",
+          .type = "string",
+          .summary = "For an image: the rows the histogram draws.",
+          .range = "\"rgb\", \"luma\" or \"rgb-luma\"",
+          .defaultValue = "rgb"},
+         {.name = "histogramScale",
+          .type = "string",
+          .summary = "For an image: the histogram's height scale.",
+          .range = "\"linear\" or \"logarithmic\"",
+          .defaultValue = "linear"},
+         {.name = "brightness",
+          .type = "number",
+          .summary = "For an image: the trace brightness gain (the panel's Brightness).",
+          .unit = "gain",
+          .range = "0.1..16",
+          .defaultValue = "1"}},
+        R"({"name":"query","arguments":{"kind":"scopes","composition":1,"frame":24,"result":"summary"}})");
+    {
+        auto& scopes = out.back();
+        scopes.examples.push_back(
+            {.surface = "mcp",
+             .text =
+                 R"({"name":"query","arguments":{"kind":"scopes","frame":24,"result":"image","image":"all","width":640}})"});
+        scopes.examples.push_back(
+            {.surface = "mcp",
+             .text =
+                 R"({"name":"query","arguments":{"kind":"scopes","frame":0,"lastFrame":47,"signal":"working","axisMaximum":4,"scopes":["histogram"],"result":"summary"}})"});
+        scopes.related.emplace_back("bloom.scopes");
+        scopes.errors = {
+            makeError("-32602", "composition does not exist, or frame is outside it",
+                      "pick a composition and frame the error lists (query:compositions)"),
+            makeError("-32602", "a scope name, signal, resolution or result that is not valid",
+                      "use one of the names the error lists"),
+            makeError("-32602", "display or view the color configuration lacks",
+                      "choose one of the valid pairs the error lists, or leave both out"),
+            makeError("-32602",
+                      "width or height outside 128..2048, height with image all, or "
+                      "more frames than a read allows",
+                      "use the range the error names, or split the read"),
+            makeError("-32602", "the tables would not fit one answer",
+                      "ask for fewer scopes, encoding sparse, a smaller region, fewer frames, a "
+                      "summary or an image"),
+            makeError("bloom.mcp.cancelled", "the request was cancelled",
+                      "ask again; nothing was changed", true)};
+    }
     kind("render-route", "Which route produced the Viewer's frame: GPU or CPU, and why.",
          "Desktop application only. Reads what the displayed frame itself recorded: `scene` is "
          "where the composition was evaluated and `display` where the display transform ran, "
@@ -572,6 +763,20 @@ void addPythonEntries(std::vector<ReferenceEntry>& out) {
         "bloom.render.range(first, last, *, out, ...). Output keeps alpha; the composition "
         "background colour is not rendered.",
         "bloom.render.frame(0, out=\"frames\")");
+    api("bloom.scopes", "Read the Scopes panel's tables, a summary or a picture of a scope.",
+        "bloom.scopes.read(frame=None, *, last_frame=None, composition=None, time=None, "
+        "scopes=None, signal=\"display\", axis_maximum=1, region=None, ignore_transparent=False, "
+        "resolution=\"full\", display=None, view=None, result=\"tables\", encoding=\"dense\") "
+        "measures the frames exactly as query:scopes does (the arguments are the same, in "
+        "snake_case) and returns the same answer as a dict with snake_case keys: settings, luma, "
+        "primaries and frames, each frame with its route, counted, counters and tables or summary. "
+        "bloom.scopes.image(out, frame=None, *, image=\"all\", width=640, height=None, ...) "
+        "writes the PNG to the path `out` (for a range, one numbered file per frame, as "
+        "bloom.render.range names them) and returns the same dict with each frame's path. "
+        "A read inside bloom.tasks.submit reports progress per frame and stops when the task is "
+        "cancelled (CancelledError). A bad argument raises ValueError with the remedy; a project "
+        "that cannot be measured raises RuntimeError.",
+        "bloom.scopes.read(24, result=\"summary\")[\"frames\"][0][\"summary\"]");
     api("bloom.events", "Subscribe to command events.",
         "bloom.events.subscribe(callback, kinds=...) and bloom.events.pump().",
         "bloom.events.subscribe(print)");

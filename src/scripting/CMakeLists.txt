@@ -47,6 +47,7 @@ target_sources(
         reference_session_tools.cpp
         reference_surfaces.cpp
         render.cpp
+        scope_read.cpp
         session.cpp
     PUBLIC
         FILE_SET HEADERS
@@ -66,6 +67,7 @@ target_sources(
             include/bloom/scripting/query.hpp
             include/bloom/scripting/readings.hpp
             include/bloom/scripting/render.hpp
+            include/bloom/scripting/scope_read.hpp
             include/bloom/scripting/session.hpp
             include/bloom/scripting/tasks.hpp
             include/bloom/scripting/value.hpp
@@ -149,6 +151,18 @@ if(BUILD_TESTING)
         NAME bloom.scripting.operation-reference
         COMMAND bloom_scripting_operation_reference_test
         LABELS unit scripting mcp
+    )
+    # #724 Scopes: the read behind MCP's `query` kind `scopes` and Python's `bloom.scopes`, headless.
+    # ZLIB backs the test's own PNG reader.
+    bloom_find_dependency(ZLIB)
+    add_executable(bloom_scripting_scope_read_test tests/scope_read_tests.cpp)
+    target_link_libraries(bloom_scripting_scope_read_test PRIVATE bloom_scripting ZLIB::ZLIBSTATIC)
+    bloom_enable_warnings(bloom_scripting_scope_read_test)
+    bloom_add_test(
+        NAME bloom.scripting.scope-read
+        COMMAND bloom_scripting_scope_read_test
+        LABELS unit scripting runtime render
+        TIMEOUT 300
     )
     add_executable(bloom_scripting_layer_alignment_test tests/layer_alignment_tests.cpp)
     target_link_libraries(bloom_scripting_layer_alignment_test PRIVATE bloom_scripting)
