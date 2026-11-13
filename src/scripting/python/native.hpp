@@ -51,6 +51,10 @@ class NativeHost final {
                                   std::uint64_t last, bool range, const std::string& preset,
                                   const std::string& destination, std::uint64_t cancellationTask,
                                   bool replace, bool requireDevice);
+    // #724 Scopes (scopes.cpp): `options` is bloom.scopes' complete request; `progress` is None or
+    // a callable taking (frames done, frames total) that may raise to stop the read.
+    [[nodiscard]] nb::dict scopes(const nb::dict& options, std::uint64_t cancellationTask,
+                                  const nb::object& progress);
     [[nodiscard]] nb::list events();
     [[nodiscard]] nb::list tasks() const;
     [[nodiscard]] std::unique_ptr<TaskTicket> trackTask(std::string name) {

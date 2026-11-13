@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Any
 version: str
 facade_version: str
@@ -31,6 +32,11 @@ class Host:
                replace: bool) -> dict[str, Any]:
         """`succeeded`; on failure `diagnostic` and `diagnostic_code` ("cancelled",
         "missing-processing-root" or "")."""
+        ...
+    def scopes(self, options: dict[str, Any], cancellation_task: int,
+               progress: Callable[[int, int], None] | None = ...) -> dict[str, Any]:
+        """The whole request of bloom.scopes; on a cancelled read `succeeded` is False and
+        `diagnostic_code` is "cancelled"."""
         ...
     def events(self) -> list[dict[str, Any]]: ...
     def tasks(self) -> list[dict[str, Any]]: ...

@@ -53,6 +53,8 @@ void bindHost(nb::module_& module) {
              nb::arg("working_space") = nb::none(), nb::arg("file") = nb::none(),
              nb::arg("project_relative") = false, nb::arg("context") = nb::none())
         .def("render", &NativeHost::render)
+        .def("scopes", &NativeHost::scopes, nb::arg("options"), nb::arg("cancellation_task"),
+             nb::arg("progress") = nb::none())
         .def("events", &NativeHost::events)
         .def("tasks", &NativeHost::tasks)
         .def("track_task", &NativeHost::trackTask, nb::keep_alive<0, 1>())

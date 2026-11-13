@@ -22,7 +22,7 @@ function(bloom_python_require_pic bloom_python_target)
 endfunction()
 bloom_python_require_pic(bloom_scripting)
 
-add_library(bloom_python_binding OBJECT native.cpp projections.cpp render.cpp bindings.cpp task_ticket.cpp root_retirements.cpp)
+add_library(bloom_python_binding OBJECT native.cpp projections.cpp render.cpp scopes.cpp bindings.cpp task_ticket.cpp root_retirements.cpp)
 target_link_libraries(bloom_python_binding PRIVATE bloom_scripting nanobind::core Python3::Module)
 target_compile_features(bloom_python_binding PRIVATE cxx_std_20)
 target_compile_definitions(bloom_python_binding PRIVATE BLOOM_PYTHON_VERSION="${PROJECT_VERSION}")
@@ -116,6 +116,12 @@ if(BUILD_TESTING)
     bloom_add_test(NAME bloom.scripting.python-parity-ops
         COMMAND "${Python3_EXECUTABLE}" -I
             "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_parity_ops.py"
+            "${CMAKE_BINARY_DIR}/python"
+        LABELS scripting python integration)
+    # #724: bloom.scopes reads tables, a summary and a picture of the Scopes panel's measure.
+    bloom_add_test(NAME bloom.scripting.python-scopes
+        COMMAND "${Python3_EXECUTABLE}" -I
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_scopes.py"
             "${CMAKE_BINARY_DIR}/python"
         LABELS scripting python integration)
     # #357: several Hosts rendering through one interpreter device must exit promptly.
