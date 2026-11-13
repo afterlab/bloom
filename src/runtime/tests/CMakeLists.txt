@@ -2959,6 +2959,15 @@ set_tests_properties(bloom.runtime.gpu_warp_path_native
     PROPERTIES SKIP_RETURN_CODE 77)
 
 
+# #724 Scopes: the Qt-free scope picture (graticule plan, picture render, PNG bytes) with no widget.
+bloom_find_dependency(ZLIB)
+add_executable(bloom_runtime_scope_picture_test scope_picture_tests.cpp)
+target_include_directories(bloom_runtime_scope_picture_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_scope_picture_test PRIVATE bloom_runtime_evaluator ZLIB::ZLIBSTATIC)
+bloom_enable_warnings(bloom_runtime_scope_picture_test)
+bloom_enable_strict_floating_point(bloom_runtime_scope_picture_test)
+bloom_add_test(NAME bloom.runtime.scope_picture COMMAND bloom_runtime_scope_picture_test LABELS unit runtime render)
+
 # #724 Scopes: the CPU reference of the scope measure, its packed form and summary.
 add_executable(bloom_runtime_scope_measure_test scope_measure_tests.cpp)
 target_include_directories(bloom_runtime_scope_measure_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")

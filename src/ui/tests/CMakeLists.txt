@@ -2320,6 +2320,17 @@ bloom_add_test(
     TIMEOUT 60
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
+# #724 Scopes: the panel and the headless scope picture draw from one plan, palette and mapping.
+add_executable(bloom_ui_scopes_picture_test scopes_picture_tests.cpp)
+target_link_libraries(bloom_ui_scopes_picture_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_scopes_picture_test)
+bloom_add_test(
+    NAME bloom.ui.scopes-picture
+    COMMAND bloom_ui_scopes_picture_test
+    LABELS ui unit
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
 # #724 Scopes: the Scopes panel over genuine CPU reference frames; no device and no Viewer.
 add_executable(bloom_ui_scopes_panel_test scopes_panel_tests.cpp)
 target_link_libraries(bloom_ui_scopes_panel_test PRIVATE bloom_ui)
