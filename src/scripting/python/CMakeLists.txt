@@ -96,13 +96,16 @@ if(BUILD_TESTING)
         # bloom-cli export probes the encoders and renders a saved queue end to end.
         TIMEOUT 180)
     # #650: every preset export.presets lists as available is accepted by the Python operation
-    # and rendered by bloom-cli export (real encodes of two frames each).
-    bloom_add_test(NAME bloom.scripting.python-export-presets
-        COMMAND "${Python3_EXECUTABLE}" -I
-            "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_export_presets.py"
-            "${CMAKE_BINARY_DIR}/python" $<TARGET_FILE:bloom-cli>
-        LABELS scripting python integration device
-        TIMEOUT 600)
+    # and rendered by bloom-cli export (real encodes of two frames each). The walk runs on Linux
+    # only, so it is registered there only: elsewhere it used to skip itself and count as passed.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        bloom_add_test(NAME bloom.scripting.python-export-presets
+            COMMAND "${Python3_EXECUTABLE}" -I
+                "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_export_presets.py"
+                "${CMAKE_BINARY_DIR}/python" $<TARGET_FILE:bloom-cli>
+            LABELS scripting python integration device
+            TIMEOUT 600)
+    endif()
     # Agent feedback: one time contract (an integer is a frame) and parameter value kinds.
     bloom_add_test(NAME bloom.scripting.python-agent-feedback
         COMMAND "${Python3_EXECUTABLE}" -I

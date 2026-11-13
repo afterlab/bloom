@@ -27,8 +27,6 @@ class ExportPresets(unittest.TestCase):
         _state._host.reset(self.token)
 
     def test_every_available_preset_is_accepted_and_rendered(self):
-        if sys.platform != 'linux':
-            self.skipTest('export runs on Linux in this version')
         with tempfile.TemporaryDirectory(prefix='bloom-export-presets-') as directory:
             folder = pathlib.Path(directory)
             script = folder / 'presets.json'
