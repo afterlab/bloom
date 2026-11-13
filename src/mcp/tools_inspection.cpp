@@ -1,6 +1,7 @@
 // The read-back queries that answer a fact an agent would otherwise have to render or provoke an
 // error to learn (#390): text-metrics, layer-bounds, history, viewer, preview-cache, jobs and
-// render-route (pixels lives with the render code, tools_render.cpp). They hold no project truth
+// render-route (pixels lives with the render code, tools_render.cpp, and scopes in
+// tools_scopes.cpp). They hold no project truth
 // and change nothing. A state the application does not know is reported as null,
 // never as a made-up value.
 #include "core_internal.hpp"
@@ -540,7 +541,7 @@ yyjson_mut_val* renderRouteQuery(McpServerCore::State& core, Json& out, McpCall&
 bool isInspectionQuery(const std::string_view kind) noexcept {
     return kind == "text-metrics" || kind == "layer-bounds" || kind == "history" ||
            kind == "viewer" || kind == "preview-cache" || kind == "jobs" ||
-           kind == "render-route" || kind == "pixels";
+           kind == "render-route" || kind == "pixels" || kind == "scopes";
 }
 
 yyjson_mut_val* inspectionQuery(McpServerCore::State& core, Json& out, McpCall& call,
@@ -559,6 +560,8 @@ yyjson_mut_val* inspectionQuery(McpServerCore::State& core, Json& out, McpCall& 
         return renderRouteQuery(core, out, call, arguments);
     if (kind == "pixels")
         return pixelsQuery(core, out, call, arguments);
+    if (kind == "scopes")
+        return scopesQuery(core, out, call, arguments);
     return previewCacheQuery(core, out, call, arguments);
 }
 

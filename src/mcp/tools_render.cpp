@@ -706,6 +706,12 @@ std::filesystem::path nextCapturePath(McpServerCore::State& core) {
 
 } // namespace
 
+std::filesystem::path nextScopePicturePath(McpServerCore::State& core) {
+    return nextCapturePath(core);
+}
+
+void pruneScopePictures(const std::filesystem::path& folder) { pruneCaptures(folder); }
+
 yyjson_mut_val* renderTool(McpServerCore::State& core, Json& out, McpCall& call,
                            yyjson_val* arguments, const bool compositionExport) {
     return call.live != nullptr ? renderLive(core, out, call, arguments, compositionExport)

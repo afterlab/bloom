@@ -48,6 +48,7 @@ target_sources(
         tools_readback.cpp
         tools_reference.cpp
         tools_render.cpp
+        tools_scopes.cpp
         tools_session.cpp
     PUBLIC
         FILE_SET HEADERS
@@ -94,6 +95,16 @@ if(BUILD_TESTING)
         COMMAND bloom_mcp_core_tools_test
         LABELS unit mcp
         TIMEOUT 120
+    )
+    # #724 Scopes: query kind `scopes` through the shared core, headless.
+    add_executable(bloom_mcp_scope_query_test tests/scope_query_tests.cpp)
+    target_link_libraries(bloom_mcp_scope_query_test PRIVATE bloom_mcp yyjson::yyjson)
+    bloom_enable_warnings(bloom_mcp_scope_query_test)
+    bloom_add_test(
+        NAME bloom.mcp.scope-query
+        COMMAND bloom_mcp_scope_query_test
+        LABELS unit mcp runtime render
+        TIMEOUT 300
     )
     add_executable(bloom_mcp_export_reopen_quality_test tests/export_reopen_quality_tests.cpp)
     target_link_libraries(bloom_mcp_export_reopen_quality_test PRIVATE bloom_mcp

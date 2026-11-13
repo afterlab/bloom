@@ -267,7 +267,9 @@ int serve(scripting::Session& session) {
                     .undoHistory = {},
                     .viewerState = {},
                     .previewCache = {},
-                    .viewerRoute = {}},
+                    .viewerRoute = {},
+                    .scopeRoutes = {},
+                    .warmScopes = {}},
              .profilerSnapshot =
                  [&profiler](runtime::ProfilerSnapshot& out) {
                      static_cast<void>(profiler.sampleNow());

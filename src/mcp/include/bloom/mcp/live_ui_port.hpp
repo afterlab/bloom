@@ -18,6 +18,8 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/ids.hpp>
+#include <bloom/runtime/scope_frame_measure.hpp>
+#include <bloom/scripting/scope_read.hpp>
 
 #include <array>
 #include <cstddef>
@@ -472,6 +474,17 @@ struct McpLiveUiPort final {
     std::function<McpPreviewCacheState()> previewCache;
     // query kind render-route: which route produced the Viewer's displayed frame.
     std::function<McpViewerRoute()> viewerRoute;
+    // query kind scopes (#724): where the application measures a frame's scopes. Only `device` and
+    // `ocio` need to be set (the application's final-render evaluator and its shared OCIO
+    // context); the read evaluates on the CPU reference itself. Empty: the CPU reference counts
+    // every frame. Called on the owner thread; the std::function members it returns are called on
+    // a worker.
+    std::function<runtime::ScopeFrameRoutes()> scopeRoutes;
+    // query kind scopes: the preview cache's sidecar of a frame under exactly the identity the read
+    // would measure, or nothing. Called on the owner thread, once per frame of a read. Empty: every
+    // frame is measured.
+    std::function<std::optional<scripting::ScopeWarmHit>(const scripting::ScopeWarmQuery&)>
+        warmScopes;
 };
 
 } // namespace bloom::mcp

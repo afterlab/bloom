@@ -298,6 +298,13 @@ struct TransientResult final {
 // still route.
 [[nodiscard]] yyjson_mut_val* pixelsQuery(McpServerCore::State& core, Json& out, McpCall& call,
                                           yyjson_val* arguments);
+// query kind=scopes (tools_scopes.cpp): the Scopes panel's count tables, a summary of them or a
+// picture of a scope, for one frame or a range.
+[[nodiscard]] yyjson_mut_val* scopesQuery(McpServerCore::State& core, Json& out, McpCall& call,
+                                          yyjson_val* arguments);
+// Where a scope picture is written, and its pruning: the capture folder, shared with capture.
+[[nodiscard]] std::filesystem::path nextScopePicturePath(McpServerCore::State& core);
+void pruneScopePictures(const std::filesystem::path& folder);
 // An integer is a whole frame of the composition at its frame rate; [numerator, denominator] is
 // exact seconds.
 [[nodiscard]] core::RationalTime frameOrSecondsArgument(yyjson_val* value,

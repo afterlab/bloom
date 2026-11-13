@@ -588,7 +588,9 @@ void liveSeams() {
         .undoHistory = {},
         .viewerState = {},
         .previewCache = {},
-        .viewerRoute = {}};
+        .viewerRoute = {},
+        .scopeRoutes = {},
+        .warmScopes = {}};
     Live server(std::move(port));
     expect(contains(server.call("dialog.answer", R"({"button":"Cancel"})"), R"("succeeded":true)") &&
                answered == "Cancel",
