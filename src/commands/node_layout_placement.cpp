@@ -146,6 +146,18 @@ struct NodeControlsEstimate final {
         return {.sliders = 2};
     if (typeId == document::kShapeMorphNodeType)
         return {.sliders = 1};
+    // #638: the path nodes' distances and shares on sliders, Start and End as one range; HSL
+    // Qualifier's three windows, each with its softness slider.
+    if (typeId == document::kTrimPathNodeType)
+        return {.ranges = 1, .sliders = 1};
+    if (typeId == document::kOffsetPathNodeType)
+        return {.sliders = 3};
+    if (typeId == document::kRoundCornersNodeType)
+        return {.sliders = 1};
+    if (typeId == document::kPathStrokeNodeType)
+        return {.ranges = 1, .sliders = 12};
+    if (typeId == document::kHslQualifierNodeType)
+        return {.ranges = 3, .sliders = 3};
     // #511: the pad for the mode's point and the angle dial of Mirror or Kaleidoscope (one at a time).
     if (typeId == document::kTileMirrorNodeType)
         return {1, 0, true};
