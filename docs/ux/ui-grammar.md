@@ -1914,8 +1914,26 @@ Drawing rules (no literal colors; every color is a `kit::Color` token, every siz
   channel and code; cb, cr, angle and saturation; x and y) and the count of that cell.
 
 The scope region is the panel's seam for the Viewer: `ScopesEditor::setRegion` and `clearRegion`,
-`regionArmed`, and the `regionChanged` and `regionArmedChanged` signals. It is session state of the
-panel, never project state, and not undoable.
+`regionArmed`, and the `regionChanged` and `regionArmedChanged` signals. The panel reads and writes
+the region of its followed Viewer's composition in the session's `ScopesRegionStore`, which also
+holds the Region toggle and the count of visible Scopes panels, so every panel and every Viewer of
+a composition agree. It is session state, never serialized, never project state, not undoable, and
+it changes nothing that renders or exports.
+
+**Scope region overlay (Viewer).** While a Scopes panel is visible, each Viewer draws its
+composition's scope region in widget pixels: a dashed `Foreground` hairline over a `Canvas`
+underlay (one device pixel at every zoom and display scale), eight `GizmoHandle` squares with
+`Surface` fill and `Foreground` outline, and the label "Scopes" on a `Surface` plate at the top-left
+corner (inside the corner when there is no room above). It is deliberately unlike the region of
+interest, which is an `Accent` outline with the rest of the frame dimmed, and unlike the selection's
+`Accent` gizmo. With the Region toggle armed, a drag in the Viewer draws a rectangle (one drag per
+arming; the toggle clears afterwards); a press on the region's body or a handle moves or resizes it
+even when not armed. Escape cancels a drag in flight and leaves the previous region, and with no
+drag disarms the toggle. The rectangle is whole composition pixels (x and y floored, the far edge
+raised) clipped to the frame; an empty result is ignored. Anywhere else, and with no visible Scopes
+panel, the overlay is not drawn and takes no input, so layer moves, marquee selection and the
+region of interest tool (Ctrl+Alt) are unaffected. The gesture only writes the region; the panel's
+controller measures.
 
 | Object name | Part |
 | --- | --- |
