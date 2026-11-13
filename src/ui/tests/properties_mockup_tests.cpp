@@ -93,6 +93,35 @@ void run() {
     if (!panel || !grid)
         return;
     waitForBounds(*grid);
+    // #718: a moving playhead costs the anchor grid no evaluation. The bounds are resolved once,
+    // after the time has stood still. The wait is made endless here and ended by hand, so the
+    // test sees the same thing whatever the machine is doing.
+    {
+        const auto evaluations = [&] { return grid->property("boundsEvaluations").toInt(); };
+        const int resolved = evaluations();
+        const int wait = grid->property("settleMilliseconds").toInt();
+        grid->setProperty("settleMilliseconds", 24 * 60 * 60 * 1000);
+        for (const int frame : {1, 2, 3}) {
+            expect(session.setCurrentTime(*core::RationalTime::create(frame, 24)),
+                   "the playhead moves");
+            settle();
+        }
+        expect(evaluations() == resolved && grid->isEnabled(),
+               "time-only changes evaluate nothing and keep the grid usable");
+        QMetaObject::invokeMethod(grid, "settleNow");
+        expect(evaluations() == resolved + 1,
+               "the bounds are resolved once when the playhead has stood still");
+        QElapsedTimer timer;
+        timer.start();
+        while (grid->property("boundsResolving").toBool() && timer.elapsed() < 10000) {
+            settle();
+            QThread::msleep(5);
+        }
+        expect(!grid->property("boundsResolving").toBool() && evaluations() == resolved + 1 &&
+                   grid->isEnabled(),
+               "that one evaluation finishes and nothing follows it");
+        grid->setProperty("settleMilliseconds", wait);
+    }
     // Visible band contract: area chrome (1px content inset + 1px content margin) plus the
     // panel's XS outer margin reads as exactly one inter-panel gutter before the section.
     {

@@ -26,14 +26,20 @@ PropertiesAnchorGrid::PropertiesAnchorGrid(CompositionSession& session, QWidget*
     connect(timer_, &QTimer::timeout, this, [this] { poll(); });
     settle_->setSingleShot(true);
     settle_->setInterval(kSettleMilliseconds);
-    connect(settle_, &QTimer::timeout, this, [this] {
-        ++generation_;
-        refining_ = true;
-        if (active_)
-            task_.cancel();
-        else
-            start();
-    });
+    connect(settle_, &QTimer::timeout, this, [this] { settleNow(); });
+}
+void PropertiesAnchorGrid::settleNow() {
+    settle_->stop();
+    ++generation_;
+    refining_ = true;
+    if (active_)
+        task_.cancel();
+    else
+        start();
+}
+int PropertiesAnchorGrid::settleMilliseconds() const { return settle_->interval(); }
+void PropertiesAnchorGrid::setSettleMilliseconds(const int milliseconds) {
+    settle_->setInterval(milliseconds);
 }
 PropertiesAnchorGrid::~PropertiesAnchorGrid() {
     if (scheduler_) {
@@ -168,6 +174,8 @@ void PropertiesAnchorGrid::start() {
         });
     task_ = submission.handle;
     active_ = submission.accepted();
+    if (active_)
+        ++evaluations_;
     if (active_)
         timer_->start();
     else

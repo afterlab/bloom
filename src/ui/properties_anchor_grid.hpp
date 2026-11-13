@@ -15,12 +15,24 @@ class CompositionSession;
 class PropertiesAnchorGrid final : public kit::KAnchorGrid {
     Q_OBJECT
     Q_PROPERTY(int selectedPoint READ selectedPoint)
+    // For tests (#718): how many bounds evaluations were started, whether one is running, and
+    // the wait after the playhead last moved (a test makes it endless and ends it itself, so no
+    // clock decides what it sees).
+    Q_PROPERTY(int boundsEvaluations READ boundsEvaluations)
+    Q_PROPERTY(bool boundsResolving READ boundsResolving)
+    Q_PROPERTY(int settleMilliseconds READ settleMilliseconds WRITE setSettleMilliseconds)
   public:
     PropertiesAnchorGrid(CompositionSession& session, QWidget* parent);
     ~PropertiesAnchorGrid() override;
     void refresh();
     [[nodiscard]] int selectedPoint() const override;
     void choosePoint(int index) override;
+    [[nodiscard]] int boundsEvaluations() const noexcept { return evaluations_; }
+    [[nodiscard]] bool boundsResolving() const noexcept { return active_; }
+    [[nodiscard]] int settleMilliseconds() const;
+    void setSettleMilliseconds(int milliseconds);
+    // Ends the wait after a playhead move now, as its timer would.
+    Q_INVOKABLE void settleNow();
 
   private:
     struct Result {
@@ -46,5 +58,6 @@ class PropertiesAnchorGrid final : public kit::KAnchorGrid {
     // Restarted by every time-only change; the bounds are resolved when it runs out (#718).
     QTimer* settle_;
     bool active_ = false;
+    int evaluations_ = 0;
 };
 } // namespace bloom::ui
