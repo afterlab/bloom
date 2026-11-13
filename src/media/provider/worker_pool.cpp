@@ -259,6 +259,8 @@ struct MediaWorkerPool::State {
     bool arenaUnavailable = false;
     std::atomic<bool> stopping{false};
     std::atomic<std::size_t> active{0};
+    // Held by call() from start to end; retainedMutex is taken inside it.
+    std::mutex callMutex;
     std::mutex retainedMutex;
     std::unique_ptr<Retained> retained;
     // A retained worker that ended abnormally while idle: the next call that needed it fails once
@@ -372,9 +374,13 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
         state_->options.expected.declarations.end())
         return Unavailable{Error::IdentityMismatch,
                            "Pinned qualification is absent from the handshake"};
-    std::unique_lock lock(state_->retainedMutex, std::try_to_lock);
-    if (!lock.owns_lock())
+    // One call at a time: a second one is refused. The idle monitor and releaseRetained() hold
+    // retainedMutex only for a moment and are not a call in flight, so this call waits for them
+    // instead of reporting a busy pool.
+    const std::unique_lock inFlight(state_->callMutex, std::try_to_lock);
+    if (!inFlight.owns_lock())
         return Unavailable{Error::Busy, "Video worker capacity reached"};
+    const std::unique_lock lock(state_->retainedMutex);
     if (state_->active.fetch_add(1) != 0) {
         state_->active.fetch_sub(1);
         return Unavailable{Error::Busy, "Video worker capacity reached"};
