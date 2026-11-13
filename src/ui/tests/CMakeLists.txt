@@ -270,6 +270,7 @@ bloom_add_test(
 )
 target_link_libraries(bloom_gpu_preview_submitter_test PRIVATE bloom_ui)
 target_link_libraries(bloom_gpu_preview_app_test PRIVATE bloom_ui bloom_runtime_evaluator)
+target_include_directories(bloom_gpu_preview_app_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 # Desktop composition-root regression: the shared host packaged-tool helper supplies the expected
 # staged digests and qualifies the REAL tools staged beside this executable, so the default general
 # Neutral DisplayRgba8 program is available at 6000x4000. Mirrors apps/bloom/main.cpp exactly; no
@@ -424,6 +425,7 @@ bloom_enable_warnings(bloom_kit_tokens_test)
 bloom_enable_warnings(bloom_kit_surfaces_test)
 bloom_enable_warnings(bloom_composition_projection_test)
 bloom_enable_warnings(bloom_properties_editor_test)
+target_include_directories(bloom_composition_preview_controller_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_composition_preview_controller_test)
 bloom_enable_warnings(bloom_composition_preview_cpu_stage_test)
 bloom_enable_warnings(bloom_composition_preview_gpu_scene_stage_test)
@@ -436,6 +438,7 @@ bloom_enable_warnings(bloom_ui_gpu_present_image_qpainter_oracle_test)
 bloom_enable_warnings(bloom_composition_session_animation_test)
 bloom_enable_warnings(bloom_composition_session_rebind_test)
 bloom_enable_warnings(bloom_application_shutdown_test)
+target_include_directories(bloom_project_host_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_project_host_test)
 bloom_enable_warnings(bloom_task_monitor_test)
 bloom_enable_warnings(bloom_viewer_editor_test)
@@ -1004,6 +1007,7 @@ bloom_add_test(
 add_executable(bloom_footage_verification_test footage_verification_tests.cpp)
 target_include_directories(bloom_footage_verification_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_footage_verification_test PRIVATE bloom_ui Qt6::Test)
+target_include_directories(bloom_footage_verification_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_footage_verification_test)
 bloom_add_test(
     NAME bloom.ui.footage-verification
@@ -1304,6 +1308,7 @@ bloom_add_test(
 # rather than failing when no device is actually available.
 add_executable(bloom_ram_preview_service_pipeline_test ram_preview_service_pipeline_tests.cpp)
 target_link_libraries(bloom_ram_preview_service_pipeline_test PRIVATE bloom_ui)
+target_include_directories(bloom_ram_preview_service_pipeline_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_ram_preview_service_pipeline_test)
 if(DEFINED BLOOM_DEPENDENCY_PREFIX AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/${BLOOM_VULKAN_LOADER_PREFIX_DIR}/${BLOOM_VULKAN_LOADER_FILE_NAME}")
     set(bloom_ram_preview_vulkan_loader_args
@@ -1805,6 +1810,7 @@ add_executable(bloom_depth_focus_pick_ui_test depth_focus_pick_ui_tests.cpp)
 target_include_directories(bloom_depth_focus_pick_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_depth_focus_pick_ui_test PRIVATE bloom_ui bloom_runtime_compiler
     bloom_runtime_evaluator bloom_commands Qt6::Test)
+target_include_directories(bloom_depth_focus_pick_ui_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_depth_focus_pick_ui_test)
 add_test(NAME bloom.ui.depth-focus-pick COMMAND bloom_depth_focus_pick_ui_test)
 set_tests_properties(bloom.ui.depth-focus-pick PROPERTIES
@@ -1829,6 +1835,7 @@ add_executable(bloom_line_end_viewer_ui_test line_end_viewer_ui_tests.cpp)
 target_include_directories(bloom_line_end_viewer_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_line_end_viewer_ui_test PRIVATE bloom_ui bloom_runtime_compiler
     bloom_runtime_evaluator bloom_commands Qt6::Test)
+target_include_directories(bloom_line_end_viewer_ui_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_line_end_viewer_ui_test)
 add_test(NAME bloom.ui.line-end-viewer COMMAND bloom_line_end_viewer_ui_test)
 set_tests_properties(bloom.ui.line-end-viewer PROPERTIES
@@ -1841,6 +1848,7 @@ add_executable(bloom_warp_viewer_ui_test warp_viewer_ui_tests.cpp)
 target_include_directories(bloom_warp_viewer_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_warp_viewer_ui_test PRIVATE bloom_ui bloom_runtime_compiler
     bloom_runtime_evaluator bloom_commands Qt6::Test)
+target_include_directories(bloom_warp_viewer_ui_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_warp_viewer_ui_test)
 add_test(NAME bloom.ui.warp-viewer COMMAND bloom_warp_viewer_ui_test)
 set_tests_properties(bloom.ui.warp-viewer PROPERTIES
@@ -1853,6 +1861,7 @@ add_executable(bloom_viewer_drill_test viewer_drill_tests.cpp)
 target_include_directories(bloom_viewer_drill_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_viewer_drill_test PRIVATE bloom_ui bloom_runtime_compiler
     bloom_runtime_evaluator bloom_commands Qt6::Test)
+target_include_directories(bloom_viewer_drill_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_viewer_drill_test)
 add_test(NAME bloom.ui.viewer-drill COMMAND bloom_viewer_drill_test)
 set_tests_properties(bloom.ui.viewer-drill PROPERTIES
@@ -1942,6 +1951,7 @@ bloom_add_test(NAME bloom.ui.audio-loop-transport COMMAND bloom_ui_audio_loop_tr
 
 add_executable(bloom_ui_audio_device_control_test audio_device_control_tests.cpp)
 target_link_libraries(bloom_ui_audio_device_control_test PRIVATE bloom_ui)
+target_include_directories(bloom_ui_audio_device_control_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_ui_audio_device_control_test)
 bloom_add_test(NAME bloom.ui.audio-device-control COMMAND bloom_ui_audio_device_control_test
     LABELS ui audio TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
@@ -1998,6 +2008,7 @@ bloom_add_test(
 add_executable(bloom_svg_readd_ui_test svg_readd_ui_tests.cpp)
 target_include_directories(bloom_svg_readd_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_svg_readd_ui_test PRIVATE bloom_ui Qt6::Test)
+target_include_directories(bloom_svg_readd_ui_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_svg_readd_ui_test)
 bloom_add_test(
     NAME bloom.ui.svg-readd
@@ -2024,6 +2035,7 @@ target_include_directories(bloom_import_progress_window_test PRIVATE ${CMAKE_CUR
 target_link_libraries(bloom_import_progress_window_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
 target_compile_definitions(bloom_import_progress_window_test PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+target_include_directories(bloom_import_progress_window_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_import_progress_window_test)
 bloom_add_test(
     NAME bloom.ui.import-progress-window
@@ -2078,6 +2090,7 @@ target_link_libraries(bloom_ui_mcp_live_ui_binding_test PRIVATE bloom_ui bloom_r
     bloom_host_export_testing Qt6::Test ZLIB::ZLIB)
 target_compile_definitions(bloom_ui_mcp_live_ui_binding_test PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+target_include_directories(bloom_ui_mcp_live_ui_binding_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_ui_mcp_live_ui_binding_test)
 bloom_add_test(NAME bloom.ui.mcp-live-ui-binding COMMAND bloom_ui_mcp_live_ui_binding_test
     LABELS ui mcp integration TIMEOUT 240
@@ -2104,6 +2117,7 @@ if(BLOOM_BUILD_PYTHON)
         bloom_mcp_testing Qt6::Test)
     target_compile_definitions(bloom_ui_mcp_script_run_test PRIVATE
         BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+    target_include_directories(bloom_ui_mcp_script_run_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     bloom_enable_warnings(bloom_ui_mcp_script_run_test)
     bloom_add_test(NAME bloom.ui.mcp-script-run COMMAND bloom_ui_mcp_script_run_test
         LABELS ui mcp scripting python integration TIMEOUT 180
@@ -2988,6 +3002,7 @@ target_link_libraries(bloom_ui_layer_drop_window_test PRIVATE bloom_ui bloom_run
     bloom_commands Qt6::Test)
 target_compile_definitions(bloom_ui_layer_drop_window_test PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+target_include_directories(bloom_ui_layer_drop_window_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_ui_layer_drop_window_test)
 add_test(NAME bloom.ui.layer-drop-window COMMAND bloom_ui_layer_drop_window_test
     --media-fixtures "${PROJECT_BINARY_DIR}/apps/bloom-media-worker/fixtures")

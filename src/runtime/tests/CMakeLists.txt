@@ -459,6 +459,7 @@ bloom_add_test(NAME bloom.runtime.operation_cache_accounting
 
 add_executable(bloom_runtime_memory_pressure_monitor_test memory_pressure_monitor_tests.cpp)
 target_link_libraries(bloom_runtime_memory_pressure_monitor_test PRIVATE bloom_runtime)
+target_include_directories(bloom_runtime_memory_pressure_monitor_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_runtime_memory_pressure_monitor_test)
 bloom_add_test(NAME bloom.runtime.memory_pressure_monitor
               COMMAND bloom_runtime_memory_pressure_monitor_test LABELS unit runtime TIMEOUT 60)
@@ -467,6 +468,7 @@ bloom_add_test(NAME bloom.runtime.memory_pressure_monitor
 # scheduler's fixed-slot copy, the ledger adapter, absent fields and the per-sample cost.
 add_executable(bloom_runtime_profiler_sampler_test profiler_sampler_tests.cpp)
 target_link_libraries(bloom_runtime_profiler_sampler_test PRIVATE bloom_runtime)
+target_include_directories(bloom_runtime_profiler_sampler_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_runtime_profiler_sampler_test)
 bloom_add_test(NAME bloom.runtime.profiler_sampler COMMAND bloom_runtime_profiler_sampler_test
               LABELS unit runtime TIMEOUT 60)
@@ -810,6 +812,7 @@ target_link_libraries(
     PRIVATE bloom_runtime_evaluator
 )
 target_include_directories(bloom_runtime_gpu_preview_display_service_test PRIVATE ..)
+target_include_directories(bloom_runtime_gpu_preview_display_service_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_runtime_gpu_preview_display_service_test)
 bloom_enable_strict_floating_point(bloom_runtime_gpu_preview_display_service_test)
 bloom_add_test(
@@ -1874,6 +1877,7 @@ if(TARGET bloom_render_gpu_scene_executor_fault)
                 bloom_media_image bloom_media_video bloom_media_cache bloom_color bloom_color_ocio
                 OpenEXR::OpenEXR)
     bloom_enable_warnings(bloom_runtime_gpu_media_executor_retirement_test)
+    target_include_directories(bloom_runtime_gpu_media_executor_retirement_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     bloom_enable_strict_floating_point(bloom_runtime_gpu_media_executor_retirement_test)
     # Same as the media executor target: the shared fixture/oracle header has helpers this TU does
     # not use.
@@ -2315,6 +2319,7 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
     include(BloomGpuShaderTools)
     bloom_package_gpu_shader_tools(bloom_runtime_gpu_preview_display_service_packed_test)
     bloom_enable_warnings(bloom_runtime_gpu_preview_display_service_packed_test)
+    target_include_directories(bloom_runtime_gpu_preview_display_service_packed_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     bloom_enable_strict_floating_point(bloom_runtime_gpu_preview_display_service_packed_test)
     bloom_add_test(NAME bloom.runtime.gpu_preview_display_service_packed
         COMMAND bloom_runtime_gpu_preview_display_service_packed_test
@@ -2336,6 +2341,7 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
     include(BloomGpuShaderTools)
     bloom_package_gpu_shader_tools(bloom_runtime_gpu_preview_display_service_general_test)
     bloom_enable_warnings(bloom_runtime_gpu_preview_display_service_general_test)
+    target_include_directories(bloom_runtime_gpu_preview_display_service_general_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     bloom_enable_strict_floating_point(bloom_runtime_gpu_preview_display_service_general_test)
     bloom_add_test(
         NAME bloom.runtime.gpu_preview_display_service_general
@@ -2449,6 +2455,7 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
     target_compile_definitions(bloom_runtime_gpu_process_frame_ocio_native_test PRIVATE
         "BLOOM_GPU_OCIO_CONTEXT_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_process_frame_ocio_native_test>\"")
     bloom_enable_warnings(bloom_runtime_gpu_process_frame_ocio_native_test)
+    target_include_directories(bloom_runtime_gpu_process_frame_ocio_native_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     bloom_enable_strict_floating_point(bloom_runtime_gpu_process_frame_ocio_native_test)
     include(BloomGpuShaderTools)
     bloom_package_gpu_shader_tools(bloom_runtime_gpu_process_frame_ocio_native_test)
@@ -2696,6 +2703,7 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
             "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
     endif()
     bloom_enable_warnings(bloom_runtime_gpu_output_color_test)
+    target_include_directories(bloom_runtime_gpu_output_color_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     bloom_enable_strict_floating_point(bloom_runtime_gpu_output_color_test)
     bloom_add_test(
         NAME bloom.runtime.gpu_output_color

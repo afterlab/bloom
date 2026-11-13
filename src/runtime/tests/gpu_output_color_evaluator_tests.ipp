@@ -9,7 +9,7 @@ void testFinalEvaluatorTerminalAndUnknown(Expectations& expectations) {
     using bloom::runtime::GpuProcessFrameStatus;
     bloom::render::test::FinalHostRetirementScope host;
     auto policy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(1, host.owner);
-    auto sample = bloom::runtime::memoryBudgetSample();
+    auto sample = bloom::test_support::fixedMemoryBudgetSample();
     bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
                                               sample.machine.availableBytes.value_or(0));
     ledger.beginProcessSampling();

@@ -1021,7 +1021,9 @@ void smallCardFillStaysInsideTheCard() {
             policy.setHeadroom({.ramBytes = 0, .vramBytes = 0});
             deliverHost(policy, 8 * kGiB, 1);
             std::deque<NativeImageStorageToken> cache;
-            const auto owned = [&] { return static_cast<std::uint64_t>(cache.size()) * imageBytes; };
+            const auto owned = [&] {
+                return static_cast<std::uint64_t>(cache.size()) * imageBytes;
+            };
             // The modelled card: its size is the ceiling, and the driver's live budget is what the
             // cached images leave of it.
             const auto report = [&] {
@@ -1073,8 +1075,8 @@ void smallCardFillStaysInsideTheCard() {
                 }
                 require(grant.status == GpuProcessingPhaseAdmission::Accepted && grant.lease,
                         "a waiting frame is admitted once the caches gave its shortfall back");
-                auto image = NativeImageStorageToken::reserve(grant.lease, imageBytes, local,
-                                                              Clock::now());
+                auto image =
+                    NativeImageStorageToken::reserve(grant.lease, imageBytes, local, Clock::now());
                 require(image.token.has_value(), "the frame's device stage allocates its image");
                 const auto during = policy.snapshot().reservations;
                 require(during.totalDeviceClaimBytes <= card && during.deviceCapacityBytes == card,

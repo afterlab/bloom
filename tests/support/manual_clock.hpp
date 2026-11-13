@@ -35,9 +35,8 @@ class ManualClock final {
 
   private:
     // Starts away from the epoch so "no time recorded yet" defaults never compare equal to now.
-    std::atomic<Clock::rep> ticks_{std::chrono::duration_cast<Clock::duration>(
-                                       std::chrono::hours{1})
-                                       .count()};
+    std::atomic<Clock::rep> ticks_{
+        std::chrono::duration_cast<Clock::duration>(std::chrono::hours{1}).count()};
 };
 
 } // namespace bloom::test_support

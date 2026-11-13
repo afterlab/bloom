@@ -14,7 +14,7 @@ void cancelledGeneralDisplayReleasesPhase(
     PackedRetirementScope retirement;
     TaskScheduler scheduler(schedulerConfig());
     auto policy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(32, retirement.owner);
-    auto sample = bloom::runtime::memoryBudgetSample();
+    auto sample = bloom::test_support::fixedMemoryBudgetSample();
     bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
                                               sample.machine.availableBytes.value_or(0));
     ledger.beginProcessSampling();
@@ -145,7 +145,7 @@ void payloadAllocationFailureProof(
     PackedRetirementScope retirement;
     TaskScheduler scheduler(schedulerConfig());
     auto policy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(32, retirement.owner);
-    auto sample = bloom::runtime::memoryBudgetSample();
+    auto sample = bloom::test_support::fixedMemoryBudgetSample();
     bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
                                               sample.machine.availableBytes.value_or(0));
     ledger.beginProcessSampling();
@@ -264,7 +264,7 @@ void unsupportedPackedProof(
     // This CPU fallback is a production processing attempt, so it needs the same explicit,
     // actually sampled host root even though no native executor will initialize.
     options.processingPhasePolicy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>();
-    auto sample = bloom::runtime::memoryBudgetSample();
+    auto sample = bloom::test_support::fixedMemoryBudgetSample();
     bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
                                               sample.machine.availableBytes.value_or(0));
     ledger.beginProcessSampling();
@@ -309,7 +309,7 @@ void heldTransferProof(
     auto builder = std::make_shared<CpuGpuSceneBuilder>();
     configured.processingPhasePolicy =
         std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(4, retirement.owner);
-    auto sample = bloom::runtime::memoryBudgetSample();
+    auto sample = bloom::test_support::fixedMemoryBudgetSample();
     bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
                                               sample.machine.availableBytes.value_or(0));
     ledger.beginProcessSampling();

@@ -5,6 +5,7 @@
 // evaluation, the live cached-frame re-request, and a warm-cache paired timing. It never fabricates
 // a GPU success or an eligibility report.
 
+#include "fixed_memory_budget.hpp"
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/commands/command_stack.hpp>
@@ -209,7 +210,9 @@ class AppProcessingRoot final {
         std::make_shared<runtime::GpuProcessingPhasePolicy>(32);
     AppProcessingRoot(runtime::TaskScheduler& scheduler, ui::TaskUiBridge& bridge,
                       Expectations& expectations)
-        : scheduler_(scheduler), expectations_(expectations), sampler_(scheduler, bridge, ledger_) {
+        : scheduler_(scheduler), expectations_(expectations),
+          sampler_(scheduler, bridge, ledger_, bloom::test_support::fixedMemoryBudgetSample,
+                   nullptr, std::nullopt) {
         ledger_.beginProcessSampling();
         QObject::connect(&sampler_, &ui::MemoryBudgetController::sampleApplied, &sampler_, [this] {
             const auto delivered = ledger_.state();

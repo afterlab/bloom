@@ -1,3 +1,4 @@
+#include "fixed_memory_budget.hpp"
 #include <atomic>
 #include <cstdlib>
 #include <new>
@@ -83,7 +84,7 @@ bool matrix(Expectations& checks, const TestOptions& options,
     PackedRetirementScope retirement;
     TaskScheduler scheduler(schedulerConfig());
     auto policy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(32, retirement.owner);
-    auto sample = bloom::runtime::memoryBudgetSample();
+    auto sample = bloom::test_support::fixedMemoryBudgetSample();
     bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
                                               sample.machine.availableBytes.value_or(0));
     ledger.beginProcessSampling();
@@ -91,7 +92,7 @@ bool matrix(Expectations& checks, const TestOptions& options,
     const auto sampled = ledger.applySample(std::move(sample), deliveredAt);
     policy->applyHostSample(sampled, ledger.physicalByteBudget(), deliveredAt);
     const auto refresh = [&] {
-        auto refreshedSample = bloom::runtime::memoryBudgetSample();
+        auto refreshedSample = bloom::test_support::fixedMemoryBudgetSample();
         const auto at = bloom::runtime::GpuProcessingPhasePolicy::Clock::now();
         const auto state = ledger.applySample(std::move(refreshedSample), at);
         policy->applyHostSample(state, ledger.physicalByteBudget(), at);
@@ -386,7 +387,7 @@ void startupQueuedRequestProof(
     PackedRetirementScope retirement;
     TaskScheduler scheduler(schedulerConfig());
     auto policy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(32, retirement.owner);
-    auto sample = bloom::runtime::memoryBudgetSample();
+    auto sample = bloom::test_support::fixedMemoryBudgetSample();
     bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
                                               sample.machine.availableBytes.value_or(0));
     ledger.beginProcessSampling();

@@ -15,6 +15,7 @@
 //     below the production measured native-selection interval, so their published pixels carry
 //     honest CpuOcio/CPU provenance even while the service is Ready. This is CPU-stage overlap,
 //     not a GPU pixel pass; genuine packed RAM/native evidence is a separate fixture.
+#include "fixed_memory_budget.hpp"
 #include "ram_preview_pipeline_test_support.hpp"
 
 #include <bloom/runtime/gpu_preview_display_service.hpp>
@@ -41,7 +42,7 @@ using namespace bloom::ui::ram_pipeline_test;
 std::shared_ptr<runtime::GpuProcessingPhasePolicy> sampledServiceRoot() {
     auto sampled = std::async(std::launch::async, [] {
         auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(4);
-        auto sample = runtime::memoryBudgetSample();
+        auto sample = bloom::test_support::fixedMemoryBudgetSample();
         runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
                                            sample.machine.availableBytes.value_or(0));
         ledger.beginProcessSampling();

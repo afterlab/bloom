@@ -5,6 +5,7 @@
 // (only VK_SUCCESS may clear a submission). These vectors use the proof-only fault macro and are
 // inert in a production build.
 
+#include "fixed_memory_budget.hpp"
 #include "gpu_media_scene_preparation_test_support.hpp"
 
 #include "gpu_media_executor_test_support.hpp"
@@ -257,7 +258,7 @@ void testProductionUploadUnknown(Expectations& expectations, const Options& opti
     using bloom::runtime::GpuProcessFrameStatus;
     bloom::render::test::FinalHostRetirementScope host;
     auto policy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(1, host.owner);
-    auto sample = bloom::runtime::memoryBudgetSample();
+    auto sample = bloom::test_support::fixedMemoryBudgetSample();
     bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
                                               sample.machine.availableBytes.value_or(0));
     ledger.beginProcessSampling();
@@ -384,7 +385,7 @@ void testNextFrameAfterUnretiredSubmission(Expectations& expectations, const Opt
             bloom::render::test::FinalHostRetirementScope host;
             auto policy =
                 std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(capacity, host.owner);
-            auto sample = bloom::runtime::memoryBudgetSample();
+            auto sample = bloom::test_support::fixedMemoryBudgetSample();
             bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
                                                       sample.machine.availableBytes.value_or(0));
             ledger.beginProcessSampling();

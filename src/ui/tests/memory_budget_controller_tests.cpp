@@ -97,12 +97,15 @@ void heldSampling() {
     unsigned polls = 0, applied = 0;
     QObject::connect(&bridge, &ui::TaskUiBridge::snapshotsPolled, &bridge, [&] { ++polls; });
     auto state = std::make_shared<Held>();
-    ui::MemoryBudgetController owner(scheduler, bridge, ledger, [state, uiThread](const auto&) {
-        state->offUi = std::this_thread::get_id() != uiThread;
-        state->entered = true;
-        state->release.wait();
-        return sample();
-    });
+    ui::MemoryBudgetController owner(
+        scheduler, bridge, ledger,
+        [state, uiThread](const auto&) {
+            state->offUi = std::this_thread::get_id() != uiThread;
+            state->entered = true;
+            state->release.wait();
+            return sample();
+        },
+        nullptr, std::nullopt);
     QObject::connect(&owner, &ui::MemoryBudgetController::sampleApplied, &owner,
                      [&] { ++applied; });
     expect(spin([&] { return state->entered.load(); }), "sample worker entered off UI");
@@ -139,27 +142,29 @@ void teardown() {
     ui::TaskUiBridge bridge(scheduler);
     bridge.stop();
     auto state = std::make_shared<Held>();
-    auto owner = std::make_unique<ui::MemoryBudgetController>(scheduler, bridge, ledger,
-                                                              [state](const auto&) {
-                                                                  state->entered = true;
-                                                                  state->release.wait();
-                                                                  return sample();
-                                                              });
+    auto owner = std::make_unique<ui::MemoryBudgetController>(
+        scheduler, bridge, ledger,
+        [state](const auto&) {
+            state->entered = true;
+            state->release.wait();
+            return sample();
+        },
+        nullptr, std::nullopt);
     expect(spin([&] { return state->entered.load(); }), "teardown fixture worker entered");
     owner.reset(); // Cancels without waiting on held OS work or retaining a QObject in it.
     state->release.count_down();
     expect(spin([&] { return scheduler.isQuiescent(); }), "destroyed owner worker retires safely");
     expect(ledger.state().sampleSerial == 0 && ledger.state().effectiveBytes == 0,
            "late completion after destruction cannot publish or rearm");
-    owner = std::make_unique<ui::MemoryBudgetController>(scheduler, bridge, ledger,
-                                                         [](const auto&) { return sample(); });
+    owner = std::make_unique<ui::MemoryBudgetController>(
+        scheduler, bridge, ledger, [](const auto&) { return sample(); }, nullptr, std::nullopt);
     owner->requestSample();
     expect(spin([&] { return scheduler.isQuiescent(); }, false), "result held before GUI delivery");
     owner.reset();
     QCoreApplication::processEvents();
     expect(ledger.state().sampleSerial == 0, "queued completion cannot dereference deleted owner");
-    owner = std::make_unique<ui::MemoryBudgetController>(scheduler, bridge, ledger,
-                                                         [](const auto&) { return sample(); });
+    owner = std::make_unique<ui::MemoryBudgetController>(
+        scheduler, bridge, ledger, [](const auto&) { return sample(); }, nullptr, std::nullopt);
     QObject::connect(owner.get(), &ui::MemoryBudgetController::sampleApplied,
                      QCoreApplication::instance(), [&] { owner.reset(); });
     expect(spin([&] { return !owner; }), "synchronous completion observer may delete owner");
@@ -322,18 +327,21 @@ void sampledPressurePreviewRecovery() {
     auto held = std::make_shared<Held>();
     std::atomic_bool holdNext{false};
     std::atomic_size_t available{64 * gib};
-    ui::MemoryBudgetController owner(scheduler, bridge, ledger, [&](const auto&) {
-        if (holdNext.exchange(false)) {
-            held->entered = true;
-            held->release.wait();
-        }
-        auto measured = sample();
-        measured.physicalBytes = 64 * gib;
-        measured.machine.availableBytes = available.load();
-        measured.process.status = runtime::ProcessMemoryStatus::Unsupported;
-        measured.process.domains.clear();
-        return measured;
-    });
+    ui::MemoryBudgetController owner(
+        scheduler, bridge, ledger,
+        [&](const auto&) {
+            if (holdNext.exchange(false)) {
+                held->entered = true;
+                held->release.wait();
+            }
+            auto measured = sample();
+            measured.physicalBytes = 64 * gib;
+            measured.machine.availableBytes = available.load();
+            measured.process.status = runtime::ProcessMemoryStatus::Unsupported;
+            measured.process.domains.clear();
+            return measured;
+        },
+        nullptr, std::nullopt);
     QObject::connect(&owner, &ui::MemoryBudgetController::sampleApplied, &preview, [&] {
         const auto state = ledger.state();
         policy->applyHostSample(state, ledger.physicalByteBudget(),
@@ -458,8 +466,8 @@ void coldForegroundAndSettings() {
         preview.state().frame && cache->size() == 0 && cache->byteBudget() == 0 &&
             evaluator.operationCache()->retainedBytes() == 0 && ledger.state().sampleSerial == 0,
         "foreground frame remains visible while reusable caches and status observers remain cold");
-    ui::MemoryBudgetController owner(scheduler, bridge, ledger,
-                                     [](const auto&) { return sample(); });
+    ui::MemoryBudgetController owner(
+        scheduler, bridge, ledger, [](const auto&) { return sample(); }, nullptr, std::nullopt);
     expect(spin([&] { return ledger.state().sampleSerial == 1; }),
            "one owner delivers shared sample");
     const auto requested = ui::cacheMemoryBudgetsFromSettings(settings);

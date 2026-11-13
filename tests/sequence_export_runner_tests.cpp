@@ -1,5 +1,5 @@
-#include "gpu_route_proof_export_support.hpp"
 #include "fixed_memory_budget.hpp"
+#include "gpu_route_proof_export_support.hpp"
 #include "process_probe.hpp"
 
 #include <algorithm>
@@ -1407,7 +1407,7 @@ int main(int argc, char** argv) {
             } else {
                 throw std::runtime_error("usage: <fixture-directory> [--require-device] "
                                          "[--route-proof-dir <dir>] [--proof-only] "
-                                     "[--streaming-soak]");
+                                         "[--streaming-soak]");
             }
         }
         if (directory.empty()) {
@@ -1416,7 +1416,8 @@ int main(int argc, char** argv) {
                                      "[--streaming-soak]");
         }
         if (streamingSoak) {
-            // The stress run: the long export against the real machine, with the resident-set bound.
+            // The stress run: the long export against the real machine, with the resident-set
+            // bound.
             std::filesystem::remove_all(directory);
             std::filesystem::create_directories(directory);
             testExportStreamsWithBoundedMemory(directory, false, true);

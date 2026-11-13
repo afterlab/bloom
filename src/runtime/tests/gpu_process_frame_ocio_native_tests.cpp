@@ -12,6 +12,7 @@
 // alpha. Requires the Vulkan backend and the pinned tools; skips cleanly otherwise.
 
 #include "final_host_test_support.hpp"
+#include "fixed_memory_budget.hpp"
 #include "gpu_media_executor_test_support.hpp"
 #include "gpu_scene_executor_test_support.hpp"
 
@@ -368,7 +369,7 @@ int run(int argc, char** argv) {
     auto phasePolicy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(32, host.owner);
     std::optional<bloom::runtime::MemoryBudgetLedger> liveLedger;
     const auto refreshLivePolicy = [&] {
-        auto sample = bloom::runtime::memoryBudgetSample();
+        auto sample = bloom::test_support::fixedMemoryBudgetSample();
         if (!liveLedger) {
             liveLedger.emplace(sample.physicalBytes, sample.machine.availableBytes.value_or(0));
             liveLedger->beginProcessSampling();

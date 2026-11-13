@@ -16,6 +16,7 @@
 // explicit SKIP (exit 77) unless --require-device is passed. Nothing here fabricates an image, a
 // command identity, or a qualification report.
 
+#include "fixed_memory_budget.hpp"
 #include "gpu_preview_display_service_general_support.hpp"
 #include <bloom/core/file_uri.hpp>
 #include <bloom/document/new_project.hpp>
@@ -31,7 +32,7 @@ namespace {
 // One non-UI sampling owner, independent of Tasks admission. It outlives every service,
 // scheduler and borrowed stage; no process-global ledger or settings are changed.
 struct SampledServiceRoot final {
-    bloom::runtime::MemoryBudgetSample initial = bloom::runtime::memoryBudgetSample();
+    bloom::runtime::MemoryBudgetSample initial = bloom::test_support::fixedMemoryBudgetSample();
     bloom::runtime::MemoryBudgetLedger ledger{initial.physicalBytes,
                                               initial.machine.availableBytes.value_or(0)};
     std::shared_ptr<bloom::runtime::TaskBudgetView> view =
@@ -47,7 +48,7 @@ struct SampledServiceRoot final {
                 for (int index = 0; index < 100 && !stop.stop_requested(); ++index)
                     std::this_thread::sleep_for(50ms);
                 if (!stop.stop_requested())
-                    deliver(bloom::runtime::memoryBudgetSample());
+                    deliver(bloom::test_support::fixedMemoryBudgetSample());
             }
         });
     }

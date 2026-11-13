@@ -5,6 +5,7 @@
 //
 // A missing device or missing shader tools is an explicit SKIP (exit 77) unless --require-device.
 
+#include "fixed_memory_budget.hpp"
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
