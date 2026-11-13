@@ -117,6 +117,7 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
                                     : std::vector<runtime::EvaluatedOperationBounds>{});
         }
         paintRoi(painter);
+        paintScopesRegion(painter);
         paintCreation(painter);
         paintLayerMarquee(painter);
         paintPathTools(painter);

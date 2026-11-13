@@ -2992,6 +2992,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         viewer_resident_interaction_native_tests.cpp
         viewer_resident_interaction_support.hpp
         viewer_resident_drill_proof.ipp
+        viewer_resident_scopes_region_proof.ipp
         viewer_resident_transition_support.hpp
         gpu_service_chain_fixture.hpp
         gpu_vertical_proof_support.hpp)
@@ -3034,6 +3035,18 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         NAME bloom.ui.viewer_resident_drill_native
         COMMAND bloom_ui_viewer_resident_interaction_native_test
                 ${bloom_ui_gpu_viewer_service_chain_loader_args} --drill
+        LABELS ui gpu viewer resident interaction native
+        TIMEOUT 150
+        ENVIRONMENT "QT_QPA_PLATFORM=wayland"
+        SKIP_RETURN_CODE 77 COMPOSITOR)
+    # #724: the Scopes region overlay is recorded into the resident present request, over the
+    # device-presented picture: with a visible Scopes panel and a region the request's overlay draws
+    # the region's rectangle and handles inside its bounds and nothing elsewhere; without the region
+    # or without a visible panel it equals the plain overlay.
+    bloom_add_test(
+        NAME bloom.ui.viewer_resident_scopes_region_native
+        COMMAND bloom_ui_viewer_resident_interaction_native_test
+                ${bloom_ui_gpu_viewer_service_chain_loader_args} --scopes-region
         LABELS ui gpu viewer resident interaction native
         TIMEOUT 150
         ENVIRONMENT "QT_QPA_PLATFORM=wayland"

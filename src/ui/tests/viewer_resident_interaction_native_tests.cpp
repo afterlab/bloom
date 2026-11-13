@@ -59,9 +59,10 @@
 #include "viewer_resident_interaction_support.hpp"
 #include "viewer_resident_transition_support.hpp"
 
-#include "viewer_resident_editor_outline_proof.ipp"
 #include "viewer_resident_drill_proof.ipp"
+#include "viewer_resident_editor_outline_proof.ipp"
 #include "viewer_resident_resize_proof.ipp"
+#include "viewer_resident_scopes_region_proof.ipp"
 
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const HarnessOptions options = parseHarnessOptions(argc, argv);
@@ -367,6 +368,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             const bool drilled = exerciseResidentDrill(checks, session, controller, *viewer, *host,
                                                        service, fixture.compiler, fixture.evaluator);
             return drilled && checks.failures() == 0 ? 0 : 1;
+        }
+
+        if (options.scopesRegion) {
+            exerciseResidentScopesRegion(checks, session, *viewer);
+            return checks.failures() == 0 ? 0 : 1;
         }
 
         if (options.resizeProof) {

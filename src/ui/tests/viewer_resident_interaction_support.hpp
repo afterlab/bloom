@@ -28,6 +28,8 @@ struct HarnessOptions final {
     bool shutdownInFlight = false;
     // #645: drill into an imported SVG's nested groups on the resident route.
     bool drill = false;
+    // #724: the Scopes region overlay on the resident route.
+    bool scopesRegion = false;
     std::filesystem::path trace;
 };
 
@@ -45,6 +47,8 @@ struct HarnessOptions final {
             options.shutdownInFlight = true;
         } else if (argument == "--drill") {
             options.drill = true;
+        } else if (argument == "--scopes-region") {
+            options.scopesRegion = true;
         } else if (argument == "--general") {
             options.general = true;
         } else if (argument == "--transitions") {
