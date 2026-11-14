@@ -11,12 +11,10 @@ namespace bloom::quality {
 namespace {
 constexpr auto npos = std::string_view::npos;
 
-// Text that is someone else's or owned elsewhere: vendored third-party sources, the node catalogue
-// the owner edits, and the benchmark guide, whose media generator is an external program it has to
-// name on the command line.
+// Text that is someone else's: vendored third-party sources, and the benchmark guide, whose media
+// generator is an external program it has to name on the command line.
 bool exempt(const std::string& path) {
     return path.starts_with("third_party/") || path.find("/third_party/") != std::string::npos ||
-           (path.starts_with("docs/product/node-catalogue") && path.ends_with(".md")) ||
            path == "docs/development/benchmarks.md";
 }
 // TEMPORARY: files that in-flight engine lanes are changing, left unreworded to avoid rebase
