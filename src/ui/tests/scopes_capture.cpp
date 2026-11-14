@@ -282,14 +282,49 @@ class Workspace final {
         settle();
     }
 
+    // True when the panel shows the Viewer's frame at full detail and every trace on show was
+    // mapped from those tables, with nothing still running.
+    [[nodiscard]] bool settled() const {
+        const auto& state = controller_->state();
+        const auto reading = panel_->controller()->reading();
+        if (state.activity != ui::PreviewActivity::Ready || state.frame == nullptr ||
+            !viewer_->mappingForTest().has_value() ||
+            reading.state != ui::ScopesReading::State::Ready || reading.behind ||
+            reading.detail != 0 || reading.scopes == nullptr || panel_->renderer()->busy())
+            return false;
+        for (std::size_t kind = 0; kind < ui::scopes::kKindCount; ++kind) {
+            const auto finished = panel_->renderer()->finished(static_cast<ui::scopes::Kind>(kind));
+            if (finished != nullptr && finished->request.tables.get() != &reading.scopes->tables)
+                return false;
+        }
+        return true;
+    }
+
+    // After a resize: every trace asked for at the new size has arrived and no other is asked
+    // for once the event loop has turned. A grab before that paints the trace of the size before.
+    void awaitTraces() {
+        const bool idle = awaitQtCondition("the traces of the current size arrive", [&] {
+            if (panel_->renderer()->busy())
+                return false;
+            const auto maps = panel_->renderer()->mapsStarted();
+            for (int turn = 0; turn < 10; ++turn)
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            return !panel_->renderer()->busy() && panel_->renderer()->mapsStarted() == maps;
+        });
+        if (!idle)
+            throw std::runtime_error("the panel's traces never settled after a resize");
+    }
+
     void settle() {
+        // Settled, and still settled with no new mapping after the event loop has turned: a
+        // layout pass or a newer reading may ask for another trace.
         const bool ready = awaitQtCondition("the panel settles on the Viewer's frame", [&] {
-            const auto& state = controller_->state();
-            const auto reading = panel_->controller()->reading();
-            return state.activity == ui::PreviewActivity::Ready && state.frame != nullptr &&
-                   viewer_->mappingForTest().has_value() &&
-                   reading.state == ui::ScopesReading::State::Ready && !reading.behind &&
-                   !panel_->renderer()->busy();
+            if (!settled())
+                return false;
+            const auto maps = panel_->renderer()->mapsStarted();
+            for (int turn = 0; turn < 10; ++turn)
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            return settled() && panel_->renderer()->mapsStarted() == maps;
         });
         if (!ready) {
             const auto reading = panel_->controller()->reading();
@@ -298,10 +333,9 @@ class Workspace final {
                 std::to_string(static_cast<int>(controller_->state().activity)) + ", frame " +
                 std::to_string(controller_->state().frame != nullptr) + ", reading " +
                 std::to_string(static_cast<int>(reading.state)) + " '" + reading.message +
-                "', behind " + std::to_string(reading.behind));
+                "', behind " + std::to_string(reading.behind) + ", detail " +
+                std::to_string(reading.detail));
         }
-        for (int turn = 0; turn < 10; ++turn)
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
         (void)viewer_->grab();
     }
 
@@ -343,8 +377,7 @@ struct Output final {
 QImage grabPanel(Workspace& work, const int width, const int height = 0) {
     auto& panel = work.panel();
     panel.resize(width, 4000);
-    for (int turn = 0; turn < 10; ++turn)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    work.awaitTraces();
     int wanted = height;
     if (wanted == 0) {
         auto* header = panel.findChild<QWidget*>(QStringLiteral("scopesHeader"));
@@ -357,9 +390,7 @@ QImage grabPanel(Workspace& work, const int width, const int height = 0) {
         wanted = header->height() + std::max(contentHeight, content->sizeHint().height()) + 4;
     }
     panel.resize(width, wanted);
-    for (int turn = 0; turn < 10; ++turn)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    (void)work.panel().renderer();
+    work.awaitTraces();
     return panel.grab().toImage();
 }
 
@@ -367,8 +398,7 @@ QImage grabPanel(Workspace& work, const int width, const int height = 0) {
 QImage grabStatus(Workspace& work, const int width) {
     auto& panel = work.panel();
     panel.resize(width, 900);
-    for (int turn = 0; turn < 10; ++turn)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    work.awaitTraces();
     auto* scroll = panel.findChild<QWidget*>(QStringLiteral("scopesScroll"));
     const int bottom = scroll != nullptr ? scroll->geometry().top() : 300;
     return panel.grab(QRect(0, 0, width, bottom + 24)).toImage();
@@ -465,6 +495,14 @@ int main(int argc, char** argv) {
                 const auto refusal = work.viewer().applyRemoteChange(change);
                 if (!refusal.isEmpty())
                     throw std::runtime_error(refusal.toStdString());
+                // The change reaches the panel with the Viewer's next frame; settle() alone would
+                // accept the tables of the picture before it.
+                if (!awaitQtCondition("the scopes on show are of the exposed picture", [&] {
+                        const auto reading = work.panel().controller()->reading();
+                        return reading.scopes != nullptr &&
+                               reading.scopes->identity.viewAdjust.exposure == 1.0;
+                    }))
+                    throw std::runtime_error("the exposure change never reached the scopes");
                 work.settle();
                 out.save(grabStatus(work, width), QStringLiteral("status-warning"), width);
                 // The tables on show are not the shown frame's under the current settings while
