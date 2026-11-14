@@ -33,17 +33,20 @@
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
+#include <bloom/ui/scopes_controller.hpp>
+#include <bloom/ui/scopes_editor.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 
-#include <filesystem>
-#include <fstream>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QSettings>
 #include <QTemporaryDir>
+#include <QWidget>
+#include <filesystem>
+#include <fstream>
 
 #include <algorithm>
 #include <atomic>
@@ -638,6 +641,97 @@ void testRamPreviewWorkArea(Expectations& expectations) {
         const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
         expectations.expect(key && fixture.frameCache->contains(*key) == (frame >= 2 && frame < 5),
                             "RAM uses half-open work-area frame bounds");
+    }
+    ram.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
+// #724 Scopes: a real RAM preview fill with a visible Scopes panel. The panel follows the
+// controller's stateChanged(); every frame the fill retains is measured in the background and
+// gets a sidecar under the panel's identity, which the Viewer then shows without a new measure. A
+// hidden panel attaches nothing to a second fill.
+void testRamFillMeasuresScopes(Expectations& expectations) {
+    const auto format = document::CompositionFormat::create(
+        64, 64, core::PixelAspectRatio::square(), *document::FrameRate::create(25, 1));
+    SessionFixture fixture(document::makeNewProject("RAM scopes", "Main", time(7, 25), *format));
+    commands::Transaction range("Work area", fixture.session.snapshot().revision());
+    range.emplace<commands::SetWorkArea>(fixture.session.compositionId(), time(2, 25), time(5, 25));
+    expectations.expect(fixture.session.executeTransaction(std::move(range)).changed(),
+                        "work area accepted");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "foreground settled");
+    fixture.frameCache->clear();
+
+    const runtime::CpuCompositionEvaluator cpuEvaluator;
+    runtime::ScopeFrameRoutes routes;
+    routes.evaluateCpu = [&cpuEvaluator](auto plan, const runtime::EvaluationRequest& request,
+                                         const runtime::CancellationToken& cancellation) {
+        return cpuEvaluator.evaluate(std::move(plan), request, cancellation);
+    };
+    ui::ScopesServices services;
+    services.scheduler = &fixture.scheduler;
+    services.bridge = &fixture.bridge;
+    services.cache = fixture.frameCache;
+    services.measure = ui::makeScopesMeasure(routes, {}, std::size_t{1} << 26);
+
+    ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
+                                 fixture.bridge, fixture.countingPipeline());
+    QWidget host;
+    host.resize(520, 1500);
+    auto* panel = new ui::ScopesEditor(services, &ram, &host);
+    host.show();
+    expectations.expect(waitUntil([&] { return panel->panelShown(); }), "the panel is shown");
+    auto& scopes = *panel->controller();
+    panel->showViewerFrame(fixture.controller.state().frame, {});
+    expectations.expect(waitUntil([&] { return !scopes.busy(); }), "the shown frame is measured");
+    const ui::PreviewScopeIdentity identity{.settings = panel->measureSettings(), .viewAdjust = {}};
+    const auto keyAt = [&](const std::int64_t frame) {
+        return fixture.controller.cacheKeyForTime(time(frame, 25));
+    };
+
+    ram.start();
+    expectations.expect(waitUntil([&] { return !ram.isCaching() && ram.cachedFrameCount() == 3; }),
+                        "the fill ends with its three frames");
+    expectations.expect(waitUntil([&] { return !scopes.busy(); }),
+                        "the panel's background measures end");
+    for (std::int64_t frame = 2; frame < 5; ++frame) {
+        const auto key = keyAt(frame);
+        const auto sidecar = key ? fixture.frameCache->scopesFor(*key, identity) : nullptr;
+        expectations.expect(sidecar != nullptr && sidecar->tables.counted() == 64U * 64U,
+                            "every frame the fill retained has a sidecar of all its pixels");
+    }
+
+    // Stepping to a filled frame shows its scopes from the sidecar: no new measure.
+    const auto measures = scopes.measuresStarted();
+    const auto hits = scopes.cacheHits();
+    expectations.expect(fixture.session.setCurrentTime(time(3, 25)), "the time steps");
+    expectations.expect(waitUntil([&] {
+                            const auto& shown = fixture.controller.state().frame;
+                            return isReady(fixture.controller) && shown != nullptr &&
+                                   shown->desiredIdentity().time == time(3, 25);
+                        }),
+                        "the filled frame is shown");
+    panel->showViewerFrame(fixture.controller.state().frame, {});
+    expectations.expect(waitUntil([&] { return !scopes.busy(); }), "the panel settles");
+    expectations.expect(scopes.measuresStarted() == measures && scopes.cacheHits() > hits,
+                        "a filled frame's scopes come from its sidecar without a measure");
+
+    // A hidden panel attaches nothing to a second fill of another range.
+    host.hide();
+    expectations.expect(waitUntil([&] { return !panel->panelShown(); }), "the panel is hidden");
+    commands::Transaction second("Work area", fixture.session.snapshot().revision());
+    second.emplace<commands::SetWorkArea>(fixture.session.compositionId(), time(5, 25),
+                                          time(7, 25));
+    expectations.expect(fixture.session.executeTransaction(std::move(second)).changed(),
+                        "second work area accepted");
+    ram.start();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }), "the second fill ends");
+    expectations.expect(waitUntil([&] { return !scopes.busy(); }), "nothing runs for the panel");
+    for (std::int64_t frame = 5; frame < 7; ++frame) {
+        const auto key = keyAt(frame);
+        expectations.expect(key && fixture.frameCache->contains(*key) &&
+                                fixture.frameCache->scopesFor(*key, identity) == nullptr,
+                            "a frame filled under a hidden panel has no sidecar");
     }
     ram.beginShutdown();
     finishFixture(fixture, expectations);
@@ -1910,6 +2004,11 @@ void testImportedSvgPreviewAtHalfScale(Expectations& expectations) {
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    // The Scopes panel keeps its section state in a settings folder of this run.
+    QTemporaryDir settingsDirectory;
+    QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, settingsDirectory.path());
+    application.setOrganizationName(QStringLiteral("BloomRamPreviewTests"));
+    application.setApplicationName(QStringLiteral("RamPreview"));
     Expectations expectations;
     // Same shape as cpu_composition_evaluator_tests.cpp's main(): the fixtures here compare
     // std::variant-carrying identities, so the standard library's own throwing paths are reachable
@@ -1933,6 +2032,7 @@ int main(int argc, char** argv) {
         testCachingReleasesTheProcessImage(expectations);
         testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(expectations);
         testRamPreviewWorkArea(expectations);
+        testRamFillMeasuresScopes(expectations);
         testRamPreviewButtonReflectsFillingAndCancels(expectations);
         testRamPreviewCachesTheRangeThenPlaysEveryFrame(expectations);
         testLargeIndexedCoverageMetadata(expectations);

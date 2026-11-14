@@ -197,9 +197,10 @@ void ScopesController::showFrame(const PreparedPreviewFrameHandle& frame,
 void ScopesController::setRangeFillActive(const bool active) {
     if (rangeFillActive_ == active)
         return;
+    // Frames the fill already retained stay queued when it ends: the fill's last frames are
+    // retained long before the background measure reaches them. Only new frames stop being queued;
+    // hiding the panel or closing every scope empties the queue (setSettings).
     rangeFillActive_ = active;
-    if (!active)
-        fillQueue_.clear();
 }
 
 void ScopesController::publish(ScopesReading reading) {
