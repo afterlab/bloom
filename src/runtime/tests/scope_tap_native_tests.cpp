@@ -24,7 +24,14 @@
 //       frame keeps nothing and is never held back; a fill tap never replaces the Viewer's tap and
 //       the reverse;
 //   (7) shutting the service down with a request queued, or in flight, ends it and unblocks the
-//       caller.
+//       caller;
+//   (8) memory (the pressureCases below): the measure is admitted as a Background phase and yields
+//       to the Viewer on a declared card. A card that fits the Viewer's frame but not the frame
+//       plus the measure ends it Skipped(NoRoom) with the Viewer's counters unmoved; a waiting
+//       request is admitted when the room returns and ends NoRoom when its tap is given back; the
+//       taps are the first memory given back for a frame that needs room, a measure in flight is
+//       tracked against its phase and never makes a frame wait, a fill tap that does not fit as
+//       Background is refused without holding the fill back, and the idle trim releases the tap.
 //
 // Requires the Vulkan backend and the pinned shader tools; skips (77) without a device and fails
 // under --require-device.
@@ -37,7 +44,9 @@
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_scope_tables.hpp>
+#include <bloom/render/native_image_storage.hpp>
 #include <bloom/render/scope_table_layout.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/scope_frame_measure.hpp>
@@ -83,6 +92,17 @@ GpuPreviewDisplayServiceOptions packedOptions(const TestOptions& options) {
     return configured;
 }
 
+// What a rig plans for: the card (0 keeps the suite's declared card) and the working allowance
+// the Viewer's frames state in their envelope (0 keeps the suite's default).
+struct RigShape final {
+    std::uint64_t card = 0;
+    std::uint64_t viewerWorkingBytes = 832ULL * 1024 * 1024;
+    // The scene cache's retained-byte ceiling (the suite's default when empty).
+    std::optional<std::uint64_t> sceneCacheBytes = std::nullopt;
+    // How long the idle service waits before it trims its retention (the default when 0).
+    std::uint64_t idleTrimMilliseconds = 0;
+};
+
 // The service, its scheduler and the counting scene preparation, torn down in reverse order.
 struct Rig final {
     PackedRetirementScope retirement;
@@ -91,6 +111,8 @@ struct Rig final {
     bloom::runtime::MemoryBudgetLedger ledger;
     std::shared_ptr<std::atomic<std::uint64_t>> preparations =
         std::make_shared<std::atomic<std::uint64_t>>(0);
+    std::shared_ptr<std::atomic<std::uint64_t>> viewerWorking =
+        std::make_shared<std::atomic<std::uint64_t>>(832ULL * 1024 * 1024);
     std::unique_ptr<GpuPreviewDisplayService> service;
     std::shared_ptr<bloom::runtime::detail::PreviewDisplayServiceCore> core;
     std::shared_ptr<const bloom::runtime::CompiledCompositionPlan> plan;
@@ -112,34 +134,47 @@ struct Rig final {
     Rig(const TestOptions& options,
         std::shared_ptr<const bloom::runtime::CompiledCompositionPlan> planValue,
         std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle> processor,
-        bloom::document::Snapshot snapshotValue)
+        bloom::document::Snapshot snapshotValue, const RigShape shape = {})
         : scheduler(config()),
           policy(std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(32, retirement.owner)),
           ledger(makeLedger()), plan(std::move(planValue)), snapshot(std::move(snapshotValue)) {
         ledger.beginProcessSampling();
         refresh();
-        const bloom::runtime::GpuScenePreparationPhase phase{
-            .policy = policy,
-            .envelope = {.metadataBytes = 1024ULL * 1024,
-                         .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
-                         .requestedExecutorBytes = kBudget,
-                         .deviceWorkingBytes = 832ULL * 1024 * 1024}};
-        auto builder =
-            std::make_shared<CpuGpuSceneBuilder>(nullptr, bloom::runtime::GpuSceneMediaContext{},
-                                                 bloom::runtime::GpuSceneOcioContext{}, phase);
-        auto baseStage = packedStageFunction(plan, builder, {}, processor);
+        viewerWorking->store(shape.viewerWorkingBytes);
+        // The Viewer's frames state their working allowance in their envelope; a test that needs a
+        // frame with a need of its own sets `viewerWorking` before submitting it (an envelope with
+        // no measured peaks yet is admitted at exactly its stated need).
         auto count = preparations;
+        auto working = viewerWorking;
+        auto planCopy = plan;
+        auto policyCopy = policy;
         PreviewGpuSceneStageFunction counted =
-            [baseStage, count](
+            [count, working, planCopy, policyCopy, processor](
                 const bloom::document::Snapshot& snap, const PreviewRequestIdentity& identity,
                 const std::size_t bytes,
                 const std::vector<bloom::runtime::SnapshotParameterOverride>& overrides,
                 TaskContext& context) {
                 count->fetch_add(1);
-                return baseStage(snap, identity, bytes, overrides, context);
+                const bloom::runtime::GpuScenePreparationPhase phase{
+                    .policy = policyCopy,
+                    .envelope = {.metadataBytes = 1024ULL * 1024,
+                                 .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
+                                 .requestedExecutorBytes = kBudget,
+                                 .deviceWorkingBytes = working->load()}};
+                auto builder = std::make_shared<CpuGpuSceneBuilder>(
+                    nullptr, bloom::runtime::GpuSceneMediaContext{},
+                    bloom::runtime::GpuSceneOcioContext{}, phase);
+                return packedStageFunction(planCopy, builder, {}, processor)(snap, identity, bytes,
+                                                                             overrides, context);
             };
         auto configured = packedOptions(options);
         configured.processingPhasePolicy = policy;
+        if (shape.card != 0)
+            configured.deviceMemoryLimitBytes = shape.card;
+        if (shape.sceneCacheBytes)
+            configured.residentSceneCacheBudgets.maxRetainedBytes = *shape.sceneCacheBytes;
+        if (shape.idleTrimMilliseconds != 0)
+            configured.idleTrimDelay = std::chrono::milliseconds(shape.idleTrimMilliseconds);
         service = std::make_unique<GpuPreviewDisplayService>(
             scheduler, counted,
             generalCpuStageFunction(plan, processor, std::make_shared<CpuCompositionEvaluator>()),
@@ -254,12 +289,22 @@ take(std::future<GpuScopeTapMeasureOutcome>& future, const std::string& what) {
 struct TableHold final {
     std::shared_ptr<bloom::runtime::detail::PreviewDisplayServiceCore> core;
     std::shared_ptr<std::atomic_bool> held = std::make_shared<std::atomic_bool>(true);
+    // Set once the owner polled the held table readback: the measure's submission is in flight
+    // and its readback is held (a measure between its steps has nothing in flight).
+    std::shared_ptr<std::atomic_bool> polled = std::make_shared<std::atomic_bool>(false);
 
     explicit TableHold(std::shared_ptr<bloom::runtime::detail::PreviewDisplayServiceCore> target)
         : core(std::move(target)) {
-        core->scopeTablesPollOverride = [held = held](bloom::render::GpuScopeTables& tables) {
-            return held->load() ? bloom::render::GpuScopeTablesState::Pending : tables.poll();
+        core->scopeTablesPollOverride = [held = held, polled = polled](
+                                            bloom::render::GpuScopeTables& tables) {
+            if (!held->load())
+                return tables.poll();
+            polled->store(true);
+            return bloom::render::GpuScopeTablesState::Pending;
         };
+    }
+    [[nodiscard]] bool awaitHeld(const std::string& what) const {
+        return awaitCondition(what, [&] { return polled->load(); });
     }
     void release() {
         held->store(false);
@@ -461,8 +506,7 @@ bool run(Expectations& checks, const TestOptions& options,
         TableHold hold(rig.core);
         const auto before = counters();
         auto measure = measureAsync(service, key, job);
-        if (!awaitCondition("the held measure is in flight",
-                            [&] { return Access::scopeStepperBegan(*rig.core); }))
+        if (!hold.awaitHeld("the held measure is in flight"))
             return true;
         for (std::uint64_t index = 0; index < 3; ++index) {
             const auto frame = rig.frame(10 + index, static_cast<std::int64_t>(10 + index),
@@ -497,8 +541,7 @@ bool run(Expectations& checks, const TestOptions& options,
         {
             TableHold hold(rig.core);
             auto measure = measureAsync(service, currentKey, job);
-            if (!awaitCondition("the measure to hold is in flight",
-                                [&] { return Access::scopeStepperBegan(*rig.core); }))
+            if (!hold.awaitHeld("the measure to hold is in flight"))
                 return true;
             const auto busy = service.measureScopeTap(currentKey, job,
                                                       bloom::runtime::CancellationToken{});
@@ -580,9 +623,7 @@ bool run(Expectations& checks, const TestOptions& options,
                 return TaskResult<int>::succeeded(0);
             });
         checks.expect(task.accepted(), "the cancellable measure task is admitted");
-        if (!task.accepted() ||
-            !awaitCondition("the measure to cancel is in flight",
-                            [&] { return Access::scopeStepperBegan(*rig.core); }))
+        if (!task.accepted() || !hold.awaitHeld("the measure to cancel is in flight"))
             return true;
         task.handle.cancel();
         if (!awaitCondition("cancellation reaches the submission in flight",
@@ -736,8 +777,7 @@ void shutdownCases(Expectations& checks, const TestOptions& options,
         if (inFlight) {
             tables = std::make_unique<TableHold>(rig.core);
             measure = measureAsync(*rig.service, key, job);
-            if (!awaitCondition("the measure is in flight",
-                                [&] { return Access::scopeStepperBegan(*rig.core); }))
+            if (!tables->awaitHeld("the measure is in flight"))
                 return;
         } else {
             // An active Viewer frame (its transfer held) keeps the measure queued.
@@ -763,6 +803,565 @@ void shutdownCases(Expectations& checks, const TestOptions& options,
         transfer->release();
         if (tables)
             tables->release();
+    }
+}
+
+
+// ---- memory admission and yield (#724) ------------------------------------------------------
+//
+// Every byte size below comes from the device's own allocation sizes (a probe device) and the
+// layout of the scope tables, and every card is a declared card (`deviceMemoryLimitBytes`), so
+// nothing here depends on the machine's real free memory. A Viewer frame's need is stated in its
+// envelope; an envelope with no measured peak yet is admitted at exactly its stated need, so a
+// test that wants a frame with a need of its own states a new working allowance for it.
+//
+//   (a) a card the size of the measure's own memory fits the Viewer's frame but not the frame plus
+//       the measure's memory: the measure ends Skipped(NoRoom) holding nothing, the Viewer's frames
+//       keep completing, and nothing is made to wait or give anything back for the measure;
+//       a measure the card could hold but the room is held right now waits at the service holding
+//       nothing and is admitted when the room returns, and ends Skipped(NoRoom) when its tap is
+//       given back meanwhile;
+//   (b) the taps are given back first when a Viewer frame needs their bytes: before the scene
+//       cache, the parked storage or the UI's finished frames;
+//   (c) a measure in flight (readback held) never makes a Viewer frame wait: it is tracked against
+//       its Background phase, the frames park that phase and complete, and a frame that is short
+//       of memory tells the measure to stop (it is polled to its end, then Skipped(NoRoom));
+//   (d) a fill tap that does not fit as Background is refused: the frame is delivered, the slot
+//       stays free, no later frame is held back, and the key measures Skipped(NoRoom);
+//   (e) the idle trim releases the Viewer tap; the next shown frame is tapped again.
+
+
+struct Derived final {
+    std::uint64_t image = 0;
+    std::uint64_t layoutBytes = 0;
+    // The measure's device need for a Display job with Chromaticity (two color outputs, the
+    // table buffer and its staging copy), as the service computes it from the same sizes.
+    std::uint64_t measureNeed = 0;
+};
+
+[[nodiscard]] std::optional<Derived> deriveSizes(const TestOptions& options) {
+    bloom::render::GpuDeviceCreationOptions probeOptions;
+    probeOptions.loader_path = options.loaderPath;
+    auto created = bloom::render::GpuDevice::create(probeOptions);
+    if (!created.hasValue())
+        return std::nullopt;
+    const auto budget = created.device->availableAllocationBudget();
+    if (!budget.allocation_sizes || !budget.allocation_sizes->image ||
+        !budget.allocation_sizes->buffer)
+        return std::nullopt;
+    Derived derived;
+    derived.image = budget.allocation_sizes->image(kSize, kSize);
+    const auto layout = bloom::render::scopeTableLayout(
+        kScopeTableAll, bloom::render::kScopeWaveformMaxColumns, 0);
+    derived.layoutBytes = layout.byteCount();
+    derived.measureNeed =
+        2 * derived.image +
+        2 * std::max(derived.layoutBytes, budget.allocation_sizes->buffer(derived.layoutBytes));
+    return derived;
+}
+
+// Room the test holds on the policy's books (a Viewer-class phase with a claim on its device need),
+// so a frame is short of exactly what the test leaves. Released by destruction.
+struct HeldRoom final {
+    bloom::render::GpuProcessingPhaseGrant grant;
+    std::optional<bloom::render::NativeImageStorageToken> token;
+};
+
+[[nodiscard]] HeldRoom holdRoom(bloom::runtime::GpuProcessingPhasePolicy& policy,
+                                const std::uint64_t bytes, const bool claim = true) {
+    HeldRoom held;
+    held.grant = policy.reserve(
+        {.output = bloom::runtime::GpuProcessingPhaseOutput::PackedPreview,
+         .pixels = 1,
+         .metadataBytes = 4096,
+         .requestedExecutorBytes = std::uint64_t{0},
+         .deviceWorkingBytes = bytes,
+         .sourceFree = true,
+         .native = true,
+         .admissionClass = bloom::runtime::GpuAdmissionClass::Viewer});
+    // Without a claim only the policy's record of the Viewer's last need changes.
+    if (!held.grant.lease || !claim)
+        return held;
+    const bloom::render::NativeImageStorageIdentity identity{
+        .allocatorGeneration = 1, .memoryType = 0, .heap = 0};
+    auto reserved = bloom::render::NativeImageStorageToken::reserve(held.grant.lease, bytes, identity);
+    held.token = std::move(reserved.token);
+    return held;
+}
+
+[[nodiscard]] bool deviceReported(const Rig& rig) {
+    return awaitCondition("the service reports its card to the policy",
+                          [&] { return rig.policy->usableCapacity().deviceReady; });
+}
+
+void pressureCases(Expectations& checks, const TestOptions& options,
+                   const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan,
+                   const std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle>& processor,
+                   const bloom::document::Snapshot& snapshot, const Scope& scope) {
+    const auto derived = deriveSizes(options);
+    if (!derived) {
+        checks.expect(false, "the probe device reports its allocation sizes");
+        return;
+    }
+    const auto displayJob = scope.job(scope.settings(ScopeSignal::Display, kScopeTableAll));
+    const auto displayReference = scope.reference(scope.settings(ScopeSignal::Display, kScopeTableAll));
+    const auto none = bloom::runtime::CancellationToken{};
+
+    // ---- (a) no room beside the Viewer ------------------------------------------------------
+    {
+        Rig rig(options, plan, processor, snapshot,
+                {.card = derived->measureNeed, .viewerWorkingBytes = 4 * derived->image});
+        auto& service = *rig.service;
+        if (!rig.ready() || !deviceReported(rig))
+            return;
+        const auto counters = [&] { return service.status().counters; };
+        const auto first = rig.frame(1, 0, TaskPriority::Visible);
+        if (!first)
+            return;
+        checks.expect(isPacked(*first), "(a) the Viewer's frame completes on the small card");
+        const auto viewerNeed = rig.policy->viewerPriority().reserveDeviceBytes;
+        const auto usable = rig.policy->usableCapacity().deviceUsableBytes;
+        checks.expect(viewerNeed != 0 && viewerNeed <= usable &&
+                          derived->measureNeed + viewerNeed > usable,
+                      "(a) the card fits the Viewer's frame but not the frame plus the measure");
+        const auto owned = rig.policy->snapshot().reservations;
+        const auto before = counters();
+        const auto outcome = service.measureScopeTap(keyOf(*first), displayJob, none);
+        const auto after = counters();
+        checks.expect(outcome.status == GpuScopeTapStatus::Skipped &&
+                          outcome.skip == GpuScopeTapSkip::NoRoom,
+                      "(a) the measure ends Skipped(NoRoom): " + outcome.message);
+        checks.expect(after.scopeMeasureNeedBytes == derived->measureNeed,
+                      "(a) the measure's need is the color outputs and the table buffers from the "
+                      "device's allocation sizes");
+        checks.expect(after.scopeMeasuresNoRoom == before.scopeMeasuresNoRoom + 1 &&
+                          after.scopeMeasuresStarted == before.scopeMeasuresStarted &&
+                          after.scopeMeasureAdmissions == 0 && after.scopeColorDispatches == 0 &&
+                          after.scopeMeasuresGivenBack == 0,
+                      "(a) the measure was never admitted, never began and gave nothing back");
+        const auto held = rig.policy->snapshot().reservations;
+        checks.expect(held.peakOwnedNativeBytes == owned.peakOwnedNativeBytes &&
+                          held.ownedNativeBufferBytes == 0 &&
+                          held.admittedPhases == owned.admittedPhases,
+                      "(a) the refused measure took no native memory and no phase");
+        for (std::uint64_t index = 0; index < 3; ++index) {
+            const auto frame = rig.frame(10 + index, static_cast<std::int64_t>(10 + index),
+                                         TaskPriority::Visible);
+            checks.expect(frame && isPacked(*frame),
+                          "(a) the Viewer's frames keep completing as GpuPreparedPacked");
+        }
+        const auto end = counters();
+        checks.expect(end.capacityWaits == before.capacityWaits &&
+                          end.cpuFallbacks == before.cpuFallbacks &&
+                          end.deviceRoomReclaims == before.deviceRoomReclaims &&
+                          service.status().residentFrameEvictionSerial == 0 &&
+                          end.scopeViewerTapYields == 0,
+                      "(a) the Viewer's capacity-wait and CPU-fallback counters did not move, and "
+                      "nothing was reclaimed or given back for the measure");
+    }
+
+    // ---- (a2) a measure the card could hold waits, then is admitted or yields ----------------
+    {
+        Rig rig(options, plan, processor, snapshot,
+                {.card = 4 * derived->measureNeed, .viewerWorkingBytes = 4 * derived->image});
+        auto& service = *rig.service;
+        if (!rig.ready() || !deviceReported(rig))
+            return;
+        const auto counters = [&] { return service.status().counters; };
+        const auto first = rig.frame(1, 0, TaskPriority::Visible);
+        if (!first)
+            return;
+        const auto key = keyOf(*first);
+        // Room is held right now by another admitted phase (the test's own claim): the card could
+        // hold the measure beside the Viewer, the free room cannot.
+        const auto viewerNeed = rig.policy->viewerPriority().reserveDeviceBytes;
+        const auto free = rig.policy->usableCapacity().deviceFreeBytes;
+        checks.expect(free > derived->measureNeed + viewerNeed,
+                      "(a2) the card holds the measure beside the Viewer's need");
+        const auto claim = free - (derived->measureNeed + viewerNeed) + 1;
+        const bloom::render::NativeImageStorageIdentity identity{
+            .allocatorGeneration = 1, .memoryType = 0, .heap = 0};
+        const auto reserveClaim = [&] {
+            auto grant = rig.policy->reserve(
+                {.output = bloom::runtime::GpuProcessingPhaseOutput::PackedPreview,
+                 .pixels = 1,
+                 .metadataBytes = 4096,
+                 .requestedExecutorBytes = std::uint64_t{0},
+                 .deviceWorkingBytes = claim,
+                 .sourceFree = true,
+                 .native = true,
+                 .admissionClass = bloom::runtime::GpuAdmissionClass::Background});
+            return grant;
+        };
+        {
+            auto grant = reserveClaim();
+            auto token = grant.lease ? bloom::render::NativeImageStorageToken::reserve(
+                                           grant.lease, claim, identity)
+                                     : bloom::render::NativeImageStorageGrant{};
+            checks.expect(grant.lease && token.token.has_value(),
+                          "(a2) the test's phase claims room beside the measure (grant " +
+                              std::to_string(static_cast<int>(grant.status)) + ", domain " +
+                              std::to_string(static_cast<int>(grant.domain)) + ", token " +
+                              std::to_string(static_cast<int>(token.status)) + ", claim " +
+                              std::to_string(claim) + ", free " + std::to_string(free) + ")");
+            if (!grant.lease || !token.token)
+                return;
+            auto measure = measureAsync(service, key, displayJob);
+            if (!awaitCondition("the measure waits for room", [&] {
+                    return counters().scopeMeasureAdmissionWaits == 1;
+                }))
+                return;
+            checks.expect(notReady(measure) && Access::scopeRequestPending(*rig.core) &&
+                              counters().scopeMeasuresStarted == 0 &&
+                              counters().scopeMeasureAdmissions == 0 &&
+                              rig.policy->snapshot().reservations.admittedPhases == 1,
+                          "(a2) the waiting measure holds nothing and has not begun");
+            // The room returns: the measure is admitted and measured.
+            token.token.reset();
+            grant.lease.reset();
+            const auto outcome = take(measure, "the measure admitted when the room returned");
+            checks.expect(outcome && outcome->status == GpuScopeTapStatus::Measured &&
+                              tablesWithinOneCell(outcome->counts, displayReference.counts) &&
+                              counters().scopeMeasureAdmissions == 1,
+                          "(a2) the measure is admitted as Background once the room returns");
+        }
+        if (!awaitCondition("the measure's phase retires", [&] {
+                return rig.policy->snapshot().reservations.admittedPhases == 0;
+            }))
+            return;
+        // Again with the room held: this time the tap is given back while the measure waits.
+        {
+            auto grant = reserveClaim();
+            auto token = grant.lease ? bloom::render::NativeImageStorageToken::reserve(
+                                           grant.lease, claim, identity)
+                                     : bloom::render::NativeImageStorageGrant{};
+            if (!grant.lease || !token.token) {
+                checks.expect(false, "(a2) the test's phase claims room again");
+                return;
+            }
+            const auto waitsBefore = counters().scopeMeasureAdmissionWaits;
+            auto measure = measureAsync(service, key, displayJob);
+            if (!awaitCondition("the second measure waits for room", [&] {
+                    return counters().scopeMeasureAdmissionWaits == waitsBefore + 1;
+                }))
+                return;
+            // A frame needs device memory: the service reads the shortfall the same way it reads
+            // a frame's wait, and gives the tap (and with it the request) back first.
+            rig.core->deviceReclaim->request(1);
+            rig.core->notify();
+            const auto outcome = take(measure, "the waiting measure whose tap was given back");
+            checks.expect(outcome && outcome->status == GpuScopeTapStatus::Skipped &&
+                              outcome->skip == GpuScopeTapSkip::NoRoom &&
+                              counters().scopeViewerTapYields == 1 &&
+                              !Access::scopeViewerTapHeld(*rig.core),
+                          "(a2) a waiting request whose tap was given back ends Skipped(NoRoom), "
+                          "not TapGone");
+            const auto later = service.measureScopeTap(key, displayJob, none);
+            checks.expect(later.status == GpuScopeTapStatus::Skipped &&
+                              later.skip == GpuScopeTapSkip::NoRoom,
+                          "(a2) a later measure for the given-back key is Skipped(NoRoom)");
+            const auto unknown = service.measureScopeTap(GpuScopeTapKey::of(rig.identity(1, 99)),
+                                                         displayJob, none);
+            checks.expect(unknown.status == GpuScopeTapStatus::Skipped &&
+                              unknown.skip == GpuScopeTapSkip::TapGone,
+                          "(a2) a key no frame had is TapGone, not NoRoom");
+        }
+    }
+
+    // ---- (b) the taps are given back first --------------------------------------------------
+    // Without a scene cache the taps are the only holders of their pictures, so giving them back
+    // alone makes the room and nothing else is reclaimed. With one (b2) the cache gives way only
+    // after them: the tap's alias would otherwise keep a cached picture's bytes allocated.
+    {
+        const std::string name = "(b) ";
+        Rig rig(options, plan, processor, snapshot,
+                {.card = 16 * derived->image,
+                 .viewerWorkingBytes = derived->image,
+                 .sceneCacheBytes = std::optional<std::uint64_t>{0}});
+        auto& service = *rig.service;
+        if (!rig.ready() || !deviceReported(rig))
+            return;
+        const auto counters = [&] { return service.status().counters; };
+        const auto viewer = rig.frame(1, 0, TaskPriority::Visible);
+        const auto fill = rig.frame(2, 1, TaskPriority::Foreground, true);
+        if (!viewer || !fill)
+            return;
+        checks.expect(Access::scopeViewerTapHeld(*rig.core) && Access::scopeFillTapHeld(*rig.core),
+                      name + "the Viewer's tap and the fill tap are held");
+        // The next frame is admitted (the room free holds its stated need) but its native
+        // allocations, the most storage a frame's phase held as the policy measured it, do not fit
+        // the room beside the taps: the room the test holds leaves the midpoint between the two.
+        // The root refuses the allocation for room and the service gives way inside it, taps first.
+        const auto free = rig.policy->usableCapacity().deviceFreeBytes;
+        const auto measured = rig.policy->snapshot().reservations;
+        const auto need = measured.peakPhaseDeviceNeedBytes;
+        const auto peak = measured.peakPhaseDeviceAllocationBytes;
+        checks.expect(need != 0 && peak > need && free > need + (peak - need) / 2,
+                      name + "the card holds a frame beside the taps");
+        auto room = holdRoom(*rig.policy, free - (need + (peak - need) / 2));
+        if (!room.token)
+            return;
+        const auto before = counters();
+        const auto next = rig.frame(3, 2, TaskPriority::Visible);
+        checks.expect(next && isPacked(*next),
+                      name + "the Viewer frame that needed the taps' bytes completes on the GPU");
+        const auto after = counters();
+        checks.expect(after.scopeViewerTapYields == 1 && after.scopeFillTapYields == 1 &&
+                          !Access::scopeFillTapHeld(*rig.core),
+                      name + "both taps were given back, one per slot");
+        checks.expect(after.scopeReclaimsSeenAtFirstGiveBack == 0 && after.idleTrims == 0 &&
+                          service.status().residentFrameEvictionSerial == 0,
+                      name + "the taps went first: no parked storage, scene cache or finished "
+                             "frame had been reclaimed when they were given back, and the UI was "
+                             "not asked to evict finished frames");
+        checks.expect(after.cpuFallbacks == before.cpuFallbacks &&
+                          after.scopeMeasuresGivenBack == 0 && after.scopeMeasuresRequested == 0,
+                      name + "the frame took no CPU fallback and there was no measure to wait on");
+        const auto gone = service.measureScopeTap(keyOf(*fill), displayJob, none);
+        checks.expect(gone.status == GpuScopeTapStatus::Skipped &&
+                          gone.skip == GpuScopeTapSkip::NoRoom,
+                      name + "the given-back fill tap measures Skipped(NoRoom)");
+    }
+
+    {
+        Rig rig(options, plan, processor, snapshot,
+                {.card = 16 * derived->image, .viewerWorkingBytes = 4 * derived->image});
+        auto& service = *rig.service;
+        if (!rig.ready() || !deviceReported(rig))
+            return;
+        const auto counters = [&] { return service.status().counters; };
+        const auto viewer = rig.frame(1, 0, TaskPriority::Visible);
+        if (!viewer)
+            return;
+        const auto retained = rig.policy->snapshot().reservations.retainedNativeImageBytes;
+        checks.expect(retained >= 2 * derived->image && Access::scopeViewerTapHeld(*rig.core),
+                      "(b2) the scene cache and the Viewer's tap hold the frame's pictures");
+        // A frame is short of everything those pictures hold: the request a frame's wait raises.
+        rig.core->deviceReclaim->request(retained);
+        rig.core->notify();
+        checks.expect(awaitCondition("the scene cache gives its pictures back", [&] {
+                          return rig.policy->snapshot().reservations.retainedNativeImageBytes <
+                                 retained;
+                      }),
+                      "(b2) the scene cache gave pictures back after the tap");
+        const auto after = counters();
+        checks.expect(after.scopeViewerTapYields == 1 && !Access::scopeViewerTapHeld(*rig.core) &&
+                          after.scopeReclaimsSeenAtFirstGiveBack == 0,
+                      "(b2) the tap was given back before the scene cache, parked storage or the "
+                      "OCIO programs");
+    }
+
+    // ---- (c) a measure in flight never makes a Viewer frame wait ----------------------------
+    {
+        Rig rig(options, plan, processor, snapshot,
+                {.card = 4 * derived->measureNeed, .viewerWorkingBytes = 4 * derived->image});
+        auto& service = *rig.service;
+        if (!rig.ready() || !deviceReported(rig))
+            return;
+        const auto counters = [&] { return service.status().counters; };
+        const auto first = rig.frame(1, 0, TaskPriority::Visible);
+        if (!first)
+            return;
+        TableHold hold(rig.core);
+        auto measure = measureAsync(service, keyOf(*first), displayJob);
+        if (!hold.awaitHeld("the held measure is in flight"))
+            return;
+        const auto inFlight = rig.policy->snapshot().reservations;
+        checks.expect(counters().scopeMeasureAdmissions == 1 && inFlight.admittedPhases == 1 &&
+                          inFlight.ownedNativeBufferBytes >= derived->layoutBytes &&
+                          inFlight.ownedNativeImageBytes >= 2 * derived->image,
+                      "(c) the measure's color outputs and table buffers are tracked against its "
+                      "one Background phase");
+        const auto before = counters();
+        for (std::uint64_t index = 0; index < 3; ++index) {
+            const auto frame = rig.frame(20 + index, static_cast<std::int64_t>(20 + index),
+                                         TaskPriority::Visible);
+            checks.expect(frame && isPacked(*frame),
+                          "(c) a Viewer frame completes while the measure is held in flight");
+        }
+        const auto during = counters();
+        checks.expect(notReady(measure) && Access::scopeRequestPending(*rig.core) &&
+                          during.scopeMeasurePhaseParks >= 1 &&
+                          during.scopeMeasuresGivenBack == 0 &&
+                          during.capacityWaits == before.capacityWaits &&
+                          during.cpuFallbacks == before.cpuFallbacks &&
+                          during.packedTransfers == before.packedTransfers + 3,
+                      "(c) the frames parked the measure's phase and neither waited nor fell back; "
+                      "the measure was only polled");
+        hold.release();
+        const auto outcome = take(measure, "the released measure");
+        checks.expect(outcome && outcome->status == GpuScopeTapStatus::Measured &&
+                          tablesWithinOneCell(outcome->counts, displayReference.counts),
+                      "(c) the measure delivers the tables of the frame it counted");
+        checks.expect(awaitCondition("the measure's memory and phase are retired", [&] {
+                          const auto snap = rig.policy->snapshot().reservations;
+                          // The cached color program keeps its small uniform buffer.
+                          return snap.admittedPhases == 0 &&
+                                 snap.ownedNativeBufferBytes < derived->layoutBytes;
+                      }),
+                      "(c) the measure's tracked memory and its phase are retired at its end");
+    }
+    {
+        // A frame whose allocations are short of memory while the measure is in flight. The
+        // measure is not the Viewer's to wait for: pressure tells it to stop and gives the tap
+        // back, and it is polled to its end; its memory (and its alias of the tapped picture)
+        // returns only once its fence is proven retired. A frame that still cannot get memory then
+        // waits for memory like any other frame (a capacity wait, never the CPU); the memory the
+        // measure was admitted beside (the Viewer's last need) is what keeps that case rare.
+        Rig rig(options, plan, processor, snapshot,
+                {.card = 4 * derived->measureNeed,
+                 .viewerWorkingBytes = derived->image,
+                 .sceneCacheBytes = std::optional<std::uint64_t>{0}});
+        auto& service = *rig.service;
+        if (!rig.ready() || !deviceReported(rig))
+            return;
+        const auto counters = [&] { return service.status().counters; };
+        const auto first = rig.frame(1, 0, TaskPriority::Visible);
+        if (!first)
+            return;
+        // What the Viewer's frames needed and held, before the measure's phase exists.
+        const auto measured = rig.policy->snapshot().reservations;
+        const auto frameNeed = measured.peakPhaseDeviceNeedBytes;
+        const auto peak = measured.peakPhaseDeviceAllocationBytes;
+        TableHold hold(rig.core);
+        auto measure = measureAsync(service, keyOf(*first), displayJob);
+        if (!hold.awaitHeld("the held measure is in flight"))
+            return;
+        // The frame's stated need fits; its native allocations (the most storage a frame's phase
+        // held, as the policy measured it) do not fit the room the test leaves.
+        const auto free = rig.policy->usableCapacity().deviceFreeBytes;
+        checks.expect(frameNeed != 0 && peak > frameNeed &&
+                          free > frameNeed + (peak - frameNeed) / 2,
+                      "(c2) the card holds a frame beside the measure");
+        auto room = holdRoom(*rig.policy, free - (frameNeed + (peak - frameNeed) / 2));
+        if (!room.token)
+            return;
+        const auto before = counters();
+        auto submission = rig.submit(rig.identity(30, 30), TaskPriority::Visible);
+        if (!awaitCondition("the measure is told to stop for the frame", [&] {
+                return counters().scopeMeasuresGivenBack == 1 && Access::scopeStopIssued(*rig.core);
+            }))
+            return;
+        // The frame completes while the readback is still held: it never waits for the measure.
+        const auto done = rig.finish(submission, "the short frame");
+        checks.expect(done && isPacked(*done) && counters().cpuFallbacks == before.cpuFallbacks &&
+                          counters().capacityWaits == before.capacityWaits,
+                      "(c2) the short frame completes on the GPU with the readback still held: it "
+                      "neither waits for the measure nor falls back");
+        checks.expect(notReady(measure) && Access::scopeRequestPending(*rig.core) &&
+                          counters().scopeViewerTapYields == 1 &&
+                          counters().scopeReclaimsSeenAtFirstGiveBack == 0,
+                      "(c2) the measure in flight was told to stop and is polled to its end, its "
+                      "memory not freed before its fence is proven; the tap went first");
+        hold.release();
+        const auto outcome = take(measure, "the stopped measure");
+        checks.expect(outcome && outcome->status == GpuScopeTapStatus::Skipped &&
+                          outcome->skip == GpuScopeTapSkip::NoRoom,
+                      "(c2) the stopped measure ends Skipped(NoRoom)");
+        room.token.reset();
+        room.grant.lease.reset();
+        checks.expect(awaitCondition("the measure's phase retires", [&] {
+                          return rig.policy->snapshot().reservations.admittedPhases == 0;
+                      }),
+                      "(c2) the stopped measure's phase is retired once its fence is proven");
+    }
+
+    // ---- (d) a fill tap that does not fit as Background is refused --------------------------
+    {
+        Rig rig(options, plan, processor, snapshot,
+                {.card = 16 * derived->image, .viewerWorkingBytes = 4 * derived->image});
+        auto& service = *rig.service;
+        if (!rig.ready() || !deviceReported(rig))
+            return;
+        const auto counters = [&] { return service.status().counters; };
+        const auto viewer = rig.frame(1, 0, TaskPriority::Visible);
+        if (!viewer)
+            return;
+        // A flagged fill frame held at its transfer; the Viewer then holds nearly all the room
+        // that is free (a Viewer-class request admitted with a claim, which records its need): the
+        // frame's tap, one picture, cannot be held beside it as Background when it publishes.
+        const auto fillFrame = [&](const std::uint64_t generation,
+                                   const std::int64_t time) -> std::shared_ptr<const bloom::runtime::PreparedPreviewFrame> {
+            TransferHold transfer(rig.core);
+            auto submission = rig.submit(rig.identity(generation, time), TaskPriority::Foreground, true);
+            if (!awaitCondition("the fill frame reaches its held transfer", [&] {
+                    return Access::residentActivePhase(*rig.core) ==
+                           bloom::runtime::detail::ResidentNativePhase::Transfer;
+                }))
+                return {};
+            const auto free = rig.policy->usableCapacity().deviceFreeBytes;
+            const auto need = holdRoom(*rig.policy, free - derived->image / 2);
+            if (!need.token)
+                return {};
+            transfer.release();
+            return rig.finish(submission, "the flagged fill frame");
+        };
+        const auto base = counters();
+        const auto first = fillFrame(2, 1);
+        checks.expect(first && isPacked(*first),
+                      "(d) the flagged fill frame completes and is delivered");
+        const auto second = fillFrame(3, 2);
+        const auto after = counters();
+        checks.expect(second && isPacked(*second) &&
+                          after.scopeFillStageWaits == base.scopeFillStageWaits,
+                      "(d) a second flagged fill frame is not held back");
+        checks.expect(after.scopeFillTapsRefused == base.scopeFillTapsRefused + 2 &&
+                          after.scopeFillTapsKept == base.scopeFillTapsKept &&
+                          !Access::scopeFillTapHeld(*rig.core) &&
+                          Access::scopeViewerTapHeld(*rig.core) &&
+                          after.scopeTapsKept == base.scopeTapsKept,
+                      "(d) both refusals are counted, the fill slot stays free and the Viewer's "
+                      "tap is untouched");
+        if (first) {
+            const auto fallback = service.measureScopeTap(keyOf(*first), displayJob, none);
+            checks.expect(fallback.status == GpuScopeTapStatus::Skipped &&
+                              fallback.skip == GpuScopeTapSkip::NoRoom &&
+                              counters().scopeMeasuresNoRoom == base.scopeMeasuresNoRoom + 1,
+                          "(d) the refused frame's key measures Skipped(NoRoom): the UI measures "
+                          "its retained picture");
+        }
+        checks.expect(after.cpuFallbacks == base.cpuFallbacks &&
+                          after.scopeFillTapYields == 0 && after.scopeViewerTapYields == 0,
+                      "(d) the fill frames took the GPU route and nothing was given back");
+    }
+
+    // ---- (e) the idle trim releases the Viewer tap ------------------------------------------
+    {
+        Rig rig(options, plan, processor, snapshot,
+                {.card = 0, .viewerWorkingBytes = 4 * derived->image, .idleTrimMilliseconds = 50});
+        auto& service = *rig.service;
+        if (!rig.ready())
+            return;
+        const auto counters = [&] { return service.status().counters; };
+        const auto first = rig.frame(1, 0, TaskPriority::Visible);
+        if (!first)
+            return;
+        const auto key = keyOf(*first);
+        const auto settings = scope.settings(ScopeSignal::Working, kNoChromaticity);
+        const auto job = scope.job(settings);
+        checks.expect(Access::scopeViewerTapHeld(*rig.core), "(e) the shown frame is tapped");
+        if (!awaitCondition("the idle service trims its retention", [&] {
+                rig.core->notify();
+                return counters().scopeTapIdleReleases == 1 && counters().idleTrims >= 1;
+            }))
+            return;
+        checks.expect(!Access::scopeViewerTapHeld(*rig.core) && counters().idleTrims >= 1 &&
+                          counters().scopeViewerTapYields == 0,
+                      "(e) the idle trim released the Viewer tap, and it is not memory pressure");
+        const auto skipped = service.measureScopeTap(key, job, none);
+        checks.expect(skipped.status == GpuScopeTapStatus::Skipped &&
+                          skipped.skip == GpuScopeTapSkip::NoRoom,
+                      "(e) a later measure for that key gives a Skipped result");
+        const auto tapsBefore = counters().scopeTapsKept;
+        const auto next = rig.frame(2, 1, TaskPriority::Visible);
+        checks.expect(next && counters().scopeTapsKept == tapsBefore + 1 &&
+                          Access::scopeViewerTapHeld(*rig.core),
+                      "(e) the next shown frame is tapped again");
+        if (next) {
+            const auto measured = service.measureScopeTap(keyOf(*next), job, none);
+            checks.expect(measured.status == GpuScopeTapStatus::Measured,
+                          "(e) and measures");
+        }
     }
 }
 
@@ -866,6 +1465,7 @@ int runAll(int argc, char** argv) {
     if (!run(checks, options, plan, processor, document.snapshot(), scope))
         return options.requireDevice ? 1 : kSkipExit;
     shutdownCases(checks, options, plan, processor, document.snapshot(), scope);
+    pressureCases(checks, options, plan, processor, document.snapshot(), scope);
     if (checks.failures() + bloom::test_support::awaitFailureCount() != 0)
         return 1;
     std::cout << "PASS: scope tap and device scope measure on the preview display service\n";

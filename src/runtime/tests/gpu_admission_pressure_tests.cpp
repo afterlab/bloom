@@ -537,6 +537,95 @@ void strictViewerPriority() {
             "an idle Viewer holds nothing: the export frame is admitted");
 }
 
+// The scope measure's phase (#724): a native, source-free Background phase that needs `deviceNeed`
+// bytes of working storage and a table copy on the host.
+GpuProcessingPhaseEnvelope measurePhase(const std::uint64_t deviceNeed) {
+    return {.output = GpuProcessingPhaseOutput::PackedPreview,
+            .pixels = 1,
+            .metadataBytes = kMiB,
+            .requestedExecutorBytes = std::uint64_t{0},
+            .deviceWorkingBytes = deviceNeed,
+            .sourceFree = true,
+            .native = true,
+            .admissionClass = GpuAdmissionClass::Background};
+}
+
+// A Background measure phase never delays a Viewer phase: it waits while a Viewer request waits,
+// and its grant leaves the Viewer's last need free, so the next Viewer frame is admitted at once
+// beside it.
+void backgroundMeasureYieldsToTheViewer() {
+    const std::uint64_t pixels = 2048ULL * 858;
+    const std::uint64_t viewerNeed = 64 * kMiB + pixels * 16;
+    const std::uint64_t measureNeed = 40 * kMiB;
+    const NativeImageStorageIdentity local{.allocatorGeneration = 7, .memoryType = 2, .heap = 1};
+    {
+        // A Viewer frame holds its device stage. The card holds it and the measure but not the
+        // measure beside one more Viewer need: the measure waits, domain Viewer, taking nothing.
+        GpuProcessingPhasePolicy policy(32);
+        policy.setHeadroom({.ramBytes = 0, .vramBytes = 0});
+        deliverHost(policy, 20 * kGiB, 1);
+        const auto start = Clock::now();
+        reportDevice(policy, 1, 2 * viewerNeed + measureNeed - 1);
+        auto viewer = policy.reserve(frame(), start);
+        require(viewer.lease != nullptr, "the Viewer frame is admitted");
+        auto viewerStage = NativeImageStorageToken::reserve(viewer.lease, viewerNeed, local, start);
+        require(viewerStage.token.has_value(), "the Viewer device stage starts");
+        const auto before = policy.snapshot().reservations;
+        const auto refused = policy.reserve(measurePhase(measureNeed), start);
+        require(refused.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
+                    refused.domain == GpuProcessingPhaseDomain::Viewer && !refused.lease,
+                "an active Viewer keeps its last need free: the Background measure waits");
+        require(policy.snapshot().reservations.admittedPhases == before.admittedPhases,
+                "the waiting measure holds nothing");
+        // The card grows by one byte: the measure is admitted and leaves the Viewer's need free.
+        reportDevice(policy, 1, 2 * viewerNeed + measureNeed);
+        auto granted = policy.reserve(measurePhase(measureNeed), start);
+        require(granted.status == GpuProcessingPhaseAdmission::Accepted && granted.lease,
+                "with the Viewer's need free beside it the measure is admitted");
+        auto measureStage =
+            NativeImageStorageToken::reserve(granted.lease, measureNeed, local, start);
+        require(measureStage.token.has_value(), "the measure's device stage starts");
+        require(policy.usableCapacity().deviceFreeBytes >= viewerNeed,
+                "a Background grant leaves the Viewer's last need free");
+        // The next Viewer frame is admitted at once beside the measure's stage.
+        auto next = policy.reserve(frame(), start);
+        require(next.status == GpuProcessingPhaseAdmission::Accepted && next.lease,
+                "the measure's phase never delays the next Viewer phase");
+    }
+    {
+        // A Viewer request waits for device room: the measure waits too, even though its small
+        // need would fit the room that is free; and when room returns the Viewer goes first.
+        GpuProcessingPhasePolicy policy(32);
+        policy.setHeadroom({.ramBytes = 0, .vramBytes = 0});
+        deliverHost(policy, 20 * kGiB, 1);
+        const auto start = Clock::now();
+        reportDevice(policy, 1, viewerNeed + measureNeed);
+        auto holder = policy.reserve(frame(), start);
+        require(holder.lease != nullptr, "the first Viewer frame is admitted");
+        auto holderStage = NativeImageStorageToken::reserve(holder.lease, viewerNeed, local, start);
+        require(holderStage.token.has_value(), "its device stage starts");
+        const auto waiting = policy.reserve(frame(), start);
+        require(waiting.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
+                    policy.viewerPriority(start).waiting,
+                "the second Viewer frame waits for device room");
+        require(policy.usableCapacity().deviceFreeBytes >= measureNeed,
+                "the measure's need alone fits the room that is free");
+        const auto yielded = policy.reserve(measurePhase(measureNeed), start);
+        require(yielded.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
+                    yielded.domain == GpuProcessingPhaseDomain::Viewer && !yielded.lease,
+                "a waiting Viewer request holds the Background measure back");
+        holderStage.token.reset();
+        holder.lease.reset();
+        const auto again = policy.reserve(measurePhase(measureNeed), start);
+        require(again.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
+                    again.domain == GpuProcessingPhaseDomain::Viewer,
+                "a released slot goes to the waiting Viewer, not to the measure");
+        auto viewer = policy.reserve(frame(), start);
+        require(viewer.status == GpuProcessingPhaseAdmission::Accepted && viewer.lease,
+                "the waiting Viewer frame is admitted first");
+    }
+}
+
 void deviceGrowthBeyondTheClaimUsesLiveRoom() {
     GpuProcessingPhaseBudget budget;
     const auto now = std::chrono::steady_clock::now();
@@ -1131,6 +1220,7 @@ int main() {
         exhaustionIsRefusedWithReadableCounters();
         manyConcurrentPhases();
         strictViewerPriority();
+        backgroundMeasureYieldsToTheViewer();
         retentionIsEvictedBeforeWaiting();
         cachesYieldToWork();
         previewFillWorkIsNotStarved();
