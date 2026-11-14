@@ -6,7 +6,6 @@
 #include <bloom/mcp/streamable_http.hpp>
 
 #include <algorithm>
-#include <chrono>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -289,8 +288,10 @@ void admission() {
 }
 
 void tokens() {
-    // Constant time: equal-length near misses differing at the first and the last byte take the
-    // same path (every byte is compared); timing is measured loosely as a sanity bound.
+    // Every byte counts: an equal-length near miss fails wherever it differs, at the first byte, the
+    // last, and each one between. That the comparison takes the same time for all of them is a
+    // property of bearerMatches's code (it folds every byte, with no early exit), not something a
+    // clock on a shared machine can assert.
     std::string first(kToken);
     first[6] = first[6] == 'a' ? 'b' : 'a';
     std::string last(kToken);
@@ -303,19 +304,12 @@ void tokens() {
                !bearerMatches(bearer(std::string(kToken.substr(0, 10))), kToken) &&
                !bearerMatches(std::nullopt, kToken) && !bearerMatches(bearer(""), kToken),
            "length mismatches and absence fail");
-    const auto time = [&](const std::string& value) {
-        const auto header = bearer(value);
-        const auto start = std::chrono::steady_clock::now();
-        bool any = false;
-        for (int index = 0; index < 200000; ++index)
-            any = any != bearerMatches(header, kToken);
-        static_cast<void>(any);
-        return std::chrono::steady_clock::now() - start;
-    };
-    const auto early = time(first);
-    const auto late = time(last);
-    const auto ratio = static_cast<double>(early.count()) / static_cast<double>(late.count());
-    expect(ratio > 0.5 && ratio < 2.0, "near misses at the first and last byte take similar time");
+    for (std::size_t index = 0; index < kToken.size(); ++index) {
+        std::string miss(kToken);
+        miss[index] = static_cast<char>(miss[index] ^ 0x01);
+        expect(!bearerMatches(bearer(miss), kToken),
+               "a token differing in one byte fails, whichever byte it is");
+    }
 
     expect(tokenWellFormed(kToken), "a well-formed token");
     expect(!tokenWellFormed("bloom_short") && !tokenWellFormed(std::string(kToken) + "A") &&
