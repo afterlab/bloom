@@ -191,7 +191,8 @@ enum class Admission : std::uint8_t { Granted, Wait, NoRoom };
                                               .native = true,
                                               .admissionClass = GpuAdmissionClass::Background};
     // The policy keeps the device need of the latest native phase as the room the caches keep free
-    // for the next Viewer frame; a measure's need must not replace the Viewer's.
+    // for the next Viewer frame; a measure's need must not replace the Viewer's. Any class's grant
+    // overwrites that record (#729), so the Viewer's value is put back after the measure's grant.
     const auto keptReserve = policy->deviceWorkReserveBytes();
     auto grant = policy->reserve(envelope);
     if (grant.status == render::GpuProcessingPhaseAdmission::Accepted && grant.lease)
