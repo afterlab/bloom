@@ -40,7 +40,12 @@ measured from:
 - the measured rectangle, when a region or the Viewer's region of interest applies;
 - **GPU** or **CPU**: which one counted the frame. When the graphics processor could not count a
   frame, the processor does, and the line says why;
-- the number of pixels counted.
+- the number of pixels counted;
+- **Live detail**, while the scopes on show are the slightly coarser live measure.
+
+While the picture is changing, as in playback or while you scrub, the scopes show a slightly
+coarser live measure of each frame they reach; a frame that stays is measured again at full detail,
+and the status line says "Live detail" until then.
 
 A second line in the warning color lists every Viewer setting that makes the measured picture
 differ from what an export writes: exposure or gamma that is not neutral, a channel view,

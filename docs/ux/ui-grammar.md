@@ -1858,7 +1858,8 @@ Under the header is the status line, always visible (outside the scroll area), i
 - the measurement in `Muted`: composition and frame time, display and view (or the working space),
   resolution (Full, Half, Quarter), the measured rectangle when a region or the Viewer's region of
   interest applies, the route (GPU or CPU, with the reason when the CPU counted a device frame), and
-  the pixels counted;
+  the pixels counted, and "Live detail" while the tables on show are the coarser live measure of a
+  frame that has not yet been measured at full detail (nothing extra at full detail);
 - in `Warn`, one entry per Viewer setting that makes the picture differ from the export: exposure or
   gamma that is not neutral, a look that is off (Display signal), a channel shown, isolation;
 - in `Warn`, "Behind: these scopes are of <composition>, frame <n>" while the tables on show are

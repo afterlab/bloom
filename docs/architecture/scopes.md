@@ -214,6 +214,100 @@ detail changes only the bytes of the one table readback and the table memory.
 The entry is the decision O1 of the Scopes specification of issue #724. Like
 `prep.statistics.result_readback` it needs the owner's approval; it lands only with that approval.
 
+## Real-time cost
+
+The owner allows the tables' readback if updating them in real time is cheap. It is shown by
+structure and by tests of that structure; no timing is measured or asserted anywhere.
+
+**What runs for one shown frame.** The frame is measured by one cancellable task on a task worker,
+never on the interface thread, in two steps: at the live detail (detail 1) first and, when that
+frame is still the one shown, once more at full detail (detail 0).
+
+| Step | Device route | CPU route |
+|---|---|---|
+| The frame's scene | Run again on the final-render evaluator (the shown picture was prepared by the Viewer's own service; the measure does not reuse it) | Evaluated again by the CPU evaluator |
+| Color programs | The display program (Display signal), the XYZ program (only with the CIE table) | Per pixel on the worker |
+| Counting | The pixel pass and, with the Waveform, the column pass of the kernel | `measureScopesCpu` |
+| Readback | One table readback, the layout's bytes at the measure's detail; no picture | None |
+| After | Packing and the trace mapping on task workers | The same |
+
+On the device route a measured frame's scene therefore runs a second time, on the final-render
+evaluator's device, beside the run that prepared the Viewer's picture. That is the price of never
+reading the picture back and of never delaying the Viewer's frame.
+
+**Bytes read back per measure** are the table in "The table readback": for a picture at least 256
+wide, every section is 1,597,504 bytes at the live detail and, for a picture at least 512 wide,
+6,324,288 at full detail (4,218,944 for a picture 256 wide); one section reads back only its own
+table (the Histogram 16,448 bytes at either detail). Only the open sections are measured, so a
+collapsed section's table is neither counted nor read back.
+
+**Bounds.**
+
+- One measure is in flight per controller, for the shown frame and the RAM preview fill together.
+  Cancelling it does not free the slot: the slot is free when its task has finished. The device
+  side agrees: the kernel's table slot is one per process, and a second measure of the process
+  that began while one was in flight would be refused as busy (`gpu_scope_tables.cpp`).
+- Latest wins. While a measure is in flight a newer shown frame, a settings change or a view
+  adjustment only replaces the one waiting request; the frames in between are never measured
+  (`measuresSkipped` counts them). A measure in flight for a frame or identity that is no longer
+  wanted is cancelled and observes that between its steps; its result is neither shown nor cached.
+  Nothing queues beyond the one waiting request.
+- A frame replaced before its live tables arrive is never measured at full detail, so playback and
+  scrubbing read back live tables only; a frame that stays ends at full detail without any playback
+  signal.
+- A RAM preview fill measures retained frames at full detail, one at a time, in the same slot and
+  only when no shown-frame request waits or is in flight. A fill measure already running when a
+  shown frame arrives is finished first (it is for a frame still wanted); the shown frame's request
+  waits for it.
+
+**What never happens.** No wait on the Viewer's frame, fence or presentation. Nothing on the
+interface thread: the measure, the packing and the mapping run on task workers and the controller
+only submits, polls and publishes. No picture readback.
+
+**Code facts for the device route** (read from the code; the Viewer's wait-free property is shown
+by structure, not timed).
+
+- (a) The Viewer and the measure use different devices and queues. The Viewer's frames come from
+  the preview display service, which creates its own `GpuDevice` on its own service thread
+  (`gpu_preview_display_service_jobs.cpp:257`, thread started at `gpu_preview_display_service.cpp:565`;
+  the application runs it with presentation `Disabled`, `apps/bloom/main.cpp:372-373`, so it presents
+  on no Vulkan queue). The measure runs on the final-render evaluator, which the application's
+  `GpuExportProvider` creates (`apps/bloom/main.cpp:609`, `gpu_export_provider.cpp:309`); its owner
+  thread creates another `GpuDevice` (`gpu_process_frame.cpp:692`). Each device gets its own
+  `VkDevice` and its own compute queue (`gpu_device_bootstrap.cpp:661-665`), so no queue, fence or
+  command pool is shared. What the two share is the memory accounting of the processing-phase
+  policy (`gpu_processing_phase_policy.cpp`), which ranks the Viewer first (`viewerPriority`); a
+  measure that finds no room is counted by the CPU reference instead (`AwaitingCapacity` maps to
+  Unavailable, `gpu_process_frame.cpp:262-266` and `gpu_process_frame_scope.cpp:397`),
+  and never makes the Viewer wait.
+- (b) The table readback's fence is polled on the evaluator's owner thread
+  (`gpu_scope_tables.cpp:785` refuses a poll from any other thread; `runScopeMeasure` is called
+  from the owner's request run, `gpu_process_frame.cpp:483`). The task worker that asked for the
+  measure waits on its own request's condition variable only (`gpu_process_frame.cpp:1261-1271`),
+  and that worker is a scheduler thread of the measure's task (`scopes_controller.cpp:282`), neither
+  the interface thread nor a thread the Viewer's service waits on. The one mutex around the table
+  slot (`gpu_scope_tables.cpp:147`, taken at 322, 338, 431 and 526) guards a state flip only and is
+  never held across the submit or the fence poll; the Viewer's service never touches it.
+- (c) The readback is asynchronous: the copy is recorded and submitted with a fence
+  (`vkQueueSubmit`, `gpu_scope_tables.cpp:746`) and the owner then polls the fence's status
+  (`vkGetFenceStatus`, `gpu_scope_tables.cpp:795`, in the loop of `gpu_process_frame_scope.cpp:325-340`
+  that sleeps in 50 microsecond steps and observes cancellation and the deadline). No device call
+  blocks on the copy; there is no `vkWaitForFences` in the scope tables code.
+
+**Tests of the structure.** `bloom.ui.scopes-controller`: no second measure starts while the first
+is held, the greatest number in flight is 1, four of five frames are skipped, the newest frame's
+live result is shown and cached and the held frame's is neither, the newest frame then ends at full
+detail; live then full for a frame left alone (the full tables equal a direct full measure, the
+live ones equal them pooled), a frame replaced while held never gets a full measure, a detail-0
+sidecar is shown with no measure and a detail-1 sidecar is shown at once with one full measure
+following. `bloom.ui.scopes-realtime`: with a visible panel and the measure held, a session
+stepped through several frames is published and shown by the preview and the Viewer each time, the
+held measure ran on a worker, the interface thread's event loop kept turning, and one measure was
+in flight throughout. It runs the CPU routes and so cannot show the device; (a) to (c) above and
+the bytes asserted by `bloom.runtime.scope_frame_measure_native` cover that side. A test that a
+second device completes a frame while a measure is in flight on the first would need a seam that
+holds the readback in flight, which the production code does not have, and is not built.
+
 ## Reading scopes from MCP and Python
 
 `scripting/scope_read.hpp` is the one Qt-free read behind MCP's `query` kind `scopes` and Python's
@@ -238,6 +332,11 @@ that counted and, for a frame the device could not count, the reason.
 - The sidecar's identity is the frame's `PreviewFrameCacheKey` plus `PreviewScopeIdentity`: the
   measure settings (which scopes, the signal and its axis maximum, the region, Ignore Transparent
   Pixels and the detail) and the Viewer's exposure and gamma. A frame has at most one sidecar.
+- The panel's measure has two details of one frame: the live one (detail 1) and the full one
+  (detail 0). The panel's settings carry detail 0; the controller measures the shown frame at the
+  live detail first and replaces the live sidecar by the full one when it arrives. A sidecar of the
+  shown frame at detail 0 is shown at once with no measure; one at detail 1 is shown at once and the
+  full measure follows.
 - A scope setting replaces the sidecar and leaves the frame's entry alone. An edit of the document
   gives the frame another cache key, so the frame and its sidecar are both new. A sidecar leaves
   the cache with its frame.
@@ -258,12 +357,18 @@ evaluator.
 
 `ScopesController` (`scopes_controller.hpp`) is told which frame the followed Viewer shows and
 which measure the panel wants. It takes the tables from the frame's sidecar when the identity
-matches, and otherwise measures on a task worker and attaches the result. A superseded request is
-cancelled and its result is neither shown nor cached. While another frame's tables are on show the
-reading is marked behind and names the frame that was measured. During a RAM preview fill with a
-panel open, each frame the cache retains is measured in the background, one at a time; frames
-still waiting when the fill ends are measured too, and hiding the panel or closing every scope
-drops them.
+matches, and otherwise measures on a task worker and attaches the result. One measure is in flight
+per controller and the newest request replaces the one waiting ("Real-time cost"); a superseded
+measure is cancelled and its result is neither shown nor cached. The shown frame is measured at the
+live detail (`kLiveDetail`, detail 1) first and, when it is still the shown frame under the same
+settings, once more at full detail, whose tables replace the live ones in the reading and in the
+frame's sidecar. `ScopesReading::detail` says which tables are on show, and the status line says
+"Live detail" while it is not 0. The panel's settings keep detail 0: the detail is the
+controller's choice. While another frame's tables are on show the reading is marked behind and
+names the frame that was measured. During a RAM preview fill with a panel open, each frame the
+cache retains is measured at full detail in the background, one at a time and only when no
+shown-frame request waits or is in flight; frames still waiting when the fill ends are measured
+too, and hiding the panel or closing every scope drops them.
 
 `ScopesEditor` (`bloom.scopes`) is the panel: the header, the status line and five collapsible
 sections whose collapse state is kept per panel area. A hidden panel and a collapsed section ask
@@ -304,13 +409,15 @@ other stages' are. The measure holds no state between frames.
 | `bloom.runtime.scope_picture` | The Qt-free picture: a picture from detail-1 and detail-2 tables has the size and graticule of full detail's and a trace over the same region, the plan's facts for each scope (Waveform codes, Vectorscope ticks, targets and skin line, CIE grid, labels, triangle and printed lines, Parade panes, Histogram rows and clip markers), trace pixels equal to the mapping over the canvas, the visible floor, Histogram heights, the picture of all five, PNG bytes decoded back, and the cancelled, byte-limit and size refusals |
 | `bloom.ui.scopes-picture` | The panel and the picture agree (hover readouts at detail 1 report the detail cell's count): palette and metrics equal the interface tokens, an offscreen grab and the picture agree on the trace rectangle of each scope, and the plan's hairlines are where the grab has graticule pixels |
 | `bloom.color.scope-colorimetry` | The XYZ transform, the luma coefficients and the primaries of the built-in configs |
-| `bloom.runtime.scope_frame_measure_native` | A frame through the production device route against the CPU reference: exact for the Working signal, within one cell through the OCIO steps, one table readback and no picture readback, the route named; a measure at detail 1 reads back the layout's bytes, and a Histogram-only measure its 16,448 bytes and runs no XYZ program |
+| `bloom.runtime.scope_frame_measure_native` | A frame through the production device route against the CPU reference: exact for the Working signal, within one cell through the OCIO steps, one table readback and no picture readback, the route named; a measure at detail 1 reads back the layout's bytes, and a Histogram-only measure its 16,448 bytes and runs no XYZ program; the bytes of one section and of every section at the live and at full detail |
 | `bloom.scripting.scope-read` | The headless read: tables equal the CPU reference cell for cell for both signals, counters, luma and primaries, sums, sparse equal to dense, the summary, pictures, a range with progress and a deterministic cancel, the warm-sidecar port, region, transparency, resolution, display and view, and every refusal with its remedy |
 | `bloom.mcp.scope-query` | `query` kind `scopes` on the shared core: the tables equal the read's, sparse, summary, image and range answers, and the refusals |
 | `bloom.scripting.python-scopes` | `bloom.scopes.read` and `image` from Python: a flat color's tables, sparse equal to dense, summary, range and time, written and replaced files, argument errors |
 | `bloom.ui.scopes-mcp-warm` | The MCP read against a real preview and cache: a sidecar under the read's own settings is answered from the cache with no measure; every setting (a sidecar of another detail included), region, isolation, look or composition that differs is measured |
 | `bloom.scripting.scope-read-native` | The headless read on a real device: route Gpu, Working tables equal the CPU reference, CIE and Display tables within one cell; a disabled provider reads with the CPU reference and says why |
 | `bloom.color.scope-colorimetry-external` | The XYZ transform of an external config through the helper process equals the built-in's; spaces with no XYZ interchange are refused with their reason |
+| `bloom.ui.scopes-controller` | The controller over CPU frames: one measure in flight, latest wins with skipped frames counted, live then full, a replaced frame never measured in full, sidecars of both details, cancellation, the fill |
+| `bloom.ui.scopes-realtime` | A real preview, Viewer and panel with the measure held: every stepped frame is published and shown, the measure runs on a worker, the interface thread's loop keeps turning, one measure in flight (CPU routes) |
 | `bloom.ui.scopes-region` | Includes a project saved with a scope region equal, byte for byte, to one saved without |
 | `bloom.ui.viewer_resident_scopes_region_native` | The scope region and its handles are drawn over the device-presented Viewer picture (needs a window system and a device) |
 
