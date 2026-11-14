@@ -41,15 +41,24 @@ retainable(const runtime::PreparedPreviewFrame& frame) {
 
 [[nodiscard]] PreparedPreviewFrameHandle
 restamp(const std::shared_ptr<const runtime::PreviewDisplayOnlyFrame>& frame,
-        const std::uint64_t requestGeneration) {
+        const std::uint64_t requestGeneration,
+        std::shared_ptr<const runtime::PreviewFrameScopes> scopes) {
     // The display buffer is what a retained frame IS; the request generation is only which ask it
     // answered. Re-creating the envelope over the same immutable buffer is therefore a copy of one
     // small identity struct and a shared-pointer increment -- no pixel is touched.
-    auto rebuilt = runtime::PreparedPreviewFrame::createDisplayOnly(requestGeneration, frame);
+    auto rebuilt = runtime::PreparedPreviewFrame::createDisplayOnly(requestGeneration, frame,
+                                                                    std::move(scopes));
     if (!rebuilt.has_value()) {
         return nullptr;
     }
     return std::make_shared<const runtime::PreparedPreviewFrame>(std::move(*rebuilt));
+}
+
+// Whether a cached frame's scope tables answer a request: always when it asks for none, else when
+// they were counted under the same settings.
+[[nodiscard]] bool scopesAnswer(const std::shared_ptr<const runtime::PreviewFrameScopes>& scopes,
+                                const runtime::PreviewScopeRequest* asked) noexcept {
+    return asked == nullptr || (scopes != nullptr && scopes->settings == asked->settings);
 }
 
 } // namespace
@@ -240,16 +249,25 @@ PreviewFrameCache::take(const runtime::PreviewRequestIdentity& identity) {
         return nullptr;
     }
     const auto position = found->second;
+    if (!scopesAnswer(position->scopes, identity.scopes.get())) {
+        // #730: the request asks for scope tables this frame does not carry. It is prepared again,
+        // tables and all, and the new frame replaces this entry.
+        ++statistics_.misses;
+        counters_.miss();
+        if (trace_)
+            trace_->record(identity, PreviewTraceStage::CacheLookup, PreviewTraceOutcome::Miss);
+        return nullptr;
+    }
     PreparedPreviewFrameHandle frame;
     if (position->resident != nullptr) {
         // Resident re-stamp: share the same opaque lease, copy no pixels and no native allocation.
-        auto rebuilt = runtime::PreparedPreviewFrame::createResident(identity.requestGeneration,
-                                                                     position->resident);
+        auto rebuilt = runtime::PreparedPreviewFrame::createResident(
+            identity.requestGeneration, position->resident, position->scopes);
         if (rebuilt.has_value()) {
             frame = std::make_shared<const runtime::PreparedPreviewFrame>(std::move(*rebuilt));
         }
     } else {
-        frame = restamp(position->frame, identity.requestGeneration);
+        frame = restamp(position->frame, identity.requestGeneration, position->scopes);
     }
     if (frame == nullptr || frame->desiredIdentity() != identity) {
         // The key matched but the rebuilt envelope does not answer this request exactly. Nothing
@@ -310,8 +328,12 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
             displayQualified_.has_value() && *displayQualified_ != frame->isOcioQualified();
         ++metadataWork_.exactProbes;
         const auto existing = exactIndex_.find(key);
+        const auto& incomingScopes = frame->scopes();
         if (!qualificationChanged && existing != exactIndex_.end() &&
-            entryIsLive(*existing->second)) {
+            entryIsLive(*existing->second) &&
+            (incomingScopes == nullptr || existing->second->scopes == incomingScopes ||
+             (existing->second->scopes != nullptr &&
+              existing->second->scopes->settings == incomingScopes->settings))) {
             entries_.splice(entries_.begin(), entries_, existing->second);
             if (existing->second->residentPosition)
                 residentOrder_.splice(residentOrder_.begin(), residentOrder_,
@@ -319,9 +341,11 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
             return report(InsertOutcome::AlreadyPresent, PreviewTraceOutcome::Reused);
         }
         const auto bytes = frameByteCost(*frame);
-        // A device-budgeted resident frame takes nothing from the host byte budget.
+        // #730: the frame's scope tables are host memory whatever its pixels' storage is.
+        const std::size_t tableBytes = incomingScopes != nullptr ? incomingScopes->byteSize() : 0;
+        // A device-budgeted resident frame's pixels take nothing from the host byte budget.
         const bool charged = !resident || !deviceBudgeted();
-        const auto hostCharge = charged ? bytes : 0;
+        const auto hostCharge = (charged ? bytes : 0) + tableBytes;
         const auto refuse = [&] {
             ++statistics_.rejections;
             counters_.refused();
@@ -354,8 +378,8 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
                        .frame = nullptr,
                        .resident = nullptr,
                        .bytes = bytes,
-                       .scopes = nullptr,
-                       .scopeBytes = 0};
+                       .scopes = incomingScopes,
+                       .scopeBytes = tableBytes};
         if (resident)
             incoming.resident = frame->residentFrame();
         else
@@ -422,7 +446,7 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
             inserted->residentPosition = residentOrder_.begin();
         }
         // Sum only after bounding the old retained set, avoiding size_t overflow at extreme caps.
-        while (charged && hostBytes() > byteBudget_ - bytes) {
+        while (hostCharge != 0 && hostBytes() > byteBudget_ - hostCharge) {
             const auto victim = byteBudgetVictim(inserted);
             if (victim == entries_.end())
                 break;
@@ -433,6 +457,7 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
             removeAt(victim);
         }
         residentBytes_ += bytes;
+        scopeBytes_ += tableBytes;
         if (resident) {
             gpuResidentBytes_ += bytes;
             ++gpuResidentEntries_;
@@ -498,74 +523,22 @@ bool PreviewFrameCache::contains(const PreviewFrameCacheKey& key) const {
     return found != exactIndex_.end() && entryIsLive(*found->second);
 }
 
-bool PreviewFrameCache::attachScopes(const PreviewFrameCacheKey& key,
-                                     PreviewScopeSidecarHandle sidecar) {
-    const auto found = exactIndex_.find(key);
-    if (sidecar == nullptr || found == exactIndex_.end() || !entryIsLive(*found->second))
-        return false;
-    const auto position = found->second;
-    const auto bytes = sidecar->byteSize();
-    scopeBytes_ -= position->scopeBytes;
-    position->scopes = std::move(sidecar);
-    position->scopeBytes = bytes;
-    scopeBytes_ += bytes;
-    // Older frames give way as they do for a frame; this entry is never its own victim.
-    while (hostBytes() > byteBudget_) {
-        const auto victim = byteBudgetVictim(position);
-        if (victim == entries_.end()) {
-            scopeBytes_ -= bytes;
-            position->scopes.reset();
-            position->scopeBytes = 0;
-            return false;
-        }
-        ++statistics_.evictions;
-        counters_.evicted(victim->bytes);
-        removeAt(victim);
-    }
-    return true;
-}
-
-PreviewScopeSidecarHandle PreviewFrameCache::scopesFor(const PreviewFrameCacheKey& key,
-                                                       const PreviewScopeIdentity& identity) const {
+std::shared_ptr<const runtime::PreviewFrameScopes>
+PreviewFrameCache::scopesOf(const PreviewFrameCacheKey& key) const {
     const auto found = exactIndex_.find(key);
     if (found == exactIndex_.end() || !entryIsLive(*found->second))
         return nullptr;
-    const auto& scopes = found->second->scopes;
-    return scopes != nullptr && scopes->identity == identity ? scopes : nullptr;
+    return found->second->scopes;
 }
 
-std::optional<PreviewScopeSource>
-PreviewFrameCache::scopeSourceFor(const PreviewFrameCacheKey& key) const {
+bool PreviewFrameCache::containsWithScopes(const PreviewFrameCacheKey& key,
+                                           const runtime::ScopeMeasureSettings& settings) const {
+    ++metadataWork_.exactProbes;
     const auto found = exactIndex_.find(key);
     if (found == exactIndex_.end() || !entryIsLive(*found->second))
-        return std::nullopt;
-    const Entry& entry = *found->second;
-    if (entry.resident != nullptr)
-        return PreviewScopeSource{entry.resident->desiredIdentity(),
-                                  entry.resident->processIdentity(),
-                                  runtime::PreviewDisplayProvider::GpuResident};
-    return PreviewScopeSource{entry.frame->desiredIdentity(), entry.frame->processIdentity(),
-                              entry.frame->provenance().provider};
-}
-
-std::optional<PreviewScopeFrame>
-PreviewFrameCache::peekScopeFrame(const PreviewFrameCacheKey& key) const {
-    const auto source = scopeSourceFor(key);
-    if (!source)
-        return std::nullopt;
-    const Entry& entry = *exactIndex_.find(key)->second;
-    PreparedPreviewFrameHandle frame;
-    if (entry.resident != nullptr) {
-        auto rebuilt = runtime::PreparedPreviewFrame::createResident(
-            entry.resident->desiredIdentity().requestGeneration, entry.resident);
-        if (rebuilt.has_value())
-            frame = std::make_shared<const runtime::PreparedPreviewFrame>(std::move(*rebuilt));
-    } else {
-        frame = restamp(entry.frame, entry.frame->desiredIdentity().requestGeneration);
-    }
-    if (frame == nullptr)
-        return std::nullopt;
-    return PreviewScopeFrame{std::move(frame), *source};
+        return false;
+    const auto& scopes = found->second->scopes;
+    return scopes != nullptr && scopes->settings == settings;
 }
 
 std::vector<core::RationalTime>

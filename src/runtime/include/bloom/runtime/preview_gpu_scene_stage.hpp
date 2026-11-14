@@ -37,6 +37,9 @@
 // no alternative decoder is ever invented here.
 namespace bloom::runtime {
 
+class PreparedFrameScopeMeasure;
+struct PreviewFrameScopes;
+
 enum class PreviewGpuSceneStageStatus : std::uint8_t {
     // A plan was compiled and an immutable scene prepared; `stage` carries it.
     Prepared,
@@ -133,6 +136,22 @@ class PreviewGpuSceneStage final {
         return phaseLease_;
     }
 
+    // #730: the frame's scope measure, prepared on the worker for the device, or the frame's
+    // tables already settled there (an empty area). Set once by the stage function, before the
+    // stage is published; both null when the request asked for no tables.
+    void setScopes(std::shared_ptr<const PreparedFrameScopeMeasure> measure,
+                   std::shared_ptr<const PreviewFrameScopes> settled) noexcept {
+        scopeMeasure_ = std::move(measure);
+        settledScopes_ = std::move(settled);
+    }
+    [[nodiscard]] const std::shared_ptr<const PreparedFrameScopeMeasure>&
+    scopeMeasure() const noexcept {
+        return scopeMeasure_;
+    }
+    [[nodiscard]] const std::shared_ptr<const PreviewFrameScopes>& settledScopes() const noexcept {
+        return settledScopes_;
+    }
+
   private:
     PreviewRequestIdentity desiredIdentity_;
     std::shared_ptr<render::GpuProcessingPhaseLease> phaseLease_;
@@ -141,6 +160,8 @@ class PreviewGpuSceneStage final {
     std::shared_ptr<const GpuDisplayProgram> displayProgram_;
     std::size_t pixelStorageByteLimit_ = 0;
     std::vector<TaskDiagnostic> diagnostics_;
+    std::shared_ptr<const PreparedFrameScopeMeasure> scopeMeasure_;
+    std::shared_ptr<const PreviewFrameScopes> settledScopes_;
 };
 
 // A stage outcome is small enough to pass through TaskResult only as a handle. For Prepared the

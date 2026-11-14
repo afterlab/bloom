@@ -41,6 +41,9 @@ enum class ResidentNativePhase : std::uint8_t {
     None,
     Executor,
     Display,
+    // #730: the frame counts its scope tables on the scene picture, after its display step and
+    // before its transfer (gpu_preview_display_service_scope.cpp).
+    Scopes,
     Transfer,
     // A failure/deadline/cancellation/lost-generation was observed while a native submission may
     // still be unretired. The stage, its GpuTaskCompletion, its source snapshot/identity/overrides

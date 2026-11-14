@@ -25,6 +25,8 @@
 // handle, exactly as makeCompositionPreviewPipeline already is.
 namespace bloom::runtime {
 
+struct PreviewFrameScopes;
+
 enum class PreviewCpuStageStatus : std::uint8_t {
     // A plan was compiled and a frame evaluated; `stage` carries it.
     Evaluated,
@@ -81,12 +83,23 @@ class PreviewCpuStage final {
         return diagnostics_;
     }
 
+    // #730: the scope tables counted from this stage's process frame on the worker that evaluated
+    // it, when the request asked for them; every frame prepared from the stage carries them. Set
+    // once by the stage function, before the stage is published.
+    void setScopes(std::shared_ptr<const PreviewFrameScopes> scopes) noexcept {
+        scopes_ = std::move(scopes);
+    }
+    [[nodiscard]] const std::shared_ptr<const PreviewFrameScopes>& scopes() const noexcept {
+        return scopes_;
+    }
+
   private:
     PreviewRequestIdentity desiredIdentity_;
     std::shared_ptr<const ProcessFrame> processFrame_;
     std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> displayProcessor_;
     std::size_t pixelStorageByteLimit_ = 0;
     std::vector<TaskDiagnostic> diagnostics_;
+    std::shared_ptr<const PreviewFrameScopes> scopes_;
 };
 
 // A stage outcome is small enough to pass through TaskResult only as a handle: the value type is

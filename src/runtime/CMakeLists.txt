@@ -291,6 +291,8 @@ target_sources(
         gpu_preview_display_service_resident_private.hpp
         gpu_preview_display_service_scope.cpp
         gpu_preview_display_service_scope_private.hpp
+        preview_frame_scopes.cpp
+        preview_frame_scopes_private.hpp
         gpu_scene_cache.cpp
         gpu_scene_executor.cpp
         gpu_scene_executor_planner.cpp
@@ -380,6 +382,7 @@ target_sources(
             include/bloom/runtime/gpu_process_frame.hpp
             include/bloom/runtime/gpu_scope_measure.hpp
             include/bloom/runtime/scope_frame_measure.hpp
+            include/bloom/runtime/preview_frame_scopes.hpp
             include/bloom/runtime/scope_picture.hpp
             include/bloom/runtime/gpu_processing_phase_policy.hpp
             include/bloom/runtime/packed_host_retirement.hpp

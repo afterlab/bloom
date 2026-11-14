@@ -226,8 +226,9 @@ makeGpuNeutralDisplayPreview(const PreviewCpuStage& stage,
                                             std::move(*buffer.value()), std::move(provenance),
                                             std::move(bounds));
         auto shared = std::make_shared<const PreviewDisplayOnlyFrame>(std::move(displayOnly));
+        // #730: the scope tables the CPU stage counted travel with the frame.
         return PreparedPreviewFrame::createDisplayOnly(stage.desiredIdentity().requestGeneration,
-                                                       std::move(shared));
+                                                       std::move(shared), stage.scopes());
     } catch (...) {
         return std::nullopt;
     }

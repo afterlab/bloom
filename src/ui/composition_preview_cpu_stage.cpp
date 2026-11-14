@@ -6,6 +6,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/preview_frame_scopes.hpp>
 #include <bloom/runtime/qualified_display_preparation.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
@@ -295,9 +296,25 @@ runtime::PreviewCpuStageFunction makeCompositionPreviewCpuStage(
                 "The selected OCIO working space could not prepare a qualified display transform"));
         }
 
-        auto stage = std::make_shared<const runtime::PreviewCpuStage>(
+        // #730: the scope tables, counted from the frame's process picture on this worker, travel
+        // with every frame prepared from the stage.
+        std::shared_ptr<const runtime::PreviewFrameScopes> scopes;
+        if (desiredIdentity.scopes != nullptr) {
+            context.reportProgress({.phase = "Preparing preview frame",
+                                    .subphase = "Counting the scopes",
+                                    .completed = 0,
+                                    .total = std::nullopt});
+            scopes = runtime::measurePreviewFrameScopesCpu(*desiredIdentity.scopes, desiredIdentity,
+                                                           *evaluationResult.frame(),
+                                                           context.cancellation());
+            if (scopes == nullptr)
+                return StageResult::cancelled(std::move(diagnostics));
+        }
+        auto mutableStage = std::make_shared<runtime::PreviewCpuStage>(
             desiredIdentity, evaluationResult.frame(), std::move(selection.handle),
             pixelStorageByteLimit, std::move(diagnostics));
+        mutableStage->setScopes(std::move(scopes));
+        std::shared_ptr<const runtime::PreviewCpuStage> stage = std::move(mutableStage);
         return StageResult::succeeded(std::make_shared<const runtime::PreviewCpuStageOutcome>(
             runtime::PreviewCpuStageOutcome{.status = runtime::PreviewCpuStageStatus::Evaluated,
                                             .stage = std::move(stage),
@@ -402,6 +419,9 @@ runtime::PreviewCpuDisplayFallback makeCompositionPreviewCpuDisplayFallback(
                 missingResultDiagnostic("The prepared frame identity did not match its request"));
             return Result::failed(std::move(diagnostics));
         }
+        // #730: the scope tables the stage counted travel with the frame and its cached copy.
+        if (stage.scopes() != nullptr)
+            prepared = prepared->withScopes(stage.scopes());
 
         // The cache's display-only copy is prepared on this worker, beside the CPU display
         // preparation that already touched every pixel. The published foreground frame still
@@ -414,7 +434,7 @@ runtime::PreviewCpuDisplayFallback makeCompositionPreviewCpuDisplayFallback(
                 auto displayOnly =
                     std::make_shared<const runtime::PreviewDisplayOnlyFrame>(std::move(*stripped));
                 auto envelope = runtime::PreparedPreviewFrame::createDisplayOnly(
-                    desiredIdentity.requestGeneration, std::move(displayOnly));
+                    desiredIdentity.requestGeneration, std::move(displayOnly), prepared->scopes());
                 if (envelope && envelope->desiredIdentity() == desiredIdentity)
                     cacheFrame =
                         std::make_shared<const runtime::PreparedPreviewFrame>(std::move(*envelope));

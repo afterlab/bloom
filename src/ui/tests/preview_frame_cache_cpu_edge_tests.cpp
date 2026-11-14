@@ -13,13 +13,16 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/render/image_types.hpp>
+#include <bloom/render/scope_table_layout.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
+#include <bloom/runtime/preview_frame_scopes.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
+#include <bloom/runtime/scope_measure.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 
 #include <QCoreApplication>
@@ -396,65 +399,87 @@ int main(int argc, char** argv) {
                                 "finished frames are untouched by the source working set");
         }
 
-        // #724 Scopes: a sidecar's identity names the picture it counted. A Retained sidecar never
-        // answers a Rendered lookup and the reverse; the entry keeps one sidecar at a time.
+        // #730 Scopes: a frame carries the tables its preparation counted, charged to the host
+        // byte budget; a request that asks for tables under settings the cached frame lacks is a
+        // miss, so the frame is prepared again and its tables with it.
         {
+            runtime::ScopeMeasureSettings display;
+            runtime::ScopeMeasureSettings working;
+            working.signal = runtime::ScopeSignal::Working;
+            const auto tablesFor = [](const runtime::ScopeMeasureSettings& settings) {
+                const auto pixel = render::Rgba32f::fromPremultiplied(0.5F, 0.5F, 0.5F, 1.0F);
+                const std::vector<render::Rgba32f> gray(2, *pixel.value());
+                runtime::ScopeMeasureInput input;
+                input.signal = gray;
+                input.width = 2;
+                input.height = 1;
+                input.areaWidth = 2;
+                input.areaHeight = 1;
+                input.scopes = render::kScopeTableHistogram;
+                input.luma = runtime::scopeLuma(0.2126F, 0.7152F, 0.0722F);
+                auto scopes = std::make_shared<runtime::PreviewFrameScopes>();
+                scopes->settings = settings;
+                scopes->status = runtime::PreviewFrameScopesStatus::Measured;
+                if (const auto counts = runtime::measureScopesCpu(input))
+                    scopes->tables = runtime::ScopeTables::pack(*counts, runtime::ScopeRoute::Cpu);
+                scopes->area = {0, 0, 2, 1};
+                return std::shared_ptr<const runtime::PreviewFrameScopes>(std::move(scopes));
+            };
+            const auto asking = [&](const runtime::ScopeMeasureSettings& settings) {
+                auto identity = frameA1->desiredIdentity();
+                identity.scopes = std::make_shared<const runtime::PreviewScopeRequest>(
+                    runtime::PreviewScopeRequest{.settings = settings, .colors = {}, .ocio = {}});
+                return identity;
+            };
             PreviewFrameCache scopeCache(kBudget);
-            expectations.expect(scopeCache.insert(frameA1).retained(),
-                                "scope identity: the frame is cached");
-            bloom::ui::PreviewScopeIdentity rendered;
-            bloom::ui::PreviewScopeIdentity retained;
-            retained.source = runtime::ScopeSource::Retained;
-            expectations.expect(rendered.source == runtime::ScopeSource::Rendered &&
-                                    !(rendered == retained),
-                                "scope identity: Rendered is the default and differs from Retained");
-            auto renderedSidecar = std::make_shared<bloom::ui::PreviewScopeSidecar>();
-            renderedSidecar->identity = rendered;
-            auto retainedSidecar = std::make_shared<bloom::ui::PreviewScopeSidecar>();
-            retainedSidecar->identity = retained;
-            expectations.expect(scopeCache.attachScopes(keyA, renderedSidecar),
-                                "scope identity: a Rendered sidecar attaches");
-            expectations.expect(scopeCache.scopesFor(keyA, rendered) == renderedSidecar &&
-                                    scopeCache.scopesFor(keyA, retained) == nullptr,
-                                "scope identity: a Rendered sidecar never satisfies a Retained "
-                                "lookup");
-            expectations.expect(scopeCache.attachScopes(keyA, retainedSidecar),
-                                "scope identity: a Retained sidecar attaches");
-            expectations.expect(scopeCache.scopesFor(keyA, retained) == retainedSidecar &&
-                                    scopeCache.scopesFor(keyA, rendered) == nullptr,
-                                "scope identity: a Retained sidecar never satisfies a Rendered "
-                                "lookup");
-        }
-
-        // #724 Scopes: peekScopeFrame hands a measure the retained frame and its source without
-        // counting a hit or a miss and without moving the entry in the eviction order.
-        {
-            auto planC = oneSolidPlan(document::ProjectId::fromRaw(998));
-            auto frameC = cpuFrame(planC, 1);
-            expectations.expect(frameC != nullptr, "peek: the third frame is built");
-            if (frameC != nullptr) {
-                const auto keyB = PreviewFrameCacheKey::forIdentity(frameB->desiredIdentity());
-                // Room for two frames, not three.
-                PreviewFrameCache peekCache(costA * 2 + costA / 2);
-                expectations.expect(peekCache.insert(frameA1).retained() &&
-                                        peekCache.insert(frameB).retained(),
-                                    "peek: two frames are cached, the older one is A");
-                const auto before = peekCache.statistics();
-                const auto peeked = peekCache.peekScopeFrame(keyA);
-                expectations.expect(peeked && peeked->frame != nullptr &&
-                                        peeked->frame->displayBufferView().has_value() &&
-                                        peeked->source.identity == frameA1->desiredIdentity(),
-                                    "peek: the handle and the source of the entry");
-                expectations.expect(!peekCache.peekScopeFrame(
-                                        PreviewFrameCacheKey::forIdentity(frameC->desiredIdentity())),
-                                    "peek: no entry, nothing");
-                const auto after = peekCache.statistics();
-                expectations.expect(after.hits == before.hits && after.misses == before.misses,
-                                    "peek: no hit or miss is counted");
-                expectations.expect(peekCache.insert(frameC).retained() &&
-                                        !peekCache.contains(keyA) && peekCache.contains(keyB),
-                                    "peek: the peeked entry is still the oldest and is evicted");
-            }
+            expectations.expect(scopeCache.insert(frameA1).retained() &&
+                                    scopeCache.scopeTableBytes() == 0,
+                                "scopes: the frame is cached without tables");
+            expectations.expect(scopeCache.take(frameA1->desiredIdentity()) != nullptr,
+                                "scopes: a request that asks for no tables hits");
+            expectations.expect(scopeCache.take(asking(display)) == nullptr &&
+                                    !scopeCache.containsWithScopes(keyA, display),
+                                "scopes: a request that asks for tables misses without them");
+            const auto displayTables = tablesFor(display);
+            const auto hostBefore = scopeCache.hostBytes();
+            expectations.expect(scopeCache.insert(std::make_shared<const PreparedPreviewFrame>(
+                                                      frameA1->withScopes(displayTables)))
+                                            .outcome ==
+                                        PreviewFrameCache::InsertOutcome::Retained &&
+                                    scopeCache.size() == 1,
+                                "scopes: the frame with its tables replaces the frame without");
+            expectations.expect(scopeCache.scopeTableBytes() == displayTables->byteSize() &&
+                                    scopeCache.hostBytes() ==
+                                        hostBefore + displayTables->byteSize(),
+                                "scopes: the tables are charged to the host byte budget");
+            const auto hit = scopeCache.take(asking(display));
+            expectations.expect(hit != nullptr && hit->scopes() == displayTables &&
+                                    scopeCache.containsWithScopes(keyA, display),
+                                "scopes: a request for the same settings hits with the tables");
+            expectations.expect(scopeCache.take(asking(working)) == nullptr &&
+                                    !scopeCache.containsWithScopes(keyA, working),
+                                "scopes: other settings miss");
+            // The frame cached again without tables keeps the ones it carries.
+            const auto statistics = scopeCache.statistics();
+            expectations.expect(scopeCache.insert(frameA1).outcome ==
+                                        PreviewFrameCache::InsertOutcome::AlreadyPresent &&
+                                    scopeCache.scopesOf(keyA) == displayTables,
+                                "scopes: a frame without tables does not drop the cached ones");
+            expectations.expect(scopeCache.statistics().hits == statistics.hits &&
+                                    scopeCache.statistics().misses == statistics.misses,
+                                "scopes: reading the tables counts no hit or miss");
+            // The Working signal's tables replace the Display ones.
+            const auto workingTables = tablesFor(working);
+            (void)scopeCache.insert(
+                std::make_shared<const PreparedPreviewFrame>(frameA1->withScopes(workingTables)));
+            expectations.expect(scopeCache.scopesOf(keyA) == workingTables &&
+                                    scopeCache.containsWithScopes(keyA, working) &&
+                                    !scopeCache.containsWithScopes(keyA, display) &&
+                                    scopeCache.scopeTableBytes() == workingTables->byteSize(),
+                                "scopes: tables of other settings replace the cached ones");
+            scopeCache.clear();
+            expectations.expect(scopeCache.scopeTableBytes() == 0,
+                                "scopes: a cleared cache holds no tables");
         }
 
         if (expectations.failures() != 0) {

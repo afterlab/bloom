@@ -210,7 +210,7 @@ void retireResidentRoute(const std::shared_ptr<PreviewDisplayServiceCore>& core)
 }
 
 void retireNativeOnOwner(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
-    // The scope measure and the tap pictures go before anything they read or were computed on.
+    // The scope measure's native stage goes before anything it read or was computed on.
     retireScopeNative(core);
     core->nativeReady.clear();
     core->nativeActive.reset();
@@ -484,10 +484,10 @@ bool residentDisplayBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core
     }
     const std::uint64_t budget =
         stage.gpuByteAllowance != 0 ? stage.gpuByteAllowance : core->previewByteAllowance();
-    // #724: a weak alias, so a refused begin still finds its attempt's image unique and retires it
-    // as before. Once the display owns the picture, the scope tap aliases it.
+    // #730: a weak alias, so a refused begin still finds its attempt's image unique and retires it
+    // as before. Once the display owns the picture, a frame that counts scope tables aliases it.
     const std::weak_ptr<const render::GpuImage> scopeAlias = input;
-    const bool tapWanted = scopeTapWanted(stage);
+    const bool tapWanted = scopeMeasureWanted(stage);
 
     // General display: run the exact OCIO DisplayRgba8 program through the owned display arm. The
     // arm reuses the producer's bounded native-program cache, so an unchanged display/view is a

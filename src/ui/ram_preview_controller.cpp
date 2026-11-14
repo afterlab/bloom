@@ -1,5 +1,4 @@
 #include <bloom/ui/ram_preview_controller.hpp>
-#include <bloom/ui/scope_fill_taps.hpp>
 
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -393,7 +392,9 @@ void RamPreviewController::requestFrames() {
                 ++nextFrameIndex_;
                 continue;
             }
-            if (previewController_.frameCache().contains(*key)) {
+            // #730: with a Scopes panel shown, a cached frame without tables of the current scope
+            // settings is filled again; its tables are counted as it is prepared.
+            if (previewController_.frameCacheAnswers(*key)) {
                 ++nextFrameIndex_;
                 continue;
             }
@@ -428,13 +429,7 @@ void RamPreviewController::requestFrames() {
         request.usesPurgeableCaches = true;
 
         runtime::TaskSubmission<PreviewPreparationResultHandle> submission;
-        if (submitter_ && scopeTaps_ != nullptr && scopeTaps_->canTap() && scopeTaps_->wanted()) {
-            // A Scopes panel is shown with a scope open: the service keeps this frame's scene
-            // picture for the panel's measure, and ScopeFillTaps answers it.
-            submission = scopeTaps_->submit(std::move(request), snapshot, desiredIdentity,
-                                            previewController_.effectivePixelStorageByteLimit(),
-                                            {});
-        } else if (submitter_) {
+        if (submitter_) {
             submission = submitter_(std::move(request), snapshot, desiredIdentity,
                                     previewController_.effectivePixelStorageByteLimit(), {});
         } else {
@@ -470,18 +465,6 @@ bool RamPreviewController::drainResults() {
     Q_ASSERT(QThread::currentThread() == thread());
     const auto serial = runSerial_;
     auto landed = pipeline_.takeReady();
-    // Every result taken from the pipeline is reported before anything can end this loop, so a
-    // flagged frame's tap is always answered (ScopeFillTaps), whatever the fill does with it.
-    if (scopeTaps_ != nullptr) {
-        for (const auto& ready : landed) {
-            PreparedPreviewFrameHandle delivered;
-            if (ready.result.state() == runtime::TaskState::Succeeded &&
-                ready.result.value().has_value() && *ready.result.value() != nullptr &&
-                (*ready.result.value())->status() == runtime::PreviewPreparationStatus::Prepared)
-                delivered = (*ready.result.value())->frame();
-            scopeTaps_->received(ready.identity, delivered);
-        }
-    }
     for (auto& ready : landed) {
         if (!caching_ || shuttingDown_ || serial != runSerial_) {
             return false;
@@ -639,6 +622,9 @@ RamPreviewController::identityFor(const core::RationalTime time,
         .viewName = settings.viewName,
         .showLook = settings.showLook,
         .isolation = previewController_.isolation(),
+        // #730: the frame's scope tables are counted as it is prepared while a Scopes panel is
+        // shown.
+        .scopes = previewController_.scopeRequest(snapshot.project().id(), compositionId_),
     };
 }
 
@@ -662,8 +648,6 @@ void RamPreviewController::finish(const Completion outcome) {
     completedEnd_ = session_.workArea().end;
     completedRevision_ = session_.snapshot().revision();
     previewController_.endRamPreviewProgress();
-    if (scopeTaps_ != nullptr)
-        scopeTaps_->fillEnded();
     if (serial != runSerial_ || caching_)
         return;
     emit stateChanged();
@@ -673,17 +657,6 @@ void RamPreviewController::finish(const Completion outcome) {
 }
 
 void RamPreviewController::cancelAndDetachActive() noexcept { pipeline_.cancelAllAndDetach(); }
-
-void RamPreviewController::setScopeFillTaps(ScopeFillTaps* const taps) {
-    scopeTaps_ = taps;
-    // A frame this controller stops reading is handed to the taps' owner, which answers its tap
-    // when its task has finished.
-    pipeline_.setDetachObserver(
-        taps == nullptr ? std::function<void(const runtime::PreviewRequestIdentity&)>{}
-                        : [taps](const runtime::PreviewRequestIdentity& identity) {
-                              taps->orphan(identity);
-                          });
-}
 
 std::optional<std::uint64_t>
 RamPreviewController::acceptedFrameIndex(const PreviewFrameCacheKey& key) const {
@@ -807,6 +780,9 @@ void RamPreviewController::onEntryRetained(const PreviewFrameCacheKey& key) {
         if (!index)
             return;
         pendingRetentionLoss_.erase(*index);
+        // #730: a frame without the scope tables a shown Scopes panel asks for covers nothing.
+        if (!previewController_.frameCacheAnswers(key))
+            return;
         if (coverageIndex_.contains(*index))
             return;
         ++metadataWork_.deltaUpdates;
@@ -931,7 +907,9 @@ void RamPreviewController::refreshCoverage(const bool notify, const bool force) 
                 if (!key)
                     continue;
                 const auto index = acceptedFrameIndex(*key);
-                if (index)
+                // #730: with a Scopes panel shown, a frame without tables of the current settings
+                // is not covered: the run prepares it again.
+                if (index && previewController_.frameCacheAnswers(*key))
                     addRetainedIndex(*index);
             }
         }

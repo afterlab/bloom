@@ -7,6 +7,7 @@
 #include <bloom/runtime/gpu_prepared_packed_preview_product.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/packed_host_retirement.hpp>
+#include <bloom/runtime/preview_frame_scopes.hpp>
 #include <mutex>
 #include <stdexcept>
 namespace {
@@ -141,9 +142,24 @@ packedView(const bloom::runtime::PreparedPreviewFrame& frame) {
                 program = std::make_shared<const GpuDisplayProgram>(std::move(prepared.program));
             }
         }
-        auto stage = std::make_shared<const PreviewGpuSceneStage>(
+        // #730: a request that asks for scope tables has its frame's job count them, as the
+        // production stage (composition_preview_gpu_scene_stage.cpp) prepares it.
+        bloom::runtime::FrameScopeMeasurePreparation scopes;
+        if (identity.scopes != nullptr) {
+            scopes = bloom::runtime::prepareFrameScopeMeasure(
+                *identity.scopes, identity, *built.scene, *plan, request, context.cancellation());
+            if (scopes.cancelled)
+                return R::cancelled();
+            if (scopes.prepared == nullptr && scopes.settled == nullptr)
+                return R::succeeded(std::make_shared<const PreviewGpuSceneStageOutcome>(
+                    PreviewGpuSceneStageOutcome{PreviewGpuSceneStageStatus::UnsupportedGpuSubset,
+                                                nullptr,
+                                                {failDiag("harness.scopes-unavailable")}}));
+        }
+        auto stage = std::make_shared<PreviewGpuSceneStage>(
             identity, built.scene, processor, std::move(program), limit,
             std::vector<TaskDiagnostic>{}, std::move(built.phaseLease));
+        stage->setScopes(std::move(scopes.prepared), std::move(scopes.settled));
         return R::succeeded(
             std::make_shared<const PreviewGpuSceneStageOutcome>(PreviewGpuSceneStageOutcome{
                 PreviewGpuSceneStageStatus::Prepared, std::move(stage), {}}));

@@ -206,7 +206,8 @@ std::size_t PreviewResidentDisplayFrame::retainedByteCost() const noexcept {
 
 std::optional<PreparedPreviewFrame> PreparedPreviewFrame::createResident(
     const std::uint64_t requestGeneration,
-    std::shared_ptr<const PreviewResidentDisplayFrame> displayFrame) noexcept {
+    std::shared_ptr<const PreviewResidentDisplayFrame> displayFrame,
+    std::shared_ptr<const PreviewFrameScopes> scopes) noexcept {
     if (requestGeneration == 0 || displayFrame == nullptr || !displayFrame->isDisplayValid()) {
         // An invalidated lease must never be restamped into a servable envelope.
         return std::nullopt;
@@ -217,15 +218,18 @@ std::optional<PreparedPreviewFrame> PreparedPreviewFrame::createResident(
     try {
         PreviewRequestIdentity desiredIdentity = displayFrame->desiredIdentity();
         desiredIdentity.requestGeneration = requestGeneration;
-        return PreparedPreviewFrame(desiredIdentity, DisplayFrameVariant(std::move(displayFrame)));
+        PreparedPreviewFrame frame(desiredIdentity, DisplayFrameVariant(std::move(displayFrame)));
+        frame.scopes_ = std::move(scopes);
+        return frame;
     } catch (...) {
         return std::nullopt;
     }
 }
 
-std::optional<PreparedPreviewFrame> PreparedPreviewFrame::createDisplayOnly(
-    const std::uint64_t requestGeneration,
-    std::shared_ptr<const PreviewDisplayOnlyFrame> displayFrame) noexcept {
+std::optional<PreparedPreviewFrame>
+PreparedPreviewFrame::createDisplayOnly(const std::uint64_t requestGeneration,
+                                        std::shared_ptr<const PreviewDisplayOnlyFrame> displayFrame,
+                                        std::shared_ptr<const PreviewFrameScopes> scopes) noexcept {
     if (requestGeneration == 0 || displayFrame == nullptr ||
         !displayFrame->displayBufferView().has_value()) {
         return std::nullopt;
@@ -236,7 +240,9 @@ std::optional<PreparedPreviewFrame> PreparedPreviewFrame::createDisplayOnly(
     try {
         PreviewRequestIdentity desiredIdentity = displayFrame->desiredIdentity();
         desiredIdentity.requestGeneration = requestGeneration;
-        return PreparedPreviewFrame(desiredIdentity, DisplayFrameVariant(std::move(displayFrame)));
+        PreparedPreviewFrame frame(desiredIdentity, DisplayFrameVariant(std::move(displayFrame)));
+        frame.scopes_ = std::move(scopes);
+        return frame;
     } catch (...) {
         return std::nullopt;
     }
@@ -245,6 +251,13 @@ std::optional<PreparedPreviewFrame> PreparedPreviewFrame::createDisplayOnly(
 PreparedPreviewFrame::PreparedPreviewFrame(PreviewRequestIdentity desiredIdentity,
                                            DisplayFrameVariant displayFrame) noexcept
     : desiredIdentity_(std::move(desiredIdentity)), displayFrame_(std::move(displayFrame)) {}
+
+PreparedPreviewFrame
+PreparedPreviewFrame::withScopes(std::shared_ptr<const PreviewFrameScopes> scopes) const {
+    PreparedPreviewFrame frame(*this);
+    frame.scopes_ = std::move(scopes);
+    return frame;
+}
 
 // std::visit/std::get both have a (never-actually-reachable-here, since displayFrame_ is only ever
 // constructed by the create*() factories and never reassigned) valueless_by_exception exception

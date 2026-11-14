@@ -22,8 +22,7 @@ serviceWaitInterval(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
     // Any preview stage, queued native job, or in-flight native submission needs the short poll.
     const bool previewActive = !core->stages.empty() || core->nativeInFlight ||
                                core->residentNativeInFlight || !core->nativeReady.empty() ||
-                               !core->residentNativeReady.empty() ||
-                               core->scope.active.load(std::memory_order_acquire);
+                               !core->residentNativeReady.empty();
     if (core->packedTransferLate) {
         return std::chrono::milliseconds(50);
     }
@@ -60,8 +59,6 @@ struct NativeProgress final {
     std::size_t stages = 0;
     bool nativeInFlight = false;
     bool residentInFlight = false;
-    // A tap kept or freed, a scope measure ended: a stage held back by the fill slot can start.
-    std::uint64_t scopeEpoch = 0;
 
     bool operator==(const NativeProgress&) const = default;
 };
@@ -79,8 +76,7 @@ nativeProgress(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core) n
             .ready = core->nativeReady.size(),
             .stages = core->stages.size(),
             .nativeInFlight = core->nativeInFlight,
-            .residentInFlight = core->residentNativeInFlight,
-            .scopeEpoch = core->scope.epoch.load(std::memory_order_acquire)};
+            .residentInFlight = core->residentNativeInFlight};
 }
 
 // Samples no state; the caller captures the wake generation BEFORE doing work, so a notification
@@ -115,6 +111,7 @@ void waitForWake(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core,
         return false;
     const auto& active = core->residentNativeActive;
     if (active != nullptr && (active->residentPhase == detail::ResidentNativePhase::Display ||
+                              active->residentPhase == detail::ResidentNativePhase::Scopes ||
                               active->residentPhase == detail::ResidentNativePhase::Transfer ||
                               active->residentPhase == detail::ResidentNativePhase::Retiring))
         return false;
@@ -137,8 +134,6 @@ void drainService(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core
     // preview drain. This refuses new native targets and asks every live target to retire; it never
     // publishes a false safe ack.
     detail::beginServicePresentationShutdown(core);
-    // A queued or in-flight scope measure ends first (its caller wakes) and the taps go back.
-    detail::shutdownScopeMeasure(core);
     // Request cooperative cancellation; ownership is retained until every child is terminal and the
     // native submission has actually retired. This single path also serves the exception path.
     for (const auto& stage : core->stages) {
@@ -237,11 +232,7 @@ void runServiceLoop(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
                 detail::processPreviewStages(core);
                 detail::processNativeDisplay(core);
                 charge(core->counterOwnerStageNanoseconds);
-                detail::reapScopeTaps(core);
                 detail::processResidentNativeDisplay(core);
-                // The scope measure steps after the frames: it begins a step only when no
-                // Viewer-class stage is waiting, and never waits on a fence.
-                detail::stepScopeMeasure(core);
                 charge(core->counterOwnerResidentNanoseconds);
                 detail::processServiceCachePurge(core);
                 detail::pollServiceQueueTimings(core);
@@ -791,37 +782,14 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
     result.counters.residentQualificationMicros =
         core.counterResidentQualificationMicros.load(std::memory_order_relaxed);
     const auto& scope = core.scope;
-    result.counters.scopeTapsKept = scope.tapsKept.load(std::memory_order_relaxed);
-    result.counters.scopeFillTapsKept = scope.fillTapsKept.load(std::memory_order_relaxed);
-    result.counters.scopeFillStageWaits = scope.fillStageWaits.load(std::memory_order_relaxed);
-    result.counters.scopeMeasuresRequested = scope.measuresRequested.load(std::memory_order_relaxed);
-    result.counters.scopeMeasuresStarted = scope.measuresStarted.load(std::memory_order_relaxed);
-    result.counters.scopeMeasuresCompleted = scope.measuresCompleted.load(std::memory_order_relaxed);
-    result.counters.scopeMeasuresSkipped = scope.measuresSkipped.load(std::memory_order_relaxed);
-    result.counters.scopeMeasuresCancelled = scope.measuresCancelled.load(std::memory_order_relaxed);
-    result.counters.scopeMeasuresFailed = scope.measuresFailed.load(std::memory_order_relaxed);
-    result.counters.scopeMeasuresBusy = scope.measuresBusy.load(std::memory_order_relaxed);
-    result.counters.scopeMeasureYields = scope.measureYields.load(std::memory_order_relaxed);
+    result.counters.scopeFramesMeasured = scope.framesMeasured.load(std::memory_order_relaxed);
+    result.counters.scopeFramesFailed = scope.framesFailed.load(std::memory_order_relaxed);
     result.counters.scopeColorDispatches = scope.colorDispatches.load(std::memory_order_relaxed);
-    result.counters.scopeTableDispatches = scope.tableDispatches.load(std::memory_order_relaxed);
     result.counters.scopeTableReadbacks = scope.tableReadbacks.load(std::memory_order_relaxed);
     result.counters.scopeTableReadbackBytes =
         scope.tableReadbackBytes.load(std::memory_order_relaxed);
     result.counters.scopeTableReadbackBytesTotal =
         scope.tableReadbackBytesTotal.load(std::memory_order_relaxed);
-    result.counters.scopeMeasureAdmissions = scope.measureAdmissions.load(std::memory_order_relaxed);
-    result.counters.scopeMeasureAdmissionWaits =
-        scope.measureAdmissionWaits.load(std::memory_order_relaxed);
-    result.counters.scopeMeasureNeedBytes = scope.measureNeedBytes.load(std::memory_order_relaxed);
-    result.counters.scopeMeasuresNoRoom = scope.measuresNoRoom.load(std::memory_order_relaxed);
-    result.counters.scopeMeasuresGivenBack = scope.measuresGivenBack.load(std::memory_order_relaxed);
-    result.counters.scopeMeasurePhaseParks = scope.measurePhaseParks.load(std::memory_order_relaxed);
-    result.counters.scopeViewerTapYields = scope.viewerTapYields.load(std::memory_order_relaxed);
-    result.counters.scopeFillTapYields = scope.fillTapYields.load(std::memory_order_relaxed);
-    result.counters.scopeTapIdleReleases = scope.tapIdleReleases.load(std::memory_order_relaxed);
-    result.counters.scopeReclaimsSeenAtFirstGiveBack =
-        scope.reclaimsSeenAtFirstGiveBack.load(std::memory_order_relaxed);
-    result.counters.scopeFillTapsRefused = scope.fillTapsRefused.load(std::memory_order_relaxed);
     return result;
 }
 
@@ -829,8 +797,7 @@ TaskSubmission<PreviewPreparationResultHandle>
 GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& snapshot,
                                  const PreviewRequestIdentity& borrowedIdentity,
                                  const std::size_t pixelStorageByteLimit,
-                                 const std::vector<SnapshotParameterOverride>& overrides,
-                                 const bool tapForScopes) {
+                                 const std::vector<SnapshotParameterOverride>& overrides) {
     auto identity = borrowedIdentity;
     const auto color = captureEvaluationColorIntent(identity.colorIntent);
     if (!color) {
@@ -923,7 +890,6 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
         request.owner, request.groupId, request.sourceVersion, request.coalescingKey);
     stageSubmission.queuedBehindStartup = startupPending;
     stageSubmission.deliveredDefaultAllowance = deliveredDefault != nullptr;
-    stageSubmission.tapForScopes = tapForScopes;
     TaskRequest cpuRequest = request;
     const bool fillWork = request.priority == TaskPriority::Foreground ||
                           request.priority == TaskPriority::Background;
@@ -984,30 +950,6 @@ GpuPreviewDisplayService::purgeRetainedCaches(const std::chrono::milliseconds ti
     return impl_ == nullptr || impl_->core == nullptr
                ? std::nullopt
                : detail::purgeServiceCaches(impl_->core, timeout);
-}
-std::optional<GpuScopeTapGeometry>
-GpuPreviewDisplayService::scopeTapGeometry(const GpuScopeTapKey& key) const {
-    if (impl_ == nullptr || impl_->core == nullptr)
-        return std::nullopt;
-    return detail::scopeTapGeometryOf(impl_->core, key);
-}
-
-GpuScopeTapMeasureOutcome
-GpuPreviewDisplayService::measureScopeTap(const GpuScopeTapKey& key, const GpuScopeMeasureJob& job,
-                                          const CancellationToken& cancellation) {
-    if (impl_ == nullptr || impl_->core == nullptr) {
-        GpuScopeTapMeasureOutcome outcome;
-        outcome.status = GpuScopeTapStatus::Skipped;
-        outcome.skip = GpuScopeTapSkip::TapGone;
-        outcome.message = "the service has no tapped frame";
-        return outcome;
-    }
-    return detail::measureScopeTapOn(impl_->core, key, job, cancellation);
-}
-
-void GpuPreviewDisplayService::dropScopeTap(const GpuScopeTapKey& key) noexcept {
-    if (impl_ != nullptr && impl_->core != nullptr)
-        detail::dropScopeTapOn(impl_->core, key);
 }
 
 void GpuPreviewDisplayService::beginShutdown() noexcept {

@@ -171,7 +171,7 @@ BackgroundPreviewController::playbackFrameAvailability(const core::RationalTime 
     const auto key = previewController_.cacheKeyForTime(time);
     if (!key)
         return PlaybackFrameAvailability::Unavailable;
-    if (previewController_.frameCache().contains(*key))
+    if (previewController_.frameCacheAnswers(*key))
         return PlaybackFrameAvailability::Ready;
     // A blocked read-ahead (a gesture, a purge, a RAM preview run, a held mouse button) prepares
     // nothing, so the transport plays through its own playback request rather than wait on it.
@@ -334,8 +334,10 @@ void BackgroundPreviewController::fillNextFrame() {
             .showLook = key->showLook,
             .channelInspection = key->channelInspection,
             .isolation = key->isolation,
+            // #730: read-ahead frames carry the scope tables while a Scopes panel is shown.
+            .scopes = previewController_.scopeRequest(key->projectId, key->compositionId),
         };
-        if (cache.contains(*key)) {
+        if (previewController_.frameCacheAnswers(*key)) {
             // Protect nearer existing entries from eviction by this pass's farther entries.
             if (const auto cached = cache.take(identity))
                 learnFrameCost(*cached);

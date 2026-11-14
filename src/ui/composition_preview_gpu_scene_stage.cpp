@@ -4,6 +4,7 @@
 
 #include <bloom/runtime/gpu_neutral_display_qualification.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
+#include <bloom/runtime/preview_frame_scopes.hpp>
 
 #include <memory>
 #include <optional>
@@ -325,16 +326,49 @@ runtime::PreviewGpuSceneStageFunction makeCompositionPreviewGpuSceneStage(
             }
         }
 
-        std::shared_ptr<const runtime::PreviewGpuSceneStage> stage =
+        // #730: the frame's scope tables are counted by its own job on the device. Their color
+        // programs are prepared here, on this worker, for the scene's picture; a frame the device
+        // cannot count takes the CPU route, which counts them from its process picture.
+        runtime::FrameScopeMeasurePreparation scopes;
+        if (desiredIdentity.scopes != nullptr) {
+            context.reportProgress({.phase = "Preparing GPU preview scene",
+                                    .subphase = "Preparing the scope measure",
+                                    .completed = 0,
+                                    .total = std::nullopt});
+            scopes = runtime::prepareFrameScopeMeasure(*desiredIdentity.scopes, desiredIdentity,
+                                                       *buildResult.scene, *compileResult.plan,
+                                                       evaluationRequest, context.cancellation());
+            if (scopes.cancelled || context.isCancellationRequested())
+                return StageResult::cancelled(std::move(diagnostics));
+            if (scopes.prepared == nullptr && scopes.settled == nullptr) {
+                diagnostics.push_back(
+                    {.code = "bloom.preview.gpu-scene.scopes-unavailable",
+                     .severity = runtime::DiagnosticSeverity::Warning,
+                     .summary = "The device cannot count this frame's scopes",
+                     .detail = scopes.message,
+                     .suggestedAction = "Take the full CPU composition preview path, which counts "
+                                        "the scopes from its process picture."});
+                return StageResult::succeeded(
+                    std::make_shared<const runtime::PreviewGpuSceneStageOutcome>(
+                        runtime::PreviewGpuSceneStageOutcome{
+                            .status = runtime::PreviewGpuSceneStageStatus::UnsupportedGpuSubset,
+                            .stage = {},
+                            .diagnostics = std::move(diagnostics)}));
+            }
+        }
+
+        auto mutableStage =
             displayProgram != nullptr
-                ? std::make_shared<const runtime::PreviewGpuSceneStage>(
+                ? std::make_shared<runtime::PreviewGpuSceneStage>(
                       desiredIdentity, std::move(buildResult.scene), std::move(selection.handle),
                       std::move(displayProgram), pixelStorageByteLimit, std::move(diagnostics),
                       std::move(buildResult.phaseLease))
-                : std::make_shared<const runtime::PreviewGpuSceneStage>(
+                : std::make_shared<runtime::PreviewGpuSceneStage>(
                       desiredIdentity, std::move(buildResult.scene), std::move(selection.handle),
                       pixelStorageByteLimit, std::move(diagnostics),
                       std::move(buildResult.phaseLease));
+        mutableStage->setScopes(std::move(scopes.prepared), std::move(scopes.settled));
+        std::shared_ptr<const runtime::PreviewGpuSceneStage> stage = std::move(mutableStage);
         return StageResult::succeeded(std::make_shared<const runtime::PreviewGpuSceneStageOutcome>(
             runtime::PreviewGpuSceneStageOutcome{.status =
                                                      runtime::PreviewGpuSceneStageStatus::Prepared,

@@ -24,6 +24,9 @@ class GpuDevice;
 
 namespace bloom::runtime {
 
+struct PreviewScopeRequest;
+struct PreviewFrameScopes;
+
 enum class PreviewOutput : std::uint8_t {
     Composition,
 };
@@ -55,8 +58,24 @@ struct PreviewRequestIdentity final {
     // inspection: empty for the composition as exported, and part of the frame's identity, so a
     // dimmed frame is never served outside the group or an undimmed one inside it.
     std::vector<document::LayerId> isolation{};
+    // #730: the scope tables this frame's preparation also counts (preview_frame_scopes.hpp); null
+    // for none. It is not part of the frame's identity: two requests that differ only here
+    // prepare the same picture, so equality ignores it and no cache key holds it.
+    std::shared_ptr<const PreviewScopeRequest> scopes = nullptr;
 
-    friend bool operator==(const PreviewRequestIdentity&, const PreviewRequestIdentity&) = default;
+    friend bool operator==(const PreviewRequestIdentity& left,
+                           const PreviewRequestIdentity& right) noexcept {
+        return left.projectId == right.projectId && left.compositionId == right.compositionId &&
+               left.sourceRevision == right.sourceRevision &&
+               left.requestGeneration == right.requestGeneration && left.time == right.time &&
+               left.output == right.output && left.resolution == right.resolution &&
+               left.quality == right.quality && left.colorIntent == right.colorIntent &&
+               left.resolutionPolicy == right.resolutionPolicy && left.roi == right.roi &&
+               left.viewAdjust == right.viewAdjust && left.displayName == right.displayName &&
+               left.viewName == right.viewName && left.showLook == right.showLook &&
+               left.channelInspection == right.channelInspection &&
+               left.isolation == right.isolation;
+    }
 };
 
 // The viewer's normalized, alternative-agnostic view of a published display buffer (issue #97,
@@ -363,12 +382,23 @@ class PreparedPreviewFrame final {
     // Re-stamps a retained display-only frame with the generation of the request it now answers.
     [[nodiscard]] static std::optional<PreparedPreviewFrame>
     createDisplayOnly(std::uint64_t requestGeneration,
-                      std::shared_ptr<const PreviewDisplayOnlyFrame> displayFrame) noexcept;
+                      std::shared_ptr<const PreviewDisplayOnlyFrame> displayFrame,
+                      std::shared_ptr<const PreviewFrameScopes> scopes = nullptr) noexcept;
     // Re-stamps a retained resident frame with the generation of the request it now answers. The
     // lease is shared by pointer, so this copies no pixels and no native allocation.
     [[nodiscard]] static std::optional<PreparedPreviewFrame>
     createResident(std::uint64_t requestGeneration,
-                   std::shared_ptr<const PreviewResidentDisplayFrame> displayFrame) noexcept;
+                   std::shared_ptr<const PreviewResidentDisplayFrame> displayFrame,
+                   std::shared_ptr<const PreviewFrameScopes> scopes = nullptr) noexcept;
+
+    // #730: the scope tables this frame's preparation counted (preview_frame_scopes.hpp); null
+    // when its request asked for none. A re-stamped or display-only copy of the frame keeps them.
+    [[nodiscard]] const std::shared_ptr<const PreviewFrameScopes>& scopes() const noexcept {
+        return scopes_;
+    }
+    // The same frame (its pixels shared, never copied) carrying `scopes`.
+    [[nodiscard]] PreparedPreviewFrame
+    withScopes(std::shared_ptr<const PreviewFrameScopes> scopes) const;
 
     [[nodiscard]] const PreviewRequestIdentity& desiredIdentity() const& noexcept {
         return desiredIdentity_;
@@ -456,6 +486,7 @@ class PreparedPreviewFrame final {
 
     PreviewRequestIdentity desiredIdentity_;
     DisplayFrameVariant displayFrame_;
+    std::shared_ptr<const PreviewFrameScopes> scopes_;
 };
 
 enum class PreviewPreparationStatus : std::uint8_t {

@@ -2,6 +2,7 @@
 
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/playback_controller.hpp>
+#include <bloom/ui/scopes_region_store.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <bloom/core/telemetry_counters.hpp>
@@ -557,6 +558,36 @@ void CompositionPreviewController::notifyProcessingCapacityChanged() {
     }
 }
 
+void CompositionPreviewController::setScopesStore(ScopesRegionStore* const store) {
+    if (scopesStore_ == store)
+        return;
+    if (scopesStore_ != nullptr)
+        disconnect(scopesStore_, nullptr, this, nullptr);
+    scopesStore_ = store;
+    if (store != nullptr)
+        connect(store, &ScopesRegionStore::measureChanged, this, [this] {
+            // Playback asks for its next frame with the new settings itself. Otherwise the shown
+            // frame is asked for again; the cache answers it only with matching tables.
+            if (shuttingDown_ || playbackActive_)
+                return;
+            requestPreview(false, PreviewRequestKind::Visible, true);
+        });
+}
+
+std::shared_ptr<const runtime::PreviewScopeRequest>
+CompositionPreviewController::scopeRequest(const document::ProjectId project,
+                                           const document::CompositionId composition) const {
+    if (scopesStore_ == nullptr)
+        return nullptr;
+    return scopesStore_->request({project, composition});
+}
+
+bool CompositionPreviewController::frameCacheAnswers(const PreviewFrameCacheKey& key) const {
+    const auto request = scopeRequest(key.projectId, key.compositionId);
+    return request == nullptr ? frameCache_->contains(key)
+                              : frameCache_->containsWithScopes(key, request->settings);
+}
+
 void CompositionPreviewController::requestRefresh() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!shuttingDown_) {
@@ -1030,6 +1061,7 @@ void CompositionPreviewController::requestPreview(
         .showLook = settings_.showLook,
         .channelInspection = settings_.channelInspection,
         .isolation = isolation(),
+        .scopes = scopeRequest(snapshot.project().id(), compositionId),
     };
 
     if (trace_)

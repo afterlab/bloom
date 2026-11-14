@@ -95,10 +95,6 @@ pickResidentReadyStage(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
             best = it;
             break;
         }
-        // #724: a flagged fill frame does not start its scene work while the one fill tap slot
-        // holds a picture (or another flagged fill frame will put one there).
-        if (scopeFillStageHeldBack(core, **it))
-            continue;
         if (best == core->residentNativeReady.end() ||
             static_cast<int>((*it)->priority) < static_cast<int>((*best)->priority)) {
             best = it;
@@ -162,10 +158,10 @@ void releaseProcessingPhase(const std::shared_ptr<PreviewDisplayServiceCore>& co
     // Dispose the prepared scene before terminal publication or admitting a fallback. A sticky
     // generation slot independently keeps the conservative lease charged through native teardown.
     stage->gpuStage.reset();
-    // #724: a picture the tap did not take goes with the phase (a failed or cancelled frame keeps
-    // nothing, and a flagged fill stage that ends here frees the fill slot it held).
+    // #730: the frame's scope measure goes with the phase (the stepper before the work it reads).
+    stage->scopeStepper.reset();
+    stage->scopeWork.reset();
     stage->scopePicture.reset();
-    stage->holdsFillTapSlot = false;
 }
 
 // #539: whether device room a frame was short of can come back without the frame changing: the
@@ -205,11 +201,8 @@ residentCapacityWait(const std::shared_ptr<PreviewDisplayServiceCore>& core,
     const auto& phase = stage.gpuStage->phaseLease();
     if (!phase)
         return std::nullopt;
-    // #724: the scope taps and the measure's memory are the first things given back for a frame
-    // short of device memory.
-    const auto scopeGiven = giveScopeMemoryBack(core);
     const bool cut = phase->executorByteLimit() < phase->executorByteCeiling();
-    if (!cut && !scopeGiven.any && !residentDeviceRoomCanReturn(core, *phase))
+    if (!cut && !residentDeviceRoomCanReturn(core, *phase))
         return std::nullopt;
     core->deviceReclaim->request(std::max<std::uint64_t>(
         {phase->deviceNeedBytes(), phase->executorByteLimit(), std::uint64_t{1}}));
@@ -281,12 +274,9 @@ void finishResidentImmediately(const std::shared_ptr<PreviewDisplayServiceCore>&
     // preview route (the shared code), not a failed frame (#539).
     bool storageRoomCanReturn = false;
     if (retryableStorage && core->options.processingPhasePolicy && deviceRefusal()) {
-        // The scope taps and the measure's memory go first (#724).
-        const auto scopeGiven = giveScopeMemoryBack(core);
         // The device caches give way, not the frame (#425): the retry finds the evicted room.
-        storageRoomCanReturn =
-            !residentDeviceLost(core) &&
-            (scopeGiven.any || residentDeviceRoomCanReturn(core, *stage->gpuStage->phaseLease()));
+        storageRoomCanReturn = !residentDeviceLost(core) &&
+                               residentDeviceRoomCanReturn(core, *stage->gpuStage->phaseLease());
         core->deviceReclaim->request(
             std::max<std::uint64_t>(stage->gpuStage->phaseLease()->deviceNeedBytes(), 1));
     }
@@ -414,6 +404,7 @@ void advanceResidentAhead(const std::shared_ptr<PreviewDisplayServiceCore>& core
                           const std::shared_ptr<PreviewDisplayStageRecord>& active) {
     if (core->residentAhead == nullptr) {
         if ((active->residentPhase != ResidentNativePhase::Display &&
+             active->residentPhase != ResidentNativePhase::Scopes &&
              active->residentPhase != ResidentNativePhase::Transfer) ||
             active->cancellationRequested || active->nativeDiscard ||
             core->stopping.load(std::memory_order_acquire) || core->residentRouteTerminal ||
@@ -449,7 +440,6 @@ void advanceResidentAhead(const std::shared_ptr<PreviewDisplayServiceCore>& core
         next->nativeDispatched = true;
         next->nativeStartedAt = nativeNow(core);
         next->residentPhase = ResidentNativePhase::Executor;
-        next->holdsFillTapSlot = next->tapForScopes && !scopeViewerClass(next->priority);
         core->residentAhead = std::move(next);
         core->counterScenesAhead.fetch_add(1, std::memory_order_relaxed);
     }
@@ -511,7 +501,6 @@ void startResidentPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>&
     stage->pixelStorageByteLimit = submission.pixelStorageByteLimit;
     stage->gpuByteAllowance = submission.gpuByteAllowance;
     stage->resident = true;
-    stage->tapForScopes = submission.tapForScopes;
     // Retained so a GPU-subset refusal or a resident native failure can take the full original CPU
     // path without re-asking the caller, using the same snapshot/identity/overrides.
     stage->snapshot = submission.snapshot;
@@ -769,6 +758,68 @@ void handleGpuStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>&
 // Resident native pump (one resident job in flight; safe retirement)
 // -----------------------------------------------------------------------------------------------
 
+// The frame after its display step (and, for a frame that counts scope tables, after that
+// measure): the packed transfer of a GpuPreparedPacked frame, or the resident frame's publication,
+// or the end of a cancelled or failed stage.
+void continueAfterDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                          const std::shared_ptr<PreviewDisplayStageRecord>& stage,
+                          const render::GpuResidentDisplayPollResult poll, const bool cancelled,
+                          const bool nativeFailure) {
+    if (!cancelled && poll == render::GpuResidentDisplayPollResult::Ready &&
+        core->options.product == GpuPreviewDisplayProductMode::GpuPreparedPacked) {
+        std::string reason;
+        if (residentPackedTransferBegin(core, stage, reason)) {
+            stage->residentPhase = ResidentNativePhase::Transfer;
+            stage->nativeStartedAt = nativeNow(core);
+            return;
+        }
+        publishResidentJobDetail(core, "GPU packed transfer begin refused: " + reason);
+    } else {
+        // The display submission is retired (or never submitted); no unretired pin remains.
+        stage->processingPhaseRetired = poll == render::GpuResidentDisplayPollResult::Ready;
+        core->residentNativeInFlight = false;
+        core->residentNativeActive.reset();
+        stage->residentPhase = ResidentNativePhase::Done;
+        if (cancelled) {
+            releaseProcessingPhase(core, stage, !nativeFailure);
+            if (nativeFailure) {
+                core->counterResidentFailures.fetch_add(1, std::memory_order_relaxed);
+            }
+            completeCancelled(stage);
+            return;
+        }
+        if (poll == render::GpuResidentDisplayPollResult::Ready) {
+            std::string reason;
+            auto frame = residentFinishFrame(core, *stage, reason);
+            if (frame.has_value() && stage->scopes != nullptr)
+                frame = frame->withScopes(stage->scopes);
+            if (frame.has_value()) {
+                auto prepared = PreviewPreparationResult::prepared(
+                    std::make_shared<const PreparedPreviewFrame>(std::move(*frame)));
+                if (prepared.has_value()) {
+                    releaseProcessingPhase(core, stage, true);
+                    if (stage->completion.isValid()) {
+                        static_cast<void>(
+                            std::move(stage->completion)
+                                .succeed(std::make_shared<const PreviewPreparationResult>(
+                                    std::move(*prepared))));
+                    }
+                    stage->phase = StagePhase::Done;
+                    return;
+                }
+            }
+            if (!reason.empty()) {
+                publishResidentJobDetail(core, "resident display frame refused: " + reason);
+            }
+        }
+    }
+    core->residentNativeInFlight = false;
+    core->residentNativeActive.reset();
+    stage->residentPhase = ResidentNativePhase::Done;
+    finishResidentImmediately(core, stage, true);
+    return;
+}
+
 void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
     // The general display route needs only the scene executor; the Neutral fast path additionally
     // requires the resident display (checked per-stage in
@@ -801,12 +852,6 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             return;
         }
         const auto& phase = stage->gpuStage->phaseLease();
-        // #724: the device's one retained slot may hold the scope measure's phase; the stage never
-        // waits for the measure, which is parked (or ended when nothing of it is in flight).
-        if (phase && core->device && !yieldScopeDeviceToStage(core)) {
-            core->residentNativeReady.push_front(stage);
-            return;
-        }
         // Recover a phase latched by an earlier unproven retirement (device-wide idle proof).
         if (phase && core->device && core->device->processingPhaseOccupied())
             static_cast<void>(core->device->recoverUnprovenProcessingPhase());
@@ -847,7 +892,6 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
         stage->nativeDispatched = true;
         stage->nativeStartedAt = nativeNow(core);
         stage->residentPhase = ResidentNativePhase::Executor;
-        stage->holdsFillTapSlot = stage->tapForScopes && !scopeViewerClass(stage->priority);
         core->residentNativeActive = stage;
         core->residentNativeInFlight = true;
         return;
@@ -972,57 +1016,25 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             beginResidentRetirement(core, stage, nativeFailure);
             return;
         }
+        // #730: a frame that counts scope tables counts them now, on the scene picture its job
+        // computed, before its transfer.
         if (!cancelled && poll == render::GpuResidentDisplayPollResult::Ready &&
-            core->options.product == GpuPreviewDisplayProductMode::GpuPreparedPacked) {
-            std::string reason;
-            if (residentPackedTransferBegin(core, stage, reason)) {
-                stage->residentPhase = ResidentNativePhase::Transfer;
-                stage->nativeStartedAt = nativeNow(core);
-                return;
-            }
-            publishResidentJobDetail(core, "GPU packed transfer begin refused: " + reason);
-        } else {
-            // The display submission is retired (or never submitted); no unretired pin remains.
-            stage->processingPhaseRetired = poll == render::GpuResidentDisplayPollResult::Ready;
-            core->residentNativeInFlight = false;
-            core->residentNativeActive.reset();
-            stage->residentPhase = ResidentNativePhase::Done;
-            if (cancelled) {
-                releaseProcessingPhase(core, stage, !nativeFailure);
-                if (nativeFailure) {
-                    core->counterResidentFailures.fetch_add(1, std::memory_order_relaxed);
-                }
-                completeCancelled(stage);
-                return;
-            }
-            if (poll == render::GpuResidentDisplayPollResult::Ready) {
-                std::string reason;
-                auto frame = residentFinishFrame(core, *stage, reason);
-                if (frame.has_value()) {
-                    auto prepared = PreviewPreparationResult::prepared(
-                        std::make_shared<const PreparedPreviewFrame>(std::move(*frame)));
-                    if (prepared.has_value()) {
-                        keepScopeTap(core, *stage);
-                        releaseProcessingPhase(core, stage, true);
-                        if (stage->completion.isValid()) {
-                            static_cast<void>(
-                                std::move(stage->completion)
-                                    .succeed(std::make_shared<const PreviewPreparationResult>(
-                                        std::move(*prepared))));
-                        }
-                        stage->phase = StagePhase::Done;
-                        return;
-                    }
-                }
-                if (!reason.empty()) {
-                    publishResidentJobDetail(core, "resident display frame refused: " + reason);
-                }
-            }
+            beginFrameScopeMeasure(core, *stage)) {
+            stage->residentPhase = ResidentNativePhase::Scopes;
+            stage->nativeStartedAt = nativeNow(core);
+            return;
         }
-        core->residentNativeInFlight = false;
-        core->residentNativeActive.reset();
-        stage->residentPhase = ResidentNativePhase::Done;
-        finishResidentImmediately(core, stage, true);
+        continueAfterDisplay(core, stage, poll, cancelled, nativeFailure);
+        return;
+    }
+    case ResidentNativePhase::Scopes: {
+        const bool deadlineExpired =
+            nativeNow(core) - stage->nativeStartedAt >= core->options.nativeDispatchDeadline;
+        if (!stepFrameScopeMeasure(core, *stage, cancelled, deadlineExpired))
+            return;
+        // Settled with nothing of the measure in flight; the display step was Ready.
+        continueAfterDisplay(core, stage, render::GpuResidentDisplayPollResult::Ready, cancelled,
+                             false);
         return;
     }
     case ResidentNativePhase::Transfer: {
@@ -1066,6 +1078,9 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             try {
                 std::string reason;
                 auto frame = residentPackedTransferFinish(core, *stage, reason);
+                // #730: the frame carries the scope tables its job counted.
+                if (frame && stage->scopes != nullptr)
+                    frame = frame->withScopes(stage->scopes);
                 if (frame) {
                     auto prepared = PreviewPreparationResult::prepared(
                         std::make_shared<const PreparedPreviewFrame>(std::move(*frame)));
@@ -1094,7 +1109,6 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
                             publishResidentJobDetail(core,
                                                      "GPU packed host ownership promotion refused");
                         } else {
-                            keepScopeTap(core, *stage);
                             releaseProcessingPhase(core, stage, true);
                             static_cast<void>(
                                 std::move(stage->completion).succeed(std::move(payload)));

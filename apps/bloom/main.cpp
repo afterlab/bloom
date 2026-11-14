@@ -71,7 +71,6 @@
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/qualified_display_processor_bootstrap.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
-#include <bloom/ui/scope_fill_taps.hpp>
 #include <bloom/ui/scopes_editor.hpp>
 #include <bloom/ui/system_notifier.hpp>
 #include <bloom/ui/task_monitor_model.hpp>
@@ -569,14 +568,9 @@ int main(int argc, char* argv[]) try {
     bloom::ui::BackgroundPreviewController backgroundPreviewController(
         compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline,
         nullptr, gpuPreviewDisplaySubmitter);
-    // #724 Scopes: the one owner of the RAM preview fill's scope taps (declared before the fill
-    // controller and every panel, so it outlives them; shut down with the preview service).
-    bloom::ui::ScopeFillTaps scopeFillTaps(&gpuPreviewDisplayService, previewFrameCache,
-                                           taskUiBridge);
     bloom::ui::RamPreviewController ramPreviewController(
         compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline,
         nullptr, gpuPreviewDisplaySubmitter);
-    ramPreviewController.setScopeFillTaps(&scopeFillTaps);
     // RAM preview keeps as many frames in flight as the measured free capacity holds (usable RAM
     // and VRAM minus the headroom preferences), up to one per hardware thread for
     // decode/preparation.
@@ -678,7 +672,6 @@ int main(int argc, char* argv[]) try {
     shutdownCoordinator.setPackedHostRetirement(
         [&] {
             gpuPreviewDisplayService.beginShutdown();
-            scopeFillTaps.shutdown();
             previewController.releasePublishedFramesForShutdown();
             viewerPreviews.releasePublishedFramesForShutdown();
             cpuEvaluator.operationCache()->close();
@@ -837,18 +830,19 @@ int main(int argc, char* argv[]) try {
     mcpAdapter.startWaiter();
     QObject::connect(&projectHost, &bloom::ui::ProjectHost::exportQueueReplaced, &mcpAdapter,
                      [&mcpService] { mcpService.exportQueueReplaced(); });
-    // #724 Scopes: every Scopes panel measures a picture the Viewer already produced and never
-    // evaluates a scene: the scene picture the Viewer's own device kept (the preview display
-    // service's scope tap), else the CPU route's process picture, else the retained display
-    // picture. The shared OCIO context the device color steps need is resolved on the worker the
-    // way the preview resolves it. The final-render device and the CPU evaluator below are the
-    // routes of MCP and Python reads, which are the only reads that may evaluate a scene (a frame
-    // with no shown or retained picture).
-    // The scope regions, the Region toggle and the visible-panel count every Scopes panel and
-    // Viewer share: session state, never saved and never part of undo.
+    // #730 Scopes: the frame pipeline counts the scope tables. While a Scopes panel is visible,
+    // every Viewer, read-ahead and RAM Preview request asks its frame's preparation to count them
+    // too (on the preview display service's device as part of the frame's job, else on the CPU
+    // route's worker), and the tables travel with the frame into the preview cache. The shared
+    // OCIO context the device color steps need is resolved on the worker the way the preview
+    // resolves it. The final-render device and the CPU evaluator below are the routes of MCP and
+    // Python reads of a frame no Viewer prepared.
+    // The session's scope state (regions, the header menus' settings, the visible-panel count),
+    // shared by every Scopes panel and Viewer: never saved and never part of undo.
     bloom::ui::ScopesRegionStore scopesRegions;
     bloom::ui::ScopesServices scopesServices;
-    scopesServices.regions = &scopesRegions;
+    scopesServices.store = &scopesRegions;
+    previewController.setScopesStore(&scopesRegions);
     {
         bloom::runtime::ScopeFrameRoutes routes;
         routes.device = [statisticsDeviceSource] {
@@ -877,16 +871,12 @@ int main(int argc, char* argv[]) try {
                             const bloom::runtime::CancellationToken& cancellation) {
                 return cpuEvaluator.evaluate(std::move(plan), request, cancellation);
             };
-        // query kind scopes (#724): the same device, OCIO context and CPU evaluator routes, and the
-        // preview cache's warm sidecars of the frames the Viewer's controller has cached.
-        const auto routesOcio = routes.ocio;
+        // query kind scopes (#724, #730): the same device, OCIO context and CPU evaluator routes,
+        // and the tables the frames the Viewer's controller cached carry.
+        scopesRegions.setOcio(routes.ocio);
         mcpLiveUi.setScopes(routes, &previewController, previewFrameCache);
         scopesServices.scheduler = &taskScheduler;
         scopesServices.bridge = &taskUiBridge;
-        scopesServices.cache = previewFrameCache;
-        scopesServices.fillTaps = &scopeFillTaps;
-        scopesServices.measure = bloom::ui::makeScopesMeasure(
-            {.previewService = &gpuPreviewDisplayService, .ocio = routesOcio});
     }
     std::shared_ptr<bloom::ui::ScriptPanelRuntime> scriptRuntime;
     const bool editorsRegistered = bloom::ui::registerFoundationEditors(
@@ -1159,7 +1149,6 @@ int main(int argc, char* argv[]) try {
             // Tasks, native surfaces and export owners have retired before this callback.
             // Release every live CPU or native Viewer, not just surfaces with native targets.
             gpuPreviewDisplayService.beginShutdown();
-            scopeFillTaps.shutdown();
             window.releasePackedFramesForShutdown();
             previewController.releasePublishedFramesForShutdown();
             viewerPreviews.releasePublishedFramesForShutdown();

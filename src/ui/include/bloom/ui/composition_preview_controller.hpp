@@ -14,6 +14,7 @@
 
 #include <QElapsedTimer>
 #include <QObject>
+#include <QPointer>
 #include <QRectF>
 #include <QString>
 #include <QTimer>
@@ -31,6 +32,7 @@ namespace bloom::ui {
 
 class CompositionSession;
 class PlaybackController;
+class ScopesRegionStore;
 class TaskUiBridge;
 
 inline constexpr std::size_t kDefaultPreviewPixelStorageByteLimit =
@@ -195,6 +197,19 @@ class CompositionPreviewController final : public QObject {
     // generation is missing from it, and the cache key does not carry one.
     [[nodiscard]] std::optional<PreviewFrameCacheKey>
     cacheKeyForTime(core::RationalTime time) const;
+
+    // #730 Scopes: the session's scope state (borrowed; null: no request counts scope tables).
+    // While a Scopes panel is visible every request of this controller, its read-ahead and the
+    // RAM Preview fill asks its frame's preparation to count the scope tables as well, and a
+    // change of what is counted requests the shown frame again.
+    void setScopesStore(ScopesRegionStore* store);
+    // What a request for a frame of the composition asks to count; null while no Scopes panel is
+    // visible.
+    [[nodiscard]] std::shared_ptr<const runtime::PreviewScopeRequest>
+    scopeRequest(document::ProjectId project, document::CompositionId composition) const;
+    // Whether the cache holds `key`'s frame as a request of this controller would take it: with
+    // the scope tables of the current settings while a Scopes panel is visible.
+    [[nodiscard]] bool frameCacheAnswers(const PreviewFrameCacheKey& key) const;
 
     // Playback counts skipped frame indices, rejected misses, and requests discarded or late.
     // Scrubbing outside playback never contributes. The last total survives pause().
@@ -455,6 +470,7 @@ class CompositionPreviewController final : public QObject {
     bool colorIntentCaptured_ = false;
     const std::size_t legacyPixelStorageByteLimit_ = runtime::gpuPreviewRequestByteAllowance();
     PreviewFrameCacheHandle frameCache_;
+    QPointer<ScopesRegionStore> scopesStore_;
     CompositionPreviewState state_;
     std::shared_ptr<runtime::GpuProcessingPhasePolicy> processingPolicy_;
     std::optional<runtime::TaskAdmissionRetry> deferredAdmission_;
