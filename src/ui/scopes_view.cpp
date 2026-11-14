@@ -416,7 +416,8 @@ QString ScopeView::readoutAt(const QPointF& position) const {
             static_cast<std::uint32_t>(std::max<qreal>(0, local) / paneWidth * columns));
         const int code = std::clamp(
             static_cast<int>((plot.bottom() - position.y()) / plot.height() * 1024.0), 0, 1023);
-        const auto level = static_cast<std::uint32_t>(code >> 1);
+        // The count of the detail's level: the full level (code >> 1) shifted right by the detail.
+        const auto level = static_cast<std::uint32_t>((code >> 1) >> tables.layout().detail);
         QStringList counts;
         if (parade) {
             counts << tr("%1 %2")
@@ -462,9 +463,11 @@ QString ScopeView::readoutAt(const QPointF& position) const {
         const double fy = (position.y() - plot.top()) / plot.height();
         const double cb = fx - 0.5;
         const double cr = 0.5 - fy;
-        const auto cell = [](const double value) {
+        // The cell of the detail's table under the pointer.
+        const double side = static_cast<double>(tables.layout().cells());
+        const auto cell = [side](const double value) {
             return static_cast<std::uint32_t>(
-                std::clamp(std::floor((value + 0.5) * 512.0), 0.0, 511.0));
+                std::clamp(std::floor((value + 0.5) * side), 0.0, side - 1.0));
         };
         double angle = std::atan2(cr, cb) * 180.0 / std::numbers::pi;
         if (angle < 0)
@@ -484,11 +487,11 @@ QString ScopeView::readoutAt(const QPointF& position) const {
         const double y = (plot.bottom() - position.y()) / plot.height();
         std::uint32_t count = 0;
         if (x < scopes::kChromaticityXMaximum && y < scopes::kChromaticityYMaximum) {
-            const auto xCell =
-                static_cast<std::uint32_t>(x / scopes::kChromaticityXMaximum * 512.0);
-            const auto yCell =
-                static_cast<std::uint32_t>(y / scopes::kChromaticityYMaximum * 512.0);
-            count = tables.chromaticity(std::min(xCell, 511U), std::min(yCell, 511U));
+            const auto cells = tables.layout().cells();
+            const double side = static_cast<double>(cells);
+            const auto xCell = static_cast<std::uint32_t>(x / scopes::kChromaticityXMaximum * side);
+            const auto yCell = static_cast<std::uint32_t>(y / scopes::kChromaticityYMaximum * side);
+            count = tables.chromaticity(std::min(xCell, cells - 1U), std::min(yCell, cells - 1U));
         }
         return tr("x %1 · y %2 · Count %3").arg(x, 0, 'f', 4).arg(y, 0, 'f', 4).arg(count);
     }

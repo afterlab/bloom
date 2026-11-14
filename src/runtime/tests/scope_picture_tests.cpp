@@ -87,7 +87,8 @@ constexpr double kKb = 0.0722;
 
 [[nodiscard]] runtime::ScopeTables tablesOf(const std::vector<Rgba32f>& signal,
                                             const std::uint32_t width, const std::uint32_t height,
-                                            const std::uint32_t scopeBits) {
+                                            const std::uint32_t scopeBits,
+                                            const std::uint32_t detail = 0) {
     std::vector<Rgba32f> xyz;
     for (const auto& pixel : signal)
         xyz.push_back(xyzOf(pixel));
@@ -100,6 +101,7 @@ constexpr double kKb = 0.0722;
     input.areaHeight = height;
     input.scopes = scopeBits;
     input.axisMaximum = 1;
+    input.detail = detail;
     input.luma = rec709();
     const auto counts = runtime::measureScopesCpu(input);
     if (!counts)
@@ -766,6 +768,151 @@ void testTraceComposition(Expectations& e) {
     }
 }
 
+// A picture drawn from detail-1 (and detail-2) tables: the same size and graticule, and a trace
+// that covers the same region.
+//
+// The rule asserted for the trace: with `size` the larger side of the trace image in pixels, a
+// detail-d cell is 2^d full cells wide, so it covers at most ceil(2^d * size / 512) output pixels
+// (the unit of the footprint below, plus one for rounding of the spans). Every drawn trace pixel of
+// the detail-d image has a drawn pixel of the full-detail image within that footprint on each
+// axis, and every drawn pixel of the full-detail image has a drawn pixel of the detail-d image
+// within it. The Histogram does not depend on the detail: its image is equal.
+[[nodiscard]] std::vector<Rgba32f> gradientPixels() {
+    std::vector<Rgba32f> pixels;
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x)
+            pixels.push_back(px(static_cast<float>(x) / 63.0F, static_cast<float>(y) / 63.0F,
+                                static_cast<float>((x * 5 + y * 3) % 64) / 63.0F));
+    return pixels;
+}
+
+[[nodiscard]] bool drawnNear(const scopes::ScopeImage& image, const int x, const int y,
+                             const int footprint) {
+    for (int dy = -footprint; dy <= footprint; ++dy)
+        for (int dx = -footprint; dx <= footprint; ++dx) {
+            const int px = x + dx;
+            const int py = y + dy;
+            if (px >= 0 && py >= 0 && px < image.width && py < image.height &&
+                image.pixel(px, py) != 0U)
+                return true;
+        }
+    return false;
+}
+
+void testDetailPicture(Expectations& e) {
+    const auto pixels = gradientPixels();
+    const auto full = tablesOf(pixels, 64, 64, kAllScopes, 0);
+    const auto luma = rec709();
+    const auto colorimetry = rec709Colorimetry();
+    scopes::PictureOptions options;
+    struct Case {
+        scopes::Kind kind;
+        int width;
+        int height;
+    };
+    const auto measure = scopes::embeddedTextMeasure(1.0);
+    for (const std::uint32_t detail : {1U, 2U}) {
+        const auto coarse = tablesOf(pixels, 64, 64, kAllScopes, detail);
+        e.expect(coarse.layout().detail == detail && coarse.layout().cells() == (512U >> detail),
+                 "the detail's tables have the detail's layout");
+        scopes::PictureInput fullInput;
+        fullInput.tables = &full;
+        fullInput.luma = &luma;
+        fullInput.colorimetry = &colorimetry;
+        auto coarseInput = fullInput;
+        coarseInput.tables = &coarse;
+        for (const auto& item :
+             {Case{scopes::Kind::Waveform, 320, 200}, Case{scopes::Kind::Parade, 320, 200},
+              Case{scopes::Kind::Vectorscope, 300, 300}, Case{scopes::Kind::Histogram, 300, 240},
+              Case{scopes::Kind::Chromaticity, 300, 300}}) {
+            const std::string name = "detail " + std::to_string(detail) + ", kind " +
+                                     std::to_string(static_cast<int>(item.kind));
+            const auto fullPicture = scopes::renderScopePicture(item.kind, item.width, item.height,
+                                                                fullInput, options, {}, 1U << 24U);
+            const auto coarsePicture = scopes::renderScopePicture(
+                item.kind, item.width, item.height, coarseInput, options, {}, 1U << 24U);
+            e.expect(fullPicture.ok() && coarsePicture.ok() &&
+                         coarsePicture.image.width == fullPicture.image.width &&
+                         coarsePicture.image.height == fullPicture.image.height,
+                     name + ": the picture has the same size");
+            if (!fullPicture.ok() || !coarsePicture.ok())
+                continue;
+            // The graticule: the same plan, and the same pixels wherever neither trace draws.
+            scopes::GraticuleRequest request;
+            request.kind = item.kind;
+            request.width = item.width;
+            request.height = item.height;
+            request.luma = &luma;
+            request.colorimetry = &colorimetry;
+            request.measure = measure;
+            const auto plan = scopes::buildScopeGraticule(request);
+            scopes::TraceRequest mapping;
+            mapping.kind = item.kind;
+            mapping.luma = &luma;
+            mapping.colors = options.palette.traceColors();
+            mapping.size = plan.traceRequestSize;
+            mapping.gapPixels = scopes::kParadeGap;
+            mapping.tables = &full;
+            const auto fullTrace = scopes::renderTrace(mapping);
+            mapping.tables = &coarse;
+            const auto coarseTrace = scopes::renderTrace(mapping);
+            e.expect(!fullTrace.image.empty() && !coarseTrace.image.empty() &&
+                         fullTrace.image.width == coarseTrace.image.width &&
+                         fullTrace.image.height == coarseTrace.image.height,
+                     name + ": the traces have the same size");
+            if (fullTrace.image.empty() || coarseTrace.image.empty())
+                continue;
+            const int left = static_cast<int>(std::lround(plan.trace.x));
+            const int top = static_cast<int>(std::lround(plan.trace.y));
+            int graticuleDifferences = 0;
+            for (int y = 0; y < item.height; ++y)
+                for (int x = 0; x < item.width; ++x) {
+                    const int tx = x - left;
+                    const int ty = y - top;
+                    const bool inTrace = tx >= 0 && ty >= 0 && tx < fullTrace.image.width &&
+                                         ty < fullTrace.image.height;
+                    if (inTrace && (fullTrace.image.pixel(tx, ty) != 0U ||
+                                    coarseTrace.image.pixel(tx, ty) != 0U))
+                        continue;
+                    graticuleDifferences +=
+                        fullPicture.image.pixel(x, y) == coarsePicture.image.pixel(x, y) ? 0 : 1;
+                }
+            e.expect(graticuleDifferences == 0,
+                     name + ": the graticule and everything outside the trace is the same (" +
+                         std::to_string(graticuleDifferences) + " differ)");
+            if (item.kind == scopes::Kind::Histogram) {
+                e.expect(fullTrace.image.pixels == coarseTrace.image.pixels,
+                         name + ": the Histogram's trace does not depend on the detail");
+                continue;
+            }
+            // The trace covers the same region.
+            const int larger = std::max(fullTrace.image.width, fullTrace.image.height);
+            const int footprint = ((1 << detail) * larger + 511) / 512 + 1;
+            int drawnCoarse = 0;
+            int drawnFull = 0;
+            int uncovered = 0;
+            int missed = 0;
+            for (int y = 0; y < fullTrace.image.height; ++y)
+                for (int x = 0; x < fullTrace.image.width; ++x) {
+                    if (coarseTrace.image.pixel(x, y) != 0U) {
+                        ++drawnCoarse;
+                        uncovered += drawnNear(fullTrace.image, x, y, footprint) ? 0 : 1;
+                    }
+                    if (fullTrace.image.pixel(x, y) != 0U) {
+                        ++drawnFull;
+                        missed += drawnNear(coarseTrace.image, x, y, footprint) ? 0 : 1;
+                    }
+                }
+            e.expect(drawnCoarse > 0 && drawnFull > 0, name + ": both traces draw something");
+            e.expect(uncovered == 0 && missed == 0,
+                     name + ": the traces cover the same region within " +
+                         std::to_string(footprint) + " pixels (" + std::to_string(uncovered) +
+                         " drawn pixels of the detail's trace have none of the full trace near, " +
+                         std::to_string(missed) + " of the full trace have none of the detail's)");
+        }
+    }
+}
+
 void testAllScopesPicture(Expectations& e) {
     const auto tables = colorBars();
     const auto luma = rec709();
@@ -994,6 +1141,7 @@ int main() {
         testHistogramHeights(e);
         testClipMarkers(e);
         testTraceComposition(e);
+        testDetailPicture(e);
         testAllScopesPicture(e);
         testPng(e);
         testRefusals(e);

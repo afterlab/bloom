@@ -299,21 +299,24 @@ ScopeTablesData describeScopeTables(const runtime::ScopeCounts& counts,
     }
     if (layout.has(render::kScopeTableWaveform)) {
         ScopeTableData table;
-        table.shape = {render::kScopeChannels, layout.columns, render::kScopeWaveformLevels};
+        const std::uint32_t levels = layout.waveformLevels();
+        const std::uint32_t codesPerLevel = render::kScopeCodes / levels;
+        table.shape = {render::kScopeChannels, layout.columns, levels};
         table.order = "channel (red, green, blue, luma), then column from the left of the measured "
-                      "area, then level 0 (code 0 to 1) to 511 (code 1022 to 1023)";
+                      "area, then level 0 (code 0 to " +
+                      std::to_string(codesPerLevel - 1U) + ") to " + std::to_string(levels - 1U) +
+                      " (code " + std::to_string(render::kScopeCodes - codesPerLevel) + " to " +
+                      std::to_string(render::kScopeCodes - 1U) + ")";
         table.underOverShape = {render::kScopeChannels, layout.columns};
         std::vector<std::uint32_t> cells;
-        cells.reserve(std::size_t{render::kScopeChannels} * layout.columns *
-                      render::kScopeWaveformLevels);
+        cells.reserve(std::size_t{render::kScopeChannels} * layout.columns * levels);
         for (std::uint32_t channel = 0; channel < render::kScopeChannels; ++channel) {
             for (std::uint32_t column = 0; column < layout.columns; ++column) {
                 const auto base = layout.waveformOffset + (channel * layout.columns + column) *
-                                                              render::kScopeWaveformColumnWords;
-                cells.insert(cells.end(), words.begin() + base,
-                             words.begin() + base + render::kScopeWaveformLevels);
-                table.under.push_back(words[base + render::kScopeWaveformLevelUnder]);
-                table.over.push_back(words[base + render::kScopeWaveformLevelOver]);
+                                                              layout.waveformColumnWords();
+                cells.insert(cells.end(), words.begin() + base, words.begin() + base + levels);
+                table.under.push_back(words[base + layout.waveformLevelUnder()]);
+                table.over.push_back(words[base + layout.waveformLevelOver()]);
             }
         }
         fill(table, cells, encoding, data.jsonBytes);
@@ -322,23 +325,25 @@ ScopeTablesData describeScopeTables(const runtime::ScopeCounts& counts,
     }
     const auto grid = [&](const std::uint32_t offset, std::string order) {
         ScopeTableData table;
-        table.shape = {render::kScopeCells, render::kScopeCells};
+        table.shape = {layout.cells(), layout.cells()};
         table.order = std::move(order);
         const std::vector<std::uint32_t> cells(words.begin() + offset,
-                                               words.begin() + offset +
-                                                   render::kScopeCells * render::kScopeCells);
+                                               words.begin() + offset + layout.gridWords());
         fill(table, cells, encoding, data.jsonBytes);
         return table;
     };
     if (layout.has(render::kScopeTableVectorscope))
-        data.vectorscope = grid(layout.vectorscopeOffset,
-                                "row = Cr cell 0 to 511 (Cr -0.5 to 0.5, upward), column = Cb cell "
-                                "0 to 511 (Cb -0.5 to 0.5, to the right)");
+        data.vectorscope =
+            grid(layout.vectorscopeOffset,
+                 "row = Cr cell 0 to " + std::to_string(layout.cells() - 1U) +
+                     " (Cr -0.5 to 0.5, upward), column = Cb cell 0 to " +
+                     std::to_string(layout.cells() - 1U) + " (Cb -0.5 to 0.5, to the right)");
     if (layout.has(render::kScopeTableChromaticity))
         data.chromaticity =
             grid(layout.chromaticityOffset,
-                 "row = y cell 0 to 511 (CIE y 0 to 0.9, upward), column = x cell 0 "
-                 "to 511 (CIE x 0 to 0.8, to the right)");
+                 "row = y cell 0 to " + std::to_string(layout.cells() - 1U) +
+                     " (CIE y 0 to 0.9, upward), column = x cell 0 to " +
+                     std::to_string(layout.cells() - 1U) + " (CIE x 0 to 0.8, to the right)");
     return data;
 }
 
@@ -564,6 +569,10 @@ struct Job final {
                  .view = request.view,
                  .defaultDisplayView = job.request.display.empty() && job.request.view.empty(),
                  .settings = settings});
+        // A sidecar counted at another detail than the read's is another measure, whatever the port
+        // says: the read never serves it.
+        if (hit && hit->tables.layout().detail != settings.detail)
+            hit.reset();
         runtime::ScopeTables tables;
         if (hit) {
             frame.fromCache = true;

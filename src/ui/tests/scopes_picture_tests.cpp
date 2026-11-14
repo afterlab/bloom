@@ -83,7 +83,8 @@ template <typename Predicate> [[nodiscard]] bool waitUntil(Predicate predicate) 
 }
 
 [[nodiscard]] runtime::ScopeTables measure(const std::vector<Rgba32f>& pixels,
-                                           const runtime::ScopeLuma& luma) {
+                                           const runtime::ScopeLuma& luma,
+                                           const std::uint32_t detail = 0) {
     std::vector<Rgba32f> xyz;
     for (const auto& pixel : pixels) {
         const float r = pixel.red();
@@ -102,6 +103,7 @@ template <typename Predicate> [[nodiscard]] bool waitUntil(Predicate predicate) 
     input.areaHeight = 64;
     input.scopes = render::kScopeTableAll;
     input.axisMaximum = 1;
+    input.detail = detail;
     input.luma = luma;
     const auto counts = runtime::measureScopesCpu(input);
     if (!counts)
@@ -110,7 +112,8 @@ template <typename Predicate> [[nodiscard]] bool waitUntil(Predicate predicate) 
 }
 
 // 75% color bars, 64 x 64, with one odd pixel so the traces have dense and single-count cells.
-[[nodiscard]] runtime::ScopeTables colorBars(const runtime::ScopeLuma& luma) {
+[[nodiscard]] runtime::ScopeTables colorBars(const runtime::ScopeLuma& luma,
+                                             const std::uint32_t detail = 0) {
     constexpr std::array<std::array<float, 3>, 8> bars{{{0.75F, 0.75F, 0.75F},
                                                         {0.75F, 0.75F, 0.0F},
                                                         {0.0F, 0.75F, 0.75F},
@@ -126,7 +129,7 @@ template <typename Predicate> [[nodiscard]] bool waitUntil(Predicate predicate) 
             pixels.push_back(px(bar[0], bar[1], bar[2]));
         }
     pixels[0] = px(0.3F, 0.6F, 0.1F);
-    return measure(pixels, luma);
+    return measure(pixels, luma, detail);
 }
 
 // Every pixel of a 64 x 64 frame a different gray in the lower half of the range: a flat Histogram
@@ -485,6 +488,124 @@ void testViewAgreesWithPicture(Expectations& e,
     }
 }
 
+// The count in the text of a readout (its last "Count N" or "Count R n . G n" part).
+[[nodiscard]] QString countPart(const QString& readout) {
+    const auto at = readout.indexOf(QStringLiteral("Count "));
+    return at < 0 ? QString() : readout.mid(at + 6);
+}
+
+// Hover readouts at detail 1: the value under the pointer is the same, and the count is the count
+// of the detail's cell, which is the full detail's cells of that block summed.
+void testDetailReadouts(Expectations& e,
+                        const std::shared_ptr<const runtime::ScopeSignalColor>& color) {
+    auto rig = makeRig();
+    const auto fullHandle = std::make_shared<ui::PreviewScopeSidecar>();
+    fullHandle->tables = colorBars(color->luma(), 0);
+    fullHandle->area = {0, 0, 64, 64};
+    const auto coarseHandle = std::make_shared<ui::PreviewScopeSidecar>();
+    coarseHandle->tables = colorBars(color->luma(), 1);
+    coarseHandle->area = {0, 0, 64, 64};
+    const auto& full = fullHandle->tables;
+    const auto& coarse = coarseHandle->tables;
+    e.expect(coarse.layout().detail == 1U && coarse.layout().cells() == 256U,
+             "the detail-1 sidecar has 256-cell tables");
+
+    const auto show = [&](const scopes::Kind kind,
+                          const std::shared_ptr<ui::PreviewScopeSidecar>& sidecar) {
+        auto view = std::make_unique<ui::ScopeView>(kind, rig.renderer.get());
+        ui::ScopeViewData data;
+        data.scopes = sidecar;
+        data.color = color;
+        view->setData(data);
+        view->resize(340, view->heightForWidth(340));
+        view->show();
+        return view;
+    };
+    // Vectorscope: the center is Cb = Cr = 0, which the gray and black bars fill; its full cell is
+    // 256, and the detail's cell 128 holds the 2 x 2 block 256..257.
+    const auto fullScope = show(scopes::Kind::Vectorscope, fullHandle);
+    const auto coarseScope = show(scopes::Kind::Vectorscope, coarseHandle);
+    const auto centerFull = fullScope->readoutAt(fullScope->plotRect().center());
+    const auto centerCoarse = coarseScope->readoutAt(coarseScope->plotRect().center());
+    const std::uint32_t fullCenter = full.vectorscope(256, 256);
+    const std::uint32_t block = full.vectorscope(256, 256) + full.vectorscope(257, 256) +
+                                full.vectorscope(256, 257) + full.vectorscope(257, 257);
+    e.expect(fullCenter != 0U && coarse.vectorscope(128, 128) == block,
+             "the detail's center cell is the block of full cells");
+    e.expect(countPart(centerFull) == QString::number(fullCenter),
+             "the full readout reports the full cell's count: " + centerFull.toStdString());
+    e.expect(countPart(centerCoarse) == QString::number(block),
+             "the detail-1 readout reports the detail cell's count: " + centerCoarse.toStdString());
+    e.expect(centerFull.left(centerFull.indexOf(QStringLiteral("Count "))) ==
+                 centerCoarse.left(centerCoarse.indexOf(QStringLiteral("Count "))),
+             "the value under the pointer is the same at both details");
+
+    // Chromaticity: the readout's count is the detail's cell under the pointer; scan the plot for
+    // a cell that holds a count in the full table and compare the pooled count.
+    const auto fullChroma = show(scopes::Kind::Chromaticity, fullHandle);
+    const auto coarseChroma = show(scopes::Kind::Chromaticity, coarseHandle);
+    const auto plot = fullChroma->plotRect();
+    int compared = 0;
+    int differing = 0;
+    for (int step = 0; step < 400; ++step) {
+        const QPointF point(plot.left() + plot.width() * (step % 20 + 0.5) / 20.0,
+                            plot.top() + plot.height() * (step / 20 + 0.5) / 20.0);
+        const auto fullText = fullChroma->readoutAt(point);
+        const auto coarseText = coarseChroma->readoutAt(point);
+        if (fullText.isEmpty() || coarseText.isEmpty())
+            continue;
+        ++compared;
+        // The detail's cell holds at least the full cell under the pointer.
+        differing += countPart(coarseText).toUInt() >= countPart(fullText).toUInt() ? 0 : 1;
+    }
+    e.expect(compared > 100 && differing == 0,
+             "a detail cell's count is at least the full cell's under the same pointer");
+
+    // Waveform: the same column and code, and the detail's count holds the full count.
+    const auto fullWave = show(scopes::Kind::Waveform, fullHandle);
+    const auto coarseWave = show(scopes::Kind::Waveform, coarseHandle);
+    const auto wavePlot = fullWave->plotRect();
+    int waveCompared = 0;
+    int waveDiffering = 0;
+    for (int step = 0; step < 100; ++step) {
+        const QPointF point(wavePlot.left() + wavePlot.width() * (step % 10 + 0.5) / 10.0,
+                            wavePlot.top() + wavePlot.height() * (step / 10 + 0.5) / 10.0);
+        const auto fullText = fullWave->readoutAt(point);
+        const auto coarseText = coarseWave->readoutAt(point);
+        if (fullText.isEmpty() || coarseText.isEmpty())
+            continue;
+        ++waveCompared;
+        const auto prefix = [](const QString& text) {
+            return text.left(text.indexOf(QStringLiteral("Count ")));
+        };
+        waveDiffering += prefix(fullText) == prefix(coarseText) ? 0 : 1;
+        // "R n · G n · B n": every channel's detail count is at least the full one.
+        const auto fullCounts = countPart(fullText).split(QStringLiteral(" · "));
+        const auto coarseCounts = countPart(coarseText).split(QStringLiteral(" · "));
+        if (fullCounts.size() != coarseCounts.size()) {
+            ++waveDiffering;
+            continue;
+        }
+        for (qsizetype index = 0; index < fullCounts.size(); ++index)
+            waveDiffering += coarseCounts[index].split(' ').last().toUInt() >=
+                                     fullCounts[index].split(' ').last().toUInt()
+                                 ? 0
+                                 : 1;
+    }
+    e.expect(waveCompared > 50 && waveDiffering == 0,
+             "the waveform readout names the same column and code, with the detail's counts");
+
+    // The Histogram does not depend on the detail.
+    const auto fullHistogram = show(scopes::Kind::Histogram, fullHandle);
+    const auto coarseHistogram = show(scopes::Kind::Histogram, coarseHandle);
+    const auto histogramPlot = fullHistogram->plotRect();
+    const QPointF bin(histogramPlot.left() + 0.75 * histogramPlot.width(),
+                      histogramPlot.top() + 10);
+    e.expect(!fullHistogram->readoutAt(bin).isEmpty() &&
+                 fullHistogram->readoutAt(bin) == coarseHistogram->readoutAt(bin),
+             "the Histogram readout does not depend on the detail");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -512,8 +633,10 @@ int main(int argc, char** argv) {
                  .display = {},
                  .view = {}});
             e.expect(static_cast<bool>(prepared), "the signal's color objects prepare");
-            if (prepared)
+            if (prepared) {
                 testViewAgreesWithPicture(e, prepared.color);
+                testDetailReadouts(e, prepared.color);
+            }
         }
         if (e.failures() != 0) {
             std::cerr << e.failures() << " scope picture expectation(s) failed\n";

@@ -326,6 +326,48 @@ void expectMeasured(Warm& warm, scripting::ScopeReadRequest request,
                what + ": the measure is of the whole frame, not the sidecar's tables");
 }
 
+// `counts` pooled to detail 1: each 2 x 2 block of Vectorscope and CIE cells and each pair of
+// Waveform levels summed, the under and over words and everything else as they are.
+[[nodiscard]] runtime::ScopeCounts pooledToDetailOne(const runtime::ScopeCounts& counts) {
+    runtime::ScopeCounts pooled;
+    pooled.layout = render::scopeTableLayout(counts.layout.scopes, counts.layout.columns, 1);
+    pooled.layout.columns = counts.layout.columns;
+    pooled.words.assign(pooled.layout.wordCount, 0U);
+    for (std::uint32_t i = 0; i < render::kScopeCounterWords; ++i)
+        pooled.words[i] = counts.words[i];
+    const auto& from = counts.layout;
+    const auto& to = pooled.layout;
+    if (from.has(render::kScopeTableHistogram))
+        for (std::uint32_t i = 0; i < from.histogramWords(); ++i)
+            pooled.words[to.histogramOffset + i] = counts.words[from.histogramOffset + i];
+    if (from.has(render::kScopeTableWaveform))
+        for (std::uint32_t channel = 0; channel < render::kScopeChannels; ++channel)
+            for (std::uint32_t column = 0; column < from.columns; ++column) {
+                const auto source = from.waveformOffset + channel * from.waveformChannelWords() +
+                                    column * from.waveformColumnWords();
+                const auto target = to.waveformOffset + channel * to.waveformChannelWords() +
+                                    column * to.waveformColumnWords();
+                for (std::uint32_t level = 0; level < from.waveformLevels(); ++level)
+                    pooled.words[target + level / 2U] += counts.words[source + level];
+                pooled.words[target + to.waveformLevelUnder()] =
+                    counts.words[source + from.waveformLevelUnder()];
+                pooled.words[target + to.waveformLevelOver()] =
+                    counts.words[source + from.waveformLevelOver()];
+            }
+    const auto pool = [&](const std::uint32_t scope, const std::uint32_t fromOffset,
+                          const std::uint32_t toOffset) {
+        if (!from.has(scope))
+            return;
+        for (std::uint32_t row = 0; row < from.cells(); ++row)
+            for (std::uint32_t column = 0; column < from.cells(); ++column)
+                pooled.words[toOffset + (row / 2U) * to.cells() + column / 2U] +=
+                    counts.words[fromOffset + row * from.cells() + column];
+    };
+    pool(render::kScopeTableVectorscope, from.vectorscopeOffset, to.vectorscopeOffset);
+    pool(render::kScopeTableChromaticity, from.chromaticityOffset, to.chromaticityOffset);
+    return pooled;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -398,6 +440,46 @@ int main(int argc, char** argv) {
             expect(result.ok() && result.frames.size() == 1 && result.frames.front().fromCache &&
                        result.frames.front().summary.has_value(),
                    "a summary is answered from the sidecar of its two tables");
+            expect(warm.attach(*key, genuine, defaultSettings()), "the full sidecar is back");
+        }
+
+        // A sidecar counted at another detail never answers a read, which measures at detail 0:
+        // the detail is part of the identity the sidecar is found under.
+        {
+            auto coarseSettings = defaultSettings();
+            coarseSettings.detail = 1;
+            auto coarseFrame = genuine;
+            coarseFrame.counts = pooledToDetailOne(genuine.counts);
+            expect(coarseFrame.counts.layout.detail == 1U &&
+                       coarseFrame.counts.layout.cells() == 256U &&
+                       coarseFrame.counts.counted() == genuine.counts.counted(),
+                   "the pooled fixture is a detail-1 measure of the same frame");
+            expect(warm.attach(*key, coarseFrame, coarseSettings),
+                   "a detail-1 sidecar is attached");
+            expectMeasured(warm, defaultRead(), genuine, "a read against a sidecar of detail 1");
+            const auto bound =
+                warm.binding().warmScopes({.composition = warm.project().composition,
+                                           .time = frameTime(0),
+                                           .resolution = runtime::CompositionFormatResolution{},
+                                           .quality = runtime::EvaluationQuality::Reference,
+                                           .colorIntent = warm.session().colorIntent(),
+                                           .display = {},
+                                           .view = {},
+                                           .defaultDisplayView = true,
+                                           .settings = defaultSettings()});
+            expect(!bound.has_value(), "the binding gives nothing for detail 0 against detail 1");
+            const auto same =
+                warm.binding().warmScopes({.composition = warm.project().composition,
+                                           .time = frameTime(0),
+                                           .resolution = runtime::CompositionFormatResolution{},
+                                           .quality = runtime::EvaluationQuality::Reference,
+                                           .colorIntent = warm.session().colorIntent(),
+                                           .display = {},
+                                           .view = {},
+                                           .defaultDisplayView = true,
+                                           .settings = coarseSettings});
+            expect(same.has_value() && same->tables.layout().detail == 1U,
+                   "the same sidecar is found under its own detail");
             expect(warm.attach(*key, genuine, defaultSettings()), "the full sidecar is back");
         }
 

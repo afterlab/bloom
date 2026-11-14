@@ -80,7 +80,7 @@ void paintWaveformPane(ScopeImage& image, const int paneX, const int paneWidth,
             return;
         auto* row = rowOf(image, y);
         // Row y from the top is the levels from the top down.
-        const auto levels = spanOf(height - 1 - y, height, render::kScopeWaveformLevels);
+        const auto levels = spanOf(height - 1 - y, height, tables.layout().waveformLevels());
         for (int x = 0; x < paneWidth; ++x) {
             const auto cells = spanOf(x, paneWidth, columns);
             Accumulator sum;
@@ -183,7 +183,7 @@ ScopeImage mapVectorscope(const ScopeTables& tables, const ScopeLuma& luma, cons
         return {};
     auto image = makeImage(size);
     const auto largest = tables.tableMaximum(render::kScopeTableVectorscope);
-    const auto cells = render::kScopeCells;
+    const auto cells = tables.layout().cells();
     for (int y = 0; y < size.height; ++y) {
         if (cancelledNow(cancelled))
             return {};
@@ -246,7 +246,7 @@ ScopeImage mapChromaticity(const ScopeTables& tables, const float gain, const Pi
         return {};
     auto image = makeImage(size);
     const auto largest = tables.tableMaximum(render::kScopeTableChromaticity);
-    const auto cells = render::kScopeCells;
+    const auto cells = tables.layout().cells();
     for (int y = 0; y < size.height; ++y) {
         if (cancelledNow(cancelled))
             return {};
@@ -348,9 +348,9 @@ ClipSummary clipSummary(const ScopeTables& tables, const Kind kind,
         summary.columns.assign(tables.layout().columns, 0);
         for (std::uint32_t column = 0; column < tables.layout().columns; ++column)
             for (const auto channel : channels) {
-                if (tables.waveform(channel, column, render::kScopeWaveformLevelUnder) != 0)
+                if (tables.waveform(channel, column, tables.layout().waveformLevelUnder()) != 0)
                     summary.columns[column] |= 1U;
-                if (tables.waveform(channel, column, render::kScopeWaveformLevelOver) != 0)
+                if (tables.waveform(channel, column, tables.layout().waveformLevelOver()) != 0)
                     summary.columns[column] |= 2U;
             }
     }

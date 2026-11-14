@@ -571,6 +571,52 @@ void warmSidecars(const Bars& bars, Reads& reads) {
            "a sidecar of other settings is not used");
 }
 
+// A sidecar counted at another detail is never served to a read, which measures at detail 0: the
+// settings the port is asked with carry detail 0, an exact-identity port finds nothing under them,
+// and a port that wrongly answers with a detail-1 sidecar is not believed.
+void warmSidecarOfAnotherDetail(const Bars& bars, Reads& reads) {
+    runtime::ScopeMeasureSettings settings;
+    settings.signal = runtime::ScopeSignal::Working;
+    settings.scopes = render::kScopeTableHistogram | render::kScopeTableVectorscope;
+    runtime::ScopeMeasureSettings coarse = settings;
+    coarse.detail = 1;
+    const auto coarseCounts = reference(bars, 0, coarse).counts;
+    expect(coarseCounts.layout.detail == 1U && coarseCounts.layout.cells() == 256U,
+           "the fixture sidecar is counted at detail 1");
+    const auto coarseTables = runtime::ScopeTables::pack(coarseCounts, runtime::ScopeRoute::Gpu);
+
+    auto request = requestFor(bars, 0);
+    request.signal = runtime::ScopeSignal::Working;
+    request.scopes = settings.scopes;
+
+    // An exact-identity port that knows only the detail-1 measure.
+    std::vector<scripting::ScopeWarmQuery> asked;
+    auto ports = reads.ports();
+    ports.warm =
+        [&](const scripting::ScopeWarmQuery& query) -> std::optional<scripting::ScopeWarmHit> {
+        asked.push_back(query);
+        if (!(query.settings == coarse))
+            return std::nullopt;
+        return scripting::ScopeWarmHit{coarseTables, {0, 0, 64, 64}, "coarse"};
+    };
+    const auto strict = scripting::readScopes(*bars.session, request, ports);
+    expect(strict.ok() && strict.frames.size() == 1 && !strict.frames[0].fromCache &&
+               strict.frames[0].counts.layout.detail == 0U &&
+               strict.frames[0].counts.layout.cells() == 512U,
+           "a read measures at detail 0 and finds no sidecar of detail 1");
+    expect(asked.size() == 1 && asked[0].settings.detail == 0U && !(asked[0].settings == coarse),
+           "the port is asked under detail 0");
+
+    // A port that answers every query with the detail-1 sidecar: the read does not serve it.
+    ports.warm = [&](const scripting::ScopeWarmQuery&) -> std::optional<scripting::ScopeWarmHit> {
+        return scripting::ScopeWarmHit{coarseTables, {0, 0, 64, 64}, "coarse"};
+    };
+    const auto careless = scripting::readScopes(*bars.session, request, ports);
+    expect(careless.ok() && careless.frames.size() == 1 && !careless.frames[0].fromCache &&
+               careless.frames[0].counts.layout.detail == 0U,
+           "a sidecar of another detail is never served to a read");
+}
+
 // ---- Region, transparency, resolution, display and view -----------------------------------------
 
 void settingsChangeTheResult(const Bars& bars, Reads& reads) {
@@ -790,6 +836,7 @@ int main() {
     pictures(bars, reads);
     rangeProgressAndCancel(bars, reads);
     warmSidecars(bars, reads);
+    warmSidecarOfAnotherDetail(bars, reads);
     settingsChangeTheResult(bars, reads);
     transparentPixelsAreLeftOut(reads);
     displayAndView(bars, reads);
