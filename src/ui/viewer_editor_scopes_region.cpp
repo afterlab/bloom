@@ -30,6 +30,17 @@
 
 namespace bloom::ui {
 
+double snapToDevicePixelCenter(const double value, const double scale) {
+    return (std::floor(value * scale) + 0.5) / scale;
+}
+
+QRectF snapRectToDevicePixelCenters(const QRectF& rect, const double scale) {
+    return QRectF(QPointF(snapToDevicePixelCenter(rect.left(), scale),
+                          snapToDevicePixelCenter(rect.top(), scale)),
+                  QPointF(snapToDevicePixelCenter(rect.right(), scale),
+                          snapToDevicePixelCenter(rect.bottom(), scale)));
+}
+
 namespace {
 
 // The whole-pixel rectangle that holds `area` (composition pixels), clipped to the frame; nothing
@@ -261,12 +272,8 @@ void ViewerEditor::paintScopesRegion(QPainter& painter) const {
     painter.setRenderHint(QPainter::Antialiasing, false);
     // Edges on device-pixel centers: one device pixel wide at every scale.
     const double scale = painter.device()->devicePixelRatioF();
-    const auto snap = [scale](const double value) {
-        return (std::floor(value * scale) + 0.5) / scale;
-    };
-    const QRectF raw = screenRect(*mapping, *region);
-    const QRectF area(QPointF(snap(raw.left()), snap(raw.top())),
-                      QPointF(snap(raw.right()), snap(raw.bottom())));
+    const auto snap = [scale](const double value) { return snapToDevicePixelCenter(value, scale); };
+    const QRectF area = snapRectToDevicePixelCenters(screenRect(*mapping, *region), scale);
     // A Canvas underlay under a dashed Foreground line reads on any picture.
     QPen under(kit::color(kit::Color::Canvas), kit::kHairlineWidth);
     under.setCosmetic(true);

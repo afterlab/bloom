@@ -13,6 +13,7 @@
 //     visible Scopes panel nothing is drawn and no input is taken;
 //   * the region is no project state: no revision, no undo step, no new frame, and a project saved
 //     with a region set is the very file a save without one gives.
+//   * the region's edges snap to device-pixel centers at scales 1, 1.5 and 2.
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -37,6 +38,7 @@
 #include <bloom/ui/scopes_region_store.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/viewer_editor.hpp>
+#include <bloom/ui/viewer_overlays.hpp>
 
 #include <QApplication>
 #include <QElapsedTimer>
@@ -671,6 +673,41 @@ void testRegionIsNotSaved(Expectations& e) {
 
 } // namespace
 
+// ---- device-pixel snapping --------------------------------------------------------------------
+
+void testDevicePixelSnapping(Expectations& e) {
+    const auto onCenter = [](const double value, const double scale) {
+        const double device = value * scale - 0.5;
+        return std::abs(device - std::round(device)) < 1e-9;
+    };
+    const auto within = [](const double snapped, const double input, const double scale) {
+        return std::abs(snapped - input) <= 1.0 / scale + 1e-9;
+    };
+    const QRectF inputs[] = {QRectF(QPointF(10.3, 20.7), QPointF(55.55, 61.1)),
+                             QRectF(QPointF(0.01, 3.99), QPointF(7.5, 9.25)),
+                             QRectF(QPointF(100.49, 0.0), QPointF(101.0, 12.99))};
+    for (const double scale : {1.0, 1.5, 2.0}) {
+        bool centered = true;
+        bool close = true;
+        for (const QRectF& input : inputs) {
+            const QRectF out = ui::snapRectToDevicePixelCenters(input, scale);
+            centered = centered && onCenter(out.left(), scale) && onCenter(out.top(), scale) &&
+                       onCenter(out.right(), scale) && onCenter(out.bottom(), scale);
+            close = close && within(out.left(), input.left(), scale) &&
+                    within(out.top(), input.top(), scale) &&
+                    within(out.right(), input.right(), scale) &&
+                    within(out.bottom(), input.bottom(), scale);
+        }
+        e.expect(centered,
+                 "every snapped edge is a device-pixel center at scale " + std::to_string(scale));
+        e.expect(close,
+                 "every snapped edge is within one device pixel at scale " + std::to_string(scale));
+        const QRectF on = ui::snapRectToDevicePixelCenters(inputs[0], scale);
+        e.expect(ui::snapRectToDevicePixelCenters(on, scale) == on,
+                 "a rectangle already on centers is unchanged at scale " + std::to_string(scale));
+    }
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
@@ -687,6 +724,7 @@ int main(int argc, char** argv) {
     testPerCompositionAndVisibility(e);
     testNotProjectState(e);
     testRegionIsNotSaved(e);
+    testDevicePixelSnapping(e);
     if (e.failures() != 0) {
         std::cerr << e.failures() << " scope region check(s) failed\n";
         return 1;

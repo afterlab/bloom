@@ -58,6 +58,13 @@ hitTestViewer(const ViewerMapping& mapping, QPointF screenPoint,
               std::span<const runtime::EvaluatedOperationBounds> selected,
               std::span<const document::LayerId> pointText = {});
 
+// One coordinate moved to the center of the device pixel that holds it: `scale` is device pixels
+// per logical pixel. A one-device-pixel line drawn there is crisp and the result is within one
+// device pixel of `value`.
+[[nodiscard]] double snapToDevicePixelCenter(double value, double scale);
+// The rectangle's four edges, each moved with snapToDevicePixelCenter.
+[[nodiscard]] QRectF snapRectToDevicePixelCenters(const QRectF& rect, double scale);
+
 [[nodiscard]] QLineF textLayoutCaret(const render::TextLayout& layout, std::size_t byte);
 [[nodiscard]] std::size_t nearestTextLayoutBoundary(const render::TextLayout& layout,
                                                     QPointF point);
