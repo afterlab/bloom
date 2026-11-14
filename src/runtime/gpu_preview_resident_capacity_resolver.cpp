@@ -286,6 +286,7 @@ void refreshResidentForegroundCapacity(
         // some are unallocated promises, and treating them as free could over-admit new work.
         static_cast<void>(core->options.processingPhasePolicy->reportDevice(
             core->device->ownershipEpoch(), allocation));
+        core->counterDeviceReports.fetch_add(1, std::memory_order_release);
     }
     if (core->gpuStageFunction != nullptr && usesLiveForegroundDefault(*core)) {
         core->effectivePreviewByteAllowance.store(

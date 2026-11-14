@@ -207,6 +207,11 @@ struct GpuPreviewDisplayServiceCounters final {
     // the scene cache gave way inside the allocation, and the bytes they released.
     std::uint64_t deviceRoomReclaims = 0;
     std::uint64_t deviceRoomReclaimedBytes = 0;
+    // Device reports the service has handed to the shared processing policy (one per sampling
+    // slot, at most every 50 milliseconds, or at once when work waits for device room). Reports
+    // only; no behavior hangs on it. A test that changed the device's books awaits it to move by
+    // two: the first report may have been sampled before the change, the second was not.
+    std::uint64_t deviceReports = 0;
     // GPU parent submissions refused by the scheduler's bounded per-request admission (the derived
     // host default or an explicit configured capacity) BEFORE any stage work. Non-zero means a
     // request the display stage could have handled was forced onto the CPU by ADMISSION, not by

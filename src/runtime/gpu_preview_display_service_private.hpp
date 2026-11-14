@@ -349,6 +349,7 @@ struct PreviewDisplayServiceCore final {
     std::atomic<std::uint64_t> counterIdleTrimmedBytes{0};
     std::atomic<std::uint64_t> counterDeviceRoomReclaims{0};
     std::atomic<std::uint64_t> counterDeviceRoomReclaimedBytes{0};
+    std::atomic<std::uint64_t> counterDeviceReports{0};
     std::atomic<std::uint64_t> counterGpuCacheHits{0};
     std::atomic<std::uint64_t> counterGpuCacheMisses{0};
     std::atomic<std::uint64_t> counterCpuFallbacks{0};

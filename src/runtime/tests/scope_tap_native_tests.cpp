@@ -948,12 +948,14 @@ struct HeldRoom final {
 }
 
 // Waits until the service has taken a device report of its own after everything the test has done
-// so far: the service samples the device at most every 50 milliseconds, on a turn of its loop, so
-// the wait lets that interval pass and then for two turns after a wake.
+// so far. The service counts its reports (`counters.deviceReports`): a report counted after the
+// test's last action may have been sampled before it, so the wait is for two more, each woken by a
+// notify, and then for two turns of the loop.
 [[nodiscard]] bool awaitDeviceReport(const Rig& rig) {
-    const auto start = std::chrono::steady_clock::now();
-    if (!awaitCondition("the service's sampling interval passes", [&] {
-            return std::chrono::steady_clock::now() - start >= std::chrono::milliseconds(100);
+    const auto reportsBefore = rig.service->status().counters.deviceReports;
+    if (!awaitCondition("the service takes two device reports", [&] {
+            rig.core->notify();
+            return rig.service->status().counters.deviceReports >= reportsBefore + 2;
         }))
         return false;
     // A turn that was already running when the wake came may end before it; the next one is whole.

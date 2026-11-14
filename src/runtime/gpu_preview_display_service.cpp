@@ -765,6 +765,7 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
         core.counterDeviceRoomReclaims.load(std::memory_order_relaxed);
     result.counters.deviceRoomReclaimedBytes =
         core.counterDeviceRoomReclaimedBytes.load(std::memory_order_relaxed);
+    result.counters.deviceReports = core.counterDeviceReports.load(std::memory_order_relaxed);
     result.counters.gpuAdmissionRefusals =
         core.counterGpuAdmissionRefusals.load(std::memory_order_relaxed);
     result.counters.fullFrameReadbacks =
