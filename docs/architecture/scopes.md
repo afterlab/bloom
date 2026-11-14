@@ -216,7 +216,9 @@ which measure the panel wants. It takes the tables from the frame's sidecar when
 matches, and otherwise measures on a task worker and attaches the result. A superseded request is
 cancelled and its result is neither shown nor cached. While another frame's tables are on show the
 reading is marked behind and names the frame that was measured. During a RAM preview fill with a
-panel open, each frame the cache retains is measured in the background.
+panel open, each frame the cache retains is measured in the background, one at a time; frames
+still waiting when the fill ends are measured too, and hiding the panel or closing every scope
+drops them.
 
 `ScopesEditor` (`bloom.scopes`) is the panel: the header, the status line and five collapsible
 sections whose collapse state is kept per panel area. A hidden panel and a collapsed section ask
