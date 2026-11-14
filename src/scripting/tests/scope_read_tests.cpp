@@ -5,6 +5,7 @@
 // warm-sidecar port; region, Ignore Transparent Pixels, half resolution, display and view; every
 // refusal with its remedy.
 
+#include "await.hpp"
 #include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -116,8 +117,8 @@ struct Reads final {
     runtime::TaskScheduler scheduler;
     ~Reads() {
         scheduler.beginShutdown();
-        while (!scheduler.isQuiescent())
-            std::this_thread::yield();
+        (void)bloom::test_support::awaitCondition("the read scheduler drains after shutdown",
+                                                  [&] { return scheduler.isQuiescent(); });
     }
     [[nodiscard]] scripting::ScopeReadPorts ports() {
         scripting::ScopeReadPorts value;
@@ -503,8 +504,8 @@ void rangeProgressAndCancel(const Bars& bars, Reads& reads) {
         [&askedAfterStop](
             const scripting::ScopeWarmQuery& query) -> std::optional<scripting::ScopeWarmHit> {
         if (query.time == core::RationalTime::create(1, 24).value())
-            while (askedAfterStop.load() < 2)
-                std::this_thread::yield();
+            (void)bloom::test_support::awaitCondition("the read asks again after it was stopped",
+                                                      [&] { return askedAfterStop.load() >= 2; });
         return std::nullopt;
     };
     const auto cancelled = scripting::readScopes(*bars.session, request, cancelling);
@@ -841,8 +842,9 @@ int main() {
     transparentPixelsAreLeftOut(reads);
     displayAndView(bars, reads);
     refusals(bars, reads);
-    if (failures != 0) {
-        std::cerr << failures << " scope read check(s) failed\n";
+    const int totalFailures = failures + bloom::test_support::awaitFailureCount();
+    if (totalFailures != 0) {
+        std::cerr << totalFailures << " scope read check(s) failed\n";
         return 1;
     }
     return 0;

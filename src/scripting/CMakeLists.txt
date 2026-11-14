@@ -157,6 +157,7 @@ if(BUILD_TESTING)
     bloom_find_dependency(ZLIB)
     add_executable(bloom_scripting_scope_read_test tests/scope_read_tests.cpp)
     target_link_libraries(bloom_scripting_scope_read_test PRIVATE bloom_scripting ZLIB::ZLIBSTATIC)
+    target_include_directories(bloom_scripting_scope_read_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     bloom_enable_warnings(bloom_scripting_scope_read_test)
     bloom_add_test(
         NAME bloom.scripting.scope-read
@@ -359,6 +360,7 @@ if(BUILD_TESTING)
     add_executable(bloom_scripting_scope_read_native_test tests/scope_read_native_tests.cpp)
     target_link_libraries(bloom_scripting_scope_read_native_test PRIVATE bloom_scripting)
     bloom_package_gpu_shader_tools(bloom_scripting_scope_read_native_test)
+    target_include_directories(bloom_scripting_scope_read_native_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     bloom_enable_warnings(bloom_scripting_scope_read_native_test)
     bloom_add_test(
         NAME bloom.scripting.scope-read-native

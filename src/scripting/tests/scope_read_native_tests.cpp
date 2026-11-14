@@ -15,6 +15,7 @@
 // bloom.runtime.scope_frame_measure_native. Skips (exit 77) without a device or the packaged tools,
 // and fails under --require-device.
 
+#include "await.hpp"
 #include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -271,8 +272,8 @@ struct Reads final {
     runtime::TaskScheduler scheduler;
     ~Reads() {
         scheduler.beginShutdown();
-        while (!scheduler.isQuiescent())
-            std::this_thread::yield();
+        (void)bloom::test_support::awaitCondition("the read scheduler drains after shutdown",
+                                                  [&] { return scheduler.isQuiescent(); });
     }
 };
 
@@ -301,8 +302,9 @@ int main(int argc, char** argv) {
                        frame.counted == 64U * 64U,
                    "with no device the read is counted by the CPU reference and carries a note");
             provider->beginShutdown();
-            while (!provider->retirementComplete())
-                std::this_thread::yield();
+            (void)bloom::test_support::awaitCondition("the provider retires its resources", [&] {
+                return provider->retirementComplete();
+            });
             static_cast<void>(provider->collectRetired());
         }
 
@@ -317,9 +319,8 @@ int main(int argc, char** argv) {
         }
         auto provider = host::GpuExportProvider::create(enabledOptions(loader));
         provider->prepare(scheduler);
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-        while (!provider->prepared() && std::chrono::steady_clock::now() < deadline)
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        (void)bloom::test_support::awaitCondition("the GPU export provider is prepared",
+                                                  [&] { return provider->prepared(); });
         int exitCode = 0;
         if (!provider->deviceAvailable() || !provider->gpuDisplayPreparationAvailable()) {
             if (requireDevice) {
@@ -379,8 +380,8 @@ int main(int argc, char** argv) {
             }
         }
         provider->beginShutdown();
-        while (!provider->retirementComplete())
-            std::this_thread::yield();
+        (void)bloom::test_support::awaitCondition("the provider retires its resources",
+                                                  [&] { return provider->retirementComplete(); });
         static_cast<void>(provider->collectRetired());
         if (exitCode != 0)
             return exitCode;
@@ -388,8 +389,9 @@ int main(int argc, char** argv) {
         std::cerr << "unexpected exception: " << error.what() << '\n';
         return 1;
     }
-    if (gFailures != 0) {
-        std::cerr << "scope read native: " << gFailures << " failure(s)\n";
+    if (gFailures + bloom::test_support::awaitFailureCount() != 0) {
+        std::cerr << "scope read native: " << gFailures + bloom::test_support::awaitFailureCount()
+                  << " failure(s)\n";
         return 1;
     }
     std::cout << "scope read native: ok\n";

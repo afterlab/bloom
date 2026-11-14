@@ -17,6 +17,7 @@
 // bloom.runtime.scope_frame_measure_native and by docs/architecture/scopes.md, "Real-time cost".
 // No timing is measured or asserted.
 
+#include "await_qt.hpp"
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/new_project.hpp>
@@ -39,7 +40,6 @@
 #include <bloom/ui/viewer_editor.hpp>
 
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QMetaObject>
 #include <QSettings>
@@ -63,6 +63,8 @@ namespace {
 namespace document = bloom::document;
 namespace runtime = bloom::runtime;
 namespace ui = bloom::ui;
+using bloom::test_support::awaitFailureCount;
+using bloom::test_support::awaitQtCondition;
 using namespace std::chrono_literals;
 
 class Expectations final {
@@ -79,15 +81,6 @@ class Expectations final {
   private:
     int failures_ = 0;
 };
-
-// Runs the event loop until `predicate` holds; the bound only ends a run that already failed.
-template <typename Predicate> [[nodiscard]] bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < 60000)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-    return predicate();
-}
 
 document::CompositionFormat format() {
     const auto value = document::CompositionFormat::create(64, 64);
@@ -216,13 +209,15 @@ int main(int argc, char** argv) {
             const auto frame = viewer.scopesSource().frame;
             return frame ? frame->desiredIdentity().time.toSeconds() : -1.0;
         };
-        e.expect(waitUntil([&] {
-                     return controller.state().activity == ui::PreviewActivity::Ready &&
-                            controller.state().frame != nullptr && shownTime() == 0.0 &&
-                            scopes.reading().state == ui::ScopesReading::State::Ready &&
-                            !scopes.busy();
-                 }),
-                 "the first frame is shown and measured, live and full");
+        e.expect(
+            awaitQtCondition("the first frame is shown and measured, live and full",
+                             [&] {
+                                 return controller.state().activity == ui::PreviewActivity::Ready &&
+                                        controller.state().frame != nullptr && shownTime() == 0.0 &&
+                                        scopes.reading().state == ui::ScopesReading::State::Ready &&
+                                        !scopes.busy();
+                             }),
+            "the first frame is shown and measured, live and full");
         const auto base = gate->entered.load();
         const auto started = scopes.measuresStarted();
 
@@ -231,24 +226,29 @@ int main(int argc, char** argv) {
         for (int second = 1; second <= 5; ++second) {
             e.expect(session.setCurrentTime(bloom::core::RationalTime::fromInteger(second)),
                      "the session steps to the next frame");
-            e.expect(waitUntil([&] {
-                         return controller.state().activity == ui::PreviewActivity::Ready &&
-                                controller.state().frame != nullptr &&
-                                controller.state().frame->desiredIdentity().time.toSeconds() ==
-                                    static_cast<double>(second);
-                     }),
+            e.expect(awaitQtCondition(
+                         "the preview controller publishes the stepped frame",
+                         [&] {
+                             return controller.state().activity == ui::PreviewActivity::Ready &&
+                                    controller.state().frame != nullptr &&
+                                    controller.state().frame->desiredIdentity().time.toSeconds() ==
+                                        static_cast<double>(second);
+                         }),
                      "the preview controller publishes the stepped frame");
-            e.expect(waitUntil([&] { return shownTime() == static_cast<double>(second); }) &&
+            e.expect(awaitQtCondition("the Viewer shows the stepped frame",
+                                      [&] { return shownTime() == static_cast<double>(second); }) &&
                          scopes.reading().shown &&
                          scopes.reading().shown->identity.time.toSeconds() ==
                              static_cast<double>(second),
                      "the Viewer, and the panel following it, show the stepped frame");
             if (second == 1)
-                e.expect(waitUntil([&] { return gate->entered.load() > base; }),
+                e.expect(awaitQtCondition("the first measure of the run started and is held",
+                                          [&] { return gate->entered.load() > base; }),
                          "the first measure of the run started and is held");
             bool ran = false;
             QMetaObject::invokeMethod(&application, [&ran] { ran = true; }, Qt::QueuedConnection);
-            e.expect(waitUntil([&ran] { return ran; }),
+            e.expect(awaitQtCondition("the interface thread's event loop kept turning",
+                                      [&ran] { return ran; }),
                      "the interface thread's event loop kept turning");
             e.expect(gate->entered.load() == base + 1 && scopes.measuresInFlight() == 1 &&
                          scopes.maxMeasuresInFlight() == 1 &&
@@ -260,10 +260,12 @@ int main(int argc, char** argv) {
 
         // Released: only the newest frame is measured, live then full.
         gate->hold(false);
-        e.expect(waitUntil([&] {
-                     return scopes.reading().state == ui::ScopesReading::State::Ready &&
-                            !scopes.busy();
-                 }),
+        e.expect(awaitQtCondition("the scopes settle on the newest frame",
+                                  [&] {
+                                      return scopes.reading().state ==
+                                                 ui::ScopesReading::State::Ready &&
+                                             !scopes.busy();
+                                  }),
                  "the scopes settle on the newest frame");
         const auto calls = gate->callsSince(static_cast<std::size_t>(base));
         e.expect(calls.size() == 3 && calls[0].seconds == 1.0 && calls[1].seconds == 5.0 &&
@@ -281,9 +283,10 @@ int main(int argc, char** argv) {
 
     controller.beginShutdown();
     bridge.beginShutdown();
-    (void)waitUntil([&] { return scheduler.isQuiescent(); });
-    if (e.failures() != 0) {
-        std::cerr << e.failures() << " scope realtime check(s) failed\n";
+    (void)awaitQtCondition("the scheduler drains after shutdown",
+                           [&] { return scheduler.isQuiescent(); });
+    if (e.failures() + awaitFailureCount() != 0) {
+        std::cerr << e.failures() + awaitFailureCount() << " scope realtime check(s) failed\n";
         return 1;
     }
     std::cout << "PASS: scopes realtime\n";

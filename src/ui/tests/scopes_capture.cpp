@@ -10,6 +10,7 @@
 // solids) and a generated sunset (an SVG of smooth gradients; the repository holds no photograph).
 // Not registered with CTest.
 
+#include "await_qt.hpp"
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -38,7 +39,6 @@
 #include <bloom/ui/viewer_editor.hpp>
 
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QImage>
 #include <QLayout>
 #include <QScrollArea>
@@ -61,23 +61,13 @@
 namespace {
 
 using namespace bloom;
+using bloom::test_support::awaitFailureCount;
+using bloom::test_support::awaitQtCondition;
 using namespace std::chrono_literals;
 namespace ui = bloom::ui;
 namespace scopes = bloom::ui::scopes;
 
 constexpr std::int64_t kFps = 24;
-
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 60000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (predicate())
-            return true;
-        std::this_thread::sleep_for(1ms);
-    }
-    return predicate();
-}
 
 // ---- The scenes ---------------------------------------------------------------------------------
 
@@ -267,7 +257,8 @@ class Workspace final {
         viewer_.reset();
         controller_->beginShutdown();
         rig_.bridge->beginShutdown();
-        (void)waitUntil([this] { return rig_.scheduler.isQuiescent(); });
+        (void)awaitQtCondition("the scheduler drains after the rig shuts down",
+                               [this] { return rig_.scheduler.isQuiescent(); });
     }
 
     [[nodiscard]] ui::ViewerEditor& viewer() { return *viewer_; }
@@ -292,7 +283,7 @@ class Workspace final {
     }
 
     void settle() {
-        const bool ready = waitUntil([&] {
+        const bool ready = awaitQtCondition("the panel settles on the Viewer's frame", [&] {
             const auto& state = controller_->state();
             const auto reading = panel_->controller()->reading();
             return state.activity == ui::PreviewActivity::Ready && state.frame != nullptr &&
@@ -482,10 +473,12 @@ int main(int argc, char** argv) {
                 // the earlier tables on show.)
                 work.hold(true);
                 work.panel().setIgnoreTransparent(true);
-                const bool behind = waitUntil([&] {
-                    const auto reading = work.panel().controller()->reading();
-                    return reading.behind && reading.state == ui::ScopesReading::State::Measuring;
-                });
+                const bool behind =
+                    awaitQtCondition("the panel shows Behind while the held measure runs", [&] {
+                        const auto reading = work.panel().controller()->reading();
+                        return reading.behind &&
+                               reading.state == ui::ScopesReading::State::Measuring;
+                    });
                 if (!behind) {
                     const auto reading = work.panel().controller()->reading();
                     throw std::runtime_error(
@@ -506,5 +499,5 @@ int main(int argc, char** argv) {
         std::cerr << "capture failed: " << error.what() << '\n';
         return 1;
     }
-    return out.failures == 0 ? 0 : 1;
+    return out.failures + awaitFailureCount() == 0 ? 0 : 1;
 }

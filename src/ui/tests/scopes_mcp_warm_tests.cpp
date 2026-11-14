@@ -16,6 +16,7 @@
 // The port is called from the read's worker and marshaled to the interface thread, as the MCP
 // service does.
 
+#include "await_qt.hpp"
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -43,7 +44,6 @@
 
 #include <QApplication>
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QMetaObject>
 #include <QSettings>
@@ -67,6 +67,8 @@
 namespace {
 
 using namespace bloom;
+using bloom::test_support::awaitFailureCount;
+using bloom::test_support::awaitQtCondition;
 using namespace std::chrono_literals;
 
 int gFailures = 0;
@@ -77,19 +79,6 @@ void expect(const bool condition, const std::string& message,
         ++gFailures;
         std::cerr << location.file_name() << ':' << location.line() << ": " << message << '\n';
     }
-}
-
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < 60000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (predicate())
-            return true;
-        std::this_thread::sleep_for(1ms);
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return predicate();
 }
 
 constexpr auto kArtwork =
@@ -183,7 +172,8 @@ struct Rig final {
     ~Rig() {
         bridge->beginShutdown();
         scheduler.beginShutdown();
-        waitUntil([this] { return scheduler.isQuiescent(); });
+        (void)awaitQtCondition("the scheduler drains after the rig shuts down",
+                               [this] { return scheduler.isQuiescent(); });
     }
 };
 
@@ -230,7 +220,7 @@ class Warm final {
     // The preview shows the frame at 0 and the cache holds it under the controller's own key.
     [[nodiscard]] std::optional<ui::PreviewFrameCacheKey> shown() {
         std::optional<ui::PreviewFrameCacheKey> key;
-        const bool ready = waitUntil([&] {
+        const bool ready = awaitQtCondition("the frame at 0 is shown and cached", [&] {
             key = controller_->cacheKeyForTime(frameTime(0));
             return controller_->state().activity == ui::PreviewActivity::Ready && key &&
                    cache_->contains(*key);
@@ -263,7 +253,7 @@ class Warm final {
             result = scripting::readScopes(*project_.scripting, request, ports);
             finished = true;
         });
-        waitUntil([&] { return finished.load(); });
+        (void)awaitQtCondition("the read worker finishes", [&] { return finished.load(); });
         worker.join();
         return result;
     }
@@ -656,8 +646,8 @@ int main(int argc, char** argv) {
     } catch (const std::exception& error) {
         expect(false, std::string("unexpected exception: ") + error.what());
     }
-    if (gFailures != 0) {
-        std::cerr << "scopes mcp warm: " << gFailures << " failure(s)\n";
+    if (gFailures + awaitFailureCount() != 0) {
+        std::cerr << "scopes mcp warm: " << gFailures + awaitFailureCount() << " failure(s)\n";
         return 1;
     }
     std::cout << "scopes mcp warm: ok\n";

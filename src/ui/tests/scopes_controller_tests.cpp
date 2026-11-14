@@ -13,6 +13,7 @@
 //   * a sidecar goes with its frame, and one that does not fit the budget is not kept.
 // No device is used.
 
+#include "await_qt.hpp"
 #include <bloom/core/color.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -29,7 +30,6 @@
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <QCoreApplication>
-#include <QElapsedTimer>
 
 #include <algorithm>
 #include <atomic>
@@ -57,6 +57,8 @@ namespace runtime = bloom::runtime;
 namespace ui = bloom::ui;
 using bloom::core::Color4d;
 using bloom::runtime::PreparedPreviewFrame;
+using bloom::test_support::awaitFailureCount;
+using bloom::test_support::awaitQtCondition;
 using bloom::ui::PreviewFrameCache;
 using bloom::ui::PreviewFrameCacheKey;
 using bloom::ui::ScopesReading;
@@ -76,15 +78,6 @@ class Expectations final {
   private:
     int failures_ = 0;
 };
-
-// Runs the event loop until `predicate` holds; the bound only ends a run that cannot succeed.
-template <typename Predicate> [[nodiscard]] bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < 60000)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-    return predicate();
-}
 
 constexpr auto kProjectId = document::ProjectId::fromRaw(1);
 constexpr auto kCompositionId = document::CompositionId::fromRaw(2);
@@ -299,7 +292,7 @@ int main(int argc, char** argv) {
                                     controller.reading().scopes == nullptr &&
                                     !controller.reading().behind,
                                 "the first frame is being measured with nothing on show");
-            expectations.expect(waitUntil(settled),
+            expectations.expect(awaitQtCondition("the frame's scopes arrive: ", settled),
                                 "the frame's scopes arrive: " + controller.reading().message);
             const auto first = controller.reading().scopes;
             expectations.expect(first != nullptr && !controller.reading().behind &&
@@ -351,7 +344,9 @@ int main(int argc, char** argv) {
                                     controller.reading().behind &&
                                     controller.reading().scopes == first,
                                 "a changed setting shows the old tables as behind");
-            expectations.expect(waitUntil(settled), "the frame is measured under the new setting");
+            expectations.expect(
+                awaitQtCondition("the frame is measured under the new setting", settled),
+                "the frame is measured under the new setting");
             expectations.expect(controller.measuresStarted() == 4 &&
                                     cache->contains(keyOf(frame0)) && cache->size() == 2 &&
                                     cache->scopesFor(keyOf(frame0), identityOf(settings)) ==
@@ -360,7 +355,8 @@ int main(int argc, char** argv) {
                                         controller.reading().scopes,
                                 "the sidecar is replaced and the frame's entry is untouched");
             controller.setSettings(settings);
-            expectations.expect(waitUntil(settled), "the first setting is measured again");
+            expectations.expect(awaitQtCondition("the first setting is measured again", settled),
+                                "the first setting is measured again");
             const auto current = controller.reading().scopes;
             expectations.expect(first != nullptr && current != nullptr && current != first &&
                                     current->tables == first->tables &&
@@ -379,7 +375,8 @@ int main(int argc, char** argv) {
                     keyOf(frame1) ==
                         PreviewFrameCacheKey::forIdentity(controller.reading().shown->identity),
                 "the earlier frame's tables are labeled behind and name their frame");
-            expectations.expect(waitUntil(settled), "the new frame's scopes arrive");
+            expectations.expect(awaitQtCondition("the new frame's scopes arrive", settled),
+                                "the new frame's scopes arrive");
             expectations.expect(
                 !controller.reading().behind && controller.reading().scopes != current &&
                     controller.reading().measured &&
@@ -390,7 +387,7 @@ int main(int argc, char** argv) {
             // The Viewer's exposure is part of the Display measure, and not of the Working one.
             const auto beforeAdjust = controller.measuresStarted();
             controller.showFrame(frame1, runtime::ViewAdjust{.exposure = -1.0, .gamma = 1.0});
-            expectations.expect(waitUntil(settled) &&
+            expectations.expect(awaitQtCondition("the exposed frame is measured", settled) &&
                                     controller.measuresStarted() == beforeAdjust + 2,
                                 "an exposure measures the Display signal again");
             expectations.expect(
@@ -398,7 +395,8 @@ int main(int argc, char** argv) {
                     controller.reading().scopes->tables.unpack().histogram(0, 1023) == 0,
                 "the exposure darkens the measured signal");
             controller.showFrame(frame1, {});
-            expectations.expect(waitUntil(settled), "the neutral frame is measured again");
+            expectations.expect(awaitQtCondition("the neutral frame is measured again", settled),
+                                "the neutral frame is measured again");
 
             // A superseded measure is cancelled; its result is neither shown nor cached.
             expectations.expect(cache->insert(frame2).retained() &&
@@ -407,15 +405,18 @@ int main(int argc, char** argv) {
             gate->hold(true, false);
             const auto enteredBefore = gate->entered.load();
             controller.showFrame(frame2, {});
-            expectations.expect(waitUntil([&] { return gate->entered.load() > enteredBefore; }),
-                                "the held measure started");
+            expectations.expect(
+                awaitQtCondition("the held measure started",
+                                 [&] { return gate->entered.load() > enteredBefore; }),
+                "the held measure started");
             controller.showFrame(frame3, {});
             gate->hold(false, false);
-            expectations.expect(waitUntil([&] {
-                                    return controller.reading().state ==
-                                               ScopesReading::State::Ready &&
-                                           !controller.busy();
-                                }),
+            expectations.expect(awaitQtCondition("the last shown frame's scopes arrive",
+                                                 [&] {
+                                                     return controller.reading().state ==
+                                                                ScopesReading::State::Ready &&
+                                                            !controller.busy();
+                                                 }),
                                 "the last shown frame's scopes arrive");
             expectations.expect(
                 controller.reading().measured &&
@@ -447,8 +448,10 @@ int main(int argc, char** argv) {
                     const auto base = gate->entered.load();
                     gate->hold(true, false);
                     controller.showFrame(frames[0], {});
-                    expectations.expect(waitUntil([&] { return gate->entered.load() > base; }),
-                                        "the first measure of the run started and is held");
+                    expectations.expect(
+                        awaitQtCondition("the first measure of the run started and is held",
+                                         [&] { return gate->entered.load() > base; }),
+                        "the first measure of the run started and is held");
                     for (std::size_t index = 1; index < frames.size(); ++index)
                         controller.showFrame(frames[index], {});
                     expectations.expect(controller.measuresStarted() == started + 1 &&
@@ -462,9 +465,12 @@ int main(int argc, char** argv) {
                         "four of the five frames were replaced before they started");
                     // The live measure of the newest frame runs; its full measure is held.
                     gate->hold(false, true);
-                    expectations.expect(waitUntil([&] { return gate->entered.load() >= base + 3; }),
-                                        "the newest frame's live measure ran and its full one "
-                                        "started");
+                    expectations.expect(
+                        awaitQtCondition("the newest frame's live measure ran and its full one "
+                                         "started",
+                                         [&] { return gate->entered.load() >= base + 3; }),
+                        "the newest frame's live measure ran and its full one "
+                        "started");
                     const auto calls = gate->callsSince(static_cast<std::size_t>(base));
                     expectations.expect(calls.size() == 3 && calls[0].seconds == 100.0 &&
                                             calls[0].detail == ui::kLiveDetail &&
@@ -490,7 +496,9 @@ int main(int argc, char** argv) {
                                             controller.maxMeasuresInFlight() == 1,
                                         "still one measure in flight");
                     gate->hold(false, false);
-                    expectations.expect(waitUntil(settled), "the newest frame ends at full detail");
+                    expectations.expect(
+                        awaitQtCondition("the newest frame ends at full detail", settled),
+                        "the newest frame ends at full detail");
                     expectations.expect(
                         controller.reading().detail == 0U &&
                             cache->scopesFor(keyOf(frames[5]), identityOf(settings)) ==
@@ -509,8 +517,9 @@ int main(int argc, char** argv) {
                 withVectorscope.scopes =
                     render::kScopeTableHistogram | render::kScopeTableVectorscope;
                 controller.setSettings(withVectorscope);
-                expectations.expect(waitUntil(settled),
-                                    "the shown frame settles under the settings");
+                expectations.expect(
+                    awaitQtCondition("the shown frame settles under the settings", settled),
+                    "the shown frame settles under the settings");
                 auto liveSettings = withVectorscope;
                 liveSettings.detail = ui::kLiveDetail;
                 const auto fullIdentity = identityOf(withVectorscope);
@@ -536,8 +545,10 @@ int main(int argc, char** argv) {
                     auto started = controller.measuresStarted();
                     gate->hold(false, true);
                     controller.showFrame(stay, {});
-                    expectations.expect(waitUntil([&] { return gate->entered.load() >= base + 2; }),
-                                        "the full measure follows the live one");
+                    expectations.expect(
+                        awaitQtCondition("the full measure follows the live one",
+                                         [&] { return gate->entered.load() >= base + 2; }),
+                        "the full measure follows the live one");
                     const auto live = controller.reading().scopes;
                     expectations.expect(
                         live != nullptr &&
@@ -548,7 +559,8 @@ int main(int argc, char** argv) {
                             cache->scopesFor(keyOf(stay), fullIdentity) == nullptr,
                         "the live tables are shown while the full ones are measured");
                     gate->hold(false, false);
-                    expectations.expect(waitUntil(settled), "the frame ends at full detail");
+                    expectations.expect(awaitQtCondition("the frame ends at full detail", settled),
+                                        "the frame ends at full detail");
                     const auto full = controller.reading().scopes;
                     const auto calls = gate->callsSince(static_cast<std::size_t>(base));
                     expectations.expect(
@@ -599,11 +611,14 @@ int main(int argc, char** argv) {
                     base = gate->entered.load();
                     gate->hold(true, false);
                     controller.showFrame(replaced, {});
-                    expectations.expect(waitUntil([&] { return gate->entered.load() > base; }),
-                                        "the live measure of the frame to be replaced is held");
+                    expectations.expect(
+                        awaitQtCondition("the live measure of the frame to be replaced is held",
+                                         [&] { return gate->entered.load() > base; }),
+                        "the live measure of the frame to be replaced is held");
                     controller.showFrame(replacement, {});
                     gate->hold(false, false);
-                    expectations.expect(waitUntil(settled), "the replacement settles");
+                    expectations.expect(awaitQtCondition("the replacement settles", settled),
+                                        "the replacement settles");
                     const auto replacedCalls = gate->callsSince(static_cast<std::size_t>(base));
                     std::size_t replacedFull = 0;
                     for (const auto& call : replacedCalls)
@@ -645,11 +660,16 @@ int main(int argc, char** argv) {
                                             controller.reading().detail == ui::kLiveDetail &&
                                             !controller.reading().behind,
                                         "a detail 1 sidecar is shown at once");
-                    expectations.expect(waitUntil([&] { return gate->entered.load() > base; }),
-                                        "the full measure of the live sidecar's frame started");
+                    expectations.expect(
+                        awaitQtCondition("the full measure of the live sidecar's frame started",
+                                         [&] { return gate->entered.load() > base; }),
+                        "the full measure of the live sidecar's frame started");
                     gate->hold(false, false);
-                    expectations.expect(waitUntil(settled), "the live sidecar's frame ends at full "
-                                                            "detail");
+                    expectations.expect(awaitQtCondition("the live sidecar's frame ends at full "
+                                                         "detail",
+                                                         settled),
+                                        "the live sidecar's frame ends at full "
+                                        "detail");
                     const auto cachedCalls = gate->callsSince(static_cast<std::size_t>(base));
                     expectations.expect(cachedCalls.size() == 1 && cachedCalls[0].detail == 0U &&
                                             controller.measuresStarted() == started + 1 &&
@@ -657,7 +677,9 @@ int main(int argc, char** argv) {
                                         "one full measure follows a live sidecar");
                 }
                 controller.setSettings(settings);
-                expectations.expect(waitUntil(settled), "the first settings are measured again");
+                expectations.expect(
+                    awaitQtCondition("the first settings are measured again", settled),
+                    "the first settings are measured again");
             }
 
             // A RAM preview fill measures the frames the cache retains.
@@ -670,11 +692,14 @@ int main(int argc, char** argv) {
                                         cache->insert(frame5).retained(),
                                     "the fill's frames are cached");
                 expectations.expect(
-                    waitUntil([&] {
-                        return cache->scopesFor(keyOf(frame4), identityOf(settings)) != nullptr &&
-                               cache->scopesFor(keyOf(frame5), identityOf(settings)) != nullptr &&
-                               !controller.busy();
-                    }),
+                    awaitQtCondition("the retained frames are measured in the background",
+                                     [&] {
+                                         return cache->scopesFor(keyOf(frame4),
+                                                                 identityOf(settings)) != nullptr &&
+                                                cache->scopesFor(keyOf(frame5),
+                                                                 identityOf(settings)) != nullptr &&
+                                                !controller.busy();
+                                     }),
                     "the retained frames are measured in the background");
                 controller.setRangeFillActive(false);
                 const auto started = controller.measuresStarted();
@@ -703,7 +728,8 @@ int main(int argc, char** argv) {
                         controller.reading().state == ScopesReading::State::Measuring &&
                             controller.reading().behind,
                         "the earlier revision's tables are behind the edited frame");
-                    expectations.expect(waitUntil(settled), "the edited frame is measured");
+                    expectations.expect(awaitQtCondition("the edited frame is measured", settled),
+                                        "the edited frame is measured");
                     expectations.expect(
                         controller.measuresStarted() == started + 2 &&
                             !controller.reading().behind &&
@@ -756,9 +782,9 @@ int main(int argc, char** argv) {
         }
 
         bridge.beginShutdown();
-        for (int turn = 0; turn < 2000 && !scheduler.isQuiescent(); ++turn)
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-        if (expectations.failures() != 0)
+        (void)awaitQtCondition("the scheduler drains after shutdown",
+                               [&] { return scheduler.isQuiescent(); });
+        if (expectations.failures() + awaitFailureCount() != 0)
             return 1;
         std::cout << "PASS: scopes controller\n";
         return 0;

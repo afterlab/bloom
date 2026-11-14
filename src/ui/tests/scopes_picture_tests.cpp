@@ -11,6 +11,7 @@
 //     pixels.
 // No device and no Viewer.
 
+#include "await_qt.hpp"
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/render/scope_table_layout.hpp>
@@ -26,7 +27,6 @@
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QImage>
 #include <QPixmap>
 
@@ -49,6 +49,8 @@ namespace render = bloom::render;
 namespace runtime = bloom::runtime;
 namespace scopes = bloom::runtime::scopes;
 namespace ui = bloom::ui;
+using bloom::test_support::awaitFailureCount;
+using bloom::test_support::awaitQtCondition;
 using render::Rgba32f;
 using namespace std::chrono_literals;
 
@@ -66,14 +68,6 @@ class Expectations final {
   private:
     int failures_ = 0;
 };
-
-template <typename Predicate> [[nodiscard]] bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < 60000)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-    return predicate();
-}
 
 [[nodiscard]] Rgba32f px(const float r, const float g, const float b) {
     const auto result = Rgba32f::fromPremultiplied(r, g, b, 1.0F);
@@ -318,10 +312,11 @@ void testViewAgreesWithPicture(Expectations& e,
         view.setData(data);
         view.resize(item.width, view.heightForWidth(item.width));
         view.show();
-        e.expect(waitUntil([&] {
-                     return !view.traceImage().isNull() && !view.showsBehind() &&
-                            view.devicePixelRatioF() == 1.0;
-                 }),
+        e.expect(awaitQtCondition(name + ": the trace is mapped at device pixel ratio 1",
+                                  [&] {
+                                      return !view.traceImage().isNull() && !view.showsBehind() &&
+                                             view.devicePixelRatioF() == 1.0;
+                                  }),
                  name + ": the trace is mapped on a worker at device pixel ratio 1");
         if (view.traceImage().isNull())
             continue;
@@ -638,8 +633,9 @@ int main(int argc, char** argv) {
                 testDetailReadouts(e, prepared.color);
             }
         }
-        if (e.failures() != 0) {
-            std::cerr << e.failures() << " scope picture expectation(s) failed\n";
+        if (e.failures() + awaitFailureCount() != 0) {
+            std::cerr << e.failures() + awaitFailureCount()
+                      << " scope picture expectation(s) failed\n";
             return 1;
         }
         std::cout << "scope picture panel tests passed\n";

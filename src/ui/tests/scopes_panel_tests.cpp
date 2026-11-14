@@ -15,6 +15,7 @@
 //   * during a RAM preview fill, with the panel shown, the frames the cache retains are measured.
 // The status line's every item, warning and reason is asserted as a pure function here too.
 
+#include "await_qt.hpp"
 #include <bloom/core/color.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -44,7 +45,6 @@
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QScrollArea>
 #include <QSettings>
 #include <QTemporaryDir>
@@ -73,6 +73,8 @@ namespace ui = bloom::ui;
 namespace kit = bloom::ui::kit;
 using bloom::core::Color4d;
 using bloom::runtime::PreparedPreviewFrame;
+using bloom::test_support::awaitFailureCount;
+using bloom::test_support::awaitQtCondition;
 using bloom::ui::PreviewFrameCache;
 using bloom::ui::PreviewFrameCacheKey;
 using bloom::ui::ScopesEditor;
@@ -93,14 +95,6 @@ class Expectations final {
   private:
     int failures_ = 0;
 };
-
-template <typename Predicate> [[nodiscard]] bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < 60000)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-    return predicate();
-}
 
 constexpr auto kProjectId = document::ProjectId::fromRaw(1);
 constexpr auto kCompositionId = document::CompositionId::fromRaw(2);
@@ -529,14 +523,17 @@ int main(int argc, char** argv) {
                  "a hidden panel measures nothing");
 
         host.show();
-        e.expect(waitUntil([&] { return panel->isVisible(); }), "the panel is shown");
+        e.expect(awaitQtCondition("the panel is shown", [&] { return panel->isVisible(); }),
+                 "the panel is shown");
         e.expect(panel->panelShown() && panel->measureSettings().scopes == render::kScopeTableAll &&
                      controller.settings().scopes == render::kScopeTableAll,
                  "a shown panel asks for every scope");
-        e.expect(waitUntil([&] {
-                     return controller.reading().state == ScopesReading::State::Ready &&
-                            !controller.busy();
-                 }),
+        e.expect(awaitQtCondition("the frame is measured once the panel is shown",
+                                  [&] {
+                                      return controller.reading().state ==
+                                                 ScopesReading::State::Ready &&
+                                             !controller.busy();
+                                  }),
                  "the frame is measured once the panel is shown");
         e.expect(measured->started == 2 && !measured->onInterfaceThread,
                  "it was measured twice, live then full, on a task worker");
@@ -596,10 +593,12 @@ int main(int argc, char** argv) {
                  "with every section collapsed nothing is measured and the line says so");
         for (const auto kind : kKinds)
             panel->section(kind)->setCollapsed(false);
-        e.expect(waitUntil([&] {
-                     return controller.reading().state == ScopesReading::State::Ready &&
-                            !controller.busy();
-                 }) &&
+        e.expect(awaitQtCondition("the reopened sections are measured",
+                                  [&] {
+                                      return controller.reading().state ==
+                                                 ScopesReading::State::Ready &&
+                                             !controller.busy();
+                                  }) &&
                      controller.settings().scopes == render::kScopeTableAll,
                  "opening them again measures them");
 
@@ -620,10 +619,12 @@ int main(int argc, char** argv) {
                  "the panel's settings keep detail 0");
         for (const auto kind : kKinds)
             panel->section(kind)->setCollapsed(false);
-        e.expect(waitUntil([&] {
-                     return controller.reading().state == ScopesReading::State::Ready &&
-                            !controller.busy();
-                 }),
+        e.expect(awaitQtCondition("every section open measures again",
+                                  [&] {
+                                      return controller.reading().state ==
+                                                 ScopesReading::State::Ready &&
+                                             !controller.busy();
+                                  }),
                  "every section open measures again");
 
         // Persisted per panel area.
@@ -648,18 +649,22 @@ int main(int argc, char** argv) {
                      controller.reading().state == ScopesReading::State::Idle,
                  "a frame shown while hidden is not measured");
         panel->show();
-        e.expect(waitUntil([&] {
-                     return controller.reading().state == ScopesReading::State::Ready &&
-                            !controller.busy();
-                 }),
+        e.expect(awaitQtCondition("shown again, the panel measures the Viewer's frame",
+                                  [&] {
+                                      return controller.reading().state ==
+                                                 ScopesReading::State::Ready &&
+                                             !controller.busy();
+                                  }),
                  "shown again, the panel measures the Viewer's frame");
 
         // ---- Behind ---------------------------------------------------------------------------
         panel->showViewerFrame(frame0, {});
-        e.expect(waitUntil([&] {
-                     return controller.reading().state == ScopesReading::State::Ready &&
-                            !controller.busy();
-                 }) &&
+        e.expect(awaitQtCondition("the frames agree and the measure is ready",
+                                  [&] {
+                                      return controller.reading().state ==
+                                                 ScopesReading::State::Ready &&
+                                             !controller.busy();
+                                  }) &&
                      panel->statusText().behind.isEmpty(),
                  "no Behind while the frames agree");
         // Hold the measure by asking for a setting the frame has no sidecar for.
@@ -673,17 +678,21 @@ int main(int argc, char** argv) {
         e.expect(behindLabel != nullptr && behindLabel->isVisibleTo(panel) &&
                      behindLabel->tone() == kit::Color::Warn,
                  "Behind is shown in the warning color");
-        e.expect(waitUntil([&] {
-                     return controller.reading().state == ScopesReading::State::Ready &&
-                            !controller.busy();
-                 }) &&
+        e.expect(awaitQtCondition("the Behind measure arrives",
+                                  [&] {
+                                      return controller.reading().state ==
+                                                 ScopesReading::State::Ready &&
+                                             !controller.busy();
+                                  }) &&
                      panel->statusText().behind.isEmpty(),
                  "the label goes when the measure arrives");
         panel->setIgnoreTransparent(false);
-        e.expect(waitUntil([&] {
-                     return controller.reading().state == ScopesReading::State::Ready &&
-                            !controller.busy();
-                 }),
+        e.expect(awaitQtCondition("every pixel is counted again",
+                                  [&] {
+                                      return controller.reading().state ==
+                                                 ScopesReading::State::Ready &&
+                                             !controller.busy();
+                                  }),
                  "every pixel is counted again");
 
         // ---- Warnings, through the panel
@@ -696,23 +705,27 @@ int main(int argc, char** argv) {
         e.expect(warningLabel != nullptr && warningLabel->tone() == kit::Color::Warn &&
                      warningLabel->isVisibleTo(panel) && warningLabel->text().contains("Exposure"),
                  "warnings are in the warning color");
-        e.expect(waitUntil([&] {
-                     return controller.reading().state == ScopesReading::State::Ready &&
-                            !controller.busy();
-                 }),
+        e.expect(awaitQtCondition("the exposed frame is measured",
+                                  [&] {
+                                      return controller.reading().state ==
+                                                 ScopesReading::State::Ready &&
+                                             !controller.busy();
+                                  }),
                  "the exposed frame is measured");
         panel->showViewerFrame(frame0, {});
-        e.expect(waitUntil([&] {
-                     return controller.reading().state == ScopesReading::State::Ready &&
-                            !controller.busy();
-                 }) &&
+        e.expect(awaitQtCondition("the neutral frame is measured",
+                                  [&] {
+                                      return controller.reading().state ==
+                                                 ScopesReading::State::Ready &&
+                                             !controller.busy();
+                                  }) &&
                      panel->statusText().warnings.isEmpty(),
                  "a neutral Viewer has no warning");
 
         // ---- Settings that measure again
         // ----------------------------------------------------------
         const auto settled = [&] {
-            return waitUntil([&] {
+            return awaitQtCondition("the panel settles on a ready measure", [&] {
                 return controller.reading().state == ScopesReading::State::Ready &&
                        !controller.busy();
             });
@@ -820,7 +833,8 @@ int main(int argc, char** argv) {
             }
             return true;
         };
-        e.expect(waitUntil(allMapped), "every open scope's trace is mapped");
+        e.expect(awaitQtCondition("every open scope's trace is mapped", allMapped),
+                 "every open scope's trace is mapped");
         bool workers = true;
         for (const auto kind : kKinds) {
             const auto finished = renderer->finished(kind);
@@ -831,7 +845,8 @@ int main(int argc, char** argv) {
         started = controller.measuresStarted();
         const auto mapsBefore = renderer->mapsStarted();
         panel->setBrightness(2.0F);
-        e.expect(waitUntil([&] { return !renderer->busy(); }) &&
+        e.expect(awaitQtCondition("the renderer finishes mapping the new Brightness",
+                                  [&] { return !renderer->busy(); }) &&
                      renderer->mapsStarted() > mapsBefore &&
                      controller.measuresStarted() == started,
                  "a Brightness change maps again and does not measure again");
@@ -867,10 +882,12 @@ int main(int argc, char** argv) {
         e.expect(controller.reading().behind ||
                      controller.reading().state == ScopesReading::State::Ready,
                  "the next frame is being measured");
-        e.expect(waitUntil([&] {
-                     return controller.reading().state == ScopesReading::State::Ready &&
-                            !controller.busy();
-                 }),
+        e.expect(awaitQtCondition("the next frame is measured",
+                                  [&] {
+                                      return controller.reading().state ==
+                                                 ScopesReading::State::Ready &&
+                                             !controller.busy();
+                                  }),
                  "the next frame is measured");
 
         // ---- No Viewer, and no frame: an empty graticule
@@ -887,10 +904,12 @@ int main(int argc, char** argv) {
         panel->followViewer(nullptr);
         e.expect(panel->statusText().line.contains("No Viewer"), "and with no Viewer, says so");
         panel->showViewerFrame(frame0, {});
-        e.expect(waitUntil([&] {
-                     return controller.reading().state == ScopesReading::State::Ready &&
-                            !controller.busy();
-                 }),
+        e.expect(awaitQtCondition("a frame comes back",
+                                  [&] {
+                                      return controller.reading().state ==
+                                                 ScopesReading::State::Ready &&
+                                             !controller.busy();
+                                  }),
                  "a frame comes back");
 
         // ---- A RAM preview fill measures the frames the cache retains
@@ -903,10 +922,12 @@ int main(int argc, char** argv) {
             const auto identity = ui::PreviewScopeIdentity{.settings = settings, .viewAdjust = {}};
             panel->setRamFillRunning(true);
             e.expect(cache->insert(frame2).retained(), "a fill frame is cached");
-            e.expect(waitUntil([&] {
-                         return cache->scopesFor(keyOf(frame2), identity) != nullptr &&
-                                !controller.busy();
-                     }),
+            e.expect(awaitQtCondition("during a fill the retained frames are measured",
+                                      [&] {
+                                          return cache->scopesFor(keyOf(frame2), identity) !=
+                                                     nullptr &&
+                                                 !controller.busy();
+                                      }),
                      "during a fill the retained frames are measured");
             panel->setRamFillRunning(false);
             const auto before = controller.measuresStarted();
@@ -933,9 +954,9 @@ int main(int argc, char** argv) {
         e.expect(!measured->onInterfaceThread, "no measure ran on the interface thread");
         host.hide();
         bridge.beginShutdown();
-        for (int turn = 0; turn < 2000 && !scheduler.isQuiescent(); ++turn)
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-        if (e.failures() != 0)
+        (void)awaitQtCondition("the scheduler drains after shutdown",
+                               [&] { return scheduler.isQuiescent(); });
+        if (e.failures() + awaitFailureCount() != 0)
             return 1;
         std::cout << "PASS: scopes panel\n";
         return 0;

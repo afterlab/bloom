@@ -367,12 +367,13 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         if (options.drill) {
             const bool drilled = exerciseResidentDrill(checks, session, controller, *viewer, *host,
                                                        service, fixture.compiler, fixture.evaluator);
-            return drilled && checks.failures() == 0 ? 0 : 1;
+            return drilled && checks.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0
+                                                                                                : 1;
         }
 
         if (options.scopesRegion) {
             exerciseResidentScopesRegion(checks, session, *viewer);
-            return checks.failures() == 0 ? 0 : 1;
+            return checks.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
         }
 
         if (options.resizeProof) {
@@ -383,7 +384,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             else
                 exerciseViewerResizeProof(checks, *viewer, *area, *resizeSplitter, *host, scheduler,
                                           core, client);
-            return checks.failures() == 0 ? 0 : 1;
+            return checks.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
         }
 
         if (options.baseline) {

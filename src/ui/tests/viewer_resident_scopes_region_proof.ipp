@@ -10,11 +10,6 @@
 
 namespace {
 
-void pumpEvents() {
-    for (int turn = 0; turn < 20; ++turn)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-}
-
 // The overlay the Viewer would hand the presenter, drawn into an image of the container's size.
 [[nodiscard]] QImage residentOverlayImage(ui::ViewerEditor& viewer, QRectF& container) {
     const auto request = viewer.buildResidentPresentRequestForTest();
@@ -41,7 +36,8 @@ void exerciseResidentScopesRegion(Expectations& checks, ui::CompositionSession& 
     ui::ScopesEditor panel(services);
     panel.show();
     panel.followViewer(&viewer);
-    pumpEvents();
+    (void)bloom::test_support::awaitQtCondition("the visible Scopes panel makes the store active",
+                                                [&] { return store.active(); });
     checks.expect(store.active(), "scopes region: the visible Scopes panel makes the store active");
     const ui::ScopesRegionStore::Key key{session.snapshot().project().id(),
                                          session.compositionId()};
@@ -54,7 +50,10 @@ void exerciseResidentScopesRegion(Expectations& checks, ui::CompositionSession& 
 
     constexpr Region kRegion{200, 150, 640, 360};
     store.setRegion(key, kRegion);
-    pumpEvents();
+    (void)bloom::test_support::awaitQtCondition("the Viewer's overlay draws the region", [&] {
+        QRectF probe;
+        return residentOverlayImage(viewer, probe) != plain;
+    });
     QRectF withContainer;
     const auto drawn = residentOverlayImage(viewer, withContainer);
     checks.expect(!drawn.isNull() && drawn.size() == plain.size(),
@@ -94,7 +93,10 @@ void exerciseResidentScopesRegion(Expectations& checks, ui::CompositionSession& 
 
     // No region: the plain overlay again.
     store.clearRegion(key);
-    pumpEvents();
+    (void)bloom::test_support::awaitQtCondition("the Viewer's overlay is the plain one again", [&] {
+        QRectF probe;
+        return residentOverlayImage(viewer, probe) == plain;
+    });
     QRectF cleared;
     checks.expect(residentOverlayImage(viewer, cleared) == plain,
                   "scopes region: clearing the region restores the plain overlay");
@@ -102,7 +104,8 @@ void exerciseResidentScopesRegion(Expectations& checks, ui::CompositionSession& 
     // A region with no visible Scopes panel draws nothing.
     store.setRegion(key, kRegion);
     panel.hide();
-    pumpEvents();
+    (void)bloom::test_support::awaitQtCondition("hiding the panel makes the store inactive",
+                                                [&] { return !store.active(); });
     checks.expect(!store.active(), "scopes region: hiding the panel makes the store inactive");
     QRectF hidden;
     checks.expect(residentOverlayImage(viewer, hidden) == plain,

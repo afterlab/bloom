@@ -15,6 +15,7 @@
 //   * PNG bytes decode back to the same pixels; a cancelled call, a byte limit below the picture
 //     and an invalid size fail with their error and never throw.
 
+#include "await.hpp"
 #include <bloom/render/image_types.hpp>
 #include <bloom/render/scope_table_layout.hpp>
 #include <bloom/runtime/scope_measure.hpp>
@@ -236,13 +237,11 @@ runtime::CancellationToken makeCancelledToken() {
         release = true;
     }
     condition.notify_all();
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!submission.handle.tryTakeResult().has_value() &&
-           std::chrono::steady_clock::now() < deadline)
-        std::this_thread::yield();
+    (void)bloom::test_support::awaitCondition(
+        "the cancelled task ends", [&] { return submission.handle.tryTakeResult().has_value(); });
     scheduler.beginShutdown();
-    while (!scheduler.isQuiescent() && std::chrono::steady_clock::now() < deadline)
-        std::this_thread::yield();
+    (void)bloom::test_support::awaitCondition("the scheduler drains after shutdown",
+                                              [&] { return scheduler.isQuiescent(); });
     return token;
 }
 
@@ -1145,8 +1144,9 @@ int main() {
         testAllScopesPicture(e);
         testPng(e);
         testRefusals(e);
-        if (e.failures() != 0) {
-            std::cerr << e.failures() << " scope picture expectation(s) failed\n";
+        if (e.failures() + bloom::test_support::awaitFailureCount() != 0) {
+            std::cerr << e.failures() + bloom::test_support::awaitFailureCount()
+                      << " scope picture expectation(s) failed\n";
             return 1;
         }
         std::cout << "scope picture tests passed\n";

@@ -15,6 +15,7 @@
 //     with a region set is the very file a save without one gives.
 //   * the region's edges snap to device-pixel centers at scales 1, 1.5 and 2.
 
+#include "await_qt.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
@@ -41,7 +42,6 @@
 #include <bloom/ui/viewer_overlays.hpp>
 
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QImage>
 #include <QKeyEvent>
@@ -69,6 +69,8 @@ namespace {
 namespace document = bloom::document;
 namespace runtime = bloom::runtime;
 namespace ui = bloom::ui;
+using bloom::test_support::awaitFailureCount;
+using bloom::test_support::awaitQtCondition;
 using namespace std::chrono_literals;
 using Region = runtime::ScopeRegion;
 
@@ -86,15 +88,6 @@ class Expectations final {
   private:
     int failures_ = 0;
 };
-
-// Polls a condition while the event loop runs; the bound only ends a run that already failed.
-template <typename Predicate> [[nodiscard]] bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < 20000)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-    return predicate();
-}
 
 constexpr std::uint32_t kSize = 64;
 
@@ -191,11 +184,12 @@ struct Fixture final {
     ~Fixture() {
         controller.beginShutdown();
         bridge.beginShutdown();
-        (void)waitUntil([&] { return scheduler.isQuiescent(); });
+        (void)awaitQtCondition("the scheduler drains after the fixture shuts down",
+                               [&] { return scheduler.isQuiescent(); });
     }
 
     [[nodiscard]] bool ready() {
-        return waitUntil([&] {
+        return awaitQtCondition("the Viewer shows a ready frame with a mapping", [&] {
             const auto& frame = controller.state().frame;
             return frame &&
                    frame->desiredIdentity().sourceRevision == session.snapshot().revision() &&
@@ -260,11 +254,12 @@ struct SavedFixture final {
         viewer.reset();
         controller->beginShutdown();
         bridge.beginShutdown();
-        (void)waitUntil([&] { return scheduler.isQuiescent(); });
+        (void)awaitQtCondition("the scheduler drains after the fixture shuts down",
+                               [&] { return scheduler.isQuiescent(); });
     }
 
     [[nodiscard]] bool ready() {
-        return waitUntil([&] {
+        return awaitQtCondition("the Viewer shows a ready frame with a mapping", [&] {
             const auto& frame = controller->state().frame;
             return frame && controller->state().activity == ui::PreviewActivity::Ready &&
                    viewer->mappingForTest().has_value();
@@ -281,7 +276,7 @@ struct SavedFixture final {
 QPointF screen(ui::ViewerEditor& viewer, const QPointF compositionPoint) {
     // The Viewer maps against what it painted last; after a zoom or resolution change that is the
     // next frame.
-    (void)waitUntil([&] {
+    (void)awaitQtCondition("the Viewer has a mapping to map a point", [&] {
         (void)viewer.grab();
         return viewer.mappingForTest().has_value();
     });
@@ -570,7 +565,8 @@ void testPerCompositionAndVisibility(Expectations& e) {
     other.setScopesRegionStore(&f.store);
     other.resize(400, 300);
     other.show();
-    e.expect(waitUntil([&] { return other.mappingForTest().has_value(); }),
+    e.expect(awaitQtCondition("the second Viewer has a mapping",
+                              [&] { return other.mappingForTest().has_value(); }),
              "the second Viewer has a mapping");
     e.expect(f.viewer.scopesRegionDrawnForTest() == Region{4, 6, 10, 12} &&
                  other.scopesRegionDrawnForTest() == Region{4, 6, 10, 12},
@@ -586,15 +582,18 @@ void testPerCompositionAndVisibility(Expectations& e) {
     // Another composition keeps its own region, and the panel follows it.
     e.expect(f.session.setComposition(second.composition),
              "the session shows the second composition");
-    e.expect(waitUntil([&] { return f.viewer.scopesRegionKey() == second; }) &&
-                 waitUntil([&] { return !f.panel->region().has_value(); }),
+    e.expect(awaitQtCondition("the Viewer follows to the second composition's region key",
+                              [&] { return f.viewer.scopesRegionKey() == second; }) &&
+                 awaitQtCondition("the panel drops the region",
+                                  [&] { return !f.panel->region().has_value(); }),
              "the panel follows the Viewer to the other composition, which has no region");
     f.panel->setRegion(Region{30, 30, 4, 4});
     e.expect(f.store.region(first) == Region{4, 6, 10, 12} &&
                  f.store.region(second) == Region{30, 30, 4, 4},
              "two compositions keep separate regions");
     e.expect(f.session.setComposition(first.composition), "back to the first composition");
-    e.expect(waitUntil([&] { return f.panel->region() == Region{4, 6, 10, 12}; }),
+    e.expect(awaitQtCondition("the panel follows back to the first composition's region",
+                              [&] { return f.panel->region() == Region{4, 6, 10, 12}; }),
              "the panel follows back to the first composition's region");
     e.expect(f.ready(), "the preview is ready again");
     other.hide();
@@ -725,8 +724,8 @@ int main(int argc, char** argv) {
     testNotProjectState(e);
     testRegionIsNotSaved(e);
     testDevicePixelSnapping(e);
-    if (e.failures() != 0) {
-        std::cerr << e.failures() << " scope region check(s) failed\n";
+    if (e.failures() + awaitFailureCount() != 0) {
+        std::cerr << e.failures() + awaitFailureCount() << " scope region check(s) failed\n";
         return 1;
     }
     std::cout << "scope region tests passed\n";
