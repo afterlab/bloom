@@ -77,6 +77,15 @@ using bloom::test_support::awaitCondition;
 using Access = bloom::runtime::detail::GpuPreviewDisplayServiceTestAccess;
 
 constexpr std::uint32_t kSize = 256;
+// The picture of the frame a pressure case sends last: larger than any frame its rig rendered
+// before, so no storage a device parked or reuses for the earlier frames fits it, and it must
+// allocate new native storage.
+constexpr std::uint32_t kLargeSize = 2 * kSize;
+// Frames of this request generation or later render the larger plan (the stage picks by it).
+constexpr std::uint64_t kLargeGeneration = 1000;
+// An idle service trims its retention after a delay of its own (the taps with it); a case that is
+// not about the trim keeps the service from trimming while it waits for the books.
+constexpr std::uint64_t kNoIdleTrim = 10ULL * 60 * 1000;
 constexpr std::uint32_t kNoChromaticity =
     kScopeTableHistogram | kScopeTableWaveform | kScopeTableVectorscope;
 // Several requests are in flight together in some cases: they must fit the request-owned
@@ -101,7 +110,17 @@ struct RigShape final {
     std::optional<std::uint64_t> sceneCacheBytes = std::nullopt;
     // How long the idle service waits before it trims its retention (the default when 0).
     std::uint64_t idleTrimMilliseconds = 0;
+    // The plan of the frames from `kLargeGeneration` on (the same composition at a larger size).
+    std::shared_ptr<const bloom::runtime::CompiledCompositionPlan> largePlan = nullptr;
 };
+
+// The declared card every pressure case runs on, found by `pressureCases` (0 until then: a case's
+// card is then declared as it is). A device needs a card of a size of its own before its service
+// qualifies the resident route and before its allocator's blocks leave room for a frame (a modelled
+// card smaller than that never runs a native frame on it, whatever the policy's books say), so each
+// case declares this roomy card and then shapes the policy's usable capacity to the numbers it
+// plans for (`deviceReported`).
+std::uint64_t modelledCardBytes = 0;
 
 // The service, its scheduler and the counting scene preparation, torn down in reverse order.
 struct Rig final {
@@ -118,6 +137,9 @@ struct Rig final {
     std::shared_ptr<const bloom::runtime::CompiledCompositionPlan> plan;
     bloom::document::Snapshot snapshot;
     std::atomic<std::uint64_t> nextOwner{100};
+    // The usable device capacity the rig's case plans for (0: the card as declared). See
+    // `modelledCardBytes` and `deviceReported`.
+    std::uint64_t usableTarget = 0;
 
     static bloom::runtime::MemoryBudgetLedger makeLedger() {
         auto sample = bloom::test_support::fixedMemoryBudgetSample();
@@ -147,9 +169,10 @@ struct Rig final {
         auto count = preparations;
         auto working = viewerWorking;
         auto planCopy = plan;
+        auto largeCopy = shape.largePlan;
         auto policyCopy = policy;
         PreviewGpuSceneStageFunction counted =
-            [count, working, planCopy, policyCopy, processor](
+            [count, working, planCopy, largeCopy, policyCopy, processor](
                 const bloom::document::Snapshot& snap, const PreviewRequestIdentity& identity,
                 const std::size_t bytes,
                 const std::vector<bloom::runtime::SnapshotParameterOverride>& overrides,
@@ -164,13 +187,21 @@ struct Rig final {
                 auto builder = std::make_shared<CpuGpuSceneBuilder>(
                     nullptr, bloom::runtime::GpuSceneMediaContext{},
                     bloom::runtime::GpuSceneOcioContext{}, phase);
-                return packedStageFunction(planCopy, builder, {}, processor)(snap, identity, bytes,
-                                                                             overrides, context);
+                const auto& framePlan =
+                    largeCopy != nullptr && identity.requestGeneration >= kLargeGeneration
+                        ? largeCopy
+                        : planCopy;
+                return packedStageFunction(framePlan, builder, {}, processor)(snap, identity, bytes,
+                                                                              overrides, context);
             };
         auto configured = packedOptions(options);
         configured.processingPhasePolicy = policy;
-        if (shape.card != 0)
-            configured.deviceMemoryLimitBytes = shape.card;
+        if (shape.card != 0) {
+            // A card smaller than `modelledCardBytes` is modelled on it: see `deviceReported`.
+            usableTarget = modelledCardBytes != 0 ? shape.card : 0;
+            configured.deviceMemoryLimitBytes =
+                modelledCardBytes != 0 ? modelledCardBytes : shape.card;
+        }
         if (shape.sceneCacheBytes)
             configured.residentSceneCacheBudgets.maxRetainedBytes = *shape.sceneCacheBytes;
         if (shape.idleTrimMilliseconds != 0)
@@ -833,6 +864,8 @@ void shutdownCases(Expectations& checks, const TestOptions& options,
 
 struct Derived final {
     std::uint64_t image = 0;
+    // The same for the larger picture of the frames that must be short of memory.
+    std::uint64_t largeImage = 0;
     std::uint64_t layoutBytes = 0;
     // The measure's device need for a Display job with Chromaticity (two color outputs, the
     // table buffer and its staging copy), as the service computes it from the same sizes.
@@ -851,6 +884,7 @@ struct Derived final {
         return std::nullopt;
     Derived derived;
     derived.image = budget.allocation_sizes->image(kSize, kSize);
+    derived.largeImage = budget.allocation_sizes->image(kLargeSize, kLargeSize);
     const auto layout = bloom::render::scopeTableLayout(
         kScopeTableAll, bloom::render::kScopeWaveformMaxColumns, 0);
     derived.layoutBytes = layout.byteCount();
@@ -889,9 +923,78 @@ struct HeldRoom final {
     return held;
 }
 
-[[nodiscard]] bool deviceReported(const Rig& rig) {
-    return awaitCondition("the service reports its card to the policy",
-                          [&] { return rig.policy->usableCapacity().deviceReady; });
+// Waits for the service's card report, then shapes the usable device capacity to the card the
+// rig's case plans for: the headroom (the policy's own, public setting for memory that is not the
+// compositor's) takes the rest of the declared card, so the books say exactly the stated size on
+// every device whatever its allocator holds (a plain shortfall of the case's own, never a
+// reading of real free memory). A failing check names both sizes.
+[[nodiscard]] bool deviceReported(const Rig& rig, Expectations& checks) {
+    if (!awaitCondition("the service reports its card to the policy",
+                        [&] { return rig.policy->usableCapacity().deviceReady; }))
+        return false;
+    if (rig.usableTarget == 0)
+        return true;
+    const auto usable = rig.policy->usableCapacity().deviceUsableBytes;
+    checks.expect(usable >= rig.usableTarget,
+                  "the declared card holds the usable capacity the case plans for (usable " +
+                      std::to_string(usable) + ", planned " + std::to_string(rig.usableTarget) +
+                      ", declared " + std::to_string(modelledCardBytes) + ")");
+    if (usable < rig.usableTarget)
+        return false;
+    rig.policy->setHeadroom({.ramBytes = 0, .vramBytes = usable - rig.usableTarget});
+    return awaitCondition("the policy's books say the planned card", [&] {
+        return rig.policy->usableCapacity().deviceUsableBytes <= rig.usableTarget;
+    });
+}
+
+// Waits until the service has taken a device report of its own after everything the test has done
+// so far: the service samples the device at most every 50 milliseconds, on a turn of its loop, so
+// the wait lets that interval pass and then for two turns after a wake.
+[[nodiscard]] bool awaitDeviceReport(const Rig& rig) {
+    const auto start = std::chrono::steady_clock::now();
+    if (!awaitCondition("the service's sampling interval passes", [&] {
+            return std::chrono::steady_clock::now() - start >= std::chrono::milliseconds(100);
+        }))
+        return false;
+    // A turn that was already running when the wake came may end before it; the next one is whole.
+    rig.core->notify();
+    const auto first = rig.service->status().counters.ownerServiceNanoseconds;
+    std::optional<std::uint64_t> second;
+    return awaitCondition("the service takes two turns", [&] {
+        rig.core->notify();
+        const auto now = rig.service->status().counters.ownerServiceNanoseconds;
+        if (!second && now != first)
+            second = now;
+        return second && now != *second;
+    });
+}
+
+// Shapes the usable device capacity so that `room` bytes are free beside the claims held now: the
+// same headroom setting as `deviceReported`, so the books say exactly that room on every device
+// and no claim the test holds stands in for memory (a device that estimates its free memory from
+// its images would count such a claim against them). The policy's capacity is the device's own
+// estimate less the headroom, and the estimate moves with the device's images, so the headroom is
+// moved by what a fresh report says is still missing, until the report says the room.
+[[nodiscard]] bool leaveRoom(const Rig& rig, const std::uint64_t room) {
+    for (int attempt = 0; attempt < 6; ++attempt) {
+        if (!awaitDeviceReport(rig))
+            return false;
+        const auto capacity = rig.policy->usableCapacity();
+        if (capacity.deviceFreeBytes == room)
+            return true;
+        const auto headroom = rig.policy->headroom();
+        std::uint64_t vram = headroom.vramBytes;
+        if (capacity.deviceFreeBytes > room) {
+            vram += capacity.deviceFreeBytes - room;
+        } else {
+            const auto missing = room - capacity.deviceFreeBytes;
+            if (vram < missing)
+                return false;
+            vram -= missing;
+        }
+        rig.policy->setHeadroom({.ramBytes = headroom.ramBytes, .vramBytes = vram});
+    }
+    return false;
 }
 
 void pressureCases(Expectations& checks, const TestOptions& options,
@@ -906,13 +1009,111 @@ void pressureCases(Expectations& checks, const TestOptions& options,
     const auto displayJob = scope.job(scope.settings(ScopeSignal::Display, kScopeTableAll));
     const auto displayReference = scope.reference(scope.settings(ScopeSignal::Display, kScopeTableAll));
     const auto none = bloom::runtime::CancellationToken{};
+    const auto text = [](const std::uint64_t value) { return std::to_string(value); };
+
+    // A device's own numbers, measured on its own service: the smallest declared card (doubling
+    // from 16 MiB) on which its first Viewer frame completes as a device frame; every case then
+    // declares a card of at least twice that and at least twice the largest card it plans for
+    // (`modelledCardBytes`), and shapes the usable capacity to its plan. The Viewer's own need is
+    // what the policy records after that first frame on the roomy card.
+    const auto firstFrame = [&](const std::uint64_t card, const std::uint64_t working,
+                                std::uint64_t& need) {
+        Rig probe(options, plan, processor, snapshot, {.card = card, .viewerWorkingBytes = working});
+        if (!probe.ready() || !awaitCondition("the probe service reports its card", [&] {
+                return probe.policy->usableCapacity().deviceReady;
+            }))
+            return false;
+        const auto frame = probe.frame(1, 0, TaskPriority::Visible);
+        if (!frame || !isPacked(*frame))
+            return false;
+        need = probe.policy->viewerPriority().reserveDeviceBytes;
+        return true;
+    };
+    std::uint64_t smallestCard = 0;
+    std::uint64_t viewerNeed4 = 0;
+    for (std::uint64_t card = 16ULL * 1024 * 1024; card <= 2048ULL * 1024 * 1024 && smallestCard == 0;
+         card *= 2) {
+        if (firstFrame(card, 4 * derived->image, viewerNeed4))
+            smallestCard = card;
+    }
+    const auto sizes = "image " + text(derived->image) + ", table layout " +
+                       text(derived->layoutBytes) + ", measure need " + text(derived->measureNeed) +
+                       ", Viewer need " + text(viewerNeed4) + ", smallest card with a device frame " +
+                       text(smallestCard);
+    checks.expect(smallestCard != 0 && viewerNeed4 != 0,
+                  "the probe Viewer frame completes on a declared card (" + sizes + ")");
+    if (smallestCard == 0 || viewerNeed4 == 0)
+        return;
+    modelledCardBytes = std::max({2 * smallestCard, 2 * (viewerNeed4 + 4 * derived->measureNeed),
+                                  64 * derived->largeImage});
+    struct ModelledCardReset final {
+        ~ModelledCardReset() { modelledCardBytes = 0; }
+    } resetModelledCard;
+
+    // The frame that must be short of memory is a larger picture than any frame its rig rendered
+    // before (`kLargeSize`): no storage the device parked or reuses for the earlier frames has its
+    // shape, so the frame allocates new native storage whatever a device reuses. What it allocates
+    // and the need its envelope states are measured on this device, on a roomy card, after the same
+    // frames the case renders first (a Viewer frame, and a flagged fill frame when `withFill`).
+    const auto largePlan = makePlan(kLargeSize, kLargeSize);
+    // What the device's native storage reuse did for the frames so far.
+    const auto reuseNumbers = [&](const Rig& rig) {
+        const auto r = rig.core->device->nativeStorageReuseStats();
+        return "parked " + text(r.parkedDeviceBytes) + " bytes in " + text(r.parkedEntries) +
+               " entries, reused " + text(r.reused) + ", created " + text(r.created);
+    };
+    struct LargeFrame final {
+        // The need its envelope stated, as the policy recorded it.
+        std::uint64_t need = 0;
+        // How far the device claims rose above what they were before the frame (the policy's
+        // high-water mark of the claims): the room the frame takes while it runs, new native
+        // storage and storage it takes back from the device's parked storage alike.
+        std::uint64_t growth = 0;
+        // The device's storage reuse before and after the frame on the probe.
+        std::string reuseBefore;
+        std::string reuseAfter;
+    };
+    const auto probeLargeFrame = [&](const bool withFill, const std::uint64_t working,
+                                     LargeFrame& out) {
+        Rig probe(options, plan, processor, snapshot,
+                  {.card = modelledCardBytes / 4,
+                   .viewerWorkingBytes = working,
+                   .sceneCacheBytes = std::optional<std::uint64_t>{0},
+                   .idleTrimMilliseconds = kNoIdleTrim,
+                   .largePlan = largePlan});
+        if (!probe.ready() || !deviceReported(probe, checks))
+            return false;
+        if (!probe.frame(1, 0, TaskPriority::Visible))
+            return false;
+        if (withFill && !probe.frame(2, 1, TaskPriority::Foreground, true))
+            return false;
+        if (!awaitCondition("the probe's phases retire", [&] {
+                return probe.policy->snapshot().reservations.admittedPhases == 0;
+            }))
+            return false;
+        const auto claimsBefore = probe.policy->usableCapacity().deviceClaimBytes;
+        out.reuseBefore = reuseNumbers(probe);
+        const auto large = probe.frame(kLargeGeneration, 2, TaskPriority::Visible);
+        if (!large || !isPacked(*large))
+            return false;
+        out.reuseAfter = reuseNumbers(probe);
+        if (!awaitCondition("the probe's phases retire", [&] {
+                return probe.policy->snapshot().reservations.admittedPhases == 0;
+            }))
+            return false;
+        const auto peakClaims = probe.policy->snapshot().reservations.peakTotalDeviceClaimBytes;
+        out.growth = peakClaims > claimsBefore ? peakClaims - claimsBefore : 0;
+        out.need = probe.policy->viewerPriority().reserveDeviceBytes;
+        return true;
+    };
 
     // ---- (a) no room beside the Viewer ------------------------------------------------------
     {
         Rig rig(options, plan, processor, snapshot,
-                {.card = derived->measureNeed, .viewerWorkingBytes = 4 * derived->image});
+                {.card = viewerNeed4 + derived->measureNeed / 2,
+                 .viewerWorkingBytes = 4 * derived->image});
         auto& service = *rig.service;
-        if (!rig.ready() || !deviceReported(rig))
+        if (!rig.ready() || !deviceReported(rig, checks))
             return;
         const auto counters = [&] { return service.status().counters; };
         const auto first = rig.frame(1, 0, TaskPriority::Visible);
@@ -923,7 +1124,10 @@ void pressureCases(Expectations& checks, const TestOptions& options,
         const auto usable = rig.policy->usableCapacity().deviceUsableBytes;
         checks.expect(viewerNeed != 0 && viewerNeed <= usable &&
                           derived->measureNeed + viewerNeed > usable,
-                      "(a) the card fits the Viewer's frame but not the frame plus the measure");
+                      "(a) the card fits the Viewer's frame but not the frame plus the measure "
+                      "(Viewer need " + text(viewerNeed) + ", usable card " + text(usable) +
+                          ", measure need " + text(derived->measureNeed) + ", picture allocation " +
+                          text(derived->image) + ")");
         const auto owned = rig.policy->snapshot().reservations;
         const auto before = counters();
         const auto outcome = service.measureScopeTap(keyOf(*first), displayJob, none);
@@ -963,9 +1167,10 @@ void pressureCases(Expectations& checks, const TestOptions& options,
     // ---- (a2) a measure the card could hold waits, then is admitted or yields ----------------
     {
         Rig rig(options, plan, processor, snapshot,
-                {.card = 4 * derived->measureNeed, .viewerWorkingBytes = 4 * derived->image});
+                {.card = viewerNeed4 + 4 * derived->measureNeed,
+                 .viewerWorkingBytes = 4 * derived->image});
         auto& service = *rig.service;
-        if (!rig.ready() || !deviceReported(rig))
+        if (!rig.ready() || !deviceReported(rig, checks))
             return;
         const auto counters = [&] { return service.status().counters; };
         const auto first = rig.frame(1, 0, TaskPriority::Visible);
@@ -977,7 +1182,11 @@ void pressureCases(Expectations& checks, const TestOptions& options,
         const auto viewerNeed = rig.policy->viewerPriority().reserveDeviceBytes;
         const auto free = rig.policy->usableCapacity().deviceFreeBytes;
         checks.expect(free > derived->measureNeed + viewerNeed,
-                      "(a2) the card holds the measure beside the Viewer's need");
+                      "(a2) the card holds the measure beside the Viewer's need (free " + text(free) +
+                          ", Viewer need " + text(viewerNeed) + ", measure need " +
+                          text(derived->measureNeed) + ")");
+        if (free <= derived->measureNeed + viewerNeed)
+            return;
         const auto claim = free - (derived->measureNeed + viewerNeed) + 1;
         const bloom::render::NativeImageStorageIdentity identity{
             .allocatorGeneration = 1, .memoryType = 0, .heap = 0};
@@ -1074,12 +1283,17 @@ void pressureCases(Expectations& checks, const TestOptions& options,
     // after them: the tap's alias would otherwise keep a cached picture's bytes allocated.
     {
         const std::string name = "(b) ";
+        LargeFrame large;
+        if (!probeLargeFrame(true, derived->image, large))
+            return;
         Rig rig(options, plan, processor, snapshot,
-                {.card = 16 * derived->image,
+                {.card = 8 * derived->largeImage,
                  .viewerWorkingBytes = derived->image,
-                 .sceneCacheBytes = std::optional<std::uint64_t>{0}});
+                 .sceneCacheBytes = std::optional<std::uint64_t>{0},
+                 .idleTrimMilliseconds = kNoIdleTrim,
+                 .largePlan = largePlan});
         auto& service = *rig.service;
-        if (!rig.ready() || !deviceReported(rig))
+        if (!rig.ready() || !deviceReported(rig, checks))
             return;
         const auto counters = [&] { return service.status().counters; };
         const auto viewer = rig.frame(1, 0, TaskPriority::Visible);
@@ -1088,27 +1302,56 @@ void pressureCases(Expectations& checks, const TestOptions& options,
             return;
         checks.expect(Access::scopeViewerTapHeld(*rig.core) && Access::scopeFillTapHeld(*rig.core),
                       name + "the Viewer's tap and the fill tap are held");
-        // The next frame is admitted (the room free holds its stated need) but its native
-        // allocations, the most storage a frame's phase held as the policy measured it, do not fit
-        // the room beside the taps: the room the test holds leaves the midpoint between the two.
-        // The root refuses the allocation for room and the service gives way inside it, taps first.
-        const auto free = rig.policy->usableCapacity().deviceFreeBytes;
-        const auto measured = rig.policy->snapshot().reservations;
-        const auto need = measured.peakPhaseDeviceNeedBytes;
-        const auto peak = measured.peakPhaseDeviceAllocationBytes;
-        checks.expect(need != 0 && peak > need && free > need + (peak - need) / 2,
-                      name + "the card holds a frame beside the taps");
-        auto room = holdRoom(*rig.policy, free - (need + (peak - need) / 2));
-        if (!room.token)
+        // The larger frame is admitted (the room left holds the need its envelope states) but it
+        // takes more room than that while it runs, as measured on this device: the room left is
+        // what it takes less half of what the taps hold, so it is short of room beside the taps
+        // and has enough once the taps' pictures are given back. The root refuses the allocation
+        // for room and the service gives way inside it, taps first.
+        if (!awaitCondition("the frames' phases retire", [&] {
+                return rig.policy->snapshot().reservations.admittedPhases == 0;
+            }))
+            return;
+        const auto tapBytes = rig.policy->snapshot().reservations.retainedNativeImageBytes;
+        const auto left = std::max(large.need, large.growth - std::min(large.growth, tapBytes / 2));
+        std::string reuseBefore;
+        const auto numbers = [&] {
+            const auto c = counters();
+            const auto r = rig.policy->snapshot().reservations;
+            return " (room left for the frame " + text(left) + ", the room it took on the probe " +
+                   text(large.growth) + ", its stated need " + text(large.need) +
+                   ", the taps' bytes " + text(tapBytes) + ", picture allocation " +
+                   text(derived->image) + ", larger picture allocation " +
+                   text(derived->largeImage) + ", Viewer tap yields " +
+                   text(c.scopeViewerTapYields) + ", fill tap yields " + text(c.scopeFillTapYields) +
+                   ", capacity waits " + text(c.capacityWaits) + ", CPU fallbacks " +
+                   text(c.cpuFallbacks) + ", device room reclaims " + text(c.deviceRoomReclaims) +
+                   ", retained image bytes " + text(r.retainedNativeImageBytes) +
+                   ", owned image bytes " + text(r.ownedNativeImageBytes) + ", graph jobs " +
+                   text(c.residentGraphJobs) + ", peak claims " +
+                   text(r.peakTotalDeviceClaimBytes) + "; storage reuse before the frame (" +
+                   reuseBefore + "), after (" + reuseNumbers(rig) + "); on the probe before (" +
+                   large.reuseBefore + "), after (" + large.reuseAfter + "))";
+        };
+        const bool fits = tapBytes >= 2 * derived->image && large.need <= left &&
+                          large.growth > left && large.growth - left <= tapBytes;
+        checks.expect(fits, name + "the card holds the larger frame beside the taps only once "
+                                   "the taps are given back" + numbers());
+        if (!fits)
+            return;
+        const bool shaped = leaveRoom(rig, left);
+        checks.expect(shaped, name + "the books leave the room planned for the frame" + numbers());
+        if (!shaped)
             return;
         const auto before = counters();
-        const auto next = rig.frame(3, 2, TaskPriority::Visible);
+        reuseBefore = reuseNumbers(rig);
+        const auto next = rig.frame(kLargeGeneration, 2, TaskPriority::Visible);
         checks.expect(next && isPacked(*next),
-                      name + "the Viewer frame that needed the taps' bytes completes on the GPU");
+                      name + "the Viewer frame that needed the taps' bytes completes on the GPU" +
+                          numbers());
         const auto after = counters();
         checks.expect(after.scopeViewerTapYields == 1 && after.scopeFillTapYields == 1 &&
                           !Access::scopeFillTapHeld(*rig.core),
-                      name + "both taps were given back, one per slot");
+                      name + "both taps were given back, one per slot" + numbers());
         checks.expect(after.scopeReclaimsSeenAtFirstGiveBack == 0 && after.idleTrims == 0 &&
                           service.status().residentFrameEvictionSerial == 0,
                       name + "the taps went first: no parked storage, scene cache or finished "
@@ -1127,7 +1370,7 @@ void pressureCases(Expectations& checks, const TestOptions& options,
         Rig rig(options, plan, processor, snapshot,
                 {.card = 16 * derived->image, .viewerWorkingBytes = 4 * derived->image});
         auto& service = *rig.service;
-        if (!rig.ready() || !deviceReported(rig))
+        if (!rig.ready() || !deviceReported(rig, checks))
             return;
         const auto counters = [&] { return service.status().counters; };
         const auto viewer = rig.frame(1, 0, TaskPriority::Visible);
@@ -1156,7 +1399,7 @@ void pressureCases(Expectations& checks, const TestOptions& options,
         Rig rig(options, plan, processor, snapshot,
                 {.card = 4 * derived->measureNeed, .viewerWorkingBytes = 4 * derived->image});
         auto& service = *rig.service;
-        if (!rig.ready() || !deviceReported(rig))
+        if (!rig.ready() || !deviceReported(rig, checks))
             return;
         const auto counters = [&] { return service.status().counters; };
         const auto first = rig.frame(1, 0, TaskPriority::Visible);
@@ -1208,40 +1451,80 @@ void pressureCases(Expectations& checks, const TestOptions& options,
         // returns only once its fence is proven retired. A frame that still cannot get memory then
         // waits for memory like any other frame (a capacity wait, never the CPU); the memory the
         // measure was admitted beside (the Viewer's last need) is what keeps that case rare.
+        // The short frame is a larger picture than the earlier frame (see `probeLargeFrame`).
+        LargeFrame large;
+        if (!probeLargeFrame(false, derived->image, large))
+            return;
         Rig rig(options, plan, processor, snapshot,
                 {.card = 4 * derived->measureNeed,
                  .viewerWorkingBytes = derived->image,
-                 .sceneCacheBytes = std::optional<std::uint64_t>{0}});
+                 .sceneCacheBytes = std::optional<std::uint64_t>{0},
+                 .idleTrimMilliseconds = kNoIdleTrim,
+                 .largePlan = largePlan});
         auto& service = *rig.service;
-        if (!rig.ready() || !deviceReported(rig))
+        if (!rig.ready() || !deviceReported(rig, checks))
             return;
         const auto counters = [&] { return service.status().counters; };
         const auto first = rig.frame(1, 0, TaskPriority::Visible);
         if (!first)
             return;
-        // What the Viewer's frames needed and held, before the measure's phase exists.
-        const auto measured = rig.policy->snapshot().reservations;
-        const auto frameNeed = measured.peakPhaseDeviceNeedBytes;
-        const auto peak = measured.peakPhaseDeviceAllocationBytes;
         TableHold hold(rig.core);
         auto measure = measureAsync(service, keyOf(*first), displayJob);
         if (!hold.awaitHeld("the held measure is in flight"))
             return;
-        // The frame's stated need fits; its native allocations (the most storage a frame's phase
-        // held, as the policy measured it) do not fit the room the test leaves.
-        const auto free = rig.policy->usableCapacity().deviceFreeBytes;
-        checks.expect(frameNeed != 0 && peak > frameNeed &&
-                          free > frameNeed + (peak - frameNeed) / 2,
-                      "(c2) the card holds a frame beside the measure");
-        auto room = holdRoom(*rig.policy, free - (frameNeed + (peak - frameNeed) / 2));
-        if (!room.token)
+        // The frame's stated need fits; it takes more room than that while it runs, as measured
+        // on this device, so it is short of the room the test leaves beside the tap and the
+        // measure and has enough once the tap's picture is given back (the room left is what the
+        // frame takes less half of the tap's bytes).
+        const auto tapBytes = rig.policy->snapshot().reservations.retainedNativeImageBytes;
+        const auto left = std::max(large.need, large.growth - std::min(large.growth, tapBytes / 2));
+        const bool fits = tapBytes >= derived->image && large.need <= left &&
+                          large.growth > left && large.growth - left <= tapBytes;
+        checks.expect(fits, "(c2) the card holds the larger frame beside the measure only once the "
+                            "tap is given back (room left for the frame " + text(left) +
+                                ", the room it took on the probe " + text(large.growth) +
+                                ", its stated need " + text(large.need) + ", the tap's bytes " +
+                                text(tapBytes) + ", measure need " + text(derived->measureNeed) +
+                                ")");
+        if (!fits) {
+            hold.release();
             return;
+        }
+        if (!leaveRoom(rig, left)) {
+            checks.expect(false, "(c2) the books leave the room planned for the frame (" +
+                                     text(left) + ")");
+            hold.release();
+            return;
+        }
         const auto before = counters();
-        auto submission = rig.submit(rig.identity(30, 30), TaskPriority::Visible);
+        const auto reuseBefore = reuseNumbers(rig);
+        auto submission = rig.submit(rig.identity(kLargeGeneration, 30), TaskPriority::Visible);
         if (!awaitCondition("the measure is told to stop for the frame", [&] {
                 return counters().scopeMeasuresGivenBack == 1 && Access::scopeStopIssued(*rig.core);
-            }))
+            })) {
+            const auto c = counters();
+            checks.expect(false, "(c2) the measure was not told to stop (room left for the frame " +
+                                     text(left) + ", the room it took on the probe " +
+                                     text(large.growth) +
+                                     ", its stated need " + text(large.need) +
+                                     ", measure need " + text(derived->measureNeed) +
+                                     ", given back " + text(c.scopeMeasuresGivenBack) +
+                                     ", Viewer tap yields " + text(c.scopeViewerTapYields) +
+                                     ", capacity waits " + text(c.capacityWaits) +
+                                     ", CPU fallbacks " + text(c.cpuFallbacks) +
+                                     ", device room reclaims " + text(c.deviceRoomReclaims) +
+                                     ", retained image bytes " +
+                                     text(rig.policy->snapshot().reservations
+                                              .retainedNativeImageBytes) +
+                                     ", peak claims " +
+                                     text(rig.policy->snapshot().reservations
+                                              .peakTotalDeviceClaimBytes) +
+                                     "; storage reuse before the frame (" + reuseBefore +
+                                     "), after (" + reuseNumbers(rig) + "); on the probe before (" +
+                                     large.reuseBefore + "), after (" + large.reuseAfter + "))");
+            hold.release();
             return;
+        }
         // The frame completes while the readback is still held: it never waits for the measure.
         const auto done = rig.finish(submission, "the short frame");
         checks.expect(done && isPacked(*done) && counters().cpuFallbacks == before.cpuFallbacks &&
@@ -1258,8 +1541,6 @@ void pressureCases(Expectations& checks, const TestOptions& options,
         checks.expect(outcome && outcome->status == GpuScopeTapStatus::Skipped &&
                           outcome->skip == GpuScopeTapSkip::NoRoom,
                       "(c2) the stopped measure ends Skipped(NoRoom)");
-        room.token.reset();
-        room.grant.lease.reset();
         checks.expect(awaitCondition("the measure's phase retires", [&] {
                           return rig.policy->snapshot().reservations.admittedPhases == 0;
                       }),
@@ -1271,7 +1552,7 @@ void pressureCases(Expectations& checks, const TestOptions& options,
         Rig rig(options, plan, processor, snapshot,
                 {.card = 16 * derived->image, .viewerWorkingBytes = 4 * derived->image});
         auto& service = *rig.service;
-        if (!rig.ready() || !deviceReported(rig))
+        if (!rig.ready() || !deviceReported(rig, checks))
             return;
         const auto counters = [&] { return service.status().counters; };
         const auto viewer = rig.frame(1, 0, TaskPriority::Visible);

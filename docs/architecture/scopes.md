@@ -423,7 +423,8 @@ timed).
   measure, and an unflagged fill frame keeps nothing and is never held back; shutdown ends a
   queued or in-flight request; on a declared card that fits the Viewer's frame but not the frame
   plus the measure the request ends Skipped(NoRoom) with the Viewer's counters unmoved, the taps
-  are the first memory given back for a frame that needs room, a fill tap that does not fit is
+  are the first memory given back for a frame that needs room (a larger picture than the frames
+  that made the taps, so no parked storage serves it), a fill tap that does not fit is
   refused without holding the fill, and the idle trim releases the tap.
 - `bloom.runtime.gpu_admission_pressure` (`backgroundMeasureYieldsToTheViewer`): a Background
   measure phase waits while a Viewer request waits, and its grant leaves the Viewer's last need free.
