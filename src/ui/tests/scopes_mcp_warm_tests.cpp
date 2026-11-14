@@ -7,6 +7,8 @@
 //   * a frame the preview shows, with a sidecar attached under the identity a default read would
 //     measure, is answered from the cache with exactly the sidecar's tables and with no measure
 //     run (the CPU route is counted);
+//   * the sidecar's identity names the picture it counted: a Retained sidecar (the cached 8-bit
+//     picture's tables) is never served to a read, a Rendered one is;
 //   * the same read is measured when the scope settings differ (signal, region, Ignore
 //     Transparent Pixels, the scopes asked for, the axis maximum), when the resolution differs,
 //     when the display and view differ, when the composition read is not the one the Viewer shows,
@@ -270,9 +272,10 @@ class Warm final {
     // read that asked for `settings`.
     [[nodiscard]] bool attach(const ui::PreviewFrameCacheKey& key,
                               const scripting::ScopeReadFrame& frame,
-                              const runtime::ScopeMeasureSettings& settings) {
+                              const runtime::ScopeMeasureSettings& settings,
+                              const runtime::ScopeSource source = runtime::ScopeSource::Rendered) {
         auto sidecar = std::make_shared<ui::PreviewScopeSidecar>();
-        sidecar->identity = ui::PreviewScopeIdentity{settings, {}};
+        sidecar->identity = ui::PreviewScopeIdentity{settings, {}, source};
         sidecar->tables = runtime::ScopeTables::pack(frame.counts, frame.route);
         sidecar->area = frame.area;
         return cache_->attachScopes(key, std::move(sidecar));
@@ -411,6 +414,22 @@ int main(int argc, char** argv) {
                        result.frames.front().area == genuine.area,
                    "the warm answer equals a cold measure of the frame, cell for cell");
             expect(warm.measures() == before, "the genuine sidecar needed no measure either");
+        }
+        // The sidecar's identity names the picture it counted. A Retained sidecar (the tables of the
+        // cached 8-bit picture, another definition) is never served to a read, which measures; a
+        // Rendered one is, exactly as above.
+        {
+            expect(warm.attach(*key, leftHalf, defaultSettings(), runtime::ScopeSource::Retained),
+                   "a Retained sidecar replaces the Rendered one");
+            expectMeasured(warm, defaultRead(), genuine, "a Retained sidecar");
+            expect(warm.attach(*key, genuine, defaultSettings(), runtime::ScopeSource::Rendered),
+                   "the Rendered sidecar is back");
+            const int before = warm.measures();
+            const auto result = warm.read(defaultRead());
+            expect(result.ok() && result.frames.size() == 1 && result.frames.front().fromCache &&
+                       result.frames.front().counts == genuine.counts &&
+                       warm.measures() == before,
+                   "a Rendered sidecar is served with no measure");
         }
         // A summary measures the Histogram and the Vectorscope alone, so it is another identity
         // than the sidecar of all five tables; a sidecar of those two answers it.

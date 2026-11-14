@@ -38,6 +38,7 @@ namespace bloom::ui {
 
 class EditorRegistry;
 class RamPreviewController;
+class ScopeFillTaps;
 class ScopeView;
 class ScopesTraceRenderer;
 class TaskUiBridge;
@@ -59,6 +60,9 @@ struct ScopesServices final {
     TaskUiBridge* bridge = nullptr;
     PreviewFrameCacheHandle cache;
     ScopesMeasure measure;
+    // The owner of the RAM preview fill's scope taps, shared by every panel (null: the fill's
+    // frames are measured from their retained pictures only).
+    ScopeFillTaps* fillTaps = nullptr;
     // The scope regions, the Region toggle and the visible-panel count every panel and Viewer of
     // the session share. Null: the panel keeps a store of its own (no Viewer then draws it).
     ScopesRegionStore* regions = nullptr;

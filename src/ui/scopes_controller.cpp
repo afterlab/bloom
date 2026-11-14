@@ -1,8 +1,7 @@
 #include <bloom/ui/scopes_controller.hpp>
 
-#include "composition_preview_stage_shared.hpp"
-
 #include <bloom/runtime/input_color_context.hpp>
+#include <bloom/ui/scope_fill_taps.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <algorithm>
@@ -91,43 +90,136 @@ colorFor(ColorCache& cache, const runtime::PreviewRequestIdentity& frame,
 
 } // namespace
 
-ScopesMeasure
-makeScopesMeasure(runtime::ScopeFrameRoutes routes,
-                  std::function<std::optional<std::filesystem::path>()> assetBaseDirectory,
-                  const std::size_t pixelStorageByteLimit) {
-    return [routes = std::move(routes), assetBaseDirectory = std::move(assetBaseDirectory),
-            pixelStorageByteLimit, colors = std::make_shared<ColorCache>()](
-               const PreviewScopeSource& source, const PreviewScopeIdentity& identity,
+namespace {
+
+// A tap's outcome as the measure of a frame.
+[[nodiscard]] runtime::ScopeFrameMeasure
+measureOfTap(const runtime::GpuScopeTapMeasureOutcome& outcome) {
+    runtime::ScopeFrameMeasure measure;
+    measure.status = outcome.status == runtime::GpuScopeTapStatus::Measured
+                         ? runtime::ScopeFrameStatus::Measured
+                         : runtime::ScopeFrameStatus::EmptyArea;
+    measure.route = outcome.route;
+    measure.source = outcome.source;
+    measure.counts = outcome.counts;
+    measure.area = outcome.area;
+    measure.colorDispatches = outcome.colorDispatches;
+    measure.tableReadbacks = outcome.tableReadbacks;
+    measure.tableReadbackBytes = outcome.tableReadbackBytes;
+    measure.pictureReadbacks = outcome.pictureReadbacks;
+    return measure;
+}
+
+[[nodiscard]] ScopesMeasured unavailable(ScopesMeasured result, std::string message) {
+    result.measure.status = runtime::ScopeFrameStatus::Unavailable;
+    result.measure.message = std::move(message);
+    return result;
+}
+
+} // namespace
+
+ScopesMeasure makeScopesMeasure(ScopesMeasureSources sources) {
+    return [sources = std::move(sources), colors = std::make_shared<ColorCache>()](
+               const ScopesMeasureInput& input, const PreviewScopeIdentity& identity,
                const runtime::CancellationToken& cancellation) {
         ScopesMeasured result;
-        if (source.process.plan == nullptr) {
-            result.measure.message = "The frame carries no plan to measure it from.";
-            return result;
-        }
-        result.color = colorFor(*colors, source.identity, identity, result.measure.message);
+        result.detail = identity.settings.detail;
+        result.color = colorFor(*colors, input.source.identity, identity, result.measure.message);
         if (result.color == nullptr)
             return result;
-        if (cancellation.isCancellationRequested()) {
+        const auto cancelled = [&] {
             result.measure.status = runtime::ScopeFrameStatus::Cancelled;
             return result;
+        };
+        if (cancellation.isCancellationRequested())
+            return cancelled();
+
+        // (a) The scene picture the Viewer's device kept for the frame (a Viewer frame's tap, or
+        // the RAM preview fill frame's own).
+        const bool fillTapped = input.fillTap != nullptr && input.fillTap->tapped();
+        const bool tapExpected =
+            fillTapped || (input.fillTap == nullptr && sources.previewService != nullptr &&
+                           deviceProvider(input.source.provider));
+        if (tapExpected) {
+            const auto key = fillTapped ? input.fillTap->key()
+                                        : runtime::GpuScopeTapKey::of(input.source.identity);
+            const auto ocio = sources.ocio ? sources.ocio() : nullptr;
+            if (!fillTapped && !sources.previewService->scopeTapGeometry(key)) {
+                result.tapNote = input.priorTapNote.empty()
+                                     ? std::string("the Viewer's device holds no picture of this "
+                                                   "frame")
+                                     : input.priorTapNote;
+            } else if (ocio == nullptr) {
+                result.tapNote = "the shared color context is not available";
+                result.tapRetry = true;
+            } else {
+                const auto job = runtime::makeScopeMeasureJob(identity.settings, *result.color,
+                                                              *ocio);
+                const auto outcome = fillTapped
+                                         ? input.fillTap->measure(job, cancellation)
+                                         : sources.previewService->measureScopeTap(key, job,
+                                                                                   cancellation);
+                using Status = runtime::GpuScopeTapStatus;
+                if (outcome.status == Status::Measured || outcome.status == Status::EmptyArea) {
+                    result.measure = measureOfTap(outcome);
+                    return result;
+                }
+                if (outcome.status == Status::Cancelled)
+                    return cancelled();
+                result.tapNote = outcome.message;
+                result.tapRetry = !(outcome.status == Status::Skipped &&
+                                    outcome.skip == runtime::GpuScopeTapSkip::TapGone);
+            }
         }
-        const auto request = detail::evaluationRequestFor(source.identity, *source.process.plan,
-                                                          pixelStorageByteLimit);
-        result.measure =
-            runtime::measureScopeFrame(routes, source.process.plan, request, identity.settings,
-                                       *result.color, deviceProvider(source.provider), cancellation,
-                                       assetBaseDirectory ? assetBaseDirectory() : std::nullopt);
+
+        // (b) The CPU route's process picture the frame still holds.
+        if (input.frame != nullptr && input.frame->hasProcessFrame()) {
+            result.measure = runtime::measureScopeFrameCpu(*input.frame->processFrame(),
+                                                           identity.settings, *result.color,
+                                                           cancellation);
+            return result;
+        }
+        if (input.renderedOnly)
+            return unavailable(std::move(result), result.tapNote.empty()
+                                                      ? std::string("no Rendered picture")
+                                                      : result.tapNote);
+
+        // (c) The retained display picture.
+        if (input.frame == nullptr)
+            return unavailable(std::move(result), "The frame is not available to measure.");
+        const auto view = input.frame->displayBufferView();
+        const auto& plan = input.source.process.plan;
+        if (!view || plan == nullptr)
+            return unavailable(std::move(result),
+                               "The frame holds no picture the scopes can count.");
+        if (input.fillTap != nullptr)
+            input.fillTap->release();
+        auto retained = identity.settings;
+        // The CPU counts the same pixels at either detail: the retained picture is counted once,
+        // in full.
+        retained.detail = 0;
+        result.detail = 0;
+        result.measure = runtime::measureScopeFrameRetained(
+            *view,
+            runtime::RetainedScopePicture{plan->format().width(), plan->format().height(),
+                                          input.frame->desiredIdentity().viewAdjust},
+            retained, *result.color, cancellation);
+        if (result.measure.status == runtime::ScopeFrameStatus::Unavailable &&
+            !result.tapNote.empty())
+            result.measure.message += " (" + result.tapNote + ")";
         return result;
     };
 }
 
 ScopesController::ScopesController(runtime::TaskScheduler& scheduler, TaskUiBridge& bridge,
                                    PreviewFrameCacheHandle cache, ScopesMeasure measure,
-                                   QObject* parent)
+                                   ScopeFillTaps* const fillTaps, QObject* parent)
     : QObject(parent), scheduler_(scheduler), bridge_(bridge), cache_(std::move(cache)),
-      measure_(std::move(measure)) {
+      measure_(std::move(measure)), fillTaps_(fillTaps) {
     settings_.scopes = 0;
     connect(&bridge_, &TaskUiBridge::resultsAvailable, this, &ScopesController::poll);
+    if (fillTaps_ != nullptr)
+        connect(fillTaps_, &ScopeFillTaps::tapsAvailable, this, &ScopesController::startNext);
     if (cache_ != nullptr) {
         connect(cache_.get(), &PreviewFrameCache::entryRetained, this,
                 [this](const PreviewFrameCacheKey& key) {
@@ -144,15 +236,23 @@ ScopesController::ScopesController(runtime::TaskScheduler& scheduler, TaskUiBrid
 }
 
 ScopesController::~ScopesController() {
-    if (inFlight_)
+    // A tap this controller holds is answered by letting go of it; the panel no longer wants any.
+    if (fillTaps_ != nullptr)
+        fillTaps_->setWanted(this, false);
+    if (inFlight_) {
         inFlight_->handle.cancel();
+        if (inFlight_->request.tap != nullptr)
+            inFlight_->request.tap->release();
+    }
 }
 
 PreviewScopeIdentity ScopesController::identityFor(const runtime::ViewAdjust viewAdjust,
-                                                   const std::uint32_t detail) const {
+                                                   const std::uint32_t detail,
+                                                   const runtime::ScopeSource source) const {
     PreviewScopeIdentity identity;
     identity.settings = settings_;
     identity.settings.detail = detail;
+    identity.source = source;
     // The Working signal is measured before the display transform: the Viewer's exposure and
     // gamma do not reach it.
     if (settings_.signal == runtime::ScopeSignal::Display)
@@ -167,6 +267,10 @@ void ScopesController::setSettings(const runtime::ScopeMeasureSettings& requeste
     if (settings_ == settings)
         return;
     settings_ = settings;
+    // A panel with a scope open wants the RAM preview fill's taps; one with none (hidden, or every
+    // section collapsed) does not, and the taps already received are dropped.
+    if (fillTaps_ != nullptr)
+        fillTaps_->setWanted(this, settings_.scopes != 0);
     // Frames queued for the old settings are measured under the new ones when their turn comes;
     // a retained frame's measure already running is for the old ones and is cancelled (refresh).
     if (settings_.scopes == 0)
@@ -183,11 +287,18 @@ void ScopesController::showFrame(const PreparedPreviewFrameHandle& frame,
     const bool same = shown.has_value() == shown_.has_value() &&
                       (!shown || (PreviewFrameCacheKey::forIdentity(shown->identity) ==
                                       PreviewFrameCacheKey::forIdentity(shown_->identity) &&
-                                  shown->process.plan == shown_->process.plan)) &&
+                                  shown->process.plan == shown_->process.plan &&
+                                  // The same picture with its process picture, or without it,
+                                  // is measured from what it holds.
+                                  frame->hasProcessFrame() == shownFrame_->hasProcessFrame())) &&
                       viewAdjust == viewAdjust_;
-    if (same)
+    if (same) {
+        // The same picture under a newer request: measures that start from now on use this handle.
+        shownFrame_ = frame;
         return;
+    }
     shown_ = std::move(shown);
+    shownFrame_ = frame;
     viewAdjust_ = viewAdjust;
     refresh();
 }
@@ -206,6 +317,10 @@ void ScopesController::publish(ScopesReading reading) {
     emit readingChanged();
 }
 
+std::string ScopesController::priorNote(const PreviewFrameCacheKey& key) const {
+    return fillTaps_ != nullptr ? fillTaps_->failureFor(key) : std::string{};
+}
+
 void ScopesController::refresh() {
     ++generation_;
     // What is wanted now, if anything has to be measured for it.
@@ -217,11 +332,21 @@ void ScopesController::refresh() {
         const auto fullIdentity = identityFor(viewAdjust_, 0);
         const auto liveIdentity = identityFor(viewAdjust_, kLiveDetail);
         PreviewScopeSidecarHandle cached;
+        bool full = false;
         if (cache_ != nullptr) {
-            cached = cache_->scopesFor(key, fullIdentity);
-            const bool full = cached != nullptr;
-            if (!full)
-                cached = cache_->scopesFor(key, liveIdentity);
+            // The tables the frame's entry holds, best first: Rendered full, Rendered live,
+            // Retained full, Retained live.
+            const auto lookup = [&](const std::uint32_t detail, const runtime::ScopeSource source) {
+                return cache_->scopesFor(key, identityFor(viewAdjust_, detail, source));
+            };
+            if ((cached = lookup(0, runtime::ScopeSource::Rendered)) != nullptr)
+                full = true;
+            else if ((cached = lookup(kLiveDetail, runtime::ScopeSource::Rendered)) != nullptr)
+                full = false;
+            else if ((cached = lookup(0, runtime::ScopeSource::Retained)) != nullptr)
+                full = true;
+            else
+                cached = lookup(kLiveDetail, runtime::ScopeSource::Retained);
             if (cached != nullptr) {
                 ++cacheHits_;
                 reading.state = ScopesReading::State::Ready;
@@ -230,9 +355,16 @@ void ScopesController::refresh() {
                 reading.color = cached->color;
                 reading.message = cached->note;
                 reading.detail = cached->identity.settings.detail;
-                // A live sidecar is shown at once and the full measure follows.
+                // A live sidecar is shown at once and the full measure follows; Rendered live
+                // tables are replaced only by Rendered full ones.
                 if (!full)
-                    wanted = Request{*shown_, key, fullIdentity};
+                    wanted = Request{*shown_,
+                                     key,
+                                     fullIdentity,
+                                     shownFrame_,
+                                     nullptr,
+                                     cached->identity.source == runtime::ScopeSource::Rendered,
+                                     priorNote(key)};
             }
         }
         if (cached == nullptr) {
@@ -243,7 +375,8 @@ void ScopesController::refresh() {
             reading.color = reading_.color;
             reading.detail = reading_.detail;
             reading.behind = reading.scopes != nullptr;
-            wanted = Request{*shown_, key, liveIdentity};
+            wanted = Request{*shown_, key, liveIdentity, shownFrame_, nullptr, false,
+                             priorNote(key)};
         }
     }
     // Latest wins: a measure in flight that is not the wanted one is cancelled (it observes that
@@ -251,14 +384,15 @@ void ScopesController::refresh() {
     // replaced.
     const bool sameInFlight = inFlight_ && inFlight_->shown && !inFlight_->cancelled && wanted &&
                               inFlight_->request.key == wanted->key &&
-                              inFlight_->request.identity == wanted->identity;
+                              inFlight_->request.identity == wanted->identity &&
+                              inFlight_->request.renderedOnly == wanted->renderedOnly;
     if (inFlight_ && inFlight_->shown && !sameInFlight)
         cancelInFlight();
     if (want_ && !wantInFlight_)
         ++measuresSkipped_;
     want_ = std::move(wanted);
     wantInFlight_ = sameInFlight;
-    // A retained frame's measure under other settings or another view adjust is dropped too.
+    // A fill frame's measure under other settings or another view adjust is dropped too.
     if (inFlight_ && !inFlight_->shown &&
         inFlight_->request.identity != identityFor(viewAdjust_, 0))
         cancelInFlight();
@@ -271,6 +405,9 @@ void ScopesController::cancelInFlight() {
         return;
     inFlight_->cancelled = true;
     inFlight_->handle.cancel();
+    // A fill tap that was not measured is answered now rather than when its task is reaped.
+    if (inFlight_->request.tap != nullptr && !inFlight_->shown)
+        inFlight_->request.tap->release();
 }
 
 std::optional<ScopesController::Pending> ScopesController::submit(const Request& wanted,
@@ -288,11 +425,15 @@ std::optional<ScopesController::Pending> ScopesController::submit(const Request&
     request.usesPurgeableCaches = true;
     auto submission = scheduler_.submit<ResultHandle>(
         std::move(request),
-        [measure = measure_, source, identity = wanted.identity](runtime::TaskContext& context) {
+        [measure = measure_,
+         input = ScopesMeasureInput{source, wanted.frame, wanted.tap, wanted.renderedOnly,
+                                    wanted.priorTapNote},
+         source,
+         identity = wanted.identity](runtime::TaskContext& context) {
             using TaskResult = runtime::TaskResult<ResultHandle>;
             if (context.isCancellationRequested())
                 return TaskResult::cancelled();
-            auto measured = measure(source, identity, context.cancellation());
+            auto measured = measure(input, identity, context.cancellation());
             if (context.isCancellationRequested() ||
                 measured.measure.status == runtime::ScopeFrameStatus::Cancelled)
                 return TaskResult::cancelled();
@@ -306,18 +447,27 @@ std::optional<ScopesController::Pending> ScopesController::submit(const Request&
     return Pending{std::move(submission.handle), wanted, shown, false};
 }
 
-PreviewScopeSidecarHandle ScopesController::sidecarOf(const Result& result) const {
+PreviewScopeSidecarHandle
+ScopesController::sidecarOf(const Result& result, const PreviewScopeIdentity& asked) const {
     const auto& measure = result.measured.measure;
     if (measure.status != runtime::ScopeFrameStatus::Measured &&
         measure.status != runtime::ScopeFrameStatus::EmptyArea)
         return nullptr;
     auto sidecar = std::make_shared<PreviewScopeSidecar>();
-    sidecar->identity = result.identity;
+    sidecar->identity = asked;
+    // The sidecar names what was counted: the picture and the detail it was counted at.
+    sidecar->identity.source = measure.source;
+    sidecar->identity.settings.detail = result.measured.detail;
     // An empty area has no tables: the sidecar records that nothing was there to count.
     if (measure.status == runtime::ScopeFrameStatus::Measured)
         sidecar->tables = runtime::ScopeTables::pack(measure.counts, measure.route);
     sidecar->area = measure.area;
     sidecar->note = measure.message;
+    if (measure.source == runtime::ScopeSource::Retained) {
+        sidecar->note = "counted from the cached picture";
+        if (!result.measured.tapNote.empty())
+            sidecar->note += ": " + result.measured.tapNote;
+    }
     sidecar->color = result.measured.color;
     return sidecar;
 }
@@ -327,6 +477,9 @@ void ScopesController::poll() {
         if (auto taken = inFlight_->handle.tryTakeResult()) {
             const auto pending = std::move(*inFlight_);
             inFlight_.reset();
+            // A tap not measured by now is answered: the task may never have run.
+            if (pending.request.tap != nullptr)
+                pending.request.tap->release();
             const auto& value = taken->value();
             const bool succeeded =
                 taken->state() == runtime::TaskState::Succeeded && value && *value;
@@ -351,38 +504,77 @@ void ScopesController::poll() {
                         publish(std::move(reading));
                     }
                 }
-            } else if (succeeded && cache_ != nullptr &&
-                       pending.request.identity == identityFor(viewAdjust_, 0)) {
-                if (auto sidecar = sidecarOf(**value))
-                    static_cast<void>(
-                        cache_->attachScopes(pending.request.key, std::move(sidecar)));
+            } else {
+                takeFill(succeeded ? value->get() : nullptr, pending);
             }
         }
     }
     startNext();
 }
 
+void ScopesController::takeFill(const Result* const result, const Pending& pending) {
+    const auto& request = pending.request;
+    const bool current = settings_.scopes != 0 && request.identity == identityFor(viewAdjust_, 0);
+    PreviewScopeSidecarHandle sidecar;
+    if (result != nullptr && current)
+        sidecar = sidecarOf(*result, request.identity);
+    if (request.tap == nullptr) {
+        // A retained frame's measure.
+        if (sidecar != nullptr && cache_ != nullptr)
+            static_cast<void>(attachScopeSidecar(*cache_, request.key, sidecar));
+        return;
+    }
+    if (result != nullptr && !result->measured.tapNote.empty() && fillTaps_ != nullptr)
+        fillTaps_->rememberFailure(request.key, result->measured.tapNote);
+    // A fill frame's tap. Its tables go to its frame (now, or when the frame is retained); a tap
+    // that was refused, given back or not measured falls back to the retained picture, which the
+    // frame's retention queues.
+    if (sidecar != nullptr && fillTaps_ != nullptr) {
+        fillTaps_->deliver(request.key, std::move(sidecar));
+        return;
+    }
+    // A frame that is not retained yet is queued by its retention.
+    if (current && cache_ != nullptr && cache_->contains(request.key))
+        fillQueue_.push_front(request.key);
+}
+
 void ScopesController::takeShown(const Result& result, const Pending& pending) {
     ScopesReading reading = reading_;
     reading.shown = shown_;
-    if (auto sidecar = sidecarOf(result)) {
+    const auto& request = pending.request;
+    if (auto sidecar = sidecarOf(result, request.identity)) {
         if (cache_ != nullptr)
-            static_cast<void>(cache_->attachScopes(pending.request.key, sidecar));
+            static_cast<void>(attachScopeSidecar(*cache_, request.key, sidecar));
         reading.state = ScopesReading::State::Ready;
         reading.message = sidecar->note;
         reading.detail = sidecar->identity.settings.detail;
+        const bool rendered = sidecar->identity.source == runtime::ScopeSource::Rendered;
+        const bool live = sidecar->identity.settings.detail != 0;
         reading.scopes = std::move(sidecar);
         reading.measured = result.source;
         reading.color = reading.scopes->color;
         reading.behind = false;
-        // The live tables are on show: the frame, when it stays, is measured once more in full.
-        if (pending.request.identity.settings.detail != 0) {
-            auto full = pending.request;
+        // The live tables are on show: the frame, when it stays, is measured once more in full,
+        // from a Rendered source only, so the tables never change source. Retained tables of a
+        // frame whose device tap was refused for a reason that may pass are replaced once, when
+        // the tap measures at full detail.
+        if (rendered && live) {
+            auto full = request;
             full.identity.settings.detail = 0;
+            full.renderedOnly = true;
             want_ = std::move(full);
+        } else if (!rendered && result.measured.tapRetry && !request.renderedOnly) {
+            auto retry = request;
+            retry.identity.settings.detail = 0;
+            retry.renderedOnly = true;
+            want_ = std::move(retry);
         } else {
             want_.reset();
         }
+    } else if (request.renderedOnly) {
+        // A Rendered upgrade of tables already on show that could not be made: they stay.
+        want_.reset();
+        return;
     } else {
         want_.reset();
         reading.state = ScopesReading::State::Failed;
@@ -408,8 +600,10 @@ void ScopesController::startNext() {
         publish(std::move(reading));
         return;
     }
-    // A retained frame is measured only when no shown-frame request waits or is in flight.
-    if (!want_)
+    // The fill's frames are measured only when no shown-frame request waits or is in flight: the
+    // frames that still hold their scene picture first (their picture is held until measured), then
+    // the retained ones.
+    if (!want_ && !startTap())
         static_cast<void>(startFill());
 }
 
@@ -422,6 +616,30 @@ bool ScopesController::startShown() {
     return true;
 }
 
+bool ScopesController::startTap() {
+    if (fillTaps_ == nullptr || settings_.scopes == 0)
+        return false;
+    auto tap = fillTaps_->takeTap(this);
+    if (tap == nullptr)
+        return false;
+    const auto key = PreviewFrameCacheKey::forIdentity(tap->identity());
+    const auto& frame = tap->frame();
+    PreviewScopeSource source{frame->desiredIdentity(), frame->processIdentity(),
+                              frame->provenance().provider};
+    inFlight_ = submit(Request{std::move(source), key, identityFor(viewAdjust_, 0), frame, tap,
+                               false, {}},
+                       false);
+    if (!inFlight_) {
+        // Not started: the tap is answered and the frame is counted from its retained picture.
+        tap->release();
+        if (cache_ != nullptr && cache_->contains(key))
+            fillQueue_.push_front(key);
+        return false;
+    }
+    maxInFlight_ = std::max<std::uint32_t>(maxInFlight_, 1U);
+    return true;
+}
+
 bool ScopesController::startFill() {
     if (cache_ == nullptr || settings_.scopes == 0)
         return false;
@@ -429,10 +647,17 @@ bool ScopesController::startFill() {
     while (!fillQueue_.empty()) {
         const auto key = std::move(fillQueue_.front());
         fillQueue_.pop_front();
-        const auto source = cache_->scopeSourceFor(key);
-        if (!source || cache_->scopesFor(key, identity) != nullptr)
+        auto frame = cache_->peekScopeFrame(key);
+        if (!frame.has_value() ||
+            cache_->scopesFor(key, identityFor(viewAdjust_, 0, runtime::ScopeSource::Rendered)) !=
+                nullptr ||
+            cache_->scopesFor(key, identityFor(viewAdjust_, 0, runtime::ScopeSource::Retained)) !=
+                nullptr)
             continue;
-        inFlight_ = submit(Request{*source, key, identity}, false);
+        inFlight_ = submit(
+            Request{std::move(frame->source), key, identity, std::move(frame->frame), nullptr,
+                    false, {}},
+            false);
         if (inFlight_) {
             maxInFlight_ = std::max<std::uint32_t>(maxInFlight_, 1U);
             return true;

@@ -88,7 +88,7 @@ ScopesEditor::ScopesEditor(const ScopesServices& services, RamPreviewController*
     store_ = services_.regions != nullptr ? services_.regions : new ScopesRegionStore(this);
     if (services_.usable()) {
         controller_ = new ScopesController(*services_.scheduler, *services_.bridge, services_.cache,
-                                           services_.measure, this);
+                                           services_.measure, services_.fillTaps, this);
         renderer_ = new ScopesTraceRenderer(*services_.scheduler, *services_.bridge, this);
         connect(controller_, &ScopesController::readingChanged, this, &ScopesEditor::onReading);
     }

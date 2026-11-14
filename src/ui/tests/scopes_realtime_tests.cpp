@@ -97,6 +97,7 @@ struct Gate final {
     std::atomic<int> running{0};
     std::atomic<int> maxRunning{0};
     std::atomic<bool> onInterfaceThread{false};
+    std::atomic<bool> noProcessFrame{false};
     struct Call final {
         double seconds = 0.0;
         std::uint32_t detail = 0;
@@ -164,17 +165,24 @@ int main(int argc, char** argv) {
     ui::CompositionPreviewSettings previewSettings;
     previewSettings.resolutionPolicy = runtime::PreviewResolutionPolicy::Full;
     previewSettings.colorIntent = session.colorIntent();
+    const auto evaluations = std::make_shared<std::atomic<int>>(0);
+    const auto pipeline =
+        ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer, qualified);
     ui::CompositionPreviewController controller(
         session, scheduler, bridge,
-        ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer, qualified),
+        [pipeline, evaluations](const document::Snapshot& snapshot,
+                                const runtime::PreviewRequestIdentity& identity,
+                                const std::size_t limit,
+                                const std::vector<runtime::SnapshotParameterOverride>& overrides,
+                                runtime::TaskContext& context) {
+            ++*evaluations;
+            return pipeline(snapshot, identity, limit, overrides, context);
+        },
         previewSettings, cache);
 
-    runtime::ScopeFrameRoutes routes;
-    routes.evaluateCpu = [&evaluator](auto plan, const runtime::EvaluationRequest& request,
-                                      const runtime::CancellationToken& cancellation) {
-        return evaluator.evaluate(std::move(plan), request, cancellation);
-    };
-    const auto production = ui::makeScopesMeasure(routes, {}, std::size_t{1} << 26);
+    // The measure has no evaluator to call (it counts the CPU frame's process picture); the scene
+    // runs are the preview's own, counted by wrapping its preparation function.
+    const auto production = ui::makeScopesMeasure({});
     const auto gate = std::make_shared<Gate>();
     const auto interfaceThread = std::this_thread::get_id();
     ui::ScopesServices services;
@@ -182,13 +190,16 @@ int main(int argc, char** argv) {
     services.bridge = &bridge;
     services.cache = cache;
     services.measure = [production, gate,
-                        interfaceThread](const ui::PreviewScopeSource& source,
+                        interfaceThread](const ui::ScopesMeasureInput& input,
                                          const ui::PreviewScopeIdentity& identity,
                                          const runtime::CancellationToken& cancellation) {
         if (std::this_thread::get_id() == interfaceThread)
             gate->onInterfaceThread = true;
-        gate->enter(source.identity.time.toSeconds(), identity.settings.detail);
-        auto result = production(source, identity, cancellation);
+        // The shown frame's picture is the CPU route's process frame: the measure counts it.
+        if (input.frame == nullptr || !input.frame->hasProcessFrame())
+            gate->noProcessFrame = true;
+        gate->enter(input.source.identity.time.toSeconds(), identity.settings.detail);
+        auto result = production(input, identity, cancellation);
         --gate->running;
         return result;
     };
@@ -220,6 +231,10 @@ int main(int argc, char** argv) {
             "the first frame is shown and measured, live and full");
         const auto base = gate->entered.load();
         const auto started = scopes.measuresStarted();
+        e.expect(scopes.reading().scopes != nullptr &&
+                     scopes.reading().scopes->identity.source == runtime::ScopeSource::Rendered &&
+                     scopes.reading().scopes->tables.route() == runtime::ScopeRoute::Cpu,
+                 "the shown frame was counted from its process picture (Rendered, CPU)");
 
         // The measure is held shut; the session steps through five more frames.
         gate->hold(true);
@@ -258,7 +273,9 @@ int main(int argc, char** argv) {
         e.expect(!gate->onInterfaceThread.load() && gate->running.load() == 1,
                  "the held measure runs on a task worker");
 
-        // Released: only the newest frame is measured, live then full.
+        // Released: only the newest frame is measured, live then full. Every scene run so far was
+        // the preview's own frame; the measures now to run add none.
+        const auto scenesAtRelease = evaluations->load();
         gate->hold(false);
         e.expect(awaitQtCondition("the scopes settle on the newest frame",
                                   [&] {
@@ -279,6 +296,10 @@ int main(int argc, char** argv) {
         e.expect(!gate->onInterfaceThread.load() && gate->maxRunning.load() == 1 &&
                      scopes.maxMeasuresInFlight() == 1,
                  "no measure ran on the interface thread and never two ran at once");
+        e.expect(!gate->noProcessFrame.load(),
+                 "every measure was handed the shown frame's process picture");
+        e.expect(evaluations->load() == scenesAtRelease,
+                 "the scopes ran no scene: the released measures evaluated nothing");
     }
 
     controller.beginShutdown();

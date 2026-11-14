@@ -5,6 +5,7 @@
 // measuring speed. What is pinned is not how fast a frame is but WHETHER a frame was rendered at
 // all: a cache that works shows up as an invocation count that stops moving.
 #include "await_qt.hpp"
+#include "fixed_memory_budget.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -20,12 +21,16 @@
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/gpu_preview_display_service.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/composition_plan_cache.hpp>
+#include <bloom/ui/composition_preview_cpu_stage.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -33,6 +38,7 @@
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
+#include <bloom/ui/scope_fill_taps.hpp>
 #include <bloom/ui/scopes_controller.hpp>
 #include <bloom/ui/scopes_editor.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -55,6 +61,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -663,17 +670,11 @@ void testRamFillMeasuresScopes(Expectations& expectations) {
         "foreground settled");
     fixture.frameCache->clear();
 
-    const runtime::CpuCompositionEvaluator cpuEvaluator;
-    runtime::ScopeFrameRoutes routes;
-    routes.evaluateCpu = [&cpuEvaluator](auto plan, const runtime::EvaluationRequest& request,
-                                         const runtime::CancellationToken& cancellation) {
-        return cpuEvaluator.evaluate(std::move(plan), request, cancellation);
-    };
     ui::ScopesServices services;
     services.scheduler = &fixture.scheduler;
     services.bridge = &fixture.bridge;
     services.cache = fixture.frameCache;
-    services.measure = ui::makeScopesMeasure(routes, {}, std::size_t{1} << 26);
+    services.measure = ui::makeScopesMeasure({});
 
     ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
                                  fixture.bridge, fixture.countingPipeline());
@@ -688,7 +689,10 @@ void testRamFillMeasuresScopes(Expectations& expectations) {
     expectations.expect(
         awaitQtCondition("the shown frame is measured", [&] { return !scopes.busy(); }),
         "the shown frame is measured");
-    const ui::PreviewScopeIdentity identity{.settings = panel->measureSettings(), .viewAdjust = {}};
+    // A fill with no tap (no preview display service here) is measured from the retained pictures.
+    const ui::PreviewScopeIdentity identity{.settings = panel->measureSettings(),
+                                            .viewAdjust = {},
+                                            .source = runtime::ScopeSource::Retained};
     const auto keyAt = [&](const std::int64_t frame) {
         return fixture.controller.cacheKeyForTime(time(frame, 25));
     };
@@ -749,6 +753,206 @@ void testRamFillMeasuresScopes(Expectations& expectations) {
                             "a frame filled under a hidden panel has no sidecar");
     }
     ram.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
+
+// #724 Scopes, RAM preview fill with the scene picture taps (docs/architecture/scopes.md, "RAM
+// preview fill"). A real fill through a preview display service that is not enabled (no device):
+// its CPU path accepts the flag and holds nothing, so what is tested is the owner's accounting, the
+// CPU route's process pictures and the panel.
+//   * F4: with the panel closed the fill is unchanged and pays nothing: no flagged submission, no
+//     tap, no measure of the panel, no scope counter of the service moved, no sidecar.
+//   * F5: with the panel open on the Working signal, every retained frame carries full-detail
+//     tables marked Rendered, counted from the frame's own picture, and the scopes ran no scene:
+//     the scene runs are exactly the fill's frames.
+//   * every frame of a flagged fill is answered, and a fill cancelled mid-run answers its frames.
+// The processing root a preview display service admits against, with a host sample from off the
+// interface thread (the same root the service pipeline test uses).
+std::shared_ptr<runtime::GpuProcessingPhasePolicy> sampledServiceRoot() {
+    auto sampled = std::async(std::launch::async, [] {
+        auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(4);
+        auto sample = bloom::test_support::fixedMemoryBudgetSample();
+        runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
+                                           sample.machine.availableBytes.value_or(0));
+        ledger.beginProcessSampling();
+        const auto at = runtime::GpuProcessingPhasePolicy::Clock::now();
+        const auto state = ledger.applySample(std::move(sample), at);
+        policy->applyHostSample(state, ledger.physicalByteBudget(), at);
+        return policy;
+    });
+    if (!bloom::test_support::awaitQtCondition("the off-UI processing sample finishes", [&] {
+            return sampled.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+        }))
+        throw std::runtime_error("The off-UI processing sample did not finish.");
+    return sampled.get();
+}
+
+void testRamFillTapsScopes(Expectations& expectations) {
+    const auto format = document::CompositionFormat::create(
+        64, 64, core::PixelAspectRatio::square(), *document::FrameRate::create(25, 1));
+    SessionFixture fixture(document::makeNewProject("RAM tap", "Main", time(10, 25), *format));
+    commands::Transaction range("Work area", fixture.session.snapshot().revision());
+    range.emplace<commands::SetWorkArea>(fixture.session.compositionId(), time(1, 25), time(4, 25));
+    expectations.expect(fixture.session.executeTransaction(std::move(range)).changed(),
+                        "work area accepted");
+    expectations.expect(
+        awaitQtCondition("foreground settled", [&] { return isReady(fixture.controller); }),
+        "foreground settled");
+    fixture.frameCache->clear();
+
+    // The service that every fill request goes through: not enabled, so the ordinary CPU stage and
+    // display fallback run, counted here as the scene runs.
+    const auto sceneRuns = std::make_shared<std::atomic<int>>(0);
+    auto stage = ui::makeCompositionPreviewCpuStage(
+        fixture.pipelineFixture.compiler, fixture.pipelineFixture.evaluator,
+        fixture.pipelineFixture.qualifiedProcessorProvider, fixture.pipelineFixture.planCache);
+    runtime::GpuPreviewDisplayServiceOptions options;
+    options.enabled = false;
+    options.previewByteAllowance = std::size_t{512} * 1024U * 1024U;
+    options.processingPhasePolicy = sampledServiceRoot();
+    runtime::GpuPreviewDisplayService service(
+        fixture.scheduler,
+        [stage = std::move(stage), sceneRuns](const document::Snapshot& snapshot,
+                                              const runtime::PreviewRequestIdentity& identity,
+                                              const std::size_t bytes,
+                                              const std::vector<runtime::SnapshotParameterOverride>&
+                                                  overrides,
+                                              runtime::TaskContext& context) {
+            ++*sceneRuns;
+            return stage(snapshot, identity, bytes, overrides, context);
+        },
+        ui::makeCompositionPreviewCpuDisplayFallback(fixture.pipelineFixture.displayPreparer),
+        options);
+    ui::ScopeFillTaps taps(&service, fixture.frameCache, fixture.bridge);
+    ui::RamPreviewController ram(
+        fixture.session, fixture.controller, fixture.scheduler, fixture.bridge,
+        fixture.countingPipeline(), nullptr,
+        [&service](runtime::TaskRequest request, const document::Snapshot& snapshot,
+                   const runtime::PreviewRequestIdentity& identity, const std::size_t limit,
+                   const std::vector<runtime::SnapshotParameterOverride>& overrides) {
+            return service.submit(std::move(request), snapshot, identity, limit, overrides);
+        });
+    ram.setScopeFillTaps(&taps);
+
+    ui::ScopesServices services;
+    services.scheduler = &fixture.scheduler;
+    services.bridge = &fixture.bridge;
+    services.cache = fixture.frameCache;
+    services.measure = ui::makeScopesMeasure({});
+    services.fillTaps = &taps;
+    QWidget host;
+    host.resize(520, 1500);
+    auto* panel = new ui::ScopesEditor(services, &ram, &host);
+    auto& scopes = *panel->controller();
+    panel->setSignal(runtime::ScopeSignal::Working);
+    const auto keyAt = [&](const std::int64_t frame) {
+        return fixture.controller.cacheKeyForTime(time(frame, 25));
+    };
+    const auto answered = [&] { return taps.answeredByMeasure() + taps.answeredByDrop(); };
+
+    // F4: the panel is closed (its host never shown): the fill pays nothing.
+    expectations.expect(!panel->panelShown() && !taps.wanted(),
+                        "a panel that is not shown does not want the fill's taps");
+    const auto scopeCountersBefore = service.status().counters;
+    ram.start();
+    expectations.expect(
+        awaitQtCondition("the fill with the panel closed ends with its three frames",
+                         [&] { return !ram.isCaching() && ram.cachedFrameCount() == 3; }),
+        "the fill with the panel closed ends with its three frames");
+    const auto scopeCountersAfter = service.status().counters;
+    expectations.expect(taps.flaggedSubmissions() == 0 && taps.waitingTaps() == 0 &&
+                            taps.pendingSubmissions() == 0 && answered() == 0 &&
+                            scopes.measuresStarted() == 0 &&
+                            scopeCountersAfter.scopeFillTapsKept ==
+                                scopeCountersBefore.scopeFillTapsKept &&
+                            scopeCountersAfter.scopeFillStageWaits == 0 &&
+                            scopeCountersAfter.scopeMeasuresRequested == 0 &&
+                            scopeCountersAfter.scopeMeasuresStarted == 0 &&
+                            scopeCountersAfter.scopeTableReadbacks == 0,
+                        "a fill with the panel closed flags nothing, taps nothing and measures "
+                        "nothing");
+    expectations.expect(sceneRuns->load() == 3, "the closed fill ran exactly its three scenes");
+    for (std::int64_t frame = 1; frame < 4; ++frame) {
+        const auto key = keyAt(frame);
+        expectations.expect(key && fixture.frameCache->contains(*key) &&
+                                fixture.frameCache->scopeSidecarBytes() == 0,
+                            "a frame filled with the panel closed is retained with no sidecar");
+    }
+
+    // F5: the panel is open on the Working signal; another range is filled.
+    commands::Transaction second("Work area", fixture.session.snapshot().revision());
+    second.emplace<commands::SetWorkArea>(fixture.session.compositionId(), time(5, 25),
+                                          time(8, 25));
+    expectations.expect(fixture.session.executeTransaction(std::move(second)).changed(),
+                        "second work area accepted");
+    host.show();
+    expectations.expect(awaitQtCondition("the panel is shown", [&] { return panel->panelShown(); }),
+                        "the panel is shown");
+    expectations.expect(taps.wanted(), "a panel shown with a scope open wants the fill's taps");
+    const auto scenesBefore = sceneRuns->load();
+    ram.start();
+    expectations.expect(
+        awaitQtCondition("the fill with the panel open ends with its frames",
+                         [&] { return !ram.isCaching() && ram.cachedFrameCount() == 3; }),
+        "the fill with the panel open ends with its frames");
+    expectations.expect(
+        awaitQtCondition("every flagged frame is answered and measured",
+                         [&] {
+                             return taps.flaggedSubmissions() == 3 &&
+                                    answered() == taps.flaggedSubmissions() &&
+                                    taps.pendingSubmissions() == 0 && taps.waitingTaps() == 0 &&
+                                    !scopes.busy();
+                         }),
+        "every flagged frame is answered and measured");
+    auto settings = panel->measureSettings();
+    settings.detail = 0;
+    const ui::PreviewScopeIdentity identity{.settings = settings,
+                                            .viewAdjust = {},
+                                            .source = runtime::ScopeSource::Rendered};
+    for (std::int64_t frame = 5; frame < 8; ++frame) {
+        const auto key = keyAt(frame);
+        const auto sidecar = key ? fixture.frameCache->scopesFor(*key, identity) : nullptr;
+        expectations.expect(sidecar != nullptr && sidecar->tables.counted() == 64U * 64U &&
+                                sidecar->identity.settings.signal == runtime::ScopeSignal::Working &&
+                                sidecar->identity.settings.detail == 0U &&
+                                sidecar->identity.source == runtime::ScopeSource::Rendered,
+                            "every frame the fill retained carries full-detail Working tables, "
+                            "marked Rendered");
+    }
+    expectations.expect(sceneRuns->load() - scenesBefore == 3,
+                        "the scopes ran no scene: the scene runs are the fill's three frames");
+    expectations.expect(taps.keptTables() == 0, "no tables are left waiting for a frame");
+
+    // A fill cancelled with its frame in flight: the frame is answered whatever happens to it.
+    commands::Transaction third("Work area", fixture.session.snapshot().revision());
+    third.emplace<commands::SetWorkArea>(fixture.session.compositionId(), time(0, 25),
+                                         time(10, 25));
+    expectations.expect(fixture.session.executeTransaction(std::move(third)).changed(),
+                        "third work area accepted");
+    const auto flaggedBefore = taps.flaggedSubmissions();
+    ram.start();
+    ram.cancel();
+    expectations.expect(
+        awaitQtCondition("a cancelled fill answers every flagged frame",
+                         [&] {
+                             return answered() == taps.flaggedSubmissions() &&
+                                    taps.pendingSubmissions() == 0 && taps.waitingTaps() == 0 &&
+                                    !scopes.busy();
+                         }),
+        "a cancelled fill answers every flagged frame");
+    expectations.expect(taps.flaggedSubmissions() >= flaggedBefore,
+                        "the cancelled fill's flagged frames are counted");
+
+    // The panel is closed while a fill runs: the next frames are not flagged.
+    host.hide();
+    expectations.expect(
+        awaitQtCondition("the panel is hidden", [&] { return !panel->panelShown() && !taps.wanted(); }),
+        "the panel is hidden and no longer wants the fill's taps");
+    ram.beginShutdown();
+    taps.shutdown();
+    expectations.expect(answered() == taps.flaggedSubmissions(),
+                        "every flagged frame was answered exactly once");
     finishFixture(fixture, expectations);
 }
 
@@ -2048,6 +2252,7 @@ int main(int argc, char** argv) {
         testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(expectations);
         testRamPreviewWorkArea(expectations);
         testRamFillMeasuresScopes(expectations);
+        testRamFillTapsScopes(expectations);
         testRamPreviewButtonReflectsFillingAndCancels(expectations);
         testRamPreviewCachesTheRangeThenPlaysEveryFrame(expectations);
         testLargeIndexedCoverageMetadata(expectations);

@@ -413,13 +413,7 @@ int main(int argc, char** argv) {
         ui::TaskUiBridge bridge{scheduler, nullptr, 1ms};
         auto cache = std::make_shared<PreviewFrameCache>(std::size_t{1} << 28);
 
-        const runtime::CpuCompositionEvaluator cpuEvaluator;
-        runtime::ScopeFrameRoutes routes;
-        routes.evaluateCpu = [&cpuEvaluator](auto plan, const runtime::EvaluationRequest& request,
-                                             const runtime::CancellationToken& cancellation) {
-            return cpuEvaluator.evaluate(std::move(plan), request, cancellation);
-        };
-        const auto production = ui::makeScopesMeasure(routes, {}, std::size_t{1} << 26);
+        const auto production = ui::makeScopesMeasure({});
         const auto measured = std::make_shared<Measured>();
         const auto interfaceThread = std::this_thread::get_id();
         ui::ScopesServices services;
@@ -427,13 +421,13 @@ int main(int argc, char** argv) {
         services.bridge = &bridge;
         services.cache = cache;
         services.measure = [production, measured,
-                            interfaceThread](const ui::PreviewScopeSource& source,
+                            interfaceThread](const ui::ScopesMeasureInput& input,
                                              const ui::PreviewScopeIdentity& identity,
                                              const runtime::CancellationToken& cancellation) {
             if (std::this_thread::get_id() == interfaceThread)
                 measured->onInterfaceThread = true;
             ++measured->started;
-            return production(source, identity, cancellation);
+            return production(input, identity, cancellation);
         };
         services.compositionName = [](document::ProjectId, document::CompositionId) {
             return QStringLiteral("Titles");
@@ -919,7 +913,9 @@ int main(int argc, char** argv) {
         e.expect(frame2 && frame3, "the fill's frames are built");
         if (frame2 && frame3) {
             const auto settings = panel->measureSettings();
-            const auto identity = ui::PreviewScopeIdentity{.settings = settings, .viewAdjust = {}};
+            // A frame the cache retains is counted from its retained picture.
+            const auto identity = ui::PreviewScopeIdentity{
+                .settings = settings, .viewAdjust = {}, .source = runtime::ScopeSource::Retained};
             panel->setRamFillRunning(true);
             e.expect(cache->insert(frame2).retained(), "a fill frame is cached");
             e.expect(awaitQtCondition("during a fill the retained frames are measured",

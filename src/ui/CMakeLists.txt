@@ -585,6 +585,7 @@ target_sources(
         qt_font_transport.hpp
         tool_controller.cpp
         composition_thumbnail_controller.cpp
+        scope_fill_taps.cpp
         scopes_controller.cpp
         scopes_drawing.cpp
         scopes_editor.cpp
@@ -817,6 +818,7 @@ target_sources(
             include/bloom/ui/layer_alignment_actions.hpp
             include/bloom/ui/tool_controller.hpp
             include/bloom/ui/composition_thumbnail_controller.hpp
+            include/bloom/ui/scope_fill_taps.hpp
             include/bloom/ui/scopes_controller.hpp
             include/bloom/ui/scopes_drawing.hpp
             include/bloom/ui/scopes_editor.hpp

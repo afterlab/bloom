@@ -21,6 +21,7 @@
 namespace bloom::ui {
 
 class CompositionSession;
+class ScopeFillTaps;
 class TaskUiBridge;
 
 // Exact frame-grid coverage independent of pixel payloads. Each insertion/removal touches its
@@ -151,6 +152,11 @@ class RamPreviewController final : public QObject {
         fillWidthProvider_ = std::move(provider);
     }
     [[nodiscard]] std::size_t fillWidth() const noexcept { return pipeline_.width(); }
+    // #724 Scopes: while a Scopes panel is shown with a scope open, the fill's requests carry the
+    // flag that keeps each frame's scene picture for the panel's measure, through `taps` (see
+    // ScopeFillTaps: it answers every flagged frame, whatever happens to the fill). With no panel
+    // wanting them the fill is unchanged. `taps` must outlive this controller. Null: no flag.
+    void setScopeFillTaps(ScopeFillTaps* taps);
     // The high-water mark of frames ever preparing at once for this controller (across its runs).
     // Exposed so a test can pin the bound without racing the workers.
     [[nodiscard]] std::uint32_t peakInFlightFrames() const noexcept {
@@ -235,6 +241,7 @@ class RamPreviewController final : public QObject {
     TaskUiBridge& taskUiBridge_;
     PreviewPreparationFunction preparation_;
     PreviewPreparationSubmitter submitter_;
+    ScopeFillTaps* scopeTaps_ = nullptr;
 
     // At most TWO frames preparing at once; the bound and cancellation live in the helper.
     FillWidthProvider fillWidthProvider_;

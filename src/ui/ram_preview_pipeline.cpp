@@ -40,6 +40,8 @@ std::size_t RamPreviewPipeline::cancelIf(const std::function<bool(const InFlight
     std::size_t cancelled = 0;
     for (auto it = slots_.begin(); it != slots_.end();) {
         if (stale(*it)) {
+            if (detachObserver_)
+                detachObserver_(it->identity);
             it->handle.cancel();
             it = slots_.erase(it);
             ++cancelled;
@@ -52,6 +54,12 @@ std::size_t RamPreviewPipeline::cancelIf(const std::function<bool(const InFlight
 
 void RamPreviewPipeline::cancelAllAndDetach() noexcept {
     for (auto& slot : slots_) {
+        if (detachObserver_) {
+            try {
+                detachObserver_(slot.identity);
+            } catch (...) {
+            }
+        }
         slot.handle.cancel();
     }
     slots_.clear();

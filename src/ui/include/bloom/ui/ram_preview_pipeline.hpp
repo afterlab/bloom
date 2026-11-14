@@ -65,6 +65,12 @@ class RamPreviewPipeline final {
     // duplicate of a frame still in flight.
     [[nodiscard]] bool isInFlight(const PreviewFrameCacheKey& key) const;
 
+    // Told about every slot this pipeline stops reading (cancelled and detached), before its task
+    // is cancelled: the result of such a task is never taken from here.
+    void setDetachObserver(std::function<void(const runtime::PreviewRequestIdentity&)> observer) {
+        detachObserver_ = std::move(observer);
+    }
+
     // Adds an accepted submission. Caller must have checked hasCapacity().
     void add(InFlight slot);
 
@@ -87,6 +93,7 @@ class RamPreviewPipeline final {
     std::size_t width_ = kMaxInFlight;
     std::vector<InFlight> slots_;
     std::uint32_t peakInFlight_ = 0;
+    std::function<void(const runtime::PreviewRequestIdentity&)> detachObserver_;
 };
 
 } // namespace bloom::ui

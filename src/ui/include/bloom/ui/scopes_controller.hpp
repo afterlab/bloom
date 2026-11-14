@@ -10,15 +10,29 @@
 // While another frame's tables are still the ones on show, the reading says it is behind and names
 // the frame that was measured.
 //
+// A measure never evaluates a scene: it counts a picture the Viewer already produced. For a frame
+// it picks, in this order, (a) the scene picture the Viewer's own device kept for the frame (the
+// scope tap of the preview display service; source Rendered, route GPU), (b) the CPU route's
+// process picture the frame still holds (Rendered, CPU), (c) the retained 8-bit display picture
+// (source Retained, route CPU; Display and CIE only, the Working signal says it is not available
+// for a cached frame). When (a) is tried and does not measure (skipped, busy, failed) the frame is
+// counted from (c) so the scopes keep updating, and a frame that stays shown tries (a) once more at
+// full detail and replaces the Retained tables by the Rendered ones when that works.
+//
 // The work is bounded (docs/architecture/scopes.md, "Real-time cost"): one measure is in flight per
 // controller, for the shown frame and the RAM preview fill together, and a newer request only
-// replaces the one waiting. The shown frame is measured at the live detail first and, when that
-// frame is still the one shown, once more at full detail.
+// replaces the one waiting. A Rendered shown frame is measured at the live detail first and, when
+// that frame is still the one shown, once more at full detail. A Retained measure counts the same
+// pixels at either detail on the CPU, so it is made once, at full detail, and its frame is not
+// measured again (except for the one retry of (a) above); a Rendered measure that follows a live
+// one never replaces its tables by Retained ones, so the source never flickers.
 //
-// During a RAM preview fill, with the panel open, every frame the cache retains is measured too, in
-// the background and only while nothing else is wanted, so a warm range plays its scopes without
-// measuring.
+// During a RAM preview fill, with the panel open, the fill's frames are measured from their own
+// scene pictures at full detail (ScopeFillTaps), and every other frame the cache retains from its
+// retained picture, in the background and only while nothing else is wanted, so a warm range plays
+// its scopes without measuring.
 
+#include <bloom/runtime/gpu_scope_measure.hpp>
 #include <bloom/runtime/scope_frame_measure.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
@@ -34,9 +48,34 @@
 #include <optional>
 #include <string>
 
+namespace bloom::runtime {
+class GpuPreviewDisplayService;
+struct GpuSceneOcioContext;
+} // namespace bloom::runtime
+
 namespace bloom::ui {
 
+class ScopeFillTap;
+class ScopeFillTaps;
 class TaskUiBridge;
+
+// What one measure of a frame may count. The measure never evaluates a scene.
+struct ScopesMeasureInput final {
+    // The frame's request, plan and route.
+    PreviewScopeSource source;
+    // The frame as the Viewer shows it, or as the cache retains it: its process picture (CPU
+    // route) and its retained display picture. Null for a fill frame the cache does not hold yet.
+    PreparedPreviewFrameHandle frame;
+    // A RAM preview fill frame's tap, counted instead of the Viewer's tap. The measure answers it.
+    std::shared_ptr<ScopeFillTap> fillTap;
+    // Only the Rendered sources are tried: the device tap and the CPU process picture. Used to
+    // replace tables that are already on show; a result that is not Measured leaves them as they
+    // are.
+    bool renderedOnly = false;
+    // Why a RAM preview fill's tap of this frame did not measure, when it did not (for the status
+    // of a cached frame); empty otherwise.
+    std::string priorTapNote;
+};
 
 // One measure of one frame, run on a task worker.
 struct ScopesMeasured final {
@@ -44,18 +83,30 @@ struct ScopesMeasured final {
     // The signal's color objects (the graticules' primaries and white, the luma coefficients);
     // null when they could not be prepared.
     std::shared_ptr<const runtime::ScopeSignalColor> color;
+    // The detail the tables were counted at (a Retained measure is always at full detail).
+    std::uint32_t detail = 0;
+    // Why the device tap was not used when it was tried or expected; empty when it was used or the
+    // frame has none.
+    std::string tapNote;
+    // The tap was tried and refused for a reason that may pass (busy, no room, superseded, failed),
+    // not because the frame has no tap.
+    bool tapRetry = false;
 };
-using ScopesMeasure = std::function<ScopesMeasured(const PreviewScopeSource& source,
+using ScopesMeasure = std::function<ScopesMeasured(const ScopesMeasureInput& input,
                                                    const PreviewScopeIdentity& identity,
                                                    const runtime::CancellationToken& cancellation)>;
 
-// The production measure: the frame's own plan and request through runtime::measureScopeFrame, on
-// the device when the frame was prepared on the device. `assetBaseDirectory` is read on the
-// worker for every measure. Thread-safe; keeps the color objects of the last few signals.
-[[nodiscard]] ScopesMeasure
-makeScopesMeasure(runtime::ScopeFrameRoutes routes,
-                  std::function<std::optional<std::filesystem::path>()> assetBaseDirectory,
-                  std::size_t pixelStorageByteLimit);
+// Where the production measure finds pictures. Neither source evaluates a scene.
+struct ScopesMeasureSources final {
+    // The preview display service of the Viewer's device (null: no tap).
+    runtime::GpuPreviewDisplayService* previewService = nullptr;
+    // The shared OCIO context the device color steps are prepared from, resolved on the worker.
+    std::function<std::shared_ptr<const runtime::GpuSceneOcioContext>()> ocio;
+};
+
+// The production measure: the device tap, else the frame's own process picture, else its retained
+// display picture. Thread-safe; keeps the color objects of the last few signals.
+[[nodiscard]] ScopesMeasure makeScopesMeasure(ScopesMeasureSources sources);
 
 struct ScopesReading final {
     enum class State : std::uint8_t {
@@ -89,9 +140,11 @@ class ScopesController final : public QObject {
     Q_OBJECT
 
   public:
+    // `fillTaps` (optional) hands the controller the taps of the RAM preview fill's frames while a
+    // scope is open.
     ScopesController(runtime::TaskScheduler& scheduler, TaskUiBridge& bridge,
                      PreviewFrameCacheHandle cache, ScopesMeasure measure,
-                     QObject* parent = nullptr);
+                     ScopeFillTaps* fillTaps = nullptr, QObject* parent = nullptr);
     ~ScopesController() override;
 
     // The measure the panel wants. No scope bit (a hidden panel, every section collapsed) measures
@@ -106,7 +159,8 @@ class ScopesController final : public QObject {
     // the Viewer's neutral frame; the adjustment is applied by the measure.
     void showFrame(const PreparedPreviewFrameHandle& frame, runtime::ViewAdjust viewAdjust);
 
-    // A RAM preview fill is running: measure the frames the cache retains.
+    // A RAM preview fill is running: measure the frames the cache retains from their retained
+    // pictures (the fill's own taps are served whenever a scope is open).
     void setRangeFillActive(bool active);
 
     [[nodiscard]] const ScopesReading& reading() const noexcept { return reading_; }
@@ -143,19 +197,27 @@ class ScopesController final : public QObject {
     struct Request final {
         PreviewScopeSource source;
         PreviewFrameCacheKey key;
+        // What is asked for (source Rendered); the sidecar names what was counted.
         PreviewScopeIdentity identity;
+        PreparedPreviewFrameHandle frame;
+        std::shared_ptr<ScopeFillTap> tap;
+        bool renderedOnly = false;
+        std::string priorTapNote;
     };
     struct Pending final {
         runtime::TaskHandle<ResultHandle> handle;
         Request request;
-        // True for the shown frame's measure, false for a retained frame of the fill.
+        // True for the shown frame's measure, false for a fill frame (a tap or a retained frame).
         bool shown = true;
         // Cancelled: it keeps the slot until its task has finished, and its result is dropped.
         bool cancelled = false;
     };
 
     [[nodiscard]] PreviewScopeIdentity identityFor(runtime::ViewAdjust viewAdjust,
-                                                   std::uint32_t detail = 0) const;
+                                                   std::uint32_t detail = 0,
+                                                   runtime::ScopeSource source =
+                                                       runtime::ScopeSource::Rendered) const;
+    [[nodiscard]] std::string priorNote(const PreviewFrameCacheKey& key) const;
     void refresh();
     void cancelInFlight();
     void poll();
@@ -163,17 +225,22 @@ class ScopesController final : public QObject {
     void startNext();
     void takeShown(const Result& result, const Pending& pending);
     [[nodiscard]] bool startShown();
+    [[nodiscard]] bool startTap();
     [[nodiscard]] bool startFill();
+    void takeFill(const Result* result, const Pending& pending);
     [[nodiscard]] std::optional<Pending> submit(const Request& request, bool shown);
-    [[nodiscard]] PreviewScopeSidecarHandle sidecarOf(const Result& result) const;
+    [[nodiscard]] PreviewScopeSidecarHandle sidecarOf(const Result& result,
+                                                      const PreviewScopeIdentity& asked) const;
     void publish(ScopesReading reading);
 
     runtime::TaskScheduler& scheduler_;
     TaskUiBridge& bridge_;
     PreviewFrameCacheHandle cache_;
     ScopesMeasure measure_;
+    ScopeFillTaps* fillTaps_ = nullptr;
     runtime::ScopeMeasureSettings settings_;
     std::optional<PreviewScopeSource> shown_;
+    PreparedPreviewFrameHandle shownFrame_;
     runtime::ViewAdjust viewAdjust_{};
     ScopesReading reading_;
     // The one measure in flight: the shown frame's or a retained frame's.

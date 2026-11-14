@@ -225,25 +225,19 @@ class Workspace final {
         viewer_ = std::make_unique<ui::ViewerEditor>(*session_, *controller_);
         viewer_->setScopesRegionStore(&store_);
 
-        runtime::ScopeFrameRoutes routes;
-        routes.evaluateCpu = [this](std::shared_ptr<const runtime::CompiledCompositionPlan> plan,
-                                    const runtime::EvaluationRequest& request,
-                                    const runtime::CancellationToken& token) {
-            return cpu_.evaluate(std::move(plan), request, token);
-        };
-        const auto production = ui::makeScopesMeasure(routes, {}, std::size_t{1} << 28);
+        const auto production = ui::makeScopesMeasure({});
         ui::ScopesServices services;
         services.scheduler = &rig_.scheduler;
         services.bridge = rig_.bridge.get();
         services.cache = cache_;
         services.regions = &store_;
         // The production measure; a held frame waits (so the panel can be shown behind it).
-        services.measure = [production, this](const ui::PreviewScopeSource& source,
+        services.measure = [production, this](const ui::ScopesMeasureInput& input,
                                               const ui::PreviewScopeIdentity& identity,
                                               const runtime::CancellationToken& token) {
             while (hold_.load() && !token.isCancellationRequested())
                 std::this_thread::sleep_for(1ms);
-            return production(source, identity, token);
+            return production(input, identity, token);
         };
         services.compositionName = [](document::ProjectId, document::CompositionId) {
             return QStringLiteral("Main");
@@ -348,7 +342,6 @@ class Workspace final {
     ui::ScopesRegionStore store_;
     std::unique_ptr<ui::ViewerEditor> viewer_;
     std::unique_ptr<ui::ScopesEditor> panel_;
-    runtime::CpuCompositionEvaluator cpu_;
     std::atomic<bool> hold_{false};
 };
 

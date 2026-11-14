@@ -539,7 +539,10 @@ McpLiveUiBinding::warmScopes(const scripting::ScopeWarmQuery& query) const {
         if (!named && !defaulted)
             return std::nullopt;
     }
-    const auto sidecar = scopeCache_->scopesFor(*key, PreviewScopeIdentity{query.settings, {}});
+    // Only a Rendered sidecar answers a read: the tables of a retained 8-bit picture are another
+    // definition (their identity names the source), and a read with no such sidecar measures.
+    const auto sidecar = scopeCache_->scopesFor(
+        *key, PreviewScopeIdentity{query.settings, {}, runtime::ScopeSource::Rendered});
     if (sidecar == nullptr)
         return std::nullopt;
     return scripting::ScopeWarmHit{sidecar->tables, sidecar->area, sidecar->note};
