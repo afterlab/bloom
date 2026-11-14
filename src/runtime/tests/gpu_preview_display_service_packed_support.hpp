@@ -46,7 +46,7 @@ struct PackedProgramStorageProbe final {
     }
 };
 
-void observePackedProgramStorage(
+[[maybe_unused]] void observePackedProgramStorage(
     const std::shared_ptr<bloom::runtime::detail::PreviewDisplayServiceCore>& core,
     const std::shared_ptr<bloom::runtime::GpuProcessingPhasePolicy>& policy,
     const std::shared_ptr<PackedProgramStorageProbe>& probe) {
@@ -71,7 +71,7 @@ void observePackedProgramStorage(
     };
 }
 
-void checkPackedProgramStorage(Expectations& checks,
+[[maybe_unused]] void checkPackedProgramStorage(Expectations& checks,
                                const PackedProgramStorageProbe::Sample& sample,
                                const std::uint64_t logicalPackedBytes) {
     checks.expect(sample.sampledTextures == 0 && sample.programs.cacheEntries == 1 &&
@@ -83,7 +83,7 @@ void checkPackedProgramStorage(Expectations& checks,
                   "one exact native OCIO program owns its status/uniform and packed intermediate");
 }
 
-[[nodiscard]] bloom::runtime::PreviewDisplayBufferView
+[[maybe_unused]] [[nodiscard]] bloom::runtime::PreviewDisplayBufferView
 packedView(const bloom::runtime::PreparedPreviewFrame& frame) {
     const auto view = frame.displayBufferView();
     if (!view)
@@ -158,7 +158,7 @@ packedResult(const std::optional<TaskResult<PreviewPreparationResultHandle>>& re
     return (**result->value()).frame();
 }
 
-void compareCpu(Expectations& checks, const bloom::runtime::PreparedPreviewFrame& frame,
+[[maybe_unused]] void compareCpu(Expectations& checks, const bloom::runtime::PreparedPreviewFrame& frame,
                 const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan,
                 const bloom::color::PreparedCpuDisplayProcessorHandle& processor) {
     const auto& identity = frame.desiredIdentity();
