@@ -3207,19 +3207,14 @@ void drivenValuesShareWhatIsPrepared() {
                 imageSource = node.id;
         expect(audioLayer.isValid() && imageSource.isValid(), "both layers are added");
         const auto waitFor = [&](const char* what, const QString& port, const double want) {
-            QElapsedTimer wait;
-            wait.start();
             QString text;
-            bool reached = false;
-            while (!reached && wait.elapsed() < 20000) {
-                QCoreApplication::processEvents();
-                QThread::msleep(5);
+            const bool reached = bloom::test_support::awaitQtCondition(what, [&] {
                 const auto texts = readoutTexts(fixture.properties);
                 text = texts.contains(port) ? texts.at(port) : QString();
                 bool number = false;
                 const double value = text.toDouble(&number);
-                reached = number && std::abs(value - want) < 0.02;
-            }
+                return number && std::abs(value - want) < 0.02;
+            });
             expect(reached, (std::string(what) + ": " + text.toStdString()).c_str());
         };
 
@@ -3254,12 +3249,10 @@ void drivenValuesShareWhatIsPrepared() {
         const auto read = platform::sourceReadWork().fullReads;
         const auto evaluations = session.drivenValueWork().evaluations;
         expect(session.setCurrentTime(*core::RationalTime::create(2, 1)), "the playhead moves");
-        QElapsedTimer wait;
-        wait.start();
-        while (session.drivenValueWork().evaluations == evaluations && wait.elapsed() < 20000) {
-            QCoreApplication::processEvents();
-            QThread::msleep(5);
-        }
+        expect(bloom::test_support::awaitQtCondition(
+                   "the moved playhead evaluates the driven values again",
+                   [&] { return session.drivenValueWork().evaluations != evaluations; }),
+               "the moved playhead evaluates the driven values again");
         waitFor("and resolves again at another time", QStringLiteral("count"), 256.0);
         expect(session.drivenValueWork().evaluations > evaluations &&
                    platform::sourceReadWork().fullReads == read,

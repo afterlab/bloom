@@ -176,6 +176,7 @@ if(BUILD_TESTING)
     # its source is under tests/integration.
     add_executable(bloom_scripting_render_source_mirror_test
                    "${PROJECT_SOURCE_DIR}/tests/integration/render_source_mirror_tests.cpp")
+    target_include_directories(bloom_scripting_render_source_mirror_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     target_link_libraries(bloom_scripting_render_source_mirror_test PRIVATE bloom_scripting
                                                                             bloom_media_cache)
     bloom_enable_warnings(bloom_scripting_render_source_mirror_test)

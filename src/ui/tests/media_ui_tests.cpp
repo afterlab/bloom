@@ -631,9 +631,9 @@ void run() {
                 "an unrelated edit probes no source file");
     }
     controller.verifyFootage();
-    timer.restart();
-    while (!controller.missing(still) && timer.elapsed() < 15000)
-        QTest::qWait(10);
+    require(awaitQtCondition("Verify footage reports the removed source missing",
+                             [&] { return controller.missing(still); }),
+            "Verify footage reports the removed source missing");
     require(controller.missing(still) && controller.thumbnail(still).isNull(),
             "unreadable asset never reuses a stale decoded proxy");
     require(card->assetProblem() && warningBadge(renderCard()) > 5,
@@ -693,10 +693,9 @@ void playbackStartsNoMediaJobs() {
     for (const auto& asset : session.snapshot().project().assets())
         layers.emplace<commands::AddImageLayer>(session.compositionId(), asset.id);
     require(session.executeTransaction(std::move(layers)).succeeded(), "25 sequence layers");
-    timer.restart();
-    while ((controller.busy() || controller.thumbnailsPending()) && timer.elapsed() < 30000)
-        QTest::qWait(10);
-    require(!controller.thumbnailsPending(), "the media worker settles before playback");
+    require(awaitQtCondition("the media worker settles before playback",
+                             [&] { return !controller.busy() && !controller.thumbnailsPending(); }),
+            "the media worker settles before playback");
     // #718: the Assets panel says where each source lives and what the disk cache holds of it.
     // A thumbnail reads a sequence's first member, so one file of each is copied.
     mirror.flush();

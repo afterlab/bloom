@@ -6,6 +6,7 @@
 // pick list (document enum, OCIO color space, LUT/audio/image/video asset, font, probe list) must
 // be a KDropdown on the card AND in Properties, bools a KSwitch, colors a KColorChip. The audit
 // table is printed so the docs table can be regenerated from it.
+#include "await_qt.hpp"
 #include "channel_checklist_field.hpp"
 #include "font_picker.hpp"
 #include "node_editor_items.hpp"
@@ -347,14 +348,15 @@ int main(int argc, char** argv) {
                        parameter, document::NumberListValue{{1.0, 2.5, -3.0, 4.0, 5.0}}, "List"),
                    "the clean project's list is authored");
             listSession.selectNode(*id);
-            QElapsedTimer wait;
-            wait.start();
             QString readout;
-            while (readout.isEmpty() && wait.elapsed() < 15'000) {
-                listSession.refreshDrivenValues();
-                QApplication::processEvents(QEventLoop::AllEvents, 20);
-                readout = listSession.valueOutputText(*id, document::kValuePortName);
-            }
+            expect(bloom::test_support::awaitQtCondition(
+                       "the list output is read out",
+                       [&] {
+                           listSession.refreshDrivenValues();
+                           readout = listSession.valueOutputText(*id, document::kValuePortName);
+                           return !readout.isEmpty();
+                       }),
+                   "the list output is read out");
             expect(readout == QStringLiteral("5 items: 1, 2.5, -3, 4, …"),
                    "the list output reads out its length and first numbers, not \"" +
                        readout.toStdString() + "\"");
@@ -382,5 +384,5 @@ int main(int argc, char** argv) {
     }
     expect(audited > 50, "the audit reached the registry's parameters");
     std::cerr << "audited parameters: " << audited << '\n';
-    return failures == 0 ? 0 : 1;
+    return failures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

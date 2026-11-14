@@ -111,12 +111,9 @@ void run() {
         QMetaObject::invokeMethod(grid, "settleNow");
         expect(evaluations() == resolved + 1,
                "the bounds are resolved once when the playhead has stood still");
-        QElapsedTimer timer;
-        timer.start();
-        while (grid->property("boundsResolving").toBool() && timer.elapsed() < 10000) {
-            settle();
-            QThread::msleep(5);
-        }
+        expect(bloom::test_support::awaitQtCondition("the anchor grid's one evaluation finishes",
+                                [&] { return !grid->property("boundsResolving").toBool(); }),
+               "the anchor grid's one evaluation finishes");
         expect(!grid->property("boundsResolving").toBool() && evaluations() == resolved + 1 &&
                    grid->isEnabled(),
                "that one evaluation finishes and nothing follows it");

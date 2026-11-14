@@ -284,9 +284,9 @@ int run(int argc, char** argv) {
                 return audioPlaybackSession.mix().has_value() && playbackAudible() == expected &&
                        delivered();
             };
-            while (!published() && timer.elapsed() < 15000)
-                QTest::qWait(10);
-            require(published(), "stage 7c: playback publishes the mix export evaluates");
+            require(bloom::test_support::awaitQtCondition("stage 7c: playback publishes the mix export evaluates",
+                                     published),
+                    "stage 7c: playback publishes the mix export evaluates");
             require(playback.state() == ui::PlaybackState::Playing,
                     "stage 7c: the edit does not stop playback");
         };
@@ -327,14 +327,11 @@ int run(int argc, char** argv) {
         remove.emplace<commands::DeleteLayers>(composition, std::vector<document::LayerId>{second});
         require(fixture.session.executeTransaction(std::move(remove)).succeeded(),
                 "stage 7c: the second layer is removed");
-        {
-            QElapsedTimer timer;
-            timer.start();
-            while ((!audioPlaybackSession.mix() || playbackAudible().size() != 1) &&
-                   timer.elapsed() < 15000)
-                QTest::qWait(10);
-        }
-        require(audioPlaybackSession.mix().has_value() && playbackAudible().size() == 1,
+        require(bloom::test_support::awaitQtCondition("stage 7c: one layer remains",
+                                 [&] {
+                                     return audioPlaybackSession.mix().has_value() &&
+                                            playbackAudible().size() == 1;
+                                 }),
                 "stage 7c: one layer remains");
         playback.pause();
         std::cout << "stage 7c ok: peaks " << one << " and " << two << '\n';

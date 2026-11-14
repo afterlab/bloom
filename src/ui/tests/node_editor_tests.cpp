@@ -772,10 +772,9 @@ void testBakeToKeyframesIsOneUndoStep(Expectations& expectations) {
     const auto curves = [&] { return fixture.session.composition()->animationCurves().records().size(); };
     const auto curvesBefore = curves();
     bake->trigger();
-    QElapsedTimer timer;
-    timer.start();
-    while (numberNodes() == 1 && timer.elapsed() < 20000)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    expectations.expect(bloom::test_support::awaitQtCondition("the bake adds its Number node",
+                                         [&] { return numberNodes() != 1; }),
+                        "the bake finishes");
     expectations.expect(numberNodes() == 2 && curves() == curvesBefore + 1,
                         "Bake to Keyframes adds one keyed Number node");
     expectations.expect(fixture.session.undoLabel() == QStringLiteral("Bake to keyframes"),

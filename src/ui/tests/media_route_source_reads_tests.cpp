@@ -7,6 +7,9 @@
 // Device-free: the CPU reference route. The GPU preparation's reads are covered by
 // bloom.runtime.gpu_media_scene_preparation.
 
+#include "await_qt.hpp"
+#include "fixed_memory_budget.hpp"
+
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
@@ -34,7 +37,6 @@
 #include <QApplication>
 #include <QColor>
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QImage>
 #include <QSettings>
@@ -49,7 +51,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <thread>
 #include <utility>
 
 namespace {
@@ -68,20 +69,6 @@ void expect(const bool ok, const std::string& message) {
 constexpr std::uint32_t kWidth = 64;
 constexpr std::uint32_t kHeight = 36;
 constexpr std::uint64_t kMembers = 3;
-
-template <typename Predicate>
-bool waitUntil(Predicate predicate, const std::chrono::milliseconds limit = 30s) {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < limit.count()) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        if (predicate())
-            return true;
-        std::this_thread::sleep_for(1ms);
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    return predicate();
-}
 
 struct Rig final {
     runtime::TaskScheduler scheduler;
@@ -161,12 +148,15 @@ void pass(const std::string& label, const std::filesystem::path& first,
         expect(session.setCurrentTime(timeOf(frame)) || first,
                label + ": the playhead moves to frame " + std::to_string(frame));
         controller.requestRefresh();
-        expect(waitUntil([&] {
-                   const auto displayed = viewer.displayedFrameForTest();
-                   return controller.state().activity == ui::PreviewActivity::Ready &&
-                          displayed != nullptr && (first || displayed != before) &&
-                          viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
-               }),
+        expect(bloom::test_support::awaitQtCondition(
+                   "the Viewer shows the frame",
+                   [&] {
+                       const auto displayed = viewer.displayedFrameForTest();
+                       return controller.state().activity == ui::PreviewActivity::Ready &&
+                              displayed != nullptr && (first || displayed != before) &&
+                              viewer.displayedPreviewState().freshness ==
+                                  ui::FrameFreshness::Current;
+                   }),
                label + ": the Viewer shows frame " + std::to_string(frame));
     };
     for (std::uint64_t frame = 0; frame < kMembers; ++frame)
@@ -193,11 +183,15 @@ void pass(const std::string& label, const std::filesystem::path& first,
     expect(play != nullptr, label + ": the Viewer has its play button");
     if (play != nullptr) {
         play->click();
-        expect(waitUntil([&] { return session.currentTime() >= timeOf(kMembers); }),
+        expect(bloom::test_support::awaitQtCondition(
+                   "playback passes the sequence",
+                   [&] { return session.currentTime() >= timeOf(kMembers); }),
                label + ": playback moves the playhead past the sequence");
         if (play->isChecked())
             play->click();
-        expect(waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Ready; }),
+        expect(bloom::test_support::awaitQtCondition(
+                   "the Viewer settles after playback",
+                   [&] { return controller.state().activity == ui::PreviewActivity::Ready; }),
                label + ": the Viewer settles after playback");
     }
     unchanged("playback");
@@ -208,8 +202,11 @@ void pass(const std::string& label, const std::filesystem::path& first,
     expect(cache != nullptr && cache->isEnabled(), label + ": the Viewer has RAM Preview");
     if (cache != nullptr) {
         cache->click();
-        expect(waitUntil([&] { return ram.isCaching() || ram.lastCompletion().has_value(); }) &&
-                   waitUntil([&] { return !ram.isCaching(); }, 120s) &&
+        expect(bloom::test_support::awaitQtCondition(
+                   "RAM Preview starts",
+                   [&] { return ram.isCaching() || ram.lastCompletion().has_value(); }) &&
+                   bloom::test_support::awaitQtCondition("RAM Preview finishes",
+                                                         [&] { return !ram.isCaching(); }) &&
                    ram.lastCompletion() == ui::RamPreviewController::Completion::Complete &&
                    ram.cachedFrameCount() == ram.totalFrameCount() && ram.totalFrameCount() != 0,
                label + ": RAM Preview caches every frame (" +
@@ -225,6 +222,7 @@ void pass(const std::string& label, const std::filesystem::path& first,
         runtime::TaskScheduler exportScheduler;
         const runtime::SnapshotCompiler exportCompiler(document::builtInNodeDefinitions());
         runtime::GpuProcessFrameEvaluatorOptions options;
+        options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
         options.enabled = false;
         const auto provider = host::GpuExportProvider::create(options);
         provider->prepare(exportScheduler);
@@ -247,7 +245,9 @@ void pass(const std::string& label, const std::filesystem::path& first,
 
     controller.beginShutdown();
     rig.bridge->beginShutdown();
-    static_cast<void>(waitUntil([&] { return rig.scheduler.isQuiescent(); }, 10s));
+    expect(bloom::test_support::awaitQtCondition("the scheduler is quiet",
+                                                 [&] { return rig.scheduler.isQuiescent(); }),
+           label + ": the scheduler is quiet at the end");
 }
 
 } // namespace
@@ -301,6 +301,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     expect(afterSecond.diskHits > afterFirst.diskHits,
            "the second session is served from the local copies");
 
+    failures += bloom::test_support::awaitFailureCount();
     if (failures != 0) {
         std::cerr << "media route source reads: " << failures << " failure(s)\n";
         return 1;

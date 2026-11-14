@@ -1,5 +1,7 @@
 // #718: a scripted or headless render reads a source the local mirror keeps exactly once. This
 // test spans scripting and the media cache, so it lives here and not in either module's tests.
+#include "fixed_memory_budget.hpp"
+
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/media/cache/source_mirror.hpp>
@@ -61,6 +63,7 @@ void testRendersReadSlowSourcesOnce() {
     runtime::TaskScheduler scheduler(config);
     runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = false;
     const auto provider = host::GpuExportProvider::create(options);
     // The plate: one small frame rendered from a generated composition.

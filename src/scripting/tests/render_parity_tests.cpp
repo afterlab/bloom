@@ -974,6 +974,7 @@ void testLoudnessOnTheHeadlessRoute() {
     runtime::TaskScheduler scheduler(config);
     runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
     runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = false;
     const auto provider = host::GpuExportProvider::create(options);
     auto created = Session::createNew("Loudness", "Composition", core::RationalTime::fromInteger(1));
