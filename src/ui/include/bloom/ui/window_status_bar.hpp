@@ -174,6 +174,11 @@ class WindowStatusBar final : public kit::KSurface {
     void refreshVideoCellForTest() { refreshVideoCell(); }
     // Whether the 250 ms preview/cache poll is currently running.
     [[nodiscard]] bool cachePollActiveForTest() const;
+    // The poll's clock, in a test's hands: with manual on, the 250 ms timer is stopped and stays
+    // stopped (showing or restoring the window does not restart it), and each
+    // tickCachePollForTest() is one tick of it. Off puts the timer back under updateCachePoll().
+    void setCachePollManualForTest(bool manual);
+    void tickCachePollForTest() { refreshPreviewCells(); }
     [[nodiscard]] QString messageTextForTest() const;
     [[nodiscard]] QString versionTextForTest() const;
     [[nodiscard]] ViewerEditor* displayedViewerForTest() const noexcept;
@@ -260,6 +265,7 @@ class WindowStatusBar final : public kit::KSurface {
     kit::KLabel* probe_ = nullptr;
     QTimer* transientTimer_ = nullptr;
     QTimer* cacheRefreshTimer_ = nullptr;
+    bool cachePollManual_ = false;
     // #685: a frame that renders in under kRenderingNoticeDelay never shows "Rendering" or dims the
     // readouts, so playback does not blink the status bar once per frame.
     QElapsedTimer renderingSince_;

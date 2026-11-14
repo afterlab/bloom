@@ -968,8 +968,18 @@ bool WindowStatusBar::cachePollActiveForTest() const {
     return cacheRefreshTimer_ != nullptr && cacheRefreshTimer_->isActive();
 }
 
-void WindowStatusBar::updateCachePoll() {
+void WindowStatusBar::setCachePollManualForTest(const bool manual) {
+    cachePollManual_ = manual;
     if (cacheRefreshTimer_ == nullptr)
+        return;
+    if (manual)
+        cacheRefreshTimer_->stop();
+    else
+        updateCachePoll();
+}
+
+void WindowStatusBar::updateCachePoll() {
+    if (cacheRefreshTimer_ == nullptr || cachePollManual_)
         return;
     const bool wanted = isVisible() && (window() == nullptr || !window()->isMinimized());
     if (wanted == cacheRefreshTimer_->isActive())

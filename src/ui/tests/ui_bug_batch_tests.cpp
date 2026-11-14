@@ -14,18 +14,17 @@
 #include "window_fixture.hpp"
 
 #include <QContextMenuEvent>
-#include <QElapsedTimer>
 #include <QHeaderView>
 #include <QImage>
 #include <QKeyEvent>
 #include <QStandardPaths>
 #include <QStringList>
-#include <bloom/commands/node_editor_operations.hpp>
-#include <bloom/document/color_grade_nodes.hpp>
-#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/entry_layer_operations.hpp>
+#include <bloom/commands/node_editor_operations.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/ui/context_bar.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
@@ -811,17 +810,13 @@ class PaintCounter final : public QObject {
     }
 };
 
-// The pace of the simulated playback below: a frame every 30 ms. Not a wait for anything: the
-// bound that test checks is repaints against frames and against the status bar's own 250 ms
-// clock, so the frames have to arrive at a playback rate.
-void playbackPace(const int ms) {
-    QApplication::processEvents();
-    QTest::qWait(ms);
-}
-
 // While the playhead advances, nothing repaints more than once per frame, and what shows the same
 // thing before and after (the status message, the Viewer cells, the anchor grid, a node card)
 // does not repaint for it.
+//
+// No clock is involved. The status bar's Memory and Cache readouts refresh on a 250 ms poll of
+// their own; the test holds that poll (setCachePollManualForTest) and ticks it by hand, so a
+// frame is a frame and a tick is a tick however long the machine takes over either.
 void testPlaybackRepaints() {
     test::WindowFixture fixture;
     auto* statusBar = fixture.window->findChild<WindowStatusBar*>();
@@ -837,27 +832,49 @@ void testPlaybackRepaints() {
            "the status bar, Nodes and Properties exist");
     if (statusBar == nullptr || nodes == nullptr || properties == nullptr)
         return;
-    playbackPace(300);
+    statusBar->setCachePollManualForTest(true);
+    expect(!statusBar->cachePollActiveForTest(), "the status bar's poll is in the test's hands");
+    settleIdle(fixture);
     PaintCounter counter;
     counter.roots = {statusBar, nodes, properties};
     qApp->installEventFilter(&counter);
     constexpr int kFrames = 24;
-    QElapsedTimer elapsed;
-    elapsed.start();
+    // What one step may repaint: every widget at most once, except the Memory readout and the bar
+    // around it, at most twice. A frame changes that readout twice, at two moments: the RAM the
+    // caches hold, then the count of cached frames. Whether the two land in one paint or two is
+    // the event loop's business, so two is the bound; a third paint would be one with nothing new.
+    auto* memoryReadout =
+        fixture.window->findChild<QWidget*>(QStringLiteral("windowStatusBarMemory"));
+    expect(memoryReadout != nullptr, "the Memory readout exists");
+    const auto expectAtMostOncePerStep = [&](std::map<QWidget*, int>& before, const char* what,
+                                             const int step) {
+        for (const auto& [widget, count] : counter.counts) {
+            const int painted = count - (before.contains(widget) ? before.at(widget) : 0);
+            const bool readout = memoryReadout != nullptr &&
+                                 (widget == memoryReadout || widget->isAncestorOf(memoryReadout));
+            expect(painted <= (readout ? 2 : 1),
+                   (std::string("at most one repaint per ") + what + ": " +
+                    widget->metaObject()->className() + " '" + widget->objectName().toStdString() +
+                    "' painted " + std::to_string(painted) + " times in " + what + " " +
+                    std::to_string(step))
+                       .c_str());
+        }
+        before = counter.counts;
+    };
+    std::map<QWidget*, int> before;
     for (int frame = 1; frame <= kFrames; ++frame) {
         if (const auto time = core::RationalTime::create(frame, 24))
             static_cast<void>(fixture.session.setCurrentTime(*time));
-        playbackPace(30);
+        settleIdle(fixture);
+        expectAtMostOncePerStep(before, "frame", frame);
+        // The poll ticking between two frames is its own step.
+        if (frame % 6 == 0) {
+            statusBar->tickCachePollForTest();
+            settle();
+            expectAtMostOncePerStep(before, "poll tick after frame", frame);
+        }
     }
     qApp->removeEventFilter(&counter);
-    // The Memory and Cache readouts also refresh on their own 250 ms clock, whatever the frame
-    // rate; on a loaded machine the 24 frames take longer and that clock ticks more often.
-    const auto clockTicks = static_cast<int>(elapsed.elapsed() / 250);
-    for (const auto& [widget, count] : counter.counts)
-        expect(count <= kFrames + clockTicks + 2,
-               (std::string("at most one repaint per frame: ") + widget->metaObject()->className() +
-                " '" + widget->objectName().toStdString() + "' painted " + std::to_string(count))
-                   .c_str());
     for (const char* name :
          {"windowStatusBarMessage", "windowStatusBarExposure", "windowStatusBarChannel",
           "windowStatusBarViewer", "propertiesAnchorGrid"}) {
