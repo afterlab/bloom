@@ -8,15 +8,16 @@
 #include <QSignalSpy>
 #include <QTcpServer>
 
-#include <algorithm>
+#include "await_qt.hpp"
 #include <QTcpSocket>
 #include <QThread>
 #include <QTimer>
-#include <bloom/platform/font_catalog.hpp>
-#include <bloom/runtime/font_resolver.hpp>
+#include <algorithm>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/platform/font_catalog.hpp>
+#include <bloom/runtime/font_resolver.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/text_field.hpp>
 #include <bloom/ui/kit/theme.hpp>
@@ -68,9 +69,11 @@ void testTransport() {
         Loopback loop;
         loop.response = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello";
         std::uint64_t seen = 0;
-        const auto result = transport.get(loop.url(), 1024, never,
-                                          [&](std::uint64_t received, std::uint64_t) { seen = received; });
-        expect(result.status == FontHttpStatus::Ok && result.body.size() == 5, "a 200 delivers the body");
+        const auto result =
+            transport.get(loop.url(), 1024, never,
+                          [&](std::uint64_t received, std::uint64_t) { seen = received; });
+        expect(result.status == FontHttpStatus::Ok && result.body.size() == 5,
+               "a 200 delivers the body");
         expect(seen == 5, "progress reports the bytes received");
     }
     {
@@ -94,12 +97,13 @@ void testTransport() {
         // A server that announces no length and sends far more than the cap is cut off while
         // the body arrives: the transport never holds more than the cap and one buffer of it.
         Loopback loop;
-        loop.response = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n" +
-                        QByteArray(8 * 1024 * 1024, 'x');
+        loop.response =
+            "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n" + QByteArray(8 * 1024 * 1024, 'x');
         std::uint64_t most = 0;
         const auto result =
-            transport.get(loop.url(), 1U << 20U, never,
-                          [&](std::uint64_t received, std::uint64_t) { most = std::max(most, received); });
+            transport.get(loop.url(), 1U << 20U, never, [&](std::uint64_t received, std::uint64_t) {
+                most = std::max(most, received);
+            });
         expect(result.status == FontHttpStatus::TooLarge && result.body.empty(),
                "a body of unannounced length over the cap is cut off");
         expect(result.error.find("the server sent more than 1 MB") != std::string::npos,
@@ -124,7 +128,8 @@ void testTransport() {
         clock.start();
         const auto result =
             transport.get(loop.url(), 1024, [&] { return clock.elapsed() > 150; }, {});
-        expect(result.status == FontHttpStatus::Cancelled, "cancellation aborts a stalled transfer");
+        expect(result.status == FontHttpStatus::Cancelled,
+               "cancellation aborts a stalled transfer");
     }
     {
         std::string url;
@@ -158,7 +163,8 @@ void testFieldAndPicker() {
     field.setFontText(QString::fromStdString(document::encodeFontId(google)));
     expect(field.familyDropdown()->currentText() == "Roboto", "the field shows the family");
     expect(field.styleDropdown()->count() > 1, "a Google family offers several styles");
-    expect(field.styleDropdown()->currentText() == "Bold", "the style selector shows the stored style");
+    expect(field.styleDropdown()->currentText() == "Bold",
+           "the style selector shows the stored style");
 
     QSignalSpy previewed(&field, &ui::FontField::fontPreviewed);
     QSignalSpy cancelled(&field, &ui::FontField::previewCancelled);
@@ -231,8 +237,7 @@ void testCommitAfterPreview() {
     chosen.weight = 700;
     Q_EMIT popup->previewed(chosen);
     QCoreApplication::processEvents();
-    expect(session.valueEditActive(),
-           "a preview is a live edit, not a commit");
+    expect(session.valueEditActive(), "a preview is a live edit, not a commit");
     const auto revision = session.snapshot().revision();
     Q_EMIT popup->chosen(chosen);
     QCoreApplication::processEvents();
@@ -246,9 +251,9 @@ void testCommitAfterPreview() {
 }
 
 // Review tool, not a test: font_picker_test --capture <dir> <dpr>. Writes the Properties font row,
-// the text node's card and the open picker at 2000, 900 and 560 pixels wide. It reaches Google Fonts
-// like the application does (a real network), into the per-user cache.
-void capture(const QString& directory, const QString& dprText) {
+// the text node's card and the open picker at 2000, 900 and 560 pixels wide. It reaches Google
+// Fonts like the application does (a real network), into the per-user cache.
+[[nodiscard]] bool capture(const QString& directory, const QString& dprText) {
     // The desktop application installs this transport at start-up; with it the picker's Google rows
     // fetch their name-only subsets (set BLOOM_FONT_CAPTURE_OFFLINE to leave them out).
     if (qEnvironmentVariableIsEmpty("BLOOM_FONT_CAPTURE_OFFLINE"))
@@ -271,18 +276,19 @@ void capture(const QString& directory, const QString& dprText) {
         properties.resize(width, 2200);
         properties.show();
         QCoreApplication::processEvents();
-        properties.grab().save(QStringLiteral("%1/properties-w%2-dpr%3.png").arg(directory).arg(width).arg(suffix));
+        properties.grab().save(
+            QStringLiteral("%1/properties-w%2-dpr%3.png").arg(directory).arg(width).arg(suffix));
         if (auto* field = properties.findChild<ui::FontField*>()) {
             (void)chosen;
             auto* popup = new ui::FontPickerPopup(&properties);
             popup->openForField(*field->familyDropdown(),
                                 document::decodeFontId(field->fontText().toStdString())
                                     .value_or(document::defaultFontId()));
-            for (int i = 0; i < 12; ++i) {
-                QCoreApplication::processEvents();
-                QThread::msleep(50);
-            }
-            popup->grab().save(QStringLiteral("%1/picker-w%2-dpr%3.png").arg(directory).arg(width).arg(suffix));
+            if (!bloom::test_support::awaitQtCondition("font picker is ready after opening",
+                                                       [&] { return popup->isReady(); }))
+                return false;
+            popup->grab().save(
+                QStringLiteral("%1/picker-w%2-dpr%3.png").arg(directory).arg(width).arg(suffix));
             // The Google Fonts section: each row in its own typeface once its name-only subset
             // has arrived.
             for (int row = 0; row < popup->rowCount(); ++row)
@@ -290,19 +296,24 @@ void capture(const QString& directory, const QString& dprText) {
                     popup->list()->setCurrentRow(row + 5);
                     break;
                 }
-            for (int i = 0; i < 80; ++i) {
-                QCoreApplication::processEvents();
-                QThread::msleep(50);
-            }
-            popup->grab().save(QStringLiteral("%1/picker-google-w%2-dpr%3.png").arg(directory).arg(width).arg(suffix));
+            if (!bloom::test_support::awaitQtCondition(
+                    "font picker previews are ready for the Google rows",
+                    [&] { return popup->isReady(); }))
+                return false;
+            popup->grab().save(QStringLiteral("%1/picker-google-w%2-dpr%3.png")
+                                   .arg(directory)
+                                   .arg(width)
+                                   .arg(suffix));
             // A search: families for many scripts, whose subsets may hold none of the letters of
             // their own Latin name.
             popup->list()->filterField()->setText(QStringLiteral("Noto Sans"));
-            for (int i = 0; i < 80; ++i) {
-                QCoreApplication::processEvents();
-                QThread::msleep(50);
-            }
-            popup->grab().save(QStringLiteral("%1/picker-search-w%2-dpr%3.png").arg(directory).arg(width).arg(suffix));
+            if (!bloom::test_support::awaitQtCondition("font picker is ready after the search",
+                                                       [&] { return popup->isReady(); }))
+                return false;
+            popup->grab().save(QStringLiteral("%1/picker-search-w%2-dpr%3.png")
+                                   .arg(directory)
+                                   .arg(width)
+                                   .arg(suffix));
             popup->close();
         }
         ui::NodeGraphEditor editor(session);
@@ -316,8 +327,10 @@ void capture(const QString& directory, const QString& dprText) {
                 editor.graphView()->centerOn(item);
         editor.graphView()->zoomToActualSize();
         QCoreApplication::processEvents();
-        editor.grab().save(QStringLiteral("%1/node-card-w%2-dpr%3.png").arg(directory).arg(width).arg(suffix));
+        editor.grab().save(
+            QStringLiteral("%1/node-card-w%2-dpr%3.png").arg(directory).arg(width).arg(suffix));
     }
+    return true;
 }
 } // namespace
 
@@ -328,11 +341,12 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     ui::kit::installAfterlabTheme(app);
     if (argc >= 4 && QString::fromLatin1(argv[1]) == QStringLiteral("--capture")) {
-        capture(QString::fromLocal8Bit(argv[2]), QString::fromLatin1(argv[3]));
-        return 0;
+        const bool captured =
+            capture(QString::fromLocal8Bit(argv[2]), QString::fromLatin1(argv[3]));
+        return captured && bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
     }
     testTransport();
     testFieldAndPicker();
     testCommitAfterPreview();
-    return failures == 0 ? 0 : 1;
+    return failures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

@@ -113,57 +113,57 @@ makeIdentity(const bloom::runtime::CompiledCompositionPlan& plan, const std::uin
     std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle> processor,
     std::shared_ptr<CpuGpuSceneBuilder> builder, std::shared_ptr<std::atomic<bool>> gate_entered,
     std::shared_ptr<std::atomic<bool>> gate_release) {
-    return
-        [plan = std::move(plan), processor = std::move(processor), builder = std::move(builder),
-         gate_entered = std::move(gate_entered), gate_release = std::move(gate_release)](
-            const bloom::document::Snapshot&, const PreviewRequestIdentity& identity,
-            const std::size_t limit, const std::vector<bloom::runtime::SnapshotParameterOverride>&,
-            TaskContext& context) -> TaskResult<PreviewGpuSceneStageOutcomeHandle> {
-            using R = TaskResult<PreviewGpuSceneStageOutcomeHandle>;
-            if (context.isCancellationRequested()) {
-                return R::cancelled();
-            }
-            if (identity.requestGeneration == kGenerationUnsupportedSubset) {
-                auto outcome = std::make_shared<const PreviewGpuSceneStageOutcome>(
-                    PreviewGpuSceneStageOutcome{PreviewGpuSceneStageStatus::UnsupportedGpuSubset,
-                                                nullptr,
-                                                {failDiag("harness.unsupported-gpu-subset")}});
-                return R::succeeded(std::move(outcome));
-            }
-            if (identity.requestGeneration == kGenerationGated) {
-                gate_entered->store(true, std::memory_order_release);
-                while (!gate_release->load(std::memory_order_acquire)) {
-                    if (context.isCancellationRequested()) {
-                        return R::cancelled();
-                    }
-                    std::this_thread::sleep_for(1ms);
-                }
-            }
-            if (context.isCancellationRequested()) {
-                return R::cancelled();
-            }
-            EvaluationRequest request{.time = identity.time,
-                                      .output = plan->output(),
-                                      .resolution = bloom::runtime::CompositionFormatResolution{},
-                                      .quality = EvaluationQuality::Reference,
-                                      .colorIntent = EvaluationColorIntent::LinearRec709Scene,
-                                      .pixelStorageByteLimit = limit};
-            auto built = builder->build(plan, request, context.cancellation());
-            if (!built.hasValue() || built.scene == nullptr) {
-                auto outcome = std::make_shared<const PreviewGpuSceneStageOutcome>(
-                    PreviewGpuSceneStageOutcome{PreviewGpuSceneStageStatus::UnsupportedGpuSubset,
-                                                nullptr,
-                                                {failDiag("harness.scene-build-refused")}});
-                return R::succeeded(std::move(outcome));
-            }
-            auto stage = std::make_shared<const PreviewGpuSceneStage>(
-                identity, built.scene, processor, limit, std::vector<TaskDiagnostic>{},
-                std::move(built.phaseLease));
-            auto outcome =
-                std::make_shared<const PreviewGpuSceneStageOutcome>(PreviewGpuSceneStageOutcome{
-                    PreviewGpuSceneStageStatus::Prepared, std::move(stage), {}});
+    return [plan = std::move(plan), processor = std::move(processor), builder = std::move(builder),
+            gate_entered = std::move(gate_entered), gate_release = std::move(gate_release)](
+               const bloom::document::Snapshot&, const PreviewRequestIdentity& identity,
+               const std::size_t limit,
+               const std::vector<bloom::runtime::SnapshotParameterOverride>&,
+               TaskContext& context) -> TaskResult<PreviewGpuSceneStageOutcomeHandle> {
+        using R = TaskResult<PreviewGpuSceneStageOutcomeHandle>;
+        if (context.isCancellationRequested()) {
+            return R::cancelled();
+        }
+        if (identity.requestGeneration == kGenerationUnsupportedSubset) {
+            auto outcome = std::make_shared<const PreviewGpuSceneStageOutcome>(
+                PreviewGpuSceneStageOutcome{PreviewGpuSceneStageStatus::UnsupportedGpuSubset,
+                                            nullptr,
+                                            {failDiag("harness.unsupported-gpu-subset")}});
             return R::succeeded(std::move(outcome));
-        };
+        }
+        if (identity.requestGeneration == kGenerationGated) {
+            gate_entered->store(true, std::memory_order_release);
+            if (!bloom::test_support::awaitCondition("gated stage is released or cancelled", [&] {
+                    return gate_release->load(std::memory_order_acquire) ||
+                           context.isCancellationRequested();
+                })) {
+                return R::cancelled();
+            }
+        }
+        if (context.isCancellationRequested()) {
+            return R::cancelled();
+        }
+        EvaluationRequest request{.time = identity.time,
+                                  .output = plan->output(),
+                                  .resolution = bloom::runtime::CompositionFormatResolution{},
+                                  .quality = EvaluationQuality::Reference,
+                                  .colorIntent = EvaluationColorIntent::LinearRec709Scene,
+                                  .pixelStorageByteLimit = limit};
+        auto built = builder->build(plan, request, context.cancellation());
+        if (!built.hasValue() || built.scene == nullptr) {
+            auto outcome = std::make_shared<const PreviewGpuSceneStageOutcome>(
+                PreviewGpuSceneStageOutcome{PreviewGpuSceneStageStatus::UnsupportedGpuSubset,
+                                            nullptr,
+                                            {failDiag("harness.scene-build-refused")}});
+            return R::succeeded(std::move(outcome));
+        }
+        auto stage = std::make_shared<const PreviewGpuSceneStage>(
+            identity, built.scene, processor, limit, std::vector<TaskDiagnostic>{},
+            std::move(built.phaseLease));
+        auto outcome =
+            std::make_shared<const PreviewGpuSceneStageOutcome>(PreviewGpuSceneStageOutcome{
+                PreviewGpuSceneStageStatus::Prepared, std::move(stage), {}});
+        return R::succeeded(std::move(outcome));
+    };
 }
 
 // The full original CPU path used by the resident fallback: a real evaluation into a

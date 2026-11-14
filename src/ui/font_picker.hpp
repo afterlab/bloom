@@ -75,8 +75,16 @@ class FontPickerPopup final : public kit::KPopupWindow {
     [[nodiscard]] int rowCount() const;
     [[nodiscard]] bool rowIsGoogle(int row) const;
     [[nodiscard]] QString rowFamily(int row) const;
+    // True while the popup is open and settled: the installed-fonts scan has finished and the list
+    // was rebuilt from it, and every visible Google row has its name-only preview face registered
+    // (with no transport installed no preview can arrive, so that part is vacuously met). It goes
+    // false when the list is rebuilt (scan result, filter or category change) or the popup closes,
+    // and is re-evaluated on the picker's existing 200 ms poll. Tests and callers can await it
+    // (readyChanged) instead of sleeping.
+    [[nodiscard]] bool isReady() const noexcept { return ready_; }
 
   Q_SIGNALS:
+    void readyChanged(bool ready);
     void previewed(const bloom::document::FontId& id);
     void chosen(const bloom::document::FontId& id);
     void cancelled();
@@ -87,7 +95,9 @@ class FontPickerPopup final : public kit::KPopupWindow {
   private:
     void rebuild();
     void pollFonts();
-    void registerVisiblePreviews();
+    // Returns true when every visible Google row has its preview face (or none can arrive).
+    [[nodiscard]] bool registerVisiblePreviews();
+    void setReady(bool ready);
     [[nodiscard]] const fontpicker::FamilyEntry* entryAt(int row) const;
     [[nodiscard]] QSize wantedFrameSize() const;
 
@@ -98,6 +108,7 @@ class FontPickerPopup final : public kit::KPopupWindow {
     std::vector<fontpicker::FamilyEntry> entries_;
     document::FontId current_;
     bool choseSomething_ = false;
+    bool ready_ = false;
     std::uint64_t seenPreviewEpoch_ = 0;
     // Registered preview faces: Google family -> Qt family name of its name-only subset.
     QHash<QString, QString> previewFamilies_;

@@ -260,6 +260,8 @@ FontPickerPopup::FontPickerPopup(QWidget* parent) : KPopupWindow(parent, kit::El
             refit(wantedFrameSize());
     });
     connect(list_, &kit::KPopupList::currentRowChanged, this, [this](const int row) {
+        // The current row moving can scroll other rows into view; the next poll re-checks them.
+        setReady(false);
         const auto* entry = entryAt(row);
         if (entry == nullptr)
             return;
@@ -329,8 +331,16 @@ void FontPickerPopup::openForField(const QWidget& anchor, const document::FontId
     pollFonts();
 }
 
+void FontPickerPopup::setReady(const bool ready) {
+    if (ready_ == ready)
+        return;
+    ready_ = ready;
+    Q_EMIT readyChanged(ready);
+}
+
 void FontPickerPopup::hideEvent(QHideEvent* event) {
     poll_.stop();
+    setReady(false);
     KPopupWindow::hideEvent(event);
     if (!choseSomething_)
         Q_EMIT cancelled();
@@ -338,6 +348,7 @@ void FontPickerPopup::hideEvent(QHideEvent* event) {
 }
 
 void FontPickerPopup::rebuild() {
+    setReady(false);
     model_->clear();
     entries_.clear();
     const QString query = list_->filterField()->text().simplified();
@@ -460,15 +471,16 @@ void FontPickerPopup::rebuild() {
         refit(wantedFrameSize());
 }
 
-void FontPickerPopup::registerVisiblePreviews() {
+bool FontPickerPopup::registerVisiblePreviews() {
     auto* view = list_->view();
     if (view == nullptr)
-        return;
+        return true;
     const auto top = view->indexAt(QPoint(4, 2));
     const int first = top.isValid() ? top.row() : 0;
     const int rows = std::min(model_->rowCount(), first + kit::kListPopupMaxRows + 2);
     auto& resolver = fonts::processFontResolver();
     int registered = 0;
+    bool allPresent = true;
     for (int row = first; row < rows; ++row) {
         const auto* entry = entryAt(row);
         if (entry == nullptr || entry->source != document::FontSource::Google)
@@ -476,8 +488,10 @@ void FontPickerPopup::registerVisiblePreviews() {
         if (previewFamilies_.contains(entry->family))
             continue;
         const auto bytes = resolver.previewSubset(entry->family.toStdString(), true);
-        if (!bytes || bytes->empty() || registered >= kMaximumRegistrationsPerTick)
+        if (!bytes || bytes->empty() || registered >= kMaximumRegistrationsPerTick) {
+            allPresent = false;
             continue;
+        }
         const QByteArray data(reinterpret_cast<const char*>(bytes->data()),
                               static_cast<qsizetype>(bytes->size()));
         const QString family = kit::registerPickerFont(data);
@@ -488,6 +502,7 @@ void FontPickerPopup::registerVisiblePreviews() {
     }
     if (registered > 0)
         list_->view()->viewport()->update();
+    return allPresent || !resolver.hasTransport();
 }
 
 void FontPickerPopup::pollFonts() {
@@ -495,7 +510,8 @@ void FontPickerPopup::pollFonts() {
     // The first scan of the installed fonts finished: show them.
     if (resolver.systemFonts().poll())
         rebuild();
-    registerVisiblePreviews();
+    const bool previewsPresent = registerVisiblePreviews();
+    setReady(isVisible() && !resolver.systemFonts().pending() && previewsPresent);
     seenPreviewEpoch_ = resolver.previewEpoch();
 }
 
