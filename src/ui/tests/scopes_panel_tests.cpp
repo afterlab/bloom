@@ -253,8 +253,16 @@ void testStatusItems(Expectations& e) {
     e.expect(has("Resolution Full"), "the resolution");
     e.expect(has("CPU") && !has("GPU"), "the route");
     e.expect(has("4 pixels counted"), "the pixels counted");
-    e.expect(!has("Region") && status.warnings.isEmpty() && status.behind.isEmpty(),
+    e.expect(!has("Region") && !has("Live detail") && status.warnings.isEmpty() &&
+                 status.behind.isEmpty(),
              "no region, no warning and no Behind on a plain frame");
+
+    // Live tables say so; full detail says nothing extra.
+    input.reading.detail = ui::kLiveDetail;
+    status = ui::describeScopesStatus(input);
+    e.expect(status.line.contains("Live detail"),
+             "live tables are labeled: " + status.line.toStdString());
+    input.reading.detail = 0;
 
     // The route and its reason.
     input.reading.scopes = sidecarFor(input.settings, runtime::ScopeRoute::Gpu);
@@ -525,11 +533,13 @@ int main(int argc, char** argv) {
         e.expect(panel->panelShown() && panel->measureSettings().scopes == render::kScopeTableAll &&
                      controller.settings().scopes == render::kScopeTableAll,
                  "a shown panel asks for every scope");
-        e.expect(
-            waitUntil([&] { return controller.reading().state == ScopesReading::State::Ready; }),
-            "the frame is measured once the panel is shown");
-        e.expect(measured->started == 1 && !measured->onInterfaceThread,
-                 "it was measured once, on a task worker");
+        e.expect(waitUntil([&] {
+                     return controller.reading().state == ScopesReading::State::Ready &&
+                            !controller.busy();
+                 }),
+                 "the frame is measured once the panel is shown");
+        e.expect(measured->started == 2 && !measured->onInterfaceThread,
+                 "it was measured twice, live then full, on a task worker");
 
         // The five sections, in order, with the names of the grammar.
         const std::array<const char*, 5> titles{"Waveform", "Parade", "Vectorscope", "Histogram",
@@ -586,10 +596,35 @@ int main(int argc, char** argv) {
                  "with every section collapsed nothing is measured and the line says so");
         for (const auto kind : kKinds)
             panel->section(kind)->setCollapsed(false);
-        e.expect(
-            waitUntil([&] { return controller.reading().state == ScopesReading::State::Ready; }) &&
-                controller.settings().scopes == render::kScopeTableAll,
-            "opening them again measures them");
+        e.expect(waitUntil([&] {
+                     return controller.reading().state == ScopesReading::State::Ready &&
+                            !controller.busy();
+                 }) &&
+                     controller.settings().scopes == render::kScopeTableAll,
+                 "opening them again measures them");
+
+        // Only what is shown is measured: the bits are the open sections', and the panel never
+        // asks for a detail (the controller chooses the live and the full one).
+        for (const auto kind : kKinds)
+            panel->section(kind)->setCollapsed(kind != scopes::Kind::Histogram);
+        e.expect(panel->measureSettings().scopes == render::kScopeTableHistogram &&
+                     controller.settings().scopes == render::kScopeTableHistogram,
+                 "with only the Histogram open only the Histogram bit is asked for");
+        for (const auto kind : kKinds)
+            panel->section(kind)->setCollapsed(kind == scopes::Kind::Chromaticity);
+        e.expect((controller.settings().scopes & render::kScopeTableChromaticity) == 0U &&
+                     controller.settings().scopes ==
+                         (render::kScopeTableAll & ~render::kScopeTableChromaticity),
+                 "with the CIE section collapsed the Chromaticity bit is absent");
+        e.expect(panel->measureSettings().detail == 0U && controller.settings().detail == 0U,
+                 "the panel's settings keep detail 0");
+        for (const auto kind : kKinds)
+            panel->section(kind)->setCollapsed(false);
+        e.expect(waitUntil([&] {
+                     return controller.reading().state == ScopesReading::State::Ready &&
+                            !controller.busy();
+                 }),
+                 "every section open measures again");
 
         // Persisted per panel area.
         panel->section(scopes::Kind::Parade)->setCollapsed(true);
@@ -613,16 +648,20 @@ int main(int argc, char** argv) {
                      controller.reading().state == ScopesReading::State::Idle,
                  "a frame shown while hidden is not measured");
         panel->show();
-        e.expect(
-            waitUntil([&] { return controller.reading().state == ScopesReading::State::Ready; }),
-            "shown again, the panel measures the Viewer's frame");
+        e.expect(waitUntil([&] {
+                     return controller.reading().state == ScopesReading::State::Ready &&
+                            !controller.busy();
+                 }),
+                 "shown again, the panel measures the Viewer's frame");
 
         // ---- Behind ---------------------------------------------------------------------------
         panel->showViewerFrame(frame0, {});
-        e.expect(
-            waitUntil([&] { return controller.reading().state == ScopesReading::State::Ready; }) &&
-                panel->statusText().behind.isEmpty(),
-            "no Behind while the frames agree");
+        e.expect(waitUntil([&] {
+                     return controller.reading().state == ScopesReading::State::Ready &&
+                            !controller.busy();
+                 }) &&
+                     panel->statusText().behind.isEmpty(),
+                 "no Behind while the frames agree");
         // Hold the measure by asking for a setting the frame has no sidecar for.
         panel->setIgnoreTransparent(true);
         status = panel->statusText();
@@ -634,10 +673,12 @@ int main(int argc, char** argv) {
         e.expect(behindLabel != nullptr && behindLabel->isVisibleTo(panel) &&
                      behindLabel->tone() == kit::Color::Warn,
                  "Behind is shown in the warning color");
-        e.expect(
-            waitUntil([&] { return controller.reading().state == ScopesReading::State::Ready; }) &&
-                panel->statusText().behind.isEmpty(),
-            "the label goes when the measure arrives");
+        e.expect(waitUntil([&] {
+                     return controller.reading().state == ScopesReading::State::Ready &&
+                            !controller.busy();
+                 }) &&
+                     panel->statusText().behind.isEmpty(),
+                 "the label goes when the measure arrives");
         panel->setIgnoreTransparent(false);
         e.expect(waitUntil([&] {
                      return controller.reading().state == ScopesReading::State::Ready &&
@@ -655,14 +696,18 @@ int main(int argc, char** argv) {
         e.expect(warningLabel != nullptr && warningLabel->tone() == kit::Color::Warn &&
                      warningLabel->isVisibleTo(panel) && warningLabel->text().contains("Exposure"),
                  "warnings are in the warning color");
-        e.expect(
-            waitUntil([&] { return controller.reading().state == ScopesReading::State::Ready; }),
-            "the exposed frame is measured");
+        e.expect(waitUntil([&] {
+                     return controller.reading().state == ScopesReading::State::Ready &&
+                            !controller.busy();
+                 }),
+                 "the exposed frame is measured");
         panel->showViewerFrame(frame0, {});
-        e.expect(
-            waitUntil([&] { return controller.reading().state == ScopesReading::State::Ready; }) &&
-                panel->statusText().warnings.isEmpty(),
-            "a neutral Viewer has no warning");
+        e.expect(waitUntil([&] {
+                     return controller.reading().state == ScopesReading::State::Ready &&
+                            !controller.busy();
+                 }) &&
+                     panel->statusText().warnings.isEmpty(),
+                 "a neutral Viewer has no warning");
 
         // ---- Settings that measure again
         // ----------------------------------------------------------
@@ -675,7 +720,7 @@ int main(int argc, char** argv) {
         e.expect(settled(), "the panel is settled");
         auto started = controller.measuresStarted();
         panel->setSignal(runtime::ScopeSignal::Working);
-        e.expect(settled() && controller.measuresStarted() == started + 1 &&
+        e.expect(settled() && controller.measuresStarted() == started + 2 &&
                      controller.settings().signal == runtime::ScopeSignal::Working,
                  "the Working signal measures again");
         e.expect(panel->statusText().line.contains("Working space"),
@@ -685,7 +730,7 @@ int main(int argc, char** argv) {
                      linear->text() == QStringLiteral("Linear values"),
                  "the Vectorscope header notes linear values for the Working signal");
         panel->setAxisMaximum(4);
-        e.expect(settled() && controller.measuresStarted() == started + 2 &&
+        e.expect(settled() && controller.measuresStarted() == started + 4 &&
                      controller.settings().axisMaximum == 4,
                  "a new axis maximum measures again");
         panel->setAxisMaximum(3);
@@ -695,7 +740,7 @@ int main(int argc, char** argv) {
                  "Display is measured on its own axis");
         started = controller.measuresStarted();
         panel->setIgnoreTransparent(true);
-        e.expect(settled() && controller.measuresStarted() == started + 1 &&
+        e.expect(settled() && controller.measuresStarted() == started + 2 &&
                      controller.settings().ignoreTransparent,
                  "Ignore Transparent Pixels measures again");
         e.expect(controller.reading().scopes != nullptr &&
@@ -735,7 +780,7 @@ int main(int argc, char** argv) {
                      panel->measureSettings().region == lastRegion &&
                      controller.settings().region == lastRegion && clearButton->isEnabled(),
                  "a region reaches the measure settings and says so");
-        e.expect(settled() && controller.measuresStarted() == started + 1 &&
+        e.expect(settled() && controller.measuresStarted() == started + 2 &&
                      controller.reading().scopes != nullptr &&
                      controller.reading().scopes->tables.counted() == 16U * 8U &&
                      controller.reading().scopes->area == runtime::ScopeMeasuredArea{4, 2, 16, 8},
@@ -822,9 +867,11 @@ int main(int argc, char** argv) {
         e.expect(controller.reading().behind ||
                      controller.reading().state == ScopesReading::State::Ready,
                  "the next frame is being measured");
-        e.expect(
-            waitUntil([&] { return controller.reading().state == ScopesReading::State::Ready; }),
-            "the next frame is measured");
+        e.expect(waitUntil([&] {
+                     return controller.reading().state == ScopesReading::State::Ready &&
+                            !controller.busy();
+                 }),
+                 "the next frame is measured");
 
         // ---- No Viewer, and no frame: an empty graticule
         // ------------------------------------------
@@ -840,9 +887,11 @@ int main(int argc, char** argv) {
         panel->followViewer(nullptr);
         e.expect(panel->statusText().line.contains("No Viewer"), "and with no Viewer, says so");
         panel->showViewerFrame(frame0, {});
-        e.expect(
-            waitUntil([&] { return controller.reading().state == ScopesReading::State::Ready; }),
-            "a frame comes back");
+        e.expect(waitUntil([&] {
+                     return controller.reading().state == ScopesReading::State::Ready &&
+                            !controller.busy();
+                 }),
+                 "a frame comes back");
 
         // ---- A RAM preview fill measures the frames the cache retains
         // -----------------------------

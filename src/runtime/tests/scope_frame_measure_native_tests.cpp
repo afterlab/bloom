@@ -570,6 +570,48 @@ int run(int argc, char** argv) {
                             "a Display Histogram-only measure reads its small tables");
     }
 
+    // Bytes per measure at the live detail (docs/architecture/scopes.md, "Real-time cost"): a
+    // measure reads back only the open sections' tables and the layout's bytes at its detail. The
+    // picture is 256 wide, so the Waveform has 256 columns at both details: all tables are
+    // 1,597,504 bytes at the live detail (the same as a picture 512 or more wide) and 4,218,944 at
+    // full detail (6,324,288 for a picture 512 or more wide).
+    {
+        constexpr std::uint32_t kLive = 1;
+        auto histogram = settingsFor(ScopeSignal::Working, kScopeTableHistogram);
+        histogram.detail = kLive;
+        const auto one = onDevice(request, histogram, *working);
+        expectations.expect(
+            one.status == ScopeFrameStatus::Measured &&
+                one.tableReadbackBytes ==
+                    bloom::render::scopeTableLayout(kScopeTableHistogram, one.area.width, kLive)
+                        .byteCount() &&
+                one.tableReadbackBytes == (8U + 4U * 1026U) * 4U && one.tableReadbacks == 1 &&
+                one.pictureReadbacks == 0,
+            "live detail, one section (Histogram): exactly its layout's 16,448 bytes");
+
+        auto all = settingsFor(ScopeSignal::Working, kScopeTableAll);
+        all.detail = kLive;
+        const auto live = onDevice(request, all, *working);
+        expectations.expect(
+            live.status == ScopeFrameStatus::Measured &&
+                live.tableReadbackBytes ==
+                    bloom::render::scopeTableLayout(kScopeTableAll, live.area.width, kLive)
+                        .byteCount() &&
+                live.tableReadbackBytes == 1'597'504U && live.tableReadbacks == 1 &&
+                live.pictureReadbacks == 0,
+            "live detail, every section: exactly the layout's 1,597,504 bytes");
+
+        all.detail = 0;
+        const auto full = onDevice(request, all, *working);
+        expectations.expect(full.status == ScopeFrameStatus::Measured &&
+                                full.tableReadbackBytes == bloom::render::scopeTableLayout(
+                                                               kScopeTableAll, full.area.width, 0)
+                                                               .byteCount() &&
+                                full.tableReadbackBytes == 4'218'944U && full.tableReadbacks == 1 &&
+                                full.pictureReadbacks == 0,
+                            "full detail, every section: exactly the layout's 4,218,944 bytes");
+    }
+
     // The Chromaticity table and the Display signal: OCIO's two processors, within one cell.
     {
         const auto settings = settingsFor(ScopeSignal::Working, kScopeTableAll);

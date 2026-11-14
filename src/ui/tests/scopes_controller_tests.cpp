@@ -31,14 +31,17 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <future>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <source_location>
 #include <string>
@@ -194,16 +197,45 @@ int main(int argc, char** argv) {
             return cpuEvaluator.evaluate(std::move(plan), request, cancellation);
         };
         const auto production = ui::makeScopesMeasure(routes, {}, std::size_t{1} << 26);
-        // The production measure behind a gate the test can hold shut, recording its thread.
+        // The production measure behind a gate the test can hold shut, recording its thread, the
+        // time and detail of every call and how many ran at once.
         struct Gate final {
-            std::atomic<bool> held{false};
-            std::promise<void> promise;
-            std::shared_future<void> open;
+            std::mutex mutex;
+            std::condition_variable condition;
+            bool holdAll = false;
+            bool holdFull = false; // hold the calls at detail 0
             std::atomic<int> entered{0};
+            std::atomic<int> running{0};
+            std::atomic<int> maxRunning{0};
             std::atomic<bool> onInterfaceThread{false};
+            struct Call final {
+                double seconds = 0.0;
+                std::uint32_t detail = 0;
+            };
+            std::vector<Call> calls; // guarded by `mutex`
+
+            void hold(const bool all, const bool full) {
+                const std::lock_guard lock(mutex);
+                holdAll = all;
+                holdFull = full;
+                condition.notify_all();
+            }
+            void enter(const double seconds, const std::uint32_t detail) {
+                std::unique_lock lock(mutex);
+                calls.push_back({seconds, detail});
+                ++entered;
+                const int now = ++running;
+                int seen = maxRunning.load();
+                while (now > seen && !maxRunning.compare_exchange_weak(seen, now)) {
+                }
+                condition.wait(lock, [&] { return !(holdAll || (holdFull && detail == 0)); });
+            }
+            [[nodiscard]] std::vector<Call> callsSince(const std::size_t first) {
+                const std::lock_guard lock(mutex);
+                return {calls.begin() + static_cast<std::ptrdiff_t>(first), calls.end()};
+            }
         };
         const auto gate = std::make_shared<Gate>();
-        gate->open = gate->promise.get_future().share();
         const auto interfaceThread = std::this_thread::get_id();
         const ui::ScopesMeasure measure =
             [production, gate, interfaceThread](const ui::PreviewScopeSource& source,
@@ -211,10 +243,10 @@ int main(int argc, char** argv) {
                                                 const runtime::CancellationToken& cancellation) {
                 if (std::this_thread::get_id() == interfaceThread)
                     gate->onInterfaceThread = true;
-                ++gate->entered;
-                if (gate->held.load())
-                    gate->open.wait();
-                return production(source, identity, cancellation);
+                gate->enter(source.identity.time.toSeconds(), identity.settings.detail);
+                const auto result = production(source, identity, cancellation);
+                --gate->running;
+                return result;
             };
 
         const auto plan = oneSolidPlan();
@@ -240,6 +272,11 @@ int main(int argc, char** argv) {
             runtime::ScopeMeasureSettings settings;
             settings.scopes = render::kScopeTableHistogram | render::kScopeTableWaveform;
             settings.signal = runtime::ScopeSignal::Display;
+            // The frame is measured live, then in full: settled is the end of both.
+            const auto settled = [&] {
+                return controller.reading().state == ScopesReading::State::Ready &&
+                       !controller.busy();
+            };
             const auto identityOf = [&](const runtime::ScopeMeasureSettings& value) {
                 return ui::PreviewScopeIdentity{.settings = value, .viewAdjust = {}};
             };
@@ -262,10 +299,7 @@ int main(int argc, char** argv) {
                                     controller.reading().scopes == nullptr &&
                                     !controller.reading().behind,
                                 "the first frame is being measured with nothing on show");
-            expectations.expect(waitUntil([&] {
-                                    return controller.reading().state ==
-                                           ScopesReading::State::Ready;
-                                }),
+            expectations.expect(waitUntil(settled),
                                 "the frame's scopes arrive: " + controller.reading().message);
             const auto first = controller.reading().scopes;
             expectations.expect(first != nullptr && !controller.reading().behind &&
@@ -275,8 +309,8 @@ int main(int argc, char** argv) {
                                     first->color != nullptr &&
                                     controller.reading().color == first->color,
                                 "the CPU reference counted every pixel of the frame");
-            expectations.expect(!gate->onInterfaceThread.load() && gate->entered.load() == 1,
-                                "the measure ran on a task worker, once");
+            expectations.expect(!gate->onInterfaceThread.load() && gate->entered.load() == 2,
+                                "the measures ran on a task worker: live, then full");
             expectations.expect(first != nullptr &&
                                     cache->scopesFor(keyOf(frame0), identityOf(settings)) == first,
                                 "the tables are the frame's sidecar in the cache");
@@ -305,7 +339,7 @@ int main(int argc, char** argv) {
             controller.showFrame(frame0, {});
             expectations.expect(controller.reading().state == ScopesReading::State::Ready &&
                                     controller.reading().scopes == first &&
-                                    controller.measuresStarted() == 1 &&
+                                    controller.measuresStarted() == 2 &&
                                     controller.cacheHits() == 1,
                                 "a frame with a matching sidecar is not measured again");
 
@@ -317,12 +351,8 @@ int main(int argc, char** argv) {
                                     controller.reading().behind &&
                                     controller.reading().scopes == first,
                                 "a changed setting shows the old tables as behind");
-            expectations.expect(waitUntil([&] {
-                                    return controller.reading().state ==
-                                           ScopesReading::State::Ready;
-                                }),
-                                "the frame is measured under the new setting");
-            expectations.expect(controller.measuresStarted() == 2 &&
+            expectations.expect(waitUntil(settled), "the frame is measured under the new setting");
+            expectations.expect(controller.measuresStarted() == 4 &&
                                     cache->contains(keyOf(frame0)) && cache->size() == 2 &&
                                     cache->scopesFor(keyOf(frame0), identityOf(settings)) ==
                                         nullptr &&
@@ -330,11 +360,7 @@ int main(int argc, char** argv) {
                                         controller.reading().scopes,
                                 "the sidecar is replaced and the frame's entry is untouched");
             controller.setSettings(settings);
-            expectations.expect(waitUntil([&] {
-                                    return controller.reading().state ==
-                                           ScopesReading::State::Ready;
-                                }),
-                                "the first setting is measured again");
+            expectations.expect(waitUntil(settled), "the first setting is measured again");
             const auto current = controller.reading().scopes;
             expectations.expect(first != nullptr && current != nullptr && current != first &&
                                     current->tables == first->tables &&
@@ -353,11 +379,7 @@ int main(int argc, char** argv) {
                     keyOf(frame1) ==
                         PreviewFrameCacheKey::forIdentity(controller.reading().shown->identity),
                 "the earlier frame's tables are labeled behind and name their frame");
-            expectations.expect(waitUntil([&] {
-                                    return controller.reading().state ==
-                                           ScopesReading::State::Ready;
-                                }),
-                                "the new frame's scopes arrive");
+            expectations.expect(waitUntil(settled), "the new frame's scopes arrive");
             expectations.expect(
                 !controller.reading().behind && controller.reading().scopes != current &&
                     controller.reading().measured &&
@@ -368,35 +390,27 @@ int main(int argc, char** argv) {
             // The Viewer's exposure is part of the Display measure, and not of the Working one.
             const auto beforeAdjust = controller.measuresStarted();
             controller.showFrame(frame1, runtime::ViewAdjust{.exposure = -1.0, .gamma = 1.0});
-            expectations.expect(waitUntil([&] {
-                                    return controller.reading().state ==
-                                           ScopesReading::State::Ready;
-                                }) &&
-                                    controller.measuresStarted() == beforeAdjust + 1,
+            expectations.expect(waitUntil(settled) &&
+                                    controller.measuresStarted() == beforeAdjust + 2,
                                 "an exposure measures the Display signal again");
             expectations.expect(
                 controller.reading().scopes != nullptr &&
                     controller.reading().scopes->tables.unpack().histogram(0, 1023) == 0,
                 "the exposure darkens the measured signal");
             controller.showFrame(frame1, {});
-            expectations.expect(waitUntil([&] {
-                                    return controller.reading().state ==
-                                           ScopesReading::State::Ready;
-                                }),
-                                "the neutral frame is measured again");
+            expectations.expect(waitUntil(settled), "the neutral frame is measured again");
 
             // A superseded measure is cancelled; its result is neither shown nor cached.
             expectations.expect(cache->insert(frame2).retained() &&
                                     cache->insert(frame3).retained(),
                                 "two more frames are cached");
-            gate->held = true;
+            gate->hold(true, false);
             const auto enteredBefore = gate->entered.load();
             controller.showFrame(frame2, {});
             expectations.expect(waitUntil([&] { return gate->entered.load() > enteredBefore; }),
                                 "the held measure started");
             controller.showFrame(frame3, {});
-            gate->held = false;
-            gate->promise.set_value();
+            gate->hold(false, false);
             expectations.expect(waitUntil([&] {
                                     return controller.reading().state ==
                                                ScopesReading::State::Ready &&
@@ -410,6 +424,241 @@ int main(int argc, char** argv) {
                     cache->scopesFor(keyOf(frame2), identityOf(settings)) == nullptr &&
                     cache->scopesFor(keyOf(frame3), identityOf(settings)) != nullptr,
                 "the superseded frame's result was not shown and not cached");
+
+            // Bounded work: one measure in flight, the latest request wins, and the frames in
+            // between are never measured. The first measure is held; five more frames are shown.
+            {
+                std::vector<std::shared_ptr<const PreparedPreviewFrame>> frames;
+                for (std::int64_t index = 0; index < 6; ++index) {
+                    frames.push_back(
+                        cpuFrame(plan, 100 + static_cast<std::uint64_t>(index), 100 + index));
+                    expectations.expect(frames.back() && cache->insert(frames.back()).retained(),
+                                        "a frame of the bounded run is cached");
+                }
+                if (std::ranges::all_of(frames,
+                                        [](const auto& frame) { return frame != nullptr; })) {
+                    const auto liveIdentity = [&] {
+                        auto live = settings;
+                        live.detail = ui::kLiveDetail;
+                        return identityOf(live);
+                    }();
+                    const auto started = controller.measuresStarted();
+                    const auto skipped = controller.measuresSkipped();
+                    const auto base = gate->entered.load();
+                    gate->hold(true, false);
+                    controller.showFrame(frames[0], {});
+                    expectations.expect(waitUntil([&] { return gate->entered.load() > base; }),
+                                        "the first measure of the run started and is held");
+                    for (std::size_t index = 1; index < frames.size(); ++index)
+                        controller.showFrame(frames[index], {});
+                    expectations.expect(controller.measuresStarted() == started + 1 &&
+                                            gate->entered.load() == base + 1 &&
+                                            controller.measuresInFlight() == 1 &&
+                                            controller.maxMeasuresInFlight() == 1 &&
+                                            controller.busy(),
+                                        "no second measure starts while the first is held");
+                    expectations.expect(
+                        controller.measuresSkipped() == skipped + 4,
+                        "four of the five frames were replaced before they started");
+                    // The live measure of the newest frame runs; its full measure is held.
+                    gate->hold(false, true);
+                    expectations.expect(waitUntil([&] { return gate->entered.load() >= base + 3; }),
+                                        "the newest frame's live measure ran and its full one "
+                                        "started");
+                    const auto calls = gate->callsSince(static_cast<std::size_t>(base));
+                    expectations.expect(calls.size() == 3 && calls[0].seconds == 100.0 &&
+                                            calls[0].detail == ui::kLiveDetail &&
+                                            calls[1].seconds == 105.0 &&
+                                            calls[1].detail == ui::kLiveDetail &&
+                                            calls[2].seconds == 105.0 && calls[2].detail == 0U,
+                                        "only the held frame and the newest were measured");
+                    expectations.expect(controller.reading().state == ScopesReading::State::Ready &&
+                                            controller.reading().detail == ui::kLiveDetail &&
+                                            controller.reading().scopes != nullptr &&
+                                            cache->scopesFor(keyOf(frames[5]), liveIdentity) ==
+                                                controller.reading().scopes &&
+                                            controller.reading().measured &&
+                                            keyOf(frames[5]) ==
+                                                PreviewFrameCacheKey::forIdentity(
+                                                    controller.reading().measured->identity),
+                                        "the newest frame's live tables are shown and cached");
+                    expectations.expect(
+                        cache->scopesFor(keyOf(frames[0]), liveIdentity) == nullptr &&
+                            cache->scopesFor(keyOf(frames[0]), identityOf(settings)) == nullptr,
+                        "the held frame's result was neither shown nor cached");
+                    expectations.expect(controller.measuresInFlight() == 1 &&
+                                            controller.maxMeasuresInFlight() == 1,
+                                        "still one measure in flight");
+                    gate->hold(false, false);
+                    expectations.expect(waitUntil(settled), "the newest frame ends at full detail");
+                    expectations.expect(
+                        controller.reading().detail == 0U &&
+                            cache->scopesFor(keyOf(frames[5]), identityOf(settings)) ==
+                                controller.reading().scopes &&
+                            controller.measuresStarted() == started + 3 &&
+                            controller.measuresInFlight() == 0 &&
+                            gate->entered.load() == base + 3 &&
+                            controller.lastTableReadbackBytes() == 0,
+                        "one full measure of the newest frame, its sidecar at detail 0");
+                }
+            }
+
+            // Live, then full. The vectorscope is measured too, for the pooled comparison.
+            {
+                auto withVectorscope = settings;
+                withVectorscope.scopes =
+                    render::kScopeTableHistogram | render::kScopeTableVectorscope;
+                controller.setSettings(withVectorscope);
+                expectations.expect(waitUntil(settled),
+                                    "the shown frame settles under the settings");
+                auto liveSettings = withVectorscope;
+                liveSettings.detail = ui::kLiveDetail;
+                const auto fullIdentity = identityOf(withVectorscope);
+                const auto liveIdentity = identityOf(liveSettings);
+
+                const auto stay = cpuFrame(plan, 120, 120);
+                const auto replaced = cpuFrame(plan, 121, 121);
+                const auto replacement = cpuFrame(plan, 122, 122);
+                const auto cached = cpuFrame(plan, 123, 123);
+                expectations.expect(
+                    stay && replaced && replacement && cached && cache->insert(stay).retained() &&
+                        cache->insert(replaced).retained() &&
+                        cache->insert(replacement).retained() && cache->insert(cached).retained(),
+                    "the frames of the live and full run are cached");
+                if (stay && replaced && replacement && cached) {
+                    const auto sourceOf = [](const auto& frame) {
+                        return ui::PreviewScopeSource{frame->desiredIdentity(),
+                                                      frame->processIdentity(),
+                                                      frame->provenance().provider};
+                    };
+                    // A frame shown and left alone: the live measure, then the full one.
+                    auto base = gate->entered.load();
+                    auto started = controller.measuresStarted();
+                    gate->hold(false, true);
+                    controller.showFrame(stay, {});
+                    expectations.expect(waitUntil([&] { return gate->entered.load() >= base + 2; }),
+                                        "the full measure follows the live one");
+                    const auto live = controller.reading().scopes;
+                    expectations.expect(
+                        live != nullptr &&
+                            controller.reading().state == ScopesReading::State::Ready &&
+                            controller.reading().detail == ui::kLiveDetail &&
+                            live->identity == liveIdentity &&
+                            cache->scopesFor(keyOf(stay), liveIdentity) == live &&
+                            cache->scopesFor(keyOf(stay), fullIdentity) == nullptr,
+                        "the live tables are shown while the full ones are measured");
+                    gate->hold(false, false);
+                    expectations.expect(waitUntil(settled), "the frame ends at full detail");
+                    const auto full = controller.reading().scopes;
+                    const auto calls = gate->callsSince(static_cast<std::size_t>(base));
+                    expectations.expect(
+                        calls.size() == 2 && calls[0].detail == ui::kLiveDetail &&
+                            calls[1].detail == 0U && controller.measuresStarted() == started + 2 &&
+                            controller.reading().detail == 0U && full != nullptr && full != live &&
+                            cache->scopesFor(keyOf(stay), fullIdentity) == full &&
+                            cache->scopesFor(keyOf(stay), liveIdentity) == nullptr,
+                        "two measures, live then full; the full tables replace the "
+                        "live ones in the reading and the sidecar");
+                    if (live != nullptr && full != nullptr) {
+                        const auto direct = production(sourceOf(stay), fullIdentity, {});
+                        expectations.expect(
+                            direct.measure.status == runtime::ScopeFrameStatus::Measured &&
+                                full->tables == runtime::ScopeTables::pack(direct.measure.counts,
+                                                                           direct.measure.route),
+                            "the full tables equal a direct detail 0 measure");
+                        const auto coarse = live->tables.unpack();
+                        const auto fine = full->tables.unpack();
+                        const auto cells = live->tables.layout().cells();
+                        bool pooled = cells * 2U == full->tables.layout().cells();
+                        for (std::uint32_t cb = 0; pooled && cb < cells; ++cb)
+                            for (std::uint32_t cr = 0; cr < cells; ++cr)
+                                pooled = pooled && coarse.vectorscope(cb, cr) ==
+                                                       fine.vectorscope(2 * cb, 2 * cr) +
+                                                           fine.vectorscope(2 * cb + 1, 2 * cr) +
+                                                           fine.vectorscope(2 * cb, 2 * cr + 1) +
+                                                           fine.vectorscope(2 * cb + 1, 2 * cr + 1);
+                        bool histogramEqual = true;
+                        for (std::uint32_t channel = 0; channel < render::kScopeChannels;
+                             ++channel) {
+                            for (std::uint32_t code = 0; code < 1024; ++code)
+                                histogramEqual =
+                                    histogramEqual && coarse.histogram(channel, code) ==
+                                                          fine.histogram(channel, code);
+                            histogramEqual = histogramEqual &&
+                                             coarse.histogram(channel, render::kScopeCodeUnder) ==
+                                                 fine.histogram(channel, render::kScopeCodeUnder) &&
+                                             coarse.histogram(channel, render::kScopeCodeOver) ==
+                                                 fine.histogram(channel, render::kScopeCodeOver);
+                        }
+                        expectations.expect(pooled && histogramEqual && coarse.counted() != 0U,
+                                            "the live tables are the full ones pooled: Vectorscope "
+                                            "2x2 sums, Histogram equal");
+                    }
+
+                    // A frame replaced while its live measure is held never gets a full measure.
+                    base = gate->entered.load();
+                    gate->hold(true, false);
+                    controller.showFrame(replaced, {});
+                    expectations.expect(waitUntil([&] { return gate->entered.load() > base; }),
+                                        "the live measure of the frame to be replaced is held");
+                    controller.showFrame(replacement, {});
+                    gate->hold(false, false);
+                    expectations.expect(waitUntil(settled), "the replacement settles");
+                    const auto replacedCalls = gate->callsSince(static_cast<std::size_t>(base));
+                    std::size_t replacedFull = 0;
+                    for (const auto& call : replacedCalls)
+                        replacedFull += call.seconds == 121.0 && call.detail == 0U ? 1U : 0U;
+                    expectations.expect(
+                        replacedCalls.size() == 3 && replacedFull == 0 &&
+                            replacedCalls[0].seconds == 121.0 &&
+                            replacedCalls[1].seconds == 122.0 &&
+                            replacedCalls[2].seconds == 122.0 && replacedCalls[2].detail == 0U &&
+                            cache->scopesFor(keyOf(replaced), liveIdentity) == nullptr &&
+                            cache->scopesFor(keyOf(replaced), fullIdentity) == nullptr,
+                        "a frame replaced before its live tables arrive is never "
+                        "measured at full detail");
+
+                    // A sidecar at detail 0 is shown at once; one at detail 1 is shown at once and
+                    // the full measure follows.
+                    controller.showFrame(stay, {});
+                    started = controller.measuresStarted();
+                    expectations.expect(controller.reading().state == ScopesReading::State::Ready &&
+                                            controller.reading().scopes == full &&
+                                            controller.reading().detail == 0U &&
+                                            !controller.busy() &&
+                                            controller.measuresStarted() == started,
+                                        "a detail 0 sidecar is shown with no measure");
+                    const auto liveMeasured = production(sourceOf(cached), liveIdentity, {});
+                    auto sidecar = std::make_shared<ui::PreviewScopeSidecar>();
+                    sidecar->identity = liveIdentity;
+                    sidecar->tables = runtime::ScopeTables::pack(liveMeasured.measure.counts,
+                                                                 liveMeasured.measure.route);
+                    sidecar->area = liveMeasured.measure.area;
+                    sidecar->color = liveMeasured.color;
+                    expectations.expect(cache->attachScopes(keyOf(cached), sidecar),
+                                        "a live sidecar is attached to the frame");
+                    base = gate->entered.load();
+                    gate->hold(false, true);
+                    controller.showFrame(cached, {});
+                    expectations.expect(controller.reading().state == ScopesReading::State::Ready &&
+                                            controller.reading().scopes == sidecar &&
+                                            controller.reading().detail == ui::kLiveDetail &&
+                                            !controller.reading().behind,
+                                        "a detail 1 sidecar is shown at once");
+                    expectations.expect(waitUntil([&] { return gate->entered.load() > base; }),
+                                        "the full measure of the live sidecar's frame started");
+                    gate->hold(false, false);
+                    expectations.expect(waitUntil(settled), "the live sidecar's frame ends at full "
+                                                            "detail");
+                    const auto cachedCalls = gate->callsSince(static_cast<std::size_t>(base));
+                    expectations.expect(cachedCalls.size() == 1 && cachedCalls[0].detail == 0U &&
+                                            controller.measuresStarted() == started + 1 &&
+                                            controller.reading().detail == 0U,
+                                        "one full measure follows a live sidecar");
+                }
+                controller.setSettings(settings);
+                expectations.expect(waitUntil(settled), "the first settings are measured again");
+            }
 
             // A RAM preview fill measures the frames the cache retains.
             const auto frame4 = cpuFrame(plan, 5, 4);
@@ -454,13 +703,9 @@ int main(int argc, char** argv) {
                         controller.reading().state == ScopesReading::State::Measuring &&
                             controller.reading().behind,
                         "the earlier revision's tables are behind the edited frame");
-                    expectations.expect(waitUntil([&] {
-                                            return controller.reading().state ==
-                                                   ScopesReading::State::Ready;
-                                        }),
-                                        "the edited frame is measured");
+                    expectations.expect(waitUntil(settled), "the edited frame is measured");
                     expectations.expect(
-                        controller.measuresStarted() == started + 1 &&
+                        controller.measuresStarted() == started + 2 &&
                             !controller.reading().behind &&
                             controller.reading().scopes ==
                                 cache->scopesFor(keyOf(editedFrame), identityOf(settings)) &&
@@ -472,6 +717,10 @@ int main(int argc, char** argv) {
             expectations.expect(changes > 0, "the panel is told when the reading changes");
             expectations.expect(!gate->onInterfaceThread.load(),
                                 "no measure ran on the interface thread");
+            expectations.expect(gate->maxRunning.load() == 1 &&
+                                    controller.maxMeasuresInFlight() == 1 &&
+                                    controller.measuresInFlight() == 0,
+                                "never more than one measure ran at once, the fill included");
         }
 
         // A sidecar goes with its frame.

@@ -2342,6 +2342,17 @@ bloom_add_test(
     TIMEOUT 180
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
 )
+# #724 Scopes: the Viewer is never delayed by the Scopes panel: a held measure, a stepped session.
+add_executable(bloom_ui_scopes_realtime_test scopes_realtime_tests.cpp)
+target_link_libraries(bloom_ui_scopes_realtime_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_scopes_realtime_test)
+bloom_add_test(
+    NAME bloom.ui.scopes-realtime
+    COMMAND bloom_ui_scopes_realtime_test
+    LABELS ui unit
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
 # #724 Scopes: the scope region in the Viewer, through the Viewer's own mouse and key handling.
 add_executable(bloom_ui_scopes_mcp_warm_test scopes_mcp_warm_tests.cpp)
 target_link_libraries(bloom_ui_scopes_mcp_warm_test PRIVATE bloom_ui)
