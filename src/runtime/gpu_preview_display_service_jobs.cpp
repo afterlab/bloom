@@ -670,6 +670,11 @@ void processNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core
             const std::uint64_t allowance = stage->gpuByteAllowance != 0
                                                 ? stage->gpuByteAllowance
                                                 : core->previewByteAllowance();
+            // #724: the stage never waits for the scope measure's phase.
+            if (stage->cpuNativePhase && core->device && !yieldScopeDeviceToStage(core)) {
+                core->nativeReady.push_front(stage);
+                return;
+            }
             if (stage->cpuNativePhase && core->device && core->device->processingPhaseOccupied())
                 static_cast<void>(core->device->recoverUnprovenProcessingPhase());
             if (!stage->cpuNativePhase || !core->device ||

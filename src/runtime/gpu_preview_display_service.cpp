@@ -808,6 +808,19 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
         scope.tableReadbackBytes.load(std::memory_order_relaxed);
     result.counters.scopeTableReadbackBytesTotal =
         scope.tableReadbackBytesTotal.load(std::memory_order_relaxed);
+    result.counters.scopeMeasureAdmissions = scope.measureAdmissions.load(std::memory_order_relaxed);
+    result.counters.scopeMeasureAdmissionWaits =
+        scope.measureAdmissionWaits.load(std::memory_order_relaxed);
+    result.counters.scopeMeasureNeedBytes = scope.measureNeedBytes.load(std::memory_order_relaxed);
+    result.counters.scopeMeasuresNoRoom = scope.measuresNoRoom.load(std::memory_order_relaxed);
+    result.counters.scopeMeasuresGivenBack = scope.measuresGivenBack.load(std::memory_order_relaxed);
+    result.counters.scopeMeasurePhaseParks = scope.measurePhaseParks.load(std::memory_order_relaxed);
+    result.counters.scopeViewerTapYields = scope.viewerTapYields.load(std::memory_order_relaxed);
+    result.counters.scopeFillTapYields = scope.fillTapYields.load(std::memory_order_relaxed);
+    result.counters.scopeTapIdleReleases = scope.tapIdleReleases.load(std::memory_order_relaxed);
+    result.counters.scopeReclaimsSeenAtFirstGiveBack =
+        scope.reclaimsSeenAtFirstGiveBack.load(std::memory_order_relaxed);
+    result.counters.scopeFillTapsRefused = scope.fillTapsRefused.load(std::memory_order_relaxed);
     return result;
 }
 

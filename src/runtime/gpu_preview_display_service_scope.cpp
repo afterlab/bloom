@@ -3,10 +3,13 @@
 
 #include "gpu_preview_display_service_private.hpp"
 
+#include <bloom/render/gpu_processing_phase_budget.hpp>
 #include <bloom/render/gpu_scope_tables.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
 #include <algorithm>
 #include <chrono>
+#include <limits>
 #include <thread>
 #include <utility>
 
@@ -43,14 +46,16 @@ scopeNow(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
     return outcome;
 }
 
-void countOutcome(ScopeTapState& scope, const GpuScopeTapStatus status) noexcept {
-    switch (status) {
+void countOutcome(ScopeTapState& scope, const GpuScopeTapMeasureOutcome& outcome) noexcept {
+    switch (outcome.status) {
     case GpuScopeTapStatus::Measured:
     case GpuScopeTapStatus::EmptyArea:
         scope.measuresCompleted.fetch_add(1, std::memory_order_relaxed);
         break;
     case GpuScopeTapStatus::Skipped:
         scope.measuresSkipped.fetch_add(1, std::memory_order_relaxed);
+        if (outcome.skip == GpuScopeTapSkip::NoRoom)
+            scope.measuresNoRoom.fetch_add(1, std::memory_order_relaxed);
         break;
     case GpuScopeTapStatus::Busy:
         scope.measuresBusy.fetch_add(1, std::memory_order_relaxed);
@@ -82,20 +87,184 @@ void countOutcome(ScopeTapState& scope, const GpuScopeTapStatus status) noexcept
            std::ranges::any_of(core.residentNativeReady, viewer);
 }
 
-// The one gate of a measure step: the Viewer comes first, and a step starts only when no frame's
-// processing phase is retained or parked on the device, so the measure's native storage is never
-// charged to a frame's phase and never outlives it. A fill-tap measure yields to Viewer-class
-// stages only: the fill stage that waits for it is not ready, so it never blocks it.
-// WP2b hook: the measure's own Background-class admission goes here.
+// Under `scope.mutex`: whether the key's tap was given back or refused.
+[[nodiscard]] bool wasGivenBackLocked(const ScopeTapState& scope, const GpuScopeTapKey& key) {
+    return std::ranges::find(scope.givenBack, key) != scope.givenBack.end();
+}
+
+// Under `scope.mutex`: remembers a key whose tap was given back or refused (bounded).
+void rememberGivenBackLocked(ScopeTapState& scope, const GpuScopeTapKey& key) {
+    if (const auto found = std::ranges::find(scope.givenBack, key); found != scope.givenBack.end())
+        scope.givenBack.erase(found);
+    scope.givenBack.push_back(key);
+    while (scope.givenBack.size() > kScopeGivenBackKeys)
+        scope.givenBack.pop_front();
+}
+
+[[nodiscard]] std::uint64_t addSaturating(const std::uint64_t left,
+                                          const std::uint64_t right) noexcept {
+    return right > std::numeric_limits<std::uint64_t>::max() - left
+               ? std::numeric_limits<std::uint64_t>::max()
+               : left + right;
+}
+
+// The device bytes the measure's own memory takes, from the device's allocation sizes: one color
+// output per color step (display, XYZ), and the table buffer with its staging copy. The host side
+// is the table readback's host copy. The picture it counts is the Viewer's and is not charged.
+struct MeasureNeed final {
+    std::uint64_t deviceBytes = 0;
+    std::uint64_t hostBytes = 0;
+};
+
+[[nodiscard]] MeasureNeed measureNeedFor(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                                         const ScopeMeasureWork& work,
+                                         const render::GpuImage& picture) noexcept {
+    std::shared_ptr<const render::GpuAllocationSizes> sizes;
+    try {
+        sizes = core->device->availableAllocationBudget().allocation_sizes;
+    } catch (...) {
+    }
+    const std::uint64_t pixels = std::uint64_t{picture.width()} * picture.height();
+    const std::uint64_t imageBytes = sizes && sizes->image
+                                         ? sizes->image(picture.width(), picture.height())
+                                         : pixels * 16U;
+    const std::uint64_t layoutBytes = scopeMeasureTableBytes(work.job) / 3U;
+    const std::uint64_t bufferBytes =
+        sizes && sizes->buffer ? std::max(layoutBytes, sizes->buffer(layoutBytes)) : layoutBytes;
+    const std::uint64_t images = (work.display != nullptr ? 1U : 0U) + (work.xyz != nullptr ? 1U : 0U);
+    return {.deviceBytes = addSaturating(images * imageBytes, 2U * bufferBytes),
+            .hostBytes = layoutBytes};
+}
+
+enum class Admission : std::uint8_t { Granted, Wait, NoRoom };
+
+// Memory admission of the measure (#724), the exact rule. The measure's memory is admitted only as
+// a Background-class processing phase through the policy's non-blocking reserve(); the service
+// first asks the policy's own facts (never reserve() itself, whose refusal would ask the cache
+// reclaimers to give memory back for the measure):
+//   - the Viewer's last device and host need (the policy's `viewerPriority()`) is kept free beside
+//     the measure, always, not only while the Viewer is active;
+//   - NoRoom: the measure's need plus the Viewer's need exceeds the usable capacity of the card,
+//     or exceeds the room free now while nothing transient holds it (no frame is admitted, none
+//     waits or was admitted within the Viewer activity window). Free room is never made by
+//     evicting anything for the measure, so a card full of retained frames and caches ends the
+//     request Skipped(NoRoom) at once, and the caller falls back to the retained picture;
+//   - Wait: the card could hold it, but a Viewer request waits or was admitted within the activity
+//     window, or other admitted frames hold the room now. The request waits at the service
+//     holding nothing, only while its tap is alive and no Viewer stage needs the device (the
+//     per-turn gate), and ends NoRoom when the tap is given back;
+//   - otherwise reserve() with GpuAdmissionClass::Background; its grant is retained on the device.
+// A refusal after the grant (a race with a Viewer request on a worker) is a Wait.
+// Without a processing-phase policy there is nothing to admit against: the measure runs as before
+// (untracked) and still only when no phase is occupied.
+[[nodiscard]] Admission admitMeasure(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                                     ScopeMeasureRequest& request,
+                                     const render::GpuImage& picture) noexcept {
+    auto& scope = core->scope;
+    const auto& policy = core->options.processingPhasePolicy;
+    if (!policy)
+        return Admission::Granted;
+    const auto need = measureNeedFor(core, request.work, picture);
+    scope.measureNeedBytes.store(need.deviceBytes, std::memory_order_relaxed);
+    const auto capacity = policy->usableCapacity();
+    const auto viewer = policy->viewerPriority();
+    if (!capacity.hostReady || !capacity.deviceReady)
+        return Admission::Wait;
+    const std::uint64_t deviceWithViewer = addSaturating(need.deviceBytes, viewer.reserveDeviceBytes);
+    const std::uint64_t hostWithViewer = addSaturating(need.hostBytes, viewer.reserveHostBytes);
+    if (deviceWithViewer > capacity.deviceUsableBytes || hostWithViewer > capacity.hostUsableBytes)
+        return Admission::NoRoom;
+    if (viewer.waiting)
+        return Admission::Wait;
+    if (deviceWithViewer > capacity.deviceFreeBytes || hostWithViewer > capacity.hostFreeBytes) {
+        const bool transient = viewer.active || capacity.admittedPhases != 0;
+        return transient ? Admission::Wait : Admission::NoRoom;
+    }
+    const GpuProcessingPhaseEnvelope envelope{.output = GpuProcessingPhaseOutput::PackedPreview,
+                                              // A native phase needs a non-empty extent; the
+                                              // measure packs and publishes nothing.
+                                              .pixels = 1,
+                                              .metadataBytes = need.hostBytes,
+                                              .requestedExecutorBytes = std::uint64_t{0},
+                                              .deviceWorkingBytes = need.deviceBytes,
+                                              .sourceFree = true,
+                                              .native = true,
+                                              .admissionClass = GpuAdmissionClass::Background};
+    // The policy keeps the device need of the latest native phase as the room the caches keep free
+    // for the next Viewer frame; a measure's need must not replace the Viewer's.
+    const auto keptReserve = policy->deviceWorkReserveBytes();
+    auto grant = policy->reserve(envelope);
+    if (grant.status == render::GpuProcessingPhaseAdmission::Accepted && grant.lease)
+        policy->noteDeviceWorkNeed(keptReserve);
+    if (grant.status == render::GpuProcessingPhaseAdmission::BudgetRefused)
+        return Admission::NoRoom;
+    if (grant.status != render::GpuProcessingPhaseAdmission::Accepted || !grant.lease)
+        return Admission::Wait;
+    if (!core->device->retainProcessingPhase(grant.lease))
+        return core->device->processingPhaseOccupied() ? Admission::Wait : Admission::NoRoom;
+    scope.phase = std::move(grant.lease);
+    scope.phaseParked = false;
+    scope.phaseRetirePending = false;
+    scope.measureAdmissions.fetch_add(1, std::memory_order_relaxed);
+    return Admission::Granted;
+}
+
+// Whether a native memory refusal of the device's retained phase is what stopped the measure: the
+// measure then yields (Skipped(NoRoom)) instead of failing.
+[[nodiscard]] bool memoryRefused(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
+    if (core->device == nullptr)
+        return false;
+    return core->device->nativeBufferStorageRefusal().has_value() ||
+           core->device->nativeImageStorageRefusal().has_value();
+}
+
+// Whether this measure's phase can be the device's retained one now: a new measure needs the slot
+// free; one that has begun takes its parked phase back when no stage's phase is retained.
+[[nodiscard]] bool measurePhaseUsable(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                                      const ScopeMeasureRequest& request) noexcept {
+    auto& scope = core->scope;
+    if (scope.phase == nullptr)
+        return !core->device->processingPhaseOccupied();
+    if (request.stepper == nullptr)
+        return false; // an earlier measure's phase still awaits its retirement
+    const auto retained = core->device->retainedProcessingPhase();
+    if (retained == scope.phase)
+        return true;
+    if (scope.phaseParked && retained == nullptr &&
+        core->device->selectProcessingPhase(scope.phase->id())) {
+        scope.phaseParked = false;
+        return true;
+    }
+    return false;
+}
+
+// The one gate of a measure step: the Viewer comes first, and a step begins only when no Viewer
+// stage is ready, active or ahead and the measure's own phase can be the device's retained one (a
+// new measure needs no phase occupied). A fill-tap measure yields to Viewer-class stages only: the
+// fill stage that waits for it is not ready, so it never blocks it.
 [[nodiscard]] bool scopeStepMayBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                                      ScopeMeasureRequest& request) noexcept {
     const bool blocked = viewerStagePresent(*core) || core->device == nullptr ||
-                         core->device->processingPhaseOccupied();
+                         !measurePhaseUsable(core, request);
     if (blocked && !request.yieldCounted) {
         request.yieldCounted = true;
         core->scope.measureYields.fetch_add(1, std::memory_order_relaxed);
     }
     return !blocked;
+}
+
+// Retires the measure's phase when the measure has ended: at once when it is the device's
+// retained phase, after taking it back from the parked slot when no stage's phase is retained,
+// and otherwise at a later turn. `proven` is false only when a fence of the measure was not
+// proven retired: the phase is then latched unproven, as a frame's is, and recovered by the
+// device-wide idle proof at the next stage start.
+void endMeasurePhase(const std::shared_ptr<PreviewDisplayServiceCore>& core, const bool proven) noexcept {
+    auto& scope = core->scope;
+    if (scope.phase == nullptr)
+        return;
+    scope.phaseRetirePending = true;
+    scope.phaseRetireProven = proven;
+    settleScopePhase(core);
 }
 
 // Ends the request: frees its native state and, for a fill tap, the fill slot (whatever the
@@ -120,10 +289,14 @@ void finishRequest(const std::shared_ptr<PreviewDisplayServiceCore>& core,
             }
         }
         freed.reset();
-        countOutcome(scope, outcome.status);
+        countOutcome(scope, outcome);
         {
             std::lock_guard lock(scope.mutex);
             scope.request.reset();
+        }
+        if (request->ownsPhase) {
+            request->ownsPhase = false;
+            endMeasurePhase(core, proven);
         }
         scope.active.store(false, std::memory_order_release);
         scope.stepperBegan.store(false, std::memory_order_release);
@@ -170,6 +343,7 @@ void stepRequest(const std::shared_ptr<PreviewDisplayServiceCore>& core,
     // The tap the request names, and whether it is still there.
     std::shared_ptr<const render::GpuImage> picture;
     bool newerViewerTap = false;
+    bool tapGivenBack = false;
     bool found = false;
     {
         std::lock_guard lock(scope.mutex);
@@ -177,10 +351,22 @@ void stepRequest(const std::shared_ptr<PreviewDisplayServiceCore>& core,
             found = true;
             picture = entry->picture;
         } else {
-            newerViewerTap = !request->fill && scope.viewer && scope.viewer->serial > request->tapSerial;
+            tapGivenBack = wasGivenBackLocked(scope, request->key);
+            newerViewerTap = !tapGivenBack && !request->fill && scope.viewer &&
+                             scope.viewer->serial > request->tapSerial;
         }
     }
+    if (request->givenBack)
+        cancelled = true;
     if (request->stepper == nullptr) {
+        if (request->givenBack || (tapGivenBack && !cancelled)) {
+            finishRequest(core, request,
+                          outcomeOf(GpuScopeTapStatus::Skipped,
+                                    "the device's memory was needed for a frame; the scope measure "
+                                    "yielded",
+                                    GpuScopeTapSkip::NoRoom));
+            return;
+        }
         if (cancelled) {
             finishRequest(core, request,
                           outcomeOf(GpuScopeTapStatus::Cancelled,
@@ -214,6 +400,25 @@ void stepRequest(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                                     "the preview memory allowance is not known yet",
                                     GpuScopeTapSkip::NoRoom));
             return;
+        }
+        // The measure's memory is admitted as Background before it takes any (see admitMeasure).
+        switch (admitMeasure(core, *request, *picture)) {
+        case Admission::Wait:
+            if (!request->admissionWaitCounted) {
+                request->admissionWaitCounted = true;
+                scope.measureAdmissionWaits.fetch_add(1, std::memory_order_relaxed);
+            }
+            return;
+        case Admission::NoRoom:
+            finishRequest(core, request,
+                          outcomeOf(GpuScopeTapStatus::Skipped,
+                                    "the device has no room for the scope measure beside what "
+                                    "the Viewer needs",
+                                    GpuScopeTapSkip::NoRoom));
+            return;
+        case Admission::Granted:
+            request->ownsPhase = scope.phase != nullptr;
+            break;
         }
         if (scope.stage == nullptr) {
             std::string message;
@@ -269,7 +474,9 @@ void stepRequest(const std::shared_ptr<PreviewDisplayServiceCore>& core,
             return core->scopeTablesPollOverride(tables);
         };
     }
+    scope.stepping = true;
     const auto state = request->stepper->step(cancelled, deadlineExpired, hooks);
+    scope.stepping = false;
     if (request->stepper->began())
         scope.stepperBegan.store(true, std::memory_order_release);
     if (request->stepper->stopIssued())
@@ -278,9 +485,19 @@ void stepRequest(const std::shared_ptr<PreviewDisplayServiceCore>& core,
         auto outcome = outcomeFromStepper(
             *request, request->stepper->fault(),
             render::GpuScopeTables::nativeDispatchCount() - request->tableDispatchesBefore);
-        if (outcome.status == GpuScopeTapStatus::Cancelled && request->tapDropped)
+        if (outcome.status == GpuScopeTapStatus::Cancelled && request->givenBack)
+            outcome = outcomeOf(GpuScopeTapStatus::Skipped,
+                                "the device's memory was needed for a frame; the scope measure "
+                                "yielded",
+                                GpuScopeTapSkip::NoRoom);
+        else if (outcome.status == GpuScopeTapStatus::Cancelled && request->tapDropped)
             outcome = outcomeOf(GpuScopeTapStatus::Skipped, "the frame's tap was dropped",
                                 GpuScopeTapSkip::TapGone);
+        else if (outcome.status == GpuScopeTapStatus::Failed && memoryRefused(core))
+            outcome = outcomeOf(GpuScopeTapStatus::Skipped,
+                                "the device refused the scope measure's memory; it yields to "
+                                "the Viewer",
+                                GpuScopeTapSkip::NoRoom);
         if (outcome.status == GpuScopeTapStatus::Measured) {
             scope.colorDispatches.fetch_add(outcome.colorDispatches, std::memory_order_relaxed);
             scope.tableDispatches.fetch_add(outcome.tableDispatches, std::memory_order_relaxed);
@@ -352,6 +569,14 @@ void keepScopeTap(const std::shared_ptr<PreviewDisplayServiceCore>& core,
             releaseReservation();
             return;
         }
+        // A flagged fill frame's tap is kept only if it fits as Background; otherwise the frame
+        // is delivered and retained as an unflagged one, the slot stays free and the caller is
+        // told by Skipped(NoRoom) for its key.
+        if (fill && !scopeFillTapFits(core, GpuScopeTapKey::of(stage.gpuStage->desiredIdentity()),
+                                      picture->allocationBytes())) {
+            releaseReservation();
+            return;
+        }
         ScopeTapEntry entry{
             .key = GpuScopeTapKey::of(stage.gpuStage->desiredIdentity()),
             .geometry = GpuScopeTapGeometry{.dataWindow = descriptor.dataWindow(),
@@ -415,6 +640,7 @@ void reapScopeTaps(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexc
 }
 
 void stepScopeMeasure(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
+    settleScopePhase(core);
     std::shared_ptr<ScopeMeasureRequest> request;
     try {
         std::lock_guard lock(core->scope.mutex);
@@ -484,12 +710,214 @@ void releaseScopeTaps(const std::shared_ptr<PreviewDisplayServiceCore>& core) no
     scope.epoch.fetch_add(1, std::memory_order_acq_rel);
 }
 
+namespace {
+
+// Gives the slots' pictures back. Each released tap is counted by `counter` of its slot (when
+// given) and its key remembered so a later request for it ends Skipped(NoRoom).
+ScopeGiveBack releaseTapSlots(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                              std::atomic<std::uint64_t>* viewerCounter,
+                              std::atomic<std::uint64_t>* fillCounter) noexcept {
+    auto& scope = core->scope;
+    std::optional<ScopeTapEntry> viewer;
+    std::optional<ScopeTapEntry> fill;
+    try {
+        std::lock_guard lock(scope.mutex);
+        if (scope.viewer) {
+            if (!scope.viewer->dropped)
+                rememberGivenBackLocked(scope, scope.viewer->key);
+            viewer = std::move(scope.viewer);
+            scope.viewer.reset();
+        }
+        if (scope.fill) {
+            if (!scope.fill->dropped)
+                rememberGivenBackLocked(scope, scope.fill->key);
+            fill = std::move(scope.fill);
+            scope.fill.reset();
+        }
+    } catch (...) {
+        return {};
+    }
+    if (viewer && viewerCounter != nullptr)
+        viewerCounter->fetch_add(1, std::memory_order_relaxed);
+    if (fill && fillCounter != nullptr)
+        fillCounter->fetch_add(1, std::memory_order_relaxed);
+    ScopeGiveBack result;
+    result.any = viewer.has_value() || fill.has_value();
+    for (const auto* entry : {&viewer, &fill}) {
+        if (entry->has_value() && (*entry)->picture != nullptr &&
+            (*entry)->picture.use_count() == 1)
+            result.freedBytes = addSaturating(result.freedBytes, (*entry)->picture->allocationBytes());
+    }
+    // The pictures are released here, on the owner thread, outside the lock.
+    viewer.reset();
+    fill.reset();
+    if (result.any)
+        scope.epoch.fetch_add(1, std::memory_order_acq_rel);
+    return result;
+}
+
+// Ends the measure's request for memory the Viewer needs: a request that has not begun, or whose
+// begun measure has nothing in flight, ends Skipped(NoRoom) now; one with a submission in flight is
+// told to stop and is polled to its end (its fence must be proven retired before its memory is
+// freed), then ends Skipped(NoRoom).
+bool giveBackMeasure(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
+    std::shared_ptr<ScopeMeasureRequest> request;
+    try {
+        std::lock_guard lock(core->scope.mutex);
+        request = core->scope.request;
+    } catch (...) {
+        return false;
+    }
+    if (request == nullptr || request->givenBack)
+        return false;
+    request->givenBack = true;
+    core->scope.measuresGivenBack.fetch_add(1, std::memory_order_relaxed);
+    try {
+        stepRequest(core, request);
+    } catch (...) {
+        finishRequest(core, request,
+                      outcomeOf(GpuScopeTapStatus::Failed, "the scope measure raised"), false);
+    }
+    return true;
+}
+
+} // namespace
+
+ScopeGiveBack giveScopeMemoryBack(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
+    // A measure's own allocation never asks for memory back for itself.
+    if (core == nullptr || core->scope.stepping)
+        return {};
+    // What had been reclaimed before this first give-back (zero: the scope memory went first).
+    std::uint64_t reclaimsSoFar = core->counterDeviceRoomReclaims.load(std::memory_order_relaxed);
+    {
+        std::lock_guard lock(core->stateMutex);
+        reclaimsSoFar += core->publishedResidentFrameEvictionSerial;
+    }
+    auto result = releaseTapSlots(core, &core->scope.viewerTapYields, &core->scope.fillTapYields);
+    const bool measure = giveBackMeasure(core);
+    result.any = result.any || measure;
+    if (result.any && !core->scope.firstGiveBackNoted) {
+        core->scope.firstGiveBackNoted = true;
+        core->scope.reclaimsSeenAtFirstGiveBack.store(reclaimsSoFar, std::memory_order_relaxed);
+    }
+    return result;
+}
+
+void releaseScopeTapsIdle(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
+    if (core == nullptr)
+        return;
+    auto& scope = core->scope;
+    std::uint64_t held = 0;
+    try {
+        std::lock_guard lock(scope.mutex);
+        held = (scope.viewer ? 1U : 0U) + (scope.fill ? 1U : 0U);
+    } catch (...) {
+        return;
+    }
+    if (held == 0)
+        return;
+    if (releaseTapSlots(core, nullptr, nullptr).any)
+        scope.tapIdleReleases.fetch_add(held, std::memory_order_relaxed);
+}
+
+bool yieldScopeDeviceToStage(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
+    auto& scope = core->scope;
+    if (core == nullptr || core->device == nullptr || scope.phase == nullptr)
+        return true;
+    try {
+        if (core->device->retainedProcessingPhase() != scope.phase)
+            return true; // not on the slot: parked, or already retired
+        std::shared_ptr<ScopeMeasureRequest> request;
+        {
+            std::lock_guard lock(scope.mutex);
+            request = scope.request;
+        }
+        if (request != nullptr && request->stepper != nullptr &&
+            request->stepper->submissionInFlight()) {
+            // In flight: only polled. Its phase is parked so the stage retains its own; the
+            // stage does not wait for the measure.
+            if (!core->device->parkProcessingPhase())
+                return false;
+            scope.phaseParked = true;
+            scope.measurePhaseParks.fetch_add(1, std::memory_order_relaxed);
+            return true;
+        }
+        if (request != nullptr)
+            giveBackMeasure(core);
+        else
+            settleScopePhase(core);
+        return core->device->retainedProcessingPhase() != scope.phase;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool scopeFillTapFits(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                      const GpuScopeTapKey& key, const std::uint64_t pictureBytes) noexcept {
+    bool fits = true;
+    try {
+        if (const auto& policy = core->options.processingPhasePolicy) {
+            // The held picture is a Background claim of its allocation bytes, measured beside the
+            // Viewer's last need when the frame publishes (before its own phase's room returns).
+            const auto capacity = policy->usableCapacity();
+            const auto viewer = policy->viewerPriority();
+            fits = capacity.deviceReady && !viewer.waiting &&
+                   addSaturating(pictureBytes, viewer.reserveDeviceBytes) <=
+                       capacity.deviceFreeBytes;
+        }
+        if (!fits) {
+            core->scope.fillTapsRefused.fetch_add(1, std::memory_order_relaxed);
+            std::lock_guard lock(core->scope.mutex);
+            rememberGivenBackLocked(core->scope, key);
+        }
+    } catch (...) {
+    }
+    return fits;
+}
+
+void settleScopePhase(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
+    auto& scope = core->scope;
+    if (scope.phase == nullptr || !scope.phaseRetirePending)
+        return;
+    try {
+        if (core->device == nullptr) {
+            scope.phase.reset();
+            scope.phaseParked = false;
+            scope.phaseRetirePending = false;
+            return;
+        }
+        const auto retained = core->device->retainedProcessingPhase();
+        if (retained != scope.phase) {
+            // Parked behind a stage's phase: retired once that stage's phase is gone.
+            if (!(scope.phaseParked && retained == nullptr &&
+                  core->device->selectProcessingPhase(scope.phase->id())))
+                return;
+        }
+        core->device->retireProcessingPhase(scope.phase->id(), scope.phaseRetireProven);
+        scope.phase.reset();
+        scope.phaseParked = false;
+        scope.phaseRetirePending = false;
+    } catch (...) {
+    }
+}
+
+std::uint64_t reclaimScopePrograms(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                                   const std::uint64_t bytes) noexcept {
+    if (core == nullptr || core->scope.stage == nullptr || core->scope.stepping)
+        return 0;
+    return core->scope.stage->reclaimPrograms(bytes);
+}
+
 void retireScopeNative(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
     shutdownScopeMeasure(core);
     releaseScopeTaps(core);
     // The color step executor and the table pipeline are destroyed on the owner thread; their
     // destructors drain what is unretired.
     core->scope.stage.reset();
+    settleScopePhase(core);
+    core->scope.phase.reset();
+    core->scope.phaseParked = false;
+    core->scope.phaseRetirePending = false;
 }
 
 std::optional<GpuScopeTapGeometry>
@@ -508,12 +936,13 @@ GpuScopeTapMeasureOutcome measureScopeTapOn(const std::shared_ptr<PreviewDisplay
     auto& scope = core->scope;
     scope.measuresRequested.fetch_add(1, std::memory_order_relaxed);
     const auto settled = [&](GpuScopeTapMeasureOutcome outcome) {
-        countOutcome(scope, outcome.status);
+        countOutcome(scope, outcome);
         return outcome;
     };
 
     std::optional<GpuScopeTapGeometry> geometry;
     std::uint64_t serial = 0;
+    bool givenBack = false;
     {
         std::lock_guard lock(scope.mutex);
         if (scope.closed || core->stopping.load(std::memory_order_acquire))
@@ -524,8 +953,15 @@ GpuScopeTapMeasureOutcome measureScopeTapOn(const std::shared_ptr<PreviewDisplay
         if (const auto* entry = findEntryLocked(scope, key)) {
             geometry = entry->geometry;
             serial = entry->serial;
+        } else {
+            givenBack = wasGivenBackLocked(scope, key);
         }
     }
+    if (!geometry && givenBack)
+        return settled(outcomeOf(GpuScopeTapStatus::Skipped,
+                                 "the frame's tap was given back or refused for memory; measure "
+                                 "its retained picture",
+                                 GpuScopeTapSkip::NoRoom));
     if (!geometry)
         return settled(outcomeOf(GpuScopeTapStatus::Skipped,
                                  "the frame to measure is no longer tapped",

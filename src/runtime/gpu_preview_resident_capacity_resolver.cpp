@@ -99,6 +99,9 @@ static void trimIdleDeviceRetention(const std::shared_ptr<PreviewDisplayServiceC
     if (core->idleTrimmed || now - core->residentBusyAt < core->options.idleTrimDelay)
         return;
     core->idleTrimmed = true;
+    // A tap matters only while frames are being shown: it goes with the rest of the idle
+    // retention, first, so the scene cache's entries are the only owners of what they cache.
+    releaseScopeTapsIdle(core);
     std::uint64_t released = 0;
     if (core->residentSceneCache != nullptr)
         released += core->residentSceneCache->reclaim(core->residentSceneCache->retainedBytes());
@@ -117,6 +120,13 @@ std::uint64_t giveWayToDeviceRoom(const std::shared_ptr<PreviewDisplayServiceCor
     if (core == nullptr || core->device == nullptr || !core->device->isOwnerThread() ||
         !core->options.processingPhasePolicy)
         return 0;
+    // The measure's own allocation never makes anything give device room back for it (#724): it
+    // is refused and the measure yields.
+    if (core->scope.stepping)
+        return 0;
+    // The scope taps and the measure's memory are given back before anything else (#724): a
+    // frame's allocation was refused for device room. What they free counts toward the room.
+    const auto scopeGiven = giveScopeMemoryBack(core);
     // Parked storage holds nothing anyone reads, so it goes first; then the scene cache's
     // unpinned entries, least recently used first (the running scene's own inputs stay pinned).
     // What the cache lets go of is parked on release, and is freed too.
@@ -124,7 +134,9 @@ std::uint64_t giveWayToDeviceRoom(const std::shared_ptr<PreviewDisplayServiceCor
         *core->options.processingPhasePolicy, bytes,
         core->device->nativeStorageReuseStats().parkedDeviceBytes +
             (core->residentSceneCache != nullptr ? core->residentSceneCache->retainedBytes() : 0));
-    auto released = core->device->releaseReusableNativeStorage(wanted, true);
+    std::uint64_t released = scopeGiven.freedBytes;
+    if (released < wanted)
+        released += core->device->releaseReusableNativeStorage(wanted - released, true);
     if (released < wanted && core->residentSceneCache != nullptr) {
         const auto parkedBefore = core->device->nativeStorageReuseStats().parkedDeviceBytes;
         released += core->residentSceneCache->reclaim(wanted - released);
@@ -180,11 +192,20 @@ void refreshResidentForegroundCapacity(
         // #682: the caches also keep room for one more phase of the current work, so a RAM fill
         // never waits for them to shrink. Only reusable retention gives this back.
         const auto reserve = deviceWorkReserveShortfall(policy);
-        if (reserve > wanted) {
-            auto released = core->device->releaseReusableNativeStorage(reserve, true);
+        // #724: the scope taps and the measure's memory are the first thing given back for a
+        // frame short of device memory, before parked storage, the scene cache, the OCIO programs
+        // or a request to the UI to evict finished frames.
+        std::uint64_t scopeFreed = 0;
+        if (wanted != 0 || reserve != 0) {
+            scopeFreed = giveScopeMemoryBack(core).freedBytes;
+            if (scopeFreed != 0)
+                allocation = sample();
+        }
+        if (reserve > wanted && reserve > scopeFreed) {
+            auto released = core->device->releaseReusableNativeStorage(reserve - scopeFreed, true);
             const auto parkedBefore = core->device->nativeStorageReuseStats().parkedDeviceBytes;
-            if (released < reserve && core->residentSceneCache != nullptr)
-                released += core->residentSceneCache->reclaim(reserve - released);
+            if (released + scopeFreed < reserve && core->residentSceneCache != nullptr)
+                released += core->residentSceneCache->reclaim(reserve - scopeFreed - released);
             const auto parkedAfter = core->device->nativeStorageReuseStats().parkedDeviceBytes;
             if (parkedAfter > parkedBefore)
                 static_cast<void>(
@@ -196,27 +217,31 @@ void refreshResidentForegroundCapacity(
                 allocation = sample();
             }
         }
-        if (wanted != 0) {
+        if (wanted != 0 && wanted > scopeFreed) {
+            const auto stillWanted = wanted - scopeFreed;
             // Parked native storage (#477) holds nothing anyone reads, so it goes first.
-            auto released = core->device->releaseReusableNativeStorage(wanted, true);
+            auto released = core->device->releaseReusableNativeStorage(stillWanted, true);
             const auto parkedBefore = core->device->nativeStorageReuseStats().parkedDeviceBytes;
-            if (released < wanted && core->residentSceneCache != nullptr)
-                released += core->residentSceneCache->reclaim(wanted - released);
+            if (released < stillWanted && core->residentSceneCache != nullptr)
+                released += core->residentSceneCache->reclaim(stillWanted - released);
             // Then the retained OCIO programs, which have no fixed byte ceiling of their own
-            // (#474): the scene executor's effect programs and the display arm's.
-            if (released < wanted && core->residentExecutor != nullptr)
-                released += core->residentExecutor->reclaimOcioPrograms(wanted - released);
-            if (released < wanted && core->residentGeneralDisplay != nullptr)
-                released += core->residentGeneralDisplay->executor().reclaim(wanted - released);
+            // (#474): the scene executor's effect programs and the display arm's, and the scope
+            // measure's color programs.
+            if (released < stillWanted && core->residentExecutor != nullptr)
+                released += core->residentExecutor->reclaimOcioPrograms(stillWanted - released);
+            if (released < stillWanted && core->residentGeneralDisplay != nullptr)
+                released += core->residentGeneralDisplay->executor().reclaim(stillWanted - released);
+            if (released < stillWanted)
+                released += reclaimScopePrograms(core, stillWanted - released);
             // Storage those releases parked is freed too, so what they report is given back.
             const auto parkedAfter = core->device->nativeStorageReuseStats().parkedDeviceBytes;
             if (parkedAfter > parkedBefore)
                 static_cast<void>(
                     core->device->releaseReusableNativeStorage(parkedAfter - parkedBefore, true));
-            if (released < wanted) {
+            if (released < stillWanted) {
                 std::lock_guard lock(core->stateMutex);
                 ++core->publishedResidentFrameEvictionSerial;
-                core->publishedResidentFrameEvictionBytes = wanted - released;
+                core->publishedResidentFrameEvictionBytes = stillWanted - released;
             }
             if (released != 0)
                 allocation = sample();

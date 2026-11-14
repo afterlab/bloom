@@ -4,6 +4,8 @@
 #include "gpu_composite_private.hpp"
 #include "gpu_device_private.hpp"
 #include "gpu_image_private.hpp"
+#include "gpu_native_buffer_allocation_private.hpp"
+#include "gpu_native_storage_reuse_private.hpp"
 #include "shaders/scope_tables_spirv.inc"
 
 #include <array>
@@ -77,6 +79,7 @@ struct ScopeBuffer final {
             state = other.state;
             buffer = other.buffer;
             allocation = other.allocation;
+            storage = std::move(other.storage);
             armed = other.armed;
             other.state = nullptr;
             other.buffer = VK_NULL_HANDLE;
@@ -89,8 +92,13 @@ struct ScopeBuffer final {
 
     void release() noexcept {
         if (armed && state != nullptr) {
-            vmaDestroyBuffer(state->allocator, buffer, allocation);
+            // The backing is released before its storage token: the token is the phase's claim on
+            // it (#724).
+            vulkan_detail::destroyNativeBuffer(*state, buffer, allocation);
+            if (state->nativeBufferBackingsDestroyed != UINT64_MAX)
+                ++state->nativeBufferBackingsDestroyed;
         }
+        storage = {};
         state = nullptr;
         buffer = VK_NULL_HANDLE;
         allocation = VK_NULL_HANDLE;
@@ -100,6 +108,9 @@ struct ScopeBuffer final {
     DeviceAllocatorState* state = nullptr;
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
+    // The processing phase's claim on the backing: with a phase retained the table buffers are
+    // admitted and tracked against it like every other native buffer (#724).
+    NativeBufferStorageToken storage;
     bool armed = false;
 };
 
@@ -207,9 +218,13 @@ struct ScopeDispatch final {
     return true;
 }
 
+// Creates one table buffer as covered native storage: under a retained processing phase it is
+// admitted against that phase (a refusal is reported through `refused` and the device's
+// native-buffer refusal), without one it takes the original rootless allocator route.
 [[nodiscard]] bool createScopeBuffer(DeviceAllocatorState& state, const std::uint64_t bytes,
-                                     const VkBufferUsageFlags usage, const bool hostVisible,
-                                     ScopeBuffer& out, std::uint64_t& actualBytes) noexcept {
+                                     const std::uint64_t byteBudget, const VkBufferUsageFlags usage,
+                                     const bool hostVisible, ScopeBuffer& out,
+                                     std::uint64_t& actualBytes, bool& refused) noexcept {
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufferInfo.size = bytes;
@@ -224,9 +239,16 @@ struct ScopeDispatch final {
     }
     VmaAllocationInfo info{};
     out.state = &state;
-    if (vmaCreateBuffer(state.allocator, &bufferInfo, &allocationInfo, &out.buffer, &out.allocation,
-                        &info) != VK_SUCCESS) {
+    const auto outcome = vulkan_detail::allocateCoveredBuffer(
+        state, bufferInfo, allocationInfo, byteBudget, out.buffer, out.allocation, info,
+        out.storage, vulkan_detail::NativeBufferPurpose::Processing);
+    if (outcome != vulkan_detail::NativeBufferAllocationOutcome::Allocated) {
+        refused = outcome == vulkan_detail::NativeBufferAllocationOutcome::PhaseRefused ||
+                  outcome == vulkan_detail::NativeBufferAllocationOutcome::TransferBudgetRefused;
+        out.storage = {};
         out.state = nullptr;
+        out.buffer = VK_NULL_HANDLE;
+        out.allocation = VK_NULL_HANDLE;
         return false;
     }
     out.armed = true;
@@ -560,15 +582,21 @@ bool GpuScopeTables::begin(const GpuScopeTablesRequest& request,
 
         std::uint64_t tablesActual = 0;
         std::uint64_t stagingActual = 0;
-        if (!createScopeBuffer(*state, bytes,
+        bool refused = false;
+        if (!createScopeBuffer(*state, bytes, byteBudget,
                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                    VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                               false, impl.tables, tablesActual) ||
-            !createScopeBuffer(*state, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, impl.staging,
-                               stagingActual)) {
-            impl.fail(GpuScopeTablesCode::MeasureFailed,
-                      "the scope table buffers could not be created");
+                               false, impl.tables, tablesActual, refused) ||
+            !createScopeBuffer(*state, bytes, byteBudget, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true,
+                               impl.staging, stagingActual, refused)) {
+            if (refused)
+                impl.fail(GpuScopeTablesCode::OverBudget,
+                          "the retained processing phase or the byte budget refused the scope "
+                          "table buffers");
+            else
+                impl.fail(GpuScopeTablesCode::MeasureFailed,
+                          "the scope table buffers could not be created");
             return false;
         }
         // The submission holds both buffers and, once retired, the host copy.

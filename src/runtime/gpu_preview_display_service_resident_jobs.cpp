@@ -205,8 +205,11 @@ residentCapacityWait(const std::shared_ptr<PreviewDisplayServiceCore>& core,
     const auto& phase = stage.gpuStage->phaseLease();
     if (!phase)
         return std::nullopt;
+    // #724: the scope taps and the measure's memory are the first things given back for a frame
+    // short of device memory.
+    const auto scopeGiven = giveScopeMemoryBack(core);
     const bool cut = phase->executorByteLimit() < phase->executorByteCeiling();
-    if (!cut && !residentDeviceRoomCanReturn(core, *phase))
+    if (!cut && !scopeGiven.any && !residentDeviceRoomCanReturn(core, *phase))
         return std::nullopt;
     core->deviceReclaim->request(std::max<std::uint64_t>(
         {phase->deviceNeedBytes(), phase->executorByteLimit(), std::uint64_t{1}}));
@@ -278,10 +281,12 @@ void finishResidentImmediately(const std::shared_ptr<PreviewDisplayServiceCore>&
     // preview route (the shared code), not a failed frame (#539).
     bool storageRoomCanReturn = false;
     if (retryableStorage && core->options.processingPhasePolicy && deviceRefusal()) {
+        // The scope taps and the measure's memory go first (#724).
+        const auto scopeGiven = giveScopeMemoryBack(core);
         // The device caches give way, not the frame (#425): the retry finds the evicted room.
         storageRoomCanReturn =
             !residentDeviceLost(core) &&
-            residentDeviceRoomCanReturn(core, *stage->gpuStage->phaseLease());
+            (scopeGiven.any || residentDeviceRoomCanReturn(core, *stage->gpuStage->phaseLease()));
         core->deviceReclaim->request(
             std::max<std::uint64_t>(stage->gpuStage->phaseLease()->deviceNeedBytes(), 1));
     }
@@ -796,6 +801,12 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             return;
         }
         const auto& phase = stage->gpuStage->phaseLease();
+        // #724: the device's one retained slot may hold the scope measure's phase; the stage never
+        // waits for the measure, which is parked (or ended when nothing of it is in flight).
+        if (phase && core->device && !yieldScopeDeviceToStage(core)) {
+            core->residentNativeReady.push_front(stage);
+            return;
+        }
         // Recover a phase latched by an earlier unproven retirement (device-wide idle proof).
         if (phase && core->device && core->device->processingPhaseOccupied())
             static_cast<void>(core->device->recoverUnprovenProcessingPhase());

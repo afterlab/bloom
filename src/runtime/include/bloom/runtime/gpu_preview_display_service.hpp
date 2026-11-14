@@ -270,6 +270,38 @@ struct GpuPreviewDisplayServiceCounters final {
     std::uint64_t scopeTableReadbacks = 0;
     std::uint64_t scopeTableReadbackBytes = 0;
     std::uint64_t scopeTableReadbackBytesTotal = 0;
+    // Memory admission and yield of the measure (#724). The measure's native memory is admitted
+    // only as a Background-class processing phase (`scopeMeasureAdmissions`); a request that
+    // cannot be admitted yet waits once (`scopeMeasureAdmissionWaits`) holding nothing, and one
+    // the card cannot fit beside what the Viewer needs ends Skipped(NoRoom). The need of the last
+    // admission decision, in device bytes, is `scopeMeasureNeedBytes`.
+    std::uint64_t scopeMeasureAdmissions = 0;
+    std::uint64_t scopeMeasureAdmissionWaits = 0;
+    std::uint64_t scopeMeasureNeedBytes = 0;
+    // Measures that ended Skipped(NoRoom), for any reason (no room beside the Viewer, a tap or
+    // the measure's memory given back for a frame that needed the room, the allowance unknown).
+    std::uint64_t scopeMeasuresNoRoom = 0;
+    // Measures ended or told to stop because a frame needed the device's memory or its one
+    // processing-phase slot (a measure with nothing in flight ends at once; one with a
+    // submission in flight is polled to its end and ends Skipped(NoRoom)).
+    std::uint64_t scopeMeasuresGivenBack = 0;
+    // Times the measure's phase was parked so a stage could retain its own (the measure kept
+    // being polled; the stage did not wait).
+    std::uint64_t scopeMeasurePhaseParks = 0;
+    // Taps given back first when a frame was short of device memory (or the reusable device
+    // memory reserve was), per slot, before parked storage, the scene cache, the OCIO programs or
+    // a request to the UI to evict finished frames.
+    std::uint64_t scopeViewerTapYields = 0;
+    std::uint64_t scopeFillTapYields = 0;
+    // Taps released because the service went idle (a tap matters only while frames are shown).
+    std::uint64_t scopeTapIdleReleases = 0;
+    // The device-room reclaims plus the finished-frame eviction requests that had already been
+    // made when the first tap or measure was given back for memory. Zero shows the scope memory
+    // went first, before parked storage, the scene cache, the OCIO programs or the UI's frames.
+    std::uint64_t scopeReclaimsSeenAtFirstGiveBack = 0;
+    // Flagged fill frames whose tap was not kept because it did not fit as Background. The frame
+    // is delivered and retained as an unflagged one; the slot stays free.
+    std::uint64_t scopeFillTapsRefused = 0;
 
     friend bool operator==(const GpuPreviewDisplayServiceCounters&,
                            const GpuPreviewDisplayServiceCounters&) = default;
@@ -441,7 +473,11 @@ enum class GpuScopeTapSkip : std::uint8_t {
     Superseded,
     // No tap has that key (never kept, dropped, freed by its measure or by shutdown).
     TapGone,
-    // The device has no room for the measure now; it never takes room a frame needs.
+    // The device has no room for the measure now; it never takes room a frame needs. It is
+    // memory pressure, never a caller's drop: the caller falls back to the retained picture's
+    // measure for that frame. It also names a key whose tap was given back (under pressure or
+    // when the service went idle) or was refused at publish (a fill frame's tap that did not fit
+    // as Background); the service remembers the last 64 such keys.
     NoRoom,
 };
 
