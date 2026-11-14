@@ -130,3 +130,25 @@ fill the picture from empty to full. **Bar color** and **Background** work as in
 - Audio Pitch reports what is sounding, overtones included, so a single low note also shows a
   little of the note a fifth above it, and drums smear across all twelve.
 - Heavy reading happens in the background and never blocks the interface.
+
+## Beat and pitch on recorded music
+
+Both nodes were run once on three freely licensed recordings: an electronic loop its author
+published as 100 beats per minute, the first minute of a piano prelude in C major (steady broken
+chords, no drums) and the first minute of a military band march in E-flat major.
+
+- **Tempo.** The loop read 100.0, the published tempo. The prelude read 132.8 and the march 127.1;
+  neither performance has a published tempo to compare with. Audio Beat reports one tempo for the
+  whole sound: it was the same value at every second of all three, so a performer who slows down or
+  speeds up is not followed, and the beats drift away from the playing wherever the tempo bends.
+- **Where the beats fall.** The nodes mark evenly spaced beats at that one tempo. Nothing tells
+  Audio Beat which beat is the first of a bar, and on music without drums (the prelude) the pulse
+  it locks to is the stream of notes, which need not be the beat a listener would tap.
+- **Notes.** In both pieces the seven notes of the key carried almost all of the share (96% in the
+  prelude; the seven highest shares in the march were exactly the notes of E-flat major). The
+  **Strongest** note was not the key note in either: D led the prelude and G the march. Audio
+  Pitch tells you which notes are sounding, not the key.
+- **Strength.** With a full band playing, the leading note held about 15% of the share, against
+  35% in the loop. On dense music **Strongest** changes often between neighbors of similar
+  strength; drive animation from **Classes** rather than from **Strongest** there.
+- **Not seen here, still possible:** half or double the tempo. None of the three showed it.

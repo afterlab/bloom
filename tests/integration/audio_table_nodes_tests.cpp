@@ -28,8 +28,11 @@
 #include <bloom/scripting/node_path_query.hpp>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
@@ -40,6 +43,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace bloom;
@@ -145,7 +149,7 @@ struct Fixture {
     }
     static document::NewProject makeProject(const document::AssetRecord& asset) {
         auto project = document::makeNewProject(
-            "Audio table", "Main", at(kSeconds),
+            "Audio table", "Main", asset.duration,
             *document::CompositionFormat::create(4, 4, core::PixelAspectRatio::square(),
                                                  *document::FrameRate::create(24, 1)));
         if (!project.project.addAsset(asset))
@@ -742,7 +746,72 @@ void bake(const document::AssetRecord& sound) {
 }
 } // namespace
 
-int main() {
+// #635 asks what Audio Beat and Audio Pitch get wrong on real music. This is the aid that report
+// was made with, not a test (no test runs it, and the repository holds no recorded music):
+//   <this program> --measure <file.wav>
+// reads a 48 kHz stereo 32-bit float WAV and prints, for each second, the tempo and beat count
+// Audio Beat reports and the leading note Audio Pitch reports, then the mean share of each note.
+int measure(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    std::array<char, 12> riff{};
+    in.read(riff.data(), static_cast<std::streamsize>(riff.size()));
+    std::uint64_t dataBytes = 0;
+    while (in) {
+        std::array<char, 8> chunk{};
+        in.read(chunk.data(), static_cast<std::streamsize>(chunk.size()));
+        if (in.gcount() != static_cast<std::streamsize>(chunk.size()))
+            break;
+        std::uint32_t size = 0;
+        std::memcpy(&size, chunk.data() + 4, 4);
+        if (std::string_view(chunk.data(), 4) == "data") {
+            dataBytes = size;
+            break;
+        }
+        in.seekg(size + (size & 1U), std::ios::cur);
+    }
+    const auto frames = dataBytes / 8U;
+    if (frames < kRate) {
+        std::cerr << "not a 48 kHz stereo float WAV of at least a second: " << path << '\n';
+        return 1;
+    }
+    const auto hash = platform::hashSourceFile(path);
+    if (hash.error != platform::SourceHashError::None)
+        return 1;
+    const auto seconds = static_cast<std::uint32_t>(frames / kRate);
+    document::AssetRecord asset;
+    asset.id = document::AssetId::fromRaw(635);
+    asset.kind = document::AssetKind::Audio;
+    asset.locator = {
+        "file", "project-relative", path.filename().string(),
+        core::fileUriFromAbsolutePath(std::filesystem::absolute(path)).value_or(std::string{})};
+    asset.contentDigest = hash.digest;
+    asset.rate = kRate;
+    asset.channels = 2;
+    asset.frames = frames;
+    asset.duration = at(seconds);
+    asset.name = path.filename().string();
+    Fixture fixture(asset);
+    const auto beat = fixture.add(document::kAudioBeatNodeType);
+    const auto pitch = fixture.add(document::kAudioPitchNodeType);
+    std::vector<double> mean(12, 0.0);
+    std::cout << "second tempo beat strongest strength\n";
+    for (std::uint32_t second = 1; second < seconds; ++second) {
+        const auto beats = read(fixture, beat, second);
+        const auto notes = read(fixture, pitch, second);
+        const auto classes = notes.list("classes");
+        for (std::size_t note = 0; note < mean.size() && note < classes.size(); ++note)
+            mean[note] += classes[note] / (seconds - 1);
+        std::cout << second << ' ' << beats.scalar("tempo") << ' ' << beats.scalar("beat") << ' '
+                  << notes.scalar("strongest") << ' ' << notes.scalar("strength") << '\n';
+    }
+    std::cout << "mean share of each note, C first:";
+    for (const double share : mean)
+        std::cout << ' ' << share;
+    std::cout << '\n';
+    return failures == 0 ? 0 : 1;
+}
+
+int main(int argc, char** argv) {
     const auto directory = platform::createPrivateTemporaryDirectory("bloom-audio-table");
     if (!directory) {
         std::cerr << "no scratch directory\n";
@@ -751,6 +820,15 @@ int main() {
     scratch = *directory;
     runtime::setAudioSoundDirectory(scratch / "sounds");
     try {
+        if (argc == 3 && std::string_view(argv[1]) == "--measure") {
+            const int result = measure(argv[2]);
+            runtime::clearAudioAnalysis();
+            runtime::clearAudioSounds();
+            runtime::setAudioSoundDirectory(std::nullopt);
+            std::error_code ignored;
+            std::filesystem::remove_all(scratch, ignored);
+            return result;
+        }
         const auto sound = writeSound();
         bands(sound);
         sample(sound);
