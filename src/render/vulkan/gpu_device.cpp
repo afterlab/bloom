@@ -414,6 +414,30 @@ GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept {
         result.allocation_sizes.reset();
     }
 
+    if (control.allocator != VK_NULL_HANDLE && control.declaredMemory) {
+        // A modelled card has the room it was declared with, less what this allocator holds on
+        // its device-local heaps. The driver's live figure moves with every other program on the
+        // real card, and a test that plans for a stated card must not move with it.
+        const VkPhysicalDeviceMemoryProperties* properties = nullptr;
+        vmaGetMemoryProperties(control.allocator, &properties);
+        std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> budgets{};
+        vmaGetHeapBudgets(control.allocator, budgets.data());
+        std::uint64_t held = 0;
+        for (std::uint32_t heap = 0; properties != nullptr &&
+                                     heap < properties->memoryHeapCount &&
+                                     heap < VK_MAX_MEMORY_HEAPS;
+             ++heap) {
+            if ((properties->memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0U) {
+                const std::uint64_t sum = held + budgets[heap].statistics.blockBytes;
+                held = sum < held ? std::numeric_limits<std::uint64_t>::max() : sum;
+            }
+        }
+        result.source = GpuAllocationBudgetSource::MemoryBudget;
+        result.available_bytes =
+            result.device_local_bytes > held ? result.device_local_bytes - held : 0;
+        return result;
+    }
+
     if (control.allocator != VK_NULL_HANDLE && control.memoryBudgetEnabled) {
         // vmaGetHeapBudgets normally reuses its last driver sample until enough allocations pass
         // through this allocator. Refresh explicitly so an idle Bloom sees memory freed or used by

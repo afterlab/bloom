@@ -180,12 +180,22 @@ int run(const int argc, char** argv) {
     acesIntent.ocioConfigRevision = *acesRevision;
     acesIntent.ocioConfigUri = bloom::color::kAcesCgV1ConfigUri;
 
-    // Acceptance (1): the DEFAULT Neutral request above the retired 4K ceiling (3840*2160).
-    constexpr std::uint32_t kNeutralWidth = 4096;
-    constexpr std::uint32_t kNeutralHeight = 2304;
-    static_assert(static_cast<std::uint64_t>(kNeutralWidth) * kNeutralHeight > 3840ULL * 2160ULL,
-                  "the default Neutral case must exceed the retired 4K ceiling");
-    auto neutralPlan = makePlan(kNeutralWidth, kNeutralHeight);
+    // Acceptance (1): the DEFAULT Neutral request. The route and its counters are the same at any
+    // size, so the default run is small and plans for a declared card; the stress run uses a frame
+    // above the retired 4K ceiling (3840*2160) on the real card.
+    constexpr std::uint32_t kLargeNeutralWidth = 4096;
+    constexpr std::uint32_t kLargeNeutralHeight = 2304;
+    static_assert(static_cast<std::uint64_t>(kLargeNeutralWidth) * kLargeNeutralHeight >
+                      3840ULL * 2160ULL,
+                  "the large Neutral case must exceed the retired 4K ceiling");
+    const std::uint32_t neutralWidth = options.largeFrames ? kLargeNeutralWidth : 960U;
+    const std::uint32_t neutralHeight = options.largeFrames ? kLargeNeutralHeight : 540U;
+    // The 6000x4000 composition and its 4608x3164 source, or the same shapes at a quarter.
+    const std::uint32_t bigWidth = options.largeFrames ? 6000U : 1500U;
+    const std::uint32_t bigHeight = options.largeFrames ? 4000U : 1000U;
+    const int sourceWidth = options.largeFrames ? 4608 : 1152;
+    const int sourceHeight = options.largeFrames ? 3164 : 791;
+    auto neutralPlan = makePlan(neutralWidth, neutralHeight);
 
     SampledServiceRoot root;
     const auto initialBudget = root.view->load();
@@ -457,7 +467,7 @@ int run(const int argc, char** argv) {
     // default scheduler config, not a test override, is the thing under test.
     {
         constexpr std::size_t kGib = std::size_t{1} << 30U;
-        auto bigPlan = makePlan(6000U, 4000U);
+        auto bigPlan = makePlan(bigWidth, bigHeight);
         const auto bigSnapshot = snapshotFor(*bigPlan);
 
         TaskScheduler defaultScheduler(root.defaults());
@@ -497,8 +507,10 @@ int run(const int argc, char** argv) {
                       << defaultStatus.residentDetail << " / " << defaultStatus.presentationDetail
                       << '\n';
         } else {
+            // Only the real card says whether the default budget exceeds the retired ceiling;
+            // the declared card of the default run is a stated size.
             expectations.expect(
-                defaultStatus.foregroundRequestBytes > kGib,
+                !options.largeFrames || defaultStatus.foregroundRequestBytes > kGib,
                 "default-scheduler: the rooted foreground budget exceeds the old "
                 "fixed 1 GiB ceiling even when cache retention has a separate partition");
             const auto bigIdentity = makeIdentity(*bigPlan, 1, {}, {}, ViewAdjust{});
@@ -554,8 +566,8 @@ int run(const int argc, char** argv) {
         namespace runtime = bloom::runtime;
         const auto mediaDirectory = makeUniqueProductionMediaDirectory();
         std::filesystem::create_directories(mediaDirectory);
-        const auto exrPath = mediaDirectory / "production_4608x3164.exr";
-        writeProductionLargeExr(exrPath, 4608, 3164);
+        const auto exrPath = mediaDirectory / "production_source.exr";
+        writeProductionLargeExr(exrPath, sourceWidth, sourceHeight);
         const auto mediaAsset = productionImageAsset(exrPath, 7001);
         auto mediaEvaluator = std::make_shared<CpuCompositionEvaluator>();
         mediaEvaluator->setAssetBaseDirectory(mediaDirectory);
@@ -563,7 +575,7 @@ int run(const int argc, char** argv) {
         mediaContext.assetBaseDirectory = mediaDirectory;
         auto mediaBuilder = std::make_shared<CpuGpuSceneBuilder>(
             nullptr, std::move(mediaContext), runtime::GpuSceneOcioContext{}, root.phase());
-        auto mediaPlan = makeProductionMediaTextPlan(format(6000U, 4000U), mediaAsset, 8000);
+        auto mediaPlan = makeProductionMediaTextPlan(format(bigWidth, bigHeight), mediaAsset, 8000);
         const auto mediaSnapshot = snapshotFor(*mediaPlan);
 
         TaskScheduler productionScheduler(root.defaults());
@@ -789,13 +801,14 @@ int run(const int argc, char** argv) {
 
     if (expectations.failures() == 0) {
         std::cout
-            << "PASS: default >4K Neutral general arm at the service; non-default adjusted "
+            << "PASS (" << neutralWidth << 'x' << neutralHeight << " Neutral, " << bigWidth << 'x'
+            << bigHeight << " production"
+            << (options.largeFrames ? ", real device" : ", declared device")
+            << "): default Neutral general arm at the service; non-default adjusted "
                "cold/warm general frames; process output retained across a display-only change; "
-               "zero full-frame readback; production-default scheduler admits a 6K resident "
-               "request "
-               "with zero admission refusal; media+text 6K production graph dispatches natively "
-               "with "
-               "zero CPU fallback; explicit small capacity refuses honestly\n";
+               "zero full-frame readback; production-default scheduler admits a resident "
+               "request with zero admission refusal; media+text production graph dispatches "
+               "natively with zero CPU fallback; explicit small capacity refuses honestly\n";
         return 0;
     }
     std::cerr << expectations.failures() << " general display service expectation(s) failed\n";

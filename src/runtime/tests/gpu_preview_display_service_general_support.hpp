@@ -4,6 +4,7 @@
 // test and the forced Neutral-qualification gate test; it defines the plan/identity/stage builders,
 // the resolver request, and the await helpers. It contains no main().
 
+#include "fixed_memory_budget.hpp"
 #include "gpu_preview_display_service_private.hpp"
 
 #include <bloom/color/ocio_builtin_registry.hpp>
@@ -109,9 +110,18 @@ constexpr auto kBlendP = bloom::document::ParameterId::fromRaw(46);
 
 #endif // BLOOM_GPU_TOOLS_AVAILABLE
 
+// The card every service in these tests plans for. A stated size, so admission does not move with
+// what else holds the real card; 0 (the large-frame stress run) is the real device.
+[[nodiscard]] inline std::uint64_t& declaredDeviceBytes() noexcept {
+    static std::uint64_t bytes = bloom::test_support::kFixedDeviceMemoryBytes;
+    return bytes;
+}
+
 struct TestOptions final {
     std::filesystem::path loaderPath;
     bool requireDevice = false;
+    // The stress registration: the 4K and 6K frames, admitted against the machine's real card.
+    bool largeFrames = false;
     bool valid = true;
 };
 
@@ -123,6 +133,9 @@ struct TestOptions final {
             options.loaderPath = argv[++index];
         } else if (argument == "--require-device") {
             options.requireDevice = true;
+        } else if (argument == "--large-frames") {
+            options.largeFrames = true;
+            declaredDeviceBytes() = 0;
         } else {
             std::cerr << "unknown argument: " << argument << '\n';
             options.valid = false;
@@ -380,6 +393,7 @@ generalFallback(std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorH
     options.loaderPath = loader;
     options.presentation = GpuPreviewDisplayServicePresentationMode::Wayland;
     options.previewByteAllowance = kBudget;
+    options.deviceMemoryLimitBytes = declaredDeviceBytes();
     options.presentationCoordinator.maxTargets = 3U;
     options.presentationCoordinator.maxRetainedTargets = 64U;
     options.presentationCoordinator.shutdownDrainPumps = 600U;

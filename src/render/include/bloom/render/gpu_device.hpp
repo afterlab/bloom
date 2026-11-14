@@ -287,9 +287,11 @@ struct GpuDeviceCreationOptions final {
     // The directory is created on the first write.
     std::filesystem::path pipeline_cache_directory{};
     // Models a card with this much device-local memory (#682): every device-local heap is capped
-    // at it in the allocator, so allocations beyond it fail and the live budget never reports
-    // more. 0 (the default) is the whole device. Tests use it to plan for small cards on any
-    // machine; nothing else sets it.
+    // at it in the allocator, so allocations beyond it fail, and the allocation budget is this
+    // size less the device's own allocations. The driver's live figure is not read, so what other
+    // programs hold on the real card does not change what a test is admitted against. 0 (the
+    // default) is the whole device. Tests use it to plan for a stated card on any machine;
+    // nothing else sets it.
     std::uint64_t device_memory_limit_bytes = 0;
 };
 

@@ -694,6 +694,7 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
                                     ? std::min(selection->deviceMemoryBytes,
                                                options.device_memory_limit_bytes)
                                     : selection->deviceMemoryBytes;
+    control->declaredMemory = options.device_memory_limit_bytes != 0;
     control->unifiedMemory = selection->unifiedMemory;
     control->deviceUuid = selection->deviceUuid;
     control->memoryBudgetEnabled = selection->memoryBudgetSupported;

@@ -219,6 +219,9 @@ struct DeviceAllocatorState final {
     std::uint64_t maxStorageBufferRange = 0;
     // Summed DEVICE_LOCAL heap size, not committed allocator bytes.
     std::uint64_t deviceLocalBytes = 0;
+    // A modelled card (GpuDeviceCreationOptions::device_memory_limit_bytes): its allocation budget
+    // is this declared size less this allocator's own blocks, never a driver reading.
+    bool declaredMemory = false;
     // Every memory heap is DEVICE_LOCAL: device memory is system memory.
     bool unifiedMemory = false;
     // Driver-reported physical device UUID, copied into every live allocation budget.

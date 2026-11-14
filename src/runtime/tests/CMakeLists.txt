@@ -2363,6 +2363,17 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
     )
     set_tests_properties(bloom.runtime.gpu_preview_display_service_general
         PROPERTIES SKIP_RETURN_CODE 77)
+    # The same service cases at 4K and 6K on the machine's real card: only there does the default
+    # budget have to exceed the retired fixed 1 GiB request ceiling. The default run above plans
+    # for a declared card at small sizes, so it does not depend on what else holds the device.
+    bloom_add_test(
+        NAME bloom.runtime.gpu_preview_display_service_general_6k
+        COMMAND bloom_runtime_gpu_preview_display_service_general_test --large-frames
+        LABELS runtime integration gpu color resident memory
+        TIMEOUT 600
+        SKIP_RETURN_CODE 77
+        STRESS
+    )
 endif()
 
 # Real native parity for the PRODUCTION builder's image-effect commands: a compiled plan with a
