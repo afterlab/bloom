@@ -723,10 +723,17 @@ void playbackStartsNoMediaJobs() {
         require(session.executeTransaction(std::move(more)).succeeded(), "one more layer");
         QApplication::processEvents();
         const auto settled = platform::sourceReadWork();
+        const auto detail =
+            "an edit that leaves the assets alone starts no thumbnail job (#718): jobs " +
+            std::to_string(controller.thumbnailJobsStarted() - jobs) + ", pending " +
+            std::to_string(controller.thumbnailsPending()) + ", busy " +
+            std::to_string(controller.busy()) + ", whole reads " +
+            std::to_string(settled.fullReads - edit.fullReads) + ", identity checks " +
+            std::to_string(settled.identityChecks - edit.identityChecks);
         require(controller.thumbnailJobsStarted() == jobs && !controller.thumbnailsPending() &&
                     !controller.busy() && settled.fullReads == edit.fullReads &&
                     settled.identityChecks == edit.identityChecks,
-                "an edit that leaves the assets alone starts no thumbnail job (#718)");
+                detail.c_str());
     }
     const auto before = platform::sourceReadWork();
     int started = 0;
