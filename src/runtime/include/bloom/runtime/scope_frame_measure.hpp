@@ -24,6 +24,7 @@
 #include <bloom/color/scope_colorimetry.hpp>
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/evaluation.hpp>
+#include <bloom/runtime/gpu_scope_measure.hpp>
 #include <bloom/runtime/scope_measure.hpp>
 #include <bloom/runtime/view_adjust.hpp>
 
@@ -39,6 +40,7 @@ namespace bloom::runtime {
 
 class GpuProcessFrameEvaluator;
 struct GpuSceneOcioContext;
+struct PreviewDisplayBufferView;
 
 struct ScopeSignalColorRequest final {
     std::shared_ptr<const color::ResolvedBloomNeutralConfig> config;
@@ -117,8 +119,9 @@ enum class ScopeFrameStatus : std::uint8_t {
     Measured,
     // The region lies outside the picture.
     EmptyArea,
-    // The device route cannot measure this frame; `message` says why. Only from
-    // measureScopeFrameOnDevice: measureScopeFrame counts such a frame with the CPU reference.
+    // This route cannot measure this frame; `message` says why. From measureScopeFrameOnDevice
+    // (measureScopeFrame counts such a frame with the CPU reference) and from
+    // measureScopeFrameRetained (the Working signal of a retained picture).
     Unavailable,
     Cancelled,
     Failed,
@@ -130,6 +133,8 @@ struct ScopeFrameMeasure final {
     // could not: why the device did not count it. Empty otherwise.
     std::string message;
     ScopeRoute route = ScopeRoute::Cpu;
+    // The picture that was counted; Rendered unless measureScopeFrameRetained counted it.
+    ScopeSource source = ScopeSource::Rendered;
     ScopeCounts counts;
     ScopeMeasuredArea area;
     // The native work of a device measure (all 0 for the CPU reference, which reads nothing back):
@@ -148,6 +153,51 @@ struct ScopeFrameMeasure final {
                                                      const ScopeMeasureSettings& settings,
                                                      const ScopeSignalColor& color,
                                                      const CancellationToken& cancellation = {});
+
+// The geometry and adjustment of a retained picture, which its pixels do not carry.
+struct RetainedScopePicture final {
+    // The composition's size in pixels: a region is in composition pixels and is scaled to the
+    // picture (scopeMeasuredArea).
+    std::uint32_t compositionWidth = 0;
+    std::uint32_t compositionHeight = 0;
+    // The exposure and gamma already baked into the picture's pixels: the retained frame's own
+    // request identity viewAdjust (neutral for every cached frame).
+    ViewAdjust bakedViewAdjust{};
+};
+
+// Counts a retained display picture on the calling thread (a CPU worker); cancellable. `view` is
+// a retained frame's PreviewDisplayBufferView: packed straight (non-premultiplied) RGBA8 in the
+// display encoding. Same counting, settings and result as measureScopeFrameCpu; the result's
+// source is Retained and its route Cpu.
+//
+// Display signal only. The picture is already display-transformed (display, view and look) with
+// `picture.bakedViewAdjust`, clamped and quantized to 8 bits, so each channel c is c / 255 and
+//   * with `color.viewAdjust()` equal to `bakedViewAdjust`, nothing more is applied (exposure and
+//     gamma are never applied twice);
+//   * with a neutral `bakedViewAdjust` (every cached frame: the Viewer derives the adjusted
+//     picture from it) and a different `color.viewAdjust()`, that adjustment is applied to the
+//     encoded value in the order of the Viewer's display path (ViewAdjust::fromEncoded: exposure
+//     in linear light, then gamma, clamped to 0..1);
+//   * any other pair is Unavailable (the picture holds a different adjustment, which cannot be
+//     removed).
+// The result is multiplied by the alpha (alpha / 255) as the CPU reference's Display signal is,
+// so the Display tables are those of the picture the Viewer shows. Values the display encoding
+// leaves outside 0..1 are not recoverable from 8 bits: a retained picture never counts under or
+// over for a neutral adjustment. The CIE table converts the same signal through
+// `color.xyz()` as the CPU reference does. The Working signal is Unavailable with a message the
+// caller can show.
+[[nodiscard]] ScopeFrameMeasure
+measureScopeFrameRetained(const PreviewDisplayBufferView& view, const RetainedScopePicture& picture,
+                          const ScopeMeasureSettings& settings, const ScopeSignalColor& color,
+                          const CancellationToken& cancellation = {});
+
+// The device measure job of `settings`: the counting settings and, borrowing `ocio` and `color`
+// (which must outlive the job), the factories that prepare the display and CIE XYZ programs on
+// the calling worker. measureScopeFrameOnDevice and the preview service's scope measure build
+// their job with it.
+[[nodiscard]] GpuScopeMeasureJob makeScopeMeasureJob(const ScopeMeasureSettings& settings,
+                                                     const ScopeSignalColor& color,
+                                                     const GpuSceneOcioContext& ocio);
 
 // The device route. Called on a CPU worker; blocks until the device has counted the frame.
 [[nodiscard]] ScopeFrameMeasure

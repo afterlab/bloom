@@ -54,6 +54,12 @@ namespace bloom::runtime {
 // to 8 bits. Working: the scene-linear process picture before the display transform.
 enum class ScopeSignal : std::uint8_t { Display = 0, Working = 1 };
 
+// Which picture a measure counted. Rendered: the frame as the evaluator or the device produced it,
+// in float (both signals). Retained: the packed 8-bit display picture a retained preview frame
+// carries (Display signal only; its values are quantized to 255 steps). A sidecar of one source is
+// never served for the other.
+enum class ScopeSource : std::uint8_t { Rendered = 0, Retained = 1 };
+
 // The route that counted a measure. A result always names it.
 enum class ScopeRoute : std::uint8_t { Cpu = 0, Gpu = 1 };
 

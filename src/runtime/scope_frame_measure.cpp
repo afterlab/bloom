@@ -6,6 +6,7 @@
 #include <bloom/runtime/gpu_process_frame.hpp>
 #include <bloom/runtime/gpu_scope_measure.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
+#include <bloom/runtime/prepared_preview_frame.hpp>
 
 #include <algorithm>
 #include <array>
@@ -314,14 +315,9 @@ ScopeFrameMeasure measureScopeFrameCpu(const ProcessFrame& frame,
     }
 }
 
-ScopeFrameMeasure
-measureScopeFrameOnDevice(GpuProcessFrameEvaluator& evaluator, const GpuSceneOcioContext& ocio,
-                          std::shared_ptr<const CompiledCompositionPlan> plan,
-                          const EvaluationRequest& request, const ScopeMeasureSettings& settings,
-                          const ScopeSignalColor& color, const CancellationToken& cancellation,
-                          const std::optional<std::filesystem::path>& assetBaseDirectory) {
-    if (settings.signal != color.signal())
-        return failed("The scope signal and its color objects do not match.");
+GpuScopeMeasureJob makeScopeMeasureJob(const ScopeMeasureSettings& settings,
+                                       const ScopeSignalColor& color,
+                                       const GpuSceneOcioContext& ocio) {
     GpuScopeMeasureJob job;
     job.scopes = settings.scopes;
     job.axisMaximum = settings.axisMaximum;
@@ -357,6 +353,144 @@ measureScopeFrameOnDevice(GpuProcessFrameEvaluator& evaluator, const GpuSceneOci
         spec.fromId = color.colorSpaceId();
         job.xyzCommand = factory(std::move(spec));
     }
+    return job;
+}
+
+namespace {
+
+[[nodiscard]] ScopeFrameMeasure
+measureRetained(const PreviewDisplayBufferView& view, const RetainedScopePicture& picture,
+                const ScopeMeasureSettings& settings, const ScopeSignalColor& color,
+                const CancellationToken& cancellation) {
+    // What a retained picture holds (checked against the code, not assumed):
+    //   * Straight (non-premultiplied) RGBA8: render::mapLinearRec709SceneToSrgbRow divides the
+    //     color by alpha before encoding it (src/render/cpu_image_primitives.cpp,
+    //     displayChannelByte(color, alpha)); an alpha of 0 is stored as (0, 0, 0, 0). The GPU
+    //     route packs the same layout (PreviewDisplayOnlyFrame::displayBufferView,
+    //     src/runtime/prepared_preview_frame.cpp).
+    //   * The display transform, the view, the look and the request's exposure and gamma are
+    //     already applied and quantized: the CPU mapper applies ViewAdjust::fromLinear when the
+    //     adjustment is not neutral (src/runtime/reference_display_preparation.cpp, the row pass),
+    //     the qualified CPU route its own (qualified_display_preparation.cpp) and the resident
+    //     DisplayRgba8 program carries `viewAdjust`
+    //     (src/runtime/gpu_preview_display_service_resident.cpp, `request.viewAdjust`).
+    //     Every retained (cached) frame is requested with a neutral adjustment
+    //     (src/ui/ram_preview_controller.cpp); the Viewer derives its adjusted picture from the
+    //     neutral one and measures neutral base plus adjustment (ViewerEditor::scopesSource).
+    //   So the adjustment of the signal is applied here only when the picture is the neutral base,
+    //   in the order of ViewAdjust::fromEncoded, which is what measureScopeFrameCpu applies to the
+    //   display transform's float result.
+    ScopeFrameMeasure result;
+    result.source = ScopeSource::Retained;
+    result.route = ScopeRoute::Cpu;
+    try {
+        if (settings.signal == ScopeSignal::Working) {
+            result.status = ScopeFrameStatus::Unavailable;
+            result.message = "The Working signal is not available for a cached frame. Switch to "
+                             "the Display signal, or show the frame again to measure it.";
+            return result;
+        }
+        if (settings.signal != color.signal())
+            return failed("The scope signal and its color objects do not match.");
+        const auto& adjust = color.viewAdjust();
+        const bool applyAdjust = !(adjust == picture.bakedViewAdjust);
+        if (applyAdjust && !picture.bakedViewAdjust.neutral()) {
+            result.status = ScopeFrameStatus::Unavailable;
+            result.message = "The cached frame already holds a different exposure and gamma.";
+            return result;
+        }
+        const auto window = view.dataWindow.value_or(view.displayWindow);
+        const auto width = static_cast<std::size_t>(window.extent().width());
+        const auto height = static_cast<std::size_t>(window.extent().height());
+        if (view.pixels.size() != width * height ||
+            view.layout.rowStrideBytes != width * sizeof(render::Rgba8))
+            return failed("The cached frame has no picture to measure.");
+        const auto area = scopeMeasuredArea(window, view.displayWindow, view.dataWindow,
+                                            settings.region, picture.compositionWidth,
+                                            picture.compositionHeight);
+        if (!area) {
+            result.status = ScopeFrameStatus::EmptyArea;
+            return result;
+        }
+        result.area = *area;
+
+        // Each channel code c/255, through the adjustment, once per code.
+        std::array<float, 256> channel{};
+        for (std::size_t code = 0; code < channel.size(); ++code) {
+            const double encoded = static_cast<double>(static_cast<float>(code) / 255.0F);
+            channel[code] = applyAdjust ? static_cast<float>(adjust.fromEncoded(encoded))
+                                        : static_cast<float>(encoded);
+        }
+        std::vector<render::Rgba32f> signal(view.pixels.size(), render::Rgba32f::transparent());
+        for (std::size_t first = 0; first < signal.size(); first += kChunkPixels) {
+            if (cancellation.isCancellationRequested())
+                return cancelledMeasure();
+            const std::size_t count = std::min(kChunkPixels, signal.size() - first);
+            for (std::size_t index = first; index < first + count; ++index) {
+                const auto& pixel = view.pixels[index];
+                if (pixel.alpha == 0)
+                    continue;
+                const float alpha = static_cast<float>(pixel.alpha) / 255.0F;
+                signal[index] = pixelOf(channel[pixel.red] * alpha, channel[pixel.green] * alpha,
+                                        channel[pixel.blue] * alpha, alpha);
+            }
+        }
+        bool cancelled = false;
+        std::vector<render::Rgba32f> xyz;
+        if ((settings.scopes & render::kScopeTableChromaticity) != 0U) {
+            if (!xyzPicture(signal, color, cancellation, xyz, cancelled))
+                return cancelled ? cancelledMeasure()
+                                 : failed("The conversion to CIE XYZ could not run on the frame.");
+        }
+        ScopeMeasureInput input;
+        input.signal = signal;
+        input.width = static_cast<std::uint32_t>(width);
+        input.height = static_cast<std::uint32_t>(height);
+        input.xyz = xyz;
+        input.areaX = area->x;
+        input.areaY = area->y;
+        input.areaWidth = area->width;
+        input.areaHeight = area->height;
+        input.scopes = settings.scopes;
+        input.axisMaximum = settings.axisMaximum;
+        input.luma = color.luma();
+        input.ignoreTransparent = settings.ignoreTransparent;
+        input.detail = settings.detail;
+        auto counts = measureScopesCpu(
+            input, [&cancellation] { return cancellation.isCancellationRequested(); });
+        if (!counts)
+            return cancellation.isCancellationRequested()
+                       ? cancelledMeasure()
+                       : failed("The scope settings are not valid for this frame.");
+        result.status = ScopeFrameStatus::Measured;
+        result.counts = std::move(*counts);
+        return result;
+    } catch (const std::bad_alloc&) {
+        return failed("The scope measure could not allocate its pictures.");
+    }
+}
+
+} // namespace
+
+ScopeFrameMeasure measureScopeFrameRetained(const PreviewDisplayBufferView& view,
+                                            const RetainedScopePicture& picture,
+                                            const ScopeMeasureSettings& settings,
+                                            const ScopeSignalColor& color,
+                                            const CancellationToken& cancellation) {
+    auto result = measureRetained(view, picture, settings, color, cancellation);
+    result.source = ScopeSource::Retained;
+    return result;
+}
+
+ScopeFrameMeasure
+measureScopeFrameOnDevice(GpuProcessFrameEvaluator& evaluator, const GpuSceneOcioContext& ocio,
+                          std::shared_ptr<const CompiledCompositionPlan> plan,
+                          const EvaluationRequest& request, const ScopeMeasureSettings& settings,
+                          const ScopeSignalColor& color, const CancellationToken& cancellation,
+                          const std::optional<std::filesystem::path>& assetBaseDirectory) {
+    if (settings.signal != color.signal())
+        return failed("The scope signal and its color objects do not match.");
+    const auto job = makeScopeMeasureJob(settings, color, ocio);
     auto outcome =
         evaluator.measureScopes(std::move(plan), request, job, cancellation, assetBaseDirectory);
     ScopeFrameMeasure result;
