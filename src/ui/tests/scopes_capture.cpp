@@ -1,16 +1,19 @@
-// Review tool, not a test (#724 Scopes): offscreen pictures of the Scopes panel and the Viewer's
-// scope region overlay, for comparing the result with the drawing style of the specification.
+// Review tool, not a test (#724, #730 Scopes): offscreen pictures of the Scopes panel in its editor
+// area (with the header menus), the menus themselves, and the Viewer's scope region overlay, for
+// comparing the result with the drawing of the specification.
 //
-//   bloom_ui_scopes_capture <directory> <dpr label>
+//   bloom_ui_scopes_capture <directory> <dpr label> [photograph]
 //
 // The device pixel ratio follows QT_SCALE_FACTOR, and the label (1 or 1.5) names the files:
-// <directory>/724-<what>-w<width>-dpr<label>.png. The panel and the Viewer are the real ones, over
-// the real preview pipeline, and every scope is the production measure of the frame the Viewer
-// shows (the CPU reference), never a stand-in. Two scenes are authored here: 75% color bars (eight
-// solids) and a generated sunset (an SVG of smooth gradients; the repository holds no photograph).
-// Not registered with CTest.
+// <directory>/730-<what>-w<width>-dpr<label>.png. The area, the panel and the Viewer are the real
+// ones, over the real preview pipeline, and every scope is drawn from the tables the frame's own
+// preparation counted (the CPU route), never a stand-in. Two scenes are authored here: 75% color
+// bars (eight solids) and a photograph given on the command line (scaled to 640 x 360 and imported
+// as an image layer; the repository holds no photograph), or, without one, a generated sunset (an
+// SVG of smooth gradients). Not registered with CTest.
 
 #include "await_qt.hpp"
+#include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -29,6 +32,8 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/editor_area.hpp>
+#include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
@@ -41,6 +46,7 @@
 #include <QApplication>
 #include <QImage>
 #include <QLayout>
+#include <QMenu>
 #include <QScrollArea>
 #include <QSettings>
 #include <QString>
@@ -51,6 +57,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -182,6 +189,33 @@ scripting::SessionCommandResult run(Scene& scene, Arguments&&... args) {
     return scene;
 }
 
+// A photograph, scaled to the composition's 640 x 360 and imported as a still image layer.
+[[nodiscard]] Scene photoScene(const QString& photograph, const QString& scratch) {
+    QImage image(photograph);
+    if (image.isNull())
+        throw std::runtime_error("the photograph does not load");
+    const QString scaled = scratch + QStringLiteral("/photograph-640x360.png");
+    if (!image.scaled(640, 360, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation)
+             .copy(0, 0, 640, 360)
+             .save(scaled))
+        throw std::runtime_error("the scaled photograph is not written");
+    auto scene = newScene("Photograph");
+    const std::filesystem::path path = scaled.toStdString();
+    {
+        commands::Transaction transaction("Import", scene.scripting->snapshot().revision());
+        if (!transaction.add(std::make_unique<commands::ImportAssets>(
+                std::vector<std::filesystem::path>{path}, path.parent_path())))
+            throw std::runtime_error("the photograph import is not prepared");
+        if (!scene.scripting->commandStack()->execute(std::move(transaction)).changed())
+            throw std::runtime_error("the photograph is not imported");
+    }
+    const auto assets = scene.scripting->snapshot().project().assets();
+    if (assets.empty())
+        throw std::runtime_error("the project holds no photograph");
+    run<commands::AddImageLayer>(scene, scene.composition, assets.front().id);
+    return scene;
+}
+
 // ---- The workspace: the real Viewer and panel over the real preview pipeline
 // ---------------------
 
@@ -223,31 +257,25 @@ class Workspace final {
                                                rig_.qualified),
             settings, cache_);
         viewer_ = std::make_unique<ui::ViewerEditor>(*session_, *controller_);
+        // The Viewer hands the store to its preview controller: while a Scopes panel is shown,
+        // every frame's preparation counts the tables too.
         viewer_->setScopesRegionStore(&store_);
 
-        const auto production = ui::makeScopesMeasure({});
         ui::ScopesServices services;
         services.scheduler = &rig_.scheduler;
         services.bridge = rig_.bridge.get();
-        services.cache = cache_;
-        services.regions = &store_;
-        // The production measure; a held frame waits (so the panel can be shown behind it).
-        services.measure = [production, this](const ui::ScopesMeasureInput& input,
-                                              const ui::PreviewScopeIdentity& identity,
-                                              const runtime::CancellationToken& token) {
-            while (hold_.load() && !token.isCancellationRequested())
-                std::this_thread::sleep_for(1ms);
-            return production(input, identity, token);
-        };
-        services.compositionName = [](document::ProjectId, document::CompositionId) {
-            return QStringLiteral("Main");
-        };
-        panel_ = std::make_unique<ui::ScopesEditor>(services);
+        services.store = &store_;
+        if (!ui::registerScopesEditor(registry_, services))
+            throw std::runtime_error("the Scopes editor does not register");
+        // The panel in its editor area, which hosts its header menus.
+        area_ = std::make_unique<ui::EditorArea>(registry_, "bloom.scopes", QString{});
+        panel_ = area_->findChild<ui::ScopesEditor*>(QStringLiteral("scopesEditor"));
+        if (panel_ == nullptr)
+            throw std::runtime_error("the area holds no Scopes panel");
     }
 
     ~Workspace() {
-        hold_ = false;
-        panel_.reset();
+        area_.reset();
         viewer_.reset();
         controller_->beginShutdown();
         rig_.bridge->beginShutdown();
@@ -257,10 +285,11 @@ class Workspace final {
 
     [[nodiscard]] ui::ViewerEditor& viewer() { return *viewer_; }
     [[nodiscard]] ui::ScopesEditor& panel() { return *panel_; }
+    [[nodiscard]] ui::EditorArea& area() { return *area_; }
     [[nodiscard]] ui::CompositionSession& session() { return *session_; }
+    [[nodiscard]] ui::CompositionPreviewController& controller() { return *controller_; }
     [[nodiscard]] ui::ScopesRegionStore& store() { return store_; }
     [[nodiscard]] Scene& scene() { return scene_; }
-    void hold(const bool value) { hold_ = value; }
 
     [[nodiscard]] ui::ScopesRegionStore::Key key() const {
         return {session_->snapshot().project().id(), session_->compositionId()};
@@ -270,25 +299,26 @@ class Workspace final {
     void show(const int viewerWidth, const int panelWidth, const int panelHeight) {
         viewer_->resize(viewerWidth, viewerWidth * 11 / 20);
         viewer_->show();
-        panel_->resize(panelWidth, panelHeight);
-        panel_->show();
+        area_->resize(panelWidth, panelHeight);
+        area_->show();
         panel_->followViewer(viewer_.get());
         settle();
     }
 
-    // True when the panel shows the Viewer's frame at full detail and every trace on show was
-    // mapped from those tables, with nothing still running.
+    // True when the Viewer's frame carries tables of the session's settings, the panel shows them
+    // and every trace on show was mapped from them, with nothing still running.
     [[nodiscard]] bool settled() const {
         const auto& state = controller_->state();
-        const auto reading = panel_->controller()->reading();
         if (state.activity != ui::PreviewActivity::Ready || state.frame == nullptr ||
-            !viewer_->mappingForTest().has_value() ||
-            reading.state != ui::ScopesReading::State::Ready || reading.behind ||
-            reading.detail != 0 || reading.scopes == nullptr || panel_->renderer()->busy())
+            !viewer_->mappingForTest().has_value())
+            return false;
+        const auto& scopes = state.frame->scopes();
+        if (scopes == nullptr || scopes->settings != store_.settings(key()) ||
+            panel_->scopes() != scopes || panel_->renderer()->busy())
             return false;
         for (std::size_t kind = 0; kind < ui::scopes::kKindCount; ++kind) {
             const auto finished = panel_->renderer()->finished(static_cast<ui::scopes::Kind>(kind));
-            if (finished != nullptr && finished->request.tables.get() != &reading.scopes->tables)
+            if (finished != nullptr && finished->request.tables.get() != &scopes->tables)
                 return false;
         }
         return true;
@@ -321,14 +351,13 @@ class Workspace final {
             return settled() && panel_->renderer()->mapsStarted() == maps;
         });
         if (!ready) {
-            const auto reading = panel_->controller()->reading();
+            const auto& frame = controller_->state().frame;
             throw std::runtime_error(
                 "the panel did not settle on the Viewer's frame: preview activity " +
                 std::to_string(static_cast<int>(controller_->state().activity)) + ", frame " +
-                std::to_string(controller_->state().frame != nullptr) + ", reading " +
-                std::to_string(static_cast<int>(reading.state)) + " '" + reading.message +
-                "', behind " + std::to_string(reading.behind) + ", detail " +
-                std::to_string(reading.detail));
+                std::to_string(frame != nullptr) + ", tables " +
+                std::to_string(frame != nullptr && frame->scopes() != nullptr) + ", shown " +
+                std::to_string(panel_->scopes() != nullptr));
         }
         (void)viewer_->grab();
     }
@@ -341,8 +370,9 @@ class Workspace final {
     std::unique_ptr<ui::CompositionPreviewController> controller_;
     ui::ScopesRegionStore store_;
     std::unique_ptr<ui::ViewerEditor> viewer_;
-    std::unique_ptr<ui::ScopesEditor> panel_;
-    std::atomic<bool> hold_{false};
+    ui::EditorRegistry registry_;
+    std::unique_ptr<ui::EditorArea> area_;
+    ui::ScopesEditor* panel_ = nullptr;
 };
 
 // ---- Output
@@ -356,7 +386,7 @@ struct Output final {
     void save(const QImage& image, const QString& what, const int width) {
         const QString path =
             directory +
-            QStringLiteral("/724-%1-w%2-dpr%3.png").arg(what, QString::number(width), label);
+            QStringLiteral("/730-%1-w%2-dpr%3.png").arg(what, QString::number(width), label);
         if (image.isNull() || !image.save(path)) {
             std::cerr << "cannot write " << path.toStdString() << '\n';
             ++failures;
@@ -366,35 +396,38 @@ struct Output final {
     }
 };
 
-// The panel at `width`, as tall as its content wants (capped), or `height` when that is given.
+// The panel's area (its header with the menus, then the panes) at `width`, as tall as its content
+// wants, or `height` when that is given.
 QImage grabPanel(Workspace& work, const int width, const int height = 0) {
-    auto& panel = work.panel();
-    panel.resize(width, 4000);
+    auto& area = work.area();
+    area.resize(width, 4000);
     work.awaitTraces();
     int wanted = height;
     if (wanted == 0) {
-        auto* header = panel.findChild<QWidget*>(QStringLiteral("scopesHeader"));
-        auto* scroll = panel.findChild<QScrollArea*>(QStringLiteral("scopesScroll"));
+        auto* scroll = work.panel().findChild<QScrollArea*>(QStringLiteral("scopesScroll"));
         auto* content = scroll != nullptr ? scroll->widget() : nullptr;
-        if (header == nullptr || content == nullptr || content->layout() == nullptr)
+        if (content == nullptr || content->layout() == nullptr)
             throw std::runtime_error("the panel's parts are missing");
         const int contentHeight = content->layout()->totalHeightForWidth(
             scroll->viewport()->width() > 0 ? scroll->viewport()->width() : width);
-        wanted = header->height() + std::max(contentHeight, content->sizeHint().height()) + 4;
+        const int above = work.panel().mapTo(&area, QPoint(0, 0)).y();
+        wanted = above + std::max(contentHeight, content->sizeHint().height()) + 4;
     }
-    panel.resize(width, wanted);
+    area.resize(width, wanted);
     work.awaitTraces();
-    return panel.grab().toImage();
+    return area.grab().toImage();
 }
 
-// The top of the panel (header controls and the status lines), down to the scroll area.
-QImage grabStatus(Workspace& work, const int width) {
-    auto& panel = work.panel();
-    panel.resize(width, 900);
-    work.awaitTraces();
-    auto* scroll = panel.findChild<QWidget*>(QStringLiteral("scopesScroll"));
-    const int bottom = scroll != nullptr ? scroll->geometry().top() : 300;
-    return panel.grab(QRect(0, 0, width, bottom + 24)).toImage();
+// A header menu, open, as the area shows it below its button.
+QImage grabMenu(Workspace& work, QMenu* menu) {
+    if (menu == nullptr)
+        throw std::runtime_error("the header menu is missing");
+    menu->popup(work.area().mapToGlobal(QPoint(0, 0)));
+    for (int turn = 0; turn < 10; ++turn)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    const auto image = menu->grab().toImage();
+    menu->hide();
+    return image;
 }
 
 QImage grabViewer(Workspace& work) {
@@ -419,23 +452,23 @@ int main(int argc, char** argv) {
     application.setApplicationName(QStringLiteral("ScopesCapture"));
     ui::kit::installAfterlabTheme(application);
     Output out{QString::fromLocal8Bit(argv[1]), QString::fromLocal8Bit(argv[2])};
-    const QString before = out.directory + QStringLiteral("/../before");
+    const QString photograph = argc > 3 ? QString::fromLocal8Bit(argv[3]) : QString();
+    QTemporaryDir scratch;
+    const auto pictureScene = [&] {
+        return photograph.isEmpty() ? sunsetScene() : photoScene(photograph, scratch.path());
+    };
     try {
         Workspace probe(barsScene());
         probe.show(900, 400, 900);
-        const int narrow = probe.panel().minimumSizeHint().width();
+        const int narrow = probe.area().minimumSizeHint().width();
         std::cout << "panel minimum width " << narrow << '\n';
         const std::array<int, 3> widths{2000, 900, narrow};
 
-        // Before: the Viewer with no overlay. After: the region (and the region of interest, for
-        // contrast).
+        // The Viewer with the region (and the region of interest, for contrast).
         // The Viewer's own minimum width is wider than the panel's, so its narrow case is 320.
         for (const int width : {2000, 900, 320}) {
             Workspace work(barsScene());
             work.show(width, std::max(width / 3, narrow), 900);
-            Output beforeOut{before, out.label};
-            beforeOut.save(grabViewer(work), QStringLiteral("viewer-without-region"), width);
-            out.failures += beforeOut.failures;
             work.store().setRegion(work.key(), runtime::ScopeRegion{120, 70, 320, 200});
             ui::ViewerEditor::RemoteChange change;
             change.regionOfInterest = std::optional<QRectF>(QRectF(300.0, 140.0, 280.0, 170.0));
@@ -446,8 +479,17 @@ int main(int argc, char** argv) {
             out.save(grabViewer(work), QStringLiteral("viewer-region-and-roi"), width);
         }
 
+        // The header menus, open.
+        {
+            Workspace work(barsScene());
+            work.show(900, 600, 900);
+            out.save(grabMenu(work, work.panel().signalMenu()), QStringLiteral("menu-signal"), 600);
+            out.save(grabMenu(work, work.panel().regionMenu()), QStringLiteral("menu-region"), 600);
+            out.save(grabMenu(work, work.panel().scopesMenu()), QStringLiteral("menu-scopes"), 600);
+        }
+
         for (const int width : widths) {
-            // The panel with all five sections open, on bars and on the sunset.
+            // The panel with all five panes open, on bars and on the photograph.
             {
                 Workspace work(barsScene());
                 work.show(900, width, 900);
@@ -466,64 +508,36 @@ int main(int argc, char** argv) {
                 out.save(grabPanel(work, width), QStringLiteral("panel-all-collapsed"), width);
             }
             {
-                Workspace work(sunsetScene());
+                Workspace work(pictureScene());
                 work.show(900, width, 900);
                 out.save(grabPanel(work, width, width == narrow ? 800 : 0),
                          QStringLiteral("panel-photo"), width);
             }
-            // The Working signal, with the Vectorscope's "Linear values" note.
+            // The Working signal.
             {
                 Workspace work(barsScene());
                 work.show(900, width, 900);
-                work.panel().setSignal(runtime::ScopeSignal::Working);
+                work.store().setSignal(runtime::ScopeSignal::Working);
                 work.settle();
                 out.save(grabPanel(work, width), QStringLiteral("panel-working-linear"), width);
             }
-            // The status line with a warning (exposure not neutral) and with "Behind".
+            // A region outside the picture: nothing to count, the empty graticule, silently.
             {
                 Workspace work(barsScene());
                 work.show(900, width, 900);
-                ui::ViewerEditor::RemoteChange change;
-                change.exposure = 1.0;
-                const auto refusal = work.viewer().applyRemoteChange(change);
-                if (!refusal.isEmpty())
-                    throw std::runtime_error(refusal.toStdString());
-                // The change reaches the panel with the Viewer's next frame; settle() alone would
-                // accept the tables of the picture before it.
-                if (!awaitQtCondition("the scopes on show are of the exposed picture", [&] {
-                        const auto reading = work.panel().controller()->reading();
-                        return reading.scopes != nullptr &&
-                               reading.scopes->identity.viewAdjust.exposure == 1.0;
-                    }))
-                    throw std::runtime_error("the exposure change never reached the scopes");
-                work.settle();
-                out.save(grabStatus(work, width), QStringLiteral("status-warning"), width);
-                // The tables on show are not the shown frame's under the current settings while
-                // the new measure runs: Behind. (A time change drops the Viewer's frame, and with
-                // it the tables, until the next frame arrives, so a setting change is what holds
-                // the earlier tables on show.)
-                work.hold(true);
-                work.panel().setIgnoreTransparent(true);
-                const bool behind =
-                    awaitQtCondition("the panel shows Behind while the held measure runs", [&] {
-                        const auto reading = work.panel().controller()->reading();
-                        return reading.behind &&
-                               reading.state == ui::ScopesReading::State::Measuring;
-                    });
-                if (!behind) {
-                    const auto reading = work.panel().controller()->reading();
-                    throw std::runtime_error(
-                        "the panel never showed Behind: reading " +
-                        std::to_string(static_cast<int>(reading.state)) + " behind " +
-                        std::to_string(reading.behind) + " started " +
-                        std::to_string(work.panel().controller()->measuresStarted()) + " time " +
-                        std::to_string(work.session().currentTime().numerator()) + " shown " +
-                        std::to_string(reading.shown.has_value()));
-                }
+                work.store().setRegion(work.key(), runtime::ScopeRegion{700, 10, 20, 20});
+                const bool empty = awaitQtCondition("the frame counts nothing in the region", [&] {
+                    const auto& frame = work.controller().state().frame;
+                    return frame != nullptr && frame->scopes() != nullptr &&
+                           frame->scopes()->status ==
+                               runtime::PreviewFrameScopesStatus::EmptyArea &&
+                           work.panel().scopes() == frame->scopes();
+                });
+                if (!empty)
+                    throw std::runtime_error("the empty region never reached the panel");
                 for (int turn = 0; turn < 10; ++turn)
                     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-                out.save(grabPanel(work, width), QStringLiteral("status-behind"), width);
-                work.hold(false);
+                out.save(grabPanel(work, width), QStringLiteral("panel-empty-region"), width);
             }
         }
     } catch (const std::exception& error) {

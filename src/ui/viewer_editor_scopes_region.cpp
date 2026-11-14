@@ -6,7 +6,7 @@
 // of interest's Accent outline and dimming. It takes input only while the Region toggle arms it
 // (a drag draws a rectangle; one drag per arming) or when the press lands on the region's handles
 // (resize; the body moves it only while armed); anywhere else the press reaches the Viewer's other
-// gestures. A drag only updates the store (on release); the panel's controller does the measuring.
+// gestures. A drag only updates the store (on release); the frame pipeline counts the new region.
 // Escape cancels a drag and leaves the previous region, and disarms the toggle when no drag runs.
 //
 // The rectangle is whole composition pixels: x and y floored, the far edge raised, clipped to the
@@ -84,6 +84,8 @@ void ViewerEditor::setScopesRegionStore(ScopesRegionStore* const store) {
         disconnect(scopesRegions_, nullptr, this, nullptr);
     scopeGesture_.reset();
     scopesRegions_ = store;
+    // #730: while a Scopes panel is visible this Viewer's frames carry their scope tables.
+    previewController_->setScopesStore(store);
     if (store != nullptr) {
         const auto refresh = [this] {
             if (!scopesRegionLive())

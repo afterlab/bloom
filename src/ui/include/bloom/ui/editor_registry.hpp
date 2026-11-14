@@ -92,9 +92,10 @@ class EditorRegistry final {
 // `scriptRuntime` receives the Script editor's runtime (null in a build without embedded Python),
 // so the in-app MCP server's script.run (#603) runs through the same interpreter and queue.
 //
-// `scopes` (#724) is what the Scopes panel measures with: the task scheduler and bridge, the
-// preview frame cache, and the measure over the application's device, OCIO and CPU routes. Null
-// registers the panel in its "not available" form. The pointee is copied.
+// `scopes` (#724, #730) is what the Scopes panel draws with: the task scheduler and bridge and the
+// session's scope state, which every Viewer is given too (its frames then carry their scope
+// tables while a Scopes panel is visible). Null registers a panel with a store of its own. The
+// pointee is copied.
 [[nodiscard]] bool registerFoundationEditors(
     EditorRegistry& registry, CompositionSession& session,
     CompositionPreviewController& previewController, RamPreviewController* ramPreview = nullptr,

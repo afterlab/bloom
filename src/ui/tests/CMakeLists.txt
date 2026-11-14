@@ -123,22 +123,6 @@ add_executable(bloom_gpu_preview_submitter_test
 add_executable(bloom_gpu_preview_app_test
     gpu_preview_app_tests.cpp
 )
-# #724 Scopes: the panel's device route end to end (real service, real tap, no window system).
-add_executable(bloom_ui_scopes_device_route_test scopes_device_route_tests.cpp)
-target_include_directories(bloom_ui_scopes_device_route_test
-    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime" "${PROJECT_SOURCE_DIR}/tests/support")
-target_link_libraries(bloom_ui_scopes_device_route_test
-    PRIVATE bloom_ui bloom_runtime_evaluator bloom_host)
-bloom_package_gpu_shader_tools(bloom_ui_scopes_device_route_test)
-bloom_enable_warnings(bloom_ui_scopes_device_route_test)
-bloom_add_test(
-    NAME bloom.ui.scopes-device-route
-    COMMAND bloom_ui_scopes_device_route_test ${bloom_ui_test_loader_args}
-    LABELS ui gpu scopes
-    TIMEOUT 300
-)
-set_tests_properties(bloom.ui.scopes-device-route
-    PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # bloom_ui_gpu_presentation_target_test adopts the borrowed VkInstance through Qt's public
 # QVulkanInstance, so it is created in the capability-gated block below (BLOOM_UI_VULKAN_AVAILABLE
 # is the conjunction of the pinned Vulkan headers and a Qt build with the Vulkan feature).
@@ -2314,18 +2298,7 @@ bloom_add_test(
 # re-stamp) and other-project retention under a standalone no-policy cache, while same-project older
 # revisions are still dropped. It builds genuine CPU reference frames and never creates a GPU device,
 # so it registers unconditionally and always runs.
-# #724 Scopes: the controller behind the Scopes panel over genuine CPU frames; no device.
-add_executable(bloom_ui_scopes_controller_test scopes_controller_tests.cpp)
-target_link_libraries(bloom_ui_scopes_controller_test PRIVATE bloom_ui)
-bloom_enable_warnings(bloom_ui_scopes_controller_test)
-bloom_add_test(
-    NAME bloom.ui.scopes-controller
-    COMMAND bloom_ui_scopes_controller_test
-    LABELS ui unit cache
-    TIMEOUT 120
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-)
-# #724 Scopes: the count-to-image mapping and the status line as pure functions (no widget).
+# #724, #730 Scopes: the count-to-image mapping as pure functions (no widget).
 add_executable(bloom_ui_scopes_drawing_test scopes_drawing_tests.cpp)
 target_link_libraries(bloom_ui_scopes_drawing_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_ui_scopes_drawing_test)
@@ -2347,7 +2320,7 @@ bloom_add_test(
     TIMEOUT 120
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
-# #724 Scopes: the Scopes panel over genuine CPU reference frames; no device and no Viewer.
+# #724, #730 Scopes: the Scopes panel over genuine CPU reference frames; no device and no Viewer.
 add_executable(bloom_ui_scopes_panel_test scopes_panel_tests.cpp)
 target_link_libraries(bloom_ui_scopes_panel_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_ui_scopes_panel_test)
@@ -2357,17 +2330,6 @@ bloom_add_test(
     LABELS ui unit cache
     TIMEOUT 180
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
-)
-# #724 Scopes: the Viewer is never delayed by the Scopes panel: a held measure, a stepped session.
-add_executable(bloom_ui_scopes_realtime_test scopes_realtime_tests.cpp)
-target_link_libraries(bloom_ui_scopes_realtime_test PRIVATE bloom_ui)
-bloom_enable_warnings(bloom_ui_scopes_realtime_test)
-bloom_add_test(
-    NAME bloom.ui.scopes-realtime
-    COMMAND bloom_ui_scopes_realtime_test
-    LABELS ui unit
-    TIMEOUT 120
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 # #724 Scopes: the scope region in the Viewer, through the Viewer's own mouse and key handling.
 add_executable(bloom_ui_scopes_mcp_warm_test scopes_mcp_warm_tests.cpp)

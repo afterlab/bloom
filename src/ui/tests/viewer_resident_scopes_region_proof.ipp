@@ -32,7 +32,7 @@ void exerciseResidentScopesRegion(Expectations& checks, ui::CompositionSession& 
     ui::ScopesRegionStore store;
     viewer.setScopesRegionStore(&store);
     ui::ScopesServices services;
-    services.regions = &store;
+    services.store = &store;
     ui::ScopesEditor panel(services);
     panel.show();
     panel.followViewer(&viewer);

@@ -1,23 +1,18 @@
 #include <bloom/ui/scopes_editor.hpp>
 
-#include <bloom/render/scope_table_layout.hpp>
-#include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
-#include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
-#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/section.hpp>
-#include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/surfaces.hpp>
-#include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/tokens.hpp>
-#include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/scopes_trace_renderer.hpp>
 #include <bloom/ui/scopes_view.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
+#include <QAction>
+#include <QActionGroup>
 #include <QApplication>
-#include <QHBoxLayout>
+#include <QMenu>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSignalBlocker>
@@ -40,8 +35,6 @@ constexpr std::array<SectionSpec, scopes::kKindCount> kSections{{
     {scopes::Kind::Chromaticity, "chromaticity"},
 }};
 
-constexpr double kBrightnessMinimum = 0.25;
-constexpr double kBrightnessMaximum = 4.0;
 constexpr std::array<std::uint32_t, 5> kAxisMaxima{1, 2, 4, 8, 16};
 
 [[nodiscard]] QString sectionTitle(const scopes::Kind kind) {
@@ -60,46 +53,32 @@ constexpr std::array<std::uint32_t, 5> kAxisMaxima{1, 2, 4, 8, 16};
     return {};
 }
 
-[[nodiscard]] std::uint32_t tableBitOf(const scopes::Kind kind) {
-    switch (kind) {
-    case scopes::Kind::Waveform:
-    case scopes::Kind::Parade:
-        return render::kScopeTableWaveform;
-    case scopes::Kind::Vectorscope:
-        return render::kScopeTableVectorscope;
-    case scopes::Kind::Histogram:
-        return render::kScopeTableHistogram;
-    case scopes::Kind::Chromaticity:
-        return render::kScopeTableChromaticity;
-    }
-    return 0;
+[[nodiscard]] QAction* checkable(QMenu* const menu, const QString& text, const QString& name,
+                                 QActionGroup* const group = nullptr) {
+    auto* action = menu->addAction(text);
+    action->setObjectName(name);
+    action->setCheckable(true);
+    if (group != nullptr)
+        group->addAction(action);
+    return action;
 }
 
 } // namespace
 
-ScopesEditor::ScopesEditor(const ScopesServices& services, RamPreviewController* const ramPreview,
-                           QWidget* const parent)
-    : QWidget(parent), services_(services), ramPreview_(ramPreview) {
+ScopesEditor::ScopesEditor(const ScopesServices& services, QWidget* const parent)
+    : QWidget(parent), services_(services) {
     setObjectName(QStringLiteral("scopesEditor"));
     setAccessibleName(tr("Scopes"));
     setAccessibleDescription(
         tr("Waveform, parade, vectorscope, histogram and CIE chromaticity of the picture the "
            "active Viewer shows"));
-    store_ = services_.regions != nullptr ? services_.regions : new ScopesRegionStore(this);
-    if (services_.usable()) {
-        controller_ = new ScopesController(*services_.scheduler, *services_.bridge, services_.cache,
-                                           services_.measure, services_.fillTaps, this);
+    store_ = services_.store != nullptr ? services_.store : new ScopesRegionStore(this);
+    if (services_.usable())
         renderer_ = new ScopesTraceRenderer(*services_.scheduler, *services_.bridge, this);
-        connect(controller_, &ScopesController::readingChanged, this, &ScopesEditor::onReading);
-    }
 
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
-    auto* top = new kit::KSurface(this, kit::Color::Background);
-    top->setObjectName(QStringLiteral("scopesHeader"));
-    outer->addWidget(top);
-    buildHeader(top);
     scroll_ = new QScrollArea(this);
     scroll_->setObjectName(QStringLiteral("scopesScroll"));
     scroll_->setWidgetResizable(true);
@@ -110,10 +89,8 @@ ScopesEditor::ScopesEditor(const ScopesServices& services, RamPreviewController*
     content->setObjectName(QStringLiteral("scopesContent"));
     scroll_->setWidget(content);
     buildSections(content);
+    buildHeader();
 
-    if (ramPreview_ != nullptr)
-        connect(ramPreview_, &RamPreviewController::stateChanged, this,
-                [this] { setRamFillRunning(ramPreview_ != nullptr && ramPreview_->isCaching()); });
     connect(qApp, &QApplication::focusChanged, this, [this](QWidget*, QWidget* const now) {
         for (auto* widget = now; widget != nullptr; widget = widget->parentWidget())
             if (auto* viewer = qobject_cast<ViewerEditor*>(widget)) {
@@ -122,19 +99,20 @@ ScopesEditor::ScopesEditor(const ScopesServices& services, RamPreviewController*
                 return;
             }
     });
-    connect(store_, &ScopesRegionStore::regionChanged, this,
-            [this](const ScopesRegionStore::Key& key) {
-                if (key == regionKey_)
-                    adoptRegion();
-            });
-    connect(store_, &ScopesRegionStore::armedChanged, this, [this](const bool armed) {
-        refreshControls();
-        emit regionArmedChanged(armed);
+    connect(store_, &ScopesRegionStore::regionChanged, this, [this] { refreshMenus(); });
+    connect(store_, &ScopesRegionStore::armedChanged, this, [this] { refreshMenus(); });
+    connect(store_, &ScopesRegionStore::drawingChanged, this, [this] {
+        refreshMenus();
+        for (auto* scopeView : views_)
+            scopeView->setDrawing(store_->drawing());
     });
-    adoptRegion();
-    refreshControls();
+    // A change of what frames count leaves the traces on show until a frame of the new settings
+    // arrives (the followed Viewer asks for one).
+    connect(store_, &ScopesRegionStore::measureChanged, this, [this] { onViewerState(); });
+    for (auto* scopeView : views_)
+        scopeView->setDrawing(store_->drawing());
+    refreshMenus();
     refreshViewsActive();
-    refreshStatus();
 }
 
 ScopesEditor::~ScopesEditor() {
@@ -158,103 +136,111 @@ QSize ScopesEditor::minimumSizeHint() const {
     return hint;
 }
 
-void ScopesEditor::buildHeader(QWidget* const parent) {
-    auto* column = new QVBoxLayout(parent);
-    column->setContentsMargins(kit::px(kit::Spacing::XS), kit::px(kit::Spacing::Gutter),
-                               kit::px(kit::Spacing::XS), kit::px(kit::Spacing::XS));
-    column->setSpacing(kit::px(kit::Spacing::XS));
+void ScopesEditor::buildHeader() {
+    auto& bar = chrome_.header;
+    bar.owner = this;
+    bar.objectName = QStringLiteral("scopesHeaderMenuBar");
+    bar.overflowButtonName = QStringLiteral("scopesHeaderOverflowButton");
+    bar.overflowMenuName = QStringLiteral("scopesHeaderOverflowMenu");
 
-    // Signal and, for the Working signal, the axis maximum M.
-    auto* signalRow = new QHBoxLayout;
-    signalRow->setSpacing(kit::px(kit::Spacing::S));
-    auto* signalLabel = new kit::KLabel(tr("Signal"), parent, kit::TypeRole::UiSmall);
-    signalLabel->setTone(kit::Color::Muted);
-    signalRow->addWidget(signalLabel);
-    signalDropdown_ = new kit::KDropdown(parent);
-    signalDropdown_->setObjectName(QStringLiteral("scopesSignal"));
-    signalDropdown_->setAccessibleName(tr("Signal"));
-    signalDropdown_->addItem(tr("Display"), static_cast<int>(runtime::ScopeSignal::Display));
-    signalDropdown_->addItem(tr("Working space"), static_cast<int>(runtime::ScopeSignal::Working));
-    signalDropdown_->setMinimumWidth(kit::px(kit::Size::DropdownWidth));
-    signalRow->addWidget(signalDropdown_);
-    auto* axisLabel = new kit::KLabel(tr("Axis maximum"), parent, kit::TypeRole::UiSmall);
-    axisLabel->setObjectName(QStringLiteral("scopesAxisMaximumLabel"));
-    axisLabel->setTone(kit::Color::Muted);
-    signalRow->addWidget(axisLabel);
-    axisDropdown_ = new kit::KDropdown(parent);
-    axisDropdown_->setObjectName(QStringLiteral("scopesAxisMaximum"));
-    axisDropdown_->setAccessibleName(tr("Axis maximum"));
-    for (const auto maximum : kAxisMaxima)
-        axisDropdown_->addItem(QString::number(maximum), maximum);
-    axisDropdown_->setFixedWidth(kit::px(kit::Size::ViewerZoomWidth));
-    signalRow->addWidget(axisDropdown_);
-    signalRow->addStretch(1);
-    column->addLayout(signalRow);
-    connect(signalDropdown_, &kit::KDropdown::activated, this, [this](const int index) {
-        setSignal(signalDropdown_->itemData(index).toInt() ==
-                          static_cast<int>(runtime::ScopeSignal::Working)
-                      ? runtime::ScopeSignal::Working
-                      : runtime::ScopeSignal::Display);
+    // Signal: Display or Working, the Working signal's axis maximum, Ignore Transparent Pixels.
+    signalMenu_ = kit::makeMenu(tr("Signal"), this);
+    signalMenu_->setObjectName(QStringLiteral("scopesSignalMenu"));
+    auto* signalGroup = new QActionGroup(signalMenu_);
+    signalGroup->setExclusive(true);
+    displayAction_ =
+        checkable(signalMenu_, tr("Display"), QStringLiteral("scopesSignalDisplay"), signalGroup);
+    workingAction_ = checkable(signalMenu_, tr("Working Space"),
+                               QStringLiteral("scopesSignalWorking"), signalGroup);
+    connect(displayAction_, &QAction::triggered, this,
+            [this] { store_->setSignal(runtime::ScopeSignal::Display); });
+    connect(workingAction_, &QAction::triggered, this,
+            [this] { store_->setSignal(runtime::ScopeSignal::Working); });
+    axisMenu_ = signalMenu_->addMenu(tr("Working Axis Maximum"));
+    axisMenu_->setObjectName(QStringLiteral("scopesAxisMaximumMenu"));
+    auto* maxima = new QActionGroup(axisMenu_);
+    maxima->setExclusive(true);
+    for (std::size_t index = 0; index < kAxisMaxima.size(); ++index) {
+        const auto maximum = kAxisMaxima[index];
+        axisActions_[index] = checkable(axisMenu_, QString::number(maximum),
+                                        QStringLiteral("scopesAxisMaximum%1").arg(maximum), maxima);
+        connect(axisActions_[index], &QAction::triggered, this,
+                [this, maximum] { store_->setWorkingAxisMaximum(maximum); });
+    }
+    signalMenu_->addSeparator();
+    ignoreTransparentAction_ = checkable(signalMenu_, tr("Ignore Transparent Pixels"),
+                                         QStringLiteral("scopesIgnoreTransparent"));
+    connect(ignoreTransparentAction_, &QAction::toggled, this,
+            [this](const bool checked) { store_->setIgnoreTransparent(checked); });
+
+    // Region: draw one in the active Viewer, or clear it.
+    regionMenu_ = kit::makeMenu(tr("Region"), this);
+    regionMenu_->setObjectName(QStringLiteral("scopesRegionMenu"));
+    drawRegionAction_ =
+        checkable(regionMenu_, tr("Draw Scope Region"), QStringLiteral("scopesDrawRegion"));
+    drawRegionAction_->setToolTip(tr("Draw a rectangle in the Viewer to measure only that part"));
+    connect(drawRegionAction_, &QAction::toggled, this,
+            [this](const bool checked) { store_->setArmed(checked); });
+    clearRegionAction_ = regionMenu_->addAction(tr("Clear Scope Region"));
+    clearRegionAction_->setObjectName(QStringLiteral("scopesClearRegion"));
+    connect(clearRegionAction_, &QAction::triggered, this, [this] {
+        if (regionKey_)
+            store_->clearRegion(*regionKey_);
     });
-    connect(axisDropdown_, &kit::KDropdown::activated, this,
-            [this](const int index) { setAxisMaximum(axisDropdown_->itemData(index).toUInt()); });
 
-    // Region (toggle) and Clear Region.
-    auto* regionRow = new QHBoxLayout;
-    regionRow->setSpacing(kit::px(kit::Spacing::S));
-    regionButton_ = new kit::KButton(tr("Region"), parent);
-    regionButton_->setObjectName(QStringLiteral("scopesRegion"));
-    regionButton_->setCheckable(true);
-    regionButton_->setToolTip(tr("Draw a rectangle in the Viewer to measure only that part"));
-    regionRow->addWidget(regionButton_);
-    clearRegionButton_ = new kit::KButton(tr("Clear Region"), parent);
-    clearRegionButton_->setObjectName(QStringLiteral("scopesClearRegion"));
-    regionRow->addWidget(clearRegionButton_);
-    regionRow->addStretch(1);
-    column->addLayout(regionRow);
-    connect(regionButton_, &kit::KButton::toggled, this,
-            [this](const bool checked) { setRegionArmed(checked); });
-    connect(clearRegionButton_, &kit::KButton::clicked, this, [this] { clearRegion(); });
+    // Scopes: each scope's modes.
+    scopesMenu_ = kit::makeMenu(tr("Scopes"), this);
+    scopesMenu_->setObjectName(QStringLiteral("scopesModesMenu"));
+    auto* waveform = scopesMenu_->addMenu(tr("Waveform"));
+    waveform->setObjectName(QStringLiteral("scopesWaveformMenu"));
+    auto* waveformGroup = new QActionGroup(waveform);
+    waveformActions_ = {
+        checkable(waveform, tr("RGB"), QStringLiteral("scopesWaveformRgb"), waveformGroup),
+        checkable(waveform, tr("Luma"), QStringLiteral("scopesWaveformLuma"), waveformGroup)};
+    for (std::size_t index = 0; index < waveformActions_.size(); ++index)
+        connect(waveformActions_[index], &QAction::triggered, this, [this, index] {
+            auto drawing = store_->drawing();
+            drawing.waveformChannels =
+                index == 1 ? scopes::WaveformChannels::Luma : scopes::WaveformChannels::Rgb;
+            store_->setDrawing(drawing);
+        });
+    auto* histogram = scopesMenu_->addMenu(tr("Histogram"));
+    histogram->setObjectName(QStringLiteral("scopesHistogramMenu"));
+    auto* channelGroup = new QActionGroup(histogram);
+    histogramChannelActions_ = {
+        checkable(histogram, tr("RGB"), QStringLiteral("scopesHistogramRgb"), channelGroup),
+        checkable(histogram, tr("Luma"), QStringLiteral("scopesHistogramLuma"), channelGroup),
+        checkable(histogram, tr("RGB and Luma"), QStringLiteral("scopesHistogramRgbAndLuma"),
+                  channelGroup)};
+    for (std::size_t index = 0; index < histogramChannelActions_.size(); ++index)
+        connect(histogramChannelActions_[index], &QAction::triggered, this, [this, index] {
+            auto drawing = store_->drawing();
+            drawing.histogramChannels = index == 1   ? scopes::HistogramChannels::Luma
+                                        : index == 2 ? scopes::HistogramChannels::RgbAndLuma
+                                                     : scopes::HistogramChannels::Rgb;
+            store_->setDrawing(drawing);
+        });
+    histogram->addSeparator();
+    auto* scaleGroup = new QActionGroup(histogram);
+    histogramScaleActions_ = {
+        checkable(histogram, tr("Linear"), QStringLiteral("scopesHistogramLinear"), scaleGroup),
+        checkable(histogram, tr("Logarithmic"), QStringLiteral("scopesHistogramLogarithmic"),
+                  scaleGroup)};
+    for (std::size_t index = 0; index < histogramScaleActions_.size(); ++index)
+        connect(histogramScaleActions_[index], &QAction::triggered, this, [this, index] {
+            auto drawing = store_->drawing();
+            drawing.histogramScale =
+                index == 1 ? scopes::HistogramScale::Logarithmic : scopes::HistogramScale::Linear;
+            store_->setDrawing(drawing);
+        });
 
-    ignoreCheck_ = new kit::KCheckBox(tr("Ignore Transparent Pixels"), parent);
-    ignoreCheck_->setObjectName(QStringLiteral("scopesIgnoreTransparent"));
-    column->addWidget(ignoreCheck_);
-    connect(ignoreCheck_, &kit::KCheckBox::toggled, this,
-            [this](const bool checked) { setIgnoreTransparent(checked); });
-
-    auto* brightnessRow = new QHBoxLayout;
-    brightnessRow->setSpacing(kit::px(kit::Spacing::S));
-    auto* brightnessLabel = new kit::KLabel(tr("Brightness"), parent, kit::TypeRole::UiSmall);
-    brightnessLabel->setTone(kit::Color::Muted);
-    brightnessRow->addWidget(brightnessLabel);
-    brightnessSlider_ = new kit::KSlider(parent);
-    brightnessSlider_->setObjectName(QStringLiteral("scopesBrightness"));
-    brightnessSlider_->setAccessibleName(tr("Brightness"));
-    brightnessSlider_->setRange(kBrightnessMinimum, kBrightnessMaximum);
-    brightnessSlider_->setValue(static_cast<double>(brightness_));
-    brightnessSlider_->setDefaultValue(static_cast<double>(scopes::traceBrightnessGainDefault()));
-    brightnessRow->addWidget(brightnessSlider_, 1);
-    column->addLayout(brightnessRow);
-    connect(brightnessSlider_, &kit::KSlider::valueChanged, this,
-            [this](const double value) { setBrightness(static_cast<float>(value)); });
-
-    // The status line, always visible under the header.
-    statusLine_ = new kit::KLabel(QString{}, parent, kit::TypeRole::UiSmall);
-    statusLine_->setObjectName(QStringLiteral("scopesStatusLine"));
-    statusLine_->setTone(kit::Color::Muted);
-    statusLine_->setWordWrap(true);
-    statusLine_->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    column->addWidget(statusLine_);
-    warningLine_ = new kit::KLabel(QString{}, parent, kit::TypeRole::UiSmall);
-    warningLine_->setObjectName(QStringLiteral("scopesStatusWarnings"));
-    warningLine_->setTone(kit::Color::Warn);
-    warningLine_->setWordWrap(true);
-    column->addWidget(warningLine_);
-    behindLine_ = new kit::KLabel(QString{}, parent, kit::TypeRole::UiSmall);
-    behindLine_->setObjectName(QStringLiteral("scopesStatusBehind"));
-    behindLine_->setTone(kit::Color::Warn);
-    behindLine_->setWordWrap(true);
-    column->addWidget(behindLine_);
+    bar.addMenuButton(tr("Signal"), signalMenu_, QStringLiteral("scopesSignalMenuButton"));
+    bar.addMenuButton(tr("Region"), regionMenu_, QStringLiteral("scopesRegionMenuButton"));
+    bar.addMenuButton(tr("Scopes"), scopesMenu_, QStringLiteral("scopesModesMenuButton"));
+    bar.addStretch();
+    // The row lives in the area's header; until an area hosts it, it is hidden here.
+    if (auto* row = EditorArea::buildChromeRow(bar, this))
+        row->hide();
 }
 
 void ScopesEditor::buildSections(QWidget* const parent) {
@@ -264,71 +250,48 @@ void ScopesEditor::buildSections(QWidget* const parent) {
     layout->setSpacing(kit::px(kit::Spacing::Gutter));
     for (const auto& spec : kSections) {
         const auto slot = static_cast<std::size_t>(spec.kind);
+        // A pane is its title, its collapse arrow and its scope: nothing else.
         auto* section = new kit::KSection(sectionTitle(spec.kind), parent);
         section->setObjectName(QStringLiteral("scopesSection_") + QLatin1String(spec.id));
         section->setResetEnabled(false);
-        section->setBodyPadding(kit::px(kit::Spacing::XS));
-        section->bodyLayout()->setSpacing(kit::px(kit::Spacing::XS));
+        section->setBodyPadding(0);
         sections_[slot] = section;
         auto* view = new ScopeView(spec.kind, renderer_, section->body());
         section->bodyLayout()->addWidget(view);
         views_[slot] = view;
         layout->addWidget(section);
-        connect(section, &kit::KSection::collapsedChanged, this, [this](bool) {
-            refreshViewsActive();
-            applySettings();
-        });
-
-        const auto addChoice = [&](const QString& name, const QString& accessible,
-                                   const QStringList& items) {
-            auto* dropdown = new kit::KDropdown(section);
-            dropdown->setObjectName(name);
-            dropdown->setAccessibleName(accessible);
-            for (int index = 0; index < items.size(); ++index)
-                dropdown->addItem(items[index], index);
-            dropdown->setFixedWidth(kit::px(kit::Size::DropdownWidth));
-            section->addHeaderAction(dropdown);
-            return dropdown;
-        };
-        switch (spec.kind) {
-        case scopes::Kind::Waveform:
-            waveformChannels_ = addChoice(QStringLiteral("scopesWaveformChannels"),
-                                          tr("Waveform channels"), {tr("RGB"), tr("Luma")});
-            connect(waveformChannels_, &kit::KDropdown::activated, this, [this](const int index) {
-                views_[static_cast<std::size_t>(scopes::Kind::Waveform)]->setWaveformChannels(
-                    index == 1 ? scopes::WaveformChannels::Luma : scopes::WaveformChannels::Rgb);
-            });
-            break;
-        case scopes::Kind::Histogram:
-            histogramChannels_ =
-                addChoice(QStringLiteral("scopesHistogramChannels"), tr("Histogram channels"),
-                          {tr("RGB"), tr("Luma"), tr("RGB and Luma")});
-            histogramScale_ = addChoice(QStringLiteral("scopesHistogramScale"),
-                                        tr("Histogram scale"), {tr("Linear"), tr("Logarithmic")});
-            connect(histogramChannels_, &kit::KDropdown::activated, this, [this](const int index) {
-                views_[static_cast<std::size_t>(scopes::Kind::Histogram)]->setHistogramChannels(
-                    index == 1   ? scopes::HistogramChannels::Luma
-                    : index == 2 ? scopes::HistogramChannels::RgbAndLuma
-                                 : scopes::HistogramChannels::Rgb);
-            });
-            connect(histogramScale_, &kit::KDropdown::activated, this, [this](const int index) {
-                views_[static_cast<std::size_t>(scopes::Kind::Histogram)]->setHistogramScale(
-                    index == 1 ? scopes::HistogramScale::Logarithmic
-                               : scopes::HistogramScale::Linear);
-            });
-            break;
-        case scopes::Kind::Vectorscope:
-            linearNote_ = new kit::KLabel(tr("Linear values"), section, kit::TypeRole::UiSmall);
-            linearNote_->setObjectName(QStringLiteral("scopesLinearNote"));
-            linearNote_->setTone(kit::Color::Muted);
-            section->addHeaderAction(linearNote_);
-            break;
-        case scopes::Kind::Parade:
-        case scopes::Kind::Chromaticity:
-            break;
-        }
+        connect(section, &kit::KSection::collapsedChanged, this,
+                [this](bool) { refreshViewsActive(); });
     }
     layout->addStretch(1);
+}
+
+void ScopesEditor::refreshMenus() {
+    const auto signal = store_->signal();
+    const QSignalBlocker blockIgnore(ignoreTransparentAction_);
+    const QSignalBlocker blockDraw(drawRegionAction_);
+    displayAction_->setChecked(signal == runtime::ScopeSignal::Display);
+    workingAction_->setChecked(signal == runtime::ScopeSignal::Working);
+    for (std::size_t index = 0; index < kAxisMaxima.size(); ++index)
+        axisActions_[index]->setChecked(kAxisMaxima[index] == store_->workingAxisMaximum());
+    axisMenu_->setEnabled(signal == runtime::ScopeSignal::Working);
+    ignoreTransparentAction_->setChecked(store_->ignoreTransparent());
+    drawRegionAction_->setChecked(store_->armed());
+    drawRegionAction_->setEnabled(regionKey_.has_value());
+    clearRegionAction_->setEnabled(regionKey_.has_value() &&
+                                   store_->region(*regionKey_).has_value());
+    const auto& drawing = store_->drawing();
+    waveformActions_[0]->setChecked(drawing.waveformChannels == scopes::WaveformChannels::Rgb);
+    waveformActions_[1]->setChecked(drawing.waveformChannels == scopes::WaveformChannels::Luma);
+    histogramChannelActions_[0]->setChecked(drawing.histogramChannels ==
+                                            scopes::HistogramChannels::Rgb);
+    histogramChannelActions_[1]->setChecked(drawing.histogramChannels ==
+                                            scopes::HistogramChannels::Luma);
+    histogramChannelActions_[2]->setChecked(drawing.histogramChannels ==
+                                            scopes::HistogramChannels::RgbAndLuma);
+    histogramScaleActions_[0]->setChecked(drawing.histogramScale == scopes::HistogramScale::Linear);
+    histogramScaleActions_[1]->setChecked(drawing.histogramScale ==
+                                          scopes::HistogramScale::Logarithmic);
 }
 
 QString ScopesEditor::persistencePrefix() const {
@@ -349,114 +312,6 @@ void ScopesEditor::adoptPersistence() {
             prefix + QLatin1String(spec.id) + QStringLiteral("/collapsed"));
 }
 
-std::uint32_t ScopesEditor::openScopeBits() const {
-    std::uint32_t bits = 0;
-    for (const auto& spec : kSections) {
-        const auto* section = sections_[static_cast<std::size_t>(spec.kind)];
-        if (section != nullptr && !section->isCollapsed())
-            bits |= tableBitOf(spec.kind);
-    }
-    return bits;
-}
-
-runtime::ScopeMeasureSettings ScopesEditor::measureSettings() const {
-    runtime::ScopeMeasureSettings settings;
-    // A hidden panel measures nothing; a collapsed section's scope is left out.
-    settings.scopes = shown_ ? openScopeBits() : 0U;
-    settings.signal = signal_;
-    settings.axisMaximum = signal_ == runtime::ScopeSignal::Working ? axisMaximum_ : 1U;
-    settings.region = region_;
-    settings.ignoreTransparent = ignoreTransparent_;
-    return settings;
-}
-
-runtime::ScopeSignal ScopesEditor::signal() const noexcept { return signal_; }
-std::uint32_t ScopesEditor::axisMaximum() const noexcept { return axisMaximum_; }
-bool ScopesEditor::ignoreTransparent() const noexcept { return ignoreTransparent_; }
-float ScopesEditor::brightness() const noexcept { return brightness_; }
-
-void ScopesEditor::setSignal(const runtime::ScopeSignal signal) {
-    if (signal_ == signal)
-        return;
-    signal_ = signal;
-    refreshControls();
-    applySettings();
-}
-
-void ScopesEditor::setAxisMaximum(const std::uint32_t axisMaximum) {
-    if (!runtime::validScopeAxisMaximum(axisMaximum) || axisMaximum_ == axisMaximum)
-        return;
-    axisMaximum_ = axisMaximum;
-    refreshControls();
-    applySettings();
-}
-
-void ScopesEditor::setIgnoreTransparent(const bool ignore) {
-    if (ignoreTransparent_ == ignore)
-        return;
-    ignoreTransparent_ = ignore;
-    refreshControls();
-    applySettings();
-}
-
-void ScopesEditor::setBrightness(const float gain) {
-    const auto clamped = std::clamp(gain, static_cast<float>(kBrightnessMinimum),
-                                    static_cast<float>(kBrightnessMaximum));
-    if (brightness_ == clamped)
-        return;
-    brightness_ = clamped;
-    refreshControls();
-    // A Brightness change maps again and does not measure again.
-    for (auto* scopeView : views_)
-        scopeView->setGain(brightness_);
-}
-
-void ScopesEditor::setRegion(const std::optional<runtime::ScopeRegion>& region) {
-    store_->setRegion(regionKey_, region);
-    // The store tells every panel (this one included) when the value changed.
-    adoptRegion();
-}
-
-// Reads the followed composition's region from the store; measures again when it differs.
-void ScopesEditor::adoptRegion() {
-    const auto next = store_->region(regionKey_);
-    if (region_ == next)
-        return;
-    region_ = next;
-    refreshControls();
-    applySettings();
-    emit regionChanged(region_);
-}
-
-void ScopesEditor::adoptRegionKey(const ScopesRegionStore::Key& key) {
-    if (key == regionKey_)
-        return;
-    regionKey_ = key;
-    adoptRegion();
-}
-
-void ScopesEditor::setRegionArmed(const bool armed) { store_->setArmed(armed); }
-
-void ScopesEditor::refreshControls() {
-    const QSignalBlocker blockSignal(signalDropdown_);
-    const QSignalBlocker blockAxis(axisDropdown_);
-    const QSignalBlocker blockRegion(regionButton_);
-    const QSignalBlocker blockIgnore(ignoreCheck_);
-    const QSignalBlocker blockBrightness(brightnessSlider_);
-    signalDropdown_->setCurrentIndex(signalDropdown_->findData(static_cast<int>(signal_)));
-    axisDropdown_->setCurrentIndex(axisDropdown_->findData(axisMaximum_));
-    const bool working = signal_ == runtime::ScopeSignal::Working;
-    axisDropdown_->setVisible(working);
-    if (auto* label = findChild<QWidget*>(QStringLiteral("scopesAxisMaximumLabel")))
-        label->setVisible(working);
-    if (linearNote_ != nullptr)
-        linearNote_->setVisible(working);
-    regionButton_->setChecked(store_->armed());
-    clearRegionButton_->setEnabled(region_.has_value());
-    ignoreCheck_->setChecked(ignoreTransparent_);
-    brightnessSlider_->setValue(static_cast<double>(brightness_));
-}
-
 void ScopesEditor::refreshViewsActive() {
     for (const auto& spec : kSections) {
         const auto slot = static_cast<std::size_t>(spec.kind);
@@ -464,34 +319,27 @@ void ScopesEditor::refreshViewsActive() {
     }
 }
 
-void ScopesEditor::applySettings() {
-    if (controller_ != nullptr)
-        controller_->setSettings(measureSettings());
-    refreshStatus();
-    emit settingsChanged();
-    updateRangeFill();
-}
-
-void ScopesEditor::setRamFillRunning(const bool running) {
-    ramFillRunning_ = running;
-    updateRangeFill();
-}
-
-void ScopesEditor::updateRangeFill() {
-    if (controller_ == nullptr)
+void ScopesEditor::handOut(std::shared_ptr<const runtime::PreviewFrameScopes> scopes) {
+    if (scopes_ == scopes)
         return;
-    // While a RAM preview fill is running and the panel is shown with a scope open, the frames the
-    // fill retains are measured too.
-    controller_->setRangeFillActive(shown_ && ramFillRunning_ && openScopeBits() != 0U);
+    scopes_ = std::move(scopes);
+    for (auto* scopeView : views_)
+        scopeView->setScopes(scopes_);
 }
 
-void ScopesEditor::showViewerFrame(const PreparedPreviewFrameHandle& frame,
-                                   const runtime::ViewAdjust viewAdjust) {
-    hasViewer_ = true;
-    viewAdjust_ = viewAdjust;
-    if (controller_ != nullptr)
-        controller_->showFrame(frame, viewAdjust);
-    refreshStatus();
+void ScopesEditor::showViewerFrame(const PreparedPreviewFrameHandle& frame) {
+    if (frame == nullptr) {
+        // No picture at all: the empty graticule.
+        handOut(nullptr);
+        return;
+    }
+    const auto& identity = frame->desiredIdentity();
+    const auto& carried = frame->scopes();
+    // A frame that does not carry tables of the current settings (yet) changes nothing on show.
+    if (carried == nullptr ||
+        carried->settings != store_->settings({identity.projectId, identity.compositionId}))
+        return;
+    handOut(carried);
 }
 
 ViewerEditor* ScopesEditor::followedViewer() const noexcept {
@@ -499,7 +347,7 @@ ViewerEditor* ScopesEditor::followedViewer() const noexcept {
 }
 
 void ScopesEditor::followViewer(ViewerEditor* const viewer) {
-    if (followedViewer() == viewer && (viewer != nullptr || !hasViewer_))
+    if (followedViewer() == viewer && viewer != nullptr)
         return;
     QObject::disconnect(viewerConnection_);
     QObject::disconnect(viewerDestroyedConnection_);
@@ -516,25 +364,24 @@ void ScopesEditor::followViewer(ViewerEditor* const viewer) {
         onViewerState();
         return;
     }
-    adoptRegionKey({});
-    if (controller_ != nullptr)
-        controller_->showFrame(nullptr, {});
-    hasViewer_ = false;
-    viewAdjust_ = {};
-    refreshStatus();
+    regionKey_.reset();
+    refreshMenus();
 }
 
 void ScopesEditor::onViewerState() {
     auto* const viewer = followedViewer();
     if (viewer == nullptr)
         return;
-    adoptRegionKey(viewer->scopesRegionKey().value_or(ScopesRegionStore::Key{}));
-    const auto source = viewer->scopesSource();
-    showViewerFrame(source.frame, source.viewAdjust);
+    const auto key = viewer->scopesRegionKey();
+    if (key != regionKey_) {
+        regionKey_ = key;
+        refreshMenus();
+    }
+    showViewerFrame(viewer->scopesSource().frame);
 }
 
 void ScopesEditor::pickViewer() {
-    if (!followed_.isNull())
+    if (!followed_.isNull() || window() == nullptr)
         return;
     ViewerEditor* choice = nullptr;
     for (auto* candidate : window()->findChildren<ViewerEditor*>()) {
@@ -543,47 +390,6 @@ void ScopesEditor::pickViewer() {
     }
     if (choice != nullptr)
         followViewer(choice);
-}
-
-ScopesStatusText ScopesEditor::statusText() const {
-    ScopesStatusInput input;
-    input.available = controller_ != nullptr;
-    input.hasViewer = hasViewer_;
-    input.hidden = !shown_;
-    input.measuring = openScopeBits() != 0U;
-    if (controller_ != nullptr) {
-        input.reading = controller_->reading();
-        input.settings = controller_->settings();
-    }
-    input.viewAdjust = viewAdjust_;
-    input.compositionName = services_.compositionName;
-    return describeScopesStatus(input);
-}
-
-void ScopesEditor::refreshStatus() {
-    if (statusLine_ == nullptr)
-        return;
-    const auto status = statusText();
-    statusLine_->setText(status.line);
-    warningLine_->setText(status.warnings.join(QStringLiteral(" · ")));
-    warningLine_->setVisible(!status.warnings.isEmpty());
-    behindLine_->setText(status.behind);
-    behindLine_->setVisible(!status.behind.isEmpty());
-}
-
-void ScopesEditor::onReading() {
-    const auto& reading = controller_->reading();
-    ScopeViewData data;
-    data.scopes = reading.scopes;
-    data.color = reading.color;
-    data.behind = reading.behind;
-    if (reading.scopes != nullptr) {
-        data.signal = reading.scopes->identity.settings.signal;
-        data.axisMaximum = reading.scopes->identity.settings.axisMaximum;
-    }
-    for (auto* scopeView : views_)
-        scopeView->setData(data);
-    refreshStatus();
 }
 
 void ScopesEditor::showEvent(QShowEvent* const event) {
@@ -597,7 +403,6 @@ void ScopesEditor::showEvent(QShowEvent* const event) {
     if (followed_.isNull())
         pickViewer();
     refreshViewsActive();
-    applySettings();
 }
 
 void ScopesEditor::hideEvent(QHideEvent* const event) {
@@ -608,17 +413,13 @@ void ScopesEditor::hideEvent(QHideEvent* const event) {
         store_->panelHidden();
     }
     refreshViewsActive();
-    applySettings();
 }
 
-bool registerScopesEditor(EditorRegistry& registry, const ScopesServices& services,
-                          RamPreviewController* const ramPreview) {
-    QPointer<RamPreviewController> guarded(ramPreview);
-    return registry.registerEditor({.id = "bloom.scopes",
-                                    .displayName = ScopesEditor::tr("Scopes"),
-                                    .create = [services, guarded](QWidget* parent) {
-                                        return new ScopesEditor(services, guarded.data(), parent);
-                                    }});
+bool registerScopesEditor(EditorRegistry& registry, const ScopesServices& services) {
+    return registry.registerEditor(
+        {.id = "bloom.scopes",
+         .displayName = ScopesEditor::tr("Scopes"),
+         .create = [services](QWidget* parent) { return new ScopesEditor(services, parent); }});
 }
 
 } // namespace bloom::ui

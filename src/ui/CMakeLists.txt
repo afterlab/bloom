@@ -585,12 +585,9 @@ target_sources(
         qt_font_transport.hpp
         tool_controller.cpp
         composition_thumbnail_controller.cpp
-        scope_fill_taps.cpp
-        scopes_controller.cpp
         scopes_drawing.cpp
         scopes_editor.cpp
         scopes_region_store.cpp
-        scopes_status.cpp
         scopes_trace_renderer.cpp
         scopes_view.cpp
         curve_graph.cpp
@@ -818,12 +815,9 @@ target_sources(
             include/bloom/ui/layer_alignment_actions.hpp
             include/bloom/ui/tool_controller.hpp
             include/bloom/ui/composition_thumbnail_controller.hpp
-            include/bloom/ui/scope_fill_taps.hpp
-            include/bloom/ui/scopes_controller.hpp
             include/bloom/ui/scopes_drawing.hpp
             include/bloom/ui/scopes_editor.hpp
             include/bloom/ui/scopes_region_store.hpp
-            include/bloom/ui/scopes_status.hpp
             include/bloom/ui/scopes_trace_renderer.hpp
             include/bloom/ui/scopes_view.hpp
             include/bloom/ui/curve_graph.hpp

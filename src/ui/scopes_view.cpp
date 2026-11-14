@@ -14,6 +14,7 @@
 #include <array>
 #include <cmath>
 #include <numbers>
+#include <vector>
 
 namespace bloom::ui {
 namespace {
@@ -21,8 +22,6 @@ namespace {
 namespace render = bloom::render;
 namespace scopes_rt = bloom::runtime::scopes;
 using kit::Color;
-
-constexpr qreal kBehindOpacity = 0.5;
 
 [[nodiscard]] QFont labelFont() { return kit::font(kit::TypeRole::Value); }
 [[nodiscard]] QFont nameFont() { return kit::font(kit::TypeRole::UiSmall); }
@@ -48,13 +47,14 @@ constexpr std::array<const char*, 4> kChannelLetters{"R", "G", "B", "Y"};
 
 scopes_rt::ScopePalette scopePanelPalette() {
     scopes_rt::ScopePalette palette;
-    palette.canvas = kit::color(Color::Canvas).rgb();
-    palette.quiet = kit::color(Color::Border).rgb();
+    // A black canvas, hairlines in BorderHover, labels in Muted (about twice the lines'
+    // brightness).
+    palette.canvas = kit::color(Color::CanvasBlack).rgb();
+    palette.quiet = kit::color(Color::BorderHover).rgb();
     palette.stronger = kit::color(Color::BorderHover).rgb();
     palette.strongest = kit::color(Color::Foreground).rgb();
     palette.label = kit::color(Color::Muted).rgb();
     palette.faint = kit::color(Color::Faint).rgb();
-    palette.warning = kit::color(Color::Warn).rgb();
     palette.channel = {kit::color(Color::ComponentX).rgb(), kit::color(Color::ComponentY).rgb(),
                        kit::color(Color::ComponentZ).rgb(), kit::color(Color::Foreground).rgb()};
     return palette;
@@ -91,16 +91,17 @@ ScopeView::ScopeView(const scopes::Kind kind, ScopesTraceRenderer* const rendere
 
 ScopeView::~ScopeView() = default;
 
-bool ScopeView::measured() const {
-    if (data_.scopes == nullptr || data_.scopes->tables.empty())
+bool ScopeView::measures(const runtime::PreviewFrameScopes* const scopes) const {
+    if (scopes == nullptr || scopes->status != runtime::PreviewFrameScopesStatus::Measured ||
+        scopes->tables.empty())
         return false;
-    const auto& layout = data_.scopes->tables.layout();
+    const auto& layout = scopes->tables.layout();
     switch (kind_) {
     case scopes::Kind::Waveform:
     case scopes::Kind::Parade:
         return layout.has(render::kScopeTableWaveform);
     case scopes::Kind::Vectorscope:
-        return layout.has(render::kScopeTableVectorscope);
+        return layout.has(render::kScopeTableVectorscope) && scopes->color != nullptr;
     case scopes::Kind::Histogram:
         return layout.has(render::kScopeTableHistogram);
     case scopes::Kind::Chromaticity:
@@ -109,57 +110,44 @@ bool ScopeView::measured() const {
     return false;
 }
 
-bool ScopeView::showsBehind() const {
-    if (trace_.isNull())
-        return false;
-    const auto* current = data_.scopes != nullptr ? &data_.scopes->tables : nullptr;
-    return data_.behind || traceTables_ != current;
-}
-
-void ScopeView::setData(const ScopeViewData& data) {
-    data_ = data;
-    if (!measured()) {
-        trace_ = {};
-        clip_ = {};
-        traceTables_ = nullptr;
-        requestedSize_ = {};
-        if (renderer_ != nullptr)
-            renderer_->clear(kind_);
-    } else {
+void ScopeView::setScopes(std::shared_ptr<const runtime::PreviewFrameScopes> scopes) {
+    if (scopes_ == scopes)
+        return;
+    scopes_ = std::move(scopes);
+    if (measures(scopes_.get())) {
+        // The trace on show stays, at full strength, until the new one replaces it.
         requestTrace();
+        if (trace_.isNull() && shown_ == nullptr) {
+            // Nothing on show yet: the graticule follows the new tables at once.
+            shown_ = scopes_;
+            update();
+        }
+        return;
     }
+    // Nothing to count for this frame (no frame, an empty region, tables that could not be
+    // counted): the empty graticule, at once and silently.
+    if (renderer_ != nullptr)
+        renderer_->clear(kind_);
+    requestedSize_ = {};
+    trace_ = {};
+    shown_ = scopes_;
+    shownDrawing_ = drawing_;
     update();
 }
 
-void ScopeView::setGain(const float gain) {
-    if (gain_ == gain)
+void ScopeView::setDrawing(const ScopesRegionStore::Drawing& drawing) {
+    if (drawing_ == drawing)
         return;
-    gain_ = gain;
-    requestTrace();
-}
-
-void ScopeView::setWaveformChannels(const scopes::WaveformChannels channels) {
-    if (waveformChannels_ == channels)
-        return;
-    waveformChannels_ = channels;
-    requestTrace();
-    update();
-}
-
-void ScopeView::setHistogramChannels(const scopes::HistogramChannels channels) {
-    if (histogramChannels_ == channels)
-        return;
-    histogramChannels_ = channels;
-    updateGeometry();
-    requestTrace();
-    update();
-}
-
-void ScopeView::setHistogramScale(const scopes::HistogramScale scale) {
-    if (histogramScale_ == scale)
-        return;
-    histogramScale_ = scale;
-    requestTrace();
+    const bool rows = drawing_.histogramChannels != drawing.histogramChannels;
+    drawing_ = drawing;
+    if (rows)
+        updateGeometry();
+    if (measures(scopes_.get()))
+        requestTrace();
+    else {
+        shownDrawing_ = drawing_;
+        update();
+    }
 }
 
 void ScopeView::setActive(const bool active) {
@@ -174,24 +162,25 @@ void ScopeView::setActive(const bool active) {
     }
 }
 
-scopes_rt::GraticuleRequest ScopeView::planRequest(const int width, const int height,
-                                                   const bool withClip) const {
+scopes_rt::GraticuleRequest
+ScopeView::planRequest(const int width, const int height,
+                       const runtime::PreviewFrameScopes* const scopes) const {
     scopes_rt::GraticuleRequest request;
     request.kind = kind_;
     request.width = width;
     request.height = height;
     request.devicePixelRatio = devicePixelRatioF();
-    request.signal = data_.signal;
-    request.axisMaximum = data_.axisMaximum;
-    request.waveformChannels = waveformChannels_;
-    request.histogramChannels = histogramChannels_;
-    request.histogramScale = histogramScale_;
-    if (data_.color != nullptr) {
-        request.luma = &data_.color->luma();
-        request.colorimetry = &data_.color->colorimetry();
+    if (scopes != nullptr) {
+        request.signal = scopes->settings.signal;
+        request.axisMaximum = scopes->settings.axisMaximum;
+        if (scopes->color != nullptr) {
+            request.luma = &scopes->color->luma();
+            request.colorimetry = &scopes->color->colorimetry();
+        }
     }
-    if (withClip)
-        request.clip = &clip_;
+    request.waveformChannels = shownDrawing_.waveformChannels;
+    request.histogramChannels = shownDrawing_.histogramChannels;
+    request.histogramScale = shownDrawing_.histogramScale;
     request.metrics = scopePanelMetrics();
     request.measure = textMeasure();
     return request;
@@ -207,57 +196,71 @@ scopes_rt::MeasureText ScopeView::textMeasure() {
     };
 }
 
-scopes_rt::ScopeGraticule ScopeView::plan(const int width, const int height,
-                                          const bool withClip) const {
-    return scopes_rt::buildScopeGraticule(planRequest(width, height, withClip));
+scopes_rt::ScopeGraticule ScopeView::plan(const int width, const int height) const {
+    return scopes_rt::buildScopeGraticule(planRequest(width, height, shown_.get()));
 }
 
-scopes_rt::ScopeGraticule ScopeView::graticule() const { return plan(width(), height(), true); }
+scopes_rt::ScopeGraticule ScopeView::graticule() const { return plan(width(), height()); }
 
 QRectF ScopeView::plotRect() const { return toQRectF(plan(width(), height()).plot); }
 
 scopes::TraceRequest ScopeView::currentRequest() const {
     scopes::TraceRequest request;
     request.kind = kind_;
-    if (data_.scopes != nullptr)
-        request.tables =
-            std::shared_ptr<const runtime::ScopeTables>(data_.scopes, &data_.scopes->tables);
-    request.color = data_.color;
-    request.colors = scopePanelPalette().traceColors();
-    request.gain = gain_;
-    const auto traceSize = plan(width(), height()).traceRequestSize;
+    if (scopes_ != nullptr) {
+        request.tables = std::shared_ptr<const runtime::ScopeTables>(scopes_, &scopes_->tables);
+        request.color = scopes_->color;
+    }
+    // The size of the plot the new tables will be drawn in: the graticule of the target drawing.
+    auto target = planRequest(width(), height(), scopes_.get());
+    target.waveformChannels = drawing_.waveformChannels;
+    target.histogramChannels = drawing_.histogramChannels;
+    target.histogramScale = drawing_.histogramScale;
+    const auto traceSize = scopes_rt::buildScopeGraticule(target).traceRequestSize;
     request.size = QSize(traceSize.width, traceSize.height);
     request.gapPixels = static_cast<int>(std::lround(scopes_rt::kParadeGap * devicePixelRatioF()));
-    request.waveformChannels = waveformChannels_;
-    request.histogramChannels = histogramChannels_;
-    request.histogramScale = histogramScale_;
+    request.waveformChannels = drawing_.waveformChannels;
+    request.histogramChannels = drawing_.histogramChannels;
+    request.histogramScale = drawing_.histogramScale;
     return request;
 }
 
 void ScopeView::requestTrace() {
-    if (renderer_ == nullptr || !active_ || !measured() || !isVisible() || width() <= 0 ||
-        height() <= 0)
+    if (renderer_ == nullptr || !active_ || !measures(scopes_.get()) || !isVisible() ||
+        width() <= 0 || height() <= 0)
         return;
     const auto request = currentRequest();
+    if (request.size.isEmpty())
+        return;
     requestedSize_ = request.size;
     renderer_->request(request);
 }
 
 void ScopeView::adoptFinished() {
     const auto finished = renderer_->finished(kind_);
-    if (finished == nullptr || data_.scopes == nullptr ||
-        finished->request.tables.get() != &data_.scopes->tables)
+    if (finished == nullptr || finished->image.isNull())
         return;
-    trace_ = finished->trace.image;
-    clip_ = finished->trace.clip;
-    traceTables_ = finished->request.tables.get();
+    // One swap: the image, the tables it was mapped from and the modes it was mapped with.
+    const auto& request = finished->request;
+    if (request.tables == nullptr)
+        return;
+    std::shared_ptr<const runtime::PreviewFrameScopes> owner;
+    if (scopes_ != nullptr && request.tables.get() == &scopes_->tables)
+        owner = scopes_;
+    else if (shown_ != nullptr && request.tables.get() == &shown_->tables)
+        owner = shown_;
+    else
+        return;
+    trace_ = finished->image;
+    shown_ = std::move(owner);
+    shownDrawing_ = {request.waveformChannels, request.histogramChannels, request.histogramScale};
     update();
 }
 
 void ScopeView::resizeEvent(QResizeEvent* const event) {
     QWidget::resizeEvent(event);
-    const auto traceSize = plan(width(), height()).traceRequestSize;
-    if (measured() && QSize(traceSize.width, traceSize.height) != requestedSize_)
+    const auto request = currentRequest();
+    if (measures(scopes_.get()) && request.size != requestedSize_)
         requestTrace();
 }
 
@@ -267,7 +270,9 @@ void ScopeView::showEvent(QShowEvent* const event) {
 }
 
 int ScopeView::heightForWidth(const int width) const {
-    return scopes_rt::scopeHeightForWidth(planRequest(width, 0, false), width);
+    auto request = planRequest(width, 0, nullptr);
+    request.histogramChannels = drawing_.histogramChannels;
+    return scopes_rt::scopeHeightForWidth(request, width);
 }
 
 QSize ScopeView::sizeHint() const {
@@ -282,20 +287,9 @@ QSize ScopeView::minimumSizeHint() const {
 }
 
 QString ScopeView::axisLabel(const int code) const {
-    return QString::fromStdString(scopes_rt::scopeAxisLabel(code, data_.signal, data_.axisMaximum));
-}
-
-void ScopeView::paintTrace(QPainter& painter, const QRectF& target, const bool additive) const {
-    if (trace_.isNull())
-        return;
-    painter.save();
-    if (showsBehind())
-        painter.setOpacity(kBehindOpacity);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform);
-    if (additive)
-        painter.setCompositionMode(QPainter::CompositionMode_Plus);
-    painter.drawImage(target, trace_);
-    painter.restore();
+    const auto signal = shown_ != nullptr ? shown_->settings.signal : runtime::ScopeSignal::Display;
+    const auto maximum = shown_ != nullptr ? shown_->settings.axisMaximum : 1U;
+    return QString::fromStdString(scopes_rt::scopeAxisLabel(code, signal, maximum));
 }
 
 void ScopeView::paintEvent(QPaintEvent* const event) {
@@ -303,24 +297,11 @@ void ScopeView::paintEvent(QPaintEvent* const event) {
     QPainter painter(this);
     const auto palette = scopePanelPalette();
     painter.fillRect(rect(), qcolor(palette.canvas));
-    const auto graticule = plan(width(), height(), true);
-    paintPlan(painter, graticule, palette);
-    if (showsBehind()) {
-        painter.setFont(nameFont());
-        painter.setPen(qcolor(palette.warning));
-        painter.drawText(toQRectF(graticule.plot)
-                             .adjusted(kit::px(kit::Spacing::XS), kit::px(kit::Spacing::XS),
-                                       -kit::px(kit::Spacing::XS), 0),
-                         // The Histogram's rows carry their channel letters at the top left.
-                         kind_ == scopes::Kind::Histogram
-                             ? static_cast<int>(Qt::AlignRight | Qt::AlignTop)
-                             : static_cast<int>(Qt::AlignLeft | Qt::AlignTop),
-                         tr("Behind"));
-    }
+    paintPlan(painter, plan(width(), height()), palette);
 }
 
 // Paints the plan with the vector painter and the interface fonts: the graticule under the trace,
-// the trace, then the lines, polylines, circles, fills and labels over it.
+// the trace, then the lines, polylines, circles and labels over it.
 void ScopeView::paintPlan(QPainter& painter, const scopes_rt::ScopeGraticule& graticule,
                           const scopes_rt::ScopePalette& palette) const {
     const auto paintShapes = [&](const scopes_rt::Layer layer) {
@@ -358,16 +339,15 @@ void ScopeView::paintPlan(QPainter& painter, const scopes_rt::ScopeGraticule& gr
         painter.setRenderHint(QPainter::Antialiasing, false);
     };
     paintShapes(scopes_rt::Layer::UnderTrace);
-    paintTrace(painter, toQRectF(graticule.trace),
-               kind_ == scopes::Kind::Waveform || kind_ == scopes::Kind::Parade);
-    paintShapes(scopes_rt::Layer::OverTrace);
-
-    painter.setPen(Qt::NoPen);
-    for (const auto& fill : graticule.fills) {
-        painter.setBrush(qcolor(palette.color(fill.color)));
-        painter.drawRect(toQRectF(fill.rect));
+    if (!trace_.isNull()) {
+        painter.save();
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        if (scopes::additiveTrace(kind_))
+            painter.setCompositionMode(QPainter::CompositionMode_Plus);
+        painter.drawImage(toQRectF(graticule.trace), trace_);
+        painter.restore();
     }
-    painter.setBrush(Qt::NoBrush);
+    paintShapes(scopes_rt::Layer::OverTrace);
 
     for (const auto& label : graticule.labels) {
         const auto font = label.font == scopes_rt::LabelFont::Numeric ? labelFont() : nameFont();
@@ -389,16 +369,16 @@ void ScopeView::paintPlan(QPainter& painter, const scopes_rt::ScopeGraticule& gr
 }
 
 QString ScopeView::readoutAt(const QPointF& position) const {
-    if (!measured())
+    if (!measures(shown_.get()) || trace_.isNull())
         return {};
     const auto g = plan(width(), height());
-    const auto& tables = data_.scopes->tables;
+    const auto& tables = shown_->tables;
     const auto plot = toQRectF(g.plot);
+    if (!plot.contains(position))
+        return {};
     switch (kind_) {
     case scopes::Kind::Waveform:
     case scopes::Kind::Parade: {
-        if (!plot.contains(position))
-            return {};
         const bool parade = kind_ == scopes::Kind::Parade;
         const qreal gap = scopes_rt::kParadeGap;
         const qreal paneWidth = parade ? (plot.width() - gap - gap) / 3 : plot.width();
@@ -411,24 +391,21 @@ QString ScopeView::readoutAt(const QPointF& position) const {
                 return {};
         }
         const auto columns = tables.layout().columns;
+        if (columns == 0)
+            return {};
         const auto column = std::min<std::uint32_t>(
             columns - 1,
             static_cast<std::uint32_t>(std::max<qreal>(0, local) / paneWidth * columns));
         const int code = std::clamp(
             static_cast<int>((plot.bottom() - position.y()) / plot.height() * 1024.0), 0, 1023);
-        // The count of the detail's level: the full level (code >> 1) shifted right by the detail.
-        const auto level = static_cast<std::uint32_t>((code >> 1) >> tables.layout().detail);
+        const auto level = static_cast<std::uint32_t>(code);
         QStringList counts;
-        if (parade) {
+        const auto channels = parade ? std::vector<std::uint32_t>{static_cast<std::uint32_t>(pane)}
+                                     : scopes::waveformChannelList(shownDrawing_.waveformChannels);
+        for (const auto channel : channels)
             counts << tr("%1 %2")
-                          .arg(QString::fromLatin1(kChannelLetters[static_cast<std::size_t>(pane)]))
-                          .arg(tables.waveform(static_cast<std::uint32_t>(pane), column, level));
-        } else {
-            for (const auto channel : scopes::waveformChannelList(waveformChannels_))
-                counts << tr("%1 %2")
-                              .arg(QString::fromLatin1(kChannelLetters[channel]))
-                              .arg(tables.waveform(channel, column, level));
-        }
+                          .arg(QString::fromLatin1(kChannelLetters[channel]))
+                          .arg(tables.waveform(channel, column, level));
         return tr("Column %1 · Code %2 (%3) · Count %4")
             .arg(column)
             .arg(code)
@@ -436,43 +413,43 @@ QString ScopeView::readoutAt(const QPointF& position) const {
             .arg(counts.join(QStringLiteral(" · ")));
     }
     case scopes::Kind::Histogram: {
-        if (!plot.contains(position))
+        const auto channels = scopes::histogramChannelList(shownDrawing_.histogramChannels);
+        if (channels.empty() || !(g.rowHeight > 0.0))
             return {};
-        const auto channels = scopes::histogramChannelList(histogramChannels_);
         const auto row = std::min<std::size_t>(
             channels.size() - 1,
             static_cast<std::size_t>((position.y() - plot.top()) / g.rowHeight));
         const auto channel = channels[row];
         const QString letter = QString::fromLatin1(kChannelLetters[channel]);
         const qreal local = position.x() - plot.left();
-        if (local < scopes_rt::kClipMarkerWidth && clip_.under[channel] != 0)
-            return tr("%1 under (below code 0) · Count %2").arg(letter).arg(clip_.under[channel]);
-        if (local > plot.width() - scopes_rt::kClipMarkerWidth && clip_.over[channel] != 0)
-            return tr("%1 over (above code 1023) · Count %2").arg(letter).arg(clip_.over[channel]);
         const int code = std::clamp(static_cast<int>(local / plot.width() * 1024.0), 0, 1023);
-        return tr("%1 · Code %2 (%3) · Count %4")
-            .arg(letter)
-            .arg(code)
-            .arg(axisLabel(code))
-            .arg(tables.histogram(channel, static_cast<std::uint32_t>(code)));
+        auto text = tr("%1 · Code %2 (%3) · Count %4")
+                        .arg(letter)
+                        .arg(code)
+                        .arg(axisLabel(code))
+                        .arg(tables.histogram(channel, static_cast<std::uint32_t>(code)));
+        // Values outside the axis are drawn in its end bins; the readout names them.
+        if (code == 0 && tables.histogram(channel, render::kScopeCodeUnder) != 0)
+            text += tr(" · Under %1").arg(tables.histogram(channel, render::kScopeCodeUnder));
+        if (code == 1023 && tables.histogram(channel, render::kScopeCodeOver) != 0)
+            text += tr(" · Over %1").arg(tables.histogram(channel, render::kScopeCodeOver));
+        return text;
     }
     case scopes::Kind::Vectorscope: {
-        if (!plot.contains(position))
-            return {};
-        const double fx = (position.x() - plot.left()) / plot.width();
-        const double fy = (position.y() - plot.top()) / plot.height();
-        const double cb = fx - 0.5;
-        const double cr = 0.5 - fy;
-        // The cell of the detail's table under the pointer.
-        const double side = static_cast<double>(tables.layout().cells());
+        const double extent = scopes_rt::kVectorscopeExtent;
+        const double cb = ((position.x() - plot.left()) / plot.width() * 2.0 - 1.0) * extent;
+        const double cr = (1.0 - (position.y() - plot.top()) / plot.height() * 2.0) * extent;
+        const double side = render::kScopeVectorscopeCells;
         const auto cell = [side](const double value) {
             return static_cast<std::uint32_t>(
-                std::clamp(std::floor((value + 0.5) * side), 0.0, side - 1.0));
+                std::clamp(std::floor((value + scopes_rt::kVectorscopeExtent) *
+                                      render::kScopeVectorscopeCellsPerUnit),
+                           0.0, side - 1.0));
         };
         double angle = std::atan2(cr, cb) * 180.0 / std::numbers::pi;
         if (angle < 0)
             angle += 360.0;
-        const double saturation = std::hypot(cb, cr) / 0.5 * 100.0;
+        const double saturation = std::hypot(cb, cr) / runtime::kScopeVectorscopeRing * 100.0;
         return tr("Cb %1 · Cr %2 · %3° · %4% saturation · Count %5")
             .arg(cb, 0, 'f', 3)
             .arg(cr, 0, 'f', 3)
@@ -481,13 +458,11 @@ QString ScopeView::readoutAt(const QPointF& position) const {
             .arg(tables.vectorscope(cell(cb), cell(cr)));
     }
     case scopes::Kind::Chromaticity: {
-        if (!plot.contains(position))
-            return {};
         const double x = (position.x() - plot.left()) / plot.width();
         const double y = (plot.bottom() - position.y()) / plot.height();
         std::uint32_t count = 0;
         if (x < scopes::kChromaticityXMaximum && y < scopes::kChromaticityYMaximum) {
-            const auto cells = tables.layout().cells();
+            constexpr auto cells = render::kScopeChromaticityCells;
             const double side = static_cast<double>(cells);
             const auto xCell = static_cast<std::uint32_t>(x / scopes::kChromaticityXMaximum * side);
             const auto yCell = static_cast<std::uint32_t>(y / scopes::kChromaticityYMaximum * side);

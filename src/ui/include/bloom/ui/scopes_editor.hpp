@@ -1,33 +1,38 @@
 #pragma once
 
-// #724 Scopes: the Scopes panel, editor `bloom.scopes`, "Scopes" (docs/ux/ui-grammar.md, "Scopes
-// panel"). It follows the active Viewer, asks its ScopesController for that frame's count tables,
-// and draws five scopes in collapsible sections: Waveform, Parade, Vectorscope, Histogram and CIE
-// Chromaticity. Measuring happens on task workers behind the controller and the count-to-image
-// mapping on task workers behind the trace renderer; this widget only lays out, labels and paints.
+// #724, #730 Scopes: the Scopes panel, editor `bloom.scopes`, "Scopes" (docs/ux/ui-grammar.md,
+// "Scopes panel"; docs/architecture/scopes.md). It follows the active Viewer and draws the scope
+// tables the frame it shows carries (PreparedPreviewFrame::scopes) in five collapsible panes:
+// Waveform, Parade, Vectorscope, Histogram and CIE Chromaticity. The frame pipeline counts the
+// tables; the panel counts nothing. The count-to-image mapping runs on task workers behind the
+// trace renderer; this widget only lays out and paints.
 //
-// One controller per panel: each panel has its own signal, axis maximum, region and open sections,
-// and its own measure to ask for. The color objects of a signal are shared by every panel through
-// the one ScopesMeasure the composition root builds.
+// The panel is the panes and nothing else: no status, warning or other text, no slider. Its
+// settings are in its header menus (EditorChromeProvider): Signal (Display or Working, the Working
+// axis maximum, Ignore Transparent Pixels), Region (Draw Scope Region, Clear Scope Region) and
+// Scopes (each scope's modes). They are the session's (ScopesRegionStore), shared by every Scopes
+// panel. A pane keeps only its title and collapse arrow.
+//
+// It never dims, fades, blanks or flashes (#730): a frame that does not carry tables of the
+// current settings yet leaves the traces on show as they are; the next frame that does replaces
+// them, each pane in one swap.
 
-#include <bloom/document/ids.hpp>
-#include <bloom/runtime/scope_measure.hpp>
-#include <bloom/runtime/view_adjust.hpp>
+#include <bloom/runtime/preview_frame_scopes.hpp>
+#include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
-#include <bloom/ui/scopes_controller.hpp>
 #include <bloom/ui/scopes_drawing.hpp>
 #include <bloom/ui/scopes_region_store.hpp>
-#include <bloom/ui/scopes_status.hpp>
 
 #include <QPointer>
-#include <QString>
 #include <QWidget>
 
 #include <array>
-#include <functional>
 #include <memory>
 #include <optional>
 
+class QAction;
+class QActionGroup;
+class QMenu;
 class QScrollArea;
 
 namespace bloom::runtime {
@@ -37,180 +42,117 @@ class TaskScheduler;
 namespace bloom::ui {
 
 class EditorRegistry;
-class RamPreviewController;
-class ScopeFillTaps;
 class ScopeView;
 class ScopesTraceRenderer;
 class TaskUiBridge;
 class ViewerEditor;
 
 namespace kit {
-class KButton;
-class KCheckBox;
-class KDropdown;
-class KLabel;
 class KSection;
-class KSlider;
 } // namespace kit
 
-// What the panel measures with. All of it outlives every panel; null (or an empty measure) makes a
-// panel that says scopes are not available in this session.
+// What the panel draws with. All of it outlives every panel.
 struct ScopesServices final {
     runtime::TaskScheduler* scheduler = nullptr;
     TaskUiBridge* bridge = nullptr;
-    PreviewFrameCacheHandle cache;
-    ScopesMeasure measure;
-    // The owner of the RAM preview fill's scope taps, shared by every panel (null: the fill's
-    // frames are measured from their retained pictures only).
-    ScopeFillTaps* fillTaps = nullptr;
-    // The scope regions, the Region toggle and the visible-panel count every panel and Viewer of
-    // the session share. Null: the panel keeps a store of its own (no Viewer then draws it).
-    ScopesRegionStore* regions = nullptr;
-    // The composition's name for the status line; may be empty.
-    std::function<QString(document::ProjectId, document::CompositionId)> compositionName;
+    // The session's scope state, shared by every panel and Viewer. Null: the panel keeps a store
+    // of its own (no Viewer then counts tables for it).
+    ScopesRegionStore* store = nullptr;
 
-    [[nodiscard]] bool usable() const noexcept {
-        return scheduler != nullptr && bridge != nullptr && cache != nullptr &&
-               static_cast<bool>(measure);
-    }
+    [[nodiscard]] bool usable() const noexcept { return scheduler != nullptr && bridge != nullptr; }
 };
 
-class ScopesEditor final : public QWidget {
+class ScopesEditor final : public QWidget, public EditorChromeProvider {
     Q_OBJECT
 
   public:
-    // `ramPreview` (optional) tells the panel when a RAM preview fill is running, so the frames it
-    // retains are measured too.
-    explicit ScopesEditor(const ScopesServices& services,
-                          RamPreviewController* ramPreview = nullptr, QWidget* parent = nullptr);
+    explicit ScopesEditor(const ScopesServices& services, QWidget* parent = nullptr);
     ~ScopesEditor() override;
 
-    // ---- What is measured ----------------------------------------------------------------
-    // The measure the panel asks for now: the open sections' tables (none while hidden), the
-    // signal and axis maximum, the region and Ignore Transparent Pixels.
-    [[nodiscard]] runtime::ScopeMeasureSettings measureSettings() const;
-    [[nodiscard]] runtime::ScopeSignal signal() const noexcept;
-    [[nodiscard]] std::uint32_t axisMaximum() const noexcept;
-    void setSignal(runtime::ScopeSignal signal);
-    void setAxisMaximum(std::uint32_t axisMaximum);
-    [[nodiscard]] bool ignoreTransparent() const noexcept;
-    void setIgnoreTransparent(bool ignore);
-    [[nodiscard]] float brightness() const noexcept;
-    void setBrightness(float gain);
-
-    // ---- The scope region (the seam the Viewer's region gesture connects to) -----------------
-    // The rectangle, in composition pixels, that limits what is measured; nothing: the whole
-    // frame. It is the followed Viewer's composition's region in the shared ScopesRegionStore, so
-    // every panel and Viewer of that composition agree. Setting it measures again. Session state:
-    // never project state, never undoable.
-    void setRegion(const std::optional<runtime::ScopeRegion>& region);
-    [[nodiscard]] const std::optional<runtime::ScopeRegion>& region() const noexcept {
-        return region_;
-    }
-    void clearRegion() { setRegion(std::nullopt); }
-    // The Region toggle: true while the panel asks the active Viewer to take a region drag.
-    void setRegionArmed(bool armed);
-    [[nodiscard]] bool regionArmed() const noexcept { return store_->armed(); }
-    [[nodiscard]] ScopesRegionStore* regionStore() const noexcept { return store_; }
+    [[nodiscard]] EditorChromeSpec& editorChrome() override { return chrome_; }
+    [[nodiscard]] ScopesRegionStore* store() const noexcept { return store_; }
 
     // ---- The followed Viewer -------------------------------------------------------------
     void followViewer(ViewerEditor* viewer);
     [[nodiscard]] ViewerEditor* followedViewer() const noexcept;
-    // The frame the Viewer shows now (its neutral frame; null: none) and the exposure and gamma it
-    // applies. What a followed Viewer's displayedStateChanged() hands to the controller; also the
-    // seam tests drive. A call states that a Viewer is being followed.
-    void showViewerFrame(const PreparedPreviewFrameHandle& frame, runtime::ViewAdjust viewAdjust);
-
-    // A RAM preview fill is running (the panel follows RamPreviewController::stateChanged). While
-    // the panel is shown with a scope open, the frames the fill retains are measured too.
-    void setRamFillRunning(bool running);
-    [[nodiscard]] bool ramFillRunning() const noexcept { return ramFillRunning_; }
+    // The frame the Viewer shows now (its neutral frame; null: none). What a followed Viewer's
+    // displayedStateChanged() hands to the panel; also the seam tests drive.
+    void showViewerFrame(const PreparedPreviewFrameHandle& frame);
+    // The tables the panes were last handed: the newest frame's that carried tables of the
+    // current settings.
+    [[nodiscard]] const std::shared_ptr<const runtime::PreviewFrameScopes>&
+    scopes() const noexcept {
+        return scopes_;
+    }
 
     // ---- Parts ----------------------------------------------------------------------------
-    [[nodiscard]] ScopesController* controller() const noexcept { return controller_; }
     [[nodiscard]] ScopesTraceRenderer* renderer() const noexcept { return renderer_; }
-    [[nodiscard]] ScopesStatusText statusText() const;
     [[nodiscard]] kit::KSection* section(scopes::Kind kind) const noexcept {
         return sections_[static_cast<std::size_t>(kind)];
     }
     [[nodiscard]] ScopeView* view(scopes::Kind kind) const noexcept {
         return views_[static_cast<std::size_t>(kind)];
     }
+    // The header menus: Signal, Region and Scopes.
+    [[nodiscard]] QMenu* signalMenu() const noexcept { return signalMenu_; }
+    [[nodiscard]] QMenu* regionMenu() const noexcept { return regionMenu_; }
+    [[nodiscard]] QMenu* scopesMenu() const noexcept { return scopesMenu_; }
     [[nodiscard]] bool panelShown() const noexcept { return shown_; }
+    // The followed Viewer's composition, whose region the Region menu draws and clears.
+    [[nodiscard]] const std::optional<ScopesRegionStore::Key>& regionKey() const noexcept {
+        return regionKey_;
+    }
     // The narrowest panel that still fits every scope beside the scroll bar.
     [[nodiscard]] QSize minimumSizeHint() const override;
-
-  signals:
-    // Region and Clear Region (and a Viewer's drag, through setRegion) change the region.
-    void regionChanged(const std::optional<bloom::runtime::ScopeRegion>& region);
-    // The Region toggle changed: true asks the active Viewer to take a region drag.
-    void regionArmedChanged(bool armed);
-    // The measure the panel asks for changed.
-    void settingsChanged();
 
   protected:
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
 
   private:
-    void buildHeader(QWidget* parent);
+    void buildHeader();
     void buildSections(QWidget* parent);
-    void applySettings();
-    void onReading();
-    void refreshStatus();
-    void refreshControls();
+    void refreshMenus();
     void refreshViewsActive();
-    void updateRangeFill();
     void adoptPersistence();
     void pickViewer();
     void onViewerState();
-    void adoptRegion();
-    void adoptRegionKey(const ScopesRegionStore::Key& key);
-    [[nodiscard]] std::uint32_t openScopeBits() const;
+    void handOut(std::shared_ptr<const runtime::PreviewFrameScopes> scopes);
     [[nodiscard]] QString persistencePrefix() const;
 
     ScopesServices services_;
-    QPointer<RamPreviewController> ramPreview_;
-    ScopesController* controller_ = nullptr;
+    ScopesRegionStore* store_ = nullptr;
     ScopesTraceRenderer* renderer_ = nullptr;
+    EditorChromeSpec chrome_;
     QPointer<QWidget> followed_;
     QMetaObject::Connection viewerConnection_;
     QMetaObject::Connection viewerDestroyedConnection_;
-    runtime::ViewAdjust viewAdjust_{};
-    bool hasViewer_ = false;
+    std::shared_ptr<const runtime::PreviewFrameScopes> scopes_;
+    // The followed Viewer's composition, whose region the Region menu draws and clears.
+    std::optional<ScopesRegionStore::Key> regionKey_;
     bool shown_ = false;
     bool persistenceAdopted_ = false;
-    bool ramFillRunning_ = false;
-
-    runtime::ScopeSignal signal_ = runtime::ScopeSignal::Display;
-    std::uint32_t axisMaximum_ = 1;
-    bool ignoreTransparent_ = false;
-    float brightness_ = scopes::traceBrightnessGainDefault();
-    std::optional<runtime::ScopeRegion> region_;
-    ScopesRegionStore* store_ = nullptr;
-    ScopesRegionStore::Key regionKey_;
     bool countedVisible_ = false;
 
-    kit::KDropdown* signalDropdown_ = nullptr;
-    kit::KDropdown* axisDropdown_ = nullptr;
-    kit::KButton* regionButton_ = nullptr;
-    kit::KButton* clearRegionButton_ = nullptr;
-    kit::KCheckBox* ignoreCheck_ = nullptr;
-    kit::KSlider* brightnessSlider_ = nullptr;
-    kit::KLabel* statusLine_ = nullptr;
-    kit::KLabel* warningLine_ = nullptr;
-    kit::KLabel* behindLine_ = nullptr;
-    kit::KLabel* linearNote_ = nullptr;
-    kit::KDropdown* waveformChannels_ = nullptr;
-    kit::KDropdown* histogramChannels_ = nullptr;
-    kit::KDropdown* histogramScale_ = nullptr;
+    QMenu* signalMenu_ = nullptr;
+    QMenu* axisMenu_ = nullptr;
+    QMenu* regionMenu_ = nullptr;
+    QMenu* scopesMenu_ = nullptr;
+    QAction* displayAction_ = nullptr;
+    QAction* workingAction_ = nullptr;
+    std::array<QAction*, 5> axisActions_{};
+    QAction* ignoreTransparentAction_ = nullptr;
+    QAction* drawRegionAction_ = nullptr;
+    QAction* clearRegionAction_ = nullptr;
+    std::array<QAction*, 2> waveformActions_{};
+    std::array<QAction*, 3> histogramChannelActions_{};
+    std::array<QAction*, 2> histogramScaleActions_{};
     QScrollArea* scroll_ = nullptr;
     std::array<kit::KSection*, scopes::kKindCount> sections_{};
     std::array<ScopeView*, scopes::kKindCount> views_{};
 };
 
 // Registers `bloom.scopes`. `services` is copied into the factory.
-[[nodiscard]] bool registerScopesEditor(EditorRegistry& registry, const ScopesServices& services,
-                                        RamPreviewController* ramPreview);
+[[nodiscard]] bool registerScopesEditor(EditorRegistry& registry, const ScopesServices& services);
 
 } // namespace bloom::ui

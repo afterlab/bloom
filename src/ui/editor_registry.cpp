@@ -96,21 +96,12 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
             {.id = std::move(id), .displayName = std::move(name), .create = std::move(factory)});
     };
 
-    ScopesServices scopesServices = scopes != nullptr ? *scopes : ScopesServices{};
-    if (!scopesServices.compositionName)
-        scopesServices.compositionName = [&session](const document::ProjectId project,
-                                                    const document::CompositionId composition) {
-            const auto& snapshot = session.snapshot();
-            if (snapshot.project().id() != project)
-                return QString{};
-            const auto* record = snapshot.project().findComposition(composition);
-            return record != nullptr ? QString::fromStdString(record->name()) : QString{};
-        };
+    const ScopesServices scopesServices = scopes != nullptr ? *scopes : ScopesServices{};
 
     return addEditor(
                "bloom.viewer", "Viewer",
                [&session, &previewController, ramPreview, gpuDependencies, viewerPreviews,
-                scopeRegions = scopesServices.regions](QWidget* parent) {
+                scopeRegions = scopesServices.store](QWidget* parent) {
                    auto* viewer = new ViewerEditor(session, previewController, ramPreview, parent);
                    viewer->setPreviewPool(viewerPreviews);
                    viewer->setScopesRegionStore(scopeRegions);
@@ -142,7 +133,7 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
            registerExportEditor(registry, session, exportQueue) &&
            registerMcpServerEditor(registry, mcpServer) &&
            registerProfilerEditor(registry, profilerFeed) &&
-           registerScopesEditor(registry, scopesServices, ramPreview);
+           registerScopesEditor(registry, scopesServices);
 }
 
 } // namespace bloom::ui

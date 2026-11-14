@@ -19,20 +19,25 @@ ScopesTraceRenderer::~ScopesTraceRenderer() {
 }
 
 bool ScopesTraceRenderer::busy() const noexcept {
-    for (const auto& pending : pending_)
-        if (pending)
+    for (std::size_t slot = 0; slot < pending_.size(); ++slot)
+        if (pending_[slot] || waiting_[slot])
             return true;
     return false;
 }
 
 bool ScopesTraceRenderer::request(const scopes::TraceRequest& request) {
-    const auto slot = static_cast<std::size_t>(request.kind);
-    if (pending_[slot]) {
-        pending_[slot]->cancel();
-        pending_[slot].reset();
-    }
     if (bridge_.isShuttingDown())
         return false;
+    const auto slot = static_cast<std::size_t>(request.kind);
+    if (pending_[slot]) {
+        waiting_[slot] = request;
+        return true;
+    }
+    return start(request);
+}
+
+bool ScopesTraceRenderer::start(const scopes::TraceRequest& request) {
+    const auto slot = static_cast<std::size_t>(request.kind);
     runtime::TaskRequest task(
         "Map scope image",
         {.kind = runtime::TaskOwnerKind::PanelRequest,
@@ -44,12 +49,12 @@ bool ScopesTraceRenderer::request(const scopes::TraceRequest& request) {
             using Result = runtime::TaskResult<FinishedHandle>;
             if (context.isCancellationRequested())
                 return Result::cancelled();
-            auto trace = scopes::renderTrace(
+            auto image = scopes::renderTrace(
                 request, [&context] { return context.isCancellationRequested(); });
             if (context.isCancellationRequested())
                 return Result::cancelled();
             return Result::succeeded(std::make_shared<const Finished>(
-                Finished{std::move(trace), request, std::this_thread::get_id()}));
+                Finished{std::move(image), request, std::this_thread::get_id()}));
         });
     if (!submission.accepted())
         return false;
@@ -65,6 +70,7 @@ void ScopesTraceRenderer::clear(const scopes::Kind kind) {
         pending_[slot]->cancel();
         pending_[slot].reset();
     }
+    waiting_[slot].reset();
     finished_[slot].reset();
 }
 
@@ -76,6 +82,11 @@ void ScopesTraceRenderer::poll() {
         if (!taken)
             continue;
         pending_[slot].reset();
+        if (waiting_[slot] && !bridge_.isShuttingDown()) {
+            auto next = std::move(*waiting_[slot]);
+            waiting_[slot].reset();
+            static_cast<void>(start(next));
+        }
         const auto& value = taken->value();
         if (taken->state() != runtime::TaskState::Succeeded || !value || !*value)
             continue;

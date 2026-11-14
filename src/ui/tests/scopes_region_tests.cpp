@@ -16,6 +16,7 @@
 //   * the region's edges snap to device-pixel centers at scales 1, 1.5 and 2.
 
 #include "await_qt.hpp"
+#include <QAction>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
@@ -73,6 +74,25 @@ using bloom::test_support::awaitFailureCount;
 using bloom::test_support::awaitQtCondition;
 using namespace std::chrono_literals;
 using Region = runtime::ScopeRegion;
+
+// The Region header menu of a Scopes panel.
+void armInPanel(ui::ScopesEditor& panel) {
+    if (auto* draw = panel.findChild<QAction*>(QStringLiteral("scopesDrawRegion")))
+        draw->setChecked(true);
+}
+[[nodiscard]] bool armedInPanel(const ui::ScopesEditor& panel) {
+    const auto* draw = panel.findChild<QAction*>(QStringLiteral("scopesDrawRegion"));
+    return draw != nullptr && draw->isChecked();
+}
+void clearInPanel(ui::ScopesEditor& panel) {
+    if (auto* clear = panel.findChild<QAction*>(QStringLiteral("scopesClearRegion")))
+        clear->trigger();
+}
+// The region of the panel's followed composition.
+[[nodiscard]] std::optional<Region> panelRegion(const ui::ScopesEditor& panel) {
+    return panel.regionKey() && panel.store() != nullptr ? panel.store()->region(*panel.regionKey())
+                                                         : std::nullopt;
+}
 
 class Expectations final {
   public:
@@ -175,7 +195,7 @@ struct Fixture final {
         viewer.resize(400, 300);
         viewer.show();
         ui::ScopesServices services;
-        services.regions = &store;
+        services.store = &store;
         panel = std::make_unique<ui::ScopesEditor>(services);
         panel->show();
         panel->followViewer(&viewer);
@@ -243,7 +263,7 @@ struct SavedFixture final {
         viewer->resize(400, 300);
         viewer->show();
         ui::ScopesServices services;
-        services.regions = &store;
+        services.store = &store;
         panel = std::make_unique<ui::ScopesEditor>(services);
         panel->show();
         panel->followViewer(viewer.get());
@@ -359,25 +379,25 @@ void testDrawAndEscape(Expectations& e) {
     drag(f.viewer, {10.4, 12.7}, {30.3, 40.4});
     e.expect(!f.store.region(key), "not armed: a drag draws nothing");
 
-    f.panel->setRegionArmed(true);
+    armInPanel(*f.panel);
     drag(f.viewer, {10.4, 12.7}, {30.3, 40.4});
     e.expect(f.store.region(key) == wholePixels(10.4, 12.7, 30.3, 40.4) &&
                  f.store.region(key) == Region{10, 12, 21, 29},
              "armed: a drag draws a whole-pixel rectangle, got " + text(f.store.region(key)));
-    e.expect(!f.store.armed() && !f.panel->regionArmed(), "arming clears after the drag");
-    e.expect(f.panel->region() == f.store.region(key) &&
-                 f.panel->measureSettings().region == f.store.region(key),
+    e.expect(!f.store.armed() && !armedInPanel(*f.panel), "arming clears after the drag");
+    e.expect(panelRegion(*f.panel) == f.store.region(key) &&
+                 f.store.settings(*f.panel->regionKey()).region == f.store.region(key),
              "the panel's region and measure settings carry it");
     e.expect(f.viewer.scopesRegionDrawnForTest() == f.store.region(key), "the Viewer draws it");
 
     // A drag drawn right to left, bottom to top gives the same rectangle.
-    f.panel->clearRegion();
-    f.panel->setRegionArmed(true);
+    clearInPanel(*f.panel);
+    armInPanel(*f.panel);
     drag(f.viewer, {30.3, 40.4}, {10.4, 12.7});
     e.expect(f.store.region(key) == Region{10, 12, 21, 29}, "the drag direction does not matter");
 
     // Escape cancels a drag in flight and leaves the previous region.
-    f.panel->setRegionArmed(true);
+    armInPanel(*f.panel);
     mouse(f.viewer, QEvent::MouseButtonPress, {40.2, 41.1});
     mouse(f.viewer, QEvent::MouseMove, {55.5, 58.5});
     e.expect(f.viewer.scopesRegionGestureForTest() &&
@@ -391,16 +411,16 @@ void testDrawAndEscape(Expectations& e) {
              "Escape cancels the drag and leaves the previous region");
     e.expect(f.store.armed(), "a cancelled drag keeps the toggle armed");
     escape(f.viewer);
-    e.expect(!f.store.armed() && !f.panel->regionArmed(), "Escape with no drag disarms the toggle");
+    e.expect(!f.store.armed() && !armedInPanel(*f.panel), "Escape with no drag disarms the toggle");
 
     // Clear Region removes it.
-    f.panel->clearRegion();
+    clearInPanel(*f.panel);
     e.expect(!f.store.region(key) && !f.viewer.scopesRegionDrawnForTest(),
              "Clear Region removes it");
 
     // An empty result is ignored and keeps the toggle armed: a click, and a drag outside the frame.
-    f.panel->setRegion(Region{5, 5, 8, 8});
-    f.panel->setRegionArmed(true);
+    f.store.setRegion(*f.panel->regionKey(), Region{5, 5, 8, 8});
+    armInPanel(*f.panel);
     mouse(f.viewer, QEvent::MouseButtonPress, {30.0, 30.0});
     mouse(f.viewer, QEvent::MouseButtonRelease, {30.0, 30.0});
     e.expect(f.store.region(key) == Region{5, 5, 8, 8} && f.store.armed(),
@@ -502,7 +522,7 @@ void testMoveResizeClip(Expectations& e) {
     e.expect(frame != nullptr && f.viewer.mappingForTest()->compositionFormat.width() == kSize,
              "the mapping is in full composition pixels at half resolution");
     moveAndResize(e, f, "half resolution");
-    f.panel->setRegionArmed(true);
+    armInPanel(*f.panel);
     drag(f.viewer, {10.4, 12.7}, {30.3, 40.4});
     e.expect(f.store.region(f.key()) == Region{10, 12, 21, 29},
              "a drawn rectangle is the same at half resolution");
@@ -542,7 +562,7 @@ void testOtherGestures(Expectations& e) {
     const auto roi = f.controller.regionOfInterest();
     e.expect(roi.has_value() && f.store.region(key) == Region{40, 40, 20, 20},
              "Ctrl+Alt is the region of interest's drag, even over the scope region");
-    f.panel->setRegionArmed(true);
+    armInPanel(*f.panel);
     drag(f.viewer, {2.0, 2.0}, {10.0, 10.0});
     drag(f.viewer, {5.0, 5.0}, {9.0, 9.0});
     e.expect(f.controller.regionOfInterest() == roi, "scope region edits leave the ROI unchanged");
@@ -556,7 +576,7 @@ void testPerCompositionAndVisibility(Expectations& e) {
     e.expect(f.ready(), "the preview is ready");
     const auto first = f.key();
     const ui::ScopesRegionStore::Key second{first.project, document::CompositionId::fromRaw(2)};
-    f.panel->setRegion(Region{4, 6, 10, 12});
+    f.store.setRegion(*f.panel->regionKey(), Region{4, 6, 10, 12});
     e.expect(f.store.region(first) == Region{4, 6, 10, 12} && !f.store.region(second),
              "the region belongs to its composition");
 
@@ -573,10 +593,10 @@ void testPerCompositionAndVisibility(Expectations& e) {
              "both Viewers of one composition draw it");
     // The overlay is on the picture: the grab differs from the grab with no region.
     const QImage withRegion = other.grab().toImage();
-    f.panel->clearRegion();
+    clearInPanel(*f.panel);
     const QImage without = other.grab().toImage();
     e.expect(withRegion != without, "the overlay changes the Viewer's picture");
-    f.panel->setRegion(Region{4, 6, 10, 12});
+    f.store.setRegion(*f.panel->regionKey(), Region{4, 6, 10, 12});
     e.expect(other.grab().toImage() == withRegion, "and the same region draws the same overlay");
 
     // Another composition keeps its own region, and the panel follows it.
@@ -585,15 +605,15 @@ void testPerCompositionAndVisibility(Expectations& e) {
     e.expect(awaitQtCondition("the Viewer follows to the second composition's region key",
                               [&] { return f.viewer.scopesRegionKey() == second; }) &&
                  awaitQtCondition("the panel drops the region",
-                                  [&] { return !f.panel->region().has_value(); }),
+                                  [&] { return !panelRegion(*f.panel).has_value(); }),
              "the panel follows the Viewer to the other composition, which has no region");
-    f.panel->setRegion(Region{30, 30, 4, 4});
+    f.store.setRegion(*f.panel->regionKey(), Region{30, 30, 4, 4});
     e.expect(f.store.region(first) == Region{4, 6, 10, 12} &&
                  f.store.region(second) == Region{30, 30, 4, 4},
              "two compositions keep separate regions");
     e.expect(f.session.setComposition(first.composition), "back to the first composition");
     e.expect(awaitQtCondition("the panel follows back to the first composition's region",
-                              [&] { return f.panel->region() == Region{4, 6, 10, 12}; }),
+                              [&] { return panelRegion(*f.panel) == Region{4, 6, 10, 12}; }),
              "the panel follows back to the first composition's region");
     e.expect(f.ready(), "the preview is ready again");
     other.hide();
@@ -625,17 +645,27 @@ void testNotProjectState(Expectations& e) {
     const auto history = f.commands.size();
     const bool canUndo = f.session.canUndo();
     const auto frame = f.controller.state().frame;
-    f.panel->setRegionArmed(true);
+    armInPanel(*f.panel);
     drag(f.viewer, {10.4, 12.7}, {30.3, 40.4});
     drag(f.viewer, {20.0, 25.0}, {30.0, 30.0});
     drag(f.viewer, {41.0, 53.0}, {45.0, 55.0});
-    f.panel->clearRegion();
-    f.panel->setRegion(Region{1, 1, 5, 5});
+    clearInPanel(*f.panel);
+    f.store.setRegion(*f.panel->regionKey(), Region{1, 1, 5, 5});
     QCoreApplication::processEvents();
     e.expect(f.session.snapshot().revision() == revision, "the project's revision is unchanged");
     e.expect(f.commands.size() == history && f.session.canUndo() == canUndo,
              "no undo step is added");
-    e.expect(f.ready() && f.controller.state().frame == frame, "the preview is not rendered again");
+    // The frame is prepared again only to count its tables in the new region (#730: the scopes
+    // are computed in the Viewer's frame pipeline); the picture is the project's as it was.
+    e.expect(awaitQtCondition("the shown frame counts the new region",
+                              [&] {
+                                  const auto& shown = f.controller.state().frame;
+                                  return shown != nullptr && shown->scopes() != nullptr &&
+                                         shown->scopes()->settings.region == Region{1, 1, 5, 5};
+                              }) &&
+                 frame != nullptr &&
+                 f.controller.state().frame->processIdentity() == frame->processIdentity(),
+             "the frame counts the new region and its picture is unchanged");
     // Undo does not touch the region either.
     (void)f.session.undo();
     e.expect(f.store.region(f.key()) == Region{1, 1, 5, 5}, "undo leaves the region as it was");
@@ -660,7 +690,7 @@ void testRegionIsNotSaved(Expectations& e) {
     e.expect(!bytesNone.empty() && bytesNone == fileBytes(again),
              "two saves of the unchanged project are byte-identical");
 
-    f.panel->setRegionArmed(true);
+    armInPanel(*f.panel);
     drag(*f.viewer, {10.4, 12.7}, {30.3, 40.4});
     e.expect(f.store.region({f.session->snapshot().project().id(), f.session->compositionId()}) ==
                  Region{10, 12, 21, 29},

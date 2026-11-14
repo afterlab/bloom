@@ -1,19 +1,22 @@
-// #724 Scopes: the Scopes panel over genuine CPU reference frames; no device and no Viewer.
+// #724, #730 Scopes: the Scopes panel over genuine CPU reference frames; no device and no Viewer.
 //
 // Asserted:
-//   * `bloom.scopes`, "Scopes", is registered like every editor and shows in the area's switcher;
-//   * the five sections, in order, collapse and persist per panel area; a collapsed section's
-//     scope is left out of the measure (Waveform and Parade share a table) and a hidden panel
-//     measures nothing;
-//   * the status line states what was measured and why nothing is shown, and "Behind" names the
-//     measured frame while another frame's tables are on show;
-//   * a changed signal, axis maximum, Ignore Transparent Pixels or region measures again, and a
-//     Brightness change maps again and does not;
-//   * the scope region seam: set, clear, arm, and the signals the Viewer's gesture will use;
-//   * no measuring and no mapping runs on the interface thread; a scope with no frame draws an
-//     empty graticule; the hover readout names the value and the count of a cell;
-//   * during a RAM preview fill, with the panel shown, the frames the cache retains are measured.
-// The status line's every item, warning and reason is asserted as a pure function here too.
+//   * `bloom.scopes`, "Scopes", is registered like every editor; the area hosts its header menus
+//     (Signal, Region, Scopes) and the panel holds nothing but its five collapsible panes: no
+//     status, warning or other text, no slider, dropdown, check box or button;
+//   * the header menus write the session's settings: Signal (Display, Working, the Working axis
+//     maximum, Ignore Transparent Pixels), Region (Draw and Clear Scope Region, disabled with no
+//     Viewer) and each scope's modes, which draw again from the same tables;
+//   * the panel draws the tables the frame the Viewer shows carries, when they were counted under
+//     the session's settings; a shown panel makes requests ask for every table, a hidden one for
+//     none;
+//   * #730, never dim: a frame's new tables leave the trace on show untouched, at full strength,
+//     until the new image replaces it in one swap; a frame without tables of the current settings
+//     changes nothing; every picture painted between two valid traces is one of the two;
+//   * the panel's layout never changes while frames change, and a frame with nothing to count
+//     draws the empty graticule silently;
+//   * mapping runs on a task worker; the hover readout names the value and the count of a cell;
+//   * the sections persist per panel area.
 
 #include "await_qt.hpp"
 #include <bloom/core/color.hpp>
@@ -26,6 +29,7 @@
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
+#include <bloom/runtime/preview_frame_scopes.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/scope_measure.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -33,21 +37,27 @@
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/panel_switcher.hpp>
 #include <bloom/ui/kit/section.hpp>
+#include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/scopes_editor.hpp>
-#include <bloom/ui/scopes_status.hpp>
+#include <bloom/ui/scopes_region_store.hpp>
 #include <bloom/ui/scopes_trace_renderer.hpp>
 #include <bloom/ui/scopes_view.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
+#include <QAction>
 #include <QApplication>
+#include <QLabel>
+#include <QMenu>
 #include <QScrollArea>
 #include <QSettings>
 #include <QTemporaryDir>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -78,7 +88,6 @@ using bloom::test_support::awaitQtCondition;
 using bloom::ui::PreviewFrameCache;
 using bloom::ui::PreviewFrameCacheKey;
 using bloom::ui::ScopesEditor;
-using bloom::ui::ScopesReading;
 using namespace std::chrono_literals;
 
 class Expectations final {
@@ -112,12 +121,13 @@ constexpr auto kSlot = document::LayerSlotId::fromRaw(30);
     return *value;
 }
 
-[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan> oneSolidPlan() {
+[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
+oneSolidPlan(const Color4d color = Color4d{1.0, 0.0, 0.0, 1.0}) {
     const auto compositionFormat = format();
     std::vector<runtime::CompiledOperation> operations;
     operations.emplace_back(
         runtime::CompiledSolid{kSolidNode,
-                               {document::ParameterId::fromRaw(40), Color4d{1.0, 0.0, 0.0, 1.0}},
+                               {document::ParameterId::fromRaw(40), color},
                                {document::ParameterId::fromRaw(kSolidNode.value() * 100 + 1000),
                                 static_cast<double>(compositionFormat.width())},
                                {document::ParameterId::fromRaw(kSolidNode.value() * 100 + 1001),
@@ -146,7 +156,8 @@ constexpr auto kSlot = document::LayerSlotId::fromRaw(30);
 
 [[nodiscard]] std::shared_ptr<const PreparedPreviewFrame>
 cpuFrame(const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan,
-         const std::uint64_t generation, const std::int64_t time) {
+         const std::uint64_t generation, const std::int64_t time,
+         const std::shared_ptr<const runtime::PreviewScopeRequest>& scopes = nullptr) {
     const runtime::CpuCompositionEvaluator evaluator;
     const auto evaluated = evaluator.evaluate(
         plan,
@@ -175,220 +186,139 @@ cpuFrame(const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan,
     const auto prepared = PreparedPreviewFrame::create(generation, display.frame());
     if (!prepared.has_value())
         return nullptr;
-    return std::make_shared<const PreparedPreviewFrame>(*prepared);
-}
-
-using render::Rgba32f;
-
-[[nodiscard]] Rgba32f px(const float r, const float g, const float b, const float a = 1.0F) {
-    const auto result = Rgba32f::fromPremultiplied(r, g, b, a);
-    if (!result)
-        throw std::logic_error("invalid fixture pixel");
-    return *result.value();
+    if (scopes == nullptr)
+        return std::make_shared<const PreparedPreviewFrame>(*prepared);
+    // The tables the frame's own preparation counts (the CPU route's worker does this).
+    auto tables = runtime::measurePreviewFrameScopesCpu(*scopes, prepared->desiredIdentity(),
+                                                        *evaluated.frame(), {});
+    return std::make_shared<const PreparedPreviewFrame>(prepared->withScopes(std::move(tables)));
 }
 
 constexpr std::array<scopes::Kind, scopes::kKindCount> kKinds{
     scopes::Kind::Waveform, scopes::Kind::Parade, scopes::Kind::Vectorscope,
     scopes::Kind::Histogram, scopes::Kind::Chromaticity};
 
-// ---- The status line ------------------------------------------------------------------------
-
-// The frame every status fixture is cloned from: a real source, so its plan names the frame rate.
-std::shared_ptr<const PreparedPreviewFrame> gBaseFrame;
-
-[[nodiscard]] ui::PreviewScopeSource sourceAt(const std::int64_t seconds) {
-    ui::PreviewScopeSource source{gBaseFrame->desiredIdentity(), gBaseFrame->processIdentity(),
-                                  runtime::PreviewDisplayProvider::CpuReference};
-    source.identity.time = bloom::core::RationalTime::fromInteger(seconds);
-    source.identity.displayName = "sRGB";
-    source.identity.viewName = "Standard";
-    return source;
+[[nodiscard]] bool tracesSettled(const ScopesEditor& panel) {
+    return panel.renderer() != nullptr && !panel.renderer()->busy();
 }
 
-[[nodiscard]] ui::PreviewScopeSidecarHandle
-sidecarFor(const runtime::ScopeMeasureSettings& settings, const runtime::ScopeRoute route) {
-    std::vector<Rgba32f> pixels(4, px(0.5F, 0.5F, 0.5F));
-    auto sidecar = std::make_shared<ui::PreviewScopeSidecar>();
-    sidecar->identity.settings = settings;
-    runtime::ScopeMeasureInput input;
-    input.signal = pixels;
-    input.width = 4;
-    input.height = 1;
-    input.areaWidth = 4;
-    input.areaHeight = 1;
-    input.scopes = render::kScopeTableHistogram;
-    input.luma = runtime::scopeLuma(0.2126F, 0.7152F, 0.0722F);
-    sidecar->tables = runtime::ScopeTables::pack(*runtime::measureScopesCpu(input), route);
-    sidecar->area = {0, 0, 4, 1};
-    return sidecar;
+// What every scope paints now.
+[[nodiscard]] std::vector<QImage> grabAll(ScopesEditor& panel) {
+    std::vector<QImage> pictures;
+    for (const auto kind : kKinds)
+        pictures.push_back(panel.view(kind)->grab().toImage());
+    return pictures;
 }
 
-[[nodiscard]] ui::ScopesStatusInput readyInput() {
-    ui::ScopesStatusInput input;
-    input.hasViewer = true;
-    input.settings.scopes = render::kScopeTableHistogram;
-    input.compositionName = [](bloom::document::ProjectId, bloom::document::CompositionId) {
-        return QStringLiteral("Titles");
-    };
-    input.reading.state = ui::ScopesReading::State::Ready;
-    input.reading.shown = sourceAt(2);
-    input.reading.measured = sourceAt(2);
-    input.reading.scopes = sidecarFor(input.settings, runtime::ScopeRoute::Cpu);
-    return input;
+[[nodiscard]] std::vector<int> heights(ScopesEditor& panel) {
+    std::vector<int> values;
+    for (const auto kind : kKinds)
+        values.push_back(panel.view(kind)->height()), values.push_back(panel.view(kind)->width());
+    values.push_back(panel.sizeHint().height());
+    return values;
 }
 
-void testStatusItems(Expectations& e) {
-    auto input = readyInput();
-    auto status = ui::describeScopesStatus(input);
-    const auto has = [&](const QString& text) { return status.line.contains(text); };
-    e.expect(status.measured && has("Titles") && has("frame 48") && has("2.000 s"),
-             "the composition and the frame time measured: " + status.line.toStdString());
-    e.expect(has("Display sRGB / Standard"), "the display and view");
-    e.expect(has("Resolution Full"), "the resolution");
-    e.expect(has("CPU") && !has("GPU"), "the route");
-    e.expect(has("4 pixels counted"), "the pixels counted");
-    e.expect(!has("Region") && !has("Live detail") && status.warnings.isEmpty() &&
-                 status.behind.isEmpty(),
-             "no region, no warning and no Behind on a plain frame");
-
-    // Live tables say so; full detail says nothing extra.
-    input.reading.detail = ui::kLiveDetail;
-    status = ui::describeScopesStatus(input);
-    e.expect(status.line.contains("Live detail"),
-             "live tables are labeled: " + status.line.toStdString());
-    input.reading.detail = 0;
-
-    // The route and its reason.
-    input.reading.scopes = sidecarFor(input.settings, runtime::ScopeRoute::Gpu);
-    status = ui::describeScopesStatus(input);
-    e.expect(status.line.contains("GPU") && !status.line.contains("CPU"),
-             "a device frame says GPU");
-    auto withNote = std::make_shared<ui::PreviewScopeSidecar>(*input.reading.scopes);
-    withNote->note = "no device";
-    input.reading.scopes = withNote;
-    status = ui::describeScopesStatus(input);
-    e.expect(status.line.contains("no device"), "the reason the device did not count is kept");
-
-    // The measured rectangle: a region and a Viewer region of interest.
-    input = readyInput();
-    input.settings.region = runtime::ScopeRegion{4, 5, 6, 7};
-    auto regioned = std::make_shared<ui::PreviewScopeSidecar>(*input.reading.scopes);
-    regioned->identity.settings.region = input.settings.region;
-    regioned->area = {4, 5, 6, 7};
-    input.reading.scopes = regioned;
-    status = ui::describeScopesStatus(input);
-    e.expect(status.line.contains("Region 4, 5, 6 x 7"), "the region's rectangle");
-    input = readyInput();
-    const auto window = render::ImageWindow::create(1, 2, 3, 4);
-    input.reading.measured->identity.roi = *window.value();
-    status = ui::describeScopesStatus(input);
-    e.expect(status.line.contains("Region of interest"), "the Viewer's region of interest");
-
-    // The Working signal names the working space, not a display.
-    input = readyInput();
-    auto working = runtime::ScopeMeasureSettings{};
-    working.signal = runtime::ScopeSignal::Working;
-    input.settings = working;
-    input.reading.scopes = sidecarFor(working, runtime::ScopeRoute::Cpu);
-    status = ui::describeScopesStatus(input);
-    e.expect(status.line.contains("Working space") && !status.line.contains("Display"),
-             "the Working signal says so");
-
-    // A proxy resolution is named.
-    input = readyInput();
-    status = ui::describeScopesStatus(input);
-    e.expect(status.line.contains("Full"), "an unreduced frame is Full");
+[[nodiscard]] QAction* action(const ScopesEditor& panel, const char* name) {
+    return panel.findChild<QAction*>(QString::fromLatin1(name));
 }
 
-void testStatusWarnings(Expectations& e) {
-    auto input = readyInput();
-    input.viewAdjust = runtime::ViewAdjust{.exposure = 1.5, .gamma = 1.0};
-    auto status = ui::describeScopesStatus(input);
-    e.expect(status.warnings.size() == 1 && status.warnings[0].contains("Exposure"),
-             "exposure that is not neutral warns");
-    input.viewAdjust = runtime::ViewAdjust{.exposure = 0.0, .gamma = 2.2};
-    status = ui::describeScopesStatus(input);
-    e.expect(status.warnings.size() == 1 && status.warnings[0].contains("Gamma"),
-             "gamma that is not neutral warns");
-    input.viewAdjust = {};
-    input.reading.shown->identity.showLook = false;
-    status = ui::describeScopesStatus(input);
-    e.expect(status.warnings.size() == 1 && status.warnings[0].contains("Look off"),
-             "a look that is off warns");
-    input.reading.shown->identity.showLook = true;
-    input.reading.shown->identity.channelInspection =
-        runtime::ChannelInspection{bloom::document::NodeId::fromRaw(1), "out", {"R"}};
-    status = ui::describeScopesStatus(input);
-    e.expect(status.warnings.size() == 1 && status.warnings[0].contains("Channel"),
-             "a channel shown warns");
-    input.reading.shown->identity.channelInspection.reset();
-    input.reading.shown->identity.isolation = {bloom::document::LayerId::fromRaw(3)};
-    status = ui::describeScopesStatus(input);
-    e.expect(status.warnings.size() == 1 && status.warnings[0].contains("Isolation"),
-             "isolation warns");
-    // Every setting at once names each.
-    input.viewAdjust = runtime::ViewAdjust{.exposure = -1.0, .gamma = 1.8};
-    input.reading.shown->identity.showLook = false;
-    input.reading.shown->identity.channelInspection =
-        runtime::ChannelInspection{bloom::document::NodeId::fromRaw(1), "out", {"A"}};
-    status = ui::describeScopesStatus(input);
-    e.expect(status.warnings.size() == 5, "every setting that differs from the export is named");
-    // The Working signal is taken before the display: exposure, gamma and the look do not apply.
-    auto working = runtime::ScopeMeasureSettings{};
-    working.signal = runtime::ScopeSignal::Working;
-    input.settings = working;
-    input.reading.scopes = sidecarFor(working, runtime::ScopeRoute::Cpu);
-    status = ui::describeScopesStatus(input);
-    e.expect(status.warnings.size() == 2, "the Working signal warns only of channel and isolation");
+void testRegistrationAndChrome(Expectations& e, const ui::ScopesServices& services) {
+    ui::EditorRegistry registry;
+    e.expect(ui::registerScopesEditor(registry, services) &&
+                 !ui::registerScopesEditor(registry, services),
+             "Scopes registers once");
+    e.expect(registry.editors().size() == 1 && registry.editors().front().id == "bloom.scopes" &&
+                 registry.editors().front().displayName == QStringLiteral("Scopes"),
+             "the editor is bloom.scopes, named Scopes");
+    ui::EditorArea area(registry, "bloom.scopes", QString{});
+    auto* picker = area.findChild<kit::KPanelSwitcher*>(QStringLiteral("editorTypePicker"));
+    e.expect(picker != nullptr && picker->findData(QStringLiteral("bloom.scopes")) >= 0,
+             "the area's switcher offers Scopes");
+    auto* panel = area.findChild<ScopesEditor*>(QStringLiteral("scopesEditor"));
+    e.expect(panel != nullptr, "the area hosts a ScopesEditor");
+    for (const char* name :
+         {"scopesSignalMenuButton", "scopesRegionMenuButton", "scopesModesMenuButton"})
+        e.expect(area.findChild<QToolButton*>(QString::fromLatin1(name)) != nullptr,
+                 std::string("the area's header holds the menu button ") + name);
+    if (panel == nullptr)
+        return;
+    // The only buttons are the panes' collapse arrows (a section's Reset is never shown).
+    bool onlyArrows = true;
+    for (auto* button : panel->findChildren<kit::KButton*>())
+        onlyArrows =
+            onlyArrows &&
+            (button->objectName() == QStringLiteral("kSectionChevron") ||
+             (button->objectName() == QStringLiteral("kSectionReset") && button->isHidden()));
+    e.expect(panel->findChildren<kit::KSlider*>().isEmpty() &&
+                 panel->findChildren<kit::KDropdown*>().isEmpty() &&
+                 panel->findChildren<kit::KCheckBox*>().isEmpty() && onlyArrows,
+             "the panel holds no slider, dropdown or check box, and no button but the collapse "
+             "arrows");
+    const QStringList titles{QStringLiteral("Waveform"), QStringLiteral("Parade"),
+                             QStringLiteral("Vectorscope"), QStringLiteral("Histogram"),
+                             QStringLiteral("CIE Chromaticity")};
+    bool onlyTitles = true;
+    for (auto* label : panel->findChildren<QLabel*>())
+        onlyTitles = onlyTitles && (label->text().isEmpty() || titles.contains(label->text()));
+    for (auto* label : panel->findChildren<kit::KLabel*>())
+        onlyTitles = onlyTitles && (label->text().isEmpty() || titles.contains(label->text()));
+    e.expect(onlyTitles, "the only text in the panel is the five pane titles");
 }
 
-void testStatusBehindAndReasons(Expectations& e) {
-    auto input = readyInput();
-    input.reading.shown = sourceAt(5);
-    input.reading.state = ui::ScopesReading::State::Measuring;
-    input.reading.behind = true;
-    auto status = ui::describeScopesStatus(input);
-    e.expect(status.behind.startsWith("Behind") && status.behind.contains("2.000 s") &&
-                 status.behind.contains("Titles"),
-             "Behind names the measured frame: " + status.behind.toStdString());
-    e.expect(status.line.contains("2.000 s") && !status.line.contains("5.000 s"),
-             "the line describes the frame the scopes are of");
-    input.reading.behind = false;
-    input.reading.state = ui::ScopesReading::State::Ready;
-    e.expect(ui::describeScopesStatus(input).behind.isEmpty(), "no Behind when the frames agree");
-
-    // The reasons nothing is shown.
-    ui::ScopesStatusInput none;
-    none.available = false;
-    e.expect(ui::describeScopesStatus(none).line.contains("not available"), "no controller");
-    none.available = true;
-    e.expect(ui::describeScopesStatus(none).line.contains("No Viewer"), "no Viewer");
-    none.hasViewer = true;
-    none.hidden = true;
-    e.expect(ui::describeScopesStatus(none).line.contains("hidden"), "a hidden panel");
-    none.hidden = false;
-    none.measuring = false;
-    e.expect(ui::describeScopesStatus(none).line.contains("collapsed"), "every section collapsed");
-    none.measuring = true;
-    e.expect(ui::describeScopesStatus(none).line.contains("no frame"), "a Viewer with no frame");
-    none.reading.shown = sourceAt(0);
-    none.reading.state = ui::ScopesReading::State::Measuring;
-    e.expect(ui::describeScopesStatus(none).line.contains("Measuring"), "the first measure");
-    none.reading.state = ui::ScopesReading::State::Failed;
-    none.reading.message = "no color config";
-    e.expect(ui::describeScopesStatus(none).line == "no color config", "a failure says why");
-    none.reading.state = ui::ScopesReading::State::Ready;
-    auto empty = std::make_shared<ui::PreviewScopeSidecar>();
-    none.reading.scopes = empty;
-    none.reading.measured = sourceAt(0);
-    e.expect(ui::describeScopesStatus(none).line.contains("outside the picture"),
-             "a region outside the picture");
+void testHeaderMenus(Expectations& e, ScopesEditor& panel, ui::ScopesRegionStore& store) {
+    auto* display = action(panel, "scopesSignalDisplay");
+    auto* working = action(panel, "scopesSignalWorking");
+    auto* axis = panel.findChild<QMenu*>(QStringLiteral("scopesAxisMaximumMenu"));
+    e.expect(display != nullptr && working != nullptr && axis != nullptr && display->isChecked() &&
+                 !working->isChecked() && !axis->isEnabled(),
+             "Signal: Display is checked and the Working axis maximum is disabled");
+    if (working != nullptr)
+        working->trigger();
+    e.expect(store.signal() == runtime::ScopeSignal::Working && working->isChecked() &&
+                 axis->isEnabled(),
+             "choosing Working writes the session's signal and enables the axis maximum");
+    if (auto* four = action(panel, "scopesAxisMaximum4"))
+        four->trigger();
+    e.expect(store.workingAxisMaximum() == 4U &&
+                 store.settings({kProjectId, kCompositionId}).axisMaximum == 4U,
+             "Working Axis Maximum 4 is the Working signal's M");
+    if (display != nullptr)
+        display->trigger();
+    e.expect(store.signal() == runtime::ScopeSignal::Display &&
+                 store.settings({kProjectId, kCompositionId}).axisMaximum == 1U,
+             "back to Display, whose M is 1");
+    auto* ignore = action(panel, "scopesIgnoreTransparent");
+    e.expect(ignore != nullptr && ignore->isCheckable() && !ignore->isChecked(),
+             "Ignore Transparent Pixels is a check item, off");
+    if (ignore != nullptr)
+        ignore->trigger();
+    e.expect(store.ignoreTransparent(), "it writes the session's setting");
+    if (ignore != nullptr)
+        ignore->trigger();
+    auto* draw = action(panel, "scopesDrawRegion");
+    auto* clear = action(panel, "scopesClearRegion");
+    e.expect(draw != nullptr && draw->isCheckable() && !draw->isEnabled() && clear != nullptr &&
+                 !clear->isEnabled(),
+             "Draw and Clear Scope Region are disabled with no Viewer to draw in");
+    if (auto* luma = action(panel, "scopesWaveformLuma"))
+        luma->trigger();
+    e.expect(store.drawing().waveformChannels == scopes::WaveformChannels::Luma &&
+                 panel.view(scopes::Kind::Waveform)->currentRequest().waveformChannels ==
+                     scopes::WaveformChannels::Luma,
+             "Scopes > Waveform > Luma draws the Waveform's luma");
+    if (auto* rgb = action(panel, "scopesWaveformRgb"))
+        rgb->trigger();
+    if (auto* logarithmic = action(panel, "scopesHistogramLogarithmic"))
+        logarithmic->trigger();
+    e.expect(store.drawing().histogramScale == scopes::HistogramScale::Logarithmic &&
+                 panel.view(scopes::Kind::Histogram)->currentRequest().histogramScale ==
+                     scopes::HistogramScale::Logarithmic,
+             "Scopes > Histogram > Logarithmic draws a logarithmic Histogram");
+    if (auto* linear = action(panel, "scopesHistogramLinear"))
+        linear->trigger();
+    e.expect(store.drawing() == ui::ScopesRegionStore::Drawing{},
+             "the modes are back to their defaults");
 }
-
-struct Measured final {
-    std::atomic<int> started{0};
-    std::atomic<bool> onInterfaceThread{false};
-};
 
 } // namespace
 
@@ -411,128 +341,35 @@ int main(int argc, char** argv) {
                                                                       .diagnosticsPerTask = 8,
                                                                       .groupRegistryCapacity = 8}};
         ui::TaskUiBridge bridge{scheduler, nullptr, 1ms};
-        auto cache = std::make_shared<PreviewFrameCache>(std::size_t{1} << 28);
-
-        const auto production = ui::makeScopesMeasure({});
-        const auto measured = std::make_shared<Measured>();
-        const auto interfaceThread = std::this_thread::get_id();
+        ui::ScopesRegionStore store;
         ui::ScopesServices services;
         services.scheduler = &scheduler;
         services.bridge = &bridge;
-        services.cache = cache;
-        services.measure = [production, measured,
-                            interfaceThread](const ui::ScopesMeasureInput& input,
-                                             const ui::PreviewScopeIdentity& identity,
-                                             const runtime::CancellationToken& cancellation) {
-            if (std::this_thread::get_id() == interfaceThread)
-                measured->onInterfaceThread = true;
-            ++measured->started;
-            return production(input, identity, cancellation);
-        };
-        services.compositionName = [](document::ProjectId, document::CompositionId) {
-            return QStringLiteral("Titles");
-        };
+        services.store = &store;
 
-        const auto plan = oneSolidPlan();
-        const auto frame0 = cpuFrame(plan, 1, 0);
-        const auto frame1 = cpuFrame(plan, 2, 1);
-        e.expect(frame0 && frame1, "the CPU frames are built");
-        if (!frame0 || !frame1)
-            return 1;
-        gBaseFrame = frame0;
-        testStatusItems(e);
-        testStatusWarnings(e);
-        testStatusBehindAndReasons(e);
-        const auto keyOf = [](const std::shared_ptr<const PreparedPreviewFrame>& frame) {
-            return PreviewFrameCacheKey::forIdentity(frame->desiredIdentity());
-        };
-        e.expect(cache->insert(frame0).retained() && cache->insert(frame1).retained(),
-                 "the frames are cached");
+        testRegistrationAndChrome(e, services);
 
-        // ---- Registration ------------------------------------------------------------------
-        {
-            ui::EditorRegistry registry;
-            e.expect(ui::registerScopesEditor(registry, services, nullptr) &&
-                         !ui::registerScopesEditor(registry, services, nullptr),
-                     "Scopes registers once");
-            e.expect(registry.editors().size() == 1 &&
-                         registry.editors().front().id == "bloom.scopes" &&
-                         registry.editors().front().displayName == QStringLiteral("Scopes"),
-                     "the editor is bloom.scopes, named Scopes");
-            ui::EditorArea area(registry, "bloom.scopes", QString{});
-            auto* picker = area.findChild<kit::KPanelSwitcher*>(QStringLiteral("editorTypePicker"));
-            e.expect(picker != nullptr && picker->findData(QStringLiteral("bloom.scopes")) >= 0,
-                     "the area's switcher offers Scopes");
-            e.expect(area.findChild<ScopesEditor*>(QStringLiteral("scopesEditor")) != nullptr,
-                     "the area hosts a ScopesEditor");
-        }
-
-        // ---- A panel with nothing to measure with --------------------------------------------
-        {
-            ScopesEditor unavailable(ui::ScopesServices{});
-            unavailable.show();
-            e.expect(unavailable.controller() == nullptr &&
-                         unavailable.statusText().line.contains("not available"),
-                     "a panel without services says scopes are not available");
-        }
-
-        // ---- The narrowest panel fits every scope beside its scroll bar ----------------------
-        {
-            ScopesEditor narrow(services);
-            narrow.show();
-            narrow.resize(narrow.minimumSizeHint().width(), 500);
-            QCoreApplication::processEvents();
-            auto* scroll = narrow.findChild<QScrollArea*>(QStringLiteral("scopesScroll"));
-            e.expect(scroll != nullptr, "the panel has its scroll area");
-            for (const auto kind : kKinds) {
-                auto* scope = narrow.view(kind);
-                if (scroll == nullptr || scope == nullptr || !scope->isVisible()) {
-                    e.expect(false, "every scope is shown in the narrow panel");
-                    continue;
-                }
-                const QRect inViewport(scope->mapTo(scroll->viewport(), QPoint(0, 0)),
-                                       scope->size());
-                e.expect(inViewport.left() >= 0 && inViewport.right() < scroll->viewport()->width(),
-                         "at the panel's minimum width no scope is wider than the scroll area");
-            }
-        }
-
-        // ---- The panel, sections and settings -------------------------------------------------
         QWidget host;
         host.resize(520, 1500);
-        auto* panel = new ScopesEditor(services, nullptr, &host);
+        auto* panel = new ScopesEditor(services, &host);
         auto* layout = new QVBoxLayout(&host);
         layout->setContentsMargins(0, 0, 0, 0);
         layout->addWidget(panel);
-        auto& controller = *panel->controller();
-        e.expect(panel->measureSettings().scopes == 0 && controller.settings().scopes == 0,
-                 "a panel that was never shown measures nothing");
-        e.expect(panel->statusText().line.contains("No Viewer"),
-                 "with no Viewer the status line says why");
-        // A frame arrives while the panel is hidden: nothing is measured.
-        panel->showViewerFrame(frame0, {});
-        e.expect(measured->started == 0 && controller.measuresStarted() == 0 &&
-                     controller.reading().state == ScopesReading::State::Idle &&
-                     panel->statusText().line.contains("hidden"),
-                 "a hidden panel measures nothing");
-
+        const ui::ScopesRegionStore::Key key{kProjectId, kCompositionId};
+        e.expect(!store.active() && store.request(key) == nullptr,
+                 "with no panel shown no request asks for tables");
         host.show();
-        e.expect(awaitQtCondition("the panel is shown", [&] { return panel->isVisible(); }),
+        e.expect(awaitQtCondition("the panel is shown", [&] { return panel->panelShown(); }),
                  "the panel is shown");
-        e.expect(panel->panelShown() && panel->measureSettings().scopes == render::kScopeTableAll &&
-                     controller.settings().scopes == render::kScopeTableAll,
-                 "a shown panel asks for every scope");
-        e.expect(awaitQtCondition("the frame is measured once the panel is shown",
-                                  [&] {
-                                      return controller.reading().state ==
-                                                 ScopesReading::State::Ready &&
-                                             !controller.busy();
-                                  }),
-                 "the frame is measured once the panel is shown");
-        e.expect(measured->started == 2 && !measured->onInterfaceThread,
-                 "it was measured twice, live then full, on a task worker");
+        const auto request = store.request(key);
+        e.expect(store.active() && request != nullptr &&
+                     request->settings.scopes == render::kScopeTableAll &&
+                     request->settings.signal == runtime::ScopeSignal::Display,
+                 "a shown panel makes requests ask for every table of the session's settings");
 
-        // The five sections, in order, with the names of the grammar.
+        testHeaderMenus(e, *panel, store);
+
+        // The five panes, in order, open by default.
         const std::array<const char*, 5> titles{"Waveform", "Parade", "Vectorscope", "Histogram",
                                                 "CIE Chromaticity"};
         bool titlesOk = true;
@@ -548,81 +385,160 @@ int main(int argc, char** argv) {
                 lastY = y;
             }
         }
-        e.expect(titlesOk, "five sections in order, open by default");
+        e.expect(titlesOk, "five panes in order, open by default");
 
-        // The status line after the measure.
-        auto status = panel->statusText();
-        e.expect(status.measured && status.line.contains("Titles") &&
-                     status.line.contains("frame 0") && status.line.contains("Display") &&
-                     status.line.contains("Full") && status.line.contains("CPU") &&
-                     status.line.contains("2304 pixels counted") && status.warnings.isEmpty() &&
-                     status.behind.isEmpty(),
-                 "the status line states what was measured: " + status.line.toStdString());
-        auto* statusLabel = panel->findChild<kit::KLabel*>(QStringLiteral("scopesStatusLine"));
-        e.expect(statusLabel != nullptr && statusLabel->text() == status.line &&
-                     statusLabel->isVisibleTo(panel),
-                 "the status line is on the panel, always visible");
+        // ---- Frames and their tables ---------------------------------------------------------
+        const auto displayRequest = store.request(key);
+        const auto red = cpuFrame(oneSolidPlan(Color4d{1.0, 0.0, 0.0, 1.0}), 1, 0, displayRequest);
+        const auto green =
+            cpuFrame(oneSolidPlan(Color4d{0.0, 0.6, 0.2, 1.0}), 2, 1, displayRequest);
+        const auto bare = cpuFrame(oneSolidPlan(Color4d{0.0, 0.0, 1.0, 1.0}), 3, 2, nullptr);
+        e.expect(red && green && bare && red->scopes() != nullptr &&
+                     red->scopes()->status == runtime::PreviewFrameScopesStatus::Measured &&
+                     bare->scopes() == nullptr,
+                 "the frames are built, two carrying their tables");
+        if (!red || !green || !bare)
+            return 1;
 
-        // Collapsing sections leaves their scopes out of the measure.
-        const auto bitsAfter = [&](const scopes::Kind kind, const bool collapsed) {
-            panel->section(kind)->setCollapsed(collapsed);
-            return controller.settings().scopes;
-        };
-        e.expect(bitsAfter(scopes::Kind::Histogram, true) ==
-                     (render::kScopeTableAll & ~render::kScopeTableHistogram),
-                 "a collapsed Histogram is not measured");
-        e.expect(bitsAfter(scopes::Kind::Waveform, true) ==
-                     (render::kScopeTableAll & ~render::kScopeTableHistogram),
-                 "Waveform and Parade share a table: it stays while the Parade is open");
-        e.expect(bitsAfter(scopes::Kind::Parade, true) ==
-                     (render::kScopeTableVectorscope | render::kScopeTableChromaticity),
-                 "with both collapsed the Waveform table is left out");
-        e.expect(bitsAfter(scopes::Kind::Chromaticity, true) == render::kScopeTableVectorscope,
-                 "a collapsed CIE Chromaticity is not measured");
-        const auto startedBeforeCollapse = controller.measuresStarted();
-        e.expect(bitsAfter(scopes::Kind::Vectorscope, true) == 0 &&
-                     controller.reading().state == ScopesReading::State::Idle &&
-                     controller.measuresStarted() == startedBeforeCollapse &&
-                     panel->statusText().line.contains("collapsed"),
-                 "with every section collapsed nothing is measured and the line says so");
+        std::vector<int> emptyHeights;
         for (const auto kind : kKinds)
-            panel->section(kind)->setCollapsed(false);
-        e.expect(awaitQtCondition("the reopened sections are measured",
+            emptyHeights.push_back(panel->view(kind)->heightForWidth(400));
+        panel->showViewerFrame(red);
+        e.expect(panel->scopes() == red->scopes(), "the panel takes the frame's tables");
+        e.expect(
+            awaitQtCondition("the red traces are mapped", [&] { return tracesSettled(*panel); }),
+            "the red traces are mapped");
+        bool allTraces = true;
+        for (const auto kind : kKinds)
+            allTraces = allTraces && !panel->view(kind)->traceImage().isNull() &&
+                        panel->view(kind)->shownScopes() == red->scopes();
+        e.expect(allTraces, "every scope paints a trace of the red frame's tables");
+        const auto mainThread = std::this_thread::get_id();
+        bool offThread = true;
+        for (const auto kind : kKinds) {
+            const auto finished = panel->renderer()->finished(kind);
+            offThread = offThread && finished != nullptr && finished->workerThread != mainThread;
+        }
+        e.expect(offThread, "every trace was mapped on a task worker");
+        {
+            std::vector<int> tracedHeights;
+            for (const auto kind : kKinds)
+                tracedHeights.push_back(panel->view(kind)->heightForWidth(400));
+            e.expect(tracedHeights == emptyHeights,
+                     "a scope is as tall with a trace as with the empty graticule");
+        }
+        // The scopes' sizes, settled: no later frame, trace or empty area changes them.
+        const auto layoutBefore = heights(*panel);
+        const auto redPictures = grabAll(*panel);
+        std::vector<QImage> redTraces;
+        for (const auto kind : kKinds)
+            redTraces.push_back(panel->view(kind)->traceImage());
+
+        // ---- #730: never dim, never blank -------------------------------------------------------
+        panel->showViewerFrame(green);
+        e.expect(panel->scopes() == green->scopes(), "the green frame's tables are asked for");
+        bool untouched = true;
+        for (std::size_t index = 0; index < kKinds.size(); ++index) {
+            const auto* view = panel->view(kKinds[index]);
+            untouched = untouched && view->traceImage() == redTraces[index] &&
+                        view->shownScopes() == red->scopes();
+        }
+        e.expect(untouched && grabAll(*panel) == redPictures,
+                 "until the new traces are mapped every scope paints the red traces as they were: "
+                 "nothing dims, fades or blanks");
+        // A frame without tables of the current settings changes nothing.
+        panel->showViewerFrame(bare);
+        e.expect(panel->scopes() == green->scopes() && grabAll(*panel) == redPictures,
+                 "a frame without tables leaves the scopes on show untouched");
+        // Every picture painted until the swaps are done is the red one or the final green one.
+        std::vector<std::vector<QImage>> painted;
+        e.expect(awaitQtCondition("the green traces are mapped",
                                   [&] {
-                                      return controller.reading().state ==
-                                                 ScopesReading::State::Ready &&
-                                             !controller.busy();
-                                  }) &&
-                     controller.settings().scopes == render::kScopeTableAll,
-                 "opening them again measures them");
-
-        // Only what is shown is measured: the bits are the open sections', and the panel never
-        // asks for a detail (the controller chooses the live and the full one).
-        for (const auto kind : kKinds)
-            panel->section(kind)->setCollapsed(kind != scopes::Kind::Histogram);
-        e.expect(panel->measureSettings().scopes == render::kScopeTableHistogram &&
-                     controller.settings().scopes == render::kScopeTableHistogram,
-                 "with only the Histogram open only the Histogram bit is asked for");
-        for (const auto kind : kKinds)
-            panel->section(kind)->setCollapsed(kind == scopes::Kind::Chromaticity);
-        e.expect((controller.settings().scopes & render::kScopeTableChromaticity) == 0U &&
-                     controller.settings().scopes ==
-                         (render::kScopeTableAll & ~render::kScopeTableChromaticity),
-                 "with the CIE section collapsed the Chromaticity bit is absent");
-        e.expect(panel->measureSettings().detail == 0U && controller.settings().detail == 0U,
-                 "the panel's settings keep detail 0");
-        for (const auto kind : kKinds)
-            panel->section(kind)->setCollapsed(false);
-        e.expect(awaitQtCondition("every section open measures again",
-                                  [&] {
-                                      return controller.reading().state ==
-                                                 ScopesReading::State::Ready &&
-                                             !controller.busy();
+                                      painted.push_back(grabAll(*panel));
+                                      return tracesSettled(*panel);
                                   }),
-                 "every section open measures again");
+                 "the green traces are mapped");
+        const auto greenPictures = grabAll(*panel);
+        bool oneSwap = true;
+        for (const auto& pictures : painted)
+            for (std::size_t index = 0; index < kKinds.size(); ++index)
+                oneSwap = oneSwap && (pictures[index] == redPictures[index] ||
+                                      pictures[index] == greenPictures[index]);
+        bool swapped = true;
+        for (std::size_t index = 0; index < kKinds.size(); ++index) {
+            const auto* view = panel->view(kKinds[index]);
+            swapped = swapped && view->shownScopes() == green->scopes() &&
+                      !view->traceImage().isNull() && view->traceImage() != redTraces[index];
+        }
+        e.expect(oneSwap, "no dimmed or empty trace was painted between the red and the green one");
+        e.expect(swapped, "every scope swapped to the green frame's trace");
+        {
+            const auto layoutAfter = heights(*panel);
+            std::string sizes;
+            for (std::size_t index = 0; index < layoutAfter.size(); ++index)
+                sizes += std::to_string(layoutBefore[index]) + "->" +
+                         std::to_string(layoutAfter[index]) + " ";
+            e.expect(layoutAfter == layoutBefore,
+                     "the layout did not change while frames changed: " + sizes);
+        }
 
-        // Persisted per panel area.
+        // A change of what is counted keeps the traces until a frame of the new settings arrives.
+        store.setSignal(runtime::ScopeSignal::Working);
+        panel->showViewerFrame(green);
+        e.expect(panel->scopes() == green->scopes() && grabAll(*panel) == greenPictures,
+                 "a frame of the old signal's tables leaves the traces on show");
+        const auto working =
+            cpuFrame(oneSolidPlan(Color4d{0.0, 0.6, 0.2, 1.0}), 4, 1, store.request(key));
+        e.expect(working && working->scopes() != nullptr &&
+                     working->scopes()->settings.signal == runtime::ScopeSignal::Working,
+                 "a frame counted under the Working signal");
+        if (working) {
+            panel->showViewerFrame(working);
+            e.expect(awaitQtCondition("the Working traces are mapped",
+                                      [&] { return tracesSettled(*panel); }) &&
+                         panel->view(scopes::Kind::Waveform)->shownScopes() == working->scopes(),
+                     "the Working frame's tables replace them");
+        }
+        store.setSignal(runtime::ScopeSignal::Display);
+
+        // ---- Nothing to count: the empty graticule, silently ---------------------------------
+        store.setRegion(key, runtime::ScopeRegion{.x = 500, .y = 0, .width = 10, .height = 10});
+        const auto outside =
+            cpuFrame(oneSolidPlan(Color4d{1.0, 1.0, 1.0, 1.0}), 5, 3, store.request(key));
+        e.expect(outside && outside->scopes() != nullptr &&
+                     outside->scopes()->status == runtime::PreviewFrameScopesStatus::EmptyArea,
+                 "a region outside the picture has nothing to count");
+        if (outside) {
+            panel->showViewerFrame(outside);
+            bool empty = true;
+            for (const auto kind : kKinds)
+                empty = empty && panel->view(kind)->traceImage().isNull();
+            e.expect(empty, "an empty area draws the empty graticule");
+            e.expect(heights(*panel) == layoutBefore, "and the layout does not change");
+        }
+        store.clearRegion(key);
+        panel->showViewerFrame(red);
+        e.expect(awaitQtCondition("the red traces are mapped again",
+                                  [&] { return tracesSettled(*panel); }),
+                 "the red traces are mapped again");
+
+        // ---- The hover readout -----------------------------------------------------------------
+        {
+            auto* histogram = panel->view(scopes::Kind::Histogram);
+            const auto plot = histogram->plotRect();
+            const auto text = histogram->readoutAt(QPointF(plot.left() + 1, plot.center().y()));
+            e.expect(text.contains(QStringLiteral("Code")) &&
+                         text.contains(QStringLiteral("Count")),
+                     "the Histogram's readout names the code and the count: " + text.toStdString());
+            e.expect(histogram->readoutAt(QPointF(-5, -5)).isEmpty(),
+                     "outside the plot there is no readout");
+        }
+
+        // ---- Sections persist per panel area; a hidden panel asks for nothing ----------------
         panel->section(scopes::Kind::Parade)->setCollapsed(true);
+        e.expect(store.request(key) != nullptr &&
+                     store.request(key)->settings.scopes == render::kScopeTableAll,
+                 "a collapsed pane still leaves every table asked for");
         {
             ScopesEditor second(ui::ScopesServices{});
             second.show();
@@ -631,333 +547,19 @@ int main(int argc, char** argv) {
                      "collapsed state is persisted");
         }
         panel->section(scopes::Kind::Parade)->setCollapsed(false);
-
-        // A hidden panel measures nothing; shown again it asks again.
-        panel->hide();
-        e.expect(!panel->panelShown() && panel->measureSettings().scopes == 0 &&
-                     controller.settings().scopes == 0,
-                 "a hidden panel asks for no scope");
-        const auto startedHidden = controller.measuresStarted();
-        panel->showViewerFrame(frame1, {});
-        e.expect(controller.measuresStarted() == startedHidden &&
-                     controller.reading().state == ScopesReading::State::Idle,
-                 "a frame shown while hidden is not measured");
-        panel->show();
-        e.expect(awaitQtCondition("shown again, the panel measures the Viewer's frame",
-                                  [&] {
-                                      return controller.reading().state ==
-                                                 ScopesReading::State::Ready &&
-                                             !controller.busy();
-                                  }),
-                 "shown again, the panel measures the Viewer's frame");
-
-        // ---- Behind ---------------------------------------------------------------------------
-        panel->showViewerFrame(frame0, {});
-        e.expect(awaitQtCondition("the frames agree and the measure is ready",
-                                  [&] {
-                                      return controller.reading().state ==
-                                                 ScopesReading::State::Ready &&
-                                             !controller.busy();
-                                  }) &&
-                     panel->statusText().behind.isEmpty(),
-                 "no Behind while the frames agree");
-        // Hold the measure by asking for a setting the frame has no sidecar for.
-        panel->setIgnoreTransparent(true);
-        status = panel->statusText();
-        e.expect(controller.reading().behind && status.behind.startsWith("Behind") &&
-                     status.behind.contains("frame 0"),
-                 "Behind names the measured frame while the new measure runs: " +
-                     status.behind.toStdString());
-        auto* behindLabel = panel->findChild<kit::KLabel*>(QStringLiteral("scopesStatusBehind"));
-        e.expect(behindLabel != nullptr && behindLabel->isVisibleTo(panel) &&
-                     behindLabel->tone() == kit::Color::Warn,
-                 "Behind is shown in the warning color");
-        e.expect(awaitQtCondition("the Behind measure arrives",
-                                  [&] {
-                                      return controller.reading().state ==
-                                                 ScopesReading::State::Ready &&
-                                             !controller.busy();
-                                  }) &&
-                     panel->statusText().behind.isEmpty(),
-                 "the label goes when the measure arrives");
-        panel->setIgnoreTransparent(false);
-        e.expect(awaitQtCondition("every pixel is counted again",
-                                  [&] {
-                                      return controller.reading().state ==
-                                                 ScopesReading::State::Ready &&
-                                             !controller.busy();
-                                  }),
-                 "every pixel is counted again");
-
-        // ---- Warnings, through the panel
-        // ----------------------------------------------------------
-        panel->showViewerFrame(frame0, runtime::ViewAdjust{.exposure = -1.0, .gamma = 1.0});
-        status = panel->statusText();
-        e.expect(status.warnings.size() == 1 && status.warnings[0].contains("Exposure"),
-                 "the Viewer's exposure is a warning");
-        auto* warningLabel = panel->findChild<kit::KLabel*>(QStringLiteral("scopesStatusWarnings"));
-        e.expect(warningLabel != nullptr && warningLabel->tone() == kit::Color::Warn &&
-                     warningLabel->isVisibleTo(panel) && warningLabel->text().contains("Exposure"),
-                 "warnings are in the warning color");
-        e.expect(awaitQtCondition("the exposed frame is measured",
-                                  [&] {
-                                      return controller.reading().state ==
-                                                 ScopesReading::State::Ready &&
-                                             !controller.busy();
-                                  }),
-                 "the exposed frame is measured");
-        panel->showViewerFrame(frame0, {});
-        e.expect(awaitQtCondition("the neutral frame is measured",
-                                  [&] {
-                                      return controller.reading().state ==
-                                                 ScopesReading::State::Ready &&
-                                             !controller.busy();
-                                  }) &&
-                     panel->statusText().warnings.isEmpty(),
-                 "a neutral Viewer has no warning");
-
-        // ---- Settings that measure again
-        // ----------------------------------------------------------
-        const auto settled = [&] {
-            return awaitQtCondition("the panel settles on a ready measure", [&] {
-                return controller.reading().state == ScopesReading::State::Ready &&
-                       !controller.busy();
-            });
-        };
-        e.expect(settled(), "the panel is settled");
-        auto started = controller.measuresStarted();
-        panel->setSignal(runtime::ScopeSignal::Working);
-        e.expect(settled() && controller.measuresStarted() == started + 2 &&
-                     controller.settings().signal == runtime::ScopeSignal::Working,
-                 "the Working signal measures again");
-        e.expect(panel->statusText().line.contains("Working space"),
-                 "and the line names the working space");
-        auto* linear = panel->findChild<kit::KLabel*>(QStringLiteral("scopesLinearNote"));
-        e.expect(linear != nullptr && linear->isVisibleTo(panel) &&
-                     linear->text() == QStringLiteral("Linear values"),
-                 "the Vectorscope header notes linear values for the Working signal");
-        panel->setAxisMaximum(4);
-        e.expect(settled() && controller.measuresStarted() == started + 4 &&
-                     controller.settings().axisMaximum == 4,
-                 "a new axis maximum measures again");
-        panel->setAxisMaximum(3);
-        e.expect(panel->axisMaximum() == 4, "an axis maximum that is not valid is refused");
-        panel->setSignal(runtime::ScopeSignal::Display);
-        e.expect(settled() && controller.settings().axisMaximum == 1,
-                 "Display is measured on its own axis");
-        started = controller.measuresStarted();
-        panel->setIgnoreTransparent(true);
-        e.expect(settled() && controller.measuresStarted() == started + 2 &&
-                     controller.settings().ignoreTransparent,
-                 "Ignore Transparent Pixels measures again");
-        e.expect(controller.reading().scopes != nullptr &&
-                     controller.reading().scopes->tables.counted() == 34U * 19U,
-                 "and counts only the pixels of the solid");
-        panel->setIgnoreTransparent(false);
-        e.expect(settled(), "back to every pixel");
-
-        // ---- The region seam
-        // ----------------------------------------------------------------------
-        int regionSignals = 0;
-        std::optional<runtime::ScopeRegion> lastRegion;
-        int armedSignals = 0;
-        bool lastArmed = false;
-        QObject::connect(panel, &ScopesEditor::regionChanged,
-                         [&](const std::optional<runtime::ScopeRegion>& region) {
-                             ++regionSignals;
-                             lastRegion = region;
-                         });
-        QObject::connect(panel, &ScopesEditor::regionArmedChanged, [&](const bool armed) {
-            ++armedSignals;
-            lastArmed = armed;
-        });
-        auto* regionButton = panel->findChild<kit::KButton*>(QStringLiteral("scopesRegion"));
-        auto* clearButton = panel->findChild<kit::KButton*>(QStringLiteral("scopesClearRegion"));
-        e.expect(regionButton != nullptr && clearButton != nullptr && !panel->region() &&
-                     !panel->regionArmed() && !clearButton->isEnabled(),
-                 "no region at first, and Clear Region has nothing to clear");
-        regionButton->click();
-        e.expect(panel->regionArmed() && armedSignals == 1 && lastArmed,
-                 "the Region toggle arms a drag");
-        panel->setRegionArmed(true);
-        e.expect(armedSignals == 1, "arming again says nothing");
-        started = controller.measuresStarted();
-        panel->setRegion(runtime::ScopeRegion{4, 2, 16, 8});
-        e.expect(regionSignals == 1 && lastRegion && lastRegion->width == 16 &&
-                     panel->measureSettings().region == lastRegion &&
-                     controller.settings().region == lastRegion && clearButton->isEnabled(),
-                 "a region reaches the measure settings and says so");
-        e.expect(settled() && controller.measuresStarted() == started + 2 &&
-                     controller.reading().scopes != nullptr &&
-                     controller.reading().scopes->tables.counted() == 16U * 8U &&
-                     controller.reading().scopes->area == runtime::ScopeMeasuredArea{4, 2, 16, 8},
-                 "the region measures only its rectangle");
-        e.expect(controller.reading().scopes != nullptr &&
-                     controller.reading().scopes->tables.layout().columns ==
-                         std::min<std::uint32_t>(512U, 16U),
-                 "with a region the Waveform's columns span the region's width");
-        e.expect(panel->statusText().line.contains("Region 4, 2, 16 x 8") &&
-                     panel->statusText().line.contains("128 pixels counted"),
-                 "the status line gives the rectangle and the pixels counted: " +
-                     panel->statusText().line.toStdString());
-        panel->setRegion(runtime::ScopeRegion{4, 2, 16, 8});
-        e.expect(regionSignals == 1, "setting the same region says nothing");
-        panel->setRegion(runtime::ScopeRegion{4, 2, 0, 8});
-        e.expect(regionSignals == 2 && !panel->region() && !lastRegion,
-                 "an empty rectangle is no region");
-        panel->setRegion(runtime::ScopeRegion{0, 0, 8, 8});
-        clearButton->click();
-        e.expect(!panel->region() && regionSignals == 4 && !lastRegion &&
-                     !clearButton->isEnabled() && !controller.settings().region &&
-                     panel->regionArmed(),
-                 "Clear Region clears the region and keeps the toggle");
-        regionButton->click();
-        e.expect(!panel->regionArmed() && armedSignals == 2 && !lastArmed, "the toggle disarms");
-        e.expect(settled(), "the cleared region is measured");
-
-        // ---- Mapping runs on workers, Brightness maps again and does not measure
-        // ----------------------
-        auto* renderer = panel->renderer();
-        e.expect(renderer != nullptr, "the panel has a trace renderer");
-        const auto allMapped = [&] {
-            for (const auto kind : kKinds) {
-                if (panel->view(kind)->traceImage().isNull() || renderer->busy(kind) ||
-                    panel->view(kind)->showsBehind())
-                    return false;
-            }
-            return true;
-        };
-        e.expect(awaitQtCondition("every open scope's trace is mapped", allMapped),
-                 "every open scope's trace is mapped");
-        bool workers = true;
-        for (const auto kind : kKinds) {
-            const auto finished = renderer->finished(kind);
-            workers = workers && finished != nullptr && finished->workerThread != interfaceThread;
-        }
-        e.expect(workers, "every mapping ran on a task worker");
-        e.expect(!measured->onInterfaceThread, "no measure ran on the interface thread");
-        started = controller.measuresStarted();
-        const auto mapsBefore = renderer->mapsStarted();
-        panel->setBrightness(2.0F);
-        e.expect(awaitQtCondition("the renderer finishes mapping the new Brightness",
-                                  [&] { return !renderer->busy(); }) &&
-                     renderer->mapsStarted() > mapsBefore &&
-                     controller.measuresStarted() == started,
-                 "a Brightness change maps again and does not measure again");
-        e.expect(panel->view(scopes::Kind::Waveform)->currentRequest().gain == 2.0F,
-                 "the gain reaches the mapping");
-
-        // Hover: the value under the pointer and the count of its cell.
-        auto* histogram = panel->view(scopes::Kind::Histogram);
-        const auto plot = histogram->plotRect();
-        // The red solid is at full red: the rightmost bin of the red row.
-        const QPointF redTop(plot.left() + 1023.5 / 1024.0 * plot.width(), plot.top() + 10);
-        e.expect(histogram->readoutAt(redTop).contains("Code 1023") &&
-                     histogram->readoutAt(redTop).contains("Count 646"),
-                 "the histogram readout names the code and the count: " +
-                     histogram->readoutAt(redTop).toStdString());
-        e.expect(histogram->readoutAt(QPointF(-5, -5)).isEmpty(), "outside the plot, no readout");
-        auto* waveform = panel->view(scopes::Kind::Waveform);
-        const auto waveformPlot = waveform->plotRect();
-        e.expect(waveform->readoutAt(waveformPlot.center()).contains("Column") &&
-                     waveform->readoutAt(waveformPlot.center()).contains("Count"),
-                 "the waveform readout names the column, the code and the count");
-        auto* vectorscope = panel->view(scopes::Kind::Vectorscope);
-        e.expect(vectorscope->readoutAt(vectorscope->plotRect().center()).contains("Cb") &&
-                     vectorscope->readoutAt(vectorscope->plotRect().center()).contains("Count"),
-                 "the vectorscope readout names cb, cr and the count");
-        auto* chromaticity = panel->view(scopes::Kind::Chromaticity);
-        e.expect(chromaticity->readoutAt(chromaticity->plotRect().center()).contains("x 0.5") &&
-                     chromaticity->readoutAt(chromaticity->plotRect().center()).contains("Count"),
-                 "the chromaticity readout names x, y and the count");
-
-        // A scope whose tables are another frame's is dimmed and labeled.
-        panel->showViewerFrame(frame1, {});
-        e.expect(controller.reading().behind ||
-                     controller.reading().state == ScopesReading::State::Ready,
-                 "the next frame is being measured");
-        e.expect(awaitQtCondition("the next frame is measured",
-                                  [&] {
-                                      return controller.reading().state ==
-                                                 ScopesReading::State::Ready &&
-                                             !controller.busy();
-                                  }),
-                 "the next frame is measured");
-
-        // ---- No Viewer, and no frame: an empty graticule
-        // ------------------------------------------
-        panel->showViewerFrame(nullptr, {});
-        e.expect(controller.reading().scopes == nullptr &&
-                     panel->statusText().line.contains("no frame"),
-                 "with no frame the line says why");
-        e.expect(
-            panel->view(scopes::Kind::Waveform)->traceImage().isNull() &&
-                panel->view(scopes::Kind::Vectorscope)->traceImage().isNull() &&
-                panel->view(scopes::Kind::Waveform)->readoutAt(waveformPlot.center()).isEmpty(),
-            "each open section shows an empty graticule");
-        panel->followViewer(nullptr);
-        e.expect(panel->statusText().line.contains("No Viewer"), "and with no Viewer, says so");
-        panel->showViewerFrame(frame0, {});
-        e.expect(awaitQtCondition("a frame comes back",
-                                  [&] {
-                                      return controller.reading().state ==
-                                                 ScopesReading::State::Ready &&
-                                             !controller.busy();
-                                  }),
-                 "a frame comes back");
-
-        // ---- A RAM preview fill measures the frames the cache retains
-        // -----------------------------
-        const auto frame2 = cpuFrame(plan, 3, 2);
-        const auto frame3 = cpuFrame(plan, 4, 3);
-        e.expect(frame2 && frame3, "the fill's frames are built");
-        if (frame2 && frame3) {
-            const auto settings = panel->measureSettings();
-            // A frame the cache retains is counted from its retained picture.
-            const auto identity = ui::PreviewScopeIdentity{
-                .settings = settings, .viewAdjust = {}, .source = runtime::ScopeSource::Retained};
-            panel->setRamFillRunning(true);
-            e.expect(cache->insert(frame2).retained(), "a fill frame is cached");
-            e.expect(awaitQtCondition("during a fill the retained frames are measured",
-                                      [&] {
-                                          return cache->scopesFor(keyOf(frame2), identity) !=
-                                                     nullptr &&
-                                                 !controller.busy();
-                                      }),
-                     "during a fill the retained frames are measured");
-            panel->setRamFillRunning(false);
-            const auto before = controller.measuresStarted();
-            e.expect(cache->insert(frame3).retained(), "another frame is cached");
-            for (int turn = 0; turn < 20; ++turn)
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-            e.expect(controller.measuresStarted() == before &&
-                         cache->scopesFor(keyOf(frame3), identity) == nullptr,
-                     "without a fill the retained frames are not measured");
-            // A hidden panel does not measure a fill either.
-            panel->setRamFillRunning(true);
-            panel->hide();
-            const auto hiddenBefore = controller.measuresStarted();
-            const auto frame4 = cpuFrame(plan, 5, 4);
-            e.expect(frame4 && cache->insert(frame4).retained(), "a frame is cached while hidden");
-            for (int turn = 0; turn < 20; ++turn)
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-            e.expect(controller.measuresStarted() == hiddenBefore,
-                     "a hidden panel measures nothing during a fill");
-            panel->show();
-            panel->setRamFillRunning(false);
-        }
-
-        e.expect(!measured->onInterfaceThread, "no measure ran on the interface thread");
         host.hide();
-        bridge.beginShutdown();
-        (void)awaitQtCondition("the scheduler drains after shutdown",
-                               [&] { return scheduler.isQuiescent(); });
-        if (e.failures() + awaitFailureCount() != 0)
+        e.expect(awaitQtCondition("the panel is hidden", [&] { return !panel->panelShown(); }) &&
+                     !store.active() && store.request(key) == nullptr,
+                 "a hidden panel makes requests ask for no tables");
+
+        delete panel;
+        e.expect(awaitFailureCount() == 0, "every wait finished");
+        if (e.failures() != 0)
             return 1;
-        std::cout << "PASS: scopes panel\n";
+        std::cout << "PASS: the Scopes panel\n";
         return 0;
-    } catch (const std::exception& exception) {
-        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
+    } catch (const std::exception& error) {
+        std::cerr << "FAIL: " << error.what() << '\n';
         return 1;
     }
 }
