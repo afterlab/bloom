@@ -504,7 +504,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     }
     if (!routeproof::displayPlatformAvailable()) {
         std::cout << "SKIP: RAM route proof needs a real Wayland platform (no display here)\n";
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
     QApplication application(argc, argv);
     const QString platformName = QApplication::platformName();
@@ -512,12 +512,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         platformName != QStringLiteral("wayland-egl")) {
         std::cout << "SKIP: RAM route proof needs a real Wayland platform (platform="
                   << platformName.toStdString() << ")\n";
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
     if (options.loader.empty() || (options.proofDirectory.empty() && !options.animatedMask &&
                                    !options.pathNodes && !options.imageStatistics)) {
         std::cout << "SKIP: RAM route proof needs --loader and --proof-dir\n";
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
     qputenv("QT_VULKAN_LIB", options.loader.string().c_str());
 
@@ -535,7 +535,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     if (!options.animatedMask && !options.pathNodes && !options.imageStatistics &&
         !routeproof::readProofNonce(options.proofDirectory, nonce)) {
         std::cout << "SKIP: no fresh run nonce in " << options.proofDirectory.string() << '\n';
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
 
     Expectations checks;
@@ -546,7 +546,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     Fixture fixture(mediaDirectory);
     if (fixture.processor == nullptr) {
         std::cout << "SKIP: the Bloom Neutral v1 processor is unavailable\n";
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
 
     std::shared_ptr<const runtime::GpuSceneOcioContext> ocioContext;
@@ -608,7 +608,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                 [&] { return statisticsProvider->prepared(); }, 90s) ||
             !statisticsProvider->deviceAvailable()) {
             std::cout << "SKIP: the device route that measures Image Statistics is unavailable\n";
-            return options.requireDevice ? 1 : 0;
+            return options.requireDevice ? 1 : 77;
         }
         const auto device = runtime::makeImageStatisticsDeviceMeasure(
             [provider = std::weak_ptr(statisticsProvider),
@@ -631,7 +631,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         if (ocioContext == nullptr || ocioContext->preparer == nullptr) {
             std::cout << "SKIP: the animated-mask and path-nodes RAM runs need the packaged shader "
                          "tools\n";
-            return options.requireDevice ? 1 : 0;
+            return options.requireDevice ? 1 : 77;
         }
         auto mediaContext = runtime::GpuSceneMediaContext::fromEvaluator(fixture.evaluator);
         mediaContext.assetBaseDirectory = mediaDirectory;
@@ -789,7 +789,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         std::cout << "SKIP: RAM resident route unavailable: " << status.residentDetail << " / "
                   << status.presentationDetail << '\n';
         service.beginShutdown();
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
     const auto core = runtime::detail::GpuPreviewDisplayServiceTestAccess::coreOf(service);
     checks.expect(core != nullptr, "the service core is reachable");
@@ -806,7 +806,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     checks.expect(view.valid, "the RAM service client publishes the borrowed instance view");
     if (!view.valid) {
         service.beginShutdown();
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
     QVulkanInstance instance;
     // clang-format off
@@ -815,7 +815,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     if (!instance.create() || !instance.isValid()) {
         std::cout << "SKIP: QVulkanInstance could not adopt the borrowed instance\n";
         service.beginShutdown();
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
     auto window = std::make_unique<QWindow>();
     window->setSurfaceType(QSurface::VulkanSurface);
@@ -1224,12 +1224,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const auto warmStart = std::chrono::steady_clock::now();
     if (!options.expectPartial && !options.expireBeforeAdmission)
         ram.start();
-    const bool warmComplete =
-        awaitProof("the warm RAM pass finishes", [&] {
-            return !ram.isCaching() &&
-                   (options.expectPartial || options.expireBeforeAdmission ||
-                    ram.cachedFrameCount() == static_cast<std::uint64_t>(frameCount));
-        });
+    const bool warmComplete = awaitProof("the warm RAM pass finishes", [&] {
+        return !ram.isCaching() &&
+               (options.expectPartial || options.expireBeforeAdmission ||
+                ram.cachedFrameCount() == static_cast<std::uint64_t>(frameCount));
+    });
     const auto afterWarm = service.status().counters;
     if (options.animatedMask) {
         const auto afterWarmPreparer = preparerCounters();

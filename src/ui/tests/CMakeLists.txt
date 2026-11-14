@@ -1380,6 +1380,7 @@ if(BLOOM_RENDER_ENABLE_VULKAN AND TARGET Vulkan::Headers)
                     ${bloom_ram_preview_vulkan_loader_args}
             LABELS ui gpu route-proof
             TIMEOUT 300
+            SKIP_RETURN_CODE 77
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         )
         set_tests_properties(${bloom_host_painted_test}
@@ -2135,7 +2136,7 @@ if(BLOOM_BUILD_PYTHON)
     target_include_directories(bloom_ui_mcp_script_run_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     bloom_enable_warnings(bloom_ui_mcp_script_run_test)
     bloom_add_test(NAME bloom.ui.mcp-script-run COMMAND bloom_ui_mcp_script_run_test
-        LABELS ui mcp scripting python integration TIMEOUT 180
+        LABELS ui mcp scripting python integration TIMEOUT 180 FIXED_MEMORY
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 
     add_executable(bloom_script_panel_test script_panel_tests.cpp)
@@ -2147,7 +2148,7 @@ if(BLOOM_BUILD_PYTHON)
     add_dependencies(bloom_script_panel_test bloom-cli)
     bloom_enable_warnings(bloom_script_panel_test)
     bloom_add_test(NAME bloom.ui.script-panel COMMAND bloom_script_panel_test
-        LABELS ui scripting python integration TIMEOUT 120
+        LABELS ui scripting python integration TIMEOUT 120 FIXED_MEMORY
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 endif()
 
@@ -2720,7 +2721,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     bloom_enable_warnings(bloom_ui_gpu_viewer_route_proof_test)
     bloom_enable_strict_floating_point(bloom_ui_gpu_viewer_route_proof_test)
     if(bloom_preview_proofs_resident)
-        # Stays registered without a compositor (where it prints a skip and passes): it is a
+        # Stays registered without a compositor (where it exits 77 and ctest reports it Skipped): it is a
         # fixture of bloom.runtime.gpu_coverage_native_acceptance, which runs it inside one.
         bloom_add_test(
             NAME bloom.ui.gpu_viewer_route_proof
@@ -2729,6 +2730,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                     ${bloom_ui_gpu_viewer_service_chain_loader_args}
             LABELS ui gpu viewer route-proof
             TIMEOUT 300
+            SKIP_RETURN_CODE 77
         )
         if(TEST bloom.ui.gpu_viewer_route_proof)
             set_tests_properties(bloom.ui.gpu_viewer_route_proof
@@ -2833,7 +2835,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     bloom_enable_warnings(bloom_ui_gpu_ram_preview_route_proof_test)
     bloom_enable_strict_floating_point(bloom_ui_gpu_ram_preview_route_proof_test)
     if(bloom_preview_proofs_resident)
-        # Stays registered without a compositor (where it prints a skip and passes): it is a
+        # Stays registered without a compositor (where it exits 77 and ctest reports it Skipped): it is a
         # fixture of bloom.runtime.gpu_coverage_native_acceptance, which runs it inside one.
         bloom_add_test(
             NAME bloom.ui.gpu_ram_preview_route_proof
@@ -2842,6 +2844,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                     ${bloom_ui_gpu_viewer_service_chain_loader_args}
             LABELS ui gpu ram route-proof
             TIMEOUT 300
+            SKIP_RETURN_CODE 77
         )
         if(TEST bloom.ui.gpu_ram_preview_route_proof)
             set_tests_properties(bloom.ui.gpu_ram_preview_route_proof

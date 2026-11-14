@@ -80,7 +80,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     }
     if (!routeproof::displayPlatformAvailable()) {
         std::cout << "SKIP: viewer route proof needs a real Wayland platform (no display here)\n";
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
     QApplication application(argc, argv);
     const QString platformName = QApplication::platformName();
@@ -88,11 +88,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         platformName != QStringLiteral("wayland-egl")) {
         std::cout << "SKIP: viewer route proof needs a real Wayland platform (platform="
                   << platformName.toStdString() << ")\n";
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
     if (options.loader.empty() || options.proofDirectory.empty()) {
         std::cout << "SKIP: viewer route proof needs --loader and --proof-dir\n";
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
     qputenv("QT_VULKAN_LIB", options.loader.string().c_str());
 
@@ -109,7 +109,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     std::string nonce;
     if (!routeproof::readProofNonce(options.proofDirectory, nonce)) {
         std::cout << "SKIP: no fresh run nonce in " << options.proofDirectory.string() << '\n';
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
 
     Expectations checks;
@@ -120,7 +120,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     Fixture fixture(mediaDirectory);
     if (fixture.processor == nullptr) {
         std::cout << "SKIP: the Bloom Neutral v1 processor is unavailable\n";
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
 
     auto newProject =
@@ -161,7 +161,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         std::cout << "SKIP: viewer resident route unavailable: " << status.residentDetail << " / "
                   << status.presentationDetail << '\n';
         service.beginShutdown();
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
     const std::shared_ptr<GpuPresentationClient> client = status.presentationClient;
     const auto afterReady = service.status().counters;
@@ -201,13 +201,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     viewer->setGpuPresentationDependencies(client, &scheduler, options.loader.string(), 1.0);
     controller.requestRefresh();
 
-    const bool presented =
-        awaitProof("the viewer presents the GPU-resident frame", [&] {
-            const auto frame = controller.state().frame;
-            return frame != nullptr &&
-                   frame->provenance().provider == runtime::PreviewDisplayProvider::GpuResident &&
-                   viewer->residentPresentationActiveForTest();
-        });
+    const bool presented = awaitProof("the viewer presents the GPU-resident frame", [&] {
+        const auto frame = controller.state().frame;
+        return frame != nullptr &&
+               frame->provenance().provider == runtime::PreviewDisplayProvider::GpuResident &&
+               viewer->residentPresentationActiveForTest();
+    });
     const auto displayed = controller.state().frame;
     checks.expect(presented && displayed != nullptr, "the controller produced a resident frame");
     checks.expect(displayed != nullptr && displayed->provenance().provider ==

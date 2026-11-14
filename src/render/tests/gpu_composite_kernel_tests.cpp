@@ -300,7 +300,8 @@ void testChainedSourceOverDerivesFromCpu(Expectations& expectations) {
     }
 }
 
-void testNativeComparisonStaged(Expectations& expectations) {
+// Returns true when the native comparison did not run (staged), so main exits 77 (CTest Skipped).
+bool testNativeComparisonStaged(Expectations& expectations) {
     // No GPU dispatch exists yet, so the native comparison is staged. This is a documented skip,
     // not a parity claim.
 #if defined(BLOOM_COMPOSITE_NATIVE_HOST)
@@ -311,6 +312,11 @@ void testNativeComparisonStaged(Expectations& expectations) {
                  "pending the composite host build flag (BLOOM_COMPOSITE_NATIVE_HOST)\n";
 #endif
     expectations.expect(true, "native comparison staging is explicit");
+#if defined(BLOOM_COMPOSITE_NATIVE_HOST)
+    return false;
+#else
+    return true;
+#endif
 }
 
 } // namespace
@@ -325,7 +331,7 @@ int main(int argc, char** argv) {
         testTranslationFixturesDeriveFromCpu(expectations);
         testSourceOverFixturesDeriveFromCpu(expectations);
         testChainedSourceOverDerivesFromCpu(expectations);
-        testNativeComparisonStaged(expectations);
+        const bool nativeStaged = testNativeComparisonStaged(expectations);
 
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures()
@@ -333,6 +339,10 @@ int main(int argc, char** argv) {
             return 1;
         }
         std::cout << "composite kernel prep: CPU-oracle fixtures and SPIR-V pins verified\n";
+        if (nativeStaged) {
+            std::cout << "SKIP: native comparison did not run; reporting Skipped, not Passed\n";
+            return 77;
+        }
         return 0;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';

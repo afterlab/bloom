@@ -198,11 +198,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     QApplication application(argc, argv);
     if (runtime::gpuPreviewRouteDisplay() != runtime::GpuPreviewRouteDisplay::HostPainted) {
         std::cout << "SKIP: this platform proves the resident preview route\n";
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
     if (options.loader.empty() || options.proofDirectory.empty()) {
         std::cout << "SKIP: the host-painted route proof needs --loader and --proof-dir\n";
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
 
     const auto scratch =
@@ -231,14 +231,14 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     std::string nonce;
     if (!routeproof::readProofNonce(options.proofDirectory, nonce)) {
         std::cout << "SKIP: no fresh run nonce in the proof directory\n";
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
 
     Expectations checks;
     Fixture fixture(mediaDirectory);
     if (fixture.processor == nullptr) {
         std::cout << "SKIP: the Bloom Neutral v1 processor is unavailable\n";
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
 
     const auto duration = core::RationalTime::create(kRamFrameCount, kFrameRate);
@@ -304,7 +304,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         std::cout << "SKIP: the GPU preview service is unavailable: "
                   << service.status().residentDetail << '\n';
         service.beginShutdown();
-        return options.requireDevice ? 1 : 0;
+        return options.requireDevice ? 1 : 77;
     }
     checks.expect(service.status().presentationClient == nullptr,
                   "the host-painted route has no native presentation target");

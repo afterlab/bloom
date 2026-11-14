@@ -395,6 +395,7 @@ bloom_add_test(
     NAME bloom.render.gpu_composite_kernel
     COMMAND bloom_render_gpu_composite_kernel_test
     LABELS unit gpu render
+    SKIP_RETURN_CODE 77
 )
 
 # CPU-only kernel/formula test for BlendV1: hashes the embedded SPIR-V array against its pinned
