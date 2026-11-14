@@ -123,6 +123,22 @@ add_executable(bloom_gpu_preview_submitter_test
 add_executable(bloom_gpu_preview_app_test
     gpu_preview_app_tests.cpp
 )
+# #724 Scopes: the panel's device route end to end (real service, real tap, no window system).
+add_executable(bloom_ui_scopes_device_route_test scopes_device_route_tests.cpp)
+target_include_directories(bloom_ui_scopes_device_route_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime" "${PROJECT_SOURCE_DIR}/tests/support")
+target_link_libraries(bloom_ui_scopes_device_route_test
+    PRIVATE bloom_ui bloom_runtime_evaluator bloom_host)
+bloom_package_gpu_shader_tools(bloom_ui_scopes_device_route_test)
+bloom_enable_warnings(bloom_ui_scopes_device_route_test)
+bloom_add_test(
+    NAME bloom.ui.scopes-device-route
+    COMMAND bloom_ui_scopes_device_route_test ${bloom_ui_test_loader_args}
+    LABELS ui gpu scopes
+    TIMEOUT 300
+)
+set_tests_properties(bloom.ui.scopes-device-route
+    PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # bloom_ui_gpu_presentation_target_test adopts the borrowed VkInstance through Qt's public
 # QVulkanInstance, so it is created in the capability-gated block below (BLOOM_UI_VULKAN_AVAILABLE
 # is the conjunction of the pinned Vulkan headers and a Qt build with the Vulkan feature).
