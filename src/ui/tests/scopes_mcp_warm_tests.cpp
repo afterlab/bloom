@@ -2,13 +2,12 @@
 //
 // The real McpLiveUiBinding, the real CompositionPreviewController and the shared PreviewFrameCache
 // of a 64 x 64 composition (an SVG imported as shapes: a red half and, inside a group, a blue half)
-// answer the scripting read's warm-sidecar port, with the CPU reference as the only measure route.
+// answer the scripting read's warm port, with the CPU reference as the only measure route.
 // Asserted:
-//   * a frame the preview shows, with a sidecar attached under the identity a default read would
-//     measure, is answered from the cache with exactly the sidecar's tables and with no measure
-//     run (the CPU route is counted);
-//   * the sidecar's identity names the picture it counted: a Retained sidecar (the cached 8-bit
-//     picture's tables) is never served to a read, a Rendered one is;
+//   * #730: a cached frame carries the tables its own preparation counted, with the settings they
+//     were counted under. A frame the preview shows whose tables were counted under exactly the
+//     settings a read would measure with is answered from the cache with exactly those tables and
+//     with no measure run (the CPU route is counted);
 //   * the same read is measured when the scope settings differ (signal, region, Ignore
 //     Transparent Pixels, the scopes asked for, the axis maximum), when the resolution differs,
 //     when the display and view differ, when the composition read is not the one the Viewer shows,
@@ -268,17 +267,24 @@ class Warm final {
                                                         : scripting::ScopeReadFrame{};
     }
 
-    // Attaches `frame`'s tables as the sidecar of the live entry `key`, under the identity of a
-    // read that asked for `settings`.
+    // Caches the shown frame of `key` again carrying `frame`'s tables, counted under `settings`:
+    // what the frame's preparation does when a Scopes panel asks for them.
     [[nodiscard]] bool attach(const ui::PreviewFrameCacheKey& key,
                               const scripting::ScopeReadFrame& frame,
-                              const runtime::ScopeMeasureSettings& settings,
-                              const runtime::ScopeSource source = runtime::ScopeSource::Rendered) {
-        auto sidecar = std::make_shared<ui::PreviewScopeSidecar>();
-        sidecar->identity = ui::PreviewScopeIdentity{settings, {}, source};
-        sidecar->tables = runtime::ScopeTables::pack(frame.counts, frame.route);
-        sidecar->area = frame.area;
-        return cache_->attachScopes(key, std::move(sidecar));
+                              const runtime::ScopeMeasureSettings& settings) {
+        const auto& shown = controller_->state().frame;
+        if (shown == nullptr ||
+            !(ui::PreviewFrameCacheKey::forIdentity(shown->desiredIdentity()) == key))
+            return false;
+        auto scopes = std::make_shared<runtime::PreviewFrameScopes>();
+        scopes->settings = settings;
+        scopes->status = runtime::PreviewFrameScopesStatus::Measured;
+        scopes->tables = runtime::ScopeTables::pack(frame.counts, frame.route);
+        scopes->area = frame.area;
+        (void)cache_->insert(std::make_shared<const runtime::PreparedPreviewFrame>(
+            shown->withScopes(std::move(scopes))));
+        const auto carried = cache_->scopesOf(key);
+        return carried != nullptr && carried->settings == settings;
     }
 
     [[nodiscard]] ui::McpLiveUiBinding& binding() { return *binding_; }
@@ -316,49 +322,7 @@ void expectMeasured(Warm& warm, scripting::ScopeReadRequest request,
     expect(warm.measures() > before, what + ": the CPU route ran");
     if (compareToDefault)
         expect(frame.counts == genuine.counts,
-               what + ": the measure is of the whole frame, not the sidecar's tables");
-}
-
-// `counts` pooled to detail 1: each 2 x 2 block of Vectorscope and CIE cells and each pair of
-// Waveform levels summed, the under and over words and everything else as they are.
-[[nodiscard]] runtime::ScopeCounts pooledToDetailOne(const runtime::ScopeCounts& counts) {
-    runtime::ScopeCounts pooled;
-    pooled.layout = render::scopeTableLayout(counts.layout.scopes, counts.layout.columns, 1);
-    pooled.layout.columns = counts.layout.columns;
-    pooled.words.assign(pooled.layout.wordCount, 0U);
-    for (std::uint32_t i = 0; i < render::kScopeCounterWords; ++i)
-        pooled.words[i] = counts.words[i];
-    const auto& from = counts.layout;
-    const auto& to = pooled.layout;
-    if (from.has(render::kScopeTableHistogram))
-        for (std::uint32_t i = 0; i < from.histogramWords(); ++i)
-            pooled.words[to.histogramOffset + i] = counts.words[from.histogramOffset + i];
-    if (from.has(render::kScopeTableWaveform))
-        for (std::uint32_t channel = 0; channel < render::kScopeChannels; ++channel)
-            for (std::uint32_t column = 0; column < from.columns; ++column) {
-                const auto source = from.waveformOffset + channel * from.waveformChannelWords() +
-                                    column * from.waveformColumnWords();
-                const auto target = to.waveformOffset + channel * to.waveformChannelWords() +
-                                    column * to.waveformColumnWords();
-                for (std::uint32_t level = 0; level < from.waveformLevels(); ++level)
-                    pooled.words[target + level / 2U] += counts.words[source + level];
-                pooled.words[target + to.waveformLevelUnder()] =
-                    counts.words[source + from.waveformLevelUnder()];
-                pooled.words[target + to.waveformLevelOver()] =
-                    counts.words[source + from.waveformLevelOver()];
-            }
-    const auto pool = [&](const std::uint32_t scope, const std::uint32_t fromOffset,
-                          const std::uint32_t toOffset) {
-        if (!from.has(scope))
-            return;
-        for (std::uint32_t row = 0; row < from.cells(); ++row)
-            for (std::uint32_t column = 0; column < from.cells(); ++column)
-                pooled.words[toOffset + (row / 2U) * to.cells() + column / 2U] +=
-                    counts.words[fromOffset + row * from.cells() + column];
-    };
-    pool(render::kScopeTableVectorscope, from.vectorscopeOffset, to.vectorscopeOffset);
-    pool(render::kScopeTableChromaticity, from.chromaticityOffset, to.chromaticityOffset);
-    return pooled;
+               what + ": the measure is of the whole frame, not the cached tables");
 }
 
 } // namespace
@@ -386,26 +350,32 @@ int main(int argc, char** argv) {
                    leftHalf.counted == 32U * 64U && !(genuine.counts == leftHalf.counts),
                "the whole frame and its left half count 4096 and 2048 pixels");
 
-        // Without a sidecar the frame is measured.
-        expectMeasured(warm, defaultRead(), genuine, "no sidecar");
+        // A frame without tables is measured.
+        expectMeasured(warm, defaultRead(), genuine, "a frame without tables");
 
-        // A sidecar under the default identity, holding the left half's tables, is the answer.
-        expect(warm.attach(*key, leftHalf, defaultSettings()), "the sidecar is attached");
+        // The frame counted under the region of the left half answers a read of that region.
+        auto leftSettings = defaultSettings();
+        leftSettings.region = leftRead.region;
+        expect(warm.attach(*key, leftHalf, leftSettings),
+               "the frame carries the left half's tables");
         {
             const int before = warm.measures();
-            const auto result = warm.read(defaultRead());
+            const auto result = warm.read(leftRead);
             expect(result.ok() && result.frames.size() == 1, "the warm read answers");
             if (result.ok() && result.frames.size() == 1) {
                 const auto& frame = result.frames.front();
-                expect(frame.fromCache, "a shown frame with a sidecar is answered from the cache");
+                expect(frame.fromCache, "a shown frame with its tables is answered from the cache");
                 expect(frame.counts == leftHalf.counts && frame.counted == leftHalf.counted &&
                            frame.area == leftHalf.area && frame.route == leftHalf.route,
-                       "its tables, area and route are the sidecar's");
+                       "its tables, area and route are the frame's");
                 expect(warm.measures() == before, "no measure ran");
             }
         }
-        // The sidecar's tables are the frame's own: the warm answer equals a cold measure.
-        expect(warm.attach(*key, genuine, defaultSettings()), "the genuine sidecar is attached");
+        expectMeasured(warm, defaultRead(), genuine,
+                       "a read of the whole frame against the left "
+                       "half's tables");
+        // The frame's tables are its own: the warm answer equals a cold measure.
+        expect(warm.attach(*key, genuine, defaultSettings()), "the frame carries its tables");
         {
             const int before = warm.measures();
             const auto result = warm.read(defaultRead());
@@ -413,30 +383,14 @@ int main(int argc, char** argv) {
                        result.frames.front().counts == genuine.counts &&
                        result.frames.front().area == genuine.area,
                    "the warm answer equals a cold measure of the frame, cell for cell");
-            expect(warm.measures() == before, "the genuine sidecar needed no measure either");
-        }
-        // The sidecar's identity names the picture it counted. A Retained sidecar (the tables of the
-        // cached 8-bit picture, another definition) is never served to a read, which measures; a
-        // Rendered one is, exactly as above.
-        {
-            expect(warm.attach(*key, leftHalf, defaultSettings(), runtime::ScopeSource::Retained),
-                   "a Retained sidecar replaces the Rendered one");
-            expectMeasured(warm, defaultRead(), genuine, "a Retained sidecar");
-            expect(warm.attach(*key, genuine, defaultSettings(), runtime::ScopeSource::Rendered),
-                   "the Rendered sidecar is back");
-            const int before = warm.measures();
-            const auto result = warm.read(defaultRead());
-            expect(result.ok() && result.frames.size() == 1 && result.frames.front().fromCache &&
-                       result.frames.front().counts == genuine.counts &&
-                       warm.measures() == before,
-                   "a Rendered sidecar is served with no measure");
+            expect(warm.measures() == before, "the frame's own tables needed no measure either");
         }
         // A summary measures the Histogram and the Vectorscope alone, so it is another identity
-        // than the sidecar of all five tables; a sidecar of those two answers it.
+        // than the tables of all five tables; tables of those two answers it.
         {
             auto request = defaultRead();
             request.output = scripting::ScopeReadOutput::Summary;
-            expectMeasured(warm, request, genuine, "a summary read against a sidecar of all five",
+            expectMeasured(warm, request, genuine, "a summary read against tables of all five",
                            false);
             auto summaryTables = defaultRead();
             summaryTables.scopes = render::kScopeTableHistogram | render::kScopeTableVectorscope;
@@ -444,55 +398,15 @@ int main(int argc, char** argv) {
             auto summarySettings = defaultSettings();
             summarySettings.scopes = summaryTables.scopes;
             expect(warm.attach(*key, summaryFrame, summarySettings),
-                   "a sidecar of the summary's two tables is attached");
+                   "the frame carries the summary's two tables");
             const auto result = warm.read(request);
             expect(result.ok() && result.frames.size() == 1 && result.frames.front().fromCache &&
                        result.frames.front().summary.has_value(),
-                   "a summary is answered from the sidecar of its two tables");
-            expect(warm.attach(*key, genuine, defaultSettings()), "the full sidecar is back");
+                   "a summary is answered from the tables of its two tables");
+            expect(warm.attach(*key, genuine, defaultSettings()), "the full tables are back");
         }
 
-        // A sidecar counted at another detail never answers a read, which measures at detail 0:
-        // the detail is part of the identity the sidecar is found under.
-        {
-            auto coarseSettings = defaultSettings();
-            coarseSettings.detail = 1;
-            auto coarseFrame = genuine;
-            coarseFrame.counts = pooledToDetailOne(genuine.counts);
-            expect(coarseFrame.counts.layout.detail == 1U &&
-                       coarseFrame.counts.layout.cells() == 256U &&
-                       coarseFrame.counts.counted() == genuine.counts.counted(),
-                   "the pooled fixture is a detail-1 measure of the same frame");
-            expect(warm.attach(*key, coarseFrame, coarseSettings),
-                   "a detail-1 sidecar is attached");
-            expectMeasured(warm, defaultRead(), genuine, "a read against a sidecar of detail 1");
-            const auto bound =
-                warm.binding().warmScopes({.composition = warm.project().composition,
-                                           .time = frameTime(0),
-                                           .resolution = runtime::CompositionFormatResolution{},
-                                           .quality = runtime::EvaluationQuality::Reference,
-                                           .colorIntent = warm.session().colorIntent(),
-                                           .display = {},
-                                           .view = {},
-                                           .defaultDisplayView = true,
-                                           .settings = defaultSettings()});
-            expect(!bound.has_value(), "the binding gives nothing for detail 0 against detail 1");
-            const auto same =
-                warm.binding().warmScopes({.composition = warm.project().composition,
-                                           .time = frameTime(0),
-                                           .resolution = runtime::CompositionFormatResolution{},
-                                           .quality = runtime::EvaluationQuality::Reference,
-                                           .colorIntent = warm.session().colorIntent(),
-                                           .display = {},
-                                           .view = {},
-                                           .defaultDisplayView = true,
-                                           .settings = coarseSettings});
-            expect(same.has_value() && same->tables.layout().detail == 1U,
-                   "the same sidecar is found under its own detail");
-            expect(warm.attach(*key, genuine, defaultSettings()), "the full sidecar is back");
-        }
-
-        // The scope settings: each one differs from the sidecar's identity.
+        // The scope settings: each one differs from the cached tables' settings.
         {
             auto request = defaultRead();
             request.signal = runtime::ScopeSignal::Working;
@@ -506,14 +420,14 @@ int main(int argc, char** argv) {
             request = defaultRead();
             request.scopes = render::kScopeTableHistogram;
             expectMeasured(warm, request, genuine, "a read of the Histogram alone", false);
-            // The axis maximum of the Working signal: a sidecar of the Working signal at 1 does
+            // The axis maximum of the Working signal: tables of the Working signal at 1 does
             // not answer a read at 4.
             auto working = defaultSettings();
             working.signal = runtime::ScopeSignal::Working;
             auto workingRead = defaultRead();
             workingRead.signal = runtime::ScopeSignal::Working;
             const auto workingFrame = warm.cold(workingRead);
-            expect(warm.attach(*key, workingFrame, working), "a Working sidecar is attached");
+            expect(warm.attach(*key, workingFrame, working), "the frame carries Working tables");
             workingRead.axisMaximum = 4;
             expectMeasured(warm, workingRead, workingFrame, "a Working read at another maximum",
                            false);
@@ -522,12 +436,12 @@ int main(int argc, char** argv) {
             expect(answered.ok() && answered.frames.size() == 1 &&
                        answered.frames.front().fromCache &&
                        answered.frames.front().counts == workingFrame.counts,
-                   "a Working read with the sidecar's own settings is answered from it");
-            // The Display sidecar is still attached? Attaching replaces: put it back.
-            expect(warm.attach(*key, genuine, defaultSettings()), "the Display sidecar is back");
+                   "a Working read with the cached tables' own settings is answered from it");
+            // Caching other tables replaces them: the Display tables go back.
+            expect(warm.attach(*key, genuine, defaultSettings()), "the Display tables are back");
         }
 
-        // The resolution: a Half read does not take a Full frame's sidecar.
+        // The resolution: a Half read does not take a Full frame's tables.
         {
             auto request = defaultRead();
             request.resolution = scripting::ScopeReadResolution::Half;
@@ -550,16 +464,18 @@ int main(int argc, char** argv) {
             auto other = warm.shown();
             expect(other.has_value(), "the preview shows the frame under another display and view");
             if (other) {
-                expect(warm.attach(*other, genuine, defaultSettings()), "its sidecar is attached");
+                expect(warm.attach(*other, genuine, defaultSettings()),
+                       "its tables are cached with it");
                 expectMeasured(warm, defaultRead(), genuine,
                                "a Viewer on another display and view");
-                // The Working signal never goes through the display: that sidecar answers.
+                // The Working signal never goes through the display: that tables answers.
                 auto working = defaultSettings();
                 working.signal = runtime::ScopeSignal::Working;
                 auto workingRead = defaultRead();
                 workingRead.signal = runtime::ScopeSignal::Working;
                 const auto workingFrame = warm.cold(workingRead);
-                expect(warm.attach(*other, workingFrame, working), "a Working sidecar is attached");
+                expect(warm.attach(*other, workingFrame, working),
+                       "the frame carries Working tables");
                 const auto answered = warm.read(workingRead);
                 expect(answered.ok() && answered.frames.size() == 1 &&
                            answered.frames.front().fromCache,
@@ -569,7 +485,8 @@ int main(int argc, char** argv) {
             auto chosen = warm.shown();
             expect(chosen.has_value(), "the preview shows the frame under the read's own pair");
             if (chosen) {
-                expect(warm.attach(*chosen, genuine, defaultSettings()), "its sidecar is attached");
+                expect(warm.attach(*chosen, genuine, defaultSettings()),
+                       "its tables are cached with it");
                 const auto result = warm.read(named);
                 expect(result.ok() && result.frames.size() == 1 && result.frames.front().fromCache,
                        "a read that names the pair the Viewer chose is answered from the cache");
@@ -585,7 +502,7 @@ int main(int argc, char** argv) {
             expect(shown.has_value(), what + ": the preview shows the frame");
             if (shown) {
                 expect(warm.attach(*shown, genuine, defaultSettings()),
-                       what + ": its sidecar is attached");
+                       what + ": its tables are cached with it");
                 expectMeasured(warm, defaultRead(), genuine, what);
             }
             reset();
@@ -624,14 +541,15 @@ int main(int argc, char** argv) {
             key = warm.shown();
         }
 
-        // After all of that, the Viewer is back as it was and its sidecar answers again.
+        // After all of that, the Viewer is back as it was and its tables answers again.
         expect(key.has_value(), "the preview shows the frame again");
         if (key) {
-            expect(warm.attach(*key, genuine, defaultSettings()), "the sidecar is attached again");
+            expect(warm.attach(*key, genuine, defaultSettings()),
+                   "the frame carries its tables again");
             const auto result = warm.read(defaultRead());
             expect(result.ok() && result.frames.size() == 1 && result.frames.front().fromCache &&
                        result.frames.front().counts == genuine.counts,
-                   "with the Viewer as it was, the sidecar answers again");
+                   "with the Viewer as it was, the tables answers again");
         }
 
         // A read of another composition than the one the Viewer shows is measured.
@@ -658,7 +576,7 @@ int main(int argc, char** argv) {
             query.settings = defaultSettings();
             expect(!unbound.warmScopes(query).has_value(),
                    "a binding with no preview and cache answers nothing");
-            // The same query on the real binding: the sidecar is there and answers.
+            // The same query on the real binding: the tables are there and answer.
             expect(warm.binding().warmScopes(query).has_value(),
                    "the same query on the bound binding answers from the cache");
         }

@@ -299,51 +299,51 @@ ScopeTablesData describeScopeTables(const runtime::ScopeCounts& counts,
     }
     if (layout.has(render::kScopeTableWaveform)) {
         ScopeTableData table;
-        const std::uint32_t levels = layout.waveformLevels();
-        const std::uint32_t codesPerLevel = render::kScopeCodes / levels;
+        const std::uint32_t levels = render::kScopeWaveformLevels;
         table.shape = {render::kScopeChannels, layout.columns, levels};
         table.order = "channel (red, green, blue, luma), then column from the left of the measured "
-                      "area, then level 0 (code 0 to " +
-                      std::to_string(codesPerLevel - 1U) + ") to " + std::to_string(levels - 1U) +
-                      " (code " + std::to_string(render::kScopeCodes - codesPerLevel) + " to " +
-                      std::to_string(render::kScopeCodes - 1U) + ")";
+                      "area, then code 0 to 1023";
         table.underOverShape = {render::kScopeChannels, layout.columns};
         std::vector<std::uint32_t> cells;
         cells.reserve(std::size_t{render::kScopeChannels} * layout.columns * levels);
         for (std::uint32_t channel = 0; channel < render::kScopeChannels; ++channel) {
             for (std::uint32_t column = 0; column < layout.columns; ++column) {
                 const auto base = layout.waveformOffset + (channel * layout.columns + column) *
-                                                              layout.waveformColumnWords();
+                                                              render::kScopeWaveformColumnWords;
                 cells.insert(cells.end(), words.begin() + base, words.begin() + base + levels);
-                table.under.push_back(words[base + layout.waveformLevelUnder()]);
-                table.over.push_back(words[base + layout.waveformLevelOver()]);
+                table.under.push_back(words[base + render::kScopeWaveformLevelUnder]);
+                table.over.push_back(words[base + render::kScopeWaveformLevelOver]);
             }
         }
         fill(table, cells, encoding, data.jsonBytes);
         countBytes(table, data.jsonBytes);
         data.waveform = std::move(table);
     }
-    const auto grid = [&](const std::uint32_t offset, std::string order) {
+    const auto grid = [&](const std::uint32_t offset, const std::uint32_t side, std::string order) {
         ScopeTableData table;
-        table.shape = {layout.cells(), layout.cells()};
+        table.shape = {side, side};
         table.order = std::move(order);
         const std::vector<std::uint32_t> cells(words.begin() + offset,
-                                               words.begin() + offset + layout.gridWords());
+                                               words.begin() + offset + side * side);
         fill(table, cells, encoding, data.jsonBytes);
         return table;
     };
-    if (layout.has(render::kScopeTableVectorscope))
-        data.vectorscope =
-            grid(layout.vectorscopeOffset,
-                 "row = Cr cell 0 to " + std::to_string(layout.cells() - 1U) +
-                     " (Cr -0.5 to 0.5, upward), column = Cb cell 0 to " +
-                     std::to_string(layout.cells() - 1U) + " (Cb -0.5 to 0.5, to the right)");
-    if (layout.has(render::kScopeTableChromaticity))
-        data.chromaticity =
-            grid(layout.chromaticityOffset,
-                 "row = y cell 0 to " + std::to_string(layout.cells() - 1U) +
-                     " (CIE y 0 to 0.9, upward), column = x cell 0 to " +
-                     std::to_string(layout.cells() - 1U) + " (CIE x 0 to 0.8, to the right)");
+    if (layout.has(render::kScopeTableVectorscope)) {
+        constexpr auto side = render::kScopeVectorscopeCells;
+        data.vectorscope = grid(layout.vectorscopeOffset, side,
+                                "row = Cr cell 0 to " + std::to_string(side - 1U) +
+                                    " (Cr -0.625 to 0.625 in steps of 1/512, upward), column = Cb "
+                                    "cell 0 to " +
+                                    std::to_string(side - 1U) +
+                                    " (Cb -0.625 to 0.625 in steps of 1/512, to the right)");
+    }
+    if (layout.has(render::kScopeTableChromaticity)) {
+        constexpr auto side = render::kScopeChromaticityCells;
+        data.chromaticity = grid(layout.chromaticityOffset, side,
+                                 "row = y cell 0 to " + std::to_string(side - 1U) +
+                                     " (CIE y 0 to 0.9, upward), column = x cell 0 to " +
+                                     std::to_string(side - 1U) + " (CIE x 0 to 0.8, to the right)");
+    }
     return data;
 }
 
@@ -383,7 +383,6 @@ struct Job final {
     input.colorimetry = &color.colorimetry();
     input.signal = request.signal;
     input.axisMaximum = request.axisMaximum;
-    input.gain = request.drawing.brightness;
     input.waveformChannels = request.drawing.waveformChannels;
     input.histogramChannels = request.drawing.histogramChannels;
     input.histogramScale = request.drawing.histogramScale;
@@ -494,8 +493,7 @@ struct Job final {
         {.config = std::make_shared<const color::ResolvedBloomNeutralConfig>(std::move(*config)),
          .signal = request.signal,
          .display = display,
-         .view = view,
-         .viewAdjust = {}});
+         .view = view});
     if (!prepared)
         return fail(ScopeReadStatus::Failed, {},
                     prepared.message.empty()
@@ -569,9 +567,9 @@ struct Job final {
                  .view = request.view,
                  .defaultDisplayView = job.request.display.empty() && job.request.view.empty(),
                  .settings = settings});
-        // A sidecar counted at another detail than the read's is another measure, whatever the port
-        // says: the read never serves it.
-        if (hit && hit->tables.layout().detail != settings.detail)
+        // Tables that lack one the read asks for are never served.
+        if (hit && (hit->tables.empty() ||
+                    (hit->tables.layout().scopes & settings.scopes) != settings.scopes))
             hit.reset();
         runtime::ScopeTables tables;
         if (hit) {
@@ -709,11 +707,6 @@ ScopeReadResult readScopes(const Session& session, ScopeReadRequest request,
                 "region is [x, y, width, height] in composition pixels and its width and "
                 "height must be at least 1; leave region out to measure the whole frame");
     }
-    if (request.drawing.brightness < kScopeBrightnessMinimum ||
-        request.drawing.brightness > kScopeBrightnessMaximum ||
-        request.drawing.brightness != request.drawing.brightness)
-        return refused(std::move(request), ScopeReadStatus::Invalid, "brightness",
-                       "brightness is a gain from 0.1 to 16 (1 is the panel's default)");
 
     // What is measured and returned.
     if (request.output == ScopeReadOutput::Image) {

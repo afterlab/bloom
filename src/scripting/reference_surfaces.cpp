@@ -395,12 +395,6 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .summary = "For a scopes image: \"linear\" (default) or \"logarithmic\".",
           .range = "\"linear\" or \"logarithmic\"",
           .choices = {{"linear", "Linear heights"}, {"logarithmic", "Logarithmic heights"}}},
-         {.name = "brightness",
-          .type = "number",
-          .summary = "For a scopes image: the trace brightness gain.",
-          .unit = "gain",
-          .range = "0.1..16",
-          .defaultValue = "1"},
          {.name = "fields",
           .type = "array of strings",
           .summary = "For the kinds that return records: keep only these members of "

@@ -56,8 +56,7 @@ def _frame_of(composition, frame, time):
 
 def _request(frame, last_frame, composition, time, scopes, signal, axis_maximum, region,
              ignore_transparent, resolution, display, view, result, encoding, image, width,
-             height, waveform_channels, histogram_channels, histogram_scale, brightness, out,
-             replace):
+             height, waveform_channels, histogram_channels, histogram_scale, out, replace):
     if composition is None:
         composition = context.composition
     if composition is None:
@@ -81,7 +80,7 @@ def _request(frame, last_frame, composition, time, scopes, signal, axis_maximum,
         "image": image, "width": 0 if width is None else int(width),
         "height": 0 if height is None else int(height),
         "waveform_channels": waveform_channels, "histogram_channels": histogram_channels,
-        "histogram_scale": histogram_scale, "brightness": float(brightness),
+        "histogram_scale": histogram_scale,
         "out": None if out is None else str(Path(out)), "replace": bool(replace),
     }
 
@@ -117,14 +116,14 @@ def read(frame=None, *, last_frame=None, composition=None, time=None, scopes=Non
         raise ValueError("result is 'tables' or 'summary'; bloom.scopes.image writes a picture")
     return _run(_request(frame, last_frame, composition, time, scopes, signal, axis_maximum,
                          region, ignore_transparent, resolution, display, view, result, encoding,
-                         "all", None, None, "rgb", "rgb", "linear", 1.0, None, False))
+                         "all", None, None, "rgb", "rgb", "linear", None, False))
 
 
 def image(out, frame=None, *, last_frame=None, composition=None, time=None, image="all",
           width=None, height=None, signal="display", axis_maximum=1, region=None,
           ignore_transparent=False, resolution="full", display=None, view=None,
           waveform_channels="rgb", histogram_channels="rgb", histogram_scale="linear",
-          brightness=1.0, replace=False):
+          replace=False):
     """Draw a scope as a PNG at `out` (a range writes one numbered file per frame).
 
     `image` is "waveform", "parade", "vectorscope", "histogram", "chromaticity" or "all" (the five
@@ -135,4 +134,4 @@ def image(out, frame=None, *, last_frame=None, composition=None, time=None, imag
     return _run(_request(frame, last_frame, composition, time, None, signal, axis_maximum, region,
                          ignore_transparent, resolution, display, view, "image", "dense", image,
                          width, height, waveform_channels, histogram_channels, histogram_scale,
-                         brightness, out, replace))
+                         out, replace))

@@ -57,8 +57,6 @@ inline constexpr int kScopeImageMaximumWidth = 2048;
 inline constexpr int kScopeImageMaximumHeight = 2048;
 inline constexpr int kScopeImageDefaultWidth = 640;
 inline constexpr std::size_t kScopeImageByteLimit = std::size_t{64} * 1024U * 1024U;
-inline constexpr float kScopeBrightnessMinimum = 0.1F;
-inline constexpr float kScopeBrightnessMaximum = 16.0F;
 // The most frames one read covers.
 inline constexpr std::uint64_t kScopeReadMaximumFrames = 1000;
 // What a JSON rendering of one read may hold in table numbers (the MCP response limit counts the
@@ -84,7 +82,6 @@ struct ScopeReadDrawing final {
     runtime::scopes::WaveformChannels waveformChannels = runtime::scopes::WaveformChannels::Rgb;
     runtime::scopes::HistogramChannels histogramChannels = runtime::scopes::HistogramChannels::Rgb;
     runtime::scopes::HistogramScale histogramScale = runtime::scopes::HistogramScale::Linear;
-    float brightness = 1.0F;
 };
 
 struct ScopeReadRequest final {

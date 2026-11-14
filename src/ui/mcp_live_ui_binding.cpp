@@ -539,13 +539,13 @@ McpLiveUiBinding::warmScopes(const scripting::ScopeWarmQuery& query) const {
         if (!named && !defaulted)
             return std::nullopt;
     }
-    // Only a Rendered sidecar answers a read: the tables of a retained 8-bit picture are another
-    // definition (their identity names the source), and a read with no such sidecar measures.
-    const auto sidecar = scopeCache_->scopesFor(
-        *key, PreviewScopeIdentity{query.settings, {}, runtime::ScopeSource::Rendered});
-    if (sidecar == nullptr)
+    // #730: the tables the cached frame's own preparation counted, under exactly the read's
+    // settings; a frame without them is measured by the read.
+    const auto scopes = scopeCache_->scopesOf(*key);
+    if (scopes == nullptr || scopes->status != runtime::PreviewFrameScopesStatus::Measured ||
+        scopes->settings != query.settings)
         return std::nullopt;
-    return scripting::ScopeWarmHit{sidecar->tables, sidecar->area, sidecar->note};
+    return scripting::ScopeWarmHit{scopes->tables, scopes->area, {}};
 }
 
 mcp::McpViewerRoute McpLiveUiBinding::viewerRoute() {

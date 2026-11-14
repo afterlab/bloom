@@ -151,7 +151,6 @@ yyjson_mut_val* settingsJson(Json& out, const scripting::ScopeReadRequest& reque
         out.set(
             settings, "histogramScale",
             out.text(kHistogramScales[static_cast<std::size_t>(request.drawing.histogramScale)]));
-        out.set(settings, "brightness", out.real(static_cast<double>(request.drawing.brightness)));
     }
     return settings;
 }
@@ -181,8 +180,7 @@ yyjson_mut_val* scopesQuery(McpServerCore::State& core, Json& out, McpCall& call
              "height",
              "waveformChannels",
              "histogramChannels",
-             "histogramScale",
-             "brightness"},
+             "histogramScale"},
             {"kind"});
     const auto snapshot = call.session.snapshot();
     scripting::ScopeReadRequest request;
@@ -266,11 +264,11 @@ yyjson_mut_val* scopesQuery(McpServerCore::State& core, Json& out, McpCall& call
     const bool imageArguments =
         member(arguments, "image") || member(arguments, "width") || member(arguments, "height") ||
         member(arguments, "waveformChannels") || member(arguments, "histogramChannels") ||
-        member(arguments, "histogramScale") || member(arguments, "brightness");
+        member(arguments, "histogramScale");
     if (imageArguments && request.output != ScopeReadOutput::Image)
-        throw InvalidInput("image, width, height, waveformChannels, histogramChannels, "
-                           "histogramScale and brightness draw a picture; set result to "
-                           "\"image\" or leave them out");
+        throw InvalidInput("image, width, height, waveformChannels, histogramChannels and "
+                           "histogramScale draw a picture; set result to \"image\" or leave "
+                           "them out");
     if (auto* image = member(arguments, "image")) {
         const auto parsed = yyjson_is_str(image)
                                 ? scripting::scopeImageKindFromName(string(image, 32))
@@ -292,11 +290,6 @@ yyjson_mut_val* scopesQuery(McpServerCore::State& core, Json& out, McpCall& call
             static_cast<runtime::scopes::HistogramChannels>(*channels);
     if (const auto scale = choice(arguments, "histogramScale", kHistogramScales))
         request.drawing.histogramScale = static_cast<runtime::scopes::HistogramScale>(*scale);
-    if (auto* brightness = member(arguments, "brightness")) {
-        if (!yyjson_is_num(brightness))
-            throw InvalidInput("brightness is a number from 0.1 to 16 (1 is the panel's default)");
-        request.drawing.brightness = static_cast<float>(yyjson_get_num(brightness));
-    }
     if (request.output == ScopeReadOutput::Image &&
         request.lastFrame - request.firstFrame >= kMcpRetainedCaptures &&
         request.lastFrame >= request.firstFrame)

@@ -258,16 +258,18 @@ void tablesMatchTheReference(const Bars& bars, Reads& reads) {
                                    data.histogram->under[channel] + data.histogram->over[channel] ==
                                4096U;
         expect(sums, "each histogram channel's bins plus under and over equal the pixels counted");
-        bool columns = data.waveform->shape == std::vector<std::uint32_t>{4, 64, 512};
+        bool columns = data.waveform->shape == std::vector<std::uint32_t>{4, 64, 1024};
         for (std::size_t channel = 0; columns && channel < 4; ++channel)
             for (std::size_t column = 0; columns && column < 64; ++column)
-                columns = sumOf(data.waveform->values, (channel * 64 + column) * 512, 512) +
+                columns = sumOf(data.waveform->values, (channel * 64 + column) * 1024, 1024) +
                               data.waveform->under[channel * 64 + column] +
                               data.waveform->over[channel * 64 + column] ==
                           64U;
         expect(columns, "each waveform column's levels plus under and over equal its 64 pixels");
-        expect(sumOf(data.vectorscope->values, 0, 512 * 512) + frame.counts.vectorscopeOutside() ==
-                   4096U,
+        expect(data.vectorscope->values.size() == 640U * 640U &&
+                   sumOf(data.vectorscope->values, 0, 640 * 640) +
+                           frame.counts.vectorscopeOutside() ==
+                       4096U,
                "the vectorscope's cells plus its outside count equal the pixels counted");
         expect(sumOf(data.chromaticity->values, 0, 512 * 512) + frame.counts.chromaticityOutside() +
                        frame.counts.noChromaticity() ==
@@ -302,10 +304,10 @@ void workingTablesAreTheBarsOwn(const Bars& bars, Reads& reads) {
     for (std::uint32_t channel = 0; channel < 3; ++channel)
         expect(counts.histogram(channel, 767) == 2048U && counts.histogram(channel, 0) == 2048U,
                "each color channel holds half its pixels at 0 and half at code 767");
-    // The waveform's first column is the white bar: 64 pixels at level 383 (code 767 >> 1) in red,
+    // The waveform's first column is the white bar: 64 pixels at level 767 (its code) in red,
     // green and blue; the last column is black.
-    expect(counts.waveform(0U, 0, 383) == 64U && counts.waveform(1U, 0, 383) == 64U &&
-               counts.waveform(2U, 0, 383) == 64U && counts.waveform(0U, 63, 0) == 64U,
+    expect(counts.waveform(0U, 0, 767) == 64U && counts.waveform(1U, 0, 767) == 64U &&
+               counts.waveform(2U, 0, 767) == 64U && counts.waveform(0U, 63, 0) == 64U,
            "the waveform columns are the bars' own levels");
 }
 
@@ -572,50 +574,35 @@ void warmSidecars(const Bars& bars, Reads& reads) {
            "a sidecar of other settings is not used");
 }
 
-// A sidecar counted at another detail is never served to a read, which measures at detail 0: the
-// settings the port is asked with carry detail 0, an exact-identity port finds nothing under them,
-// and a port that wrongly answers with a detail-1 sidecar is not believed.
-void warmSidecarOfAnotherDetail(const Bars& bars, Reads& reads) {
+// Tables that lack one the read asks for are never served, whatever the port answers.
+void warmTablesMissingAScope(const Bars& bars, Reads& reads) {
     runtime::ScopeMeasureSettings settings;
     settings.signal = runtime::ScopeSignal::Working;
     settings.scopes = render::kScopeTableHistogram | render::kScopeTableVectorscope;
-    runtime::ScopeMeasureSettings coarse = settings;
-    coarse.detail = 1;
-    const auto coarseCounts = reference(bars, 0, coarse).counts;
-    expect(coarseCounts.layout.detail == 1U && coarseCounts.layout.cells() == 256U,
-           "the fixture sidecar is counted at detail 1");
-    const auto coarseTables = runtime::ScopeTables::pack(coarseCounts, runtime::ScopeRoute::Gpu);
+    runtime::ScopeMeasureSettings fewer = settings;
+    fewer.scopes = render::kScopeTableHistogram;
+    const auto fewerCounts = reference(bars, 0, fewer).counts;
+    expect(!fewerCounts.layout.has(render::kScopeTableVectorscope),
+           "the fixture tables hold the Histogram alone");
+    const auto fewerTables = runtime::ScopeTables::pack(fewerCounts, runtime::ScopeRoute::Gpu);
 
     auto request = requestFor(bars, 0);
     request.signal = runtime::ScopeSignal::Working;
     request.scopes = settings.scopes;
-
-    // An exact-identity port that knows only the detail-1 measure.
-    std::vector<scripting::ScopeWarmQuery> asked;
     auto ports = reads.ports();
+    std::vector<scripting::ScopeWarmQuery> asked;
     ports.warm =
         [&](const scripting::ScopeWarmQuery& query) -> std::optional<scripting::ScopeWarmHit> {
         asked.push_back(query);
-        if (!(query.settings == coarse))
-            return std::nullopt;
-        return scripting::ScopeWarmHit{coarseTables, {0, 0, 64, 64}, "coarse"};
-    };
-    const auto strict = scripting::readScopes(*bars.session, request, ports);
-    expect(strict.ok() && strict.frames.size() == 1 && !strict.frames[0].fromCache &&
-               strict.frames[0].counts.layout.detail == 0U &&
-               strict.frames[0].counts.layout.cells() == 512U,
-           "a read measures at detail 0 and finds no sidecar of detail 1");
-    expect(asked.size() == 1 && asked[0].settings.detail == 0U && !(asked[0].settings == coarse),
-           "the port is asked under detail 0");
-
-    // A port that answers every query with the detail-1 sidecar: the read does not serve it.
-    ports.warm = [&](const scripting::ScopeWarmQuery&) -> std::optional<scripting::ScopeWarmHit> {
-        return scripting::ScopeWarmHit{coarseTables, {0, 0, 64, 64}, "coarse"};
+        return scripting::ScopeWarmHit{fewerTables, {0, 0, 64, 64}, "fewer"};
     };
     const auto careless = scripting::readScopes(*bars.session, request, ports);
+    expect(asked.size() == 1 && asked[0].settings == settings,
+           "the port is asked with the read's settings");
     expect(careless.ok() && careless.frames.size() == 1 && !careless.frames[0].fromCache &&
-               careless.frames[0].counts.layout.detail == 0U,
-           "a sidecar of another detail is never served to a read");
+               careless.frames[0].counts.layout.has(render::kScopeTableVectorscope) &&
+               careless.frames[0].counts.layout.vectorscopeGridWords() == 640U * 640U,
+           "tables without the Vectorscope are never served to a read that asks for it");
 }
 
 // ---- Region, transparency, resolution, display and view -----------------------------------------
@@ -837,7 +824,7 @@ int main() {
     pictures(bars, reads);
     rangeProgressAndCancel(bars, reads);
     warmSidecars(bars, reads);
-    warmSidecarOfAnotherDetail(bars, reads);
+    warmTablesMissingAScope(bars, reads);
     settingsChangeTheResult(bars, reads);
     transparentPixelsAreLeftOut(reads);
     displayAndView(bars, reads);

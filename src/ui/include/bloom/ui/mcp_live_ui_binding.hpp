@@ -69,10 +69,10 @@ class McpLiveUiBinding final : public QObject {
     // The Script editor's runtime, for script.run. Weak; without one (a build without embedded
     // Python) script.run answers Unbound.
     void setScriptRuntime(const std::shared_ptr<ScriptPanelRuntime>& runtime);
-    // #724 Scopes: where query kind scopes measures a frame (the application's final-render device,
-    // its shared OCIO context and its CPU reference evaluator: the headless route, which alone
-    // evaluates a scene for a scope), and the preview controller and cache whose Rendered warm
-    // sidecars a read may reuse (a Retained one is never served). The routes
+    // #724, #730 Scopes: where query kind scopes measures a frame (the application's final-render
+    // device, its shared OCIO context and its CPU reference evaluator: the headless route, which
+    // alone evaluates a scene for a scope), and the preview controller and cache whose frames'
+    // own tables a read may reuse when they were counted under exactly its settings. The routes
     // are copied; the controller is weak and the cache shared. Without them a read measures every
     // frame on the CPU reference.
     void setScopes(runtime::ScopeFrameRoutes routes, CompositionPreviewController* preview,

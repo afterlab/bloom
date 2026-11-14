@@ -128,7 +128,6 @@ constexpr std::array<const char*, 2> kEncodingNames{"dense", "sparse"};
             request.drawing.histogramScale == runtime::scopes::HistogramScale::Linear
                 ? "linear"
                 : "logarithmic";
-        settings["brightness"] = static_cast<double>(request.drawing.brightness);
     }
     return settings;
 }
@@ -206,7 +205,6 @@ nb::dict NativeHost::scopes(const nb::dict& options, const std::uint64_t cancell
     constexpr std::array<std::string_view, 2> histogramScales{"linear", "logarithmic"};
     request.drawing.histogramScale = static_cast<runtime::scopes::HistogramScale>(
         choiceIndex(options, "histogram_scale", histogramScales));
-    request.drawing.brightness = static_cast<float>(required<double>(options, "brightness"));
     const auto out =
         options["out"].is_none() ? std::string() : required<std::string>(options, "out");
     const bool replace = required<bool>(options, "replace");

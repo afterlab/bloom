@@ -421,8 +421,8 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
         "summary or an image instead.",
         "{revision, composition, compositionSize:{width, height}, settings:{scopes, signal, "
         "axisMaximum|null, region|null, ignoreTransparent, resolution, display|null, view|null, "
-        "result, encoding?, image?, waveformChannels?, histogramChannels?, histogramScale?, "
-        "brightness?}, axis, luma:{kr, kg, kb}, primaries:{colorSpace, r:[x, y], g, b, w}, "
+        "result, encoding?, image?, waveformChannels?, histogramChannels?, histogramScale?}, "
+        "axis, luma:{kr, kg, kb}, primaries:{colorSpace, r:[x, y], g, b, w}, "
         "frames:[{frame, time:[n, d], route (gpu|cpu), routeNote|null, fromCache, empty, "
         "measuredArea:{x, y, width, height}|null, counted, note?, counters?:{notFinite, "
         "noChromaticity|null, outside:{vectorscope|null, chromaticity|null}}, tables?:{histogram?:"
@@ -543,13 +543,7 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
           .type = "string",
           .summary = "For an image: the histogram's height scale.",
           .range = "\"linear\" or \"logarithmic\"",
-          .defaultValue = "linear"},
-         {.name = "brightness",
-          .type = "number",
-          .summary = "For an image: the trace brightness gain (the panel's Brightness).",
-          .unit = "gain",
-          .range = "0.1..16",
-          .defaultValue = "1"}},
+          .defaultValue = "linear"}},
         R"({"name":"query","arguments":{"kind":"scopes","composition":1,"frame":24,"result":"summary"}})");
     {
         auto& scopes = out.back();
