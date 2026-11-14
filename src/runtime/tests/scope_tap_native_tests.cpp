@@ -32,6 +32,12 @@
 //       taps are the first memory given back for a frame that needs room, a measure in flight is
 //       tracked against its phase and never makes a frame wait, a fill tap that does not fit as
 //       Background is refused without holding the fill back, and the idle trim releases the tap.
+//   (9) collision: the kernel's table slot is one per process, and the panel's measure (the
+//       preview service's device) and a headless read (the final-render evaluator's device) can
+//       meet over it. Neither reads the other's tables, whichever holds the slot first: a headless
+//       read refused the slot is counted by the CPU reference, labeled CPU, with the reason; a
+//       panel measure refused the slot ends Failed with the reason, its tap stays for the
+//       retained-picture fallback; each result equals the CPU reference of its own picture.
 //
 // Requires the Vulkan backend and the pinned shader tools; skips (77) without a device and fails
 // under --require-device.
@@ -48,6 +54,7 @@
 #include <bloom/render/gpu_scope_tables.hpp>
 #include <bloom/render/native_image_storage.hpp>
 #include <bloom/render/scope_table_layout.hpp>
+#include <bloom/runtime/gpu_process_frame.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/scope_frame_measure.hpp>
 #include <bloom/runtime/scope_measure.hpp>
@@ -834,6 +841,186 @@ bool run(Expectations& checks, const TestOptions& options,
     }
     checks.expect(counters().cpuFallbacks == 0, "no frame of the test took the CPU path");
     return true;
+}
+
+// Holds the table readback of the next headless measure through the evaluator's seam.
+struct EvaluatorTableHold final {
+    std::shared_ptr<std::atomic_bool> held = std::make_shared<std::atomic_bool>(true);
+    // Set once the headless measure polled its held readback: it holds the table slot.
+    std::shared_ptr<std::atomic_bool> polled = std::make_shared<std::atomic_bool>(false);
+
+    [[nodiscard]] std::function<bloom::render::GpuScopeTablesState(bloom::render::GpuScopeTables&)>
+    seam() const {
+        return [held = held, polled = polled](bloom::render::GpuScopeTables& tables) {
+            if (!held->load())
+                return tables.poll();
+            polled->store(true);
+            return bloom::render::GpuScopeTablesState::Pending;
+        };
+    }
+    void release() { held->store(false); }
+    ~EvaluatorTableHold() { held->store(false); }
+};
+
+// (9) A panel measure and a headless device read meeting over the one table slot.
+void collisionCases(Expectations& checks, const TestOptions& options,
+                    const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan,
+                    const std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle>&
+                        processor,
+                    const bloom::document::Snapshot& snapshot, const Scope& scope) {
+    using bloom::runtime::GpuProcessFrameEvaluator;
+    using bloom::runtime::GpuProcessFrameEvaluatorOptions;
+    using bloom::runtime::ScopeRoute;
+    // The correct behavior, the owner's: the table slot is one per process and a second measure
+    // never reads the first's tables. The second either waits or is refused with a reason:
+    //   * a headless read that meets the panel's held measure is refused the slot at its table
+    //     step, and counts the frame with the CPU reference, labeled CPU, saying why;
+    //   * a panel measure that meets the held headless read ends Failed saying why, with nothing
+    //     published and its tap still held, so the panel counts the retained picture;
+    //   * each result equals the CPU reference of ITS OWN picture (the two pictures differ), and
+    //     the held measure still delivers its own tables when released.
+    Rig rig(options, plan, processor, snapshot);
+    if (!rig.ready())
+        return;
+    auto& service = *rig.service;
+    const auto counters = [&] { return service.status().counters; };
+
+    // The headless route: its own evaluator on its own device, a picture of another size.
+    const auto headlessPlan = makePlan(kSize / 2, kSize / 4);
+    bloom::runtime::CpuCompositionEvaluator cpuEvaluator;
+    const auto evaluatorPolicy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(
+        32, rig.retirement.owner);
+    {
+        auto sample = bloom::test_support::fixedMemoryBudgetSample();
+        bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
+                                                  sample.machine.availableBytes.value_or(0));
+        ledger.beginProcessSampling();
+        const auto at = bloom::runtime::GpuProcessingPhasePolicy::Clock::now();
+        const auto state = ledger.applySample(std::move(sample), at);
+        evaluatorPolicy->applyHostSample(state, ledger.physicalByteBudget(), at);
+    }
+    EvaluatorTableHold evaluatorHold;
+    GpuProcessFrameEvaluatorOptions evaluatorOptions;
+    evaluatorOptions.processingPhasePolicy = evaluatorPolicy;
+    evaluatorOptions.enabled = true;
+    evaluatorOptions.loaderPath = options.loaderPath;
+    evaluatorOptions.ocioContext = scope.ocio;
+    evaluatorOptions.mediaContext =
+        bloom::runtime::GpuSceneMediaContext::fromEvaluator(cpuEvaluator);
+    evaluatorOptions.nativeDeadline = std::chrono::minutes(10);
+    evaluatorOptions.scopeTablesPollOverride = evaluatorHold.seam();
+    const std::shared_ptr<GpuProcessFrameEvaluator> evaluator =
+        GpuProcessFrameEvaluator::create(evaluatorOptions);
+    if (evaluator == nullptr || !evaluator->gpuAvailable()) {
+        std::cout << "Unsupported: no second device context for the headless route\n";
+        checks.expect(!options.requireDevice, "required headless device available");
+        return;
+    }
+    const auto settings = scope.settings(ScopeSignal::Working, kNoChromaticity);
+    const auto job = scope.job(settings);
+    const auto panelReference = scope.reference(settings);
+    const bloom::runtime::EvaluationRequest request{.time = RationalTime::fromInteger(0),
+                                                    .output = headlessPlan->output(),
+                                                    .resolution =
+                                                        bloom::runtime::CompositionFormatResolution{},
+                                                    .quality =
+                                                        bloom::runtime::EvaluationQuality::Reference,
+                                                    .colorIntent = bloom::runtime::
+                                                        EvaluationColorIntent::LinearRec709Scene,
+                                                    .pixelStorageByteLimit = kBudget};
+    const auto evaluated = cpuEvaluator.evaluate(headlessPlan, request, {});
+    if (evaluated.frame() == nullptr) {
+        checks.expect(false, "the CPU reference evaluates the headless plan");
+        return;
+    }
+    const auto headlessReference =
+        bloom::runtime::measureScopeFrameCpu(*evaluated.frame(), settings, *scope.working);
+    checks.expect(headlessReference.status == ScopeFrameStatus::Measured &&
+                      !(headlessReference.counts == panelReference.counts),
+                  "the two pictures count differently");
+    const bloom::runtime::ScopeFrameRoutes routes{
+        .device = [evaluator] { return evaluator; },
+        .ocio = [ocio = scope.ocio] { return ocio; },
+        .evaluateCpu = [&cpuEvaluator](std::shared_ptr<const bloom::runtime::CompiledCompositionPlan> p,
+                                       const bloom::runtime::EvaluationRequest& r,
+                                       const bloom::runtime::CancellationToken& token) {
+            return cpuEvaluator.evaluate(std::move(p), r, token);
+        }};
+    const auto headless = [&] {
+        return bloom::runtime::measureScopeFrame(routes, headlessPlan, request, settings,
+                                                 *scope.working, true);
+    };
+
+    // ---- Panel first: the headless read is refused the slot and counts on the CPU ---------------
+    {
+        const auto frame = rig.frame(60, 60, TaskPriority::Visible);
+        if (!frame)
+            return;
+        const auto key = keyOf(*frame);
+        TableHold hold(rig.core);
+        auto panel = measureAsync(service, key, job);
+        if (!hold.awaitHeld("the panel's measure holds the table slot"))
+            return;
+        evaluatorHold.release(); // the headless read is not held: it meets the slot as it is
+        const auto read = headless();
+        checks.expect(read.status == ScopeFrameStatus::Measured && read.route == ScopeRoute::Cpu &&
+                          !read.message.empty(),
+                      "the headless read refused the slot is counted on the CPU, labeled CPU, and "
+                      "says why: " + read.message);
+        checks.expect(read.counts == headlessReference.counts &&
+                          !(read.counts == panelReference.counts),
+                      "the headless read has the tables of its own picture, not the panel's");
+        checks.expect(notReady(panel), "the panel's measure is still held while the headless "
+                                       "read came and went");
+        hold.release();
+        const auto outcome = take(panel, "the held panel measure delivers");
+        checks.expect(outcome && outcome->status == GpuScopeTapStatus::Measured &&
+                          outcome->counts == panelReference.counts &&
+                          !(outcome->counts == headlessReference.counts),
+                      "the panel's measure has the tables of its own picture, not the headless "
+                      "read's");
+    }
+
+    // ---- Headless first: the panel's measure is refused the slot and says why -------------------
+    {
+        const auto frame = rig.frame(61, 61, TaskPriority::Visible);
+        if (!frame)
+            return;
+        const auto key = keyOf(*frame);
+        evaluatorHold.held->store(true);
+        evaluatorHold.polled->store(false);
+        auto held = std::async(std::launch::async, [&] { return headless(); });
+        if (!awaitCondition("the headless read holds the table slot",
+                            [&] { return evaluatorHold.polled->load(); })) {
+            evaluatorHold.release();
+            return;
+        }
+        const auto failedBefore = counters().scopeMeasuresFailed;
+        auto panel = measureAsync(service, key, job);
+        const auto refused = take(panel, "the panel's measure is answered while the slot is held");
+        checks.expect(refused && refused->status == GpuScopeTapStatus::Failed &&
+                          !refused->message.empty() && refused->counts.words.empty() &&
+                          counters().scopeMeasuresFailed == failedBefore + 1,
+                      "the panel's measure refused the slot ends Failed, says why and publishes "
+                      "no table: " + (refused ? refused->message : std::string{}));
+        checks.expect(service.scopeTapGeometry(key).has_value(),
+                      "the refused measure keeps the tap for the panel's fallback");
+        evaluatorHold.release();
+        const bool delivered = awaitCondition("the held headless read delivers", [&] {
+            return held.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+        });
+        const auto read = delivered ? std::optional(held.get()) : std::nullopt;
+        checks.expect(read && read->status == ScopeFrameStatus::Measured &&
+                          read->route == ScopeRoute::Gpu && read->counts == headlessReference.counts &&
+                          !(read->counts == panelReference.counts),
+                      "the held headless read has the tables of its own picture on the device");
+        // The slot is free again: the panel's measure of the same frame succeeds.
+        const auto retry = service.measureScopeTap(key, job, bloom::runtime::CancellationToken{});
+        checks.expect(retry.status == GpuScopeTapStatus::Measured &&
+                          retry.counts == panelReference.counts,
+                      "after the headless read ended the panel's measure takes the slot");
+    }
+    evaluator->beginShutdown();
 }
 
 // (7) Shutdown with a request queued, and with one in flight, unblocks the caller.
@@ -1803,6 +1990,7 @@ int runAll(int argc, char** argv) {
     if (!run(checks, options, plan, processor, document.snapshot(), scope))
         return options.requireDevice ? 1 : kSkipExit;
     shutdownCases(checks, options, plan, processor, document.snapshot(), scope);
+    collisionCases(checks, options, plan, processor, document.snapshot(), scope);
     pressureCases(checks, options, plan, processor, document.snapshot(), scope);
     if (checks.failures() + bloom::test_support::awaitFailureCount() != 0)
         return 1;

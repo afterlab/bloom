@@ -482,7 +482,8 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
         }
         auto measured = detail::runScopeMeasure(*scopeStage, *scope, std::move(image),
                                                 readbackByteAllowance, options.nativeDeadline,
-                                                cancellation, stopRequested, phase.retired);
+                                                cancellation, stopRequested, phase.retired,
+                                                options.scopeTablesPollOverride);
         outcome.status = measured.status;
         outcome.diagnostic = {measured.code, std::move(measured.message)};
         return outcome;

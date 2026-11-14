@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/render/final_pixel_storage.hpp>
+#include <bloom/render/gpu_scope_tables.hpp>
 
 // Qt-free, Vulkan-free GPU final-render/export bridge.
 //
@@ -220,6 +221,11 @@ struct GpuProcessFrameEvaluatorOptions final {
     // fails with a typed BadAllocation. Zero (the default) disables it and production never sets
     // it.
     std::uint32_t failPreparationAllocationAt = 0;
+    // Test-only seam of the scope measure's table readback (#724): when set, the measure's poll of
+    // its tables goes through it instead of GpuScopeTables::poll, so a test can hold the readback
+    // while the process-wide table slot is reserved. Empty (the default) polls the tables; the
+    // stop and deadline drains always poll the tables themselves. Production never sets it.
+    std::function<render::GpuScopeTablesState(render::GpuScopeTables&)> scopeTablesPollOverride;
 };
 
 // The device memory this evaluator retains between frames and how it gave it back (#544).

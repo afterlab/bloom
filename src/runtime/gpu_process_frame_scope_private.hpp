@@ -99,7 +99,9 @@ class ScopeMeasureStage final {
 runScopeMeasure(ScopeMeasureStage& stage, ScopeMeasureWork& work,
                 std::shared_ptr<const render::GpuImage> picture, std::uint64_t byteBudget,
                 std::chrono::milliseconds nativeDeadline, const CancellationToken& cancellation,
-                const std::atomic_bool& stopRequested, bool& nativeRetirementProven);
+                const std::atomic_bool& stopRequested, bool& nativeRetirementProven,
+                const std::function<render::GpuScopeTablesState(render::GpuScopeTables&)>&
+                    pollTablesOverride = {});
 
 
 // The non-blocking counterpart of runScopeMeasure for the preview service's owner thread (#724).

@@ -226,7 +226,9 @@ ScopeMeasureFault runScopeMeasure(ScopeMeasureStage& stage, ScopeMeasureWork& wo
                                   const std::chrono::milliseconds nativeDeadline,
                                   const CancellationToken& cancellation,
                                   const std::atomic_bool& stopRequested,
-                                  bool& nativeRetirementProven) {
+                                  bool& nativeRetirementProven,
+                                  const std::function<render::GpuScopeTablesState(
+                                      render::GpuScopeTables&)>& pollTablesOverride) {
     nativeRetirementProven = true;
     const auto cancelled = [&] {
         return cancellation.isCancellationRequested() || stopRequested.load();
@@ -337,7 +339,7 @@ ScopeMeasureFault runScopeMeasure(ScopeMeasureStage& stage, ScopeMeasureWork& wo
     for (;;) {
         if (cancelled())
             tables.cancel();
-        state = tables.poll();
+        state = pollTablesOverride && !cancelled() ? pollTablesOverride(tables) : tables.poll();
         if (state != render::GpuScopeTablesState::Pending)
             break;
         if (std::chrono::steady_clock::now() >= deadline) {
