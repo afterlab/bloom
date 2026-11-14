@@ -609,8 +609,9 @@ through the same route (`help` lists them with their arguments):
   `fromCache` (the application's warm RAM preview supplied the tables), `measuredArea`, `counted`
   and the counters of pixels not finite, without chromaticity or outside a plot. An answer too
   large for one response is refused with the ways to make it smaller. In the desktop application a
-  frame whose tables the preview cache already holds under the same settings is returned without
-  measuring. The same read is `bloom.scopes.read` and `bloom.scopes.image` in Python.
+  frame whose full-precision tables the preview cache already holds under the same settings is
+  returned without measuring; tables counted from a cached 8-bit picture are never returned to a
+  read. The same read is `bloom.scopes.read` and `bloom.scopes.image` in Python.
 - `kind:"render-route"` says which route produced the Viewer's displayed frame: `scene` and
   `display` are each `gpu` or `cpu` as the frame itself recorded, `provider` names the display
   arm, `why` is the reason the frame recorded for running part of it on the CPU, and

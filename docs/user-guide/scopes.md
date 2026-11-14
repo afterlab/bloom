@@ -11,9 +11,9 @@ The scopes only read. They never change the picture, the project, the export or 
 A hidden panel measures nothing, and a collapsed section's scope is not measured, so collapse what
 you do not need.
 
-Every number in a scope is a whole count of pixels of the frame, measured from the float picture
-before it is reduced to 8 bits. The graphics processor and the processor fallback give the same
-counts.
+Every number in a scope is a whole count of pixels of the frame. The scopes follow the Viewer's own
+picture: they count the picture the Viewer just produced, in full precision, and never render the
+frame a second time. The graphics processor and the processor fallback give the same counts.
 
 ## The header
 
@@ -41,11 +41,16 @@ measured from:
 - **GPU** or **CPU**: which one counted the frame. When the graphics processor could not count a
   frame, the processor does, and the line says why;
 - the number of pixels counted;
-- **Live detail**, while the scopes on show are the slightly coarser live measure.
+- **Live detail**, while the scopes on show are the slightly coarser live measure;
+- a note in parentheses at the end when the frame was counted from its cached picture (see
+  [Cached frames](#cached-frames)).
 
 While the picture is changing, as in playback or while you scrub, the scopes show a slightly
-coarser live measure of each frame they reach; a frame that stays is measured again at full detail,
-and the status line says "Live detail" until then.
+coarser live measure of each frame they reach and update at that live detail; a frame that stays is
+measured again at full detail, and the status line says "Live detail" until then. When a newer
+frame arrives before a frame could be counted at full precision, that frame is counted from its
+cached picture instead, and the scopes settle to full detail once the frame stays still and its
+full-precision picture is still held.
 
 A second line in the warning color lists every Viewer setting that makes the measured picture
 differ from what an export writes: exposure or gamma that is not neutral, a channel view,
@@ -111,8 +116,26 @@ becomes the region's width.
 
 ## RAM Preview
 
-While a RAM Preview fills and a Scopes panel is open, each cached frame is measured too, so the
-scopes play along with a cached range without measuring again.
+While a RAM Preview fills and a Scopes panel is open, each frame is measured as it is made, at full
+detail and for both signals, and its scopes are kept with the cached frame. Every frame in the range
+then has full scopes, and the scopes play along with the cached range without measuring again. A
+fill with no Scopes panel open costs nothing extra.
+
+## Cached frames
+
+A frame that was cached while Scopes was closed, or shown from an older cache, has no full-precision
+picture left to count: only the 8-bit picture the Viewer paints. For such a frame:
+
+- **Display** and **CIE chromaticity** are counted from that cached picture. They are slightly
+  coarser, because the picture has 8 bits per channel, and values the display encoding pushed below
+  0 or above the top of the axis are not counted as under or over. The status line ends with
+  "(counted from the cached picture)", and a reason when there is one.
+- **Working space** is not available. The panel says "The Working signal is not available for a
+  cached frame. Switch to the Display signal, or show the frame again to measure it."
+
+To get full scopes for such a frame, show it again so that it is rendered rather than taken from
+the cache (a frame the Viewer has just rendered is measured at full precision), or run the RAM
+Preview with Scopes open.
 
 ## Reading scopes from MCP and Python
 
@@ -124,4 +147,6 @@ The same measure is available to agents and scripts, with no panel open and in h
 - Python: `bloom.scopes.read` and `bloom.scopes.image`. See [Scripting Bloom with Python](python.md).
 
 A read names its own composition, frame, signal, display and view. It uses the composition's own
-defaults, not the exposure, gamma, channel view or isolation of an open Viewer.
+defaults, not the exposure, gamma, channel view or isolation of an open Viewer. A read is answered
+from the application's RAM preview only with full-precision scopes; scopes counted from a cached
+8-bit picture are never given to a read, which measures the frame instead.

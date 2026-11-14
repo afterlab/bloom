@@ -13,11 +13,14 @@
 // The Chromaticity table places every pixel by the CIE XYZ (D65) of that signal, converted by the
 // config's own transform from the signal's color space (color/scope_colorimetry.hpp).
 //
-// The device route runs the frame as a job of the final-render evaluator
-// (runtime/gpu_scope_measure.hpp) and reads back only the tables. The CPU reference evaluates the
-// frame with the CPU evaluator and counts with measureScopesCpu. A result always names the route
-// that counted it; a frame the device could not measure is counted by the CPU reference and says
-// why.
+// measureScopeFrame is the headless route (MCP and Python reads, which have no shown or retained
+// frame): the device route runs the frame as a job of the final-render evaluator
+// (runtime/gpu_scope_measure.hpp) and reads back only the tables, and the CPU reference evaluates
+// the frame with the CPU evaluator and counts with measureScopesCpu. The Scopes panel evaluates no
+// scene: it counts the Viewer's scope tap (GpuPreviewDisplayService::measureScopeTap), a CPU
+// process picture (measureScopeFrameCpu) or a retained display picture (measureScopeFrameRetained).
+// A result always names the route that counted it; a frame the device could not measure is counted
+// by the CPU reference and says why.
 
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>

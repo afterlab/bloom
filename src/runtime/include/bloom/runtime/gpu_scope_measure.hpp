@@ -1,7 +1,9 @@
 #pragma once
 
 // #724 Scopes: the scope measure as a job of the final-render device route
-// (GpuProcessFrameEvaluator::measureScopes). docs/architecture/scopes.md is the specification.
+// (GpuProcessFrameEvaluator::measureScopes), the headless route of MCP and Python reads; the Scopes
+// panel counts the Viewer's scope tap instead and runs no scene (gpu_preview_display_service.hpp).
+// docs/architecture/scopes.md is the specification.
 //
 // The frame's scene runs on the evaluator's device exactly as a final frame does. Instead of the
 // final picture readback, the owner converts the resident picture to the measured signal (the

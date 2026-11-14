@@ -14,7 +14,7 @@
 // measure on a task worker, holds one at a time and never waits for it on the interface thread or
 // on the preview's own work. It runs the CPU routes, so it says nothing about the device: that the
 // table readback does not wait on the Viewer's frame is established on the device by
-// bloom.runtime.scope_frame_measure_native and by docs/architecture/scopes.md, "Real-time cost".
+// bloom.runtime.scope_tap_native and by docs/architecture/scopes.md, "Real-time cost".
 // No timing is measured or asserted.
 
 #include "await_qt.hpp"

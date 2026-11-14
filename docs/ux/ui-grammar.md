@@ -1857,16 +1857,19 @@ Under the header is the status line, always visible (outside the scroll area), i
 
 - the measurement in `Muted`: composition and frame time, display and view (or the working space),
   resolution (Full, Half, Quarter), the measured rectangle when a region or the Viewer's region of
-  interest applies, the route (GPU or CPU, with the reason when the CPU counted a device frame), and
-  the pixels counted, and "Live detail" while the tables on show are the coarser live measure of a
-  frame that has not yet been measured at full detail (nothing extra at full detail);
+  interest applies, the route (GPU or CPU, with a note in parentheses when the frame was counted
+  from its cached picture, "counted from the cached picture" and the reason the Viewer's own
+  picture was not used when there is one), and the pixels counted, and "Live detail" while the
+  tables on show are the coarser live measure of a frame that has not yet been measured at full
+  detail (nothing extra at full detail);
 - in `Warn`, one entry per Viewer setting that makes the picture differ from the export: exposure or
   gamma that is not neutral, a look that is off (Display signal), a channel shown, isolation;
 - in `Warn`, "Behind: these scopes are of <composition>, frame <n>" while the tables on show are
   another frame's than the Viewer's. A scope painting another frame's image is dimmed and carries
   the word "Behind" in its corner; data of another frame is never shown without that label;
 - instead of the measurement, the reason nothing is shown: no Viewer, no frame, hidden panel, every
-  section collapsed, a measure in flight, a failure, a region outside the picture.
+  section collapsed, a measure in flight, a failure (the Working signal of a cached frame says it is
+  not available), a region outside the picture.
 
 Below it, a scroll area holds five collapsible `KSection`s in this order, open by default, each
 persisting its state per panel area under `scopes/<area>/sections/<id>/collapsed`. A collapsed

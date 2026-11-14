@@ -364,14 +364,19 @@ CPU. [Image Statistics](image-statistics.md#routes) owns the details;
 `bloom.ui.gpu_ram_preview_image_statistics` proves the viewer and RAM preview frames GPU-resident
 against the CPU oracle with each frame measured once on the device.
 
-Scope measure. The Scopes panel's count tables are measured as a job of the same final-render
-evaluator (`GpuProcessFrameEvaluator::measureScopes`): the frame's scene runs on the device, the
-resident picture is converted to the measured signal and to CIE XYZ by two OCIO programs, the
-fixed kernel `ScopeTablesV1` counts it, and only the tables are read back
-(`prep.scopes.result_readback`), never the picture. A frame the device cannot count is counted by
-the CPU reference and labeled CPU. [Scopes](scopes.md) owns the details;
-`bloom.runtime.scope_frame_measure_native` proves the device tables against the CPU reference with
-one table readback and no picture readback.
+Scope measure. The Scopes panel counts the picture the Viewer's own frame job computed. The preview
+display service keeps an alias of that frame's scene-linear picture (the scope tap) and, as a
+separate submission it steps without waiting on a fence and begins only while no Viewer-class stage
+is ready, active or ahead, converts it to the measured signal and to CIE XYZ with two OCIO programs,
+counts it with the fixed kernel `ScopeTablesV1`, and reads back only the tables
+(`prep.scopes.result_readback`), never the picture. No scene runs for the measure. A frame the tap
+cannot serve is counted on the CPU from the process picture it holds or from its retained display
+picture and labeled CPU. Headless MCP and Python reads with no cached tables keep the other route:
+a job of the final-render evaluator (`GpuProcessFrameEvaluator::measureScopes`) that runs the
+frame's scene on that device. [Scopes](scopes.md) owns the details;
+`bloom.runtime.scope_tap_native` proves the tap's tables against the CPU reference with no scene run,
+one table readback and no picture readback, and `bloom.runtime.scope_frame_measure_native` proves
+the headless route.
 
 Resident preview product and service. The closed `PreparedPreviewFrame` display variant has a fourth,
 GPU-resident arm, `PreviewResidentDisplayFrame`, built only by the validating owner-thread factory in
