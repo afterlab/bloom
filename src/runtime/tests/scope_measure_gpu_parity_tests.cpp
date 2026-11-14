@@ -122,7 +122,6 @@ struct Case final {
     std::uint32_t areaWidth = kSide;
     std::uint32_t areaHeight = kSide;
     bool ignoreTransparent = false;
-    std::uint32_t detail = 0;
 };
 
 void compare(Expectations& expectations, GpuScopeTables& measure, const Pictures& pictures,
@@ -140,7 +139,6 @@ void compare(Expectations& expectations, GpuScopeTables& measure, const Pictures
     input.axisMaximum = test.axisMaximum;
     input.luma = luma;
     input.ignoreTransparent = test.ignoreTransparent;
-    input.detail = test.detail;
     const auto reference = measureScopesCpu(input);
     expectations.expect(reference.has_value(), test.label + ": the CPU reference measures");
     if (!reference) {
@@ -162,7 +160,6 @@ void compare(Expectations& expectations, GpuScopeTables& measure, const Pictures
     request.cbDenominator = luma.cbDenominator;
     request.crDenominator = luma.crDenominator;
     request.ignoreTransparent = test.ignoreTransparent;
-    request.detail = test.detail;
     expectations.expect(measure.begin(request, kBudget),
                         test.label +
                             ": the device measure begins: " + measure.diagnostic().message);
@@ -253,40 +250,18 @@ void testParity(Expectations& expectations, GpuDevice& device) {
              .areaHeight = 130,
              .ignoreTransparent = true});
 
-    // The coarser details: the same pictures, the CPU reference and the device equal cell for cell.
-    for (const std::uint32_t detail : {1U, 2U}) {
-        const std::string suffix = ", detail " + std::to_string(detail);
-        compare(expectations, measure, display, rec709,
-                {.label = "display, all scopes" + suffix, .detail = detail});
-        compare(expectations, measure, display, rec709,
-                {.label = "display, area past the picture" + suffix,
-                 .areaX = -9,
-                 .areaY = 31,
-                 .areaWidth = 300,
-                 .areaHeight = 240,
-                 .detail = detail});
-        compare(expectations, measure, edges, rec709,
-                {.label = "cell edges, Rec. 709" + suffix, .detail = detail});
-        compare(expectations, measure, edges, wide,
-                {.label = "cell edges, wide space" + suffix, .detail = detail});
-        compare(expectations, measure, working, wide,
-                {.label = "working, narrow region" + suffix,
-                 .axisMaximum = 8,
-                 .areaX = 40,
-                 .areaY = 12,
-                 .areaWidth = 77,
-                 .areaHeight = 130,
-                 .ignoreTransparent = true,
-                 .detail = detail});
-        for (const std::uint32_t scope :
-             {bloom::render::kScopeTableWaveform, bloom::render::kScopeTableVectorscope,
-              bloom::render::kScopeTableChromaticity}) {
-            compare(expectations, measure, display, rec709,
-                    {.label = "display, scope " + std::to_string(scope) + suffix,
-                     .scopes = scope,
-                     .detail = detail});
-        }
-    }
+    // An area wider than the Waveform's 512 columns: columns of one and two pixels.
+    compare(expectations, measure, display, rec709,
+            {.label = "display, an area wider than the Waveform's columns",
+             .areaX = -300,
+             .areaY = 0,
+             .areaWidth = 700,
+             .areaHeight = kSide});
+    compare(expectations, measure, display, rec709,
+            {.label = "display, Waveform only, wide area",
+             .scopes = bloom::render::kScopeTableWaveform,
+             .areaX = -300,
+             .areaWidth = 700});
 }
 
 } // namespace

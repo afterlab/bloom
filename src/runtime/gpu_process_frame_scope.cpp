@@ -98,11 +98,8 @@ using namespace std::chrono_literals;
 } // namespace
 
 std::uint64_t scopeMeasureTableBytes(const GpuScopeMeasureJob& job) noexcept {
-    // The widest Waveform of the detail: `512 >> detail` columns.
-    const std::uint32_t detail =
-        job.detail <= render::kScopeMaxDetail ? job.detail : render::kScopeMaxDetail;
-    const auto layout =
-        render::scopeTableLayout(job.scopes, render::kScopeWaveformMaxColumns >> detail, detail);
+    // The widest Waveform: 512 columns.
+    const auto layout = render::scopeTableLayout(job.scopes, render::kScopeWaveformMaxColumns);
     return 3ULL * layout.byteCount();
 }
 
@@ -129,11 +126,9 @@ std::optional<ScopeMeasureFault> prepareScopeMeasureForPicture(
     const CancellationToken& cancellation) {
     const auto& job = work.job;
     const std::uint32_t scopes = job.scopes & render::kScopeTableAll;
-    if (scopes == 0U || !validScopeAxisMaximum(job.axisMaximum) ||
-        !render::validScopeDetail(job.detail)) {
+    if (scopes == 0U || !validScopeAxisMaximum(job.axisMaximum)) {
         return fault(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::InvalidRequest,
-                     "the scope measure names no scope, an axis maximum that is not valid or a "
-                     "detail above 2");
+                     "the scope measure names no scope or an axis maximum that is not valid");
     }
     const bool chromaticity = (scopes & render::kScopeTableChromaticity) != 0U;
     if (chromaticity && !job.xyzCommand) {
@@ -325,7 +320,6 @@ ScopeMeasureFault runScopeMeasure(ScopeMeasureStage& stage, ScopeMeasureWork& wo
         .cbDenominator = job.luma.cbDenominator,
         .crDenominator = job.luma.crDenominator,
         .ignoreTransparent = job.ignoreTransparent,
-        .detail = job.detail,
     };
     auto& tables = stage.tables();
     nativeRetirementProven = false;
@@ -482,7 +476,6 @@ ScopeMeasureStepper::State ScopeMeasureStepper::advance(const bool stop,
             .cbDenominator = job.luma.cbDenominator,
             .crDenominator = job.luma.crDenominator,
             .ignoreTransparent = job.ignoreTransparent,
-            .detail = job.detail,
         };
         began_ = true;
         if (!tables.begin(request, byteBudget_)) {

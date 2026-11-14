@@ -50,6 +50,7 @@ void GpuScopeTables::cancel() noexcept {}
 
 bool GpuScopeTables::hasUnretiredSubmission() noexcept { return false; }
 
+bool GpuScopeTables::processSlotFree() noexcept { return true; }
 std::uint64_t GpuScopeTables::nativeDispatchCount() noexcept { return 0; }
 
 } // namespace bloom::render

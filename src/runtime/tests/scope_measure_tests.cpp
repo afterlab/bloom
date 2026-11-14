@@ -138,12 +138,17 @@ void verifySums(const ScopeCounts& counts, const std::string& name) {
     }
     if (layout.has(render::kScopeTableVectorscope)) {
         std::uint64_t sum = counts.vectorscopeOutside();
-        for (std::uint32_t y = 0; y < 512; ++y) {
-            for (std::uint32_t x = 0; x < 512; ++x) {
+        bool lumaBounded = true;
+        for (std::uint32_t y = 0; y < render::kScopeVectorscopeCells; ++y) {
+            for (std::uint32_t x = 0; x < render::kScopeVectorscopeCells; ++x) {
                 sum += counts.vectorscope(x, y);
+                // Each pixel adds its luma code over 16: 0..63.
+                lumaBounded = lumaBounded && std::uint64_t{counts.vectorscopeLuma(x, y)} <=
+                                                 std::uint64_t{counts.vectorscope(x, y)} * 63U;
             }
         }
         check(sum == counts.counted(), name + ": vectorscope sum");
+        check(lumaBounded, name + ": a cell's luma sum is at most 63 per pixel");
     }
     if (layout.has(render::kScopeTableChromaticity)) {
         std::uint64_t sum = std::uint64_t{counts.chromaticityOutside()} + counts.noChromaticity();
@@ -189,7 +194,7 @@ measure(const Picture& picture, const Area& area, const std::string& name,
     const double y = lumaOf(r, g, b);
     const double cb = (b - y) / (2.0 * (1.0 - kKb));
     const double cr = (r - y) / (2.0 * (1.0 - kKr));
-    return {(cb + 0.5) * 512.0, (cr + 0.5) * 512.0};
+    return {(cb + 0.625) * 512.0, (cr + 0.625) * 512.0};
 }
 
 [[nodiscard]] std::uint32_t nonZeroBins(const ScopeCounts& counts, const std::uint32_t channel) {
@@ -202,8 +207,10 @@ measure(const Picture& picture, const Area& area, const std::string& name,
 
 [[nodiscard]] std::uint32_t nonZeroCells(const ScopeCounts& counts, const bool chromaticity) {
     std::uint32_t n = 0;
-    for (std::uint32_t y = 0; y < 512; ++y) {
-        for (std::uint32_t x = 0; x < 512; ++x) {
+    const std::uint32_t side =
+        chromaticity ? render::kScopeChromaticityCells : render::kScopeVectorscopeCells;
+    for (std::uint32_t y = 0; y < side; ++y) {
+        for (std::uint32_t x = 0; x < side; ++x) {
             const std::uint32_t v =
                 chromaticity ? counts.chromaticity(x, y) : counts.vectorscope(x, y);
             n += v != 0U ? 1U : 0U;
@@ -248,7 +255,7 @@ void testFlatField() {
               "flat: one histogram bin, channel " + std::to_string(channel));
         check(counts->layout.columns == kW, "flat: waveform columns");
         for (std::uint32_t column = 0; column < kW; ++column) {
-            check(counts->waveform(channel, column, code >> 1U) == kH,
+            check(counts->waveform(channel, column, code) == kH,
                   "flat: waveform level, one per column");
             std::uint32_t levels = 0;
             for (std::uint32_t l = 0; l < render::kScopeWaveformColumnWords; ++l) {
@@ -262,6 +269,9 @@ void testFlatField() {
               counts->vectorscope(static_cast<std::uint32_t>(cb), static_cast<std::uint32_t>(cr)) ==
                   pixels,
           "flat: one vectorscope cell");
+    check(counts->vectorscopeLuma(static_cast<std::uint32_t>(cb), static_cast<std::uint32_t>(cr)) ==
+              pixels * (codeOf(lumaOf(r, g, b)) >> 4U),
+          "flat: the cell sums its pixels' luma codes over 16");
     const double s = 0.4 + 0.3 + 0.2;
     check(nonZeroCells(*counts, true) == 1U &&
               counts->chromaticity(static_cast<std::uint32_t>(0.4 / s / 0.8 * 512.0),
@@ -294,8 +304,7 @@ void testRamp() {
     check(counts->layout.columns == kW, "ramp: columns");
     std::uint32_t previous = 0;
     for (std::uint32_t x = 0; x < kW; ++x) {
-        const std::uint32_t level =
-            codeOf(static_cast<double>(static_cast<float>(x) / 63.0F)) >> 1U;
+        const std::uint32_t level = codeOf(static_cast<double>(static_cast<float>(x) / 63.0F));
         check(counts->waveform(0, x, level) == kH,
               "ramp: waveform diagonal at column " + std::to_string(x));
         check(x == 0U || level > previous, "ramp: strictly rising");
@@ -338,7 +347,7 @@ void colorBars(const float level, const std::string& name) {
         const std::int32_t xHigh = static_cast<std::int32_t>(std::floor(px0 + 1e-3));
         const std::int32_t yLow = static_cast<std::int32_t>(std::floor(py0 - 1e-3));
         const std::int32_t yHigh = static_cast<std::int32_t>(std::floor(py0 + 1e-3));
-        const bool edge = xLow < 0 || xHigh > 511 || yLow < 0 || yHigh > 511;
+        const bool edge = xLow < 0 || xHigh > 639 || yLow < 0 || yHigh > 639;
         if (edge) {
             edgePixels += kBarW * kH;
             continue;
@@ -362,10 +371,20 @@ void colorBars(const float level, const std::string& name) {
     check(nonZeroCells(*counts, false) <=
               static_cast<std::uint32_t>(boxes.size()) * 4U + edgePixels,
           name + ": no stray cells");
-    if (level < 1.0F) {
-        check(edgePixels == 0U && counts->vectorscopeOutside() == 0U,
-              name + ": 75% bars inside the table");
+    // The table reaches 0.625 from the center: 100% bars are inside it, and every bar is inside
+    // the graticule's 0.60 ring (a 100% primary is about 0.51 away, a secondary about 0.51).
+    check(edgePixels == 0U && counts->vectorscopeOutside() == 0U, name + ": bars inside the table");
+    bool insideRing = true;
+    for (std::uint32_t y = 0; y < render::kScopeVectorscopeCells; ++y) {
+        for (std::uint32_t x = 0; x < render::kScopeVectorscopeCells; ++x) {
+            if (counts->vectorscope(x, y) == 0U)
+                continue;
+            const double cb = (static_cast<double>(x) + 0.5) / 512.0 - 0.625;
+            const double cr = (static_cast<double>(y) + 0.5) / 512.0 - 0.625;
+            insideRing = insideRing && std::sqrt(cb * cb + cr * cr) <= 0.60;
+        }
     }
+    check(insideRing, name + ": every bar is inside the 0.60 ring");
 }
 
 void testColorBars() {
@@ -420,7 +439,7 @@ void testCounters() {
         measure(picture, whole(picture), "counters waveform only", render::kScopeTableWaveform);
     if (only) {
         check(only->histogram(0, 0) == 0U && only->vectorscope(1, 1) == 0U, "absent tables read 0");
-        check(only->layout.wordCount == render::kScopeCounterWords + 4U * 8U * 514U,
+        check(only->layout.wordCount == render::kScopeCounterWords + 4U * 8U * 1026U,
               "waveform-only layout");
         check(only->noChromaticity() == 0U && only->vectorscopeOutside() == 0U,
               "absent tables count no outside");
@@ -488,13 +507,13 @@ void testWaveformColumns() {
             check(sum == 2U * kH, "waveform: two pixels of a row per column, times the rows");
         }
         // The first pixel of the last column is x = 1022, the ramp's last-but-one value.
-        const std::uint32_t level = codeOf(static_cast<double>(1023.0F / 1023.0F)) >> 1U;
+        const std::uint32_t level = codeOf(static_cast<double>(1023.0F / 1023.0F));
         check(w->waveform(0, 511, level) >= kH, "waveform: last column holds the top level");
     }
     const Picture odd = flat(768, 1, px(0.5F, 0.5F, 0.5F));
     const auto o = measure(odd, whole(odd), "768 wide", render::kScopeTableWaveform);
     if (o) {
-        const std::uint32_t level = codeOf(0.5) >> 1U;
+        const std::uint32_t level = codeOf(0.5);
         for (std::uint32_t column = 0; column < 512; ++column) {
             std::uint32_t expected = 0;
             for (std::uint32_t x = 0; x < 768; ++x) {
@@ -540,8 +559,8 @@ void testCrossCheck() {
     if (!counts) {
         return;
     }
-    std::vector<std::uint32_t> waveform(4U * kS * 514U, 0U);
-    std::vector<std::uint32_t> vectorscope(512U * 512U, 0U);
+    std::vector<std::uint32_t> waveform(4U * kS * 1026U, 0U);
+    std::vector<std::uint32_t> vectorscope(640U * 640U, 0U);
     std::uint32_t outside = 0;
     std::uint32_t ambiguous = 0;
     const auto margin = [](const double value) { return std::abs(value - std::round(value)); };
@@ -555,15 +574,14 @@ void testCrossCheck() {
                 const double scaled = values[channel] * 1023.0 + 0.5;
                 ambiguous += margin(scaled) < 1e-4 ? 1U : 0U;
                 const std::uint32_t code = codeOf(values[channel]);
-                const std::uint32_t level = code < 1024U ? code >> 1U : code - 512U;
-                ++waveform[(channel * kS + x) * 514U + level];
+                ++waveform[(channel * kS + x) * 1026U + code];
             }
             const auto [cb, cr] = vectorPosition(r, g, b);
             ambiguous += (margin(cb) < 1e-4 || margin(cr) < 1e-4) ? 1U : 0U;
-            if (cb < 0.0 || cb >= 512.0 || cr < 0.0 || cr >= 512.0) {
+            if (cb < 0.0 || cb >= 640.0 || cr < 0.0 || cr >= 640.0) {
                 ++outside;
             } else {
-                ++vectorscope[static_cast<std::size_t>(cr) * 512U + static_cast<std::size_t>(cb)];
+                ++vectorscope[static_cast<std::size_t>(cr) * 640U + static_cast<std::size_t>(cb)];
             }
         }
     }
@@ -572,18 +590,18 @@ void testCrossCheck() {
     std::uint32_t wrong = 0;
     for (std::uint32_t channel = 0; channel < 4; ++channel) {
         for (std::uint32_t column = 0; column < kS; ++column) {
-            for (std::uint32_t l = 0; l < 514U; ++l) {
+            for (std::uint32_t l = 0; l < 1026U; ++l) {
                 wrong += counts->waveform(channel, column, l) !=
-                                 waveform[(channel * kS + column) * 514U + l]
+                                 waveform[(channel * kS + column) * 1026U + l]
                              ? 1U
                              : 0U;
             }
         }
     }
-    for (std::uint32_t y = 0; y < 512; ++y) {
-        for (std::uint32_t x = 0; x < 512; ++x) {
+    for (std::uint32_t y = 0; y < 640; ++y) {
+        for (std::uint32_t x = 0; x < 640; ++x) {
             wrong +=
-                counts->vectorscope(x, y) != vectorscope[static_cast<std::size_t>(y) * 512U + x]
+                counts->vectorscope(x, y) != vectorscope[static_cast<std::size_t>(y) * 640U + x]
                     ? 1U
                     : 0U;
         }
@@ -640,7 +658,7 @@ void testPacking() {
         const std::uint32_t maxima[4] = {
             tableMaxOf(*counts, layout.histogramOffset, 4U * render::kScopeHistogramChannelWords),
             tableMaxOf(*counts, layout.waveformOffset, 4U * layout.waveformChannelWords()),
-            tableMaxOf(*counts, layout.vectorscopeOffset, 512U * 512U),
+            tableMaxOf(*counts, layout.vectorscopeOffset, 640U * 640U),
             tableMaxOf(*counts, layout.chromaticityOffset, 512U * 512U)};
         const std::uint32_t scopes[4] = {render::kScopeTableHistogram, render::kScopeTableWaveform,
                                          render::kScopeTableVectorscope,
@@ -696,23 +714,25 @@ void testSummary() {
     check(summary.meanHueDegrees >= 0.0 && summary.meanHueDegrees < 360.0, "summary: hue range");
 
     // The Vectorscope summary from cells set by hand: 3 pixels at (cb 384, cr 256), 1 at (256,
-    // 384).
+    // 384), of the 640-cell table over -0.625..0.625; saturation is relative to the 0.60 ring.
     ScopeCounts hand;
     hand.layout = render::scopeTableLayout(render::kScopeTableVectorscope, 4);
     hand.words.assign(hand.layout.wordCount, 0U);
-    hand.words[hand.layout.vectorscopeOffset + 256U * 512U + 384U] = 3U;
-    hand.words[hand.layout.vectorscopeOffset + 384U * 512U + 256U] = 1U;
+    hand.words[hand.layout.vectorscopeOffset + 256U * 640U + 384U] = 3U;
+    hand.words[hand.layout.vectorscopeOffset + 384U * 640U + 256U] = 1U;
     const auto handSummary = runtime::summarizeScopes(hand);
-    const double a = 384.5 / 512.0 - 0.5;
-    const double c = 256.5 / 512.0 - 0.5;
+    const double a = 384.5 / 512.0 - 0.625;
+    const double c = 256.5 / 512.0 - 0.625;
     const double distance = std::sqrt(a * a + c * c);
     check(handSummary.vectorscopeAvailable && !handSummary.channels[0].available,
           "summary: hand tables");
-    check(std::abs(handSummary.meanSaturation - distance / 0.5) < 1e-12,
+    check(std::abs(handSummary.meanSaturation - distance / 0.60) < 1e-12,
           "summary: mean saturation");
     const double meanCb = (3.0 * a + 1.0 * c) / 4.0;
     const double meanCr = (3.0 * c + 1.0 * a) / 4.0;
-    const double degrees = std::atan2(meanCr, meanCb) * 180.0 / 3.14159265358979323846;
+    double degrees = std::atan2(meanCr, meanCb) * 180.0 / 3.14159265358979323846;
+    if (degrees < 0.0)
+        degrees += 360.0;
     check(std::abs(handSummary.meanHueDegrees - degrees) < 1e-9, "summary: mean hue");
     check(!runtime::summarizeScopes(ScopeCounts{}).vectorscopeAvailable,
           "summary: nothing measured");
@@ -806,250 +826,77 @@ void testMeasuredArea() {
           "a region needs the composition's size");
 }
 
-// ---- Detail (#724): the Vectorscope, CIE and Waveform tables at a coarser detail.
+// ---- The fixed layout (#730): one definition of the tables, the same for every frame.
 
-// A deterministic picture of 64 x 64 whose pixels sit on cell and code edges (k / 512 and m / 1023
-// for small k and m, which land on the edges of the full and the coarser cells) and, from an LCG,
-// everywhere else, including values below 0 and above 1 (so some pixels are outside the
-// Vectorscope and the CIE table, under or over in the Histogram and the Waveform). Its XYZ picture
-// varies too, so the CIE table has many cells.
-[[nodiscard]] Picture detailPicture() {
-    std::uint32_t state = 12345U;
-    const auto next = [&state] {
-        state = state * 1664525U + 1013904223U;
-        return static_cast<double>(state >> 8U) / 16777216.0;
-    };
-    Picture picture = generate(64, 64, [&](const std::uint32_t x, const std::uint32_t y) {
-        const std::uint32_t index = y * 64U + x;
-        float r = 0.0F;
-        float g = 0.0F;
-        float b = 0.0F;
-        if (index % 3U == 0U) {
-            // Exactly on edges: cell edges (k / 512) and code edges (m / 1023).
-            r = static_cast<float>(index % 61U) / 512.0F;
-            g = static_cast<float>(index % 67U) / 1023.0F;
-            b = static_cast<float>(index % 71U) / 512.0F;
-        } else {
-            r = static_cast<float>(next() * 1.4 - 0.2);
-            g = static_cast<float>(next() * 1.4 - 0.2);
-            b = static_cast<float>(next() * 1.4 - 0.2);
-        }
-        return px(r, g, b, 1.0F);
-    });
-    for (auto& xyz : picture.xyz) {
-        xyz = px(static_cast<float>(next() * 0.9), static_cast<float>(next() * 1.0),
-                 static_cast<float>(next() * 1.1));
-    }
-    return picture;
+[[nodiscard]] std::uint64_t layoutBytes(const std::uint32_t scopes, const std::uint32_t width) {
+    return render::scopeTableLayout(scopes, width).byteCount();
 }
 
-[[nodiscard]] std::optional<ScopeCounts>
-measureAtDetail(const Picture& picture, const std::uint32_t scopes, const std::uint32_t detail) {
-    auto input = inputFor(picture, whole(picture), scopes, 1, false);
-    input.detail = detail;
-    return runtime::measureScopesCpu(input);
-}
-
-[[nodiscard]] std::uint64_t layoutBytes(const std::uint32_t scopes, const std::uint32_t width,
-                                        const std::uint32_t detail) {
-    return render::scopeTableLayout(scopes, width, detail).byteCount();
-}
-
-void testDetailLayout() {
+void testFixedLayout() {
     using namespace render;
-    // The bytes of a readback of every table on a picture at least 512 wide, from the layout and
-    // from the definition (counters, Histogram, Waveform columns, two grids).
-    const std::uint64_t full =
-        8U * 4U + 4U * 1026U * 4U + 4U * 512U * 514U * 4U + 2U * 512U * 512U * 4U;
-    const std::uint64_t one =
-        8U * 4U + 4U * 1026U * 4U + 4U * 256U * 258U * 4U + 2U * 256U * 256U * 4U;
-    const std::uint64_t two =
-        8U * 4U + 4U * 1026U * 4U + 4U * 128U * 130U * 4U + 2U * 128U * 128U * 4U;
-    check(full == 6324288U && one == 1597504U && two == 413760U, "detail: the byte counts");
-    check(layoutBytes(kScopeTableAll, 512, 0) == full, "detail 0: all tables at 512 wide");
-    check(layoutBytes(kScopeTableAll, 512, 1) == one, "detail 1: all tables at 512 wide");
-    check(layoutBytes(kScopeTableAll, 512, 2) == two, "detail 2: all tables at 512 wide");
-    check(layoutBytes(kScopeTableAll, 4000, 2) == two, "detail 2: wider pictures add no columns");
-    // One scope each, at 512 wide: counters 32 bytes plus the table.
+    // Every table of an area at least 512 wide, from the layout and from the definition (counters,
+    // Histogram, 512 Waveform columns of 1026 words, the Vectorscope's count and luma grids of
+    // 640 x 640, the CIE grid of 512 x 512): the bound of the readback contract.
+    const std::uint64_t full = 8U * 4U + 4U * 1026U * 4U + 4U * 512U * 1026U * 4U +
+                               2U * 640U * 640U * 4U + 512U * 512U * 4U;
+    check(full == 12'746'816U && full == kScopeTablesMaxBytes, "layout: the byte count");
+    check(layoutBytes(kScopeTableAll, 512) == full && layoutBytes(kScopeTableAll, 4000) == full,
+          "layout: all tables at 512 wide and wider");
     const std::uint32_t scopes[4] = {kScopeTableHistogram, kScopeTableWaveform,
                                      kScopeTableVectorscope, kScopeTableChromaticity};
-    const std::uint64_t expected[3][4] = {{32U + 4U * 1026U * 4U, 32U + 4U * 512U * 514U * 4U,
-                                           32U + 512U * 512U * 4U, 32U + 512U * 512U * 4U},
-                                          {32U + 4U * 1026U * 4U, 32U + 4U * 256U * 258U * 4U,
-                                           32U + 256U * 256U * 4U, 32U + 256U * 256U * 4U},
-                                          {32U + 4U * 1026U * 4U, 32U + 4U * 128U * 130U * 4U,
-                                           32U + 128U * 128U * 4U, 32U + 128U * 128U * 4U}};
-    for (std::uint32_t d = 0; d <= 2U; ++d) {
-        for (std::size_t t = 0; t < 4; ++t) {
-            check(layoutBytes(scopes[t], 512, d) == expected[d][t],
-                  "detail " + std::to_string(d) + ": one scope " + std::to_string(t));
-        }
-        const auto layout = scopeTableLayout(kScopeTableAll, 64, d);
-        check(layout.detail == d && layout.columns == 64U &&
-                  layout.waveformColumnWords() == (512U >> d) + 2U &&
-                  layout.cells() == (512U >> d) && layout.waveformLevelUnder() == (512U >> d) &&
-                  layout.waveformLevelOver() == (512U >> d) + 1U,
-              "detail " + std::to_string(d) + ": layout fields");
-    }
-    check(scopeTableLayout(kScopeTableWaveform, 300, 1).columns == 256U &&
-              scopeTableLayout(kScopeTableWaveform, 200, 1).columns == 200U &&
-              scopeTableLayout(kScopeTableWaveform, 300, 2).columns == 128U,
-          "detail: columns are min(512 >> detail, width)");
-    check(!validScopeDetail(3U) && validScopeDetail(2U), "detail: 3 is not valid");
+    const std::uint64_t expected[4] = {32U + 4U * 1026U * 4U, 32U + 4U * 512U * 1026U * 4U,
+                                       32U + 2U * 640U * 640U * 4U, 32U + 512U * 512U * 4U};
+    for (std::size_t t = 0; t < 4; ++t)
+        check(layoutBytes(scopes[t], 512) == expected[t], "layout: one scope " + std::to_string(t));
+    check(scopeTableLayout(kScopeTableWaveform, 300).columns == 300U &&
+              scopeTableLayout(kScopeTableWaveform, 600).columns == 512U &&
+              scopeTableLayout(kScopeTableHistogram, 600).columns == 0U,
+          "layout: columns are min(512, width), none without the Waveform");
 }
 
-void testDetailPooling() {
-    const Picture picture = detailPicture();
-    const auto full = measureAtDetail(picture, render::kScopeTableAll, 0);
-    check(full.has_value(), "detail: full measure");
-    if (!full) {
-        return;
-    }
-    check(nonZeroCells(*full, false) > 100U && nonZeroCells(*full, true) > 100U &&
-              full->vectorscopeOutside() > 0U && full->chromaticityOutside() > 0U &&
-              full->histogram(0, render::kScopeCodeUnder) > 0U &&
-              full->histogram(0, render::kScopeCodeOver) > 0U,
-          "detail: the picture reaches cells, outside, under and over");
-    for (std::uint32_t d = 1; d <= 2U; ++d) {
-        const std::string name = "detail " + std::to_string(d);
-        const auto coarse = measureAtDetail(picture, render::kScopeTableAll, d);
-        check(coarse.has_value(), name + ": measures");
-        if (!coarse) {
-            continue;
-        }
-        const auto& layout = coarse->layout;
-        check(layout.detail == d && coarse->words.size() == layout.wordCount, name + ": layout");
-        const std::uint32_t block = 1U << d;
-        // The counters and the Histogram do not depend on the detail.
-        for (std::uint32_t i = 0; i < render::kScopeCounterWords; ++i) {
-            check(coarse->words[i] == full->words[i], name + ": counter " + std::to_string(i));
-        }
-        for (std::uint32_t channel = 0; channel < 4U; ++channel) {
-            for (std::uint32_t i = 0; i < render::kScopeHistogramChannelWords; ++i) {
-                check(coarse->histogram(channel, i) == full->histogram(channel, i),
-                      name + ": histogram equals full detail's");
-            }
-        }
-        // The grids are the full tables with each block of cells summed.
-        std::uint32_t wrongVector = 0;
-        std::uint32_t wrongChroma = 0;
-        std::uint64_t coarseTotal = 0;
-        for (std::uint32_t row = 0; row < layout.cells(); ++row) {
-            for (std::uint32_t column = 0; column < layout.cells(); ++column) {
-                std::uint32_t sumVector = 0;
-                std::uint32_t sumChroma = 0;
-                for (std::uint32_t dy = 0; dy < block; ++dy) {
-                    for (std::uint32_t dx = 0; dx < block; ++dx) {
-                        sumVector += full->vectorscope(column * block + dx, row * block + dy);
-                        sumChroma += full->chromaticity(column * block + dx, row * block + dy);
-                    }
-                }
-                wrongVector += coarse->vectorscope(column, row) != sumVector ? 1U : 0U;
-                wrongChroma += coarse->chromaticity(column, row) != sumChroma ? 1U : 0U;
-                coarseTotal += coarse->vectorscope(column, row);
-            }
-        }
-        check(wrongVector == 0U && wrongChroma == 0U, name + ": grids are pooled full grids");
-        check(coarseTotal + coarse->vectorscopeOutside() == coarse->counted(),
-              name + ": vectorscope sum rule");
-        // Outside the detail's table the accessors give nothing.
-        check(coarse->vectorscope(layout.cells(), 0) == 0U &&
-                  coarse->chromaticity(0, layout.cells()) == 0U,
-              name + ": cells past the detail's side are absent");
-        // Each Waveform column's levels are sums of 2^d adjacent full-detail levels (the same
-        // columns: the picture is 64 wide).
-        check(layout.columns == full->layout.columns, name + ": same columns");
-        std::uint32_t wrongWave = 0;
-        for (std::uint32_t channel = 0; channel < 4U; ++channel) {
-            for (std::uint32_t column = 0; column < layout.columns; ++column) {
-                for (std::uint32_t level = 0; level < layout.waveformLevels(); ++level) {
-                    std::uint32_t sum = 0;
-                    for (std::uint32_t k = 0; k < block; ++k) {
-                        sum += full->waveform(channel, column, level * block + k);
-                    }
-                    wrongWave += coarse->waveform(channel, column, level) != sum ? 1U : 0U;
-                }
-                wrongWave +=
-                    coarse->waveform(channel, column, layout.waveformLevelUnder()) !=
-                            full->waveform(channel, column, full->layout.waveformLevelUnder())
-                        ? 1U
-                        : 0U;
-                wrongWave +=
-                    coarse->waveform(channel, column, layout.waveformLevelOver()) !=
-                            full->waveform(channel, column, full->layout.waveformLevelOver())
-                        ? 1U
-                        : 0U;
-            }
-        }
-        check(wrongWave == 0U, name + ": waveform levels are pooled full levels");
-        check(coarse->words.size() < full->words.size(), name + ": fewer words");
-
-        // Packing and unpacking work at any detail.
-        roundTrip(*coarse, name);
-        const ScopeTables packed = ScopeTables::pack(*coarse, runtime::ScopeRoute::Gpu);
-        check(packed.layout().detail == d &&
-                  packed.vectorscope(3, 5) == coarse->vectorscope(3, 5) &&
-                  packed.vectorscope(layout.cells(), 0) == 0U,
-              name + ": packed accessors follow the detail");
-    }
-    // A wider picture: the Waveform has 512 >> d columns, and a table of one scope is only that.
-    const Picture wide = flat(600, 2, px(0.25F, 0.5F, 0.75F));
-    const auto wideCounts = measureAtDetail(wide, render::kScopeTableWaveform, 1);
-    check(wideCounts.has_value() && wideCounts->layout.columns == 256U &&
-              wideCounts->words.size() == 8U + 4U * 256U * 258U,
-          "detail 1: a wide picture has 256 columns");
-    // Detail 3 is refused.
-    check(!measureAtDetail(picture, render::kScopeTableAll, 3).has_value(), "detail 3 is refused");
-    // The detail is part of the settings' equality, so of every identity that embeds them.
-    runtime::ScopeMeasureSettings a;
-    runtime::ScopeMeasureSettings b;
-    check(a == b && a.detail == 0U, "settings: detail defaults to 0");
-    b.detail = 1;
-    check(!(a == b), "settings: a detail is part of equality");
-}
-
-void testDetailSummary() {
-    // A saturated picture (Cb about -0.2, Cr about 0.3 at luma 0.5, a little noise) so that the
-    // mean vector is far from the center.
-    const Picture picture = generate(64, 64, [](const std::uint32_t x, const std::uint32_t y) {
-        const double wobbleR = static_cast<double>((x * 7U + y * 3U) % 11U) / 11.0 * 0.04 - 0.02;
-        const double wobbleB = static_cast<double>((x * 5U + y * 13U) % 9U) / 9.0 * 0.04 - 0.02;
-        const double lumaTarget = 0.5;
-        const double b = lumaTarget + 2.0 * (1.0 - kKb) * -0.2 + wobbleB;
-        const double r = lumaTarget + 2.0 * (1.0 - kKr) * 0.3 + wobbleR;
-        const double g = (lumaTarget - kKr * r - kKb * b) / kKg;
-        return px(static_cast<float>(r), static_cast<float>(g), static_cast<float>(b));
+void testWaveformLevels() {
+    // Every code has its own level: a 10-bit ramp over 1024 pixels puts one pixel on each of the
+    // 1024 levels, one per column pair, with no level skipped.
+    constexpr std::uint32_t kW = 1024;
+    const Picture ramp = generate(kW, 1, [](const std::uint32_t x, std::uint32_t) {
+        const float v = static_cast<float>(x) / 1023.0F;
+        return px(v, v, v);
     });
-    const auto full = measureAtDetail(picture, render::kScopeTableAll, 0);
-    check(full.has_value(), "detail summary: full");
-    if (!full) {
+    const auto counts = measure(ramp, whole(ramp), "10-bit ramp",
+                                render::kScopeTableWaveform | render::kScopeTableHistogram);
+    if (!counts)
         return;
+    std::uint32_t occupied = 0;
+    for (std::uint32_t level = 0; level < render::kScopeWaveformLevels; ++level) {
+        std::uint32_t sum = 0;
+        for (std::uint32_t column = 0; column < counts->layout.columns; ++column)
+            sum += counts->waveform(0, column, level);
+        occupied += sum == 1U ? 1U : 0U;
     }
-    const auto reference = runtime::summarizeScopes(*full);
-    check(reference.vectorscopeAvailable && reference.meanSaturation > 0.5,
-          "detail summary: the picture is saturated");
-    for (std::uint32_t d = 1; d <= 2U; ++d) {
-        const auto coarse = measureAtDetail(picture, render::kScopeTableAll, d);
-        check(coarse.has_value(), "detail summary: coarse");
-        if (!coarse) {
-            continue;
-        }
-        const auto summary = runtime::summarizeScopes(*coarse);
-        // The Histogram does not change: every channel summary is equal.
-        check(summary.channels == reference.channels, "detail summary: channels are equal");
-        // A pixel and the center of its detail cell are at most half a cell apart on each axis,
-        // sqrt(2) * 2^d / 1024 in distance, which is sqrt(2) * 2^d / 512 of the 0.5 radius: the
-        // tolerance on the mean saturation. The mean vector moves by at most the same distance
-        // (in cb, cr); with the mean's length of at least 0.2 here that turns the hue by at most
-        // asin(shift / 0.2) degrees.
-        const double shift = std::sqrt(2.0) * static_cast<double>(1U << d) / 1024.0;
-        check(summary.vectorscopeAvailable &&
-                  std::abs(summary.meanSaturation - reference.meanSaturation) <= shift / 0.5,
-              "detail summary: mean saturation within one detail cell");
-        const double hueTolerance = std::asin(shift / 0.2) * 180.0 / 3.14159265358979323846;
-        check(std::abs(summary.meanHueDegrees - reference.meanHueDegrees) <= hueTolerance,
-              "detail summary: mean hue within the bound");
-    }
+    check(occupied == 1024U, "10-bit ramp: each of the 1024 levels holds one pixel");
+    bool flat = true;
+    for (std::uint32_t code = 0; code < render::kScopeCodes; ++code)
+        flat = flat && counts->histogram(0, code) == 1U;
+    check(flat, "10-bit ramp: the Histogram is flat, one pixel per code");
+    // The Waveform's under and over words are the codes' own.
+    check(render::kScopeWaveformLevelUnder == render::kScopeCodeUnder &&
+              render::kScopeWaveformLevelOver == render::kScopeCodeOver,
+          "the Waveform's under and over levels are the Histogram's");
+}
+
+void testVectorscopeLuma() {
+    // A cell sums the luma codes of its pixels over 16: under is 0, over is 1023's.
+    Picture picture = flat(4, 1, px(0.5F, 0.5F, 0.5F));
+    picture.signal[1] = px(2.0F, 2.0F, 2.0F);
+    picture.signal[2] = px(-0.5F, -0.5F, -0.5F);
+    const auto counts = measure(picture, whole(picture), "vectorscope luma");
+    if (!counts)
+        return;
+    // Every gray lands in the center cell, 0.625 * 512 = 320.
+    check(counts->vectorscope(320, 320) == 4U, "vectorscope luma: grays at the center");
+    const std::uint32_t expected = 2U * (codeOf(0.5) >> 4U) + (1023U >> 4U) + 0U;
+    check(counts->vectorscopeLuma(320, 320) == expected,
+          "vectorscope luma: the center sums 2 x 32, 63 for over and 0 for under");
 }
 
 } // namespace
@@ -1069,9 +916,9 @@ int main() {
         testSummary();
         testInvalidAndCancel();
         testMeasuredArea();
-        testDetailLayout();
-        testDetailPooling();
-        testDetailSummary();
+        testFixedLayout();
+        testWaveformLevels();
+        testVectorscopeLuma();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

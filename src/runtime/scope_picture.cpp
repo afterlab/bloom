@@ -338,8 +338,7 @@ void drawCircle(Canvas& canvas, const Circle& circle, const std::uint32_t color,
 [[nodiscard]] GraticuleRequest graticuleRequest(const Kind kind, const double width,
                                                 const double height, const PictureInput& input,
                                                 const PictureOptions& options,
-                                                const MeasureText& measure,
-                                                const ClipSummary* clip) {
+                                                const MeasureText& measure) {
     GraticuleRequest request;
     request.kind = kind;
     request.width = width;
@@ -352,7 +351,6 @@ void drawCircle(Canvas& canvas, const Circle& circle, const std::uint32_t color,
     request.histogramScale = input.histogramScale;
     request.luma = input.luma;
     request.colorimetry = input.colorimetry;
-    request.clip = clip;
     request.metrics = options.metrics;
     request.measure = measure;
     return request;
@@ -368,19 +366,15 @@ void drawCircle(Canvas& canvas, const Circle& circle, const std::uint32_t color,
     const auto& palette = options.palette;
     const int widthPx = std::max(1, static_cast<int>(std::lround(dpr)));
 
-    // The trace first: its clip summary decides the markers of the plan.
-    TraceResult trace;
-    const bool haveTrace = measured(input.tables, kind);
-    auto request = graticuleRequest(kind, pixelWidth / dpr, pixelHeight / dpr, input, options,
-                                    measure, nullptr);
-    auto plan = buildScopeGraticule(request);
-    if (haveTrace) {
+    ScopeImage trace;
+    const auto request =
+        graticuleRequest(kind, pixelWidth / dpr, pixelHeight / dpr, input, options, measure);
+    const auto plan = buildScopeGraticule(request);
+    if (measured(input.tables, kind)) {
         TraceRequest mapping;
         mapping.kind = kind;
         mapping.tables = input.tables;
         mapping.luma = input.luma;
-        mapping.colors = palette.traceColors();
-        mapping.gain = input.gain;
         mapping.size = plan.traceRequestSize;
         mapping.gapPixels = static_cast<int>(std::lround(kParadeGap * dpr));
         mapping.waveformChannels = input.waveformChannels;
@@ -389,8 +383,6 @@ void drawCircle(Canvas& canvas, const Circle& circle, const std::uint32_t color,
         trace = renderTrace(mapping, cancelled);
         if (cancelled())
             return PictureError::Cancelled;
-        request.clip = &trace.clip;
-        plan = buildScopeGraticule(request);
     }
 
     canvas.fill(0, 0, canvas.width(), canvas.height(), palette.canvas);
@@ -405,13 +397,16 @@ void drawCircle(Canvas& canvas, const Circle& circle, const std::uint32_t color,
             if (circle.layer == layer)
                 drawCircle(canvas, circle, palette.color(circle.color), dpr, widthPx);
         if (layer == Layer::UnderTrace) {
-            if (!trace.image.empty()) {
+            if (!trace.empty()) {
                 const int left = roundPixel(plan.trace.left() * dpr);
                 const int top = roundPixel(plan.trace.top() * dpr);
-                const bool additive = kind == Kind::Waveform || kind == Kind::Parade;
-                for (int y = 0; y < trace.image.height; ++y)
-                    for (int x = 0; x < trace.image.width; ++x) {
-                        const auto pixel = trace.image.pixel(x, y);
+                // Light traces add to what is under them; the Histogram and the Chromaticity
+                // cover it.
+                const bool additive =
+                    kind == Kind::Waveform || kind == Kind::Parade || kind == Kind::Vectorscope;
+                for (int y = 0; y < trace.height; ++y)
+                    for (int x = 0; x < trace.width; ++x) {
+                        const auto pixel = trace.pixel(x, y);
                         if (pixel == 0U)
                             continue;
                         if (additive)
@@ -423,13 +418,6 @@ void drawCircle(Canvas& canvas, const Circle& circle, const std::uint32_t color,
             if (cancelled())
                 return PictureError::Cancelled;
         }
-    }
-    for (const auto& fill : plan.fills) {
-        const int left = roundPixel(fill.rect.left() * dpr);
-        const int top = roundPixel(fill.rect.top() * dpr);
-        const int right = std::max(left + 1, roundPixel(fill.rect.right() * dpr));
-        const int bottom = std::max(top + 1, roundPixel(fill.rect.bottom() * dpr));
-        canvas.fill(left, top, right, bottom, palette.color(fill.color));
     }
     for (const auto& label : plan.labels) {
         if (!drawLabel(canvas, label, palette.color(label.color), dpr, measure))
@@ -456,8 +444,6 @@ std::uint32_t ScopePalette::color(const ColorRole role) const noexcept {
         return label;
     case ColorRole::Faint:
         return faint;
-    case ColorRole::Warning:
-        return warning;
     case ColorRole::Red:
         return channel[0];
     case ColorRole::Green:
@@ -472,13 +458,14 @@ std::uint32_t ScopePalette::color(const ColorRole role) const noexcept {
 
 ScopePalette defaultScopePalette() noexcept {
     ScopePalette palette;
-    palette.canvas = 0xFF131313U;    // kit::Color::Canvas
-    palette.quiet = 0xFF2E2E2EU;     // kit::Color::Border
+    // A black canvas; graticule hairlines in BorderHover and labels in Muted, about twice as
+    // bright as the lines.
+    palette.canvas = 0xFF000000U;    // kit::Color::CanvasBlack
+    palette.quiet = 0xFF4A4A4AU;     // kit::Color::BorderHover
     palette.stronger = 0xFF4A4A4AU;  // kit::Color::BorderHover
     palette.strongest = 0xFFFFFFFFU; // kit::Color::Foreground
     palette.label = 0xFF999999U;     // kit::Color::Muted
     palette.faint = 0xFF666666U;     // kit::Color::Faint
-    palette.warning = 0xFFE6A23CU;   // kit::Color::Warn
     palette.channel = {0xFFE06C75U,  // kit::Color::ComponentX
                        0xFF8CC265U,  // kit::Color::ComponentY
                        0xFF7FC4F5U,  // kit::Color::ComponentZ

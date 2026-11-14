@@ -1,16 +1,22 @@
-// #724 Scopes: the Qt-free scope picture (runtime/scope_picture.hpp).
+// #724, #730 Scopes: the Qt-free scope picture (runtime/scope_picture.hpp).
 //
 // Asserted, over hand-made tables of a few pixels and no widget or device:
 //   * a picture has the size asked for; the trace pixels inside its trace rectangle equal the trace
-//     mapping's output composed over the canvas (additively for the Waveform and the Parade);
-//   * a single-count cell is drawn at or above the visible floor; Histogram heights, linear and
-//     logarithmic, match values computed here; Parade panes are thirds with the gap; clip markers
-//     appear only for under and over counts;
+//     mapping's output composed over the canvas (additively for the Waveform, the Parade and the
+//     Vectorscope);
+//   * the drawing of the reference grading application (docs/architecture/scopes.md): a Waveform
+//     column is as bright as its own pixels make it, whatever else the picture holds, so columns
+//     of one and two pixels draw alike (no stripes at any measured width); a 10-bit ramp is one
+//     continuous trace and a flat Histogram, and an 8-bit ramp draws no comb; values outside the
+//     axis are drawn on the 0 and 1023 lines and in the end bins; a single pixel among thousands
+//     is visible; Histogram heights, linear and logarithmic, match values computed here; the CIE
+//     trace marks presence in full color; Parade panes are thirds with the gap;
 //   * the graticule plan holds the facts of the specification, computed independently here: the
-//     Waveform's lines at codes 0, 128, ... 1023; the Vectorscope's ticks every 10 degrees (longer
-//     every 30), its six 75% targets from the luma coefficients and the skin tone line at 123
-//     degrees; the CIE grid every 0.1, labels every 0.2, the Rec. 709 triangle and white point and
-//     the four printed lines;
+//     Waveform's lines at codes 0, 128, ... 1023 and its bottom ticks; the Vectorscope's ring at
+//     0.60 of the +-0.625 plot with 72 ticks, cross hairs, the six 75% targets from the luma
+//     coefficients and the skin tone line at 123 degrees; 75% and 100% bars inside the ring; the
+//     CIE grid every 0.1, labels every 0.2, the gamut triangle, white point, the spectral and
+//     Planckian loci, the gamut's name and the printed lines;
 //   * the picture of all five scopes has the panel's heights and every part has content;
 //   * PNG bytes decode back to the same pixels; a cancelled call, a byte limit below the picture
 //     and an invalid size fail with their error and never throw.
@@ -88,8 +94,7 @@ constexpr double kKb = 0.0722;
 
 [[nodiscard]] runtime::ScopeTables tablesOf(const std::vector<Rgba32f>& signal,
                                             const std::uint32_t width, const std::uint32_t height,
-                                            const std::uint32_t scopeBits,
-                                            const std::uint32_t detail = 0) {
+                                            const std::uint32_t scopeBits) {
     std::vector<Rgba32f> xyz;
     for (const auto& pixel : signal)
         xyz.push_back(xyzOf(pixel));
@@ -102,7 +107,6 @@ constexpr double kKb = 0.0722;
     input.areaHeight = height;
     input.scopes = scopeBits;
     input.axisMaximum = 1;
-    input.detail = detail;
     input.luma = rec709();
     const auto counts = runtime::measureScopesCpu(input);
     if (!counts)
@@ -269,16 +273,27 @@ void testWaveformPlan(Expectations& e) {
             labels.push_back(label.text);
         e.expect(labels == std::vector<std::string>(
                                {"0", "128", "256", "384", "512", "640", "768", "896", "1023"}),
-                 "the waveform labels are the codes");
+                 "the waveform labels are the codes, and nothing else is written");
         e.expect(plan.panes.size() == 1 && plan.panes[0].width == plan.plot.width,
                  "the waveform has one pane");
-        // Minor ticks every 32 codes between the labelled lines: 32 steps minus 8 labelled.
-        int minor = 0;
-        for (const auto& line : plan.lines)
-            if (line.color == scopes::ColorRole::Stronger && line.from.x != line.to.x)
-                ++minor;
-        e.expect(minor == 24,
-                 "the waveform has minor ticks every 32 codes between the labelled lines");
+        // Minor ticks every 32 codes between the labelled lines, down the left edge; 48 steps
+        // along the bottom, every fourth longer.
+        int left = 0;
+        int bottom = 0;
+        int longer = 0;
+        for (const auto& line : plan.lines) {
+            if (line.color != scopes::ColorRole::Stronger)
+                continue;
+            if (line.from.y == line.to.y) {
+                ++left;
+            } else if (line.from.x == line.to.x && near(line.from.y, plan.plot.bottom())) {
+                ++bottom;
+                longer += near(line.to.y - line.from.y, 8.0) ? 1 : 0;
+            }
+        }
+        e.expect(left == 24, "the waveform has minor ticks every 32 codes between the lines");
+        e.expect(bottom == 49 && longer == 13,
+                 "the waveform has 48 steps of ticks along the bottom");
     }
     // The Working signal labels are linear values of the axis maximum.
     auto request = planRequest(scopes::Kind::Waveform, 300, 180, 1.0, nullptr, nullptr);
@@ -310,22 +325,25 @@ void testParadePlan(Expectations& e) {
     for (const auto& label : plan.labels)
         names += label.font == scopes::LabelFont::Name ? 1 : 0;
     e.expect(names == 3, "the parade names its three panes");
-    // The mapping gives the same split in pixels.
+    int bottom = 0;
+    for (const auto& line : plan.lines)
+        bottom += line.color == scopes::ColorRole::Stronger && line.from.x == line.to.x ? 1 : 0;
+    e.expect(bottom == 3 * 17, "each parade pane has 16 steps of ticks along the bottom");
+    // The mapping gives the same split in pixels: red at the top of the first pane, green and
+    // blue at the bottom of the others.
     std::vector<Rgba32f> red(4, px(1.0F, 0.0F, 0.0F));
     const auto tables = tablesOf(red, 4, 1, render::kScopeTableWaveform);
-    scopes::TraceColors colors;
-    colors.channel = {0xFFFF0000U, 0xFF00FF00U, 0xFF0000FFU, 0xFF808080U};
-    const auto image = scopes::mapParade(tables, colors, 1.0F, {100, 64}, 4);
+    const auto image = scopes::mapParade(tables, {100, 64}, 4);
     bool gaps = !image.empty();
-    bool panes = !image.empty();
     for (int y = 0; y < image.height && !image.empty(); ++y) {
         for (const int x : {30, 31, 32, 33, 64, 65, 66, 67, 98, 99})
             gaps = gaps && image.pixel(x, y) == 0U;
     }
-    // Panes of 30 pixels at 0..29, 34..63 (30 wide: 34..63) and 68..97.
-    panes = panes && image.pixel(0, 0) == 0xFFFF0000U && image.pixel(29, 0) == 0xFFFF0000U &&
-            image.pixel(34, 63) == 0xFF00FF00U && image.pixel(63, 63) == 0xFF00FF00U &&
-            image.pixel(68, 63) == 0xFF0000FFU && image.pixel(97, 63) == 0xFF0000FFU;
+    // Panes of 30 pixels at 0..29, 34..63 and 68..97.
+    const bool panes = !image.empty() && image.pixel(0, 0) != 0U && image.pixel(29, 0) != 0U &&
+                       image.pixel(0, 63) == 0U && image.pixel(34, 63) != 0U &&
+                       image.pixel(63, 63) != 0U && image.pixel(68, 63) != 0U &&
+                       image.pixel(97, 63) != 0U && image.pixel(34, 0) == 0U;
     e.expect(gaps && panes, "the parade image has three panes of 30 pixels and gaps of 4");
 }
 
@@ -338,76 +356,86 @@ void testVectorscopePlan(Expectations& e) {
                  near(plan.plot.y, (320 - side) / 2),
              "the vectorscope plot is a square inset by the padding");
     const auto center = plan.plot.center();
-    const double radius = side / 2;
+    // The plot spans -0.625..0.625 of Cb and Cr; the ring is at 0.60.
+    const double scale = side / 1.25;
+    const double radius = 0.60 * scale;
     e.expect(plan.circles.size() == 1 && near(plan.circles[0].radius, radius) &&
                  near(plan.circles[0].center.x, center.x) &&
                  near(plan.circles[0].center.y, center.y),
-             "the vectorscope circle has radius 0.5 of the plot");
-    // Ticks: every 10 degrees, longer every 30.
+             "the vectorscope ring is at 0.60 of Cb and Cr, inside the 0.625 plot");
+    // 72 equal ticks inward from the ring, every 5 degrees, 5% of its radius.
     int ticks = 0;
-    int major = 0;
     int matched = 0;
     for (const auto& line : plan.lines) {
-        if (!line.antialiased || line.dashed || line.color != scopes::ColorRole::Label ||
+        if (!line.antialiased || line.color != scopes::ColorRole::Stronger ||
             line.layer != scopes::Layer::UnderTrace)
             continue;
         ++ticks;
-        const double length = std::hypot(line.to.x - line.from.x, line.to.y - line.from.y);
-        major += near(length, 8.0, 1e-9) ? 1 : 0;
-        for (int degrees = 0; degrees < 360; degrees += 10) {
+        for (int degrees = 0; degrees < 360; degrees += 5) {
             const double angle = degrees * std::numbers::pi / 180.0;
-            const double expectedLength = degrees % 30 == 0 ? 8.0 : 4.0;
             if (near(line.from.x, center.x + std::cos(angle) * radius, 1e-6) &&
                 near(line.from.y, center.y - std::sin(angle) * radius, 1e-6) &&
-                near(line.to.x, center.x + std::cos(angle) * (radius - expectedLength), 1e-6) &&
-                near(line.to.y, center.y - std::sin(angle) * (radius - expectedLength), 1e-6)) {
+                near(line.to.x, center.x + std::cos(angle) * radius * 0.95, 1e-6) &&
+                near(line.to.y, center.y - std::sin(angle) * radius * 0.95, 1e-6)) {
                 ++matched;
                 break;
             }
         }
     }
-    e.expect(ticks == 36 && major == 12 && matched == 36,
-             "the vectorscope has a tick every 10 degrees and a longer one every 30");
-    // The skin tone line.
+    e.expect(ticks == 72 && matched == 72, "the vectorscope ring has 72 equal ticks");
+    // Full cross hairs.
+    int hairs = 0;
+    for (const auto& line : plan.lines)
+        hairs +=
+            line.color == scopes::ColorRole::Quiet &&
+                    ((near(line.from.x, plan.plot.left()) && near(line.to.x, plan.plot.right())) ||
+                     (near(line.from.y, plan.plot.top()) && near(line.to.y, plan.plot.bottom())))
+                ? 1
+                : 0;
+    e.expect(hairs == 2, "the vectorscope has full cross hairs");
+    // The skin tone line: solid and faint, from the center to the ring at 123 degrees.
     int skin = 0;
     for (const auto& line : plan.lines) {
-        if (!line.dashed)
-            continue;
         const double angle = 123.0 * std::numbers::pi / 180.0;
-        skin += near(line.from.x, center.x) && near(line.from.y, center.y) &&
+        skin += !line.dashed && line.color == scopes::ColorRole::Faint &&
+                        near(line.from.x, center.x) && near(line.from.y, center.y) &&
                         near(line.to.x, center.x + std::cos(angle) * radius, 1e-6) &&
-                        near(line.to.y, center.y - std::sin(angle) * radius, 1e-6) &&
-                        line.color == scopes::ColorRole::Faint
+                        near(line.to.y, center.y - std::sin(angle) * radius, 1e-6)
                     ? 1
                     : 0;
     }
-    e.expect(skin == 1, "the skin tone line runs from the center at 123 degrees");
-    // Targets at the 75% bars, with the same coefficients.
+    e.expect(skin == 1, "the skin tone line runs solid from the center at 123 degrees");
+    // Targets at the 75% bars, with the same coefficients, the letter at the lower right.
     struct Bar {
         const char* name;
         double r, g, b;
     };
     const std::array<Bar, 6> bars{{{"R", 0.75, 0, 0},
-                                   {"Mg", 0.75, 0, 0.75},
+                                   {"M", 0.75, 0, 0.75},
                                    {"B", 0, 0, 0.75},
-                                   {"Cy", 0, 0.75, 0.75},
+                                   {"C", 0, 0.75, 0.75},
                                    {"G", 0, 0.75, 0},
-                                   {"Yl", 0.75, 0.75, 0}}};
-    const double half = std::max(5.0, side * 0.025);
+                                   {"Y", 0.75, 0.75, 0}}};
+    const double half = std::max(5.0, side * 0.024);
     for (const auto& bar : bars) {
         const double y = kKr * bar.r + kKg * bar.g + kKb * bar.b;
         const double cb = (bar.b - y) / (2 * (1 - kKb));
         const double cr = (bar.r - y) / (2 * (1 - kKr));
         const auto* label = findLabel(plan, bar.name);
         e.expect(label != nullptr &&
-                     near(label->anchor.x, center.x + cb * side + half + 2.0, 1e-3) &&
-                     near(label->anchor.y, center.y - cr * side - half - 4.0, 1e-3),
+                     near(label->anchor.x, center.x + cb * scale + half + 2.0, 1.0) &&
+                     near(label->anchor.y, center.y - cr * scale + half, 1.0),
                  std::string("the vectorscope target ") + bar.name + " sits at its 75% bar");
+        // The 75% and the 100% bars are both inside the ring.
+        const double length = std::hypot(cb, cr);
+        e.expect(length < 0.60 && length / 0.75 < 0.60,
+                 std::string("the 75% and 100% ") + bar.name + " bars are inside the ring");
     }
     int brackets = 0;
     for (const auto& line : plan.lines)
         brackets += line.layer == scopes::Layer::OverTrace ? 1 : 0;
     e.expect(brackets == 48, "each target is four corner brackets of two arms");
+    e.expect(plan.labels.size() == 6, "the six target letters are the only text");
     // The targets are positions of the luma coefficients: other coefficients move them.
     const auto other = runtime::scopeLuma(0.299F, 0.587F, 0.114F);
     const auto moved = scopes::buildScopeGraticule(
@@ -430,7 +458,8 @@ void testChromaticityPlan(Expectations& e) {
         const double side = plan.plot.width;
         e.expect(near(plan.plot.width, plan.plot.height) && near(plan.image.width, side * 0.8) &&
                      near(plan.image.height, side * 0.9) &&
-                     near(plan.image.bottom(), plan.plot.bottom()),
+                     near(plan.image.bottom(), plan.plot.bottom()) &&
+                     near(plan.image.left(), plan.plot.left()),
                  "the chromaticity image covers x 0 to 0.8 and y 0 to 0.9 of the axes");
         // Grid every 0.1.
         std::vector<double> vertical;
@@ -460,24 +489,27 @@ void testChromaticityPlan(Expectations& e) {
         }
         e.expect(findLabel(plan, "0.1") == nullptr && findLabel(plan, "0.3") == nullptr,
                  "only every 0.2 is labelled");
-        // The axis names x and y sit between the labels of 0.8 and 1.0, never on top of one.
-        const auto* xName = findLabel(plan, "x");
-        const auto* yName = findLabel(plan, "y");
+        // The axis names X and Y sit between the labels of 0.8 and 1.0, never on top of one.
+        const auto* xName = findLabel(plan, "X");
+        const auto* yName = findLabel(plan, "Y");
         e.expect(xName != nullptr && yName != nullptr &&
                      near(xName->anchor.x, plan.plot.left() + side * 0.9) &&
                      near(yName->anchor.y, plan.plot.bottom() - side * 0.9),
                  "the axis names are between the labels of 0.8 and 1.0");
-        // The gamut triangle, the white point and the printed lines.
+        // The gamut triangle, the white point, the two loci and the printed lines.
         const auto map = [&](const double x, const double y) {
             return scopes::Point{plan.plot.left() + x * side, plan.plot.bottom() - y * side};
         };
         const scopes::Polyline* triangle = nullptr;
-        const scopes::Polyline* locus = nullptr;
+        const scopes::Polyline* spectral = nullptr;
+        const scopes::Polyline* planckian = nullptr;
         for (const auto& polyline : plan.polylines) {
             if (polyline.closed)
                 triangle = &polyline;
-            else
-                locus = &polyline;
+            else if (polyline.color == scopes::ColorRole::Strongest)
+                spectral = &polyline;
+            else if (polyline.color == scopes::ColorRole::Faint)
+                planckian = &polyline;
         }
         const auto corners = std::array{map(0.64, 0.33), map(0.30, 0.60), map(0.15, 0.06)};
         bool corner = triangle != nullptr && triangle->points.size() == 3;
@@ -489,19 +521,48 @@ void testChromaticityPlan(Expectations& e) {
         e.expect(plan.circles.size() == 1 && near(plan.circles[0].center.x, white.x) &&
                      near(plan.circles[0].center.y, white.y),
                  "the white point ring is at its xy");
-        e.expect(locus != nullptr && locus->points.size() > 40,
+        e.expect(spectral != nullptr && spectral->points.size() > 40,
                  "the spectral locus is a curve of many points");
-        for (const std::string text :
-             {"R 0.6400 0.3300", "G 0.3000 0.6000", "B 0.1500 0.0600", "W 0.3127 0.3290"}) {
+        // The Planckian locus passes D65 within 0.01 of xy.
+        bool nearD65 = false;
+        if (planckian != nullptr)
+            for (const auto& point : planckian->points)
+                nearD65 =
+                    nearD65 || std::hypot(point.x - white.x, point.y - white.y) <= 0.01 * side;
+        e.expect(planckian != nullptr && planckian->points.size() > 20 && nearD65,
+                 "the Planckian locus is drawn and passes near D65");
+        for (const std::string text : {"Rec.709 (D65)", "R: 0.6400, 0.3300", "G: 0.3000, 0.6000",
+                                       "B: 0.1500, 0.0600", "W: 0.3127, 0.3290"})
             e.expect(findLabel(plan, text) != nullptr, "the printed line \"" + text + "\"");
-        }
-        e.expect(findLabel(plan, "Rec.709") != nullptr, "the space's name is printed");
+        e.expect(findLabel(plan, "Rec.709") != nullptr, "the gamut is named at its green corner");
     }
+    // The gamut and white names come from the primaries, not the config's name.
+    auto p3 = rec709Colorimetry();
+    p3.colorSpaceName = "Some display";
+    p3.red = {0.680, 0.320};
+    p3.green = {0.265, 0.690};
+    p3.blue = {0.150, 0.060};
+    const auto p3Name = scopes::chromaticityGamutName(p3);
+    e.expect(p3Name.gamut == "P3" && p3Name.white == "D65", "P3 primaries with D65 are named");
+    auto ap1 = rec709Colorimetry();
+    ap1.red = {0.713, 0.293};
+    ap1.green = {0.165, 0.830};
+    ap1.blue = {0.128, 0.044};
+    ap1.white = {0.32168, 0.33767};
+    const auto ap1Name = scopes::chromaticityGamutName(ap1);
+    e.expect(ap1Name.gamut == "ACES AP1" && ap1Name.white == "D60", "ACES AP1 with D60 is named");
+    auto unknown = rec709Colorimetry();
+    unknown.colorSpaceName = "custom";
+    unknown.red = {0.6, 0.35};
+    unknown.white = {0.30, 0.30};
+    const auto unknownName = scopes::chromaticityGamutName(unknown);
+    e.expect(unknownName.gamut == "custom" && unknownName.white.empty(),
+             "other primaries keep the space's own name");
 }
 
 void testHistogramPlan(Expectations& e) {
     auto request = planRequest(scopes::Kind::Histogram, 300, 400, 1.0, nullptr, nullptr);
-    auto plan = scopes::buildScopeGraticule(request);
+    const auto plan = scopes::buildScopeGraticule(request);
     e.expect(plan.rows == 3 && near(plan.rowHeight, 56) && near(plan.plot.height, 168),
              "the histogram has three rows of 56");
     int rowLines = 0;
@@ -513,65 +574,182 @@ void testHistogramPlan(Expectations& e) {
         codeLines += line.from.x == line.to.x ? 1 : 0;
     }
     e.expect(rowLines == 4 && codeLines == 9, "row frames and a line at every labelled code");
-    e.expect(plan.fills.empty(), "no clip counts, no markers");
+    int names = 0;
+    for (const auto& label : plan.labels)
+        names += label.font == scopes::LabelFont::Name ? 1 : 0;
+    e.expect(names == 3 && findLabel(plan, "R") != nullptr && findLabel(plan, "B") != nullptr,
+             "each row is named by its channel's letter");
     request.histogramChannels = scopes::HistogramChannels::RgbAndLuma;
     e.expect(scopes::buildScopeGraticule(request).rows == 4, "luma adds a row");
-    // Clip markers at either end of the rows with counts.
-    scopes::ClipSummary clip;
-    clip.under[0] = 2;
-    clip.over[2] = 1;
-    request.histogramChannels = scopes::HistogramChannels::Rgb;
-    request.clip = &clip;
-    plan = scopes::buildScopeGraticule(request);
-    e.expect(plan.fills.size() == 2 && near(plan.fills[0].rect.x, plan.plot.left()) &&
-                 near(plan.fills[0].rect.y, plan.plot.top()) &&
-                 near(plan.fills[0].rect.width, scopes::kClipMarkerWidth) &&
-                 near(plan.fills[1].rect.right(), plan.plot.right()) &&
-                 near(plan.fills[1].rect.y, plan.plot.top() + 2 * 56),
-             "clip markers sit at the end of the row with under or over counts");
 }
 
 // ---------------------------------------------------------------------------------------------
 
-void testBrightnessFloor(Expectations& e) {
-    const auto tables = grayWithOddPixel();
-    scopes::TraceColors colors;
-    colors.channel = {0xFFFF0000U, 0xFF00FF00U, 0xFF0000FFU, 0xFFFFFFFFU};
-    const auto luma = rec709();
-    const std::uint32_t floorAlpha =
-        static_cast<std::uint32_t>(std::lround(scopes::kTraceFloor * 255.0F));
-    const auto minimumAlpha = [](const scopes::ScopeImage& image) {
-        unsigned least = 256;
-        int lit = 0;
-        for (const auto pixel : image.pixels)
-            if (scopes::alphaOf(pixel) != 0U) {
-                least = std::min(least, scopes::alphaOf(pixel));
-                ++lit;
+// The lit rows of one column of an image, top to bottom.
+[[nodiscard]] std::vector<int> litRows(const scopes::ScopeImage& image, const int x) {
+    std::vector<int> rows;
+    for (int y = 0; y < image.height; ++y)
+        if (image.pixel(x, y) != 0U)
+            rows.push_back(y);
+    return rows;
+}
+
+[[nodiscard]] std::vector<std::uint32_t> column(const scopes::ScopeImage& image, const int x) {
+    std::vector<std::uint32_t> pixels;
+    for (int y = 0; y < image.height; ++y)
+        pixels.push_back(image.pixel(x, y));
+    return pixels;
+}
+
+void testWaveformNoStripes(Expectations& e) {
+    // A flat gray at measured widths where the 512 Waveform columns hold one or two pixels (640),
+    // one to two (1000) and three to four (1920): every screen column draws the same.
+    for (const std::uint32_t width : {640U, 1000U, 1920U}) {
+        const std::vector<Rgba32f> pixels(width, px(0.4F, 0.5F, 0.6F));
+        const auto tables = tablesOf(pixels, width, 1, render::kScopeTableWaveform);
+        e.expect(tables.layout().columns == 512U, "a wide picture has 512 Waveform columns");
+        for (const int screen : {512, 300, 700}) {
+            for (const auto channels :
+                 {scopes::WaveformChannels::Rgb, scopes::WaveformChannels::Luma}) {
+                const auto image = scopes::mapWaveform(tables, channels, {screen, 128});
+                bool same = !image.empty();
+                const auto first = image.empty() ? std::vector<std::uint32_t>{} : column(image, 0);
+                bool lit = false;
+                for (const auto pixel : first)
+                    lit = lit || pixel != 0U;
+                for (int x = 1; same && x < image.width; ++x)
+                    same = column(image, x) == first;
+                e.expect(same && lit, "no column stripes: measured " + std::to_string(width) +
+                                          " wide, drawn " + std::to_string(screen) + " wide");
             }
-        return std::pair{least, lit};
-    };
-    const auto check = [&](const scopes::ScopeImage& image, const char* name) {
-        const auto [least, lit] = minimumAlpha(image);
-        e.expect(lit >= 2 && least >= floorAlpha,
-                 std::string(name) + " draws a single-count cell at or above the floor");
-    };
-    check(scopes::mapWaveform(tables, scopes::WaveformChannels::Luma, colors, 1.0F, {64, 512}),
-          "the waveform");
-    check(scopes::mapVectorscope(tables, luma, 1.0F, {512, 512}), "the vectorscope");
-    check(scopes::mapChromaticity(tables, 1.0F, scopes::chromaticityImageSize(512)),
-          "the chromaticity");
-    // The vectorscope's odd cell, by its coordinates.
+        }
+    }
+}
+
+void testWaveformRamp(Expectations& e) {
+    // A 10-bit ramp, one pixel per code: the Waveform is one continuous rising line and the
+    // Histogram is flat.
+    std::vector<Rgba32f> pixels;
+    for (int code = 0; code < 1024; ++code) {
+        const float v = static_cast<float>(code) / 1023.0F;
+        pixels.push_back(px(v, v, v));
+    }
+    const auto tables = tablesOf(pixels, 1024, 1, kAllScopes);
+    const auto waveform = scopes::mapWaveform(tables, scopes::WaveformChannels::Rgb, {512, 256});
+    bool continuous = !waveform.empty();
+    int previousTop = waveform.height;
+    for (int x = 0; continuous && x < waveform.width; ++x) {
+        const auto rows = litRows(waveform, x);
+        continuous = !rows.empty() && rows.back() - rows.front() + 1 ==
+                                          static_cast<int>(rows.size()); // no hole in a column
+        if (!continuous)
+            break;
+        // Rising, and touching or overlapping the previous column: no gap between neighbors.
+        continuous = rows.front() <= previousTop && (x == 0 || rows.back() >= previousTop - 1);
+        previousTop = rows.front();
+    }
+    e.expect(continuous, "a 10-bit ramp draws one continuous rising Waveform trace");
+    const auto histogram = scopes::mapHistogram(tables, scopes::HistogramChannels::Rgb,
+                                                scopes::HistogramScale::Linear, 56, 1024);
+    bool flat = !histogram.empty();
+    const auto height = histogram.empty() ? 0U : litRows(histogram, 0).size();
+    for (int x = 1; flat && x < histogram.width; ++x)
+        flat = litRows(histogram, x).size() == height;
+    e.expect(flat && height == 3U * 50U,
+             "a 10-bit ramp draws a flat Histogram, 90% of each channel's row");
+    // Under a flat curve: the channel's full-color outline on top, a translucent fill below.
+    if (!histogram.empty()) {
+        const auto top = histogram.pixel(500, 56 - 50);
+        const auto inside = histogram.pixel(500, 55);
+        e.expect(scopes::alphaOf(top) > 200U &&
+                     scopes::alphaOf(inside) ==
+                         static_cast<unsigned>(std::lround(scopes::kHistogramFillShare * 255.0F)),
+                 "the curve is a full-color outline over a translucent fill");
+    }
+}
+
+void testEightBitNoComb(Expectations& e) {
+    // An 8-bit gray ramp, 8 pixels of each of the 256 values in one column: its codes are 4.01
+    // apart, yet the Waveform is one unbroken vertical line at every height (no comb of empty rows)
+    // and the Histogram has no empty columns between its first and last value.
+    std::vector<Rgba32f> pixels;
+    for (int value = 0; value < 256; ++value)
+        for (int copy = 0; copy < 8; ++copy) {
+            const float v = static_cast<float>(value) / 255.0F;
+            pixels.push_back(px(v, v, v));
+        }
+    const auto tables = tablesOf(pixels, 1, 2048, kAllScopes);
+    for (const int height : {256, 333, 700, 1024, 1500}) {
+        const auto waveform =
+            scopes::mapWaveform(tables, scopes::WaveformChannels::Luma, {4, height});
+        const auto rows = waveform.empty() ? std::vector<int>{} : litRows(waveform, 0);
+        e.expect(static_cast<int>(rows.size()) == height,
+                 "an 8-bit ramp draws an unbroken Waveform line " + std::to_string(height) +
+                     " pixels tall");
+    }
+    for (const int width : {300, 816, 1024, 2000}) {
+        const auto histogram = scopes::mapHistogram(tables, scopes::HistogramChannels::Luma,
+                                                    scopes::HistogramScale::Linear, 56, width);
+        bool full = !histogram.empty();
+        for (int x = 0; full && x < histogram.width; ++x)
+            full = !litRows(histogram, x).empty();
+        e.expect(full, "an 8-bit ramp draws a Histogram with no empty column at width " +
+                           std::to_string(width));
+    }
+}
+
+void testWaveformIndependence(Expectations& e) {
+    // A column is as bright as its own pixels make it: other columns' content changes nothing.
+    std::vector<Rgba32f> plain(64 * 8, px(0.5F, 0.5F, 0.5F));
+    std::vector<Rgba32f> busy = plain;
+    for (int y = 0; y < 8; ++y)
+        for (int x = 32; x < 64; ++x)
+            busy[static_cast<std::size_t>(y * 64 + x)] =
+                px(static_cast<float>((x * 7 + y * 3) % 17) / 16.0F, 0.9F,
+                   static_cast<float>(y) / 7.0F);
+    const auto plainImage = scopes::mapWaveform(tablesOf(plain, 64, 8, kAllScopes),
+                                                scopes::WaveformChannels::Rgb, {64, 128});
+    const auto busyImage = scopes::mapWaveform(tablesOf(busy, 64, 8, kAllScopes),
+                                               scopes::WaveformChannels::Rgb, {64, 128});
+    bool same = !plainImage.empty() && !busyImage.empty();
+    for (int x = 0; same && x < 32; ++x)
+        same = column(plainImage, x) == column(busyImage, x);
+    e.expect(same, "a Waveform column's brightness does not depend on the other columns");
+}
+
+void testOutsideTheAxis(Expectations& e) {
+    // Pixel 3 is over the axis and pixel 5 under it (in every row): drawn on the 1023 and 0 lines
+    // of their columns and counted in the Histogram's end bins.
+    const auto tables = clippedFrame();
+    const auto waveform = scopes::mapWaveform(tables, scopes::WaveformChannels::Luma, {8, 64});
+    e.expect(!waveform.empty() && waveform.pixel(3, 0) != 0U && waveform.pixel(3, 63) == 0U &&
+                 waveform.pixel(5, 63) != 0U && waveform.pixel(5, 0) == 0U,
+             "over is drawn on the 1023 line and under on the 0 line");
+    const auto histogram = scopes::mapHistogram(tables, scopes::HistogramChannels::Luma,
+                                                scopes::HistogramScale::Linear, 56, 1024);
+    e.expect(!histogram.empty() && !litRows(histogram, 0).empty() &&
+                 !litRows(histogram, 1023).empty(),
+             "under and over are drawn in the Histogram's end bins");
+}
+
+void testSinglePixelVisible(Expectations& e) {
+    const auto tables = grayWithOddPixel();
+    const auto luma = rec709();
+    // The vectorscope's odd cell, by its coordinates, on a 640-pixel image (one cell a pixel).
     const double y = kKr * kOddRed + kKg * kOddGreen + kKb * kOddBlue;
     const int cbCell =
-        static_cast<int>(std::floor(((kOddBlue - y) / (2 * (1 - kKb)) + 0.5) * 512.0));
+        static_cast<int>(std::floor(((kOddBlue - y) / (2 * (1 - kKb)) + 0.625) * 512.0));
     const int crCell =
-        static_cast<int>(std::floor(((kOddRed - y) / (2 * (1 - kKr)) + 0.5) * 512.0));
-    const auto scope = scopes::mapVectorscope(tables, luma, 1.0F, {512, 512});
-    e.expect(!scope.empty() && scopes::alphaOf(scope.pixel(cbCell, 511 - crCell)) >= floorAlpha,
-             "the odd pixel's vectorscope cell is lit");
+        static_cast<int>(std::floor(((kOddRed - y) / (2 * (1 - kKr)) + 0.625) * 512.0));
+    const auto scope = scopes::mapVectorscope(tables, luma, {640, 640});
+    e.expect(!scope.empty() && scopes::alphaOf(scope.pixel(cbCell, 639 - crCell)) >= 64U,
+             "a single pixel among thousands is a visible Vectorscope dot");
+    const auto waveform = scopes::mapWaveform(tables, scopes::WaveformChannels::Rgb, {64, 256});
+    e.expect(!waveform.empty() && litRows(waveform, 0).size() >= 2U,
+             "the odd pixel's Waveform column draws it beside the gray");
     // The histogram never hides a bin with a count: one pixel tall at least.
     const auto histogram = scopes::mapHistogram(tables, scopes::HistogramChannels::Rgb,
-                                                scopes::HistogramScale::Linear, colors, 56, 1024);
+                                                scopes::HistogramScale::Linear, 56, 1024);
     const int oddCode = static_cast<int>(std::floor(kOddRed * 1023.0 + 0.5));
     e.expect(!histogram.empty() && scopes::alphaOf(histogram.pixel(oddCode, 55)) != 0U,
              "a histogram bin with one pixel among thousands is one pixel tall at least");
@@ -583,28 +761,25 @@ void testHistogramHeights(Expectations& e) {
     pixels.insert(pixels.end(), 15, px(0.5F, 0.5F, 0.5F));
     pixels.push_back(px(0.75F, 0.75F, 0.75F));
     const auto tables = tablesOf(pixels, 8, 8, render::kScopeTableHistogram);
-    scopes::TraceColors colors;
-    colors.channel = {0xFFFF0000U, 0xFF00FF00U, 0xFF0000FFU, 0xFF808080U};
-    const auto height = [](const scopes::ScopeImage& image, const int column) {
-        int count = 0;
-        for (int y = 0; y < image.height; ++y)
-            count += scopes::alphaOf(image.pixel(column, y)) != 0U ? 1 : 0;
-        return count;
+    const auto height = [](const scopes::ScopeImage& image, const int x) {
+        return static_cast<int>(litRows(image, x).size());
     };
     const auto linear = scopes::mapHistogram(tables, scopes::HistogramChannels::Luma,
-                                             scopes::HistogramScale::Linear, colors, 56, 1024);
-    const auto logarithmic =
-        scopes::mapHistogram(tables, scopes::HistogramChannels::Luma,
-                             scopes::HistogramScale::Logarithmic, colors, 56, 1024);
+                                             scopes::HistogramScale::Linear, 56, 1024);
+    const auto logarithmic = scopes::mapHistogram(tables, scopes::HistogramChannels::Luma,
+                                                  scopes::HistogramScale::Logarithmic, 56, 1024);
     e.expect(linear.width == 1024 && linear.height == 56, "one row of 56 pixels for luma");
+    // The tallest bin reaches 90% of the row. Each isolated code is drawn spread by the tent, its
+    // own bin holding a quarter of its count.
     const std::array<int, 3> codes{256, 512, 767};
     const std::array<double, 3> counts{48, 15, 1};
     for (std::size_t index = 0; index < 3; ++index) {
         const int expectedLinear =
-            std::clamp(static_cast<int>(std::ceil(counts[index] / 48.0 * 56.0)), 1, 56);
-        const int expectedLog = std::clamp(
-            static_cast<int>(std::ceil(std::log2(1.0 + counts[index]) / std::log2(49.0) * 56.0)), 1,
-            56);
+            std::clamp(static_cast<int>(std::lround(counts[index] / 48.0 * 0.9 * 56.0)), 1, 56);
+        const int expectedLog =
+            std::clamp(static_cast<int>(std::lround(std::log2(1.0 + counts[index] / 4.0) /
+                                                    std::log2(1.0 + 48.0 / 4.0) * 0.9 * 56.0)),
+                       1, 56);
         e.expect(height(linear, codes[index]) == expectedLinear,
                  "linear height of code " + std::to_string(codes[index]));
         e.expect(height(logarithmic, codes[index]) == expectedLog,
@@ -614,50 +789,25 @@ void testHistogramHeights(Expectations& e) {
              "a bin with no count has no height");
 }
 
-void testClipMarkers(Expectations& e) {
-    const auto clipped = clippedFrame();
-    const auto clip =
-        scopes::clipSummary(clipped, scopes::Kind::Waveform, scopes::WaveformChannels::Rgb,
-                            scopes::HistogramChannels::Rgb);
-    scopes::PictureInput input;
-    input.tables = &clipped;
-    const auto luma = rec709();
-    input.luma = &luma;
-    const auto colorimetry = rec709Colorimetry();
-    input.colorimetry = &colorimetry;
-    const scopes::PictureOptions options;
-    const auto picture =
-        scopes::renderScopePicture(scopes::Kind::Waveform, 320, 200, input, options, {}, 1U << 24U);
-    e.expect(picture.ok() && picture.image.width == 320 && picture.image.height == 200,
-             "the picture has the size asked for");
-    // Column 3 is over (top edge), column 5 under (bottom edge); the plan says where.
-    auto request = planRequest(scopes::Kind::Waveform, 320, 200, 1.0, &luma, &colorimetry);
-    request.measure = scopes::embeddedTextMeasure(1.0);
-    request.clip = &clip;
-    const auto plan = scopes::buildScopeGraticule(request);
-    e.expect(plan.fills.size() == 2, "one over marker and one under marker");
-    const auto warning = options.palette.warning;
-    bool both = picture.ok() && plan.fills.size() == 2;
-    for (const auto& fill : plan.fills) {
-        const int x = static_cast<int>(std::floor(fill.rect.x + 0.5));
-        const int y = static_cast<int>(std::floor(fill.rect.y + 0.5));
-        both = both && picture.image.pixel(x, y + 1) == warning;
-    }
-    e.expect(both, "the markers are drawn in the warning color");
-    // A frame with no under or over counts has none.
-    const auto clean = grayWithOddPixel();
-    input.tables = &clean;
-    const auto quiet =
-        scopes::renderScopePicture(scopes::Kind::Waveform, 320, 200, input, options, {}, 1U << 24U);
-    int warnings = 0;
-    for (const auto pixel : quiet.image.pixels)
-        warnings += pixel == warning ? 1 : 0;
-    e.expect(quiet.ok() && warnings == 0, "no marker without an under or over count");
-    const auto cleanClip =
-        scopes::clipSummary(clean, scopes::Kind::Waveform, scopes::WaveformChannels::Rgb,
-                            scopes::HistogramChannels::Rgb);
-    request.clip = &cleanClip;
-    e.expect(scopes::buildScopeGraticule(request).fills.empty(), "the plan has no marker either");
+void testChromaticityPresence(Expectations& e) {
+    // One pixel or a thousand at the same chromaticity draw the same: presence in full color.
+    std::vector<Rgba32f> one(64 * 16, px(0.0F, 0.0F, 0.0F));
+    one[0] = px(0.2F, 0.6F, 0.3F);
+    std::vector<Rgba32f> many(64 * 16, px(0.2F, 0.6F, 0.3F));
+    const auto size = scopes::chromaticityImageSize(400);
+    const auto oneImage = scopes::mapChromaticity(tablesOf(one, 64, 16, kAllScopes), size);
+    const auto manyImage = scopes::mapChromaticity(tablesOf(many, 64, 16, kAllScopes), size);
+    int lit = 0;
+    bool same = !oneImage.empty() && !manyImage.empty();
+    for (int y = 0; same && y < manyImage.height; ++y)
+        for (int x = 0; x < manyImage.width; ++x) {
+            const auto pixel = manyImage.pixel(x, y);
+            if (pixel == 0U)
+                continue;
+            ++lit;
+            same = same && oneImage.pixel(x, y) == pixel && scopes::alphaOf(pixel) == 255U;
+        }
+    e.expect(same && lit > 0, "the CIE trace marks where pixels are, in full color");
 }
 
 // The trace pixels inside the trace rectangle equal the mapping composed over the canvas. The
@@ -672,8 +822,8 @@ void testTraceComposition(Expectations& e) {
     input.colorimetry = &colorimetry;
     scopes::PictureOptions options;
     auto& palette = options.palette;
-    for (auto* role : {&palette.quiet, &palette.stronger, &palette.strongest, &palette.label,
-                       &palette.faint, &palette.warning})
+    for (auto* role :
+         {&palette.quiet, &palette.stronger, &palette.strongest, &palette.label, &palette.faint})
         *role = 0U;
     struct Case {
         scopes::Kind kind;
@@ -705,17 +855,17 @@ void testTraceComposition(Expectations& e) {
         mapping.kind = item.kind;
         mapping.tables = &tables;
         mapping.luma = &luma;
-        mapping.colors = palette.traceColors();
         mapping.size = plan.traceRequestSize;
         mapping.gapPixels = scopes::kParadeGap;
         const auto trace = scopes::renderTrace(mapping);
-        e.expect(!trace.image.empty() && trace.image.width == plan.traceImageSize.width &&
-                     trace.image.height == plan.traceImageSize.height,
+        e.expect(!trace.empty() && trace.width == plan.traceImageSize.width &&
+                     trace.height == plan.traceImageSize.height,
                  "the mapping returns the size the plan says");
         const int left = static_cast<int>(std::lround(plan.trace.x));
         const int top = static_cast<int>(std::lround(plan.trace.y));
-        const bool additive =
-            item.kind == scopes::Kind::Waveform || item.kind == scopes::Kind::Parade;
+        const bool additive = item.kind == scopes::Kind::Waveform ||
+                              item.kind == scopes::Kind::Parade ||
+                              item.kind == scopes::Kind::Vectorscope;
         // Pixels near a label are not compared.
         const auto nearLabel = [&](const int x, const int y) {
             for (const auto& label : plan.labels) {
@@ -736,19 +886,18 @@ void testTraceComposition(Expectations& e) {
         int compared = 0;
         int lit = 0;
         int mismatched = 0;
-        for (int y = 0; y < trace.image.height; ++y)
-            for (int x = 0; x < trace.image.width; ++x) {
+        for (int y = 0; y < trace.height; ++y)
+            for (int x = 0; x < trace.width; ++x) {
                 const int px = left + x;
                 const int py = top + y;
                 if (px < 0 || py < 0 || px >= item.width || py >= item.height || nearLabel(px, py))
                     continue;
-                const auto source = trace.image.pixel(x, y);
+                const auto source = trace.pixel(x, y);
                 const auto canvas = palette.canvas;
-                std::uint32_t expected = 0;
                 const auto channel = [&](const unsigned d, const unsigned s, const unsigned a) {
                     return additive ? std::min(255U, d + s) : s + (d * (255U - a) + 127U) / 255U;
                 };
-                expected = scopes::packArgb(
+                const auto expected = scopes::packArgb(
                     channel(scopes::alphaOf(canvas), scopes::alphaOf(source),
                             scopes::alphaOf(source)),
                     channel(scopes::redOf(canvas), scopes::redOf(source), scopes::alphaOf(source)),
@@ -764,151 +913,6 @@ void testTraceComposition(Expectations& e) {
                  "the trace pixels of the picture are the mapping over the canvas (kind " +
                      std::to_string(static_cast<int>(item.kind)) + ", " +
                      std::to_string(mismatched) + " differ)");
-    }
-}
-
-// A picture drawn from detail-1 (and detail-2) tables: the same size and graticule, and a trace
-// that covers the same region.
-//
-// The rule asserted for the trace: with `size` the larger side of the trace image in pixels, a
-// detail-d cell is 2^d full cells wide, so it covers at most ceil(2^d * size / 512) output pixels
-// (the unit of the footprint below, plus one for rounding of the spans). Every drawn trace pixel of
-// the detail-d image has a drawn pixel of the full-detail image within that footprint on each
-// axis, and every drawn pixel of the full-detail image has a drawn pixel of the detail-d image
-// within it. The Histogram does not depend on the detail: its image is equal.
-[[nodiscard]] std::vector<Rgba32f> gradientPixels() {
-    std::vector<Rgba32f> pixels;
-    for (int y = 0; y < 64; ++y)
-        for (int x = 0; x < 64; ++x)
-            pixels.push_back(px(static_cast<float>(x) / 63.0F, static_cast<float>(y) / 63.0F,
-                                static_cast<float>((x * 5 + y * 3) % 64) / 63.0F));
-    return pixels;
-}
-
-[[nodiscard]] bool drawnNear(const scopes::ScopeImage& image, const int x, const int y,
-                             const int footprint) {
-    for (int dy = -footprint; dy <= footprint; ++dy)
-        for (int dx = -footprint; dx <= footprint; ++dx) {
-            const int px = x + dx;
-            const int py = y + dy;
-            if (px >= 0 && py >= 0 && px < image.width && py < image.height &&
-                image.pixel(px, py) != 0U)
-                return true;
-        }
-    return false;
-}
-
-void testDetailPicture(Expectations& e) {
-    const auto pixels = gradientPixels();
-    const auto full = tablesOf(pixels, 64, 64, kAllScopes, 0);
-    const auto luma = rec709();
-    const auto colorimetry = rec709Colorimetry();
-    scopes::PictureOptions options;
-    struct Case {
-        scopes::Kind kind;
-        int width;
-        int height;
-    };
-    const auto measure = scopes::embeddedTextMeasure(1.0);
-    for (const std::uint32_t detail : {1U, 2U}) {
-        const auto coarse = tablesOf(pixels, 64, 64, kAllScopes, detail);
-        e.expect(coarse.layout().detail == detail && coarse.layout().cells() == (512U >> detail),
-                 "the detail's tables have the detail's layout");
-        scopes::PictureInput fullInput;
-        fullInput.tables = &full;
-        fullInput.luma = &luma;
-        fullInput.colorimetry = &colorimetry;
-        auto coarseInput = fullInput;
-        coarseInput.tables = &coarse;
-        for (const auto& item :
-             {Case{scopes::Kind::Waveform, 320, 200}, Case{scopes::Kind::Parade, 320, 200},
-              Case{scopes::Kind::Vectorscope, 300, 300}, Case{scopes::Kind::Histogram, 300, 240},
-              Case{scopes::Kind::Chromaticity, 300, 300}}) {
-            const std::string name = "detail " + std::to_string(detail) + ", kind " +
-                                     std::to_string(static_cast<int>(item.kind));
-            const auto fullPicture = scopes::renderScopePicture(item.kind, item.width, item.height,
-                                                                fullInput, options, {}, 1U << 24U);
-            const auto coarsePicture = scopes::renderScopePicture(
-                item.kind, item.width, item.height, coarseInput, options, {}, 1U << 24U);
-            e.expect(fullPicture.ok() && coarsePicture.ok() &&
-                         coarsePicture.image.width == fullPicture.image.width &&
-                         coarsePicture.image.height == fullPicture.image.height,
-                     name + ": the picture has the same size");
-            if (!fullPicture.ok() || !coarsePicture.ok())
-                continue;
-            // The graticule: the same plan, and the same pixels wherever neither trace draws.
-            scopes::GraticuleRequest request;
-            request.kind = item.kind;
-            request.width = item.width;
-            request.height = item.height;
-            request.luma = &luma;
-            request.colorimetry = &colorimetry;
-            request.measure = measure;
-            const auto plan = scopes::buildScopeGraticule(request);
-            scopes::TraceRequest mapping;
-            mapping.kind = item.kind;
-            mapping.luma = &luma;
-            mapping.colors = options.palette.traceColors();
-            mapping.size = plan.traceRequestSize;
-            mapping.gapPixels = scopes::kParadeGap;
-            mapping.tables = &full;
-            const auto fullTrace = scopes::renderTrace(mapping);
-            mapping.tables = &coarse;
-            const auto coarseTrace = scopes::renderTrace(mapping);
-            e.expect(!fullTrace.image.empty() && !coarseTrace.image.empty() &&
-                         fullTrace.image.width == coarseTrace.image.width &&
-                         fullTrace.image.height == coarseTrace.image.height,
-                     name + ": the traces have the same size");
-            if (fullTrace.image.empty() || coarseTrace.image.empty())
-                continue;
-            const int left = static_cast<int>(std::lround(plan.trace.x));
-            const int top = static_cast<int>(std::lround(plan.trace.y));
-            int graticuleDifferences = 0;
-            for (int y = 0; y < item.height; ++y)
-                for (int x = 0; x < item.width; ++x) {
-                    const int tx = x - left;
-                    const int ty = y - top;
-                    const bool inTrace = tx >= 0 && ty >= 0 && tx < fullTrace.image.width &&
-                                         ty < fullTrace.image.height;
-                    if (inTrace && (fullTrace.image.pixel(tx, ty) != 0U ||
-                                    coarseTrace.image.pixel(tx, ty) != 0U))
-                        continue;
-                    graticuleDifferences +=
-                        fullPicture.image.pixel(x, y) == coarsePicture.image.pixel(x, y) ? 0 : 1;
-                }
-            e.expect(graticuleDifferences == 0,
-                     name + ": the graticule and everything outside the trace is the same (" +
-                         std::to_string(graticuleDifferences) + " differ)");
-            if (item.kind == scopes::Kind::Histogram) {
-                e.expect(fullTrace.image.pixels == coarseTrace.image.pixels,
-                         name + ": the Histogram's trace does not depend on the detail");
-                continue;
-            }
-            // The trace covers the same region.
-            const int larger = std::max(fullTrace.image.width, fullTrace.image.height);
-            const int footprint = ((1 << detail) * larger + 511) / 512 + 1;
-            int drawnCoarse = 0;
-            int drawnFull = 0;
-            int uncovered = 0;
-            int missed = 0;
-            for (int y = 0; y < fullTrace.image.height; ++y)
-                for (int x = 0; x < fullTrace.image.width; ++x) {
-                    if (coarseTrace.image.pixel(x, y) != 0U) {
-                        ++drawnCoarse;
-                        uncovered += drawnNear(fullTrace.image, x, y, footprint) ? 0 : 1;
-                    }
-                    if (fullTrace.image.pixel(x, y) != 0U) {
-                        ++drawnFull;
-                        missed += drawnNear(coarseTrace.image, x, y, footprint) ? 0 : 1;
-                    }
-                }
-            e.expect(drawnCoarse > 0 && drawnFull > 0, name + ": both traces draw something");
-            e.expect(uncovered == 0 && missed == 0,
-                     name + ": the traces cover the same region within " +
-                         std::to_string(footprint) + " pixels (" + std::to_string(uncovered) +
-                         " drawn pixels of the detail's trace have none of the full trace near, " +
-                         std::to_string(missed) + " of the full trace have none of the detail's)");
-        }
     }
 }
 
@@ -1136,11 +1140,15 @@ int main() {
         testVectorscopePlan(e);
         testChromaticityPlan(e);
         testHistogramPlan(e);
-        testBrightnessFloor(e);
+        testWaveformNoStripes(e);
+        testWaveformRamp(e);
+        testEightBitNoComb(e);
+        testWaveformIndependence(e);
+        testOutsideTheAxis(e);
+        testSinglePixelVisible(e);
         testHistogramHeights(e);
-        testClipMarkers(e);
+        testChromaticityPresence(e);
         testTraceComposition(e);
-        testDetailPicture(e);
         testAllScopesPicture(e);
         testPng(e);
         testRefusals(e);

@@ -34,6 +34,7 @@ constexpr std::size_t kNone = std::numeric_limits<std::size_t>::max();
     return static_cast<std::uint32_t>(whole);
 }
 
+// The CIE chromaticity cell of an axis: floor(value * 512), or 512 when it is outside 0..511.
 [[nodiscard]] std::uint32_t scopeCell(const float value) noexcept {
     const float scaled = value * 512.0F;
     const float whole = std::floor(scaled);
@@ -43,12 +44,15 @@ constexpr std::size_t kNone = std::numeric_limits<std::size_t>::max();
     return static_cast<std::uint32_t>(whole);
 }
 
-// The word of a code in a Waveform column at `layout`'s detail: its level (code >> 1) >> detail,
-// or the under word (levels) or the over word (levels + 1).
-[[nodiscard]] std::uint32_t scopeLevel(const std::uint32_t code,
-                                       const ScopeTableLayout& layout) noexcept {
-    return code < 1024U ? (code >> 1U) >> layout.detail
-                        : code - render::kScopeCodeUnder + layout.waveformLevels();
+// The Vectorscope cell of an axis: floor((v + 0.625) * 512), or 640 when it is outside 0..639.
+[[nodiscard]] std::uint32_t vectorscopeCell(const float value) noexcept {
+    const float shifted = value + 0.625F;
+    const float scaled = shifted * 512.0F;
+    const float whole = std::floor(scaled);
+    if (!(whole >= 0.0F) || !(whole <= 639.0F)) {
+        return render::kScopeVectorscopeCells;
+    }
+    return static_cast<std::uint32_t>(whole);
 }
 
 // The word index of a cell, or kNone when the table is absent or the cell is out of range.
@@ -67,22 +71,24 @@ constexpr std::size_t kNone = std::numeric_limits<std::size_t>::max();
                                         const std::uint32_t column,
                                         const std::uint32_t level) noexcept {
     if (!layout.has(render::kScopeTableWaveform) || channel >= render::kScopeChannels ||
-        column >= layout.columns || level >= layout.waveformColumnWords()) {
+        column >= layout.columns || level >= render::kScopeWaveformColumnWords) {
         return kNone;
     }
     return static_cast<std::size_t>(layout.waveformOffset) +
            static_cast<std::size_t>(channel) * layout.waveformChannelWords() +
-           static_cast<std::size_t>(column) * layout.waveformColumnWords() + level;
+           static_cast<std::size_t>(column) * render::kScopeWaveformColumnWords + level;
 }
 
 [[nodiscard]] std::size_t gridIndex(const ScopeTableLayout& layout, const std::uint32_t scope,
                                     const std::uint32_t offset, const std::uint32_t xCell,
                                     const std::uint32_t yCell) noexcept {
-    if (!layout.has(scope) || xCell >= layout.cells() || yCell >= layout.cells()) {
+    const std::uint32_t cells = scope == render::kScopeTableVectorscope
+                                    ? render::kScopeVectorscopeCells
+                                    : render::kScopeChromaticityCells;
+    if (!layout.has(scope) || xCell >= cells || yCell >= cells) {
         return kNone;
     }
-    return static_cast<std::size_t>(offset) + static_cast<std::size_t>(yCell) * layout.cells() +
-           xCell;
+    return static_cast<std::size_t>(offset) + static_cast<std::size_t>(yCell) * cells + xCell;
 }
 
 [[nodiscard]] std::uint32_t wordAt(const std::vector<std::uint32_t>& words,
@@ -140,6 +146,12 @@ std::uint32_t ScopeCounts::vectorscope(const std::uint32_t cbCell,
         gridIndex(layout, render::kScopeTableVectorscope, layout.vectorscopeOffset, cbCell, crCell);
     return at == kNone ? 0U : wordAt(words, at);
 }
+std::uint32_t ScopeCounts::vectorscopeLuma(const std::uint32_t cbCell,
+                                           const std::uint32_t crCell) const noexcept {
+    const std::size_t at = gridIndex(layout, render::kScopeTableVectorscope,
+                                     layout.vectorscopeLumaOffset(), cbCell, crCell);
+    return at == kNone ? 0U : wordAt(words, at);
+}
 std::uint32_t ScopeCounts::chromaticity(const std::uint32_t xCell,
                                         const std::uint32_t yCell) const noexcept {
     const std::size_t at =
@@ -150,7 +162,7 @@ std::uint32_t ScopeCounts::chromaticity(const std::uint32_t xCell,
 std::optional<ScopeCounts> measureScopesCpu(const ScopeMeasureInput& input,
                                             const std::function<bool()>& cancelled) {
     if (input.areaWidth == 0U || input.areaHeight == 0U ||
-        !validScopeAxisMaximum(input.axisMaximum) || !render::validScopeDetail(input.detail)) {
+        !validScopeAxisMaximum(input.axisMaximum)) {
         return std::nullopt;
     }
     const std::uint64_t areaPixels = static_cast<std::uint64_t>(input.areaWidth) * input.areaHeight;
@@ -168,7 +180,7 @@ std::optional<ScopeCounts> measureScopesCpu(const ScopeMeasureInput& input,
     }
 
     ScopeCounts counts;
-    counts.layout = render::scopeTableLayout(scopes, input.areaWidth, input.detail);
+    counts.layout = render::scopeTableLayout(scopes, input.areaWidth);
     counts.words.assign(counts.layout.wordCount, 0U);
     const ScopeTableLayout& layout = counts.layout;
     std::vector<std::uint32_t>& words = counts.words;
@@ -222,25 +234,32 @@ std::optional<ScopeCounts> measureScopesCpu(const ScopeMeasureInput& input,
                 const std::uint32_t column = static_cast<std::uint32_t>(
                     static_cast<std::uint64_t>(x) * layout.columns / input.areaWidth);
                 for (std::uint32_t channel = 0; channel < render::kScopeChannels; ++channel) {
-                    ++words[waveformIndex(layout, channel, column,
-                                          scopeLevel(codes[channel], layout))];
+                    ++words[waveformIndex(layout, channel, column, codes[channel])];
                 }
             }
             if (layout.has(render::kScopeTableVectorscope)) {
                 const float cbDifference = b - luma;
                 const float cb = cbDifference / k.cbDenominator;
-                const float cbShifted = cb + 0.5F;
                 const float crDifference = r - luma;
                 const float cr = crDifference / k.crDenominator;
-                const float crShifted = cr + 0.5F;
-                const std::uint32_t column = scopeCell(cbShifted);
-                const std::uint32_t row = scopeCell(crShifted);
-                if (column == 512U || row == 512U) {
+                const std::uint32_t column = vectorscopeCell(cb);
+                const std::uint32_t row = vectorscopeCell(cr);
+                if (column == render::kScopeVectorscopeCells ||
+                    row == render::kScopeVectorscopeCells) {
                     ++words[render::kScopeCounterVectorscopeOutside];
                 } else {
+                    // The luma code, clipped to the axis, shifted to 0..63.
+                    const std::uint32_t lumaCode =
+                        codes[kScopeChannelLuma] == render::kScopeCodeUnder
+                            ? 0U
+                            : (codes[kScopeChannelLuma] == render::kScopeCodeOver
+                                   ? 1023U
+                                   : codes[kScopeChannelLuma]);
                     ++words[gridIndex(layout, render::kScopeTableVectorscope,
-                                      layout.vectorscopeOffset, column >> layout.detail,
-                                      row >> layout.detail)];
+                                      layout.vectorscopeOffset, column, row)];
+                    words[gridIndex(layout, render::kScopeTableVectorscope,
+                                    layout.vectorscopeLumaOffset(), column, row)] +=
+                        lumaCode >> render::kScopeVectorscopeLumaShift;
                 }
             }
             if (wantChromaticity) {
@@ -262,8 +281,7 @@ std::optional<ScopeCounts> measureScopesCpu(const ScopeMeasureInput& input,
                         ++words[render::kScopeCounterChromaticityOutside];
                     } else {
                         ++words[gridIndex(layout, render::kScopeTableChromaticity,
-                                          layout.chromaticityOffset, column >> layout.detail,
-                                          row >> layout.detail)];
+                                          layout.chromaticityOffset, column, row)];
                     }
                 }
             }
@@ -324,17 +342,19 @@ ScopeTables ScopeTables::pack(const ScopeCounts& counts, const ScopeRoute route)
         packTable(tables.waveform_, layout.waveformOffset, layout.waveformWords());
     }
     if (layout.has(render::kScopeTableVectorscope)) {
-        packTable(tables.vectorscope_, layout.vectorscopeOffset, layout.gridWords());
+        packTable(tables.vectorscope_, layout.vectorscopeOffset, layout.vectorscopeGridWords());
+        packTable(tables.vectorscopeLuma_, layout.vectorscopeLumaOffset(),
+                  layout.vectorscopeGridWords());
     }
     if (layout.has(render::kScopeTableChromaticity)) {
-        packTable(tables.chromaticity_, layout.chromaticityOffset, layout.gridWords());
+        packTable(tables.chromaticity_, layout.chromaticityOffset, layout.chromaticityWords());
     }
     return tables;
 }
 
 std::size_t ScopeTables::byteSize() const noexcept {
     return sizeof(ScopeTables) + histogram_.bytes.size() + waveform_.bytes.size() +
-           vectorscope_.bytes.size() + chromaticity_.bytes.size();
+           vectorscope_.bytes.size() + vectorscopeLuma_.bytes.size() + chromaticity_.bytes.size();
 }
 
 std::uint32_t ScopeTables::tableWidthBytes(const std::uint32_t scope) const noexcept {
@@ -404,6 +424,7 @@ ScopeCounts ScopeTables::unpack() const {
     }
     if (layout_.has(render::kScopeTableVectorscope)) {
         unpackTable(vectorscope_, layout_.vectorscopeOffset);
+        unpackTable(vectorscopeLuma_, layout_.vectorscopeLumaOffset());
     }
     if (layout_.has(render::kScopeTableChromaticity)) {
         unpackTable(chromaticity_, layout_.chromaticityOffset);
@@ -441,6 +462,12 @@ std::uint32_t ScopeTables::vectorscope(const std::uint32_t cbCell,
     const std::size_t at = gridIndex(layout_, render::kScopeTableVectorscope,
                                      layout_.vectorscopeOffset, cbCell, crCell);
     return at == kNone ? 0U : read(vectorscope_, at - layout_.vectorscopeOffset);
+}
+std::uint32_t ScopeTables::vectorscopeLuma(const std::uint32_t cbCell,
+                                           const std::uint32_t crCell) const noexcept {
+    const std::size_t at = gridIndex(layout_, render::kScopeTableVectorscope,
+                                     layout_.vectorscopeLumaOffset(), cbCell, crCell);
+    return at == kNone ? 0U : read(vectorscopeLuma_, at - layout_.vectorscopeLumaOffset());
 }
 std::uint32_t ScopeTables::chromaticity(const std::uint32_t xCell,
                                         const std::uint32_t yCell) const noexcept {
@@ -522,16 +549,16 @@ ScopeSummary summarizeScopes(const ScopeCounts& counts) {
     double sumCb = 0.0;
     double sumCr = 0.0;
     double sumDistance = 0.0;
-    const std::uint32_t cells = counts.layout.cells();
-    const double cellCount = static_cast<double>(cells);
+    const std::uint32_t cells = render::kScopeVectorscopeCells;
+    const double perUnit = static_cast<double>(render::kScopeVectorscopeCellsPerUnit);
     for (std::uint32_t row = 0; row < cells; ++row) {
-        const double cr = (static_cast<double>(row) + 0.5) / cellCount - 0.5;
+        const double cr = (static_cast<double>(row) + 0.5) / perUnit - 0.625;
         for (std::uint32_t column = 0; column < cells; ++column) {
             const std::uint32_t count = counts.vectorscope(column, row);
             if (count == 0U) {
                 continue;
             }
-            const double cb = (static_cast<double>(column) + 0.5) / cellCount - 0.5;
+            const double cb = (static_cast<double>(column) + 0.5) / perUnit - 0.625;
             const double weight = static_cast<double>(count);
             total += weight;
             sumCb += weight * cb;
@@ -543,7 +570,7 @@ ScopeSummary summarizeScopes(const ScopeCounts& counts) {
         return summary;
     }
     summary.vectorscopeAvailable = true;
-    summary.meanSaturation = (sumDistance / total) / 0.5;
+    summary.meanSaturation = (sumDistance / total) / kScopeVectorscopeRing;
     const double meanCb = sumCb / total;
     const double meanCr = sumCr / total;
     if (std::hypot(meanCb, meanCr) > 1e-12) {

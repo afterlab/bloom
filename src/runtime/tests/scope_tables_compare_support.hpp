@@ -1,6 +1,6 @@
 #pragma once
 
-// The comparators of the scope device tests (#724): the device's tables against the CPU
+// The comparators of the scope device tests (#724, #730): the device's tables against the CPU
 // reference's, cell for cell, or within one cell along every axis where OCIO's CPU and GPU
 // processors may round a pixel into the neighboring cell. Every pixel is counted in both.
 
@@ -53,18 +53,18 @@ using bloom::render::kScopeTableWaveform;
     return axis;
 }
 
-// One Waveform column along the level axis of the counts' detail: under, the levels, over.
+// One Waveform column along the level axis: under, the levels 0..1023, over.
 [[nodiscard]] inline std::vector<std::uint64_t>
 waveformAxis(const ScopeCounts& counts, const std::uint32_t channel, const std::uint32_t column) {
     std::vector<std::uint64_t> axis;
-    axis.push_back(counts.waveform(channel, column, counts.layout.waveformLevelUnder()));
-    for (std::uint32_t level = 0; level < counts.layout.waveformLevels(); ++level)
+    axis.push_back(counts.waveform(channel, column, bloom::render::kScopeWaveformLevelUnder));
+    for (std::uint32_t level = 0; level < bloom::render::kScopeWaveformLevels; ++level)
         axis.push_back(counts.waveform(channel, column, level));
-    axis.push_back(counts.waveform(channel, column, counts.layout.waveformLevelOver()));
+    axis.push_back(counts.waveform(channel, column, bloom::render::kScopeWaveformLevelOver));
     return axis;
 }
 
-// A table of `cells` x `cells` (the detail's side) summed onto one of its axes, with the pixels
+// A table of `cells` x `cells` summed onto one of its axes, with the pixels
 // outside it as a last cell.
 template <typename Cell>
 [[nodiscard]] inline std::vector<std::uint64_t> planeAxis(const Cell& cell, const std::uint32_t cells,
@@ -79,7 +79,7 @@ template <typename Cell>
     return axis;
 }
 
-// The pixels outside a 512 x 512 table are one count for both axes, so a pixel that crosses the
+// The pixels outside a table are one count for both axes, so a pixel that crosses the
 // table's edge is not placed along an axis: the axes are compared only when both sides agree on
 // how many are outside.
 [[nodiscard]] inline bool planesWithinOneCell(const ScopeCounts& device, const ScopeCounts& reference,
@@ -95,7 +95,8 @@ template <typename Cell>
                             : counts.vectorscopeOutside();
     };
     for (const bool alongFirst : {true, false}) {
-        const std::uint32_t cells = device.layout.cells();
+        const std::uint32_t cells = chromaticity ? bloom::render::kScopeChromaticityCells
+                                                 : bloom::render::kScopeVectorscopeCells;
         auto left = planeAxis(cellOf(device), cells, alongFirst, outsideOf(device));
         auto right = planeAxis(cellOf(reference), cells, alongFirst, outsideOf(reference));
         if (left[cells] != right[cells]) {
@@ -133,8 +134,23 @@ template <typename Cell>
             }
         }
     }
-    if (layout.has(kScopeTableVectorscope) && !planesWithinOneCell(device, reference, false))
-        return false;
+    if (layout.has(kScopeTableVectorscope)) {
+        if (!planesWithinOneCell(device, reference, false))
+            return false;
+        // A pixel's luma code may round one step apart too: the luma sums of the whole table
+        // differ by at most one shifted step per pixel.
+        std::uint64_t deviceLuma = 0;
+        std::uint64_t referenceLuma = 0;
+        for (std::uint32_t cr = 0; cr < bloom::render::kScopeVectorscopeCells; ++cr)
+            for (std::uint32_t cb = 0; cb < bloom::render::kScopeVectorscopeCells; ++cb) {
+                deviceLuma += device.vectorscopeLuma(cb, cr);
+                referenceLuma += reference.vectorscopeLuma(cb, cr);
+            }
+        const auto difference =
+            deviceLuma > referenceLuma ? deviceLuma - referenceLuma : referenceLuma - deviceLuma;
+        if (difference > device.counted())
+            return false;
+    }
     if (layout.has(kScopeTableChromaticity) && !planesWithinOneCell(device, reference, true))
         return false;
     return true;

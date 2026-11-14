@@ -3,7 +3,8 @@
 // docs/architecture/scopes.md. The pictures are small (256 x 256): a flat field, where every pixel
 // adds to the same cell of every table at once (the hardest case for the atomic adds); a varied
 // field with values under, inside and over every range; an area that reaches outside the picture
-// with transparent pixels ignored; and a narrow area with a raised axis maximum.
+// with transparent pixels ignored; a narrow area with a raised axis maximum; and an area wider
+// than the Waveform's columns.
 //
 // The counts here are computed independently of the CPU reference in src/runtime, which has its
 // own parity test against this kernel.
@@ -67,10 +68,15 @@ struct Picture final {
     return static_cast<std::uint32_t>(whole);
 }
 
-// The word of a code in a Waveform column at the layout's detail.
-[[nodiscard]] std::uint32_t level(const std::uint32_t value,
-                                  const ScopeTableLayout& layout) noexcept {
-    return value < 1024U ? (value >> 1U) >> layout.detail : value - 1024U + layout.waveformLevels();
+// The Vectorscope cell of an axis: floor((v + 0.625) * 512), or 640 outside 0..639.
+[[nodiscard]] std::uint32_t vectorscopeCell(const float value) noexcept {
+    const float shifted = value + 0.625F;
+    const float scaled = shifted * 512.0F;
+    const float whole = std::floor(scaled);
+    if (!(whole >= 0.0F) || !(whole <= 639.0F)) {
+        return 640U;
+    }
+    return static_cast<std::uint32_t>(whole);
 }
 
 // The tables of `request` over `picture`, counted one pixel at a time.
@@ -118,23 +124,27 @@ struct Picture final {
                     static_cast<std::uint64_t>(x) * layout.columns / request.areaWidth);
                 for (std::uint32_t channel = 0; channel < 4; ++channel) {
                     ++words[layout.waveformOffset + channel * layout.waveformChannelWords() +
-                            column * layout.waveformColumnWords() + level(codes[channel], layout)];
+                            column * bloom::render::kScopeWaveformColumnWords + codes[channel]];
                 }
             }
             if (layout.has(bloom::render::kScopeTableVectorscope)) {
                 const float cbDifference = b - luma;
                 const float cb = cbDifference / request.cbDenominator;
-                const float cbShifted = cb + 0.5F;
                 const float crDifference = r - luma;
                 const float cr = crDifference / request.crDenominator;
-                const float crShifted = cr + 0.5F;
-                const std::uint32_t column = cell(cbShifted);
-                const std::uint32_t row = cell(crShifted);
-                if (column == 512U || row == 512U) {
+                const std::uint32_t column = vectorscopeCell(cb);
+                const std::uint32_t row = vectorscopeCell(cr);
+                if (column == 640U || row == 640U) {
                     ++words[bloom::render::kScopeCounterVectorscopeOutside];
                 } else {
-                    ++words[layout.vectorscopeOffset + (row >> layout.detail) * layout.cells() +
-                            (column >> layout.detail)];
+                    // Each cell also sums its pixels' luma codes, clipped to the axis, over 16.
+                    const std::uint32_t lumaCode =
+                        codes[3] == bloom::render::kScopeCodeUnder
+                            ? 0U
+                            : (codes[3] == bloom::render::kScopeCodeOver ? 1023U : codes[3]);
+                    const std::size_t at = static_cast<std::size_t>(row) * 640U + column;
+                    ++words[layout.vectorscopeOffset + at];
+                    words[layout.vectorscopeLumaOffset() + at] += lumaCode >> 4U;
                 }
             }
             if (layout.has(bloom::render::kScopeTableChromaticity)) {
@@ -154,9 +164,7 @@ struct Picture final {
                     if (column == 512U || row == 512U) {
                         ++words[bloom::render::kScopeCounterChromaticityOutside];
                     } else {
-                        ++words[layout.chromaticityOffset +
-                                (row >> layout.detail) * layout.cells() +
-                                (column >> layout.detail)];
+                        ++words[layout.chromaticityOffset + row * 512U + column];
                     }
                 }
             }
@@ -249,10 +257,9 @@ void compare(Expectations& expectations, GpuScopeTables& measure, const Picture&
     }
     const GpuScopeTablesResult result = measure.take();
     const ScopeTableLayout layout =
-        bloom::render::scopeTableLayout(request.scopes, request.areaWidth, request.detail);
+        bloom::render::scopeTableLayout(request.scopes, request.areaWidth);
     expectations.expect(result.layout == layout, label + ": the layout is the request's");
-    // The bytes read back are the layout's, exactly: no table that was not asked for, and the
-    // detail's size for the ones that were.
+    // The bytes read back are the layout's, exactly: no table that was not asked for.
     expectations.expect(static_cast<std::uint64_t>(result.words.size()) * 4U == layout.byteCount(),
                         label + ": the bytes read back are the layout's");
     const std::uint64_t dispatches = layout.columns != 0 ? 2U : 1U;
@@ -347,102 +354,51 @@ void testTables(Expectations& expectations, GpuDevice& device) {
         compare(expectations, measure, picture, single, "single table " + std::to_string(scope));
     }
 
-    // The same pictures at detail 1 and 2, counted by the same definitions.
-    for (const std::uint32_t detail : {1U, 2U}) {
-        const std::string suffix = ", detail " + std::to_string(detail);
-        GpuScopeTablesRequest coarse = request;
-        coarse.detail = detail;
-        compare(expectations, measure, picture, coarse, "varied field" + suffix);
-        GpuScopeTablesRequest coarseOutside = outside;
-        coarseOutside.detail = detail;
-        compare(expectations, measure, picture, coarseOutside, "area past the picture" + suffix);
-        GpuScopeTablesRequest coarseNarrow = narrow;
-        coarseNarrow.detail = detail;
-        compare(expectations, measure, picture, coarseNarrow,
-                "narrow area, axis maximum 4" + suffix);
-        for (const std::uint32_t scope :
-             {bloom::render::kScopeTableHistogram, bloom::render::kScopeTableWaveform,
-              bloom::render::kScopeTableVectorscope, bloom::render::kScopeTableChromaticity}) {
-            GpuScopeTablesRequest single = coarse;
-            single.scopes = scope;
-            if (scope != bloom::render::kScopeTableChromaticity) {
-                single.xyz.reset();
-            }
-            compare(expectations, measure, picture, single,
-                    "single table " + std::to_string(scope) + suffix);
-        }
-        const Picture flat = flatPicture();
-        GpuScopeTablesRequest coarseFlat = rec709Request();
-        coarseFlat.detail = detail;
-        coarseFlat.signal = resident(*uploader.upload, flat.signal, kSide, kSide);
-        coarseFlat.xyz = resident(*uploader.upload, flat.xyz, kSide, kSide);
-        if (coarseFlat.signal != nullptr && coarseFlat.xyz != nullptr) {
-            compare(expectations, measure, flat, coarseFlat, "flat field" + suffix);
-        } else {
-            expectations.expect(false, "flat" + suffix + ": the pictures are resident");
-        }
+    // A wide area: more pixels than Waveform columns, columns spanning one or two pixels.
+    {
+        GpuScopeTablesRequest wide = request;
+        wide.scopes = bloom::render::kScopeTableWaveform;
+        wide.xyz.reset();
+        wide.areaX = -300;
+        wide.areaWidth = 700;
+        compare(expectations, measure, picture, wide, "an area wider than the Waveform's columns");
     }
 
     // The tables a measure asks for are the only ones read back: one table is the counters and
-    // that table, and the detail's layout is what the device returns.
+    // that table.
     {
         namespace render = bloom::render;
         GpuScopeTablesRequest histogramOnly = request;
         histogramOnly.scopes = render::kScopeTableHistogram;
         histogramOnly.xyz.reset();
-        expectations.expect(render::scopeTableLayout(histogramOnly.scopes, kSide, 0).byteCount() ==
+        expectations.expect(render::scopeTableLayout(histogramOnly.scopes, kSide).byteCount() ==
                                 (8U + 4U * 1026U) * 4U,
                             "a Histogram-only measure reads 8 counters and 4104 words");
         compare(expectations, measure, picture, histogramOnly, "histogram only");
     }
 
-    // A detail above 2 is refused.
-    {
-        GpuScopeTablesRequest refused = request;
-        refused.detail = 3;
-        expectations.expect(!measure.begin(refused, kBudget) &&
-                                measure.diagnostic().code == GpuScopeTablesCode::InvalidArgument,
-                            "a detail above 2 is refused");
-    }
-
-    // The byte budget follows the detail: the table buffer, its staging copy and the host copy are
-    // each the detail's layout. A budget that fits detail 2 but not detail 1 or full detail.
+    // The byte budget holds the table buffer, its staging copy and the host copy, each the
+    // layout's size (a device may round a buffer up): four times the tables fit, two do not.
     {
         namespace render = bloom::render;
-        const std::uint64_t coarsest =
-            render::scopeTableLayout(render::kScopeTableAll, kSide, 2).byteCount();
-        const std::uint64_t finer =
-            render::scopeTableLayout(render::kScopeTableAll, kSide, 1).byteCount();
-        const std::uint64_t budget = 4U * coarsest;
-        expectations.expect(budget < 3U * finer, "the budget fits detail 2 only");
+        const std::uint64_t tables =
+            render::scopeTableLayout(render::kScopeTableAll, kSide).byteCount();
         expectations.expect(
-            coarsest < finer &&
-                finer < render::scopeTableLayout(render::kScopeTableAll, kSide, 0).byteCount(),
-            "each detail reads back fewer bytes than the one before");
-        GpuScopeTablesRequest fits = request;
-        fits.detail = 2;
-        expectations.expect(measure.begin(fits, budget),
-                            "a budget that fits detail 2 accepts it: " +
+            tables == (8U + 4U * 1026U + 4U * 256U * 1026U + 2U * 640U * 640U + 512U * 512U) * 4U,
+            "every table of a 256-pixel-wide area is its fixed size");
+        expectations.expect(measure.begin(request, 4U * tables),
+                            "a budget of four times the tables accepts them: " +
                                 measure.diagnostic().message);
         GpuScopeTablesState state = measure.state();
         while (state == GpuScopeTablesState::Pending) {
             state = measure.poll();
         }
         expectations.expect(state == GpuScopeTablesState::Ready,
-                            "detail 2 under its budget is Ready");
+                            "the tables under their budget are Ready");
         static_cast<void>(measure.take());
-        for (const std::uint32_t detail : {0U, 1U}) {
-            GpuScopeTablesRequest tooMuch = request;
-            tooMuch.detail = detail;
-            expectations.expect(!measure.begin(tooMuch, budget) &&
-                                    measure.diagnostic().code == GpuScopeTablesCode::OverBudget,
-                                "the same budget refuses detail " + std::to_string(detail));
-        }
-        GpuScopeTablesRequest below = request;
-        below.detail = 2;
-        expectations.expect(!measure.begin(below, coarsest) &&
+        expectations.expect(!measure.begin(request, 2U * tables) &&
                                 measure.diagnostic().code == GpuScopeTablesCode::OverBudget,
-                            "a budget below detail 2's tables is refused");
+                            "a budget of twice the tables is refused");
     }
 
     GpuScopeTablesRequest missing = request;

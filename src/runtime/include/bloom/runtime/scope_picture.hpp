@@ -4,12 +4,13 @@
 //
 // The Scopes panel and the headless scope image (MCP and scripting sessions have no Qt) draw from
 // the same three definitions, so they cannot drift:
-//   1. The trace mapping: count tables to a premultiplied 8-bit image (brightness, the visible
-//      floor, the clip summary). The panel maps on a task worker; the headless image maps in place.
+//   1. The trace mapping: count tables to a premultiplied 8-bit image (the fixed, linear,
+//      saturating intensity of #730). The panel maps on a task worker; the headless image maps in
+//      place.
 //   2. The graticule plan: from the scope kind, a logical size, a device pixel ratio, the settings
 //      that affect drawing, the luma coefficients, the colorimetry and a text-measuring callback,
 //      a plain description of everything a scope shows besides the trace: the plot and trace
-//      rectangles, hairlines, polylines, circles, filled clip markers and labels, each with a color
+//      rectangles, hairlines, polylines, circles and labels, each with a color
 //      role, in logical coordinates. The panel paints it with its own vector painter and the UI
 //      fonts; the headless image rasterizes it with one device pixel lines and the embedded face.
 //   3. The palette: the color roles a scope uses. The panel fills it from the interface tokens; the
@@ -41,18 +42,34 @@ enum class WaveformChannels : std::uint8_t { Rgb, Luma };
 enum class HistogramChannels : std::uint8_t { Rgb, Luma, RgbAndLuma };
 enum class HistogramScale : std::uint8_t { Linear, Logarithmic };
 
-// The least brightness of a cell that holds at least one pixel.
-inline constexpr float kTraceFloor = 0.15F;
 // The Chromaticity table's extent in x and y; the scope's axes run 0 to 1.
 inline constexpr double kChromaticityXMaximum = 0.8;
 inline constexpr double kChromaticityYMaximum = 0.9;
 inline constexpr double kChromaticityAxisMaximum = 1.0;
-// The luma at which the Vectorscope's cells take their color.
-inline constexpr float kVectorscopeCellLuma = 0.7F;
-// Logical pixels of one Histogram row, a Parade gap, and the clip markers.
+// The Vectorscope's plot spans Cb and Cr from -kVectorscopeExtent to +kVectorscopeExtent (the
+// table's extent), so its ring (|CbCr| = kScopeVectorscopeRing) sits just inside the plot.
+inline constexpr double kVectorscopeExtent = 0.625;
+// Logical pixels of one Histogram row and of a Parade gap.
 inline constexpr int kHistogramRowHeight = 56;
 inline constexpr int kParadeGap = 4;
-inline constexpr int kClipMarkerWidth = 3;
+
+// The trace intensity (#730, docs/architecture/scopes.md "Trace intensity"): light adds linearly
+// and saturates. A screen pixel's density is the share of the pixels it stands for that land in
+// it, relative to an even spread (1 when the pixels spread evenly over the whole axis or plane):
+//   Waveform and Parade: the share of the screen column's source pixels (the pixels of the table
+//     columns it shows, every one counted once) in the levels of the screen row, times 1024 over
+//     the levels of that row;
+//   Vectorscope: the share of the counted pixels in the cells of the screen pixel, times
+//     640 x 640 over the cells of that pixel.
+// Its intensity is the gain times the density, not clamped and not normalized to the frame; each
+// channel adds its color times its intensity and every component is clamped to 1, so dense areas
+// whiten. Nothing is raised to a visible floor.
+inline constexpr float kWaveformTraceGain = 0.25F;
+inline constexpr float kVectorscopeTraceGain = 0.05F;
+// The Histogram's tallest column reaches this share of its row.
+inline constexpr double kHistogramHeadroom = 0.9;
+// The Histogram's filled area is its outline color at this share.
+inline constexpr float kHistogramFillShare = 0.22F;
 
 // ---------------------------------------------------------------------------------------------
 // The trace mapping
@@ -98,60 +115,56 @@ struct ScopeImage final {
     return pixel & 0xFFU;
 }
 
-// Red, green, blue and luma trace colors as 0xAARRGGBB (the alpha is ignored).
-struct TraceColors final {
-    std::array<std::uint32_t, 4> channel{};
+// A linear color, each component 0..1.
+struct TraceColor final {
+    float red = 0.0F;
+    float green = 0.0F;
+    float blue = 0.0F;
 };
-
-[[nodiscard]] constexpr float traceBrightnessGainDefault() noexcept { return 1.0F; }
-
-// 0 for a cell with no pixel; otherwise in [kTraceFloor, 1]. log2(1 + n) / log2(1 + m) times the
-// gain with core::specifiedLog2, clamped to 1.
-[[nodiscard]] float traceBrightness(std::uint32_t count, std::uint32_t largest,
-                                    float gain) noexcept;
+// The Waveform and Parade trace colors of red, green, blue and luma: a channel at full and the
+// other two at a third, so the three channels at equal intensity add to white.
+inline constexpr std::array<TraceColor, 4> kWaveformTraceColors{{{1.0F, 1.0F / 3, 1.0F / 3},
+                                                                 {1.0F / 3, 1.0F, 1.0F / 3},
+                                                                 {1.0F / 3, 1.0F / 3, 1.0F},
+                                                                 {1.0F, 1.0F, 1.0F}}};
+// The Histogram outlines of red, green, blue and luma.
+inline constexpr std::array<TraceColor, 4> kHistogramTraceColors{
+    {{0.875F, 0.204F, 0.204F}, {0.0F, 0.86F, 0.0F}, {0.0F, 0.46F, 0.73F}, {0.8F, 0.8F, 0.8F}}};
 
 using Cancelled = std::function<bool()>;
-
-// What the tables say about clipping, for the clip ticks and markers.
-struct ClipSummary final {
-    // Histogram: red, green, blue, luma.
-    std::array<std::uint32_t, 4> under{};
-    std::array<std::uint32_t, 4> over{};
-    // Waveform: per table column, bit 0 under and bit 1 over, for the channels drawn.
-    std::vector<std::uint8_t> columns;
-};
 
 // The channels each choice draws.
 [[nodiscard]] std::vector<std::uint32_t> waveformChannelList(WaveformChannels channels);
 [[nodiscard]] std::vector<std::uint32_t> histogramChannelList(HistogramChannels channels);
 
 // `size` is the image's size in pixels. An empty image comes back for a cancelled call, a table
-// that was not measured or an empty size.
+// that was not measured or an empty size. A Waveform level's or Histogram bin's count is drawn
+// spread over the levels c - 3 to c + 3 by a tent of (4 - |d|) / 16 (one 8-bit step each side,
+// mirrored at the axis ends), so 8-bit pictures draw no comb. Values outside the axis are not
+// spread: they are drawn on its end lines (code 0 and 1023) and in its end bins.
 [[nodiscard]] ScopeImage mapWaveform(const ScopeTables& tables, WaveformChannels channels,
-                                     const TraceColors& colors, float gain, PixelSize size,
-                                     const Cancelled& cancelled = {});
+                                     PixelSize size, const Cancelled& cancelled = {});
 // Three panes (red, green, blue) of equal width with `gapPixels` between them.
-[[nodiscard]] ScopeImage mapParade(const ScopeTables& tables, const TraceColors& colors, float gain,
-                                   PixelSize size, int gapPixels, const Cancelled& cancelled = {});
+[[nodiscard]] ScopeImage mapParade(const ScopeTables& tables, PixelSize size, int gapPixels,
+                                   const Cancelled& cancelled = {});
+// The image covers Cb and Cr from -kVectorscopeExtent to kVectorscopeExtent; a cell is drawn in
+// the mean color of its pixels (from its Cb, Cr and mean luma), whitening as it gets denser.
 [[nodiscard]] ScopeImage mapVectorscope(const ScopeTables& tables, const ScopeLuma& luma,
-                                        float gain, PixelSize size,
-                                        const Cancelled& cancelled = {});
+                                        PixelSize size, const Cancelled& cancelled = {});
 // The image covers x 0 to kChromaticityXMaximum and y 0 to kChromaticityYMaximum of the axes (see
-// chromaticityImageSize). `size` is that image's size.
-[[nodiscard]] ScopeImage mapChromaticity(const ScopeTables& tables, float gain, PixelSize size,
+// chromaticityImageSize). `size` is that image's size. A cell with any pixel is drawn at full
+// brightness in its own chromaticity's color: presence only.
+[[nodiscard]] ScopeImage mapChromaticity(const ScopeTables& tables, PixelSize size,
                                          const Cancelled& cancelled = {});
 // The image holds one row of `rowHeight` pixels per channel drawn, stacked top to bottom (red,
-// green, blue, then luma), all on one scale: the largest bin of the channels drawn.
+// green, blue, then luma), all on one scale: a screen column shows the mean count of its bins, and
+// the tallest column of the channels drawn reaches kHistogramHeadroom of the row.
 [[nodiscard]] ScopeImage mapHistogram(const ScopeTables& tables, HistogramChannels channels,
-                                      HistogramScale scale, const TraceColors& colors,
-                                      int rowHeight, int width, const Cancelled& cancelled = {});
+                                      HistogramScale scale, int rowHeight, int width,
+                                      const Cancelled& cancelled = {});
 
 // The size of the Chromaticity image for axes `side` pixels long.
 [[nodiscard]] PixelSize chromaticityImageSize(int side);
-
-[[nodiscard]] ClipSummary clipSummary(const ScopeTables& tables, Kind kind,
-                                      WaveformChannels waveformChannels,
-                                      HistogramChannels histogramChannels);
 
 // One request to map. Pointers are borrowed for the call.
 struct TraceRequest final {
@@ -159,8 +172,6 @@ struct TraceRequest final {
     const ScopeTables* tables = nullptr;
     // The Vectorscope's luma coefficients; null maps no Vectorscope.
     const ScopeLuma* luma = nullptr;
-    TraceColors colors;
-    float gain = 1.0F;
     // Waveform, Parade, Vectorscope and Chromaticity: the image size in pixels (Chromaticity: the
     // axes' side, from which the image size is derived). Histogram: width and the row height.
     PixelSize size;
@@ -170,13 +181,8 @@ struct TraceRequest final {
     HistogramScale histogramScale = HistogramScale::Linear;
 };
 
-struct TraceResult final {
-    ScopeImage image;
-    ClipSummary clip;
-};
-
 // Maps one request. Pure; runs on the calling thread.
-[[nodiscard]] TraceResult renderTrace(const TraceRequest& request, const Cancelled& cancelled = {});
+[[nodiscard]] ScopeImage renderTrace(const TraceRequest& request, const Cancelled& cancelled = {});
 
 // ---------------------------------------------------------------------------------------------
 // The palette
@@ -189,10 +195,8 @@ enum class ColorRole : std::uint8_t {
     Strongest,
     // Labels, the Vectorscope's ticks and brackets, the gamut triangle.
     Label,
-    // The skin tone line.
+    // The skin tone line and the Planckian locus.
     Faint,
-    // Clip markers.
-    Warning,
     Red,
     Green,
     Blue,
@@ -208,12 +212,10 @@ struct ScopePalette final {
     std::uint32_t strongest = 0;
     std::uint32_t label = 0;
     std::uint32_t faint = 0;
-    std::uint32_t warning = 0;
     // Red, green, blue and luma.
     std::array<std::uint32_t, 4> channel{};
 
     [[nodiscard]] std::uint32_t color(ColorRole role) const noexcept;
-    [[nodiscard]] TraceColors traceColors() const noexcept { return {channel}; }
 
     friend bool operator==(const ScopePalette&, const ScopePalette&) = default;
 };
@@ -274,12 +276,6 @@ struct Circle final {
     Layer layer = Layer::UnderTrace;
 };
 
-// A filled rectangle: a clip marker. Always over the trace.
-struct Fill final {
-    Rect rect;
-    ColorRole color = ColorRole::Warning;
-};
-
 // Which of the two type roles a label uses: numbers and axis values in the numeric face, names
 // (channel letters, targets, the color space) in the small interface face.
 enum class LabelFont : std::uint8_t { Numeric, Name };
@@ -332,14 +328,12 @@ struct GraticuleRequest final {
     // plan omits those parts.
     const ScopeLuma* luma = nullptr;
     const color::ScopeColorimetry* colorimetry = nullptr;
-    // The clip markers; none without it.
-    const ClipSummary* clip = nullptr;
     ScopeMetrics metrics;
     MeasureText measure;
 };
 
 // Everything a scope draws besides its trace. Painting order: the UnderTrace lines, polylines and
-// circles, the trace, then the OverTrace lines, polylines and circles, the fills, the labels.
+// circles, the trace, then the OverTrace lines, polylines and circles, then the labels.
 struct ScopeGraticule final {
     Kind kind = Kind::Waveform;
     double width = 0.0;
@@ -365,7 +359,6 @@ struct ScopeGraticule final {
     std::vector<Line> lines;
     std::vector<Polyline> polylines;
     std::vector<Circle> circles;
-    std::vector<Fill> fills;
     std::vector<Label> labels;
 };
 
@@ -388,6 +381,16 @@ struct VectorscopeTarget final {
 };
 [[nodiscard]] std::array<VectorscopeTarget, 6> vectorscopeTargets(const ScopeLuma& luma);
 inline constexpr double kSkinToneDegrees = 123.0;
+
+// The Chromaticity's names for a colorimetry: the gamut ("Rec.709", "P3", "Rec.2020", "ACES AP1",
+// "ACES AP0") when the primaries match one within 0.002 in x and y, else the color space's name;
+// the white ("D65", "D60", "D50", "DCI") when it matches one, else empty.
+struct ChromaticityGamutName final {
+    std::string gamut;
+    std::string white;
+};
+[[nodiscard]] ChromaticityGamutName
+chromaticityGamutName(const color::ScopeColorimetry& colorimetry);
 
 // ---------------------------------------------------------------------------------------------
 // The picture
@@ -418,7 +421,6 @@ struct PictureInput final {
     const color::ScopeColorimetry* colorimetry = nullptr;
     ScopeSignal signal = ScopeSignal::Display;
     std::uint32_t axisMaximum = 1;
-    float gain = 1.0F;
     WaveformChannels waveformChannels = WaveformChannels::Rgb;
     HistogramChannels histogramChannels = HistogramChannels::Rgb;
     HistogramScale histogramScale = HistogramScale::Linear;
@@ -437,7 +439,7 @@ struct PictureOptions final {
 };
 
 // One scope drawn into `pixelWidth` x `pixelHeight` pixels: canvas, graticule, trace (additive for
-// the Waveform and the Parade, as the panel composes it), clip markers and labels. Lines are one
+// the Waveform and the Parade, as the panel composes it) and labels. Lines are one
 // device pixel; labels are rasterized with the embedded face closest to the panel's. Never throws
 // for bad input; the error says why nothing was drawn. `byteLimit` bounds the picture's bytes.
 [[nodiscard]] PictureResult renderScopePicture(Kind kind, int pixelWidth, int pixelHeight,

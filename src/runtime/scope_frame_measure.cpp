@@ -54,8 +54,8 @@ constexpr std::size_t kChunkPixels = 16384;
     return pixelOf(nan, nan, nan, nan);
 }
 
-// The Display signal of `source`: straight color through the display, the Viewer's adjustment when
-// it is not neutral, then alpha again. False when the processor could not run or on cancellation
+// The Display signal of `source`: straight color through the display transform, then alpha again.
+// False when the processor could not run or on cancellation
 // (`cancelled` set).
 [[nodiscard]] bool displaySignal(const std::span<const render::Rgba32f> source,
                                  const ScopeSignalColor& color,
@@ -64,8 +64,6 @@ constexpr std::size_t kChunkPixels = 16384;
     const auto* const processor = color.displayProcessor();
     if (processor == nullptr)
         return false;
-    const auto& adjust = color.viewAdjust();
-    const bool adjusted = !adjust.neutral();
     signal.resize(source.size(), render::Rgba32f::transparent());
     std::vector<float> scratch(std::min(kChunkPixels, source.size()) * 4);
     for (std::size_t first = 0; first < source.size(); first += kChunkPixels) {
@@ -112,14 +110,9 @@ constexpr std::size_t kChunkPixels = 16384;
                 signal[first + index] = notFinitePixel();
                 continue;
             }
-            float red = scratch[index * 4 + 0];
-            float green = scratch[index * 4 + 1];
-            float blue = scratch[index * 4 + 2];
-            if (adjusted && finite(red, green, blue)) {
-                red = static_cast<float>(adjust.fromEncoded(static_cast<double>(red)));
-                green = static_cast<float>(adjust.fromEncoded(static_cast<double>(green)));
-                blue = static_cast<float>(adjust.fromEncoded(static_cast<double>(blue)));
-            }
+            const float red = scratch[index * 4 + 0];
+            const float green = scratch[index * 4 + 1];
+            const float blue = scratch[index * 4 + 2];
             const float storedRed = red * alpha;
             const float storedGreen = green * alpha;
             const float storedBlue = blue * alpha;
@@ -188,9 +181,9 @@ constexpr std::size_t kChunkPixels = 16384;
 
 ScopeSignalColorResult ScopeSignalColor::prepare(const ScopeSignalColorRequest& request) {
     ScopeSignalColorResult result;
-    if (request.config == nullptr || !request.viewAdjust.valid()) {
+    if (request.config == nullptr) {
         result.error = ScopeSignalColorError::InvalidRequest;
-        result.message = "The scope signal names no color config or an adjustment out of range.";
+        result.message = "The scope signal names no color config.";
         return result;
     }
     const auto& config = *request.config;
@@ -201,7 +194,6 @@ ScopeSignalColorResult ScopeSignalColor::prepare(const ScopeSignalColorRequest& 
         color->display_ =
             request.display.empty() ? std::string(config.displayName()) : request.display;
         color->view_ = request.view.empty() ? std::string(config.viewName()) : request.view;
-        color->viewAdjust_ = request.viewAdjust;
         const auto displays = config.displays();
         const auto entry = std::find_if(displays.begin(), displays.end(), [&](const auto& pair) {
             return pair.display == color->display_ && pair.view == color->view_;
@@ -240,9 +232,7 @@ ScopeSignalColorResult ScopeSignalColor::prepare(const ScopeSignalColorRequest& 
     color->identity_ = std::string(revision.data(), revision.size()) + '|' +
                        color->xyz_->identity() + '|' +
                        (request.signal == ScopeSignal::Display ? "display" : "working") + '|' +
-                       color->display_ + '|' + color->view_ + '|' +
-                       std::to_string(std::bit_cast<std::uint64_t>(color->viewAdjust_.exposure)) +
-                       '|' + std::to_string(std::bit_cast<std::uint64_t>(color->viewAdjust_.gamma));
+                       color->display_ + '|' + color->view_;
     result.color = std::move(color);
     return result;
 }
@@ -300,7 +290,6 @@ ScopeFrameMeasure measureScopeFrameCpu(const ProcessFrame& frame,
         input.axisMaximum = settings.axisMaximum;
         input.luma = color.luma();
         input.ignoreTransparent = settings.ignoreTransparent;
-        input.detail = settings.detail;
         auto counts = measureScopesCpu(
             input, [&cancellation] { return cancellation.isCancellationRequested(); });
         if (!counts)
@@ -317,17 +306,18 @@ ScopeFrameMeasure measureScopeFrameCpu(const ProcessFrame& frame,
 
 GpuScopeMeasureJob makeScopeMeasureJob(const ScopeMeasureSettings& settings,
                                        const ScopeSignalColor& color,
-                                       const GpuSceneOcioContext& ocio) {
+                                       const GpuSceneOcioContext& ocio,
+                                       std::shared_ptr<const void> keepAlive) {
     GpuScopeMeasureJob job;
     job.scopes = settings.scopes;
     job.axisMaximum = settings.axisMaximum;
     job.luma = color.luma();
     job.ignoreTransparent = settings.ignoreTransparent;
-    job.detail = settings.detail;
     job.region = settings.region;
-    const auto factory = [&ocio, &color](GpuOcioTransformSpec spec) -> GpuScopeCommandFactory {
+    const auto factory = [&ocio, &color,
+                          &keepAlive](GpuOcioTransformSpec spec) -> GpuScopeCommandFactory {
         return
-            [&ocio, &color, spec = std::move(spec)](
+            [&ocio, &color, keepAlive, spec = std::move(spec)](
                 const GpuOcioCommandGeometry geometry,
                 const CancellationToken& token) -> std::shared_ptr<const PreparedGpuOcioCommand> {
                 if (ocio.preparer == nullptr)
@@ -344,7 +334,6 @@ GpuScopeMeasureJob makeScopeMeasureJob(const ScopeMeasureSettings& settings,
         spec.display = color.display();
         spec.view = color.view();
         spec.workingSpaceId = std::string(color.config().processColorSpaceId());
-        spec.viewAdjust = color.viewAdjust();
         job.displayCommand = factory(std::move(spec));
     }
     if ((settings.scopes & render::kScopeTableChromaticity) != 0U) {
@@ -354,132 +343,6 @@ GpuScopeMeasureJob makeScopeMeasureJob(const ScopeMeasureSettings& settings,
         job.xyzCommand = factory(std::move(spec));
     }
     return job;
-}
-
-namespace {
-
-[[nodiscard]] ScopeFrameMeasure
-measureRetained(const PreviewDisplayBufferView& view, const RetainedScopePicture& picture,
-                const ScopeMeasureSettings& settings, const ScopeSignalColor& color,
-                const CancellationToken& cancellation) {
-    // What a retained picture holds (checked against the code, not assumed):
-    //   * Straight (non-premultiplied) RGBA8: render::mapLinearRec709SceneToSrgbRow divides the
-    //     color by alpha before encoding it (src/render/cpu_image_primitives.cpp,
-    //     displayChannelByte(color, alpha)); an alpha of 0 is stored as (0, 0, 0, 0). The GPU
-    //     route packs the same layout (PreviewDisplayOnlyFrame::displayBufferView,
-    //     src/runtime/prepared_preview_frame.cpp).
-    //   * The display transform, the view, the look and the request's exposure and gamma are
-    //     already applied and quantized: the CPU mapper applies ViewAdjust::fromLinear when the
-    //     adjustment is not neutral (src/runtime/reference_display_preparation.cpp, the row pass),
-    //     the qualified CPU route its own (qualified_display_preparation.cpp) and the resident
-    //     DisplayRgba8 program carries `viewAdjust`
-    //     (src/runtime/gpu_preview_display_service_resident.cpp, `request.viewAdjust`).
-    //     Every retained (cached) frame is requested with a neutral adjustment
-    //     (src/ui/ram_preview_controller.cpp); the Viewer derives its adjusted picture from the
-    //     neutral one and measures neutral base plus adjustment (ViewerEditor::scopesSource).
-    //   So the adjustment of the signal is applied here only when the picture is the neutral base,
-    //   in the order of ViewAdjust::fromEncoded, which is what measureScopeFrameCpu applies to the
-    //   display transform's float result.
-    ScopeFrameMeasure result;
-    result.source = ScopeSource::Retained;
-    result.route = ScopeRoute::Cpu;
-    try {
-        if (settings.signal == ScopeSignal::Working) {
-            result.status = ScopeFrameStatus::Unavailable;
-            result.message = "The Working signal is not available for a cached frame. Switch to "
-                             "the Display signal, or show the frame again to measure it.";
-            return result;
-        }
-        if (settings.signal != color.signal())
-            return failed("The scope signal and its color objects do not match.");
-        const auto& adjust = color.viewAdjust();
-        const bool applyAdjust = !(adjust == picture.bakedViewAdjust);
-        if (applyAdjust && !picture.bakedViewAdjust.neutral()) {
-            result.status = ScopeFrameStatus::Unavailable;
-            result.message = "The cached frame already holds a different exposure and gamma.";
-            return result;
-        }
-        const auto window = view.dataWindow.value_or(view.displayWindow);
-        const auto width = static_cast<std::size_t>(window.extent().width());
-        const auto height = static_cast<std::size_t>(window.extent().height());
-        if (view.pixels.size() != width * height ||
-            view.layout.rowStrideBytes != width * sizeof(render::Rgba8))
-            return failed("The cached frame has no picture to measure.");
-        const auto area = scopeMeasuredArea(window, view.displayWindow, view.dataWindow,
-                                            settings.region, picture.compositionWidth,
-                                            picture.compositionHeight);
-        if (!area) {
-            result.status = ScopeFrameStatus::EmptyArea;
-            return result;
-        }
-        result.area = *area;
-
-        // Each channel code c/255, through the adjustment, once per code.
-        std::array<float, 256> channel{};
-        for (std::size_t code = 0; code < channel.size(); ++code) {
-            const double encoded = static_cast<double>(static_cast<float>(code) / 255.0F);
-            channel[code] = applyAdjust ? static_cast<float>(adjust.fromEncoded(encoded))
-                                        : static_cast<float>(encoded);
-        }
-        std::vector<render::Rgba32f> signal(view.pixels.size(), render::Rgba32f::transparent());
-        for (std::size_t first = 0; first < signal.size(); first += kChunkPixels) {
-            if (cancellation.isCancellationRequested())
-                return cancelledMeasure();
-            const std::size_t count = std::min(kChunkPixels, signal.size() - first);
-            for (std::size_t index = first; index < first + count; ++index) {
-                const auto& pixel = view.pixels[index];
-                if (pixel.alpha == 0)
-                    continue;
-                const float alpha = static_cast<float>(pixel.alpha) / 255.0F;
-                signal[index] = pixelOf(channel[pixel.red] * alpha, channel[pixel.green] * alpha,
-                                        channel[pixel.blue] * alpha, alpha);
-            }
-        }
-        bool cancelled = false;
-        std::vector<render::Rgba32f> xyz;
-        if ((settings.scopes & render::kScopeTableChromaticity) != 0U) {
-            if (!xyzPicture(signal, color, cancellation, xyz, cancelled))
-                return cancelled ? cancelledMeasure()
-                                 : failed("The conversion to CIE XYZ could not run on the frame.");
-        }
-        ScopeMeasureInput input;
-        input.signal = signal;
-        input.width = static_cast<std::uint32_t>(width);
-        input.height = static_cast<std::uint32_t>(height);
-        input.xyz = xyz;
-        input.areaX = area->x;
-        input.areaY = area->y;
-        input.areaWidth = area->width;
-        input.areaHeight = area->height;
-        input.scopes = settings.scopes;
-        input.axisMaximum = settings.axisMaximum;
-        input.luma = color.luma();
-        input.ignoreTransparent = settings.ignoreTransparent;
-        input.detail = settings.detail;
-        auto counts = measureScopesCpu(
-            input, [&cancellation] { return cancellation.isCancellationRequested(); });
-        if (!counts)
-            return cancellation.isCancellationRequested()
-                       ? cancelledMeasure()
-                       : failed("The scope settings are not valid for this frame.");
-        result.status = ScopeFrameStatus::Measured;
-        result.counts = std::move(*counts);
-        return result;
-    } catch (const std::bad_alloc&) {
-        return failed("The scope measure could not allocate its pictures.");
-    }
-}
-
-} // namespace
-
-ScopeFrameMeasure measureScopeFrameRetained(const PreviewDisplayBufferView& view,
-                                            const RetainedScopePicture& picture,
-                                            const ScopeMeasureSettings& settings,
-                                            const ScopeSignalColor& color,
-                                            const CancellationToken& cancellation) {
-    auto result = measureRetained(view, picture, settings, color, cancellation);
-    result.source = ScopeSource::Retained;
-    return result;
 }
 
 ScopeFrameMeasure

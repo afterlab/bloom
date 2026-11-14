@@ -11,9 +11,6 @@ namespace {
 
 namespace render = bloom::render;
 
-// A dark tint of a channel color: the histogram's filled area.
-constexpr float kHistogramFillOpacity = 0.35F;
-
 [[nodiscard]] bool cancelledNow(const Cancelled& cancelled) { return cancelled && cancelled(); }
 
 [[nodiscard]] ScopeImage makeImage(const PixelSize size) {
@@ -30,15 +27,26 @@ constexpr float kHistogramFillOpacity = 0.35F;
            static_cast<std::size_t>(y) * static_cast<std::size_t>(image.width);
 }
 
-[[nodiscard]] std::uint8_t byteOf(const float value) {
-    return static_cast<std::uint8_t>(std::lround(std::clamp(value, 0.0F, 1.0F) * 255.0F));
+[[nodiscard]] unsigned byteOf(const double value) {
+    return static_cast<unsigned>(std::lround(std::clamp(value, 0.0, 1.0) * 255.0));
+}
+
+// A linear light value per component, clamped to 1, as a premultiplied pixel whose alpha is its
+// largest component: drawn additively over a black canvas it is that light.
+[[nodiscard]] std::uint32_t lightPixel(const double red, const double green, const double blue) {
+    const auto r = byteOf(red);
+    const auto g = byteOf(green);
+    const auto b = byteOf(blue);
+    return packArgb(std::max({r, g, b}), r, g, b);
 }
 
 // The source cells [first, last) of one output pixel `index` of `count` pixels over `cells` cells:
-// one cell when magnifying, the cells it covers when reducing.
+// one cell when magnifying, the cells it covers when reducing (every cell in exactly one pixel).
 struct Span final {
     std::uint32_t first = 0;
     std::uint32_t last = 0;
+
+    [[nodiscard]] std::uint32_t size() const noexcept { return last - first; }
 };
 [[nodiscard]] Span spanOf(const int index, const int count, const std::uint32_t cells) {
     const auto first = static_cast<std::uint32_t>(static_cast<std::uint64_t>(index) * cells /
@@ -48,81 +56,128 @@ struct Span final {
     return {first, std::min(cells, std::max(first + 1U, end))};
 }
 
-struct Accumulator final {
-    float red = 0.0F;
-    float green = 0.0F;
-    float blue = 0.0F;
+// A count is drawn spread over its neighbor levels by a tent one 8-bit step wide on each side:
+// level c + d takes (4 - |d|) / 16 of it for |d| < 4. Codes 4 apart then add up to a flat line, so
+// a picture whose values come in 8-bit steps (a code every 4.01) draws a continuous trace instead
+// of a comb, and a 10-bit picture is softened by a couple of levels. Levels beyond the axis are
+// mirrored back into it (level -1 onto 0, 1024 onto 1023), which keeps a flat spread flat to its
+// ends. Values under and over the axis are not spread: they stay on the 0 and 1023 lines and in the
+// end bins.
+constexpr int kLevelSpread = 4;
 
-    void add(const std::uint32_t color, const float weight) {
-        red += static_cast<float>(redOf(color)) * weight;
-        green += static_cast<float>(greenOf(color)) * weight;
-        blue += static_cast<float>(blueOf(color)) * weight;
-    }
-    [[nodiscard]] std::uint32_t premultiplied() const {
-        const auto r = static_cast<int>(std::lround(std::min(red, 255.0F)));
-        const auto g = static_cast<int>(std::lround(std::min(green, 255.0F)));
-        const auto b = static_cast<int>(std::lround(std::min(blue, 255.0F)));
-        return packArgb(static_cast<unsigned>(std::max({r, g, b})), static_cast<unsigned>(r),
-                        static_cast<unsigned>(g), static_cast<unsigned>(b));
-    }
-};
-
-void paintWaveformPane(ScopeImage& image, const int paneX, const int paneWidth,
-                       const ScopeTables& tables, const std::vector<std::uint32_t>& channels,
-                       const TraceColors& colors, const float gain, const Cancelled& cancelled) {
-    const auto columns = tables.layout().columns;
-    const auto largest = tables.tableMaximum(render::kScopeTableWaveform);
-    if (columns == 0 || paneWidth <= 0)
-        return;
-    const int height = image.height;
-    for (int y = 0; y < height; ++y) {
-        if (cancelledNow(cancelled))
-            return;
-        auto* row = rowOf(image, y);
-        // Row y from the top is the levels from the top down.
-        const auto levels = spanOf(height - 1 - y, height, tables.layout().waveformLevels());
-        for (int x = 0; x < paneWidth; ++x) {
-            const auto cells = spanOf(x, paneWidth, columns);
-            Accumulator sum;
-            bool any = false;
-            for (const auto channel : channels) {
-                std::uint32_t count = 0;
-                for (auto column = cells.first; column < cells.last; ++column)
-                    for (auto level = levels.first; level < levels.last; ++level)
-                        count = std::max(count, tables.waveform(channel, column, level));
-                if (count == 0)
-                    continue;
-                any = true;
-                sum.add(colors.channel[channel], traceBrightness(count, largest, gain));
-            }
-            if (any)
-                row[paneX + x] = sum.premultiplied();
+void spreadLevels(const std::vector<double>& counts, std::vector<double>& spread) {
+    const auto levels = static_cast<int>(counts.size());
+    std::fill(spread.begin(), spread.end(), 0.0);
+    constexpr double kNorm = static_cast<double>(kLevelSpread * kLevelSpread);
+    for (int level = 0; level < levels; ++level) {
+        const double count = counts[static_cast<std::size_t>(level)];
+        if (count <= 0.0)
+            continue;
+        for (int offset = 1 - kLevelSpread; offset < kLevelSpread; ++offset) {
+            int target = level + offset;
+            if (target < 0)
+                target = -target - 1;
+            else if (target >= levels)
+                target = 2 * levels - 1 - target;
+            spread[static_cast<std::size_t>(target)] +=
+                count * static_cast<double>(kLevelSpread - std::abs(offset)) / kNorm;
         }
     }
 }
 
-[[nodiscard]] std::uint32_t lerpToWhite(const std::array<float, 3>& base, const float amount,
-                                        const float brightness) {
-    const auto channel = [&](const float value) {
-        return byteOf((value + (1.0F - value) * amount) * brightness);
-    };
-    const auto alpha = byteOf(brightness);
-    // Premultiplied: no channel may exceed alpha.
-    return packArgb(alpha, std::min<unsigned>(channel(base[0]), alpha),
-                    std::min<unsigned>(channel(base[1]), alpha),
-                    std::min<unsigned>(channel(base[2]), alpha));
+// One pane of a Waveform or Parade. Each screen column sums the table columns it shows into 1024
+// levels, spread by the 8-bit step tent (values under the axis on level 0, over it on level 1023),
+// and divides by the pixels those columns hold; each screen row sums the levels it covers.
+void paintWaveformPane(ScopeImage& image, const int paneX, const int paneWidth,
+                       const ScopeTables& tables, const std::vector<std::uint32_t>& channels,
+                       const Cancelled& cancelled) {
+    const auto columns = tables.layout().columns;
+    if (columns == 0 || paneWidth <= 0)
+        return;
+    const int height = image.height;
+    constexpr auto kLevels = render::kScopeWaveformLevels;
+    std::vector<Span> rows(static_cast<std::size_t>(height));
+    for (int y = 0; y < height; ++y)
+        rows[static_cast<std::size_t>(y)] = spanOf(height - 1 - y, height, kLevels);
+    // Prefix sums of the levels of one channel: prefix[l] is the count of the levels below l.
+    std::vector<double> prefix(kLevels + 1U);
+    std::vector<double> counts(kLevels);
+    std::vector<double> spread(kLevels);
+    std::vector<double> light(static_cast<std::size_t>(height) * 3U);
+    for (int x = 0; x < paneWidth; ++x) {
+        if (cancelledNow(cancelled))
+            return;
+        const auto cells = spanOf(x, paneWidth, columns);
+        std::fill(light.begin(), light.end(), 0.0);
+        bool any = false;
+        for (const auto channel : channels) {
+            std::uint64_t under = 0;
+            std::uint64_t over = 0;
+            for (std::uint32_t level = 0; level < kLevels; ++level) {
+                std::uint64_t count = 0;
+                for (auto column = cells.first; column < cells.last; ++column)
+                    count += tables.waveform(channel, column, level);
+                counts[level] = static_cast<double>(count);
+            }
+            for (auto column = cells.first; column < cells.last; ++column) {
+                under += tables.waveform(channel, column, render::kScopeWaveformLevelUnder);
+                over += tables.waveform(channel, column, render::kScopeWaveformLevelOver);
+            }
+            spreadLevels(counts, spread);
+            spread[0] += static_cast<double>(under);
+            spread[kLevels - 1U] += static_cast<double>(over);
+            prefix[0] = 0.0;
+            for (std::uint32_t level = 0; level < kLevels; ++level)
+                prefix[level + 1U] = prefix[level] + spread[level];
+            const double pixels = prefix[kLevels];
+            if (pixels <= 0.0)
+                continue;
+            any = true;
+            const auto& color = kWaveformTraceColors[channel];
+            for (int y = 0; y < height; ++y) {
+                const auto& span = rows[static_cast<std::size_t>(y)];
+                const double sum = prefix[span.last] - prefix[span.first];
+                if (sum <= 0.0)
+                    continue;
+                const double density =
+                    sum / pixels * static_cast<double>(kLevels) / static_cast<double>(span.size());
+                const double intensity = static_cast<double>(kWaveformTraceGain) * density;
+                auto* out = light.data() + static_cast<std::size_t>(y) * 3U;
+                out[0] += static_cast<double>(color.red) * intensity;
+                out[1] += static_cast<double>(color.green) * intensity;
+                out[2] += static_cast<double>(color.blue) * intensity;
+            }
+        }
+        if (!any)
+            continue;
+        for (int y = 0; y < height; ++y) {
+            const auto* in = light.data() + static_cast<std::size_t>(y) * 3U;
+            if (in[0] > 0.0 || in[1] > 0.0 || in[2] > 0.0)
+                rowOf(image, y)[paneX + x] = lightPixel(in[0], in[1], in[2]);
+        }
+    }
+}
+
+// CIE xy at Y = 1 to a displayable color: the Rec. 709 matrix, out-of-gamut chromaticities
+// desaturated to the nearest in-gamut color, then scaled to full channel and encoded.
+[[nodiscard]] std::array<double, 3> chromaticityColor(const double x, const double y) {
+    const double yy = std::max(y, 1e-4);
+    const double X = x / yy;
+    const double Z = (1.0 - x - y) / yy;
+    std::array<double, 3> linear{3.2406 * X - 1.5372 - 0.4986 * Z,
+                                 -0.9689 * X + 1.8758 + 0.0415 * Z,
+                                 0.0557 * X - 0.2040 + 1.0570 * Z};
+    const double lowest = std::min({linear[0], linear[1], linear[2], 0.0});
+    for (auto& value : linear)
+        value -= lowest;
+    const double highest = std::max({linear[0], linear[1], linear[2], 1e-9});
+    std::array<double, 3> result{};
+    for (std::size_t index = 0; index < 3; ++index)
+        result[index] = std::pow(linear[index] / highest, 1.0 / 2.2);
+    return result;
 }
 
 } // namespace
-
-float traceBrightness(const std::uint32_t count, const std::uint32_t largest,
-                      const float gain) noexcept {
-    if (count == 0 || largest == 0)
-        return 0.0F;
-    const auto ratio = core::specifiedLog2(1.0F + static_cast<float>(count)) /
-                       core::specifiedLog2(1.0F + static_cast<float>(largest));
-    return std::max(kTraceFloor, std::min(1.0F, ratio * gain));
-}
 
 std::vector<std::uint32_t> waveformChannelList(const WaveformChannels channels) {
     if (channels == WaveformChannels::Luma)
@@ -148,19 +203,17 @@ PixelSize chromaticityImageSize(const int side) {
 }
 
 ScopeImage mapWaveform(const ScopeTables& tables, const WaveformChannels channels,
-                       const TraceColors& colors, const float gain, const PixelSize size,
-                       const Cancelled& cancelled) {
+                       const PixelSize size, const Cancelled& cancelled) {
     if (size.isEmpty() || tables.layout().columns == 0 ||
         !tables.layout().has(render::kScopeTableWaveform))
         return {};
     auto image = makeImage(size);
-    paintWaveformPane(image, 0, size.width, tables, waveformChannelList(channels), colors, gain,
-                      cancelled);
+    paintWaveformPane(image, 0, size.width, tables, waveformChannelList(channels), cancelled);
     return cancelledNow(cancelled) ? ScopeImage{} : image;
 }
 
-ScopeImage mapParade(const ScopeTables& tables, const TraceColors& colors, const float gain,
-                     const PixelSize size, const int gapPixels, const Cancelled& cancelled) {
+ScopeImage mapParade(const ScopeTables& tables, const PixelSize size, const int gapPixels,
+                     const Cancelled& cancelled) {
     if (size.isEmpty() || tables.layout().columns == 0 ||
         !tables.layout().has(render::kScopeTableWaveform))
         return {};
@@ -171,147 +224,166 @@ ScopeImage mapParade(const ScopeTables& tables, const TraceColors& colors, const
         const int left = static_cast<int>(channel) * (pane + gap);
         if (left >= size.width)
             break;
-        paintWaveformPane(image, left, std::min(pane, size.width - left), tables, {channel}, colors,
-                          gain, cancelled);
+        paintWaveformPane(image, left, std::min(pane, size.width - left), tables, {channel},
+                          cancelled);
     }
     return cancelledNow(cancelled) ? ScopeImage{} : image;
 }
 
-ScopeImage mapVectorscope(const ScopeTables& tables, const ScopeLuma& luma, const float gain,
-                          const PixelSize size, const Cancelled& cancelled) {
+ScopeImage mapVectorscope(const ScopeTables& tables, const ScopeLuma& luma, const PixelSize size,
+                          const Cancelled& cancelled) {
     if (size.isEmpty() || !tables.layout().has(render::kScopeTableVectorscope))
         return {};
     auto image = makeImage(size);
-    const auto largest = tables.tableMaximum(render::kScopeTableVectorscope);
-    const auto cells = tables.layout().cells();
+    const double counted = tables.counted();
+    if (counted <= 0.0)
+        return image;
+    constexpr auto kCells = render::kScopeVectorscopeCells;
+    constexpr double kGrid = static_cast<double>(kCells) * static_cast<double>(kCells);
+    constexpr double kCodeStep = static_cast<double>(1U << render::kScopeVectorscopeLumaShift);
     for (int y = 0; y < size.height; ++y) {
         if (cancelledNow(cancelled))
             return {};
         auto* row = rowOf(image, y);
         // Cr is positive up, so row y from the top is the cells from the top down.
-        const auto crCells = spanOf(size.height - 1 - y, size.height, cells);
-        const float cr = 0.5F - (static_cast<float>(y) + 0.5F) / static_cast<float>(size.height);
+        const auto crCells = spanOf(size.height - 1 - y, size.height, kCells);
+        const double cr =
+            (1.0 - (static_cast<double>(y) + 0.5) / size.height * 2.0) * kVectorscopeExtent;
         for (int x = 0; x < size.width; ++x) {
-            const auto cbCells = spanOf(x, size.width, cells);
-            std::uint32_t count = 0;
+            const auto cbCells = spanOf(x, size.width, kCells);
+            std::uint64_t count = 0;
+            std::uint64_t lumaSum = 0;
             for (auto crCell = crCells.first; crCell < crCells.last; ++crCell)
-                for (auto cbCell = cbCells.first; cbCell < cbCells.last; ++cbCell)
-                    count = std::max(count, tables.vectorscope(cbCell, crCell));
+                for (auto cbCell = cbCells.first; cbCell < cbCells.last; ++cbCell) {
+                    const auto cellCount = tables.vectorscope(cbCell, crCell);
+                    if (cellCount == 0)
+                        continue;
+                    count += cellCount;
+                    lumaSum += tables.vectorscopeLuma(cbCell, crCell);
+                }
             if (count == 0)
                 continue;
-            const float cb = (static_cast<float>(x) + 0.5F) / static_cast<float>(size.width) - 0.5F;
-            // The cell's own chroma at a fixed luma, through the same coefficients as the measure.
-            const float red = kVectorscopeCellLuma + luma.crDenominator * cr;
-            const float blue = kVectorscopeCellLuma + luma.cbDenominator * cb;
-            const float green =
-                luma.green > 0.0F
-                    ? (kVectorscopeCellLuma - luma.red * red - luma.blue * blue) / luma.green
-                    : kVectorscopeCellLuma;
-            const std::array<float, 3> base{std::clamp(red, 0.0F, 1.0F),
-                                            std::clamp(green, 0.0F, 1.0F),
-                                            std::clamp(blue, 0.0F, 1.0F)};
-            const auto brightness = traceBrightness(count, largest, gain);
-            row[x] = lerpToWhite(base, brightness * brightness, brightness);
+            const double density = static_cast<double>(count) / counted * kGrid /
+                                   static_cast<double>(crCells.size() * cbCells.size());
+            const double intensity = static_cast<double>(kVectorscopeTraceGain) * density;
+            // The mean color of the pixels: their mean luma (the middle of the shifted code) and
+            // the screen pixel's own Cb and Cr, through the signal's coefficients.
+            const double meanLuma =
+                (static_cast<double>(lumaSum) / static_cast<double>(count) * kCodeStep +
+                 kCodeStep / 2.0) /
+                1023.0;
+            const double cb =
+                ((static_cast<double>(x) + 0.5) / size.width * 2.0 - 1.0) * kVectorscopeExtent;
+            const double red = meanLuma + static_cast<double>(luma.crDenominator) * cr;
+            const double blue = meanLuma + static_cast<double>(luma.cbDenominator) * cb;
+            const double green = luma.green > 0.0F
+                                     ? (meanLuma - static_cast<double>(luma.red) * red -
+                                        static_cast<double>(luma.blue) * blue) /
+                                           static_cast<double>(luma.green)
+                                     : meanLuma;
+            std::array<double, 3> base{std::clamp(red, 0.0, 1.0), std::clamp(green, 0.0, 1.0),
+                                       std::clamp(blue, 0.0, 1.0)};
+            const double largest = std::max({base[0], base[1], base[2]});
+            // The hue at full strength over a third of white, like the Waveform's colors, so a
+            // cell whitens as it gets denser.
+            for (auto& value : base)
+                value = 1.0 / 3.0 + 2.0 / 3.0 * (largest > 1e-6 ? value / largest : 1.0);
+            row[x] = lightPixel(base[0] * intensity, base[1] * intensity, base[2] * intensity);
         }
     }
     return image;
 }
 
-namespace {
-
-// CIE xy at Y = 1 to a displayable color: the Rec. 709 matrix, out-of-gamut chromaticities
-// desaturated to the nearest in-gamut color, then scaled to full channel and encoded.
-[[nodiscard]] std::array<float, 3> chromaticityColor(const double x, const double y) {
-    const double yy = std::max(y, 1e-4);
-    const double X = x / yy;
-    const double Z = (1.0 - x - y) / yy;
-    std::array<double, 3> linear{3.2406 * X - 1.5372 - 0.4986 * Z,
-                                 -0.9689 * X + 1.8758 + 0.0415 * Z,
-                                 0.0557 * X - 0.2040 + 1.0570 * Z};
-    const double lowest = std::min({linear[0], linear[1], linear[2], 0.0});
-    for (auto& value : linear)
-        value -= lowest;
-    const double highest = std::max({linear[0], linear[1], linear[2], 1e-9});
-    std::array<float, 3> result{};
-    for (std::size_t index = 0; index < 3; ++index)
-        result[index] = static_cast<float>(std::pow(linear[index] / highest, 1.0 / 2.2));
-    return result;
-}
-
-} // namespace
-
-ScopeImage mapChromaticity(const ScopeTables& tables, const float gain, const PixelSize size,
+ScopeImage mapChromaticity(const ScopeTables& tables, const PixelSize size,
                            const Cancelled& cancelled) {
     if (size.isEmpty() || !tables.layout().has(render::kScopeTableChromaticity))
         return {};
     auto image = makeImage(size);
-    const auto largest = tables.tableMaximum(render::kScopeTableChromaticity);
-    const auto cells = tables.layout().cells();
+    constexpr auto kCells = render::kScopeChromaticityCells;
     for (int y = 0; y < size.height; ++y) {
         if (cancelledNow(cancelled))
             return {};
         auto* row = rowOf(image, y);
-        const auto yCells = spanOf(size.height - 1 - y, size.height, cells);
+        const auto yCells = spanOf(size.height - 1 - y, size.height, kCells);
         const double cy = (1.0 - (y + 0.5) / size.height) * kChromaticityYMaximum;
         for (int x = 0; x < size.width; ++x) {
-            const auto xCells = spanOf(x, size.width, cells);
-            std::uint32_t count = 0;
-            for (auto yCell = yCells.first; yCell < yCells.last; ++yCell)
-                for (auto xCell = xCells.first; xCell < xCells.last; ++xCell)
-                    count = std::max(count, tables.chromaticity(xCell, yCell));
-            if (count == 0)
+            const auto xCells = spanOf(x, size.width, kCells);
+            bool present = false;
+            for (auto yCell = yCells.first; yCell < yCells.last && !present; ++yCell)
+                for (auto xCell = xCells.first; xCell < xCells.last && !present; ++xCell)
+                    present = tables.chromaticity(xCell, yCell) != 0;
+            if (!present)
                 continue;
             const double cx = (x + 0.5) / size.width * kChromaticityXMaximum;
-            const auto brightness = traceBrightness(count, largest, gain);
-            row[x] = lerpToWhite(chromaticityColor(cx, cy), brightness * brightness, brightness);
+            const auto color = chromaticityColor(cx, cy);
+            row[x] = packArgb(255U, byteOf(color[0]), byteOf(color[1]), byteOf(color[2]));
         }
     }
     return image;
 }
 
 ScopeImage mapHistogram(const ScopeTables& tables, const HistogramChannels channels,
-                        const HistogramScale scale, const TraceColors& colors, const int rowHeight,
-                        const int width, const Cancelled& cancelled) {
+                        const HistogramScale scale, const int rowHeight, const int width,
+                        const Cancelled& cancelled) {
     if (rowHeight <= 0 || width <= 0 || !tables.layout().has(render::kScopeTableHistogram))
         return {};
     const auto list = histogramChannelList(channels);
     auto image = makeImage({width, rowHeight * static_cast<int>(list.size())});
-    // One scale for every row: the largest bin of the channels drawn.
-    std::uint32_t largest = 0;
-    for (const auto channel : list)
-        for (std::uint32_t code = 0; code < render::kScopeCodes; ++code)
-            largest = std::max(largest, tables.histogram(channel, code));
-    if (largest == 0)
+    constexpr auto kCodes = render::kScopeCodes;
+    // The mean count of the bins of every screen column, values outside the axis in the end bins.
+    const auto columns = static_cast<std::size_t>(width);
+    std::vector<double> means(list.size() * columns, 0.0);
+    std::vector<double> counts(kCodes);
+    std::vector<double> spread(kCodes);
+    double largest = 0.0;
+    for (std::size_t slot = 0; slot < list.size(); ++slot) {
+        const auto channel = list[slot];
+        for (std::uint32_t code = 0; code < kCodes; ++code)
+            counts[code] = static_cast<double>(tables.histogram(channel, code));
+        spreadLevels(counts, spread);
+        spread[0] += static_cast<double>(tables.histogram(channel, render::kScopeCodeUnder));
+        spread[kCodes - 1U] +=
+            static_cast<double>(tables.histogram(channel, render::kScopeCodeOver));
+        for (int x = 0; x < width; ++x) {
+            const auto bins = spanOf(x, width, kCodes);
+            double sum = 0.0;
+            for (auto code = bins.first; code < bins.last; ++code)
+                sum += spread[code];
+            const double mean = sum / static_cast<double>(bins.size());
+            means[slot * columns + static_cast<std::size_t>(x)] = mean;
+            largest = std::max(largest, mean);
+        }
+    }
+    if (largest <= 0.0)
         return image;
-    const float logLargest = core::specifiedLog2(1.0F + static_cast<float>(largest));
-    std::vector<int> tops(static_cast<std::size_t>(width));
+    const auto logLargest =
+        static_cast<double>(core::specifiedLog2(1.0F + static_cast<float>(largest)));
+    std::vector<int> tops(columns);
     for (std::size_t slot = 0; slot < list.size(); ++slot) {
         if (cancelledNow(cancelled))
             return {};
-        const auto channel = list[slot];
-        const auto tint = colors.channel[channel];
-        const auto outline = packArgb(255U, redOf(tint), greenOf(tint), blueOf(tint));
-        const auto tinted = [](const unsigned component) {
-            return byteOf(static_cast<float>(static_cast<double>(component) / 255.0 *
-                                             static_cast<double>(kHistogramFillOpacity)));
-        };
-        const auto fill = packArgb(byteOf(kHistogramFillOpacity), tinted(redOf(tint)),
-                                   tinted(greenOf(tint)), tinted(blueOf(tint)));
+        const auto& tint = kHistogramTraceColors[list[slot]];
+        const auto red = static_cast<double>(tint.red);
+        const auto green = static_cast<double>(tint.green);
+        const auto blue = static_cast<double>(tint.blue);
+        const auto outline = lightPixel(red, green, blue);
+        // The fill lets the graticule under it show through: premultiplied at the fill share.
+        const auto share = static_cast<double>(kHistogramFillShare);
+        const auto fill = packArgb(byteOf(share), byteOf(red * share), byteOf(green * share),
+                                   byteOf(blue * share));
         const int rowTop = static_cast<int>(slot) * rowHeight;
         for (int x = 0; x < width; ++x) {
-            const auto bins = spanOf(x, width, render::kScopeCodes);
-            std::uint32_t count = 0;
-            for (auto code = bins.first; code < bins.last; ++code)
-                count = std::max(count, tables.histogram(channel, code));
+            const double mean = means[slot * columns + static_cast<std::size_t>(x)];
             int pixels = 0;
-            if (count != 0) {
-                const float fraction =
-                    scale == HistogramScale::Linear
-                        ? static_cast<float>(count) / static_cast<float>(largest)
-                        : core::specifiedLog2(1.0F + static_cast<float>(count)) / logLargest;
-                // A single pixel is never hidden: a bin with a count is at least one pixel tall.
+            if (mean > 0.0) {
+                const double fraction = scale == HistogramScale::Linear
+                                            ? mean / largest
+                                            : static_cast<double>(core::specifiedLog2(
+                                                  1.0F + static_cast<float>(mean))) /
+                                                  logLargest;
+                // A bin with a count is at least one pixel tall.
                 pixels = std::clamp(
-                    static_cast<int>(std::ceil(fraction * static_cast<float>(rowHeight))), 1,
+                    static_cast<int>(std::lround(fraction * kHistogramHeadroom * rowHeight)), 1,
                     rowHeight);
             }
             tops[static_cast<std::size_t>(x)] = pixels;
@@ -332,63 +404,26 @@ ScopeImage mapHistogram(const ScopeTables& tables, const HistogramChannels chann
     return image;
 }
 
-ClipSummary clipSummary(const ScopeTables& tables, const Kind kind,
-                        const WaveformChannels waveformChannels,
-                        const HistogramChannels histogramChannels) {
-    ClipSummary summary;
-    if (kind == Kind::Histogram && tables.layout().has(render::kScopeTableHistogram)) {
-        for (const auto channel : histogramChannelList(histogramChannels)) {
-            summary.under[channel] = tables.histogram(channel, render::kScopeCodeUnder);
-            summary.over[channel] = tables.histogram(channel, render::kScopeCodeOver);
-        }
-    } else if ((kind == Kind::Waveform || kind == Kind::Parade) &&
-               tables.layout().has(render::kScopeTableWaveform)) {
-        const auto channels = kind == Kind::Parade ? waveformChannelList(WaveformChannels::Rgb)
-                                                   : waveformChannelList(waveformChannels);
-        summary.columns.assign(tables.layout().columns, 0);
-        for (std::uint32_t column = 0; column < tables.layout().columns; ++column)
-            for (const auto channel : channels) {
-                if (tables.waveform(channel, column, tables.layout().waveformLevelUnder()) != 0)
-                    summary.columns[column] |= 1U;
-                if (tables.waveform(channel, column, tables.layout().waveformLevelOver()) != 0)
-                    summary.columns[column] |= 2U;
-            }
-    }
-    return summary;
-}
-
-TraceResult renderTrace(const TraceRequest& request, const Cancelled& cancelled) {
-    TraceResult result;
+ScopeImage renderTrace(const TraceRequest& request, const Cancelled& cancelled) {
     if (request.tables == nullptr || request.tables->empty())
-        return result;
+        return {};
     const auto& tables = *request.tables;
     switch (request.kind) {
     case Kind::Waveform:
-        result.image = mapWaveform(tables, request.waveformChannels, request.colors, request.gain,
-                                   request.size, cancelled);
-        break;
+        return mapWaveform(tables, request.waveformChannels, request.size, cancelled);
     case Kind::Parade:
-        result.image = mapParade(tables, request.colors, request.gain, request.size,
-                                 request.gapPixels, cancelled);
-        break;
+        return mapParade(tables, request.size, request.gapPixels, cancelled);
     case Kind::Vectorscope:
         if (request.luma != nullptr)
-            result.image =
-                mapVectorscope(tables, *request.luma, request.gain, request.size, cancelled);
-        break;
+            return mapVectorscope(tables, *request.luma, request.size, cancelled);
+        return {};
     case Kind::Histogram:
-        result.image =
-            mapHistogram(tables, request.histogramChannels, request.histogramScale, request.colors,
-                         request.size.height, request.size.width, cancelled);
-        break;
+        return mapHistogram(tables, request.histogramChannels, request.histogramScale,
+                            request.size.height, request.size.width, cancelled);
     case Kind::Chromaticity:
-        result.image = mapChromaticity(tables, request.gain,
-                                       chromaticityImageSize(request.size.width), cancelled);
-        break;
+        return mapChromaticity(tables, chromaticityImageSize(request.size.width), cancelled);
     }
-    result.clip =
-        clipSummary(tables, request.kind, request.waveformChannels, request.histogramChannels);
-    return result;
+    return {};
 }
 
 } // namespace bloom::runtime::scopes

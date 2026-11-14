@@ -61,8 +61,8 @@ prepareScopeMeasure(ScopeMeasureWork& work, const PreparedGpuScene& scene,
                     const CompiledCompositionPlan& plan, const EvaluationRequest& request,
                     const CancellationToken& cancellation);
 
-// The same preparation for a picture whose geometry is known without its scene: the preview
-// service's scope tap keeps the picture, its windows, the request's region of interest and the
+// The same preparation for a picture whose geometry is known without its scene: a preview frame's
+// job knows the picture it computed, its windows, the request's region of interest and the
 // composition's size.
 [[nodiscard]] std::optional<ScopeMeasureFault> prepareScopeMeasureForPicture(
     ScopeMeasureWork& work, const render::ImageWindow& dataWindow,

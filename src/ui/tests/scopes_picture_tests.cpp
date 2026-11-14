@@ -1,4 +1,4 @@
-// #724 Scopes: the panel and the headless scope picture draw from one definition.
+// #724, #730 Scopes: the panel and the headless scope picture draw from one definition.
 //
 // Asserted:
 //   * the default palette of the headless picture equals the interface tokens the panel uses, value
@@ -8,20 +8,21 @@
 //     headless picture drawn with the panel's palette and text measure agree on the pixels of the
 //     trace rectangle (away from lines and labels, which two vector and raster text renderers
 //     draw their own way), and the plan's hairline positions are where the grab has graticule
-//     pixels.
+//     pixels;
+//   * the hover readout names the value under the pointer and the count of the cell there.
 // No device and no Viewer.
 
 #include "await_qt.hpp"
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/render/scope_table_layout.hpp>
+#include <bloom/runtime/preview_frame_scopes.hpp>
 #include <bloom/runtime/scope_frame_measure.hpp>
 #include <bloom/runtime/scope_measure.hpp>
 #include <bloom/runtime/scope_picture.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/tokens.hpp>
-#include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/scopes_trace_renderer.hpp>
 #include <bloom/ui/scopes_view.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -77,8 +78,7 @@ class Expectations final {
 }
 
 [[nodiscard]] runtime::ScopeTables measure(const std::vector<Rgba32f>& pixels,
-                                           const runtime::ScopeLuma& luma,
-                                           const std::uint32_t detail = 0) {
+                                           const runtime::ScopeLuma& luma) {
     std::vector<Rgba32f> xyz;
     for (const auto& pixel : pixels) {
         const float r = pixel.red();
@@ -97,7 +97,6 @@ class Expectations final {
     input.areaHeight = 64;
     input.scopes = render::kScopeTableAll;
     input.axisMaximum = 1;
-    input.detail = detail;
     input.luma = luma;
     const auto counts = runtime::measureScopesCpu(input);
     if (!counts)
@@ -106,8 +105,7 @@ class Expectations final {
 }
 
 // 75% color bars, 64 x 64, with one odd pixel so the traces have dense and single-count cells.
-[[nodiscard]] runtime::ScopeTables colorBars(const runtime::ScopeLuma& luma,
-                                             const std::uint32_t detail = 0) {
+[[nodiscard]] runtime::ScopeTables colorBars(const runtime::ScopeLuma& luma) {
     constexpr std::array<std::array<float, 3>, 8> bars{{{0.75F, 0.75F, 0.75F},
                                                         {0.75F, 0.75F, 0.0F},
                                                         {0.0F, 0.75F, 0.75F},
@@ -123,7 +121,7 @@ class Expectations final {
             pixels.push_back(px(bar[0], bar[1], bar[2]));
         }
     pixels[0] = px(0.3F, 0.6F, 0.1F);
-    return measure(pixels, luma, detail);
+    return measure(pixels, luma);
 }
 
 // Every pixel of a 64 x 64 frame a different gray in the lower half of the range: a flat Histogram
@@ -140,15 +138,15 @@ class Expectations final {
 void testPaletteIsTheTokens(Expectations& e) {
     const auto defaults = scopes::defaultScopePalette();
     const auto token = [](const kit::Color color) { return kit::color(color).rgb(); };
-    e.expect(defaults.canvas == token(kit::Color::Canvas), "canvas is kit::Color::Canvas");
-    e.expect(defaults.quiet == token(kit::Color::Border), "quiet is kit::Color::Border");
+    e.expect(defaults.canvas == token(kit::Color::CanvasBlack),
+             "canvas is kit::Color::CanvasBlack");
+    e.expect(defaults.quiet == token(kit::Color::BorderHover), "quiet is kit::Color::BorderHover");
     e.expect(defaults.stronger == token(kit::Color::BorderHover),
              "stronger is kit::Color::BorderHover");
     e.expect(defaults.strongest == token(kit::Color::Foreground),
              "strongest is kit::Color::Foreground");
     e.expect(defaults.label == token(kit::Color::Muted), "label is kit::Color::Muted");
     e.expect(defaults.faint == token(kit::Color::Faint), "faint is kit::Color::Faint");
-    e.expect(defaults.warning == token(kit::Color::Warn), "warning is kit::Color::Warn");
     e.expect(defaults.channel[0] == token(kit::Color::ComponentX), "red is kit::Color::ComponentX");
     e.expect(defaults.channel[1] == token(kit::Color::ComponentY),
              "green is kit::Color::ComponentY");
@@ -239,9 +237,6 @@ struct Ink final {
             ink.dot(circle.center.x + std::cos(angle) * circle.radius,
                     circle.center.y + std::sin(angle) * circle.radius, 2);
         }
-    for (const auto& fill : plan.fills)
-        for (double y = fill.rect.top(); y <= fill.rect.bottom(); y += 1.0)
-            ink.segment({fill.rect.left(), y}, {fill.rect.right(), y}, 2);
     for (const auto& label : plan.labels) {
         const auto size = measure(label.text, label.font);
         const double left =
@@ -278,6 +273,30 @@ struct Rig final {
     return rig;
 }
 
+// A frame's tables as the frame pipeline hands them to the panel.
+[[nodiscard]] std::shared_ptr<const runtime::PreviewFrameScopes>
+frameScopes(runtime::ScopeTables tables,
+            const std::shared_ptr<const runtime::ScopeSignalColor>& color) {
+    auto scopes = std::make_shared<runtime::PreviewFrameScopes>();
+    scopes->settings.scopes = render::kScopeTableAll;
+    scopes->status = runtime::PreviewFrameScopesStatus::Measured;
+    scopes->tables = std::move(tables);
+    scopes->area = {0, 0, 64, 64};
+    scopes->color = color;
+    return scopes;
+}
+
+[[nodiscard]] std::unique_ptr<ui::ScopeView>
+shownView(const scopes::Kind kind, ui::ScopesTraceRenderer& renderer,
+          std::shared_ptr<const runtime::PreviewFrameScopes> scopes, const int width) {
+    auto view = std::make_unique<ui::ScopeView>(kind, &renderer);
+    view->setActive(true);
+    view->setScopes(std::move(scopes));
+    view->resize(width, view->heightForWidth(width));
+    view->show();
+    return view;
+}
+
 [[nodiscard]] bool near(const QRgb a, const QRgb b, const int tolerance) {
     return std::abs(qRed(a) - qRed(b)) <= tolerance &&
            std::abs(qGreen(a) - qGreen(b)) <= tolerance &&
@@ -299,22 +318,15 @@ void testViewAgreesWithPicture(Expectations& e,
           Case{scopes::Kind::Histogram, "Histogram", 360},
           Case{scopes::Kind::Chromaticity, "Chromaticity", 340}}) {
         const std::string name = item.name;
-        auto built = std::make_shared<ui::PreviewScopeSidecar>();
-        built->tables = item.kind == scopes::Kind::Histogram ? grayRamp(color->luma())
-                                                             : colorBars(color->luma());
-        built->area = {0, 0, 64, 64};
-        const ui::PreviewScopeSidecarHandle sidecar = built;
-        const ui::PreviewScopeSidecarHandle& handle = sidecar;
-        ui::ScopeView view(item.kind, rig.renderer.get());
-        ui::ScopeViewData data;
-        data.scopes = handle;
-        data.color = color;
-        view.setData(data);
-        view.resize(item.width, view.heightForWidth(item.width));
-        view.show();
+        const auto frame =
+            frameScopes(item.kind == scopes::Kind::Histogram ? grayRamp(color->luma())
+                                                             : colorBars(color->luma()),
+                        color);
+        const auto shown = shownView(item.kind, *rig.renderer, frame, item.width);
+        auto& view = *shown;
         e.expect(awaitQtCondition(name + ": the trace is mapped at device pixel ratio 1",
                                   [&] {
-                                      return !view.traceImage().isNull() && !view.showsBehind() &&
+                                      return !view.traceImage().isNull() &&
                                              view.devicePixelRatioF() == 1.0;
                                   }),
                  name + ": the trace is mapped on a worker at device pixel ratio 1");
@@ -328,11 +340,11 @@ void testViewAgreesWithPicture(Expectations& e,
 
         // The same scope, drawn headless with the panel's palette and the panel's text measure.
         scopes::PictureInput input;
-        input.tables = &sidecar->tables;
+        input.tables = &frame->tables;
         input.luma = &color->luma();
         input.colorimetry = &color->colorimetry();
-        input.signal = data.signal;
-        input.axisMaximum = data.axisMaximum;
+        input.signal = frame->settings.signal;
+        input.axisMaximum = frame->settings.axisMaximum;
         scopes::PictureOptions options;
         options.palette = palette;
         options.metrics = ui::scopePanelMetrics();
@@ -352,10 +364,6 @@ void testViewAgreesWithPicture(Expectations& e,
         request.colorimetry = input.colorimetry;
         request.metrics = options.metrics;
         request.measure = options.measure;
-        const auto clip =
-            scopes::clipSummary(sidecar->tables, item.kind, scopes::WaveformChannels::Rgb,
-                                scopes::HistogramChannels::Rgb);
-        request.clip = &clip;
         const auto headlessPlan = scopes::buildScopeGraticule(request);
         e.expect(headlessPlan.plot.x == plan.plot.x && headlessPlan.plot.y == plan.plot.y &&
                      headlessPlan.plot.width == plan.plot.width &&
@@ -489,116 +497,51 @@ void testViewAgreesWithPicture(Expectations& e,
     return at < 0 ? QString() : readout.mid(at + 6);
 }
 
-// Hover readouts at detail 1: the value under the pointer is the same, and the count is the count
-// of the detail's cell, which is the full detail's cells of that block summed.
-void testDetailReadouts(Expectations& e,
-                        const std::shared_ptr<const runtime::ScopeSignalColor>& color) {
+// Hover readouts: the value under the pointer and the count of the cell there.
+void testReadouts(Expectations& e, const std::shared_ptr<const runtime::ScopeSignalColor>& color) {
     auto rig = makeRig();
-    const auto fullHandle = std::make_shared<ui::PreviewScopeSidecar>();
-    fullHandle->tables = colorBars(color->luma(), 0);
-    fullHandle->area = {0, 0, 64, 64};
-    const auto coarseHandle = std::make_shared<ui::PreviewScopeSidecar>();
-    coarseHandle->tables = colorBars(color->luma(), 1);
-    coarseHandle->area = {0, 0, 64, 64};
-    const auto& full = fullHandle->tables;
-    const auto& coarse = coarseHandle->tables;
-    e.expect(coarse.layout().detail == 1U && coarse.layout().cells() == 256U,
-             "the detail-1 sidecar has 256-cell tables");
-
-    const auto show = [&](const scopes::Kind kind,
-                          const std::shared_ptr<ui::PreviewScopeSidecar>& sidecar) {
-        auto view = std::make_unique<ui::ScopeView>(kind, rig.renderer.get());
-        ui::ScopeViewData data;
-        data.scopes = sidecar;
-        data.color = color;
-        view->setData(data);
-        view->resize(340, view->heightForWidth(340));
-        view->show();
-        return view;
+    const auto frame = frameScopes(colorBars(color->luma()), color);
+    const auto& tables = frame->tables;
+    const auto settle = [&](const ui::ScopeView& view, const std::string& what) {
+        e.expect(awaitQtCondition(what, [&] { return !view.traceImage().isNull(); }), what);
     };
-    // Vectorscope: the center is Cb = Cr = 0, which the gray and black bars fill; its full cell is
-    // 256, and the detail's cell 128 holds the 2 x 2 block 256..257.
-    const auto fullScope = show(scopes::Kind::Vectorscope, fullHandle);
-    const auto coarseScope = show(scopes::Kind::Vectorscope, coarseHandle);
-    const auto centerFull = fullScope->readoutAt(fullScope->plotRect().center());
-    const auto centerCoarse = coarseScope->readoutAt(coarseScope->plotRect().center());
-    const std::uint32_t fullCenter = full.vectorscope(256, 256);
-    const std::uint32_t block = full.vectorscope(256, 256) + full.vectorscope(257, 256) +
-                                full.vectorscope(256, 257) + full.vectorscope(257, 257);
-    e.expect(fullCenter != 0U && coarse.vectorscope(128, 128) == block,
-             "the detail's center cell is the block of full cells");
-    e.expect(countPart(centerFull) == QString::number(fullCenter),
-             "the full readout reports the full cell's count: " + centerFull.toStdString());
-    e.expect(countPart(centerCoarse) == QString::number(block),
-             "the detail-1 readout reports the detail cell's count: " + centerCoarse.toStdString());
-    e.expect(centerFull.left(centerFull.indexOf(QStringLiteral("Count "))) ==
-                 centerCoarse.left(centerCoarse.indexOf(QStringLiteral("Count "))),
-             "the value under the pointer is the same at both details");
+    // Vectorscope: the plot's center is Cb = Cr = 0, which the gray and black bars fill: cell 320
+    // of the 640-cell table that spans -0.625..0.625.
+    const auto vectorscope = shownView(scopes::Kind::Vectorscope, *rig.renderer, frame, 340);
+    settle(*vectorscope, "the Vectorscope is mapped");
+    const auto center = vectorscope->readoutAt(vectorscope->plotRect().center());
+    e.expect(tables.vectorscope(320, 320) != 0U &&
+                 countPart(center) == QString::number(tables.vectorscope(320, 320)),
+             "the Vectorscope readout reports the center cell's count: " + center.toStdString());
+    e.expect(center.contains(QStringLiteral("saturation")), "and the saturation there");
 
-    // Chromaticity: the readout's count is the detail's cell under the pointer; scan the plot for
-    // a cell that holds a count in the full table and compare the pooled count.
-    const auto fullChroma = show(scopes::Kind::Chromaticity, fullHandle);
-    const auto coarseChroma = show(scopes::Kind::Chromaticity, coarseHandle);
-    const auto plot = fullChroma->plotRect();
-    int compared = 0;
-    int differing = 0;
-    for (int step = 0; step < 400; ++step) {
-        const QPointF point(plot.left() + plot.width() * (step % 20 + 0.5) / 20.0,
-                            plot.top() + plot.height() * (step / 20 + 0.5) / 20.0);
-        const auto fullText = fullChroma->readoutAt(point);
-        const auto coarseText = coarseChroma->readoutAt(point);
-        if (fullText.isEmpty() || coarseText.isEmpty())
-            continue;
-        ++compared;
-        // The detail's cell holds at least the full cell under the pointer.
-        differing += countPart(coarseText).toUInt() >= countPart(fullText).toUInt() ? 0 : 1;
-    }
-    e.expect(compared > 100 && differing == 0,
-             "a detail cell's count is at least the full cell's under the same pointer");
+    // Waveform: a column and code, with each channel's count.
+    const auto waveform = shownView(scopes::Kind::Waveform, *rig.renderer, frame, 360);
+    settle(*waveform, "the Waveform is mapped");
+    const auto plot = waveform->plotRect();
+    // The black bar (the last eighth of the frame) is code 0 in every channel.
+    const auto black =
+        waveform->readoutAt(QPointF(plot.left() + plot.width() * 15.0 / 16.0, plot.bottom() - 0.1));
+    const auto column = static_cast<std::uint32_t>(15.0 / 16.0 * 64.0);
+    e.expect(black.startsWith(QStringLiteral("Column ")) &&
+                 black.contains(QStringLiteral("Code 0")) &&
+                 countPart(black) == QStringLiteral("R %1 · G %2 · B %3")
+                                         .arg(tables.waveform(0, column, 0))
+                                         .arg(tables.waveform(1, column, 0))
+                                         .arg(tables.waveform(2, column, 0)),
+             "the Waveform readout names the column, the code and each channel's count: " +
+                 black.toStdString());
 
-    // Waveform: the same column and code, and the detail's count holds the full count.
-    const auto fullWave = show(scopes::Kind::Waveform, fullHandle);
-    const auto coarseWave = show(scopes::Kind::Waveform, coarseHandle);
-    const auto wavePlot = fullWave->plotRect();
-    int waveCompared = 0;
-    int waveDiffering = 0;
-    for (int step = 0; step < 100; ++step) {
-        const QPointF point(wavePlot.left() + wavePlot.width() * (step % 10 + 0.5) / 10.0,
-                            wavePlot.top() + wavePlot.height() * (step / 10 + 0.5) / 10.0);
-        const auto fullText = fullWave->readoutAt(point);
-        const auto coarseText = coarseWave->readoutAt(point);
-        if (fullText.isEmpty() || coarseText.isEmpty())
-            continue;
-        ++waveCompared;
-        const auto prefix = [](const QString& text) {
-            return text.left(text.indexOf(QStringLiteral("Count ")));
-        };
-        waveDiffering += prefix(fullText) == prefix(coarseText) ? 0 : 1;
-        // "R n · G n · B n": every channel's detail count is at least the full one.
-        const auto fullCounts = countPart(fullText).split(QStringLiteral(" · "));
-        const auto coarseCounts = countPart(coarseText).split(QStringLiteral(" · "));
-        if (fullCounts.size() != coarseCounts.size()) {
-            ++waveDiffering;
-            continue;
-        }
-        for (qsizetype index = 0; index < fullCounts.size(); ++index)
-            waveDiffering += coarseCounts[index].split(' ').last().toUInt() >=
-                                     fullCounts[index].split(' ').last().toUInt()
-                                 ? 0
-                                 : 1;
-    }
-    e.expect(waveCompared > 50 && waveDiffering == 0,
-             "the waveform readout names the same column and code, with the detail's counts");
-
-    // The Histogram does not depend on the detail.
-    const auto fullHistogram = show(scopes::Kind::Histogram, fullHandle);
-    const auto coarseHistogram = show(scopes::Kind::Histogram, coarseHandle);
-    const auto histogramPlot = fullHistogram->plotRect();
-    const QPointF bin(histogramPlot.left() + 0.75 * histogramPlot.width(),
-                      histogramPlot.top() + 10);
-    e.expect(!fullHistogram->readoutAt(bin).isEmpty() &&
-                 fullHistogram->readoutAt(bin) == coarseHistogram->readoutAt(bin),
-             "the Histogram readout does not depend on the detail");
+    // Histogram: the code under the pointer in the row's channel.
+    const auto histogram = shownView(scopes::Kind::Histogram, *rig.renderer, frame, 360);
+    settle(*histogram, "the Histogram is mapped");
+    const auto rows = histogram->plotRect();
+    const auto zero = histogram->readoutAt(QPointF(rows.left() + 0.1, rows.top() + 10));
+    e.expect(zero.startsWith(QStringLiteral("R · Code 0")) &&
+                 countPart(zero) == QString::number(tables.histogram(0, 0)),
+             "the Histogram readout names the channel, the code and its count: " +
+                 zero.toStdString());
+    e.expect(histogram->readoutAt(QPointF(-4, -4)).isEmpty(), "outside the plot there is none");
 }
 
 } // namespace
@@ -630,7 +573,7 @@ int main(int argc, char** argv) {
             e.expect(static_cast<bool>(prepared), "the signal's color objects prepare");
             if (prepared) {
                 testViewAgreesWithPicture(e, prepared.color);
-                testDetailReadouts(e, prepared.color);
+                testReadouts(e, prepared.color);
             }
         }
         if (e.failures() + awaitFailureCount() != 0) {

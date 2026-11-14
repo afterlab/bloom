@@ -71,7 +71,6 @@ using bloom::runtime::ScopeRegion;
 using bloom::runtime::ScopeRoute;
 using bloom::runtime::ScopeSignal;
 using bloom::runtime::ScopeSignalColor;
-using bloom::runtime::ViewAdjust;
 
 using namespace bloom::runtime::executor_test;
 
@@ -197,23 +196,21 @@ int run(int argc, char** argv) {
                      LayerValues{.position = {60.0, 50.0}, .opacity = 0.8}, 180.0, 150.0, 7000);
     const auto request = requestFor(*plan);
 
-    const auto colorFor = [&](const ScopeSignal signal, const ViewAdjust adjust = {}) {
+    const auto colorFor = [&](const ScopeSignal signal) {
         auto prepared = ScopeSignalColor::prepare(
-            {.config = config, .signal = signal, .display = {}, .view = {}, .viewAdjust = adjust});
+            {.config = config, .signal = signal, .display = {}, .view = {}});
         expectations.expect(static_cast<bool>(prepared),
                             "the scope signal's color objects prepare: " + prepared.message);
         return prepared.color;
     };
     const auto working = colorFor(ScopeSignal::Working);
     const auto display = colorFor(ScopeSignal::Display);
-    const auto adjusted = colorFor(ScopeSignal::Display, ViewAdjust{.exposure = 0.5, .gamma = 1.2});
-    if (working == nullptr || display == nullptr || adjusted == nullptr) {
+    if (working == nullptr || display == nullptr) {
         evaluator->beginShutdown();
         return 1;
     }
-    expectations.expect(working->identity() != display->identity() &&
-                            display->identity() != adjusted->identity(),
-                        "a signal, and an adjustment, change the color identity");
+    expectations.expect(working->identity() != display->identity(),
+                        "the signal changes the color identity");
 
     // The picture the device computes for a request, read back: the float input both routes of
     // the Working signal count.
@@ -353,72 +350,45 @@ int run(int argc, char** argv) {
             "a region in composition pixels measures the same part of a proxy picture");
     }
 
-    // The detail: a measure at detail 1 through the production device route reads back the
-    // detail's bytes, once, and no picture; the tables are exact for Working without CIE and
-    // within one cell of the detail's cells through the OCIO steps.
+    // One measure through the production device route reads back the layout's bytes, once, and
+    // no picture; the tables are exact for Working without CIE.
     {
-        constexpr std::uint32_t kDetail = 1;
-        auto settings = settingsFor(ScopeSignal::Working, kNoChromaticity);
-        settings.detail = kDetail;
+        const auto settings = settingsFor(ScopeSignal::Working, kNoChromaticity);
         const auto measured = onDevice(request, settings, *working);
         const auto reference =
             bloom::runtime::measureScopeFrameCpu(*fullPicture, settings, *working);
-        expectations.expect(
-            measured.status == ScopeFrameStatus::Measured && measured.route == ScopeRoute::Gpu &&
-                reference.status == ScopeFrameStatus::Measured,
-            "detail 1: the Working signal is measured on the device: " + measured.message);
-        expectations.expect(measured.counts == reference.counts &&
-                                measured.counts.layout.detail == kDetail,
-                            "detail 1, Working: the device's tables equal the CPU reference's");
-        const auto layout =
-            bloom::render::scopeTableLayout(settings.scopes, measured.area.width, kDetail);
+        expectations.expect(measured.status == ScopeFrameStatus::Measured &&
+                                measured.route == ScopeRoute::Gpu &&
+                                reference.status == ScopeFrameStatus::Measured,
+                            "the Working signal is measured on the device: " + measured.message);
+        expectations.expect(measured.counts == reference.counts,
+                            "Working: the device's tables equal the CPU reference's");
+        const auto layout = bloom::render::scopeTableLayout(settings.scopes, measured.area.width);
         expectations.expect(measured.counts.layout == layout &&
                                 measured.tableReadbackBytes == layout.byteCount() &&
                                 measured.tableReadbacks == 1 && measured.pictureReadbacks == 0 &&
                                 measured.colorDispatches == 0,
-                            "detail 1, Working: the layout's bytes, one table readback, no "
-                            "picture readback and no color program");
+                            "Working: the layout's bytes, one table readback, no picture readback "
+                            "and no color program");
         expectations.expect(reference.tableReadbackBytes == 0 && reference.tableReadbacks == 0,
                             "the CPU reference reads nothing back");
-        // The coarser tables are the full ones pooled, and a smaller readback.
-        const auto fullMeasure =
-            onDevice(request, settingsFor(ScopeSignal::Working, kNoChromaticity), *working);
-        expectations.expect(
-            fullMeasure.status == ScopeFrameStatus::Measured &&
-                fullMeasure.tableReadbackBytes ==
-                    bloom::render::scopeTableLayout(kNoChromaticity, fullMeasure.area.width, 0)
-                        .byteCount() &&
-                fullMeasure.tableReadbackBytes > measured.tableReadbackBytes,
-            "full detail reads back the full layout's bytes, more than detail 1");
-        bool pooled = true;
-        for (std::uint32_t row = 0; row < layout.cells() && pooled; ++row)
-            for (std::uint32_t column = 0; column < layout.cells() && pooled; ++column)
-                pooled = measured.counts.vectorscope(column, row) ==
-                         fullMeasure.counts.vectorscope(column * 2, row * 2) +
-                             fullMeasure.counts.vectorscope(column * 2 + 1, row * 2) +
-                             fullMeasure.counts.vectorscope(column * 2, row * 2 + 1) +
-                             fullMeasure.counts.vectorscope(column * 2 + 1, row * 2 + 1);
-        expectations.expect(pooled, "detail 1 on the device is the full detail's cells pooled");
     }
     {
-        // Display with the Chromaticity table at detail 1: OCIO's processors, within one cell of
-        // the detail's cells.
+        // Display with the Chromaticity table: OCIO's processors, within one cell.
         auto settings = settingsFor(ScopeSignal::Display, kScopeTableAll);
-        settings.detail = 1;
         const auto measured = onDevice(request, settings, *display);
         const auto reference =
             bloom::runtime::measureScopeFrameCpu(*fullPicture, settings, *display);
         expectations.expect(measured.status == ScopeFrameStatus::Measured &&
                                 reference.status == ScopeFrameStatus::Measured,
-                            "detail 1: Display with Chromaticity is measured: " + measured.message);
+                            "Display with Chromaticity is measured: " + measured.message);
         expectations.expect(tablesWithinOneCell(measured.counts, reference.counts),
-                            "detail 1, Display: no pixel is more than one detail cell away");
-        expectations.expect(
-            measured.tableReadbackBytes ==
-                    bloom::render::scopeTableLayout(kScopeTableAll, measured.area.width, 1)
-                        .byteCount() &&
-                measured.tableReadbacks == 1 && measured.pictureReadbacks == 0,
-            "detail 1, Display: the layout's bytes in one table readback and no picture");
+                            "Display: no pixel is more than one cell away");
+        expectations.expect(measured.tableReadbackBytes == bloom::render::scopeTableLayout(
+                                                               kScopeTableAll, measured.area.width)
+                                                               .byteCount() &&
+                                measured.tableReadbacks == 1 && measured.pictureReadbacks == 0,
+                            "Display: the layout's bytes in one table readback and no picture");
         // The color programs follow the tables: with the Chromaticity table the Display
         // measure also runs the XYZ program, without it only the display program.
         settings.scopes = kNoChromaticity;
@@ -437,8 +407,7 @@ int run(int argc, char** argv) {
             expectations.expect(
                 measured.status == ScopeFrameStatus::Measured &&
                     measured.tableReadbackBytes ==
-                        bloom::render::scopeTableLayout(scope, measured.area.width, 0)
-                            .byteCount() &&
+                        bloom::render::scopeTableLayout(scope, measured.area.width).byteCount() &&
                     measured.tableReadbacks == 1 && measured.pictureReadbacks == 0,
                 "one scope reads back its own table: " + std::to_string(scope));
             if (scope == kScopeTableHistogram) {
@@ -455,46 +424,19 @@ int run(int argc, char** argv) {
                             "a Display Histogram-only measure reads its small tables");
     }
 
-    // Bytes per measure at the live detail (docs/architecture/scopes.md, "Real-time cost"): a
-    // measure reads back only the open sections' tables and the layout's bytes at its detail. The
-    // picture is 256 wide, so the Waveform has 256 columns at both details: all tables are
-    // 1,597,504 bytes at the live detail (the same as a picture 512 or more wide) and 4,218,944 at
-    // full detail (6,324,288 for a picture 512 or more wide).
+    // Bytes per measure (docs/architecture/scopes.md, "Cost"): a frame's tables are one fixed
+    // layout. The picture is 256 wide, so the Waveform has 256 columns: every table is 8,544,320
+    // bytes (12,746,816 for a picture 512 or more wide, the bound of the readback contract).
     {
-        constexpr std::uint32_t kLive = 1;
-        auto histogram = settingsFor(ScopeSignal::Working, kScopeTableHistogram);
-        histogram.detail = kLive;
-        const auto one = onDevice(request, histogram, *working);
-        expectations.expect(
-            one.status == ScopeFrameStatus::Measured &&
-                one.tableReadbackBytes ==
-                    bloom::render::scopeTableLayout(kScopeTableHistogram, one.area.width, kLive)
-                        .byteCount() &&
-                one.tableReadbackBytes == (8U + 4U * 1026U) * 4U && one.tableReadbacks == 1 &&
-                one.pictureReadbacks == 0,
-            "live detail, one section (Histogram): exactly its layout's 16,448 bytes");
-
-        auto all = settingsFor(ScopeSignal::Working, kScopeTableAll);
-        all.detail = kLive;
-        const auto live = onDevice(request, all, *working);
-        expectations.expect(
-            live.status == ScopeFrameStatus::Measured &&
-                live.tableReadbackBytes ==
-                    bloom::render::scopeTableLayout(kScopeTableAll, live.area.width, kLive)
-                        .byteCount() &&
-                live.tableReadbackBytes == 1'597'504U && live.tableReadbacks == 1 &&
-                live.pictureReadbacks == 0,
-            "live detail, every section: exactly the layout's 1,597,504 bytes");
-
-        all.detail = 0;
+        const auto all = settingsFor(ScopeSignal::Working, kScopeTableAll);
         const auto full = onDevice(request, all, *working);
-        expectations.expect(full.status == ScopeFrameStatus::Measured &&
-                                full.tableReadbackBytes == bloom::render::scopeTableLayout(
-                                                               kScopeTableAll, full.area.width, 0)
-                                                               .byteCount() &&
-                                full.tableReadbackBytes == 4'218'944U && full.tableReadbacks == 1 &&
-                                full.pictureReadbacks == 0,
-                            "full detail, every section: exactly the layout's 4,218,944 bytes");
+        expectations.expect(
+            full.status == ScopeFrameStatus::Measured &&
+                full.tableReadbackBytes ==
+                    bloom::render::scopeTableLayout(kScopeTableAll, full.area.width).byteCount() &&
+                full.tableReadbackBytes == 8'544'320U && full.tableReadbacks == 1 &&
+                full.pictureReadbacks == 0,
+            "every table: exactly the layout's 8,544,320 bytes");
     }
 
     // The Chromaticity table and the Display signal: OCIO's two processors, within one cell.
@@ -514,9 +456,7 @@ int run(int argc, char** argv) {
                 histogramAxis(measured.counts, channel) == histogramAxis(reference.counts, channel);
         expectations.expect(exact, "the Histogram does not depend on the XYZ step");
     }
-    for (const auto& [color, name] :
-         {std::pair{display, std::string_view("Display")},
-          std::pair{adjusted, std::string_view("Display with exposure and gamma")}}) {
+    for (const auto& [color, name] : {std::pair{display, std::string_view("Display")}}) {
         const auto settings = settingsFor(ScopeSignal::Display, kScopeTableAll);
         const auto measured = onDevice(request, settings, *color);
         const auto reference = bloom::runtime::measureScopeFrameCpu(*fullPicture, settings, *color);
@@ -534,10 +474,6 @@ int run(int argc, char** argv) {
     {
         const auto neutralCounts =
             onDevice(request, settingsFor(ScopeSignal::Display, kScopeTableHistogram), *display);
-        const auto adjustedCounts =
-            onDevice(request, settingsFor(ScopeSignal::Display, kScopeTableHistogram), *adjusted);
-        expectations.expect(neutralCounts.counts != adjustedCounts.counts,
-                            "the Viewer's exposure and gamma change the Display signal");
         const auto workingCounts =
             onDevice(request, settingsFor(ScopeSignal::Working, kScopeTableHistogram), *working);
         expectations.expect(neutralCounts.counts != workingCounts.counts,

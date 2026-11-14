@@ -1,8 +1,9 @@
 #pragma once
 
-// #724 Scopes: the scope measure as a job of the final-render device route
-// (GpuProcessFrameEvaluator::measureScopes), the headless route of MCP and Python reads; the Scopes
-// panel counts the Viewer's scope tap instead and runs no scene (gpu_preview_display_service.hpp).
+// #724, #730 Scopes: the scope measure as a job of the final-render device route
+// (GpuProcessFrameEvaluator::measureScopes), the headless route of MCP and Python reads; a preview
+// frame's tables are counted by its own frame job instead, which runs no extra scene
+// (gpu_preview_display_service_scope.cpp).
 // docs/architecture/scopes.md is the specification.
 //
 // The frame's scene runs on the evaluator's device exactly as a final frame does. Instead of the
@@ -38,9 +39,6 @@ struct GpuScopeMeasureJob final {
     std::uint32_t axisMaximum = 1;
     ScopeLuma luma;
     bool ignoreTransparent = false;
-    // 0 (full), 1 or 2: the detail of the Vectorscope, CIE and Waveform tables the device counts
-    // and reads back (render/scope_table_layout.hpp).
-    std::uint32_t detail = 0;
     // In composition pixels; the whole picture when not set.
     std::optional<ScopeRegion> region;
     // The Display signal: a GpuOcioTransformKind::ScopeDisplay program. Empty measures the Working
