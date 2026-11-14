@@ -13,14 +13,24 @@ option(BLOOM_ENABLE_BENCH_TESTS "Register benchmark smoke runs as tests" OFF)
 option(BLOOM_ENABLE_COMPOSITOR_TESTS
        "Register tests that need a private compositor session (run them inside one)" OFF)
 
+# The memory reading a test hands to Bloom programs it starts (bloom-mcp, bloom-cli, the Python
+# module), which cannot be given a sampler the way an in-process test gives its own: 16 GiB of
+# physical memory with 8 GiB available and an 8 GiB card, in bytes. The programs read it from
+# BLOOM_TEST_FIXED_MEMORY_READING (bloom/core/test_fixed_memory_reading.hpp); it is test-only.
+set(BLOOM_TEST_FIXED_MEMORY_READING "17179869184,8589934592,8589934592"
+    CACHE INTERNAL "Fixed memory reading for tests that start Bloom programs")
+
 # bloom_add_test(NAME <name> COMMAND <program> [args...]
 #                [LABELS ...] [ENVIRONMENT ...] [TIMEOUT <seconds>] [WORKING_DIRECTORY <dir>]
-#                [SKIP_RETURN_CODE <code>] [RUN_SERIAL] [STRESS] [BENCH] [COMPOSITOR])
+#                [SKIP_RETURN_CODE <code>] [RUN_SERIAL] [FIXED_MEMORY] [STRESS] [BENCH] [COMPOSITOR])
+# A test whose command names bloom-cli, bloom-mcp, the MCP HTTP test host or the built Python
+# module directory gets the fixed memory reading by itself; a test program that starts one of them
+# from its own code says FIXED_MEMORY. A stress test never gets it: it is there for the real machine.
 # A test marked STRESS, BENCH or COMPOSITOR is not registered unless its option is on; set its
 # properties through this function's arguments (or guard with `if(TEST <name>)`), because
 # set_tests_properties fails for a test that is not registered.
 function(bloom_add_test)
-    set(options STRESS BENCH COMPOSITOR RUN_SERIAL)
+    set(options STRESS BENCH COMPOSITOR RUN_SERIAL FIXED_MEMORY)
     set(one_value_args NAME TIMEOUT WORKING_DIRECTORY SKIP_RETURN_CODE)
     set(multi_value_args COMMAND LABELS ENVIRONMENT)
     cmake_parse_arguments(PARSE_ARGV 0 ARG "${options}" "${one_value_args}" "${multi_value_args}")
@@ -65,6 +75,16 @@ function(bloom_add_test)
         list(APPEND ARG_LABELS compositor)
         if(NOT BLOOM_ENABLE_COMPOSITOR_TESTS)
             return()
+        endif()
+    endif()
+
+    if(NOT ARG_STRESS)
+        string(FIND "${ARG_COMMAND}" "${CMAKE_BINARY_DIR}/python" bloom_test_python_module)
+        if(ARG_FIXED_MEMORY
+           OR "${ARG_COMMAND}" MATCHES "bloom-cli|bloom-mcp|bloom_mcp_http_test_host"
+           OR NOT bloom_test_python_module EQUAL -1)
+            list(APPEND ARG_ENVIRONMENT
+                 "BLOOM_TEST_FIXED_MEMORY_READING=${BLOOM_TEST_FIXED_MEMORY_READING}")
         endif()
     endif()
 

@@ -1,4 +1,5 @@
 #include <bloom/core/telemetry_counters.hpp>
+#include <bloom/core/test_fixed_memory_reading.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/memory_headroom.hpp>
 #include <bloom/runtime/memory_pressure_monitor.hpp>
@@ -6,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -118,6 +120,8 @@ inline constexpr std::size_t kSwapSustainDivisor = 4;
 } // namespace
 
 std::size_t physicalMemoryBytes() noexcept {
+    if (const auto& fixed = core::testFixedMemoryReading())
+        return static_cast<std::size_t>(fixed->physicalBytes);
 #if defined(_WIN32)
     MEMORYSTATUSEX status{};
     status.dwLength = sizeof(status);
@@ -145,6 +149,10 @@ std::size_t physicalMemoryBytes() noexcept {
 
 MachineMemorySample machineMemorySample() noexcept {
     MachineMemorySample sample;
+    if (const auto& fixed = core::testFixedMemoryReading()) {
+        sample.availableBytes = static_cast<std::size_t>(fixed->availableBytes);
+        return sample;
+    }
 #if defined(_WIN32)
     MEMORYSTATUSEX status{};
     status.dwLength = sizeof(status);
@@ -273,6 +281,14 @@ MemoryBudgetSample memoryBudgetSample(const CancellationToken& cancellation) noe
         return result;
     result.physicalBytes = physicalMemoryBytes();
     result.machine = machineMemorySample();
+    if (core::testFixedMemoryReading()) {
+        // The test reading (BLOOM_TEST_FIXED_MEMORY_READING) has no process limit, swap or stall;
+        // its time is this call, so it always counts as fresh.
+        result.process.source = ProcessMemorySource::OtherHostOnly;
+        result.process.status = ProcessMemoryStatus::Unsupported;
+        result.process.sampledAt = std::chrono::steady_clock::now();
+        return result;
+    }
     result.process = sampleProcessMemory(cancellation);
     return result;
 }

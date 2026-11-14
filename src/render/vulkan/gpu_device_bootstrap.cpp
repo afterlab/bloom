@@ -2,6 +2,7 @@
 #include "gpu_packaged_runtime.hpp"
 #include "gpu_pipeline_cache_private.hpp"
 
+#include <bloom/core/test_fixed_memory_reading.hpp>
 #include <bloom/core/telemetry_counters.hpp>
 
 #include <algorithm>
@@ -325,6 +326,12 @@ std::filesystem::path packagedVulkanLoaderPath() {
 }
 
 GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& options) {
+    // The caller's declared card, or the test reading's (BLOOM_TEST_FIXED_MEMORY_READING) when the
+    // caller declared none; 0 is the whole device.
+    const auto& fixedReading = core::testFixedMemoryReading();
+    const std::uint64_t declaredMemoryBytes =
+        options.device_memory_limit_bytes != 0 ? options.device_memory_limit_bytes
+                                               : (fixedReading ? fixedReading->deviceBytes : 0);
 #if defined(__APPLE__)
     // macOS has no system Vulkan: with no loader named, use the one packaged with this image, and
     // have the loader use the driver packaged with it (see gpu_packaged_runtime.hpp).
@@ -690,11 +697,11 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     control->maxComputeWorkGroupInvocations =
         selection->properties.limits.maxComputeWorkGroupInvocations;
     control->maxComputeWorkGroupSizeX = selection->properties.limits.maxComputeWorkGroupSize[0];
-    control->deviceLocalBytes = options.device_memory_limit_bytes != 0
+    control->deviceLocalBytes = declaredMemoryBytes != 0
                                     ? std::min(selection->deviceMemoryBytes,
-                                               options.device_memory_limit_bytes)
+                                               declaredMemoryBytes)
                                     : selection->deviceMemoryBytes;
-    control->declaredMemory = options.device_memory_limit_bytes != 0;
+    control->declaredMemory = declaredMemoryBytes != 0;
     control->unifiedMemory = selection->unifiedMemory;
     control->deviceUuid = selection->deviceUuid;
     control->memoryBudgetEnabled = selection->memoryBudgetSupported;
@@ -726,14 +733,14 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     // #682: a modelled smaller card. The allocator caps each device-local heap, refuses what
     // would exceed it, and clamps its live budget to it.
     std::array<VkDeviceSize, VK_MAX_MEMORY_HEAPS> heapLimits{};
-    if (options.device_memory_limit_bytes != 0) {
+    if (declaredMemoryBytes != 0) {
         const auto& heaps = selection->memory;
         for (std::uint32_t heap = 0; heap < VK_MAX_MEMORY_HEAPS; ++heap)
             heapLimits[heap] =
                 heap < heaps.memoryHeapCount &&
                         (heaps.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0U
                     ? std::min<VkDeviceSize>(heaps.memoryHeaps[heap].size,
-                                             options.device_memory_limit_bytes)
+                                             declaredMemoryBytes)
                     : VK_WHOLE_SIZE;
         allocatorInfo.pHeapSizeLimit = heapLimits.data();
     }

@@ -54,6 +54,7 @@ target_sources(
             include/bloom/core/sha256.hpp
             include/bloom/core/specified_log2.hpp
             include/bloom/core/telemetry_counters.hpp
+            include/bloom/core/test_fixed_memory_reading.hpp
             include/bloom/core/utf8.hpp
             include/bloom/core/file_uri.hpp
             include/bloom/core/value_primitives.hpp
@@ -274,5 +275,20 @@ if(BUILD_TESTING)
         NAME bloom.core.safe-parse
         COMMAND bloom_core_safe_parse_test
         LABELS unit text primitives
+    )
+
+    # The test-only fixed memory reading: its text form, and that a FIXED_MEMORY registration
+    # reaches the process.
+    add_executable(bloom_core_test_fixed_memory_reading_test
+                   tests/test_fixed_memory_reading_tests.cpp)
+    target_link_libraries(bloom_core_test_fixed_memory_reading_test PRIVATE bloom_core)
+    target_compile_definitions(bloom_core_test_fixed_memory_reading_test PRIVATE
+        BLOOM_TEST_FIXED_MEMORY_READING_VALUE="${BLOOM_TEST_FIXED_MEMORY_READING}")
+    bloom_enable_warnings(bloom_core_test_fixed_memory_reading_test)
+    bloom_add_test(
+        NAME bloom.core.test-fixed-memory-reading
+        COMMAND bloom_core_test_fixed_memory_reading_test
+        LABELS unit primitives
+        FIXED_MEMORY
     )
 endif()

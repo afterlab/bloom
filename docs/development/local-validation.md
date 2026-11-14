@@ -130,6 +130,23 @@ Shared test support lives in `tests/support`:
 - `manual_clock.hpp`: a clock that moves only when the test moves it, for code that takes its time
   source as a callable.
 
+A test that starts one of Bloom's own programs (`bloom-mcp`, `bloom-cli`, the Python module) cannot
+hand it a sampler. Those programs read one test-only environment variable instead, once, at their
+first memory sample:
+
+```text
+BLOOM_TEST_FIXED_MEMORY_READING=<physical bytes>,<available bytes>,<device bytes>
+```
+
+With it set, the host memory sample is that physical and available memory with no process limit,
+and every GPU device is created as a card of the declared size, so admission does not move with
+what else is running. Without it nothing changes; nothing in the product sets it, no setting maps
+to it, and a value that does not parse is reported on stderr and ignored. `bloom_add_test` sets it
+(16 GiB, 8 GiB available, an 8 GiB card) for every test whose command names one of those programs
+or the built Python module, and for a test registered with `FIXED_MEMORY` because its own code
+starts one. Stress tests never get it. The declaration is
+`src/core/include/bloom/core/test_fixed_memory_reading.hpp`.
+
 The runner itself has a small local test suite:
 
 ```sh
