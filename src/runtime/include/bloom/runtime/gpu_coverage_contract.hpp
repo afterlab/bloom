@@ -638,9 +638,12 @@ struct GpuCoverageContractDiagnostic final {
         // Decision O1 of the Scopes specification (#724), recorded in
         // docs/architecture/scopes.md; it lands only with the owner's approval. One named, bounded
         // readback: the count tables of one scope measure (at most 6,324,288 bytes whatever the
-        // picture's size), on the final-render device route. The frame, the display transform, the
-        // conversion to XYZ and the counting are device work, and no picture and no per-node
-        // full-frame roundtrip is ever read back.
+        // picture's size). For a frame the Viewer shows or a RAM preview fill retains, the
+        // readback happens on the Viewer's own device, from the scene picture its frame job
+        // computed; a headless read of the scopes (MCP, Python) with no such picture reads it back
+        // from the final-render device. Either way the display transform, the conversion to XYZ
+        // and the counting are device work, and no picture and no per-node full-frame roundtrip
+        // is ever read back.
         GpuCoverageEntry{
             "prep.scopes.result_readback",
             "bounded readback of the count tables of a scope measure so the Scopes panel and the "
