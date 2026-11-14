@@ -620,15 +620,17 @@ void run() {
     // The controller decides what a revision needs when it is published, so the proof is that
     // nothing was asked of the worker: no job started, none is pending, and no file was looked at.
     {
-        // The read counters are the whole process's: a worker still finishing earlier work (the
-        // tail of a thumbnail job that was cancelled and replaced) would move them, so the
-        // comparison starts only once the scheduler has nothing running.
-        require(awaitQtCondition("the scheduler is idle before the unrelated edit",
+        // A Verify footage pass that finishes runs the thumbnail job once more, by design. One
+        // starts by itself after an import, in the background, and its result is taken on this
+        // thread: the edit is made only when no pass is running or waiting to be taken, and
+        // nothing else is at work.
+        require(awaitQtCondition("the media work before the unrelated edit is finished",
                                  [&] {
                                      return scheduler.isQuiescent() && !controller.busy() &&
+                                            !controller.verifyingFootage() &&
                                             !controller.thumbnailsPending();
                                  }),
-                "the scheduler is idle before the unrelated edit");
+                "the media work before the unrelated edit is finished");
         const auto jobs = controller.thumbnailJobsStarted();
         const auto work = platform::sourceReadWork();
         setSource("loopMode", std::int64_t{1});
@@ -722,13 +724,14 @@ void playbackStartsNoMediaJobs() {
             "the status bar summary names the first sources and counts the rest");
     // An edit that leaves the assets alone starts no thumbnail job and looks at no file.
     {
-        // As above: nothing may still be running when the process-wide read counters are taken.
-        require(awaitQtCondition("the scheduler is idle before the edit",
+        // As above: the pass that follows the import has finished and been taken.
+        require(awaitQtCondition("the media work before the edit is finished",
                                  [&] {
                                      return scheduler.isQuiescent() && !controller.busy() &&
+                                            !controller.verifyingFootage() &&
                                             !controller.thumbnailsPending();
                                  }),
-                "the scheduler is idle before the edit");
+                "the media work before the edit is finished");
         const auto edit = platform::sourceReadWork();
         commands::Transaction more("Add Layer", session.snapshot().revision());
         more.emplace<commands::AddImageLayer>(session.compositionId(),
