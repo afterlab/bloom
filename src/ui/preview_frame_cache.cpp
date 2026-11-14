@@ -166,6 +166,12 @@ PreviewFrameCache::PreviewFrameCache(const std::size_t byteBudget,
                                   .counters = &counters_,
                                   .rows = {},
                                   .entries = [this] { return entries_.size(); }});
+    // #728: the entries belong to this thread. A budget another thread asks the ledger for (an
+    // export's capacity sample, an admission reclaim) is applied here, never on that thread.
+    ledger_.bindCacheToThisThread(this, [this] {
+        QMetaObject::invokeMethod(
+            this, [this] { ledger_.applyDeferredBudgets(this); }, Qt::QueuedConnection);
+    });
 }
 
 PreviewFrameCache::~PreviewFrameCache() { ledger_.unregisterCache(this); }

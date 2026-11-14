@@ -340,6 +340,37 @@ int main(int argc, char** argv) {
                                 "a ledger-applied budget is announced once, outside its lock");
         }
 
+        // #728: a budget another thread asks the ledger for (an export's capacity sample) is not
+        // applied on that thread. The cache keeps its entries until its own thread takes the
+        // budget, and inserting while the other thread works touches nothing they share.
+        {
+            runtime::MemoryBudgetLedger ledger(std::size_t{64} << 30, std::size_t{64} << 30);
+            PreviewFrameCache cache(std::size_t{1} << 28, ledger);
+            cache.insert(frameA1);
+            auto elsewhere = std::async(std::launch::async, [&ledger, &cache] {
+                static_cast<void>(ledger.setCacheCeiling(&cache, 0));
+            });
+            elsewhere.get();
+            expectations.expect(cache.size() == 1 && cache.contains(keyA) &&
+                                    cache.byteBudget() == std::size_t{1} << 28,
+                                "a budget applied from another thread leaves the cache alone");
+            QCoreApplication::sendPostedEvents(&cache);
+            expectations.expect(cache.size() == 0 && cache.byteBudget() == 0,
+                                "the cache's own thread applies the pending budget");
+            // The same with no ordering between the two threads: under the thread sanitizer any
+            // shared access between the inserts and the other thread's budgets is reported.
+            elsewhere = std::async(std::launch::async, [&ledger, &cache] {
+                for (std::size_t round = 1; round <= 8; ++round)
+                    static_cast<void>(ledger.setCacheCeiling(&cache, round << 24));
+            });
+            for (std::uint64_t generation = 2; generation < 10; ++generation)
+                cache.insert(cpuFrame(planA, generation));
+            elsewhere.get();
+            QCoreApplication::sendPostedEvents(&cache);
+            expectations.expect(cache.byteBudget() == std::size_t{8} << 24,
+                                "the latest budget asked from another thread is the one applied");
+        }
+
         // ADR 0037 rule 3: the source working set releases decoded sources outside the playback
         // window; finished frames are not part of it. Playback far ahead of a cached frame, with
         // every request ending and its release pass running, leaves the finished frame cached.

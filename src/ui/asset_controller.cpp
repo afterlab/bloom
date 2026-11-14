@@ -552,6 +552,15 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
                            .counters = audioCounters_.get(),
                            .rows = {},
                            .entries = [this] { return audioBuffers_.size(); }});
+    // #728: both pools belong to this thread; a budget another thread asks the ledger for is
+    // applied here, never on that thread.
+    for (const void* pool : {static_cast<const void*>(&proxyCacheBytes_),
+                             static_cast<const void*>(&decodedAudioBytes_)})
+        ledger.bindCacheToThisThread(pool, [this, pool] {
+            QMetaObject::invokeMethod(
+                this, [pool] { runtime::processMemoryBudgetLedger().applyDeferredBudgets(pool); },
+                Qt::QueuedConnection);
+        });
     dragToken_ = QUuid::createUuid().toByteArray();
     session_.setAssetController(this);
     connect(&bridge_, &TaskUiBridge::resultsAvailable, this, &AssetController::poll);
@@ -845,15 +854,11 @@ QString AssetController::sourceStorageText(const document::AssetId id) const {
     if (cached == paths.size())
         return tr("%1 · local copy kept").arg(place);
     if (cached != 0)
-        return tr("%1 · %2 of %3 files copied locally")
-            .arg(place)
-            .arg(cached)
-            .arg(paths.size());
+        return tr("%1 · %2 of %3 files copied locally").arg(place).arg(cached).arg(paths.size());
     const auto* asset = session_.snapshot().project().findAsset(id);
-    const bool keeps =
-        asset != nullptr &&
-        mediaDiskCache_->keepsLocalCopy(paths.front(), *found->second.storage->volume,
-                                        localCopyOverride(asset->interpretation));
+    const bool keeps = asset != nullptr && mediaDiskCache_->keepsLocalCopy(
+                                               paths.front(), *found->second.storage->volume,
+                                               localCopyOverride(asset->interpretation));
     return keeps ? tr("%1 · no local copy yet").arg(place) : tr("%1 · read where it is").arg(place);
 }
 QStringList AssetController::sourceStorageSummary(const int limit) const {
@@ -2725,8 +2730,8 @@ void AssetController::verifyFootage() {
             {.kind = runtime::TaskOwnerKind::Project, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Background, runtime::TaskExecutor::BlockingIo),
         [snapshot, directory = baseDirectory(),
-         sourceStore = static_cast<platform::SourceStore*>(mediaDiskCache_)](
-            runtime::TaskContext& context) {
+         sourceStore =
+             static_cast<platform::SourceStore*>(mediaDiskCache_)](runtime::TaskContext& context) {
             const auto cancel = [&context] { return context.isCancellationRequested(); };
             context.reportProgress({.phase = "Verifying footage",
                                     .subphase = {},

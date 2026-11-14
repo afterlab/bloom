@@ -4,10 +4,12 @@
 #include <algorithm>
 #include <chrono>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -126,6 +128,78 @@ void headroomSharesFreeMemoryAndShrinks() {
     ledger.unregisterCache(&b);
     ledger.unregisterCache(&c);
     ledger.unregisterCache(&live);
+}
+
+// #728: a pool bound to a thread is read and trimmed on that thread only. Another thread's ledger
+// calls see what the pool last reported and leave their budget pending until the pool's thread
+// takes it.
+void threadBoundPoolsAreOnlyTouchedOnTheirThread() {
+    MemoryBudgetLedger ledger(60 * gib, 60 * gib);
+    const auto owner = std::this_thread::get_id();
+    std::size_t held = 4 * gib, budget = 0, offThread = 0, wakes = 0;
+    std::vector<std::size_t> applied;
+    ledger.registerCache(
+        &held, 8 * gib,
+        [&] {
+            offThread += std::this_thread::get_id() != owner ? 1U : 0U;
+            return held;
+        },
+        [&](const std::size_t bytes) {
+            offThread += std::this_thread::get_id() != owner ? 1U : 0U;
+            applied.push_back(bytes);
+            budget = bytes;
+            held = std::min(held, bytes);
+        });
+    // `wakes` is written under the ledger's lock on the other thread and read here after it ends.
+    ledger.bindCacheToThisThread(&held, [&] { ++wakes; });
+    static_cast<void>(ledger.setCacheCeiling(&held, 8 * gib));
+    applied.clear();
+
+    const auto elsewhere = [&](auto&& work) {
+        std::async(std::launch::async, std::forward<decltype(work)>(work)).get();
+    };
+    elsewhere([&] {
+        static_cast<void>(ledger.setCacheCeiling(&held, 1 * gib));
+        static_cast<void>(ledger.setCacheCeiling(&held, 6 * gib));
+        static_cast<void>(ledger.reusableRetainedBytes());
+    });
+    expect(offThread == 0 && applied.empty() && held == 4 * gib && budget == 8 * gib,
+           "another thread's budget neither reads nor trims a thread-bound pool");
+    expect(wakes == 1, "the pool's thread is woken once for what is pending");
+    ledger.applyDeferredBudgets(&held);
+    expect(offThread == 0 && applied == std::vector<std::size_t>{1 * gib, 6 * gib} &&
+               held == 1 * gib && budget == 6 * gib,
+           "the pool's thread applies the lowest pending budget, then the latest");
+    expect(ledger.takeReleasedBytes() == 3 * gib, "what the deferred trim released is accounted");
+    applied.clear();
+    ledger.applyDeferredBudgets(&held);
+    expect(applied.empty(), "nothing pending applies nothing");
+
+    // A budget applied on the pool's own thread supersedes a pending one and keeps its trim.
+    held = 4 * gib;
+    elsewhere([&] { static_cast<void>(ledger.setCacheCeiling(&held, 2 * gib)); });
+    applied.clear();
+    static_cast<void>(ledger.setCacheCeiling(&held, 8 * gib));
+    expect(offThread == 0 && held == 2 * gib && wakes == 2 &&
+               applied == std::vector<std::size_t>{2 * gib, 8 * gib},
+           "a budget applied on the pool's thread keeps a pending trim");
+
+    // The paths an export's capacity refresh and an admission reclaim take.
+    ledger.applyDeferredBudgets(&held); // The wake arrives: the next one may be sent.
+    held = 4 * gib;
+    applied.clear();
+    static_cast<void>(ledger.reusableRetainedBytes());
+    elsewhere([&] {
+        ledger.setRamHeadroom(2 * gib);
+        static_cast<void>(ledger.poll({.availableBytes = 1 * gib}, at(1)));
+        static_cast<void>(ledger.reclaim(1 * gib));
+    });
+    expect(offThread == 0 && applied.empty() && held == 4 * gib && wakes == 3,
+           "a sample, a headroom and a reclaim from another thread leave the pool alone");
+    ledger.applyDeferredBudgets(&held);
+    expect(offThread == 0 && !applied.empty() && held <= 3 * gib,
+           "the reclaim is honored on the pool's thread");
+    ledger.unregisterCache(&held);
 }
 
 void swapActivityPolicy() {
@@ -846,6 +920,7 @@ int main(int argc, char** argv) try {
         return liveProcessProbe();
     selectedBudgetLifecycle();
     headroomSharesFreeMemoryAndShrinks();
+    threadBoundPoolsAreOnlyTouchedOnTheirThread();
     swapActivityPolicy();
     selectedTotalsAndHardwareDefaults();
     processAdmissionAndFailures();

@@ -350,12 +350,73 @@ void MemoryBudgetLedger::registerCache(const void* owner, const std::size_t ceil
             if (state_.processCacheCeilingBytes)
                 applyBudgetsLocked();
             else
-                entry->second.applyBudget(cacheByteBudgetLocked(entry->second));
+                entry->second.apply(cacheByteBudgetLocked(entry->second));
         } catch (...) {
             caches_.erase(entry);
             throw;
         }
     }
+}
+
+void MemoryBudgetLedger::Cache::wakeItsThread() const {
+    if (woken || !wake)
+        return;
+    woken = true;
+    wake();
+}
+
+MemoryPoolHolding MemoryBudgetLedger::Cache::held() const {
+    if (!holding)
+        return {};
+    if (onItsThread())
+        lastHeld = holding();
+    else
+        wakeItsThread(); // The next answer is current.
+    return lastHeld;
+}
+
+void MemoryBudgetLedger::Cache::apply(const std::size_t bytes) const {
+    if (!applyBudget)
+        return;
+    if (!onItsThread()) {
+        deferredLowest = deferredLowest ? std::min(*deferredLowest, bytes) : bytes;
+        deferredLatest = bytes;
+        wakeItsThread();
+        return;
+    }
+    // A budget another thread asked for and this one supersedes: its trim still happens.
+    const auto lowest = std::exchange(deferredLowest, std::nullopt);
+    deferredLatest.reset();
+    if (lowest && *lowest < bytes)
+        applyBudget(*lowest);
+    applyBudget(bytes);
+}
+
+void MemoryBudgetLedger::bindCacheToThisThread(const void* owner, std::function<void()> wake) {
+    const std::lock_guard lock(mutex_);
+    const auto found = caches_.find(owner);
+    if (found == caches_.end())
+        return;
+    found->second.thread = std::this_thread::get_id();
+    found->second.wake = std::move(wake);
+    static_cast<void>(found->second.held());
+}
+
+void MemoryBudgetLedger::applyDeferredBudgets(const void* owner) {
+    const std::lock_guard lock(mutex_);
+    const EvictionCauseScope cause(EvictionCause::MemoryPressure);
+    const auto found = caches_.find(owner);
+    if (found == caches_.end() || !found->second.onItsThread())
+        return;
+    const auto& cache = found->second;
+    cache.woken = false;
+    const auto before = cache.held().hostAllocatedBytes();
+    if (!cache.deferredLatest)
+        return;
+    cache.apply(*cache.deferredLatest);
+    const auto after = cache.held().hostAllocatedBytes();
+    if (after < before && cache.kind == MemoryBudgetOwnerKind::ReusableRetention)
+        releasedSinceTake_ = saturatedAdd(releasedSinceTake_, before - after);
 }
 
 void MemoryBudgetLedger::unregisterCache(const void* owner) {
@@ -386,7 +447,7 @@ std::size_t MemoryBudgetLedger::setCacheCeiling(const void* owner, const std::si
     if (state_.processCacheCeilingBytes)
         applyBudgetsLocked();
     else
-        found->second.applyBudget(bytes);
+        found->second.apply(bytes);
     return bytes;
 }
 
@@ -658,7 +719,7 @@ void MemoryBudgetLedger::applyBudgetsLocked() {
     yieldTargets_.clear();
     const auto before = reusableRetainedLocked();
     for (const auto& [cache, bytes] : budgets)
-        cache->applyBudget(bytes);
+        cache->apply(bytes);
     const auto after = reusableRetainedLocked();
     if (after < before)
         releasedSinceTake_ = saturatedAdd(releasedSinceTake_, before - after);
@@ -681,8 +742,7 @@ std::size_t MemoryBudgetLedger::pressureDeficit(const MachineMemorySample& sampl
         return 0;
     const auto available = poolAvailableLocked(sample);
     const auto deficit = available < *ramHeadroom_ ? *ramHeadroom_ - available : std::size_t{0};
-    const auto restoreFloor =
-        saturatedAdd(*ramHeadroom_, memoryPressureMarginBytes(*ramHeadroom_));
+    const auto restoreFloor = saturatedAdd(*ramHeadroom_, memoryPressureMarginBytes(*ramHeadroom_));
     return sample.memoryStall && available < restoreFloor
                ? std::max(deficit, restoreFloor - available)
                : deficit;
@@ -754,7 +814,7 @@ std::size_t MemoryBudgetLedger::reclaim(const std::size_t bytes) {
         // the room it was growing into); outside one every pool is bounded to what it holds.
         if (fill && shares[index] == 0)
             continue;
-        holdings[index].first->applyBudget(holdings[index].second.heldBytes - shares[index]);
+        holdings[index].first->apply(holdings[index].second.heldBytes - shares[index]);
     }
     const auto after = reusableRetainedLocked();
     const auto released = before > after ? before - after : std::size_t{0};
@@ -840,7 +900,7 @@ std::size_t MemoryBudgetLedger::yieldToPreview(const void* owner, const std::siz
         // The pool evicts to this budget now; entries it retires asynchronously free shortly.
         const auto target = holdings[index].second.heldBytes - shares[index];
         yieldTargets_[holdings[index].first] = target;
-        holdings[index].first->applyBudget(target);
+        holdings[index].first->apply(target);
         granted = saturatedAdd(granted, shares[index]);
     }
     std::size_t after = 0;

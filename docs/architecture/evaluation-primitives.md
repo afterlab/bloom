@@ -1144,7 +1144,16 @@ domain calls its retention reclaimers with the shortfall (need minus free) and r
 (`lastAwaitingNeed`). The application registers `MemoryBudgetController::workReclaimer()`, which
 queues `MemoryBudgetLedger::reclaim(shortfall)` (at least 256 MiB, coalesced) to the controller's
 thread and requests a host sample at once (the sampler trims the heap first); headless export
-providers reclaim synchronously on the process ledger and force their next sample. Reusable pools
+providers reclaim synchronously on the process ledger and force their next sample.
+
+A pool whose entries belong to one thread (the preview frame cache, the Assets proxies and decoded
+audio) binds itself to that thread with `MemoryBudgetLedger::bindCacheToThisThread` (#728). Its
+callbacks then run on that thread only. A ledger call from another thread (a headless export
+provider's sample, headroom or reclaim, a pool registering on a worker) reads what the pool last
+reported, leaves the budget it would have applied pending and wakes the pool's thread, which calls
+`applyDeferredBudgets`: the lowest pending budget first, so a reclaim is not lost, then the latest.
+The pool's thread never waits for the other thread. A reclaim from a worker therefore counts only
+what thread-safe pools released at once; work never waits for a cache. Reusable pools
 see `poolAvailableLocked`: available memory minus own swap, bounded by the room left in each finite
 cgroup domain (limit minus unreclaimable usage), and never grow into `setActiveWorkClaims` (the
 policy's pending host claims, `UsableCapacity::hostPendingClaimBytes`, applied after each sample).

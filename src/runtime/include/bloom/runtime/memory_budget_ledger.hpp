@@ -11,6 +11,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -140,6 +141,18 @@ class MemoryBudgetLedger final {
                        MemoryBudgetOwnerKind kind = MemoryBudgetOwnerKind::ReusableRetention,
                        MemoryEvictionPriority priority = MemoryEvictionPriority::Ordinary);
     void unregisterCache(const void* owner);
+    // #728: a pool whose entries belong to one thread (a pool the UI owns) binds itself to the
+    // calling thread after registering. From then on its callbacks run on that thread only. A
+    // ledger call from any other thread (an export's capacity sample, an admission reclaim, a
+    // headless pool registering) reads what the pool last reported on its own thread and leaves
+    // the budget it would have applied pending; `wake` is then called, once until the pool's
+    // thread has answered, on the other thread and under the ledger's lock. It must only arrange
+    // for applyDeferredBudgets(owner) to run on the pool's thread (it must not block or call the
+    // ledger). The pool's thread is never made to wait for the other thread's work.
+    void bindCacheToThisThread(const void* owner, std::function<void()> wake);
+    // On the bound thread: reports what `owner` holds now and applies the budgets other threads
+    // asked it for (the lowest first, so a reclaim is not lost, then the latest).
+    void applyDeferredBudgets(const void* owner);
     // How a registered pool appears in the Profiler (#423): its name, kind and counters, or its
     // rows. Read only by copyProfilerPools; budgets never see it. Unregistering drops it.
     void setPoolProfile(const void* owner, MemoryPoolProfile profile);
@@ -270,9 +283,21 @@ class MemoryBudgetLedger final {
         std::function<MemoryPoolHolding()> holding;
         std::function<void(std::size_t)> applyBudget;
         MemoryPoolProfile profile{};
-        [[nodiscard]] MemoryPoolHolding held() const {
-            return holding ? holding() : MemoryPoolHolding{};
+        // #728: set by bindCacheToThisThread. The rest is guarded by the ledger's lock.
+        std::optional<std::thread::id> thread{};
+        std::function<void()> wake{};
+        mutable MemoryPoolHolding lastHeld{};
+        mutable std::optional<std::size_t> deferredLowest{};
+        mutable std::optional<std::size_t> deferredLatest{};
+        mutable bool woken = false;
+        void wakeItsThread() const;
+        [[nodiscard]] bool onItsThread() const noexcept {
+            return !thread || *thread == std::this_thread::get_id();
         }
+        // What the pool holds: asked on its own thread, remembered for every other.
+        [[nodiscard]] MemoryPoolHolding held() const;
+        // Applies `bytes` on the pool's thread, or leaves it pending and wakes that thread.
+        void apply(std::size_t bytes) const;
     };
     [[nodiscard]] std::size_t cacheByteBudgetLocked(const Cache& cache) const;
     // Returns true only while swap is actively growing beyond the entry/sustain threshold. Static
