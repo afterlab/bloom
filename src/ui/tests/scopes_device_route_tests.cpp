@@ -144,9 +144,10 @@ struct PackedRetirementScope final {
     }
     ~PackedRetirementScope() {
         owner->beginShutdown();
-        for (int turn = 0; turn < 3000 && !owner->exitAcknowledged(); ++turn)
-            std::this_thread::sleep_for(10ms);
-        if (!owner->exitAcknowledged() || !owner->collect()) {
+        const bool exited =
+            bloom::test_support::awaitCondition("the packed retirement worker acknowledges its exit",
+                                                [this] { return owner->exitAcknowledged(); });
+        if (!exited || !owner->collect()) {
             std::cerr << "packed retirement did not exit and collect\n";
             std::terminate();
         }
