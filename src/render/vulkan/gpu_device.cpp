@@ -423,8 +423,7 @@ GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept {
         std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> budgets{};
         vmaGetHeapBudgets(control.allocator, budgets.data());
         std::uint64_t held = 0;
-        for (std::uint32_t heap = 0; properties != nullptr &&
-                                     heap < properties->memoryHeapCount &&
+        for (std::uint32_t heap = 0; properties != nullptr && heap < properties->memoryHeapCount &&
                                      heap < VK_MAX_MEMORY_HEAPS;
              ++heap) {
             if ((properties->memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0U) {

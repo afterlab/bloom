@@ -288,8 +288,8 @@ void admission() {
 }
 
 void tokens() {
-    // Every byte counts: an equal-length near miss fails wherever it differs, at the first byte, the
-    // last, and each one between. That the comparison takes the same time for all of them is a
+    // Every byte counts: an equal-length near miss fails wherever it differs, at the first byte,
+    // the last, and each one between. That the comparison takes the same time for all of them is a
     // property of bearerMatches's code (it folds every byte, with no early exit), not something a
     // clock on a shared machine can assert.
     std::string first(kToken);
