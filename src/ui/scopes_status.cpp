@@ -157,6 +157,9 @@ ScopesStatusText describeScopesStatus(const ScopesStatusInput& input) {
     }
     items << (sidecar.tables.route() == runtime::ScopeRoute::Gpu ? tr("GPU") : tr("CPU"));
     items << tr("%1 pixels counted").arg(sidecar.tables.counted());
+    // Coarser tables are on show until the frame, when it stays, is measured at full detail.
+    if (reading.detail != 0)
+        items << tr("Live detail");
     text.line = items.join(QStringLiteral(" · "));
     if (!sidecar.note.empty())
         text.line += QStringLiteral(" (%1)").arg(QString::fromStdString(sidecar.note));

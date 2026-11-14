@@ -136,7 +136,7 @@ ScopesController::ScopesController(runtime::TaskScheduler& scheduler, TaskUiBrid
                     if (fillQueue_.size() >= kFillQueueCapacity)
                         fillQueue_.pop_front();
                     fillQueue_.push_back(key);
-                    startFill();
+                    startNext();
                 });
         connect(cache_.get(), &PreviewFrameCache::entriesCleared, this,
                 [this] { fillQueue_.clear(); });
@@ -144,15 +144,15 @@ ScopesController::ScopesController(runtime::TaskScheduler& scheduler, TaskUiBrid
 }
 
 ScopesController::~ScopesController() {
-    if (active_)
-        active_->handle.cancel();
-    if (fill_)
-        fill_->handle.cancel();
+    if (inFlight_)
+        inFlight_->handle.cancel();
 }
 
-PreviewScopeIdentity ScopesController::identityFor(const runtime::ViewAdjust viewAdjust) const {
+PreviewScopeIdentity ScopesController::identityFor(const runtime::ViewAdjust viewAdjust,
+                                                   const std::uint32_t detail) const {
     PreviewScopeIdentity identity;
     identity.settings = settings_;
+    identity.settings.detail = detail;
     // The Working signal is measured before the display transform: the Viewer's exposure and
     // gamma do not reach it.
     if (settings_.signal == runtime::ScopeSignal::Display)
@@ -160,20 +160,18 @@ PreviewScopeIdentity ScopesController::identityFor(const runtime::ViewAdjust vie
     return identity;
 }
 
-void ScopesController::setSettings(const runtime::ScopeMeasureSettings& settings) {
+void ScopesController::setSettings(const runtime::ScopeMeasureSettings& requested) {
+    // The detail is the controller's choice, not the panel's.
+    auto settings = requested;
+    settings.detail = 0;
     if (settings_ == settings)
         return;
     settings_ = settings;
     // Frames queued for the old settings are measured under the new ones when their turn comes;
-    // a background measure already running is for the old ones and is dropped.
-    if (fill_) {
-        fill_->handle.cancel();
-        fill_.reset();
-    }
+    // a retained frame's measure already running is for the old ones and is cancelled (refresh).
     if (settings_.scopes == 0)
         fillQueue_.clear();
     refresh();
-    startFill();
 }
 
 void ScopesController::showFrame(const PreparedPreviewFrameHandle& frame,
@@ -210,60 +208,87 @@ void ScopesController::publish(ScopesReading reading) {
 
 void ScopesController::refresh() {
     ++generation_;
-    if (active_) {
-        active_->handle.cancel();
-        active_.reset();
-    }
+    // What is wanted now, if anything has to be measured for it.
+    std::optional<Request> wanted;
     ScopesReading reading;
     reading.shown = shown_;
-    if (!shown_ || settings_.scopes == 0) {
-        // Nothing is shown from another frame without the frame it belongs to.
-        publish(std::move(reading));
-        return;
-    }
-    const auto key = PreviewFrameCacheKey::forIdentity(shown_->identity);
-    const auto identity = identityFor(viewAdjust_);
-    if (cache_ != nullptr) {
-        if (auto cached = cache_->scopesFor(key, identity)) {
-            ++cacheHits_;
-            reading.state = ScopesReading::State::Ready;
-            reading.scopes = std::move(cached);
-            reading.measured = shown_;
-            reading.color = reading.scopes->color;
-            reading.message = reading.scopes->note;
-            publish(std::move(reading));
-            return;
+    if (shown_ && settings_.scopes != 0) {
+        const auto key = PreviewFrameCacheKey::forIdentity(shown_->identity);
+        const auto fullIdentity = identityFor(viewAdjust_, 0);
+        const auto liveIdentity = identityFor(viewAdjust_, kLiveDetail);
+        PreviewScopeSidecarHandle cached;
+        if (cache_ != nullptr) {
+            cached = cache_->scopesFor(key, fullIdentity);
+            const bool full = cached != nullptr;
+            if (!full)
+                cached = cache_->scopesFor(key, liveIdentity);
+            if (cached != nullptr) {
+                ++cacheHits_;
+                reading.state = ScopesReading::State::Ready;
+                reading.scopes = cached;
+                reading.measured = shown_;
+                reading.color = cached->color;
+                reading.message = cached->note;
+                reading.detail = cached->identity.settings.detail;
+                // A live sidecar is shown at once and the full measure follows.
+                if (!full)
+                    wanted = Request{*shown_, key, fullIdentity};
+            }
+        }
+        if (cached == nullptr) {
+            // The earlier frame's tables stay on show, labeled, until this frame's arrive.
+            reading.state = ScopesReading::State::Measuring;
+            reading.scopes = reading_.scopes;
+            reading.measured = reading_.measured;
+            reading.color = reading_.color;
+            reading.detail = reading_.detail;
+            reading.behind = reading.scopes != nullptr;
+            wanted = Request{*shown_, key, liveIdentity};
         }
     }
-    // The earlier frame's tables stay on show, labeled, until this frame's arrive.
-    reading.state = ScopesReading::State::Measuring;
-    reading.scopes = reading_.scopes;
-    reading.measured = reading_.measured;
-    reading.color = reading_.color;
-    reading.behind = reading.scopes != nullptr;
-    active_ = submit(*shown_, identity, runtime::TaskPriority::Visible);
-    if (!active_) {
-        reading.state = ScopesReading::State::Failed;
-        reading.message = "The scope measure could not be started.";
-    }
+    // Latest wins: a measure in flight that is not the wanted one is cancelled (it observes that
+    // between its steps) and keeps the slot until its task has finished; the one waiting request is
+    // replaced.
+    const bool sameInFlight = inFlight_ && inFlight_->shown && !inFlight_->cancelled && wanted &&
+                              inFlight_->request.key == wanted->key &&
+                              inFlight_->request.identity == wanted->identity;
+    if (inFlight_ && inFlight_->shown && !sameInFlight)
+        cancelInFlight();
+    if (want_ && !wantInFlight_)
+        ++measuresSkipped_;
+    want_ = std::move(wanted);
+    wantInFlight_ = sameInFlight;
+    // A retained frame's measure under other settings or another view adjust is dropped too.
+    if (inFlight_ && !inFlight_->shown &&
+        inFlight_->request.identity != identityFor(viewAdjust_, 0))
+        cancelInFlight();
     publish(std::move(reading));
+    startNext();
 }
 
-std::optional<ScopesController::Pending>
-ScopesController::submit(const PreviewScopeSource& source, const PreviewScopeIdentity& identity,
-                         const runtime::TaskPriority priority) {
+void ScopesController::cancelInFlight() {
+    if (!inFlight_)
+        return;
+    inFlight_->cancelled = true;
+    inFlight_->handle.cancel();
+}
+
+std::optional<ScopesController::Pending> ScopesController::submit(const Request& wanted,
+                                                                  const bool shown) {
     if (!measure_ || bridge_.isShuttingDown())
         return std::nullopt;
+    const auto& source = wanted.source;
     runtime::TaskRequest request(
         "Measure scopes",
         {.kind = runtime::TaskOwnerKind::PanelRequest,
          .id = runtime::TaskOwnerId::fromRaw(source.identity.compositionId.value())},
-        priority);
+        shown ? runtime::TaskPriority::Visible : runtime::TaskPriority::Background);
     request.sourceVersion = {.documentRevision = source.identity.sourceRevision.value(),
                              .requestGeneration = generation_};
     request.usesPurgeableCaches = true;
     auto submission = scheduler_.submit<ResultHandle>(
-        std::move(request), [measure = measure_, source, identity](runtime::TaskContext& context) {
+        std::move(request),
+        [measure = measure_, source, identity = wanted.identity](runtime::TaskContext& context) {
             using TaskResult = runtime::TaskResult<ResultHandle>;
             if (context.isCancellationRequested())
                 return TaskResult::cancelled();
@@ -278,8 +303,7 @@ ScopesController::submit(const PreviewScopeSource& source, const PreviewScopeIde
         return std::nullopt;
     ++measuresStarted_;
     bridge_.wake();
-    return Pending{std::move(submission.handle), PreviewFrameCacheKey::forIdentity(source.identity),
-                   identity};
+    return Pending{std::move(submission.handle), wanted, shown, false};
 }
 
 PreviewScopeSidecarHandle ScopesController::sidecarOf(const Result& result) const {
@@ -299,67 +323,122 @@ PreviewScopeSidecarHandle ScopesController::sidecarOf(const Result& result) cons
 }
 
 void ScopesController::poll() {
-    if (active_) {
-        if (auto taken = active_->handle.tryTakeResult()) {
-            const auto pending = std::move(*active_);
-            active_.reset();
+    if (inFlight_) {
+        if (auto taken = inFlight_->handle.tryTakeResult()) {
+            const auto pending = std::move(*inFlight_);
+            inFlight_.reset();
             const auto& value = taken->value();
-            ScopesReading reading = reading_;
-            reading.shown = shown_;
-            if (taken->state() == runtime::TaskState::Succeeded && value && *value) {
-                const Result& result = **value;
-                if (auto sidecar = sidecarOf(result)) {
-                    if (cache_ != nullptr)
-                        static_cast<void>(cache_->attachScopes(pending.key, sidecar));
-                    reading.state = ScopesReading::State::Ready;
-                    reading.message = sidecar->note;
-                    reading.scopes = std::move(sidecar);
-                    reading.measured = result.source;
-                    reading.color = reading.scopes->color;
-                    reading.behind = false;
-                } else {
-                    reading.state = ScopesReading::State::Failed;
-                    reading.message = result.measured.measure.message.empty()
-                                          ? std::string("The frame could not be measured.")
-                                          : result.measured.measure.message;
+            const bool succeeded =
+                taken->state() == runtime::TaskState::Succeeded && value && *value;
+            if (succeeded)
+                lastTableReadbackBytes_ = (*value)->measured.measure.tableReadbackBytes;
+            if (pending.shown) {
+                // A result is taken only when it is for what is wanted still: the measure of a
+                // frame or identity that is no longer wanted is neither shown nor cached.
+                const bool wanted = wantInFlight_ && want_ && want_->key == pending.request.key &&
+                                    want_->identity == pending.request.identity;
+                if (wanted)
+                    wantInFlight_ = false;
+                if (wanted && succeeded)
+                    takeShown(**value, pending);
+                else if (wanted) {
+                    want_.reset();
+                    if (taken->state() != runtime::TaskState::Cancelled) {
+                        ScopesReading reading = reading_;
+                        reading.shown = shown_;
+                        reading.state = ScopesReading::State::Failed;
+                        reading.message = "The scope measure did not finish.";
+                        publish(std::move(reading));
+                    }
                 }
-                publish(std::move(reading));
-            } else if (taken->state() != runtime::TaskState::Cancelled) {
-                reading.state = ScopesReading::State::Failed;
-                reading.message = "The scope measure did not finish.";
-                publish(std::move(reading));
-            }
-        }
-    }
-    if (fill_) {
-        if (auto taken = fill_->handle.tryTakeResult()) {
-            const auto pending = std::move(*fill_);
-            fill_.reset();
-            const auto& value = taken->value();
-            if (taken->state() == runtime::TaskState::Succeeded && value && *value &&
-                cache_ != nullptr && pending.identity == identityFor(viewAdjust_)) {
+            } else if (succeeded && cache_ != nullptr &&
+                       pending.request.identity == identityFor(viewAdjust_, 0)) {
                 if (auto sidecar = sidecarOf(**value))
-                    static_cast<void>(cache_->attachScopes(pending.key, std::move(sidecar)));
+                    static_cast<void>(
+                        cache_->attachScopes(pending.request.key, std::move(sidecar)));
             }
         }
     }
-    startFill();
+    startNext();
 }
 
-void ScopesController::startFill() {
-    if (fill_ || cache_ == nullptr || settings_.scopes == 0)
+void ScopesController::takeShown(const Result& result, const Pending& pending) {
+    ScopesReading reading = reading_;
+    reading.shown = shown_;
+    if (auto sidecar = sidecarOf(result)) {
+        if (cache_ != nullptr)
+            static_cast<void>(cache_->attachScopes(pending.request.key, sidecar));
+        reading.state = ScopesReading::State::Ready;
+        reading.message = sidecar->note;
+        reading.detail = sidecar->identity.settings.detail;
+        reading.scopes = std::move(sidecar);
+        reading.measured = result.source;
+        reading.color = reading.scopes->color;
+        reading.behind = false;
+        // The live tables are on show: the frame, when it stays, is measured once more in full.
+        if (pending.request.identity.settings.detail != 0) {
+            auto full = pending.request;
+            full.identity.settings.detail = 0;
+            want_ = std::move(full);
+        } else {
+            want_.reset();
+        }
+    } else {
+        want_.reset();
+        reading.state = ScopesReading::State::Failed;
+        reading.message = result.measured.measure.message.empty()
+                              ? std::string("The frame could not be measured.")
+                              : result.measured.measure.message;
+    }
+    publish(std::move(reading));
+}
+
+void ScopesController::startNext() {
+    if (inFlight_)
         return;
-    const auto identity = identityFor(viewAdjust_);
+    if (want_ && !wantInFlight_) {
+        if (startShown())
+            return;
+        // Could not start: say so rather than leave the reading measuring forever.
+        want_.reset();
+        ScopesReading reading = reading_;
+        reading.shown = shown_;
+        reading.state = ScopesReading::State::Failed;
+        reading.message = "The scope measure could not be started.";
+        publish(std::move(reading));
+        return;
+    }
+    // A retained frame is measured only when no shown-frame request waits or is in flight.
+    if (!want_)
+        static_cast<void>(startFill());
+}
+
+bool ScopesController::startShown() {
+    inFlight_ = submit(*want_, true);
+    if (!inFlight_)
+        return false;
+    wantInFlight_ = true;
+    maxInFlight_ = std::max<std::uint32_t>(maxInFlight_, 1U);
+    return true;
+}
+
+bool ScopesController::startFill() {
+    if (cache_ == nullptr || settings_.scopes == 0)
+        return false;
+    const auto identity = identityFor(viewAdjust_, 0);
     while (!fillQueue_.empty()) {
         const auto key = std::move(fillQueue_.front());
         fillQueue_.pop_front();
         const auto source = cache_->scopeSourceFor(key);
         if (!source || cache_->scopesFor(key, identity) != nullptr)
             continue;
-        fill_ = submit(*source, identity, runtime::TaskPriority::Background);
-        if (fill_)
-            return;
+        inFlight_ = submit(Request{*source, key, identity}, false);
+        if (inFlight_) {
+            maxInFlight_ = std::max<std::uint32_t>(maxInFlight_, 1U);
+            return true;
+        }
     }
+    return false;
 }
 
 } // namespace bloom::ui
