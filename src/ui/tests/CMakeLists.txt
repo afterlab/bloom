@@ -2418,6 +2418,23 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# Issue #718: a sequence the local mirror keeps is read from its storage once on the artist's
+# routes: Viewer scrubbing, playback with the Viewer's transport, RAM Preview and a movie export.
+# CPU reference route only, so it registers unconditionally and runs offscreen.
+add_executable(bloom_ui_media_route_source_reads_test media_route_source_reads_tests.cpp)
+target_link_libraries(bloom_ui_media_route_source_reads_test PRIVATE bloom_ui bloom_host)
+if(TARGET bloom-media-worker)
+    add_dependencies(bloom_ui_media_route_source_reads_test bloom-media-worker)
+endif()
+bloom_enable_warnings(bloom_ui_media_route_source_reads_test)
+bloom_add_test(
+    NAME bloom.ui.media-route-source-reads
+    COMMAND bloom_ui_media_route_source_reads_test
+    LABELS ui integration media
+    TIMEOUT 300
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 # Issue #608: Apply LUT (a channel-rotating 3D LUT) through the Viewer, a cold and warm
 # RAM preview at Half, and the still, range and movie export routes, with the transform's bypassed
 # and no-LUT states. The CPU half always runs; the GPU half runs with a Vulkan loader and a
