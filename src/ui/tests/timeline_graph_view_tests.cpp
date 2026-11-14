@@ -6,6 +6,8 @@
 #include <timeline_key_time.hpp>
 #include <timeline_keyframe_time.hpp>
 
+#include "await_qt.hpp"
+
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -300,7 +302,12 @@ void testPlaybackNeitherResamplesNorRepaintsTheGraph() {
     fixture.expandAndShowGraph();
     auto& session = fixture.session.session;
     // Settle first: pending layout, resize and deferred zoom work are not playback.
-    // All of it is queued events (no timers), so delivering them is the settle.
+    // The session prepares its color converter on a worker and announces it with snapshotChanged,
+    // which redraws the whole graph: that is start-up, so it has to land before the first paint
+    // counted below. The rest is queued events, delivered by the passes after it.
+    expect(bloom::test_support::awaitQtCondition("the session's color converter lands",
+                                                 [&] { return session.colorConverterReady(); }),
+           "the color converter lands before playback is measured");
     for (int pass = 0; pass < 3; ++pass) {
         QCoreApplication::sendPostedEvents();
         QCoreApplication::processEvents();
