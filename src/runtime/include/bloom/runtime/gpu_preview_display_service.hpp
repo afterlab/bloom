@@ -14,6 +14,11 @@
 // retained by the GPU product. Completed bytes are CPU packed RGBA8 and make no
 // GPU-resident/presentation claim.
 //
+// Scope tap (#724): the service itself, not a frame, keeps an alias of the scene-linear picture
+// the latest Viewer-class frame job computed (and of at most one flagged RAM-fill frame), so the
+// Scopes panel can count that picture on this device (measureScopeTap) without a second scene run
+// and without reading a picture back. See GpuScopeTapKey and the methods below.
+//
 // Threading and lifetime: the constructor attaches the caller's TaskScheduler GPU executor and
 // starts the service thread. The captured PreviewCpuStageFunction, PreviewCpuDisplayFallback, and
 // the scheduler MUST outlive the service. beginShutdown() is non-blocking; the destructor joins
@@ -27,12 +32,14 @@
 #include <bloom/runtime/gpu_presentation_coordinator.hpp>
 #include <bloom/runtime/gpu_preview_resident_capacity.hpp>
 #include <bloom/runtime/gpu_resident_frame_lease.hpp>
+#include <bloom/runtime/gpu_scope_measure.hpp>
 #include <bloom/runtime/gpu_resident_preview_qualification.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
 #include <bloom/runtime/preview_cpu_stage.hpp>
 #include <bloom/runtime/preview_gpu_scene_stage.hpp>
+#include <bloom/runtime/scope_measure.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
@@ -234,6 +241,36 @@ struct GpuPreviewDisplayServiceCounters final {
     // display-route microbenchmark only; it is never a whole-application FPS claim.
     std::uint64_t residentQualificationMicros = 0;
 
+    // Scope tap and device scope measure (#724). Viewer-class frames (Interactive or Visible
+    // priority) are tapped always; a RAM-fill frame only when its request asks for it.
+    // The scene-linear picture a tapped frame computed is kept by alias for the latest Viewer
+    // frame (`scopeTapsKept`) and for at most one flagged fill frame (`scopeFillTapsKept`). A fill
+    // frame with the flag off keeps nothing and is never held back: both fill counters stay zero.
+    std::uint64_t scopeTapsKept = 0;
+    std::uint64_t scopeFillTapsKept = 0;
+    // Flagged fill stages held back (once each) because the one fill tap slot was occupied.
+    std::uint64_t scopeFillStageWaits = 0;
+    // Measure requests, by how they ended. A request that was Busy never queued.
+    std::uint64_t scopeMeasuresRequested = 0;
+    std::uint64_t scopeMeasuresStarted = 0;
+    std::uint64_t scopeMeasuresCompleted = 0;
+    std::uint64_t scopeMeasuresSkipped = 0;
+    std::uint64_t scopeMeasuresCancelled = 0;
+    std::uint64_t scopeMeasuresFailed = 0;
+    std::uint64_t scopeMeasuresBusy = 0;
+    // Measures that had to wait (once each) for a Viewer-class stage, or for the device to be
+    // free of every frame's phase, before a step could begin.
+    std::uint64_t scopeMeasureYields = 0;
+    // The device work of measures: display and XYZ color program dispatches, count kernel
+    // dispatches, table readbacks and the bytes they moved (last measure and total). A measure
+    // never reads a picture back and never runs a scene: `residentGraphJobs`, `nativeDispatches`
+    // and `fullFrameReadbacks` do not move for it.
+    std::uint64_t scopeColorDispatches = 0;
+    std::uint64_t scopeTableDispatches = 0;
+    std::uint64_t scopeTableReadbacks = 0;
+    std::uint64_t scopeTableReadbackBytes = 0;
+    std::uint64_t scopeTableReadbackBytesTotal = 0;
+
     friend bool operator==(const GpuPreviewDisplayServiceCounters&,
                            const GpuPreviewDisplayServiceCounters&) = default;
 };
@@ -357,6 +394,76 @@ struct GpuPreviewDisplayServiceOptions final {
     std::chrono::milliseconds idleTrimDelay{1000};
 };
 
+// What names a tapped frame: its request identity with the Viewer adjustment and the request
+// generation neutralized. The scene picture does not depend on either, so the base frame and its
+// adjusted frame share one key, and the key of a shown frame is
+// `GpuScopeTapKey::of(frame.desiredIdentity())`.
+struct GpuScopeTapKey final {
+    PreviewRequestIdentity identity;
+
+    [[nodiscard]] static GpuScopeTapKey of(const PreviewRequestIdentity& frameIdentity);
+
+    friend bool operator==(const GpuScopeTapKey&, const GpuScopeTapKey&) = default;
+};
+
+// The geometry of a tapped picture, for the region math of the measure (scopeMeasuredArea).
+struct GpuScopeTapGeometry final {
+    render::ImageWindow dataWindow;
+    render::ImageWindow displayWindow;
+    // The request's region of interest, when it had one.
+    std::optional<render::ImageWindow> roi;
+    // The composition's size in pixels: a region is in composition pixels.
+    std::uint32_t compositionWidth = 0;
+    std::uint32_t compositionHeight = 0;
+    // True for the tap of a RAM-fill frame (its own slot), false for a Viewer frame's.
+    bool fill = false;
+};
+
+enum class GpuScopeTapStatus : std::uint8_t {
+    // `counts` holds the tables of `area`, counted on the Viewer's device.
+    Measured,
+    // The region lies outside the picture: there is nothing to count.
+    EmptyArea,
+    // The measure did not run; `skip` says why.
+    Skipped,
+    // A measure was already queued or in flight in this service.
+    Busy,
+    Cancelled,
+    // The device could not count the picture; `message` says why. The caller falls back to the
+    // retained picture or the CPU reference.
+    Failed,
+};
+
+enum class GpuScopeTapSkip : std::uint8_t {
+    None,
+    // A newer Viewer frame replaced the tap the request named before its measure started.
+    // The key decides: a request measures only the picture its key names.
+    Superseded,
+    // No tap has that key (never kept, dropped, freed by its measure or by shutdown).
+    TapGone,
+    // The device has no room for the measure now; it never takes room a frame needs.
+    NoRoom,
+};
+
+struct GpuScopeTapMeasureOutcome final {
+    GpuScopeTapStatus status = GpuScopeTapStatus::Failed;
+    GpuScopeTapSkip skip = GpuScopeTapSkip::None;
+    std::string message;
+    ScopeCounts counts;
+    ScopeMeasuredArea area;
+    // Always the device, and the picture the Viewer's own frame job rendered.
+    ScopeRoute route = ScopeRoute::Gpu;
+    ScopeSource source = ScopeSource::Rendered;
+    // The native work of this measure: color program dispatches, count kernel dispatches, table
+    // readbacks, the bytes those moved (the layout's bytes at the job's detail) and picture
+    // readbacks (always 0).
+    std::uint64_t colorDispatches = 0;
+    std::uint64_t tableDispatches = 0;
+    std::uint64_t tableReadbacks = 0;
+    std::uint64_t tableReadbackBytes = 0;
+    std::uint64_t pictureReadbacks = 0;
+};
+
 class GpuPreviewDisplayService final {
   public:
     GpuPreviewDisplayService(const GpuPreviewDisplayService&) = delete;
@@ -389,10 +496,18 @@ class GpuPreviewDisplayService final {
     // path, or an ordinary CPU task handle (CPU stage + display fallback on the same evaluated
     // frame) on the reference/unavailable/disabled path. `pixelStorageByteLimit` is the request's
     // display byte allowance and is also the GPU request-owned admission reservation.
+    //
+    // `tapForScopes` (#724) matters only for a fill frame (Foreground or Background priority): the
+    // service then keeps the scene picture of the frame for one scope measure, in its own single
+    // fill slot, and does not start another flagged fill frame's scene work while that slot is
+    // occupied. The caller MUST then free the slot for every flagged frame it received: by
+    // measureScopeTap (which frees it when the measure ends) or by dropScopeTap. A frame
+    // that failed or was cancelled holds nothing. With the flag off, a fill frame behaves as it
+    // always did and costs nothing. A Viewer-class frame is always tapped; the flag changes nothing.
     [[nodiscard]] TaskSubmission<PreviewPreparationResultHandle>
     submit(TaskRequest request, const document::Snapshot& snapshot,
            const PreviewRequestIdentity& identity, std::size_t pixelStorageByteLimit,
-           const std::vector<SnapshotParameterOverride>& overrides);
+           const std::vector<SnapshotParameterOverride>& overrides, bool tapForScopes = false);
 
     [[nodiscard]] GpuPreviewDisplayServiceStatus status() const;
 
@@ -406,6 +521,32 @@ class GpuPreviewDisplayService final {
     // expired.
     [[nodiscard]] std::optional<std::uint64_t>
     purgeRetainedCaches(std::chrono::milliseconds timeout) noexcept;
+
+    // The geometry of the tap `key` names (the latest Viewer frame's, or the fill slot's). Any
+    // thread, non-blocking; nothing when no tap has that key.
+    [[nodiscard]] std::optional<GpuScopeTapGeometry>
+    scopeTapGeometry(const GpuScopeTapKey& key) const;
+
+    // Measures the tapped picture `key` names on this service's device: the display and XYZ
+    // color steps the job asks for, then the count kernel, then one table readback, as a
+    // separate low-priority submission that starts only while no Viewer-class stage is ready,
+    // active or ahead and never waits on a fence (the owner polls). Prepares the job's color
+    // programs on the calling thread, queues ONE request and blocks only the calling thread
+    // until its result. Call it from a task worker, never the UI thread or the service thread.
+    // A second request while one is queued or in flight is Busy. `cancellation` stops the
+    // measure; its resources are freed only after the submission's fence is proven retired, so
+    // the result of a cancelled measure arrives after that. Shutting the service down ends a
+    // queued or in-flight request (Cancelled) and unblocks the caller. The measure of a fill
+    // tap frees the fill slot when it ends, whatever the result; a Viewer tap stays for the
+    // next measure.
+    [[nodiscard]] GpuScopeTapMeasureOutcome
+    measureScopeTap(const GpuScopeTapKey& key, const GpuScopeMeasureJob& job,
+                    const CancellationToken& cancellation);
+
+    // Frees the tap `key` names (any thread, non-blocking): the picture is released on the
+    // service thread. A pending or in-flight measure of it ends Skipped(TapGone). A fill tap
+    // freed this way lets the next flagged fill frame start.
+    void dropScopeTap(const GpuScopeTapKey& key) noexcept;
 
     // Non-blocking. Closes admission for this service's own tasks, requests cancellation on the
     // tasks it submitted (including ordinary CPU fallback roots), and wakes the service thread.

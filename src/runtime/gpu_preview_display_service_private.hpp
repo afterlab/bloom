@@ -5,6 +5,7 @@
 
 #include "gpu_preview_display_service_presentation_private.hpp"
 #include "gpu_preview_display_service_resident_private.hpp"
+#include "gpu_preview_display_service_scope_private.hpp"
 
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/document/document.hpp>
@@ -98,6 +99,15 @@ struct PreviewDisplayStageRecord final {
     ResidentNativePhase residentPhase = ResidentNativePhase::None;
     // Bounded owner-thread retirement pumps spent while proving an unretired resident submission.
     std::size_t residentRetirePumps = 0;
+
+    // Scope tap (#724). `tapForScopes` is the request's flag (it matters for a fill frame only).
+    // `scopePicture` aliases the scene picture the display consumed, set once the display began and
+    // handed to the tap where the frame publishes; every other end drops it with the phase.
+    // `holdsFillTapSlot` is set while a started flagged fill stage owns the one fill tap slot.
+    bool tapForScopes = false;
+    bool holdsFillTapSlot = false;
+    bool fillWaitCounted = false;
+    std::shared_ptr<const render::GpuImage> scopePicture;
 
     TaskPriority priority = TaskPriority::Background;
     TaskOwner owner;
@@ -392,6 +402,9 @@ struct PreviewDisplayServiceCore final {
     // The device bytes the last completed purge gave back (#544), under `cachePurgeMutex`.
     std::uint64_t cachePurgeReturnedBytes = 0;
 
+    // Scope tap, the measure request and its counters (#724).
+    ScopeTapState scope;
+
     // Service-thread-owned stage bookkeeping.
     std::vector<std::shared_ptr<PreviewDisplayStageRecord>> stages;
     std::deque<std::shared_ptr<PreviewDisplayStageRecord>> nativeReady;
@@ -418,6 +431,10 @@ struct PreviewDisplayServiceCore final {
         nativePollOverride;
     std::function<render::GpuDisplayTransferState(render::GpuDisplayTransfer&)>
         packedTransferPollOverride;
+    // #724 hold seam: while it returns Pending the scope measure's table poll reports pending and
+    // its readback is not taken (the real poll is not called). Empty polls the tables. Set it only
+    // while no measure is queued or in flight. Shutdown ignores it.
+    std::function<render::GpuScopeTablesState(render::GpuScopeTables&)> scopeTablesPollOverride;
     // Private test-only arm immediately before the real final shared payload allocation. Empty
     // in production; an allocator interceptor can inject an actual one-shot allocation fault.
     std::function<void()> testBeforePackedPayloadAllocation;
@@ -546,6 +563,8 @@ struct PreviewStageSubmission final {
     // startup first, so the route and the allowance are decided when this request starts.
     bool queuedBehindStartup = false;
     bool deliveredDefaultAllowance = false;
+    // #724: the request asks for its scene picture to be tapped for the scopes (fill frames).
+    bool tapForScopes = false;
 };
 
 // The resident route's selection gate: a Ready service with a live route and, for the
@@ -722,6 +741,26 @@ struct GpuPreviewDisplayServiceTestAccess final {
     }
     static std::shared_ptr<PreviewDisplayServiceCore>
     coreOf(const GpuPreviewDisplayService& service);
+    // Scope measure probes (#724): a request is queued or in flight; its stepper has begun a
+    // submission; cancellation reached the submission in flight; the slots hold a picture.
+    static bool scopeRequestPending(PreviewDisplayServiceCore& core) {
+        std::lock_guard lock(core.scope.mutex);
+        return core.scope.request != nullptr;
+    }
+    static bool scopeStepperBegan(const PreviewDisplayServiceCore& core) {
+        return core.scope.stepperBegan.load(std::memory_order_acquire);
+    }
+    static bool scopeStopIssued(const PreviewDisplayServiceCore& core) {
+        return core.scope.stopIssued.load(std::memory_order_acquire);
+    }
+    static bool scopeFillTapHeld(PreviewDisplayServiceCore& core) {
+        std::lock_guard lock(core.scope.mutex);
+        return core.scope.fill.has_value();
+    }
+    static bool scopeViewerTapHeld(PreviewDisplayServiceCore& core) {
+        std::lock_guard lock(core.scope.mutex);
+        return core.scope.viewer.has_value();
+    }
 
     // Presentation ownership probes. All read-only and owner-thread-created state; no native object
     // is exposed. `ownershipEpoch` is this exact device generation, `presentationReady` is whether

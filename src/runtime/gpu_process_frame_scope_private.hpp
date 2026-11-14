@@ -16,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -60,6 +61,15 @@ prepareScopeMeasure(ScopeMeasureWork& work, const PreparedGpuScene& scene,
                     const CompiledCompositionPlan& plan, const EvaluationRequest& request,
                     const CancellationToken& cancellation);
 
+// The same preparation for a picture whose geometry is known without its scene: the preview
+// service's scope tap keeps the picture, its windows, the request's region of interest and the
+// composition's size.
+[[nodiscard]] std::optional<ScopeMeasureFault> prepareScopeMeasureForPicture(
+    ScopeMeasureWork& work, const render::ImageWindow& dataWindow,
+    const render::ImageWindow& displayWindow, const std::optional<render::ImageWindow>& roi,
+    std::uint32_t compositionWidth, std::uint32_t compositionHeight,
+    const CancellationToken& cancellation);
+
 // Owner-thread native state of the measure, created on first use and destroyed on the owner.
 class ScopeMeasureStage final {
   public:
@@ -90,5 +100,73 @@ runScopeMeasure(ScopeMeasureStage& stage, ScopeMeasureWork& work,
                 std::shared_ptr<const render::GpuImage> picture, std::uint64_t byteBudget,
                 std::chrono::milliseconds nativeDeadline, const CancellationToken& cancellation,
                 const std::atomic_bool& stopRequested, bool& nativeRetirementProven);
+
+
+// The non-blocking counterpart of runScopeMeasure for the preview service's owner thread (#724).
+// It runs the display color step, the XYZ color step (as the job asks), then the count kernel and
+// its one table readback, one native submission at a time, and never waits on a fence: each call
+// of step() begins at most one submission or polls the one in flight once. The picture is only
+// read; nothing is read back but the tables.
+//
+// Lifetime follows runScopeMeasure: a cancel or a deadline requests cancellation of the submission
+// in flight and the stepper then keeps polling until its fence is proven retired; only then does
+// step() report Settled with retirementProven() true. A submission that was never begun leaves
+// nothing in flight. The stage and the work must outlive the stepper.
+class ScopeMeasureStepper final {
+  public:
+    struct Hooks final {
+        // Whether the next native submission of this measure may begin now. Empty: always.
+        std::function<bool()> mayBegin;
+        // The table poll. Empty: GpuScopeTables::poll. The service's test seam holds the
+        // readback through it.
+        std::function<render::GpuScopeTablesState(render::GpuScopeTables&)> pollTables;
+    };
+    enum class State : std::uint8_t { Running, Settled };
+
+    ScopeMeasureStepper(ScopeMeasureStage& stage, ScopeMeasureWork& work,
+                        std::shared_ptr<const render::GpuImage> picture,
+                        std::uint64_t byteBudget) noexcept;
+
+    // One non-blocking turn. `cancelRequested` and `deadlineExpired` cancel what is in flight (a
+    // deadline reports DeadlineExceeded). Settled once the measure ended (its fault() says how)
+    // and nothing it submitted is still unretired.
+    [[nodiscard]] State step(bool cancelRequested, bool deadlineExpired, const Hooks& hooks) noexcept;
+
+    // The result once Settled: Evaluated with `work.counts` set, or the failure.
+    [[nodiscard]] const ScopeMeasureFault& fault() const noexcept { return fault_; }
+    // True while a native submission of this measure is in flight (the deadline runs over it).
+    [[nodiscard]] bool submissionInFlight() const noexcept {
+        return phase_ == Phase::ColorPoll || phase_ == Phase::TablesPoll || phase_ == Phase::Draining;
+    }
+    // True once cancellation was issued to the submission in flight.
+    [[nodiscard]] bool stopIssued() const noexcept { return stopIssued_; }
+    // True once any native submission was begun.
+    [[nodiscard]] bool began() const noexcept { return began_; }
+    // True when the stepper settled with every submission proven retired.
+    [[nodiscard]] bool retirementProven() const noexcept { return retirementProven_; }
+
+  private:
+    enum class Phase : std::uint8_t { Next, ColorPoll, TablesPoll, Draining, Settled };
+
+    void settle(ScopeMeasureFault fault) noexcept;
+    void failAndDrain(ScopeMeasureFault fault) noexcept;
+    [[nodiscard]] State advance(bool stop, bool cancelRequested, const Hooks& hooks);
+    [[nodiscard]] ScopeMeasureFault stopFault(bool cancelRequested) const;
+
+    ScopeMeasureStage& stage_;
+    ScopeMeasureWork& work_;
+    std::shared_ptr<const render::GpuImage> signal_;
+    std::shared_ptr<const render::GpuImage> xyz_;
+    std::uint64_t byteBudget_ = 0;
+    std::uint64_t dispatchesBefore_ = 0;
+    Phase phase_ = Phase::Next;
+    bool displayDone_ = false;
+    bool xyzDone_ = false;
+    bool colorDispatchCounted_ = false;
+    bool stopIssued_ = false;
+    bool began_ = false;
+    bool retirementProven_ = false;
+    ScopeMeasureFault fault_;
+};
 
 } // namespace bloom::runtime::detail

@@ -88,7 +88,7 @@ void retireResidentRoute(const std::shared_ptr<PreviewDisplayServiceCore>& core)
 residentExecutorPoll(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
 // Takes the executor output and begins the resident display with it.
 [[nodiscard]] bool residentDisplayBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core,
-                                        const PreviewDisplayStageRecord& stage,
+                                        PreviewDisplayStageRecord& stage,
                                         std::string& reason) noexcept;
 [[nodiscard]] render::GpuResidentDisplayPollResult
 residentDisplayPoll(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;

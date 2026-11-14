@@ -95,6 +95,10 @@ pickResidentReadyStage(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
             best = it;
             break;
         }
+        // #724: a flagged fill frame does not start its scene work while the one fill tap slot
+        // holds a picture (or another flagged fill frame will put one there).
+        if (scopeFillStageHeldBack(core, **it))
+            continue;
         if (best == core->residentNativeReady.end() ||
             static_cast<int>((*it)->priority) < static_cast<int>((*best)->priority)) {
             best = it;
@@ -158,6 +162,10 @@ void releaseProcessingPhase(const std::shared_ptr<PreviewDisplayServiceCore>& co
     // Dispose the prepared scene before terminal publication or admitting a fallback. A sticky
     // generation slot independently keeps the conservative lease charged through native teardown.
     stage->gpuStage.reset();
+    // #724: a picture the tap did not take goes with the phase (a failed or cancelled frame keeps
+    // nothing, and a flagged fill stage that ends here frees the fill slot it held).
+    stage->scopePicture.reset();
+    stage->holdsFillTapSlot = false;
 }
 
 // #539: whether device room a frame was short of can come back without the frame changing: the
@@ -436,6 +444,7 @@ void advanceResidentAhead(const std::shared_ptr<PreviewDisplayServiceCore>& core
         next->nativeDispatched = true;
         next->nativeStartedAt = nativeNow(core);
         next->residentPhase = ResidentNativePhase::Executor;
+        next->holdsFillTapSlot = next->tapForScopes && !scopeViewerClass(next->priority);
         core->residentAhead = std::move(next);
         core->counterScenesAhead.fetch_add(1, std::memory_order_relaxed);
     }
@@ -497,6 +506,7 @@ void startResidentPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>&
     stage->pixelStorageByteLimit = submission.pixelStorageByteLimit;
     stage->gpuByteAllowance = submission.gpuByteAllowance;
     stage->resident = true;
+    stage->tapForScopes = submission.tapForScopes;
     // Retained so a GPU-subset refusal or a resident native failure can take the full original CPU
     // path without re-asking the caller, using the same snapshot/identity/overrides.
     stage->snapshot = submission.snapshot;
@@ -826,6 +836,7 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
         stage->nativeDispatched = true;
         stage->nativeStartedAt = nativeNow(core);
         stage->residentPhase = ResidentNativePhase::Executor;
+        stage->holdsFillTapSlot = stage->tapForScopes && !scopeViewerClass(stage->priority);
         core->residentNativeActive = stage;
         core->residentNativeInFlight = true;
         return;
@@ -980,6 +991,7 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
                     auto prepared = PreviewPreparationResult::prepared(
                         std::make_shared<const PreparedPreviewFrame>(std::move(*frame)));
                     if (prepared.has_value()) {
+                        keepScopeTap(core, *stage);
                         releaseProcessingPhase(core, stage, true);
                         if (stage->completion.isValid()) {
                             static_cast<void>(
@@ -1071,6 +1083,7 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
                             publishResidentJobDetail(core,
                                                      "GPU packed host ownership promotion refused");
                         } else {
+                            keepScopeTap(core, *stage);
                             releaseProcessingPhase(core, stage, true);
                             static_cast<void>(
                                 std::move(stage->completion).succeed(std::move(payload)));

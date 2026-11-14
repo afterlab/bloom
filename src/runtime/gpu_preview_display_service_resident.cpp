@@ -210,6 +210,8 @@ void retireResidentRoute(const std::shared_ptr<PreviewDisplayServiceCore>& core)
 }
 
 void retireNativeOnOwner(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
+    // The scope measure and the tap pictures go before anything they read or were computed on.
+    retireScopeNative(core);
     core->nativeReady.clear();
     core->nativeActive.reset();
     core->nativeInFlight = false;
@@ -470,7 +472,7 @@ residentExecutorPoll(const std::shared_ptr<PreviewDisplayServiceCore>& core) noe
 }
 
 bool residentDisplayBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core,
-                          const PreviewDisplayStageRecord& stage, std::string& reason) noexcept {
+                          PreviewDisplayStageRecord& stage, std::string& reason) noexcept {
     if (core->residentExecutor == nullptr) {
         reason = "the resident scene executor is unavailable";
         return false;
@@ -482,6 +484,10 @@ bool residentDisplayBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core
     }
     const std::uint64_t budget =
         stage.gpuByteAllowance != 0 ? stage.gpuByteAllowance : core->previewByteAllowance();
+    // #724: a weak alias, so a refused begin still finds its attempt's image unique and retires it
+    // as before. Once the display owns the picture, the scope tap aliases it.
+    const std::weak_ptr<const render::GpuImage> scopeAlias = input;
+    const bool tapWanted = scopeTapWanted(stage);
 
     // General display: run the exact OCIO DisplayRgba8 program through the owned display arm. The
     // arm reuses the producer's bounded native-program cache, so an unchanged display/view is a
@@ -514,6 +520,8 @@ bool residentDisplayBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core
                                                 : diagnostic.message;
             return false;
         }
+        if (tapWanted)
+            stage.scopePicture = scopeAlias.lock();
         return true;
     }
 
@@ -529,6 +537,8 @@ bool residentDisplayBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core
                                             : diagnostic.message;
         return false;
     }
+    if (tapWanted)
+        stage.scopePicture = scopeAlias.lock();
     return true;
 }
 
