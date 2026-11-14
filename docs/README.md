@@ -13,7 +13,9 @@ provide research or rationale, but they are not binding until adopted here.
    and non-goals.
 2. [`product/quality-bar.md`](product/quality-bar.md) — professional artist experience, reliability,
    responsiveness, and VFX expectations; [`product/node-catalogue.md`](product/node-catalogue.md) —
-   planned artist-facing node families and delivery levels.
+   shipped and planned artist-facing nodes by family, with delivery levels, and
+   [`product/node-catalogue-reconciliation.md`](product/node-catalogue-reconciliation.md) — how the
+   historical research names map onto them.
 3. [`standards/strategy.md`](standards/strategy.md) — standards-first pipeline and interoperability
    policy.
 4. [`ux/compositing-workspace.md`](ux/compositing-workspace.md) — the UI sketch as an interaction
