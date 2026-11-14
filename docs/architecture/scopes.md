@@ -55,9 +55,23 @@ not a number, is `under`; above 1023 is `over`.
 | Table | Cells | Where a pixel goes |
 |---|---|---|
 | Histogram | 4 channels (red, green, blue, luma) of 1024 bins, under and over | Bin `c` of each channel |
-| Waveform (and Parade) | 4 channels of `columns` columns of 512 levels, under and over; `columns = min(512, W)` for a measured width `W` | Column `floor(x * columns / W)`, level `c >> 1` |
-| Vectorscope | 512 by 512 | `cb = (b - y) / (2 (1 - Kb))`, `cr = (r - y) / (2 (1 - Kr))`; cell `(floor((cb + 0.5) * 512), floor((cr + 0.5) * 512))`; outside 0..511 adds 1 to `vectorscopeOutside` |
-| CIE chromaticity | 512 by 512 | `(X, Y, Z)` is the signal converted to CIE XYZ with a D65 white; `s = (X + Y) + Z`; not finite or `s <= 0` adds 1 to `noChromaticity`; otherwise `x = X / s`, `y = Y / s`, cell `(floor(x / 0.8 * 512), floor(y / 0.9 * 512))`; outside 0..511 adds 1 to `chromaticityOutside` |
+| Waveform (and Parade) | 4 channels of `columns` columns of `512 >> d` levels, under and over; `columns = min(512 >> d, W)` for a measured width `W` | Column `floor(x * columns / W)`, level `(c >> 1) >> d` |
+| Vectorscope | `512 >> d` by `512 >> d` | `cb = (b - y) / (2 (1 - Kb))`, `cr = (r - y) / (2 (1 - Kr))`; full cell `(floor((cb + 0.5) * 512), floor((cr + 0.5) * 512))`; outside 0..511 adds 1 to `vectorscopeOutside`, otherwise the pixel adds to the full cell shifted right by `d` on each axis |
+| CIE chromaticity | `512 >> d` by `512 >> d` | `(X, Y, Z)` is the signal converted to CIE XYZ with a D65 white; `s = (X + Y) + Z`; not finite or `s <= 0` adds 1 to `noChromaticity`; otherwise `x = X / s`, `y = Y / s`, full cell `(floor(x / 0.8 * 512), floor(y / 0.9 * 512))`; outside 0..511 adds 1 to `chromaticityOutside`, otherwise the pixel adds to the full cell shifted right by `d` on each axis |
+
+`d` is the measure's detail, 0, 1 or 2 (`ScopeMeasureSettings::detail`, `render::kScopeMaxDetail`);
+0 is full detail and every statement above is for it. A pixel's cell on an axis is always decided at
+full detail (0..511, or outside) and then shifted right by `d`, so "outside" never depends on the
+detail. At detail `d`, the Vectorscope and CIE tables equal the full tables with each `2^d x 2^d`
+block of cells summed, and each Waveform column's levels equal sums of `2^d` adjacent full-detail
+levels (of a Waveform measured with the same number of columns; the column count is
+`min(512 >> d, W)`, so a detail of 1 or 2 has at most 256 or 128 columns). The eight counters and
+the Histogram (1024 bins, under and over) are the same at every detail, so the percentiles, means
+and clip counts of a summary come from the same numbers; a summary's Vectorscope mean saturation
+and hue are taken from the centers of the detail's cells, which moves a pixel by at most half a
+cell: the saturation differs from full detail's by at most `sqrt(2) * 2^d / 512` (as a fraction of
+the graticule circle's radius). The live panel measures at detail 0; MCP and Python reads always
+measure at detail 0 and take no detail argument.
 
 The Parade draws the Waveform table's red, green and blue channels side by side; it has no table
 of its own. The two Vectorscope denominators are rounded once to binary32 on the host, so both
@@ -159,8 +173,38 @@ only this: the count tables of one scope measure, read back once per measure.
 
 - What is read back is at most 1,581,072 unsigned 32-bit words (8 counters, the Histogram's 4,104,
   the Waveform's 1,052,672 at 512 columns, and 262,144 each for the Vectorscope and the CIE table):
-  6,324,288 bytes, whatever the size of the picture. A measure that asks for fewer scopes reads
-  back fewer.
+  6,324,288 bytes, whatever the size of the picture. This is the contract entry's bound, the
+  full-detail worst case. A measure that asks for fewer scopes reads back fewer, and a measure at
+  detail 1 or 2 counts into smaller tables on the device and reads back the smaller tables (the
+  table buffer, its staging copy and the host copy are sized from the detail's layout, and the
+  request's budget is the detail's, not the full tables'). Only the tables asked for are
+  allocated, counted and read back; a measure without the CIE table runs no XYZ color program and
+  binds no XYZ picture. `ScopeFrameMeasure::tableReadbackBytes` reports the bytes a measure read
+  back (the layout's bytes; 0 for the CPU reference).
+
+Bytes read back by one measure, on a picture at least 512 wide (the Waveform has `min(512 >> d, W)`
+columns, so a narrower picture reads back less; the counters are 32 bytes):
+
+| Tables asked for | Detail 0 | Detail 1 | Detail 2 |
+|---|---:|---:|---:|
+| Histogram | 16,448 | 16,448 | 16,448 |
+| Waveform | 4,210,720 | 1,056,800 | 266,272 |
+| Vectorscope or CIE | 1,048,608 | 262,176 | 65,568 |
+| All four | 6,324,288 | 1,597,504 | 413,760 |
+
+Passes of one measure:
+
+| Pass | Histogram alone | Every scope |
+|---|---|---|
+| The frame's scene | 1 | 1 |
+| The display color program (the Display signal only) | 1 | 1 |
+| The XYZ color program (only with the CIE table) | 0 | 1 |
+| The count kernel's pixel pass | 1 | 1 |
+| The count kernel's column pass (only with the Waveform) | 0 | 1 |
+| Table readback | 1 | 1 |
+
+The Working signal runs no display color program. The passes do not depend on the detail; the
+detail changes only the bytes of the one table readback and the table memory.
 - The picture is never read back, and no per-node or per-operation full-frame roundtrip exists.
   The scene, both color steps and the counting are device work; the measure reports its picture
   readbacks, which are always zero, and the test asserts it.
@@ -193,7 +237,7 @@ that counted and, for a frame the device could not count, the reason.
 
 - The sidecar's identity is the frame's `PreviewFrameCacheKey` plus `PreviewScopeIdentity`: the
   measure settings (which scopes, the signal and its axis maximum, the region, Ignore Transparent
-  Pixels) and the Viewer's exposure and gamma. A frame has at most one sidecar.
+  Pixels and the detail) and the Viewer's exposure and gamma. A frame has at most one sidecar.
 - A scope setting replaces the sidecar and leaves the frame's entry alone. An edit of the document
   gives the frame another cache key, so the frame and its sidecar are both new. A sidecar leaves
   the cache with its frame.
@@ -202,7 +246,8 @@ that counted and, for a frame the device could not count, the reason.
   width that holds their largest count (`ScopeTables`). A sidecar that does not fit is not kept.
 - A cached frame without a matching sidecar is measured again from the frame's own plan and
   request through `measureScopeFrame`, never from the packed 8-bit picture, and gives the tables a
-  cold frame gives.
+  cold frame gives. A sidecar of another detail is another identity: MCP and Python reads measure
+  at detail 0 and are never served a sidecar of another detail.
 
 The sidecar is measured by a cancellable task of its own after the frame is shown or retained,
 not inside the frame's preparation: a frame is never delayed by its scopes, and a hidden panel
@@ -253,17 +298,17 @@ other stages' are. The measure holds no state between frames.
 
 | Test | What it proves |
 |---|---|
-| `bloom.runtime.scope_measure` | The CPU reference: known answers for every table, the counters, areas, columns, the axis maximum, the packed form, the summary and the measured area |
-| `bloom.render.gpu_scope_tables` | The kernel on a real device: every count against a host count of the same pictures, and its refusals (no XYZ picture, a budget below the tables) |
-| `bloom.runtime.scope_measure_gpu_parity` | CPU and device tables equal for the same float pictures, cell edges included |
-| `bloom.runtime.scope_picture` | The Qt-free picture: the plan's facts for each scope (Waveform codes, Vectorscope ticks, targets and skin line, CIE grid, labels, triangle and printed lines, Parade panes, Histogram rows and clip markers), trace pixels equal to the mapping over the canvas, the visible floor, Histogram heights, the picture of all five, PNG bytes decoded back, and the cancelled, byte-limit and size refusals |
-| `bloom.ui.scopes-picture` | The panel and the picture agree: palette and metrics equal the interface tokens, an offscreen grab and the picture agree on the trace rectangle of each scope, and the plan's hairlines are where the grab has graticule pixels |
+| `bloom.runtime.scope_measure` | The CPU reference: known answers for every table, the counters, areas, columns, the axis maximum, the packed form, the summary and the measured area; at detail 1 and 2 the Vectorscope, CIE and Waveform tables equal the full tables pooled, the counters and the Histogram are equal, the layout's exact byte counts, and detail 3 is refused |
+| `bloom.render.gpu_scope_tables` | The kernel on a real device at every detail: every count against a host count of the same pictures, the bytes read back equal to the layout's, and its refusals (no XYZ picture, a detail above 2, a budget below the detail's tables, a budget that fits a detail but not full detail) |
+| `bloom.runtime.scope_measure_gpu_parity` | CPU and device tables equal for the same float pictures at every detail, cell edges included |
+| `bloom.runtime.scope_picture` | The Qt-free picture: a picture from detail-1 and detail-2 tables has the size and graticule of full detail's and a trace over the same region, the plan's facts for each scope (Waveform codes, Vectorscope ticks, targets and skin line, CIE grid, labels, triangle and printed lines, Parade panes, Histogram rows and clip markers), trace pixels equal to the mapping over the canvas, the visible floor, Histogram heights, the picture of all five, PNG bytes decoded back, and the cancelled, byte-limit and size refusals |
+| `bloom.ui.scopes-picture` | The panel and the picture agree (hover readouts at detail 1 report the detail cell's count): palette and metrics equal the interface tokens, an offscreen grab and the picture agree on the trace rectangle of each scope, and the plan's hairlines are where the grab has graticule pixels |
 | `bloom.color.scope-colorimetry` | The XYZ transform, the luma coefficients and the primaries of the built-in configs |
-| `bloom.runtime.scope_frame_measure_native` | A frame through the production device route against the CPU reference: exact for the Working signal, within one cell through the OCIO steps, one table readback and no picture readback, the route named |
+| `bloom.runtime.scope_frame_measure_native` | A frame through the production device route against the CPU reference: exact for the Working signal, within one cell through the OCIO steps, one table readback and no picture readback, the route named; a measure at detail 1 reads back the layout's bytes, and a Histogram-only measure its 16,448 bytes and runs no XYZ program |
 | `bloom.scripting.scope-read` | The headless read: tables equal the CPU reference cell for cell for both signals, counters, luma and primaries, sums, sparse equal to dense, the summary, pictures, a range with progress and a deterministic cancel, the warm-sidecar port, region, transparency, resolution, display and view, and every refusal with its remedy |
 | `bloom.mcp.scope-query` | `query` kind `scopes` on the shared core: the tables equal the read's, sparse, summary, image and range answers, and the refusals |
 | `bloom.scripting.python-scopes` | `bloom.scopes.read` and `image` from Python: a flat color's tables, sparse equal to dense, summary, range and time, written and replaced files, argument errors |
-| `bloom.ui.scopes-mcp-warm` | The MCP read against a real preview and cache: a sidecar under the read's own settings is answered from the cache with no measure; every setting, region, isolation, look or composition that differs is measured |
+| `bloom.ui.scopes-mcp-warm` | The MCP read against a real preview and cache: a sidecar under the read's own settings is answered from the cache with no measure; every setting (a sidecar of another detail included), region, isolation, look or composition that differs is measured |
 | `bloom.scripting.scope-read-native` | The headless read on a real device: route Gpu, Working tables equal the CPU reference, CIE and Display tables within one cell; a disabled provider reads with the CPU reference and says why |
 | `bloom.color.scope-colorimetry-external` | The XYZ transform of an external config through the helper process equals the built-in's; spaces with no XYZ interchange are refused with their reason |
 | `bloom.ui.scopes-region` | Includes a project saved with a scope region equal, byte for byte, to one saved without |
