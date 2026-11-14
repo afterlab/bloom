@@ -396,6 +396,67 @@ int main(int argc, char** argv) {
                                 "finished frames are untouched by the source working set");
         }
 
+        // #724 Scopes: a sidecar's identity names the picture it counted. A Retained sidecar never
+        // answers a Rendered lookup and the reverse; the entry keeps one sidecar at a time.
+        {
+            PreviewFrameCache scopeCache(kBudget);
+            expectations.expect(scopeCache.insert(frameA1).retained(),
+                                "scope identity: the frame is cached");
+            bloom::ui::PreviewScopeIdentity rendered;
+            bloom::ui::PreviewScopeIdentity retained;
+            retained.source = runtime::ScopeSource::Retained;
+            expectations.expect(rendered.source == runtime::ScopeSource::Rendered &&
+                                    !(rendered == retained),
+                                "scope identity: Rendered is the default and differs from Retained");
+            auto renderedSidecar = std::make_shared<bloom::ui::PreviewScopeSidecar>();
+            renderedSidecar->identity = rendered;
+            auto retainedSidecar = std::make_shared<bloom::ui::PreviewScopeSidecar>();
+            retainedSidecar->identity = retained;
+            expectations.expect(scopeCache.attachScopes(keyA, renderedSidecar),
+                                "scope identity: a Rendered sidecar attaches");
+            expectations.expect(scopeCache.scopesFor(keyA, rendered) == renderedSidecar &&
+                                    scopeCache.scopesFor(keyA, retained) == nullptr,
+                                "scope identity: a Rendered sidecar never satisfies a Retained "
+                                "lookup");
+            expectations.expect(scopeCache.attachScopes(keyA, retainedSidecar),
+                                "scope identity: a Retained sidecar attaches");
+            expectations.expect(scopeCache.scopesFor(keyA, retained) == retainedSidecar &&
+                                    scopeCache.scopesFor(keyA, rendered) == nullptr,
+                                "scope identity: a Retained sidecar never satisfies a Rendered "
+                                "lookup");
+        }
+
+        // #724 Scopes: peekScopeFrame hands a measure the retained frame and its source without
+        // counting a hit or a miss and without moving the entry in the eviction order.
+        {
+            auto planC = oneSolidPlan(document::ProjectId::fromRaw(998));
+            auto frameC = cpuFrame(planC, 1);
+            expectations.expect(frameC != nullptr, "peek: the third frame is built");
+            if (frameC != nullptr) {
+                const auto keyB = PreviewFrameCacheKey::forIdentity(frameB->desiredIdentity());
+                // Room for two frames, not three.
+                PreviewFrameCache peekCache(costA * 2 + costA / 2);
+                expectations.expect(peekCache.insert(frameA1).retained() &&
+                                        peekCache.insert(frameB).retained(),
+                                    "peek: two frames are cached, the older one is A");
+                const auto before = peekCache.statistics();
+                const auto peeked = peekCache.peekScopeFrame(keyA);
+                expectations.expect(peeked && peeked->frame != nullptr &&
+                                        peeked->frame->displayBufferView().has_value() &&
+                                        peeked->source.identity == frameA1->desiredIdentity(),
+                                    "peek: the handle and the source of the entry");
+                expectations.expect(!peekCache.peekScopeFrame(
+                                        PreviewFrameCacheKey::forIdentity(frameC->desiredIdentity())),
+                                    "peek: no entry, nothing");
+                const auto after = peekCache.statistics();
+                expectations.expect(after.hits == before.hits && after.misses == before.misses,
+                                    "peek: no hit or miss is counted");
+                expectations.expect(peekCache.insert(frameC).retained() &&
+                                        !peekCache.contains(keyA) && peekCache.contains(keyB),
+                                    "peek: the peeked entry is still the oldest and is evicted");
+            }
+        }
+
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " cache CPU edge expectation(s) failed\n";
             return 1;

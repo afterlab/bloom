@@ -80,9 +80,14 @@ using PreparedPreviewFrameHandle = std::shared_ptr<const runtime::PreparedPrevie
 // #724 Scopes: what a scope measure of a frame depends on besides the frame's own key. The
 // Viewer's exposure and gamma are here because a cached frame is always the neutral one: the
 // adjusted picture the Viewer shows is derived from it and never cached.
+//
+// `source` names the picture the tables count: a Rendered sidecar (float picture of the evaluator
+// or the device) never answers a lookup for a Retained one (the 8-bit retained display picture)
+// and the reverse.
 struct PreviewScopeIdentity final {
     runtime::ScopeMeasureSettings settings;
     runtime::ViewAdjust viewAdjust{};
+    runtime::ScopeSource source = runtime::ScopeSource::Rendered;
 
     friend bool operator==(const PreviewScopeIdentity&, const PreviewScopeIdentity&) = default;
 };
@@ -111,6 +116,13 @@ struct PreviewScopeSource final {
     runtime::PreviewRequestIdentity identity;
     runtime::ProcessFrameIdentity process;
     runtime::PreviewDisplayProvider provider = runtime::PreviewDisplayProvider::CpuReference;
+};
+
+// A retained frame as a scope measure reads it: its handle (with the generation of the request it
+// answered) and what measuring it again needs.
+struct PreviewScopeFrame final {
+    PreparedPreviewFrameHandle frame;
+    PreviewScopeSource source;
 };
 
 // The RAM preview cache: prepared preview frames held in memory under a byte budget, so that
@@ -263,6 +275,9 @@ class PreviewFrameCache final : public QObject {
     // The request, plan and route of `key`'s live entry; nothing when there is none.
     [[nodiscard]] std::optional<PreviewScopeSource>
     scopeSourceFor(const PreviewFrameCacheKey& key) const;
+    // The live entry of `key` as a scope measure reads it, without counting a hit or a miss, without
+    // moving it in the eviction order and without dropping a dead entry; nothing when there is none.
+    [[nodiscard]] std::optional<PreviewScopeFrame> peekScopeFrame(const PreviewFrameCacheKey& key) const;
     // Host bytes the sidecars hold now; part of hostBytes().
     [[nodiscard]] std::size_t scopeSidecarBytes() const noexcept { return scopeBytes_; }
     // Cached times for exactly this project/composition/revision/resolution/display policy.

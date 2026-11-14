@@ -548,6 +548,26 @@ PreviewFrameCache::scopeSourceFor(const PreviewFrameCacheKey& key) const {
                               entry.frame->provenance().provider};
 }
 
+std::optional<PreviewScopeFrame>
+PreviewFrameCache::peekScopeFrame(const PreviewFrameCacheKey& key) const {
+    const auto source = scopeSourceFor(key);
+    if (!source)
+        return std::nullopt;
+    const Entry& entry = *exactIndex_.find(key)->second;
+    PreparedPreviewFrameHandle frame;
+    if (entry.resident != nullptr) {
+        auto rebuilt = runtime::PreparedPreviewFrame::createResident(
+            entry.resident->desiredIdentity().requestGeneration, entry.resident);
+        if (rebuilt.has_value())
+            frame = std::make_shared<const runtime::PreparedPreviewFrame>(std::move(*rebuilt));
+    } else {
+        frame = restamp(entry.frame, entry.frame->desiredIdentity().requestGeneration);
+    }
+    if (frame == nullptr)
+        return std::nullopt;
+    return PreviewScopeFrame{std::move(frame), *source};
+}
+
 std::vector<core::RationalTime>
 PreviewFrameCache::timesFor(const PreviewFrameCacheKey& probe) const {
     const auto lastTime = core::RationalTime::fromInteger(std::numeric_limits<std::int64_t>::max());
