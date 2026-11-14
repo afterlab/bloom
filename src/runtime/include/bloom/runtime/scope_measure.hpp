@@ -21,15 +21,21 @@
 //            `under`, above 1023 is `over`. M, the axis maximum, is a power of two.
 //      Histogram    channel k of (r, g, b, y): bin c(v_k), or its under / over.
 //      Waveform     column floor(x * columns / W) for the pixel's x in the measured area of
-//                   width W, columns = min(512, W); level c(v_k) >> 1, or the column's under /
-//                   over.
+//                   width W, columns = min(512 >> d, W); level (c(v_k) >> 1) >> d, or the
+//                   column's under / over.
 //      Vectorscope  cb = (b - y) / (2 (1 - Kb)), cr = (r - y) / (2 (1 - Kr));
-//                   cell (floor((cb + 0.5) * 512), floor((cr + 0.5) * 512)); a cell outside
-//                   0..511 adds 1 to `vectorscopeOutside`.
+//                   full cell (floor((cb + 0.5) * 512), floor((cr + 0.5) * 512)); a cell
+//                   outside 0..511 adds 1 to `vectorscopeOutside`; otherwise the pixel adds to
+//                   the full cell shifted right by d on each axis.
 //      Chromaticity (X, Y, Z) is the pixel of the XYZ picture; s = (X + Y) + Z. Any of them not
 //                   finite, or s <= 0: 1 to `noChromaticity`. Otherwise x = X / s, y = Y / s;
-//                   cell (floor(x / 0.8 * 512), floor(y / 0.9 * 512)) with 0.8 and 0.9 the
-//                   nearest binary32; a cell outside 0..511 adds 1 to `chromaticityOutside`.
+//                   full cell (floor(x / 0.8 * 512), floor(y / 0.9 * 512)) with 0.8 and 0.9
+//                   the nearest binary32; a cell outside 0..511 adds 1 to `chromaticityOutside`;
+//                   otherwise the pixel adds to the full cell shifted right by d on each axis.
+// d is the measure's detail (0 full, 1, 2). At detail d the Vectorscope and Chromaticity tables
+// equal the full ones with each 2^d x 2^d block of cells summed, and a Waveform column's levels
+// equal sums of 2^d adjacent full-detail levels (of a measure with the same columns); the
+// Histogram and the counters are the same at every detail.
 
 #include <bloom/render/image_types.hpp>
 #include <bloom/render/scope_table_layout.hpp>
@@ -73,6 +79,10 @@ struct ScopeMeasureSettings final {
     std::uint32_t axisMaximum = 1; // M: 1 for Display; 1, 2, 4, 8 or 16 for Working
     std::optional<ScopeRegion> region;
     bool ignoreTransparent = false;
+    // 0 is full detail; 1 and 2 count the Vectorscope, CIE and Waveform tables into 2x and 4x
+    // coarser cells (render/scope_table_layout.hpp), which a device measure reads back in a
+    // quarter and a sixteenth of the bytes. The Histogram and the counters do not change.
+    std::uint32_t detail = 0;
 
     friend bool operator==(const ScopeMeasureSettings&, const ScopeMeasureSettings&) = default;
 };
@@ -110,6 +120,7 @@ struct ScopeMeasureInput final {
     std::uint32_t axisMaximum = 1;
     ScopeLuma luma;
     bool ignoreTransparent = false;
+    std::uint32_t detail = 0; // 0, 1 or 2 (render::kScopeMaxDetail); a larger one gives nothing
 };
 
 // The count tables of one measure, as unsigned 32-bit words in the layout of
@@ -125,7 +136,8 @@ struct ScopeCounts final {
     [[nodiscard]] std::uint32_t vectorscopeOutside() const noexcept;
     // `index` is a code 0..1023, render::kScopeCodeUnder or render::kScopeCodeOver.
     [[nodiscard]] std::uint32_t histogram(std::uint32_t channel, std::uint32_t index) const noexcept;
-    // `level` is 0..511, render::kScopeWaveformLevelUnder or render::kScopeWaveformLevelOver.
+    // `level` is 0..layout.waveformLevels() - 1, layout.waveformLevelUnder() or
+    // layout.waveformLevelOver() (512 levels, 512 and 513 at full detail).
     [[nodiscard]] std::uint32_t waveform(std::uint32_t channel, std::uint32_t column,
                                          std::uint32_t level) const noexcept;
     [[nodiscard]] std::uint32_t vectorscope(std::uint32_t cbCell,
@@ -218,8 +230,9 @@ class ScopeTables final {
 };
 
 // The summary a scope read can ask for instead of tables, computed from the Histogram and the
-// Vectorscope tables (a value is 0 and `available` false when its table was not measured or
-// counted nothing).
+// Vectorscope tables (at a coarser detail the mean saturation and hue are from the centers of the
+// detail's cells: within sqrt(2) * 2^d / 512 of full detail's saturation) (a value is 0 and
+// `available` false when its table was not measured or counted nothing).
 struct ScopeChannelSummary final {
     bool available = false;
     // Code values (0..1023) of the counts inside the axis: the lowest and highest bin that holds a

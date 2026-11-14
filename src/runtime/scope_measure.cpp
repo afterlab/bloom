@@ -43,8 +43,12 @@ constexpr std::size_t kNone = std::numeric_limits<std::size_t>::max();
     return static_cast<std::uint32_t>(whole);
 }
 
-[[nodiscard]] std::uint32_t scopeLevel(const std::uint32_t code) noexcept {
-    return code < 1024U ? code >> 1U : code - 512U;
+// The word of a code in a Waveform column at `layout`'s detail: its level (code >> 1) >> detail,
+// or the under word (levels) or the over word (levels + 1).
+[[nodiscard]] std::uint32_t scopeLevel(const std::uint32_t code,
+                                       const ScopeTableLayout& layout) noexcept {
+    return code < 1024U ? (code >> 1U) >> layout.detail
+                        : code - render::kScopeCodeUnder + layout.waveformLevels();
 }
 
 // The word index of a cell, or kNone when the table is absent or the cell is out of range.
@@ -63,22 +67,22 @@ constexpr std::size_t kNone = std::numeric_limits<std::size_t>::max();
                                         const std::uint32_t column,
                                         const std::uint32_t level) noexcept {
     if (!layout.has(render::kScopeTableWaveform) || channel >= render::kScopeChannels ||
-        column >= layout.columns || level >= render::kScopeWaveformColumnWords) {
+        column >= layout.columns || level >= layout.waveformColumnWords()) {
         return kNone;
     }
     return static_cast<std::size_t>(layout.waveformOffset) +
            static_cast<std::size_t>(channel) * layout.waveformChannelWords() +
-           static_cast<std::size_t>(column) * render::kScopeWaveformColumnWords + level;
+           static_cast<std::size_t>(column) * layout.waveformColumnWords() + level;
 }
 
 [[nodiscard]] std::size_t gridIndex(const ScopeTableLayout& layout, const std::uint32_t scope,
                                     const std::uint32_t offset, const std::uint32_t xCell,
                                     const std::uint32_t yCell) noexcept {
-    if (!layout.has(scope) || xCell >= render::kScopeCells || yCell >= render::kScopeCells) {
+    if (!layout.has(scope) || xCell >= layout.cells() || yCell >= layout.cells()) {
         return kNone;
     }
-    return static_cast<std::size_t>(offset) +
-           static_cast<std::size_t>(yCell) * render::kScopeCells + xCell;
+    return static_cast<std::size_t>(offset) + static_cast<std::size_t>(yCell) * layout.cells() +
+           xCell;
 }
 
 [[nodiscard]] std::uint32_t wordAt(const std::vector<std::uint32_t>& words,
@@ -146,7 +150,7 @@ std::uint32_t ScopeCounts::chromaticity(const std::uint32_t xCell,
 std::optional<ScopeCounts> measureScopesCpu(const ScopeMeasureInput& input,
                                             const std::function<bool()>& cancelled) {
     if (input.areaWidth == 0U || input.areaHeight == 0U ||
-        !validScopeAxisMaximum(input.axisMaximum)) {
+        !validScopeAxisMaximum(input.axisMaximum) || !render::validScopeDetail(input.detail)) {
         return std::nullopt;
     }
     const std::uint64_t areaPixels = static_cast<std::uint64_t>(input.areaWidth) * input.areaHeight;
@@ -164,7 +168,7 @@ std::optional<ScopeCounts> measureScopesCpu(const ScopeMeasureInput& input,
     }
 
     ScopeCounts counts;
-    counts.layout = render::scopeTableLayout(scopes, input.areaWidth);
+    counts.layout = render::scopeTableLayout(scopes, input.areaWidth, input.detail);
     counts.words.assign(counts.layout.wordCount, 0U);
     const ScopeTableLayout& layout = counts.layout;
     std::vector<std::uint32_t>& words = counts.words;
@@ -218,7 +222,8 @@ std::optional<ScopeCounts> measureScopesCpu(const ScopeMeasureInput& input,
                 const std::uint32_t column = static_cast<std::uint32_t>(
                     static_cast<std::uint64_t>(x) * layout.columns / input.areaWidth);
                 for (std::uint32_t channel = 0; channel < render::kScopeChannels; ++channel) {
-                    ++words[waveformIndex(layout, channel, column, scopeLevel(codes[channel]))];
+                    ++words[waveformIndex(layout, channel, column,
+                                          scopeLevel(codes[channel], layout))];
                 }
             }
             if (layout.has(render::kScopeTableVectorscope)) {
@@ -234,7 +239,8 @@ std::optional<ScopeCounts> measureScopesCpu(const ScopeMeasureInput& input,
                     ++words[render::kScopeCounterVectorscopeOutside];
                 } else {
                     ++words[gridIndex(layout, render::kScopeTableVectorscope,
-                                      layout.vectorscopeOffset, column, row)];
+                                      layout.vectorscopeOffset, column >> layout.detail,
+                                      row >> layout.detail)];
                 }
             }
             if (wantChromaticity) {
@@ -256,7 +262,8 @@ std::optional<ScopeCounts> measureScopesCpu(const ScopeMeasureInput& input,
                         ++words[render::kScopeCounterChromaticityOutside];
                     } else {
                         ++words[gridIndex(layout, render::kScopeTableChromaticity,
-                                          layout.chromaticityOffset, column, row)];
+                                          layout.chromaticityOffset, column >> layout.detail,
+                                          row >> layout.detail)];
                     }
                 }
             }
@@ -314,16 +321,13 @@ ScopeTables ScopeTables::pack(const ScopeCounts& counts, const ScopeRoute route)
                       render::kScopeHistogramChannelWords);
     }
     if (layout.has(render::kScopeTableWaveform)) {
-        packTable(tables.waveform_, layout.waveformOffset,
-                  static_cast<std::size_t>(render::kScopeChannels) * layout.waveformChannelWords());
+        packTable(tables.waveform_, layout.waveformOffset, layout.waveformWords());
     }
     if (layout.has(render::kScopeTableVectorscope)) {
-        packTable(tables.vectorscope_, layout.vectorscopeOffset,
-                  static_cast<std::size_t>(render::kScopeCells) * render::kScopeCells);
+        packTable(tables.vectorscope_, layout.vectorscopeOffset, layout.gridWords());
     }
     if (layout.has(render::kScopeTableChromaticity)) {
-        packTable(tables.chromaticity_, layout.chromaticityOffset,
-                  static_cast<std::size_t>(render::kScopeCells) * render::kScopeCells);
+        packTable(tables.chromaticity_, layout.chromaticityOffset, layout.gridWords());
     }
     return tables;
 }
@@ -518,14 +522,16 @@ ScopeSummary summarizeScopes(const ScopeCounts& counts) {
     double sumCb = 0.0;
     double sumCr = 0.0;
     double sumDistance = 0.0;
-    for (std::uint32_t row = 0; row < render::kScopeCells; ++row) {
-        const double cr = (static_cast<double>(row) + 0.5) / 512.0 - 0.5;
-        for (std::uint32_t column = 0; column < render::kScopeCells; ++column) {
+    const std::uint32_t cells = counts.layout.cells();
+    const double cellCount = static_cast<double>(cells);
+    for (std::uint32_t row = 0; row < cells; ++row) {
+        const double cr = (static_cast<double>(row) + 0.5) / cellCount - 0.5;
+        for (std::uint32_t column = 0; column < cells; ++column) {
             const std::uint32_t count = counts.vectorscope(column, row);
             if (count == 0U) {
                 continue;
             }
-            const double cb = (static_cast<double>(column) + 0.5) / 512.0 - 0.5;
+            const double cb = (static_cast<double>(column) + 0.5) / cellCount - 0.5;
             const double weight = static_cast<double>(count);
             total += weight;
             sumCb += weight * cb;
