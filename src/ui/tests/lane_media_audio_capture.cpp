@@ -91,10 +91,12 @@ void captureCards() {
     }
 }
 
-// #636: the node menu of a node with one number output and of one with several.
+// #636: the node menu of a plain number node (the pair of the "before" picture), of an audio node
+// with one number output and of one with several.
 void captureBakeMenu() {
     for (const auto& [type, name] :
-         {std::pair{document::kAudioBandsNodeType, "node-menu-one-output"},
+         {std::pair{document::kScalarValueNodeType, "node-menu-number-node"},
+          std::pair{document::kAudioBandsNodeType, "node-menu-one-output"},
           std::pair{document::kAudioBeatNodeType, "node-menu-several-outputs"}}) {
         test::Fixture f;
         const auto node = f.add(type, {0, 0});
@@ -125,6 +127,7 @@ void captureStatusBar() {
         ++gFailures;
         return;
     }
+    save(bar->grab().toImage(), "630", QStringLiteral("status-bar-idle"));
     runtime::AudioSoundActivity rendering;
     rendering.phase = runtime::AudioSoundPhase::Rendering;
     rendering.framesDone = 12'000;

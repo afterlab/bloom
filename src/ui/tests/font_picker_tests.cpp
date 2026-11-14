@@ -4,6 +4,7 @@
 #include "qt_font_transport.hpp"
 
 #include <QApplication>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QSignalSpy>
 #include <QTcpServer>
@@ -271,6 +272,7 @@ void testCommitAfterPreview() {
     const auto layer = std::get<document::LayerId>(session.selection().primary);
     const auto source = session.directSourceNodeForLayer(layer);
     const QString suffix = QString(dprText).remove(QLatin1Char('.'));
+    QDir().mkpath(directory);
     for (const int width : {2000, 900, 560}) {
         ui::PropertiesEditor properties(session);
         properties.resize(width, 2200);

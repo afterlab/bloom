@@ -3244,6 +3244,14 @@ target_include_directories(bloom_font_picker_test PRIVATE ..)
 target_link_libraries(bloom_font_picker_test PRIVATE bloom_ui bloom_runtime_compiler bloom_platform Qt6::Test Qt6::Network)
 bloom_enable_warnings(bloom_font_picker_test)
 bloom_add_test(NAME bloom.ui.font-picker COMMAND bloom_font_picker_test LABELS ui integration kit TIMEOUT 90 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# #489 review pictures of the font picker on each platform (the picker, its Google Fonts rows and a
+# search). Not part of the suite: it reaches Google Fonts and waits for the rows to arrive, so it is
+# registered for the Review configuration only and runs with `ctest -C Review -R font-picker-review`.
+# It writes into <build>/font-picker-review.
+add_test(NAME bloom.ui.font-picker-review CONFIGURATIONS Review
+    COMMAND bloom_font_picker_test --capture ${CMAKE_BINARY_DIR}/font-picker-review 1)
+set_tests_properties(bloom.ui.font-picker-review PROPERTIES
+    TIMEOUT 300 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # #513 Stabilize: its card and the tracking job end to end through the controller.
 add_executable(bloom_stabilize_test stabilize_tests.cpp)
