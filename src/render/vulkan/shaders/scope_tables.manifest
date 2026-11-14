@@ -7,8 +7,8 @@
   "shader": {
     "language": "GLSL_460",
     "stage": "compute",
-    "sha256": "ad7040c995a0ee587b0dcee3e0149d738738e58bc3ab37744802f3932bfd3f99",
-    "spirvSha256": "8a4e3009f644d98173c3d30be86836be745c67a8a4293a2e57886bfaa77f2f6d",
+    "sha256": "594dfe70337187897d9436547d7054000d7d82d6bf955499163b0d1a4d33da06",
+    "spirvSha256": "a37d678f748825c46fe73ed641afbe0f607681deac0b3d8c7eee3a650accf038",
     "localSizeX": 256,
     "localSizeY": 1,
     "localSizeZ": 1
@@ -19,10 +19,10 @@
     {"set": 0, "binding": 1, "kind": "storage-image", "access": "readonly", "format": "rgba32f",
      "role": "signal-picture-in-cie-xyz-d65; read only with the Chromaticity table"},
     {"set": 0, "binding": 2, "kind": "storage-buffer", "access": "readwrite", "element": "uint",
-     "role": "scope-count-tables", "layout": "8 counters, then the Histogram, Waveform, Vectorscope and Chromaticity tables that were asked for (scope_table_layout.hpp)"}
+     "role": "scope-count-tables", "layout": "8 counters, then the Histogram, Waveform, Vectorscope and Chromaticity tables that were asked for (scope_table_layout.hpp); the Vectorscope, Chromaticity and Waveform sizes follow the detail"}
   ],
   "pushConstant": {
-    "byteCount": 76,
+    "byteCount": 80,
     "fields": [
       {"name": "pass", "type": "uint32", "values": "0 = one invocation per pixel, 1 = one invocation per Waveform column"},
       {"name": "scopes", "type": "uint32", "values": "1 Histogram, 2 Waveform, 4 Vectorscope, 8 Chromaticity"},
@@ -42,7 +42,8 @@
       {"name": "waveformOffset", "type": "uint32"},
       {"name": "vectorscopeOffset", "type": "uint32"},
       {"name": "chromaticityOffset", "type": "uint32"},
-      {"name": "groupWidth", "type": "uint32"}
+      {"name": "groupWidth", "type": "uint32"},
+      {"name": "detail", "type": "uint32", "values": "0 = full detail, 1 or 2: the Vectorscope and Chromaticity tables are 512 >> detail cells a side and the Waveform has 512 >> detail levels"}
     ]
   },
   "contracts": {

@@ -299,6 +299,7 @@ ScopeFrameMeasure measureScopeFrameCpu(const ProcessFrame& frame,
         input.axisMaximum = settings.axisMaximum;
         input.luma = color.luma();
         input.ignoreTransparent = settings.ignoreTransparent;
+        input.detail = settings.detail;
         auto counts = measureScopesCpu(
             input, [&cancellation] { return cancellation.isCancellationRequested(); });
         if (!counts)
@@ -326,6 +327,7 @@ measureScopeFrameOnDevice(GpuProcessFrameEvaluator& evaluator, const GpuSceneOci
     job.axisMaximum = settings.axisMaximum;
     job.luma = color.luma();
     job.ignoreTransparent = settings.ignoreTransparent;
+    job.detail = settings.detail;
     job.region = settings.region;
     const auto factory = [&ocio, &color](GpuOcioTransformSpec spec) -> GpuScopeCommandFactory {
         return
@@ -360,10 +362,14 @@ measureScopeFrameOnDevice(GpuProcessFrameEvaluator& evaluator, const GpuSceneOci
     ScopeFrameMeasure result;
     result.route = ScopeRoute::Gpu;
     result.area = outcome.area;
+    result.colorDispatches = outcome.colorDispatches;
+    result.tableReadbacks = outcome.tableReadbacks;
+    result.pictureReadbacks = outcome.pictureReadbacks;
     switch (outcome.status) {
     case GpuScopeMeasureStatus::Measured:
         result.status = ScopeFrameStatus::Measured;
         result.counts = std::move(outcome.counts);
+        result.tableReadbackBytes = outcome.tableReadbackBytes;
         break;
     case GpuScopeMeasureStatus::EmptyArea:
         result.status = ScopeFrameStatus::EmptyArea;

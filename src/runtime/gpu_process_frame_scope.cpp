@@ -92,8 +92,12 @@ using namespace std::chrono_literals;
 } // namespace
 
 std::uint64_t scopeMeasureTableBytes(const GpuScopeMeasureJob& job) noexcept {
-    const auto layout = render::scopeTableLayout(job.scopes, render::kScopeWaveformMaxColumns);
-    return 3ULL * layout.wordCount * sizeof(std::uint32_t);
+    // The widest Waveform of the detail: `512 >> detail` columns.
+    const std::uint32_t detail =
+        job.detail <= render::kScopeMaxDetail ? job.detail : render::kScopeMaxDetail;
+    const auto layout =
+        render::scopeTableLayout(job.scopes, render::kScopeWaveformMaxColumns >> detail, detail);
+    return 3ULL * layout.byteCount();
 }
 
 bool scopeMeasureUsesColorProgram(const GpuScopeMeasureJob& job) noexcept {
@@ -108,9 +112,11 @@ std::optional<ScopeMeasureFault> prepareScopeMeasure(ScopeMeasureWork& work,
                                                      const CancellationToken& cancellation) {
     const auto& job = work.job;
     const std::uint32_t scopes = job.scopes & render::kScopeTableAll;
-    if (scopes == 0U || !validScopeAxisMaximum(job.axisMaximum)) {
+    if (scopes == 0U || !validScopeAxisMaximum(job.axisMaximum) ||
+        !render::validScopeDetail(job.detail)) {
         return fault(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::InvalidRequest,
-                     "the scope measure names no scope or an axis maximum that is not valid");
+                     "the scope measure names no scope, an axis maximum that is not valid or a "
+                     "detail above 2");
     }
     const bool chromaticity = (scopes & render::kScopeTableChromaticity) != 0U;
     if (chromaticity && !job.xyzCommand) {
@@ -302,6 +308,7 @@ ScopeMeasureFault runScopeMeasure(ScopeMeasureStage& stage, ScopeMeasureWork& wo
         .cbDenominator = job.luma.cbDenominator,
         .crDenominator = job.luma.crDenominator,
         .ignoreTransparent = job.ignoreTransparent,
+        .detail = job.detail,
     };
     auto& tables = stage.tables();
     nativeRetirementProven = false;
@@ -352,6 +359,7 @@ ScopeMeasureFault runScopeMeasure(ScopeMeasureStage& stage, ScopeMeasureWork& wo
                      "the scope measure reported Ready without its tables");
     work.counts = ScopeCounts{.layout = result.layout, .words = std::move(result.words)};
     work.tableReadbacks = 1;
+    work.tableReadbackBytes = work.counts->layout.byteCount();
     return fault(GpuProcessFrameStatus::Evaluated, GpuProcessFrameDiagnosticCode::None, {});
 }
 
@@ -372,6 +380,7 @@ GpuScopeMeasureOutcome GpuProcessFrameEvaluator::measureScopes(
     outcome.area = work->area;
     outcome.colorDispatches = work->colorDispatches;
     outcome.tableReadbacks = work->tableReadbacks;
+    outcome.tableReadbackBytes = work->tableReadbackBytes;
     outcome.pictureReadbacks = frame.counters.readbacks;
     using Code = GpuProcessFrameDiagnosticCode;
     if (work->emptyArea) {

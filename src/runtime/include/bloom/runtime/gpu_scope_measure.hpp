@@ -36,6 +36,9 @@ struct GpuScopeMeasureJob final {
     std::uint32_t axisMaximum = 1;
     ScopeLuma luma;
     bool ignoreTransparent = false;
+    // 0 (full), 1 or 2: the detail of the Vectorscope, CIE and Waveform tables the device counts
+    // and reads back (render/scope_table_layout.hpp).
+    std::uint32_t detail = 0;
     // In composition pixels; the whole picture when not set.
     std::optional<ScopeRegion> region;
     // The Display signal: a GpuOcioTransformKind::ScopeDisplay program. Empty measures the Working
@@ -68,6 +71,7 @@ struct GpuScopeMeasureOutcome final {
     // readbacks. Proof that the device counted the tables and that no picture was read back.
     std::uint64_t colorDispatches = 0;
     std::uint64_t tableReadbacks = 0;
+    std::uint64_t tableReadbackBytes = 0; // the bytes those readbacks moved
     std::uint64_t pictureReadbacks = 0; // always zero
 };
 

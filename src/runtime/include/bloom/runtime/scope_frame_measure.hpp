@@ -132,6 +132,14 @@ struct ScopeFrameMeasure final {
     ScopeRoute route = ScopeRoute::Cpu;
     ScopeCounts counts;
     ScopeMeasuredArea area;
+    // The native work of a device measure (all 0 for the CPU reference, which reads nothing back):
+    // color program dispatches, table readbacks, the bytes those readbacks moved (the layout's
+    // bytes at the measure's detail) and picture readbacks (always 0: no picture leaves the
+    // device).
+    std::uint64_t colorDispatches = 0;
+    std::uint64_t tableReadbacks = 0;
+    std::uint64_t tableReadbackBytes = 0;
+    std::uint64_t pictureReadbacks = 0;
 };
 
 // The CPU reference: counts `frame`, an evaluated process frame of `plan`'s composition.

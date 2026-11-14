@@ -48,6 +48,11 @@ struct GpuScopeTablesRequest final {
     float cbDenominator = 1.0F; // 2 (1 - Kb) in binary32
     float crDenominator = 1.0F; // 2 (1 - Kr) in binary32
     bool ignoreTransparent = false;
+    // 0 is full detail; 1 and 2 count the Vectorscope, Chromaticity and Waveform tables into 2x
+    // and 4x coarser cells (scope_table_layout.hpp). The table buffer, its staging copy and the
+    // host copy are sized from the detail's layout; a detail above kScopeMaxDetail is refused as
+    // InvalidArgument.
+    std::uint32_t detail = 0;
 };
 
 enum class GpuScopeTablesState : std::uint8_t { Idle, Pending, Ready, Failure };

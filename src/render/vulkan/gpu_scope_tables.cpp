@@ -57,8 +57,9 @@ struct ScopeTablesPush final {
     std::uint32_t vectorscopeOffset;
     std::uint32_t chromaticityOffset;
     std::uint32_t groupWidth;
+    std::uint32_t detail;
 };
-static_assert(sizeof(ScopeTablesPush) == 76);
+static_assert(sizeof(ScopeTablesPush) == 80);
 
 std::atomic<std::uint64_t>& scopeDispatchCounter() noexcept {
     static std::atomic<std::uint64_t> counter{0};
@@ -493,15 +494,15 @@ bool GpuScopeTables::begin(const GpuScopeTablesRequest& request,
         const std::uint64_t pixels =
             static_cast<std::uint64_t>(request.areaWidth) * request.areaHeight;
         if (scopes != request.scopes || request.areaWidth == 0 || request.areaHeight == 0 ||
-            request.areaWidth > kScopeMaxAreaWidth ||
+            request.areaWidth > kScopeMaxAreaWidth || !validScopeDetail(request.detail) ||
             pixels > std::numeric_limits<std::uint32_t>::max()) {
             impl.setFailure(GpuScopeTablesCode::InvalidArgument,
-                            "the scope measure's scopes or area are not valid");
+                            "the scope measure's scopes, detail or area are not valid");
             return false;
         }
 
         auto state = signal->state;
-        const ScopeTableLayout layout = scopeTableLayout(scopes, request.areaWidth);
+        const ScopeTableLayout layout = scopeTableLayout(scopes, request.areaWidth, request.detail);
         const std::uint64_t bytes = static_cast<std::uint64_t>(layout.wordCount) * 4U;
         if (bytes > byteBudget || bytes > state->maxStorageBufferRange) {
             impl.setFailure(GpuScopeTablesCode::OverBudget,
@@ -692,6 +693,7 @@ bool GpuScopeTables::begin(const GpuScopeTablesRequest& request,
         push.vectorscopeOffset = layout.vectorscopeOffset;
         push.chromaticityOffset = layout.chromaticityOffset;
         push.groupWidth = pixelDispatch.groupsX * kScopeWorkgroupSize;
+        push.detail = layout.detail;
         dispatcher->vkCmdPushConstants(commands, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                        sizeof(ScopeTablesPush), &push);
         dispatcher->vkCmdDispatch(commands, pixelDispatch.groupsX, pixelDispatch.groupsY, 1);

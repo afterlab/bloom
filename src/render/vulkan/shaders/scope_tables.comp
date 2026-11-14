@@ -18,9 +18,13 @@
 //   words[0] pixels counted, [1] not finite, [2] no chromaticity, [3] chromaticity outside,
 //   [4] vectorscope outside, [5..7] zero;
 //   histogramOffset:    4 channels (red, green, blue, luma) x 1026: 1024 bins, under, over;
-//   waveformOffset:     4 channels x `columns` x 514: 512 levels, under, over;
-//   vectorscopeOffset:  512 rows (Cr) x 512 (Cb);
-//   chromaticityOffset: 512 rows (y) x 512 (x).
+//   waveformOffset:     4 channels x `columns` x (levels + 2): `levels` levels, under, over;
+//   vectorscopeOffset:  `cells` rows (Cr) x `cells` (Cb);
+//   chromaticityOffset: `cells` rows (y) x `cells` (x).
+// `detail` d (0, 1 or 2; 0 is full detail) gives levels = 512 >> d and cells = 512 >> d. A pixel's
+// cell on an axis is its full-detail cell (0..511, or outside, decided at full detail) shifted
+// right by d, and its Waveform level is (code >> 1) >> d. The Histogram and the counters do not
+// depend on the detail.
 //
 // Two passes, selected by `pass`, both flattened into 256-wide workgroups of `groupWidth`
 // invocations a row; invocations past the count return immediately.
@@ -57,6 +61,7 @@ layout(push_constant) uniform BloomScopePushConstants {
     uint vectorscopeOffset;
     uint chromaticityOffset;
     uint groupWidth;
+    uint detail;             // 0, 1 or 2
 } bloom_scope_push;
 
 const uint kScopeHistogram = 1u;
@@ -209,7 +214,10 @@ void bloom_scope_pixel_pass(uint linear)
         if (column == 512u || row == 512u) {
             bloom_scope_add(4u);
         } else {
-            bloom_scope_add(bloom_scope_push.vectorscopeOffset + row * 512u + column);
+            uint side = 512u >> bloom_scope_push.detail;
+            bloom_scope_add(bloom_scope_push.vectorscopeOffset +
+                            (row >> bloom_scope_push.detail) * side +
+                            (column >> bloom_scope_push.detail));
         }
     }
 
@@ -231,15 +239,21 @@ void bloom_scope_pixel_pass(uint linear)
             if (column == 512u || row == 512u) {
                 bloom_scope_add(3u);
             } else {
-                bloom_scope_add(bloom_scope_push.chromaticityOffset + row * 512u + column);
+                uint side = 512u >> bloom_scope_push.detail;
+                bloom_scope_add(bloom_scope_push.chromaticityOffset +
+                                (row >> bloom_scope_push.detail) * side +
+                                (column >> bloom_scope_push.detail));
             }
         }
     }
 }
 
+// The word of a code in a Waveform column: its level (code >> 1) >> detail, or the under word
+// (levels) or the over word (levels + 1).
 uint bloom_scope_level(uint code)
 {
-    return code < 1024u ? (code >> 1u) : (code - 512u);
+    uint levels = 512u >> bloom_scope_push.detail;
+    return code < 1024u ? ((code >> 1u) >> bloom_scope_push.detail) : (code - 1024u + levels);
 }
 
 void bloom_scope_column_pass(uint column)
@@ -249,8 +263,9 @@ void bloom_scope_column_pass(uint column)
     // The pixels x with floor(x * columns / width) == column.
     uint first = (column * width + columns - 1u) / columns;
     uint last = ((column + 1u) * width + columns - 1u) / columns;
-    uint base = bloom_scope_push.waveformOffset + column * 514u;
-    uint channel = columns * 514u;
+    uint columnWords = (512u >> bloom_scope_push.detail) + 2u;
+    uint base = bloom_scope_push.waveformOffset + column * columnWords;
+    uint channel = columns * columnWords;
     for (uint y = 0u; y < bloom_scope_push.areaHeight; ++y) {
         for (uint x = first; x < last; ++x) {
             vec4 signal;

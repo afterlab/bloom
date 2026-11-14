@@ -37,10 +37,11 @@ struct ScopeMeasureWork final {
     std::optional<ScopeCounts> counts;
     std::uint64_t colorDispatches = 0;
     std::uint64_t tableReadbacks = 0;
+    std::uint64_t tableReadbackBytes = 0;
 };
 
 // The bytes the measure's tables can take on the device and the host: the table buffer, its
-// staging copy and the host copy, for the widest Waveform.
+// staging copy and the host copy, for the widest Waveform of the job's detail.
 [[nodiscard]] std::uint64_t scopeMeasureTableBytes(const GpuScopeMeasureJob& job) noexcept;
 
 // True when the job runs a color program on the device, so the phase reserves room for one.

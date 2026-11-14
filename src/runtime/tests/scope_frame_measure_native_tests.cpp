@@ -53,8 +53,6 @@ using bloom::render::kScopeTableChromaticity;
 using bloom::render::kScopeTableHistogram;
 using bloom::render::kScopeTableVectorscope;
 using bloom::render::kScopeTableWaveform;
-using bloom::render::kScopeWaveformLevelOver;
-using bloom::render::kScopeWaveformLevelUnder;
 using bloom::runtime::CpuCompositionEvaluator;
 using bloom::runtime::EvaluationRequest;
 using bloom::runtime::GpuOcioContextRequest;
@@ -140,26 +138,29 @@ using namespace bloom::runtime::executor_test;
     return axis;
 }
 
+// One Waveform column along the level axis of the counts' detail: under, the levels, over.
 [[nodiscard]] std::vector<std::uint64_t>
 waveformAxis(const ScopeCounts& counts, const std::uint32_t channel, const std::uint32_t column) {
     std::vector<std::uint64_t> axis;
-    axis.push_back(counts.waveform(channel, column, kScopeWaveformLevelUnder));
-    for (std::uint32_t level = 0; level < 512; ++level)
+    axis.push_back(counts.waveform(channel, column, counts.layout.waveformLevelUnder()));
+    for (std::uint32_t level = 0; level < counts.layout.waveformLevels(); ++level)
         axis.push_back(counts.waveform(channel, column, level));
-    axis.push_back(counts.waveform(channel, column, kScopeWaveformLevelOver));
+    axis.push_back(counts.waveform(channel, column, counts.layout.waveformLevelOver()));
     return axis;
 }
 
-// A 512 x 512 table summed onto one of its axes, with the pixels outside it as a last cell.
+// A table of `cells` x `cells` (the detail's side) summed onto one of its axes, with the pixels
+// outside it as a last cell.
 template <typename Cell>
-[[nodiscard]] std::vector<std::uint64_t> planeAxis(const Cell& cell, const bool alongFirst,
+[[nodiscard]] std::vector<std::uint64_t> planeAxis(const Cell& cell, const std::uint32_t cells,
+                                                   const bool alongFirst,
                                                    const std::uint32_t outside) {
-    std::vector<std::uint64_t> axis(513, 0);
-    for (std::uint32_t first = 0; first < 512; ++first) {
-        for (std::uint32_t second = 0; second < 512; ++second)
+    std::vector<std::uint64_t> axis(static_cast<std::size_t>(cells) + 1U, 0);
+    for (std::uint32_t first = 0; first < cells; ++first) {
+        for (std::uint32_t second = 0; second < cells; ++second)
             axis[alongFirst ? first : second] += cell(first, second);
     }
-    axis[512] = outside;
+    axis[cells] = outside;
     return axis;
 }
 
@@ -179,9 +180,10 @@ template <typename Cell>
                             : counts.vectorscopeOutside();
     };
     for (const bool alongFirst : {true, false}) {
-        auto left = planeAxis(cellOf(device), alongFirst, outsideOf(device));
-        auto right = planeAxis(cellOf(reference), alongFirst, outsideOf(reference));
-        if (left[512] != right[512]) {
+        const std::uint32_t cells = device.layout.cells();
+        auto left = planeAxis(cellOf(device), cells, alongFirst, outsideOf(device));
+        auto right = planeAxis(cellOf(reference), cells, alongFirst, outsideOf(reference));
+        if (left[cells] != right[cells]) {
             // Some pixels sit on the table's edge: only the totals can be compared.
             std::uint64_t leftTotal = 0;
             std::uint64_t rightTotal = 0;
@@ -464,6 +466,108 @@ int run(int argc, char** argv) {
         expectations.expect(
             (measured.area == ScopeMeasuredArea{.x = 20, .y = 15, .width = 50, .height = 45}),
             "a region in composition pixels measures the same part of a proxy picture");
+    }
+
+    // The detail: a measure at detail 1 through the production device route reads back the
+    // detail's bytes, once, and no picture; the tables are exact for Working without CIE and
+    // within one cell of the detail's cells through the OCIO steps.
+    {
+        constexpr std::uint32_t kDetail = 1;
+        auto settings = settingsFor(ScopeSignal::Working, kNoChromaticity);
+        settings.detail = kDetail;
+        const auto measured = onDevice(request, settings, *working);
+        const auto reference =
+            bloom::runtime::measureScopeFrameCpu(*fullPicture, settings, *working);
+        expectations.expect(
+            measured.status == ScopeFrameStatus::Measured && measured.route == ScopeRoute::Gpu &&
+                reference.status == ScopeFrameStatus::Measured,
+            "detail 1: the Working signal is measured on the device: " + measured.message);
+        expectations.expect(measured.counts == reference.counts &&
+                                measured.counts.layout.detail == kDetail,
+                            "detail 1, Working: the device's tables equal the CPU reference's");
+        const auto layout =
+            bloom::render::scopeTableLayout(settings.scopes, measured.area.width, kDetail);
+        expectations.expect(measured.counts.layout == layout &&
+                                measured.tableReadbackBytes == layout.byteCount() &&
+                                measured.tableReadbacks == 1 && measured.pictureReadbacks == 0 &&
+                                measured.colorDispatches == 0,
+                            "detail 1, Working: the layout's bytes, one table readback, no "
+                            "picture readback and no color program");
+        expectations.expect(reference.tableReadbackBytes == 0 && reference.tableReadbacks == 0,
+                            "the CPU reference reads nothing back");
+        // The coarser tables are the full ones pooled, and a smaller readback.
+        const auto fullMeasure =
+            onDevice(request, settingsFor(ScopeSignal::Working, kNoChromaticity), *working);
+        expectations.expect(
+            fullMeasure.status == ScopeFrameStatus::Measured &&
+                fullMeasure.tableReadbackBytes ==
+                    bloom::render::scopeTableLayout(kNoChromaticity, fullMeasure.area.width, 0)
+                        .byteCount() &&
+                fullMeasure.tableReadbackBytes > measured.tableReadbackBytes,
+            "full detail reads back the full layout's bytes, more than detail 1");
+        bool pooled = true;
+        for (std::uint32_t row = 0; row < layout.cells() && pooled; ++row)
+            for (std::uint32_t column = 0; column < layout.cells() && pooled; ++column)
+                pooled = measured.counts.vectorscope(column, row) ==
+                         fullMeasure.counts.vectorscope(column * 2, row * 2) +
+                             fullMeasure.counts.vectorscope(column * 2 + 1, row * 2) +
+                             fullMeasure.counts.vectorscope(column * 2, row * 2 + 1) +
+                             fullMeasure.counts.vectorscope(column * 2 + 1, row * 2 + 1);
+        expectations.expect(pooled, "detail 1 on the device is the full detail's cells pooled");
+    }
+    {
+        // Display with the Chromaticity table at detail 1: OCIO's processors, within one cell of
+        // the detail's cells.
+        auto settings = settingsFor(ScopeSignal::Display, kScopeTableAll);
+        settings.detail = 1;
+        const auto measured = onDevice(request, settings, *display);
+        const auto reference =
+            bloom::runtime::measureScopeFrameCpu(*fullPicture, settings, *display);
+        expectations.expect(measured.status == ScopeFrameStatus::Measured &&
+                                reference.status == ScopeFrameStatus::Measured,
+                            "detail 1: Display with Chromaticity is measured: " + measured.message);
+        expectations.expect(tablesWithinOneCell(measured.counts, reference.counts),
+                            "detail 1, Display: no pixel is more than one detail cell away");
+        expectations.expect(
+            measured.tableReadbackBytes ==
+                    bloom::render::scopeTableLayout(kScopeTableAll, measured.area.width, 1)
+                        .byteCount() &&
+                measured.tableReadbacks == 1 && measured.pictureReadbacks == 0,
+            "detail 1, Display: the layout's bytes in one table readback and no picture");
+        // The color programs follow the tables: with the Chromaticity table the Display
+        // measure also runs the XYZ program, without it only the display program.
+        settings.scopes = kNoChromaticity;
+        const auto noXyz = onDevice(request, settings, *display);
+        expectations.expect(noXyz.status == ScopeFrameStatus::Measured &&
+                                noXyz.colorDispatches != 0 &&
+                                measured.colorDispatches > noXyz.colorDispatches,
+                            "a measure without the Chromaticity table runs no XYZ program");
+    }
+    {
+        // One scope: only its table is allocated, counted and read back.
+        for (const std::uint32_t scope : {kScopeTableHistogram, kScopeTableWaveform,
+                                          kScopeTableVectorscope, kScopeTableChromaticity}) {
+            auto settings = settingsFor(ScopeSignal::Working, scope);
+            const auto measured = onDevice(request, settings, *working);
+            expectations.expect(
+                measured.status == ScopeFrameStatus::Measured &&
+                    measured.tableReadbackBytes ==
+                        bloom::render::scopeTableLayout(scope, measured.area.width, 0)
+                            .byteCount() &&
+                    measured.tableReadbacks == 1 && measured.pictureReadbacks == 0,
+                "one scope reads back its own table: " + std::to_string(scope));
+            if (scope == kScopeTableHistogram) {
+                expectations.expect(measured.tableReadbackBytes == (8U + 4U * 1026U) * 4U &&
+                                        measured.colorDispatches == 0,
+                                    "a Histogram-only measure reads 8 counters and 4104 words "
+                                    "and runs no color program");
+            }
+        }
+        const auto displayHistogram =
+            onDevice(request, settingsFor(ScopeSignal::Display, kScopeTableHistogram), *display);
+        expectations.expect(displayHistogram.status == ScopeFrameStatus::Measured &&
+                                displayHistogram.tableReadbackBytes == (8U + 4U * 1026U) * 4U,
+                            "a Display Histogram-only measure reads its small tables");
     }
 
     // The Chromaticity table and the Display signal: OCIO's two processors, within one cell.
