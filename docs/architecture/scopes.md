@@ -123,6 +123,13 @@ without the Viewer's adjustment, since the scene picture depends on neither. A r
 only the picture its key names; a newer Viewer frame replaces the tap and the request ends
 Skipped(Superseded). The service releases its taps when it goes idle.
 
+A frame the Viewer shows while the RAM preview fill renders it has the same key in both slots. The
+frame is then counted once, from its float picture: a request for the key measures the Viewer's
+tap, and one Rendered sidecar is kept beside the frame. The shown-frame request is answered by its
+measure and the fill's request by the same tables: the panel lets the fill tap go instead of
+measuring again. `dropScopeTap` frees only the fill slot, so the Viewer's tap survives the fill
+tap's release, and the freed fill slot lets the next flagged fill frame start.
+
 **The retained-picture measure.** A retained frame is a `PreviewDisplayOnlyFrame`: the packed
 straight RGBA8 display picture, with the display transform, the view and the look baked in and the
 exposure and gamma the frame was made with (neutral for every cached frame, because the Viewer
@@ -421,7 +428,9 @@ timed).
   Skipped(Superseded); a cancel is delivered after the fence is proven retired; a fill frame is
   tapped only when its request asks, the second flagged fill frame waits for the first one's
   measure, and an unflagged fill frame keeps nothing and is never held back; shutdown ends a
-  queued or in-flight request; on a declared card that fits the Viewer's frame but not the frame
+  queued or in-flight request; a Viewer tap and a fill tap of one frame (one key) are measured
+  once, the fill tap's drop frees the fill slot and leaves the Viewer's tap; on a declared card
+  that fits the Viewer's frame but not the frame
   plus the measure the request ends Skipped(NoRoom) with the Viewer's counters unmoved, the taps
   are the first memory given back for a frame that needs room (a larger picture than the frames
   that made the taps, so no parked storage serves it), a fill tap that does not fit is
@@ -586,9 +595,9 @@ keeps for the scopes, and they are the first memory it gives back.
 | `bloom.ui.scopes-controller` | The controller over CPU frames and a scripted tap: no scene evaluated by any measure, one measure in flight, latest wins with skipped frames counted, live then full, a replaced frame never measured in full, the source order and the lookup order, a Retained sidecar never replacing a Rendered one, the Working signal of a retained frame, cancellation, the fill, and every flagged fill frame answered |
 | `bloom.ui.scopes-realtime` | A real preview, Viewer and panel with the measure held: every stepped frame is published and shown, the measure runs on a worker, the interface thread's loop keeps turning, one measure in flight (CPU routes) |
 | `bloom.runtime.scope_frame_measure_retained` | The retained-picture measure on the CPU: known pictures to known tables, `c / 255` then exposure, gamma, clamp and alpha in that order, an adjustment already in the picture not applied twice, the CIE table, region, Ignore Transparent Pixels, detail 1 and 2 pooled from detail 0, the Working signal refused with its message, an empty area and cancellation |
-| `bloom.runtime.scope_tap_native` | The tap and the device measure on a real service with no window system: parity with the CPU reference, no scene run, one table readback and no picture readback, a held readback while further frames complete, Busy, Superseded, cancel, fill pacing, shutdown, and the declared-card cases in which the measure yields |
+| `bloom.runtime.scope_tap_native` | The tap and the device measure on a real service with no window system: parity with the CPU reference, no scene run, one table readback and no picture readback, a held readback while further frames complete, Busy, Superseded, cancel, fill pacing, a Viewer tap and a fill tap of one key, shutdown, and the declared-card cases in which the measure yields |
 | `bloom.runtime.gpu_admission_pressure` | Includes `backgroundMeasureYieldsToTheViewer`: a Background measure phase waits while a Viewer request waits and leaves the Viewer's last need free |
-| `bloom.ui.scopes-device-route` | The panel's device route end to end with the real service, the real preview and RAM preview controllers and the production measure: a shown frame through the tap with no scene run, a fill with the panel closed paying nothing, a fill with the panel open leaving full Working tables beside every frame |
+| `bloom.ui.scopes-device-route` | The panel's device route end to end with the real service, the real preview and RAM preview controllers and the production measure: a shown frame through the tap with no scene run, a fill with the panel closed paying nothing, a fill with the panel open leaving full Working tables beside every frame, and a frame that is both the Viewer's and a fill frame counted once with one Rendered sidecar, both requests answered, the fill slot freed and the Viewer's tap kept |
 | `bloom.ui.ram-preview` | Includes `testRamFillTapsScopes`: a fill with the panel closed flags nothing, taps nothing and measures nothing; with the panel open every retained frame has full-detail Rendered tables and every flagged frame is answered |
 | `bloom.ui.preview-frame-cache-cpu-edge` | Includes the sidecar identity: a Rendered sidecar never answers a Retained lookup and the reverse |
 | `bloom.ui.scopes-region` | Includes a project saved with a scope region equal, byte for byte, to one saved without |

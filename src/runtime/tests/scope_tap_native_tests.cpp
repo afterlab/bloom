@@ -777,6 +777,61 @@ bool run(Expectations& checks, const TestOptions& options,
                           "the owner frees a dropped fill tap");
         }
     }
+
+    // ---- (6b) a Viewer tap and a fill tap of one frame ------------------------------------------
+    // The frame the Viewer shows is also a fill frame (the same key: the request generation and
+    // the view adjust are not in it), so both slots hold it. The correct behavior, the owner's:
+    //   * the frame is counted once, from its float picture (one measure, one table readback), and
+    //     the tables are the CPU reference's;
+    //   * both requesters are answered: the shown frame's request by that measure, and the fill's
+    //     by the same tables (it does not measure again; it lets its tap go);
+    //   * neither slot's tap is lost to the other's drop: letting the fill tap go leaves the
+    //     Viewer's tap, which a later measure of the frame still counts;
+    //   * the fill slot is freed, so the next flagged fill frame is not held back;
+    //   * nothing is measured twice: the counters of measures and table readbacks move once.
+    {
+        const auto settings = scope.settings(ScopeSignal::Working, kNoChromaticity);
+        const auto job = scope.job(settings);
+        const auto reference = scope.reference(settings);
+        const auto viewer = rig.frame(50, 50, TaskPriority::Visible);
+        const auto fill = rig.frame(51, 50, TaskPriority::Foreground, true);
+        if (!viewer || !fill)
+            return true;
+        const auto sharedKey = keyOf(*viewer);
+        checks.expect(sharedKey == keyOf(*fill),
+                      "the Viewer's frame and the fill's frame of one time share a key");
+        const auto sharedGeometry = service.scopeTapGeometry(sharedKey);
+        checks.expect(sharedGeometry && !sharedGeometry->fill && Access::scopeViewerTapHeld(*rig.core) &&
+                          Access::scopeFillTapHeld(*rig.core),
+                      "both slots hold the frame: the Viewer's answers the key");
+        const auto before = counters();
+        const auto measured = service.measureScopeTap(sharedKey, job,
+                                                      bloom::runtime::CancellationToken{});
+        checks.expect(measured.status == GpuScopeTapStatus::Measured &&
+                          measured.counts == reference.counts,
+                      "the frame is counted from its float picture: the CPU reference's tables");
+        checks.expect(counters().scopeMeasuresCompleted == before.scopeMeasuresCompleted + 1 &&
+                          counters().scopeTableReadbacks == before.scopeTableReadbacks + 1,
+                      "one measure and one table readback for the frame");
+        // The fill's requester is answered by the tables above; it lets its tap go.
+        service.dropScopeTap(sharedKey);
+        checks.expect(awaitCondition("the fill slot is freed",
+                                     [&] { return !Access::scopeFillTapHeld(*rig.core); }),
+                      "the fill slot is freed, so the fill is not held");
+        const auto after = service.scopeTapGeometry(sharedKey);
+        checks.expect(after && !after->fill && Access::scopeViewerTapHeld(*rig.core),
+                      "the fill's drop did not take the Viewer's tap of the same frame");
+        const auto again = service.measureScopeTap(sharedKey, job,
+                                                   bloom::runtime::CancellationToken{});
+        checks.expect(again.status == GpuScopeTapStatus::Measured &&
+                          again.counts == reference.counts,
+                      "the Viewer's tap still measures the frame after the fill tap went");
+        const auto next = rig.frame(52, 51, TaskPriority::Foreground, true);
+        checks.expect(next && isPacked(*next) && Access::scopeFillTapHeld(*rig.core),
+                      "the next flagged fill frame is not held back and is tapped");
+        if (next)
+            service.dropScopeTap(keyOf(*next));
+    }
     checks.expect(counters().cpuFallbacks == 0, "no frame of the test took the CPU path");
     return true;
 }

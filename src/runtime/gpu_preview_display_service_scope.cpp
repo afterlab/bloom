@@ -1007,10 +1007,12 @@ void dropScopeTapOn(const std::shared_ptr<PreviewDisplayServiceCore>& core,
     try {
         {
             std::lock_guard lock(core->scope.mutex);
-            for (auto* slot : {&core->scope.viewer, &core->scope.fill}) {
-                if (slot->has_value() && !(*slot)->dropped && (*slot)->key == key)
-                    (*slot)->dropped = true;
-            }
+            // Only the fill slot is a caller's to free: the Viewer's tap lives until a newer
+            // Viewer frame replaces it or memory is needed, and a fill tap of the same frame
+            // (the same key) must never take it along when its owner lets go.
+            auto& fill = core->scope.fill;
+            if (fill.has_value() && !fill->dropped && fill->key == key)
+                fill->dropped = true;
         }
         core->notify();
     } catch (...) {

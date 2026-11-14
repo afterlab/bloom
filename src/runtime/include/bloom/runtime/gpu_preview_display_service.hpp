@@ -563,7 +563,8 @@ class GpuPreviewDisplayService final {
     [[nodiscard]] std::optional<std::uint64_t>
     purgeRetainedCaches(std::chrono::milliseconds timeout) noexcept;
 
-    // The geometry of the tap `key` names (the latest Viewer frame's, or the fill slot's). Any
+    // The geometry of the tap `key` names (the latest Viewer frame's, or the fill slot's). When
+    // both slots hold the key, the Viewer's answers: it is the same picture. Any
     // thread, non-blocking; nothing when no tap has that key.
     [[nodiscard]] std::optional<GpuScopeTapGeometry>
     scopeTapGeometry(const GpuScopeTapKey& key) const;
@@ -584,9 +585,11 @@ class GpuPreviewDisplayService final {
     measureScopeTap(const GpuScopeTapKey& key, const GpuScopeMeasureJob& job,
                     const CancellationToken& cancellation);
 
-    // Frees the tap `key` names (any thread, non-blocking): the picture is released on the
+    // Frees the fill tap `key` names (any thread, non-blocking): the picture is released on the
     // service thread. A pending or in-flight measure of it ends Skipped(TapGone). A fill tap
-    // freed this way lets the next flagged fill frame start.
+    // freed this way lets the next flagged fill frame start. Only the fill slot is freed: a
+    // Viewer tap of the same key (the same frame, shown while it was filled) stays, and is
+    // replaced only by a newer Viewer frame or given back for memory.
     void dropScopeTap(const GpuScopeTapKey& key) noexcept;
 
     // Non-blocking. Closes admission for this service's own tasks, requests cancellation on the

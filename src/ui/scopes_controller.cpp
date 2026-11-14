@@ -620,6 +620,17 @@ bool ScopesController::startTap() {
     if (fillTaps_ == nullptr || settings_.scopes == 0)
         return false;
     auto tap = fillTaps_->takeTap(this);
+    // A frame the Viewer showed while the fill rendered it is tapped twice (the Viewer's and the
+    // fill's, one key), and the shown-frame request has already counted it: its full Rendered
+    // tables are beside the frame. The fill's request is answered by those tables; the fill tap is
+    // let go (freeing the fill slot) and nothing is counted twice.
+    while (tap != nullptr && cache_ != nullptr &&
+           cache_->scopesFor(PreviewFrameCacheKey::forIdentity(tap->identity()),
+                             identityFor(viewAdjust_, 0, runtime::ScopeSource::Rendered)) !=
+               nullptr) {
+        tap->release();
+        tap = fillTaps_->takeTap(this);
+    }
     if (tap == nullptr)
         return false;
     const auto key = PreviewFrameCacheKey::forIdentity(tap->identity());

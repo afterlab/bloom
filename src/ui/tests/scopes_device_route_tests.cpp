@@ -10,6 +10,10 @@
 //   * the scopes ran no scene: the measures of the shown frame add no scene stage run, no resident
 //     graph job, no native display dispatch and no picture readback;
 //   * a fill with the panel closed is unchanged and pays nothing: no flag, no tap, no measure;
+//   * a frame the Viewer shows while the fill renders it (one key, a Viewer tap and a fill tap):
+//     the frame is counted once, one Rendered sidecar is kept, the shown-frame request and the
+//     fill's request are both answered, the fill slot is freed and the Viewer's tap survives the
+//     fill tap's release;
 //   * a small fill with the panel open leaves full-detail Working tables, marked Rendered and equal
 //     to the CPU reference, beside every retained frame, again with no scene run added; every flagged
 //     frame was answered by its measure, and the fill never stalled.
@@ -230,6 +234,8 @@ int run(const Options& options) {
     serviceOptions.previewByteAllowance = kBudget;
     serviceOptions.processingPhasePolicy = policy;
     serviceOptions.nativeDispatchDeadline = std::chrono::minutes(10);
+    // The test is not about the idle trim, which releases the Viewer's tap.
+    serviceOptions.idleTrimDelay = std::chrono::minutes(10);
 
     auto gpuStage = ui::makeSessionRefreshingGpuSceneStage(
         compiler, evaluator, provider, coverageCache, planCache, resolver,
@@ -406,6 +412,125 @@ int run(const Options& options) {
                  "back");
     }
 
+    // ---- A frame that is both the Viewer's and a fill frame --------------------------------------------
+    // The correct behavior: the frame is counted once from its float picture (the shown-frame
+    // request's measures, none for the fill), one Rendered sidecar is kept beside it (the fill adds
+    // none), the shown-frame request and the fill's request are both answered (the first by its
+    // tables, the second by letting its tap go), neither slot's tap is lost to the other's release,
+    // and the fill slot is freed so the fill is not held.
+    {
+        const auto shownKey =
+            std::optional(ui::PreviewFrameCacheKey::forIdentity(shown->desiredIdentity()));
+        const auto tapKey = runtime::GpuScopeTapKey::of(shown->desiredIdentity());
+        const auto fullIdentity = ui::PreviewScopeIdentity{
+            .settings = fullSettings, .viewAdjust = {}, .source = runtime::ScopeSource::Rendered};
+        const auto sidecarBefore = shownKey ? frameCache->scopesFor(*shownKey, fullIdentity) : nullptr;
+        e.expect(sidecarBefore != nullptr, "the shown frame holds its full Rendered tables");
+        e.expect(service.scopeTapGeometry(tapKey).has_value(), "the Viewer's tap of the frame is held");
+        const auto before = service.status().counters;
+        const auto startedBefore = scopes.measuresStarted();
+        const auto answeredBefore = taps.answeredByMeasure() + taps.answeredByDrop();
+        const auto flaggedBefore = taps.flaggedSubmissions();
+
+        // The fill renders the frame the Viewer shows (a flagged submission, the same key).
+        auto fillIdentity = shown->desiredIdentity();
+        fillIdentity.requestGeneration += 100000;
+        runtime::TaskRequest request(
+            "Cache RAM preview frame",
+            {.kind = runtime::TaskOwnerKind::Composition,
+             .id = runtime::TaskOwnerId::fromRaw(session.compositionId().value())},
+            runtime::TaskPriority::Foreground);
+        request.sourceVersion = {.documentRevision = fillIdentity.sourceRevision.value(),
+                                 .requestGeneration = fillIdentity.requestGeneration};
+        request.usesPurgeableCaches = true;
+        auto submission = taps.submit(std::move(request),
+                                      session.evaluationSnapshotForTime(fillIdentity.time),
+                                      fillIdentity, kBudget, {});
+        e.expect(submission.accepted(), "the fill's flagged submission of the shown frame is admitted");
+        std::optional<runtime::TaskResult<runtime::PreviewPreparationResultHandle>> landed;
+        if (submission.accepted()) {
+            e.expect(awaitQtCondition("the fill's frame lands",
+                                      [&] {
+                                          landed = submission.handle.tryTakeResult();
+                                          return landed.has_value();
+                                      }),
+                     "the fill's frame lands");
+        }
+        ui::PreparedPreviewFrameHandle delivered;
+        if (landed.has_value() && landed->state() == runtime::TaskState::Succeeded &&
+            landed->value().has_value() && *landed->value() != nullptr &&
+            (*landed->value())->status() == runtime::PreviewPreparationStatus::Prepared)
+            delivered = (*landed->value())->frame();
+        e.expect(delivered != nullptr, "the fill's frame of the shown time is prepared");
+        const auto both = service.scopeTapGeometry(tapKey);
+        e.expect(service.status().counters.scopeFillTapsKept == before.scopeFillTapsKept + 1 &&
+                     both && !both->fill,
+                 "both slots hold the frame: the fill's tap is kept beside the Viewer's");
+        taps.received(fillIdentity, delivered);
+        e.expect(awaitQtCondition("the fill's request is answered",
+                                  [&] {
+                                      return taps.answeredByMeasure() + taps.answeredByDrop() ==
+                                                 answeredBefore + 1 &&
+                                             taps.pendingSubmissions() == 0 &&
+                                             taps.waitingTaps() == 0 && !scopes.busy();
+                                  }),
+                 "the fill's request for the shown frame is answered");
+        const auto after = service.status().counters;
+        e.expect(taps.flaggedSubmissions() == flaggedBefore + 1 && taps.answeredByDrop() >= 1,
+                 "the fill's request was answered by letting its tap go");
+        e.expect(after.scopeMeasuresRequested == before.scopeMeasuresRequested &&
+                     after.scopeMeasuresCompleted == before.scopeMeasuresCompleted &&
+                     after.scopeTableReadbacks == before.scopeTableReadbacks &&
+                     scopes.measuresStarted() == startedBefore,
+                 "nothing was measured twice: no measure and no table readback for the fill");
+        const auto sidecarAfter = shownKey ? frameCache->scopesFor(*shownKey, fullIdentity) : nullptr;
+        e.expect(sidecarAfter != nullptr && sidecarAfter == sidecarBefore &&
+                     scopes.reading().scopes == sidecarBefore,
+                 "one Rendered sidecar is kept, and the shown-frame request still has its tables");
+        // The fill slot is free (the tap was released) and the Viewer's tap was not lost to it.
+        const auto stillTapped = service.scopeTapGeometry(tapKey);
+        e.expect(stillTapped && !stillTapped->fill, "the release of the fill tap left the Viewer's tap");
+        const auto stallsBefore = service.status().counters.scopeFillStageWaits;
+        auto nextIdentity = fillIdentity;
+        nextIdentity.requestGeneration += 1;
+        nextIdentity.time = time(4, 25);
+        runtime::TaskRequest nextRequest(
+            "Cache RAM preview frame",
+            {.kind = runtime::TaskOwnerKind::Composition,
+             .id = runtime::TaskOwnerId::fromRaw(session.compositionId().value())},
+            runtime::TaskPriority::Foreground);
+        nextRequest.sourceVersion = {.documentRevision = nextIdentity.sourceRevision.value(),
+                                     .requestGeneration = nextIdentity.requestGeneration};
+        nextRequest.usesPurgeableCaches = true;
+        auto next = taps.submit(std::move(nextRequest),
+                                session.evaluationSnapshotForTime(nextIdentity.time), nextIdentity,
+                                kBudget, {});
+        std::optional<runtime::TaskResult<runtime::PreviewPreparationResultHandle>> nextLanded;
+        if (next.accepted())
+            e.expect(awaitQtCondition("the next flagged fill frame lands",
+                                      [&] {
+                                          nextLanded = next.handle.tryTakeResult();
+                                          return nextLanded.has_value();
+                                      }),
+                     "the next flagged fill frame lands");
+        e.expect(service.status().counters.scopeFillStageWaits == stallsBefore,
+                 "the fill slot was freed: the next flagged fill frame was not held back");
+        if (nextLanded.has_value() && nextLanded->value().has_value() &&
+            *nextLanded->value() != nullptr)
+            taps.received(nextIdentity, (*nextLanded->value())->frame());
+        e.expect(awaitQtCondition("every tap is answered",
+                                  [&] {
+                                      return taps.pendingSubmissions() == 0 && taps.waitingTaps() == 0 &&
+                                             !scopes.busy();
+                                  }),
+                 "every tap is answered");
+    }
+
+    const auto fillBase = taps.flaggedSubmissions();
+    const auto answeredBase = taps.answeredByMeasure() + taps.answeredByDrop();
+    const auto measuredBase = taps.answeredByMeasure();
+    const auto startedBase = scopes.measuresStarted();
+
     // ---- A fill with the panel closed is unchanged and pays nothing ---------------------------------
     scopes.setSettings([&] {
         auto none = settings;
@@ -424,13 +549,13 @@ int run(const Options& options) {
                                   [&] { return !ram.isCaching() && ram.cachedFrameCount() == 3; }),
                  "the closed fill ends with its three frames");
         const auto after = service.status().counters;
-        e.expect(taps.flaggedSubmissions() == 0 && taps.waitingTaps() == 0 &&
+        e.expect(taps.flaggedSubmissions() == fillBase && taps.waitingTaps() == 0 &&
                      after.scopeFillTapsKept == before.scopeFillTapsKept &&
                      after.scopeFillStageWaits == before.scopeFillStageWaits &&
                      after.scopeMeasuresRequested == before.scopeMeasuresRequested &&
                      after.scopeMeasuresStarted == before.scopeMeasuresStarted &&
                      after.scopeTableReadbacks == before.scopeTableReadbacks &&
-                     scopes.measuresStarted() == 2,
+                     scopes.measuresStarted() == startedBase,
                  "a closed fill flags nothing, keeps no picture, and measures nothing");
         std::cerr << "closed fill stages " << sceneStages->load() - scenesBefore << " graph "
                   << after.residentGraphJobs - before.residentGraphJobs << '\n';
@@ -459,14 +584,15 @@ int run(const Options& options) {
                  "the fill with the panel open ends with its three frames (it never stalled)");
         e.expect(awaitQtCondition("every flagged frame is answered",
                                   [&] {
-                                      return taps.flaggedSubmissions() == 3 &&
-                                             taps.answeredByMeasure() + taps.answeredByDrop() == 3 &&
+                                      return taps.flaggedSubmissions() == fillBase + 3 &&
+                                             taps.answeredByMeasure() + taps.answeredByDrop() ==
+                                                 answeredBase + 3 &&
                                              taps.pendingSubmissions() == 0 &&
                                              taps.waitingTaps() == 0 && !scopes.busy();
                                   }),
                  "every flagged frame is answered");
         const auto after = service.status().counters;
-        e.expect(taps.answeredByMeasure() == 3 && after.scopeFillTapsKept - before.scopeFillTapsKept == 3,
+        e.expect(taps.answeredByMeasure() == measuredBase + 3 && after.scopeFillTapsKept - before.scopeFillTapsKept == 3,
                  "all three fill taps were kept and measured on the device");
         std::cerr << "started " << scopes.measuresStarted() - startedBefore << " open fill stages " << sceneStages->load() - scenesBefore << " measures "
                   << after.scopeMeasuresCompleted - before.scopeMeasuresCompleted << " graph "
