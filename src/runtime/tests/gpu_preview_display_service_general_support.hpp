@@ -111,9 +111,11 @@ constexpr auto kBlendP = bloom::document::ParameterId::fromRaw(46);
 #endif // BLOOM_GPU_TOOLS_AVAILABLE
 
 // The card every service in these tests plans for. A stated size, so admission does not move with
-// what else holds the real card; 0 (the large-frame stress run) is the real device.
+// what else holds the real card; 0 (the large-frame stress run) is the real device. 8 GiB: the
+// packed retirement cases hold close to 1 GiB of device claims at once where device memory is
+// system memory, which a 2 GiB card refuses.
 [[nodiscard]] inline std::uint64_t& declaredDeviceBytes() noexcept {
-    static std::uint64_t bytes = bloom::test_support::kFixedDeviceMemoryBytes;
+    static std::uint64_t bytes = std::uint64_t{8} << 30U;
     return bytes;
 }
 

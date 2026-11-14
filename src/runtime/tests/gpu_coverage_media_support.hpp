@@ -17,6 +17,9 @@
 #include <ImfHeader.h>
 #include <ImfOutputFile.h>
 #include <ImfStringAttribute.h>
+#include <chrono>
+#include <random>
+#include <system_error>
 
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/core/file_uri.hpp>
@@ -56,9 +59,28 @@ struct ExrPixel final {
     float alpha = 1.0F;
 };
 
+// A directory of this process's own, removed with it. The contract and the native acceptance are
+// the same program run as two tests side by side; one fixed path had both writing the same files.
 [[nodiscard]] inline const std::filesystem::path& gateDirectory() {
-    static const std::filesystem::path directory{"/tmp/opencode/gpu-contract/media"};
-    return directory;
+    struct Owned final {
+        std::filesystem::path directory;
+        Owned() {
+            std::random_device device;
+            directory =
+                std::filesystem::temp_directory_path() /
+                ("bloom-gpu-contract-media-" + std::to_string(device()) + "-" +
+                 std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+            std::filesystem::create_directories(directory);
+        }
+        Owned(const Owned&) = delete;
+        Owned& operator=(const Owned&) = delete;
+        ~Owned() {
+            std::error_code ignored;
+            std::filesystem::remove_all(directory, ignored);
+        }
+    };
+    static const Owned owned;
+    return owned.directory;
 }
 
 inline void writeExrRgba(const std::filesystem::path& path, const int width, const int height,

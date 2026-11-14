@@ -98,7 +98,8 @@ bool same(const Pixel& a, const Pixel& b, const float tolerance = 1e-4F) {
            close(a[2], b[2], tolerance) && close(a[3], b[3], tolerance);
 }
 
-const std::filesystem::path scratch = "/tmp/opencode/gpu-contract/audio";
+// This process's own fixture directory (see sharedAudioFixture).
+const std::filesystem::path scratch = apt::sharedAudioFixture().directory;
 
 // The canvas the plot draws: the bounding box of the pixels with any alpha.
 struct Box final {

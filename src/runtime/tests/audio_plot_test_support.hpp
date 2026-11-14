@@ -14,6 +14,9 @@
 #include <bloom/platform/source_identity.hpp>
 #include <bloom/runtime/audio_analysis_source.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
+#include <chrono>
+#include <random>
+#include <system_error>
 
 #include <array>
 #include <bit>
@@ -104,9 +107,29 @@ struct AudioFixture final {
     return fixture;
 }
 
+// One fixture file per test process, in a directory of its own that goes with the process. Five
+// test programs use this fixture and run side by side; with one fixed path, one of them rewrote
+// the file while another was reading it ("Audio file could not be read").
 [[nodiscard]] inline const AudioFixture& sharedAudioFixture() {
-    static const AudioFixture fixture = makeAudioFixture("/tmp/opencode/gpu-contract/audio", "plot_fixture.wav");
-    return fixture;
+    struct Owned final {
+        AudioFixture fixture;
+        Owned() {
+            std::random_device device;
+            const auto name =
+                "bloom-audio-plot-" + std::to_string(device()) + "-" +
+                std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+            fixture =
+                makeAudioFixture(std::filesystem::temp_directory_path() / name, "plot_fixture.wav");
+        }
+        Owned(const Owned&) = delete;
+        Owned& operator=(const Owned&) = delete;
+        ~Owned() {
+            std::error_code ignored;
+            std::filesystem::remove_all(fixture.directory, ignored);
+        }
+    };
+    static const Owned owned;
+    return owned.fixture;
 }
 
 struct AudioPlotValues final {
