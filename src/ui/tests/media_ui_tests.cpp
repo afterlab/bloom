@@ -620,6 +620,15 @@ void run() {
     // The controller decides what a revision needs when it is published, so the proof is that
     // nothing was asked of the worker: no job started, none is pending, and no file was looked at.
     {
+        // The read counters are the whole process's: a worker still finishing earlier work (the
+        // tail of a thumbnail job that was cancelled and replaced) would move them, so the
+        // comparison starts only once the scheduler has nothing running.
+        require(awaitQtCondition("the scheduler is idle before the unrelated edit",
+                                 [&] {
+                                     return scheduler.isQuiescent() && !controller.busy() &&
+                                            !controller.thumbnailsPending();
+                                 }),
+                "the scheduler is idle before the unrelated edit");
         const auto jobs = controller.thumbnailJobsStarted();
         const auto work = platform::sourceReadWork();
         setSource("loopMode", std::int64_t{1});
@@ -713,6 +722,13 @@ void playbackStartsNoMediaJobs() {
             "the status bar summary names the first sources and counts the rest");
     // An edit that leaves the assets alone starts no thumbnail job and looks at no file.
     {
+        // As above: nothing may still be running when the process-wide read counters are taken.
+        require(awaitQtCondition("the scheduler is idle before the edit",
+                                 [&] {
+                                     return scheduler.isQuiescent() && !controller.busy() &&
+                                            !controller.thumbnailsPending();
+                                 }),
+                "the scheduler is idle before the edit");
         const auto edit = platform::sourceReadWork();
         commands::Transaction more("Add Layer", session.snapshot().revision());
         more.emplace<commands::AddImageLayer>(session.compositionId(),
