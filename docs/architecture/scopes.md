@@ -153,6 +153,11 @@ and, for a Failed record, the reason.
 - Playback and scrubbing only read cached tables: stepping through a cached range prepares nothing
   and measures nothing.
 
+Queued, not on main (#733): opening a Scopes panel after a RAM Preview was cached finds every
+cached frame without tables, so the Viewer prepares those frames again. #733 changes the Display
+signal to count the frame the Viewer shows at display time, with no Display-signal tables stored
+per frame. Everything above describes what is on main today.
+
 ## The panel
 
 `ScopesEditor` (`bloom.scopes`) is five collapsible panes, each with only its title and collapse

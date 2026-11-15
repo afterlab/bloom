@@ -48,10 +48,10 @@ enter and drop cues are exempt: they report that gesture. Event cues are never s
 
 ## Calling it
 
-- Result events: `ExportQueueAdapter` calls `uiFeedback.announceRender(succeeded, detail)` for every export job
-  outcome (frame, range and composition exports are all jobs), `announceRender(ok,
-  detail)` for any other render-like job, and `play(event)` for the rest. The Engine's Export queue
-  calls `announceRender` when a job finishes; it needs no other dependency.
+- Result events: `ExportQueueAdapter` calls `uiFeedback.announceRender(succeeded, detail)` for every
+  export job outcome (frame, range and composition exports are all queue jobs; cancelled jobs and
+  a drained queue make no sound), and `AssetController::importFinished` and
+  `CompositionSession::commandRejected` call `play(event)` from `apps/bloom/main.cpp`.
 - Interaction events come from `InteractionSounds`. A new kit control that should cue adds one case
   to `InteractionSounds::hook`.
 

@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-11-06
+Updated: 2026-11-15
 
 ## Purpose
 
@@ -17,8 +17,9 @@ the first Compositing workspace proof.
 
 - `WorkspaceHost` owns one recursive split tree.
 - A normal split is a non-collapsible `QSplitter` with an orientation, at least two children, and
-  proportional weights. The authored default nests a full-height right column (Assets over
-  Properties) beside a left region whose top row is Viewer | Nodes and whose bottom is the Timeline.
+  proportional weights. The authored default nests a full-height Properties column beside a left
+  region whose top row is Assets | Viewer and whose bottom is the Timeline (the table under
+  "Authored default and Version 2 migration").
 - A leaf is an `EditorArea` with a stable area ID and one selected stable editor type ID.
 - `EditorArea` instantiates only its selected editor. Switching type destroys the old editor widget
   and creates the selected editor without mutating project data.
@@ -47,8 +48,9 @@ The first slice supports:
 - reset the Compositing workspace to the Default preset
 - save and restore topology, proportions, area IDs, active area, and editor type IDs
 
-Split, close, maximize, restore, and reset are available through visible Window-menu actions
-(Split Active Area Right, Split Active Area Down). An area header's right-click menu offers Split
+Split, close, maximize and restore are available through visible Window-menu actions
+(Split Active Area Right, Split Active Area Down, Close Active Area, Maximize Active Area); reset is
+the Workspace field's Reset Workspace. An area header's right-click menu offers Split
 Right, Split Down, Fullscreen and Close for that area. No dedicated default shortcut is assigned
 yet; shortcut and remapping policy needs a cross-platform keymap design.
 

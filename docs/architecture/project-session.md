@@ -2,15 +2,17 @@
 
 Status: accepted
 
-Implementation status: synchronous Qt-free ownership, editable/degraded/preserved-read-only state,
-immutable document access, command forwarding, clean revision, dirty state, application-owned
-runtime session identity, checked content-bound Open/path generations, sealed Save/Save-As path
-authority, and generation-scoped publication-intent-ordered savepoint acceptance are implemented.
-Save-As path authority is exclusive and supports typed abandonment. Asynchronous Open/Save, atomic
-content installation, round-trip state, unsaved continuations, and complete result handling remain
-pending.
+Implementation status: implemented. Synchronous Qt-free ownership, editable/degraded/preserved-read-only
+state (`ProjectSessionContentKind`), immutable document access, command forwarding, clean revision,
+dirty state, application-owned runtime session identity, checked content-bound Open/path
+generations, sealed Save/Save-As path authority with typed abandonment, generation-scoped
+publication-intent-ordered savepoint acceptance, asynchronous Open, Save, Save As and Save Copy with
+staged, verified publication, unsaved-change continuations and crash-recovery offers (`ProjectHost`,
+`src/host/session_open.hpp`, `session_save.hpp`, `session_recovery.hpp`) are on main. The recent
+projects list described under "Recent Paths And Presentation State" is not built: there is no Open
+Recent menu.
 
-Updated: 2026-11-06
+Updated: 2026-11-15
 
 ## Purpose
 
@@ -41,7 +43,7 @@ owns:
 - the exact clean revision and the most recent publication warning
 
 A preserved read-only open whose unknown core data cannot construct a trusted `Document` instead
-owns a `PreservedReadOnlyProject`: bounded original archive data, source path and identity, format
+owns preserved read-only content (`ProjectSessionContentKind::PreservedReadOnly`): bounded original archive data, source path and identity, format
 versions, summary metadata, and diagnostics. It has no command stack and supports only inspection,
 byte-preserving Save Copy, or closing.
 
@@ -407,7 +409,8 @@ Cancel-then-Discard, rather than treating the quiescence signal alone as proof o
 
 ## Recent Paths And Presentation State
 
-Recent paths are application preferences, not project truth. Version 1 retains at most ten entries,
+Recent paths are application preferences, not project truth. Not built yet: Bloom keeps no recent
+projects list today. When it does, version 1 retains at most ten entries,
 most recently accepted first. It adds a path only after successful Open or accepted Save As, removes
 duplicates using the resolved target identity, and does not remove a missing path until the artist
 chooses to forget it or a later open diagnoses it.

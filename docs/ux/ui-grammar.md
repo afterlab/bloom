@@ -1034,11 +1034,9 @@ and `compositionSettingsCancel` (the earlier `assets*` names are retired); its p
 `preferencesRestoreDefaultsConfirmation`, `preferencesMediaDiskCacheDirectoryReason` and
 `preferencesMediaDiskCacheDirectoryClear`; an Automatic/Custom value's mode dropdown is its field's
 name plus `Mode`, a switch's words its name plus `Label`),
-`licensesWindow` (`licensesCloseButton`), `compositionExportDialog` (`compositionExportFirst`,
-`compositionExportLast`, `compositionExportBrowse`, `compositionExportAudio`,
-`compositionExportContinue`), `exportFrameRangeDialog`
-(`exportFrameRangeDestination`, `exportFrameRangeBrowse`), `exportApproval`, the failure notices
-`projectSaveFailed`, `projectOpenFailed`, `projectCopyFailed`, `exportFailed` and
+`licensesWindow` (`licensesCloseButton`), `newCompositionDialog`, `svgImportModeDialog`,
+`workspaceSavePrompt`, `workspaceDeletePrompt`, the failure notices
+`projectSaveFailed`, `projectOpenFailed`, `projectCopyFailed` and
 `projectColorSettingsFailed`, and the label color picker `timelineLayerLabelColorPicker` (it
 replaces `timelineLayerLabelColorDialog`). A prompt's heading and detail are `<dialog>Heading` and
 `<dialog>Detail`.

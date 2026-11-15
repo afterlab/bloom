@@ -59,13 +59,10 @@ Category **E** is an event sound (default on); **I** is an interaction sound (de
 
 | Event | Where it fires | Cat. | Sound | Default |
 | --- | --- | --- | --- | --- |
-| Frame export finished | `ExportJobSucceeded` / `ExportJobFailed` events read by `ExportQueueAdapter` (`export_queue_adapter.cpp`) | E | render_succeeded + notification when inactive | On |
-| Range (sequence) export finished | same signal, `frame_export_controller_composition.cpp` and the range driver | E | render_succeeded + notification | On |
-| Composition (video) export finished | same signal (`frame_export_controller_composition.cpp`) | E | render_succeeded + notification | On |
-| Export published with a warning | same signal, `PublishedWithWarning` | E | render_succeeded + notification | On |
-| Export failed, refused or not approvable (including verification failures) | same signal, `Failed`, `Refused`, `NotApprovable` | E | render_failed + notification; the error dialog adds no second sound within 80 ms | On |
-| Export cancelled | same signal, `Cancelled` | none | Silent: the artist asked for it | n/a |
-| Engine Export queue job finished or failed | `UiFeedback::announceRender` (called by the queue) | E | render_succeeded or render_failed + notification | On |
+| Export queue job finished | `ExportJobSucceeded` event read by `ExportQueueAdapter` (`export_queue_adapter.cpp`); every export, frame, range or composition, is a queue job | E | render_succeeded + notification when inactive | On |
+| Export queue job finished with warnings | same event with `withWarnings` | E | render_succeeded + notification | On |
+| Export queue job failed or refused (including verification failures) | `ExportJobFailed` event | E | render_failed + notification; the error dialog adds no second sound within 80 ms | On |
+| Export cancelled, queue drained | `ExportJobCancelled`, `ExportQueueDrained` | none | Silent: the artist asked for the cancel, and every job in a drained queue was already announced | n/a |
 | RAM preview cache complete | `RamPreviewController::cachingFinished` | none | Silent: it refills after most edits and would sound constantly; autoplay is the cue | n/a |
 | Import finished | `AssetController::importFinished` (`asset_controller.cpp`) | E | import_finished | On |
 | Import partial (some items skipped) | same signal | E | render_failed (caution) | On |
@@ -73,7 +70,7 @@ Category **E** is an event sound (default on); **I** is an interaction sound (de
 | Import cancelled or discarded | same signal | none | Silent | n/a |
 | Project save failed | `ProjectHost::saveFinished` inform dialog (`main_window.cpp`) | E | render_failed via the Error prompt | On |
 | Project open or copy failed | `openFinished`, `copyFinished` inform dialogs (`main_window.cpp`) | E | render_failed via the Error prompt | On |
-| Recover offered | none: Bloom has no recovery prompt yet | n/a | n/a | n/a |
+| Recover offered | `projectRecoverUnsaved` confirmation, a Question prompt (`project_host.cpp`) | I | modal_open, like any confirmation | Off |
 | Command refused | `CompositionSession::commandRejected` (`composition_session.cpp`), wired in `apps/bloom/main.cpp` | E | refused | On |
 | Error dialog (any kit prompt with Error tone) | `kit::inform` / `kit::buildConfirm` (`kit/dialog_prompts.cpp`), seen by `InteractionSounds` | E | render_failed | On |
 | Confirmation, Warning-tone and Info dialogs | same | I | modal_open (see Modal open) | Off |
