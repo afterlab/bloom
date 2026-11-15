@@ -2,7 +2,7 @@
 
 Status: canonical
 
-Updated: 2026-11-01
+Updated: 2026-11-15
 
 This directory is Bloom's current source of truth. Historical notes outside this repository may
 provide research or rationale, but they are not binding until adopted here.
@@ -53,7 +53,7 @@ provide research or rationale, but they are not binding until adopted here.
    [`architecture/ui-feedback.md`](architecture/ui-feedback.md), and
    [`architecture/profiler-feed.md`](architecture/profiler-feed.md) — execution and platform
    contracts and extension boundaries.
-7. [`roadmap.md`](roadmap.md) — proof-oriented implementation sequence.
+7. [`roadmap.md`](roadmap.md) — shipped, queued and parked work, in the backlog tracker's order.
 8. [`decisions/`](decisions/) — accepted architecture decision records, among them the memory
    design ([ADR 0037](decisions/0037-memory-follows-the-working-set.md): staging is scratch, media
    stays compact, memory follows the working set).
@@ -181,98 +181,66 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 
 ## Current Checkpoint
 
+- The v0.1.0-alpha.1 release comes first: the disk cache headroom (#732), Scopes counted at display
+  time (#733) and the installers, self-update and release build (#734). The three node groups
+  follow, then tests and performance. The [roadmap](roadmap.md) holds the order.
+- Projects save, open and round-trip through the deterministic `.bloom` container, with schema
+  migrations, preserved unknown data and the File menu driving it
+  ([project format](architecture/project-format.md),
+  [project session](architecture/project-session.md)).
+- A shared GPU scene prepares every current compiled pixel operation under a strict fail-closed
+  operation and render-route coverage contract, with no pixel exception. The resident Viewer
+  preview and the final-render routes both evaluate through it, shown in the status bar as
+  "GPU render". The CPU reference evaluator remains the correctness oracle and the explicit
+  supported fallback ([GPU backend](architecture/gpu-backend.md),
+  [platform support](architecture/platform-support.md)).
+- Memory follows the working set: admission uses measured capacity minus the RAM and VRAM headroom
+  preferences (default 2 GiB each) and each phase's actual need, with typed waits, retirement and
+  recovery ([ADR 0037](decisions/0037-memory-follows-the-working-set.md),
+  [GPU admission](architecture/gpu-backend.md#processing-phase-admission-by-measured-capacity-and-actual-need),
+  [Memory](user-guide/memory.md)). Slow sources get local copies through the disk cache
+  ([ADR 0040](decisions/0040-source-mirror-disk-cache.md)).
 - The UI kit polish release is complete: one control look and height, the shared popup window, the
   Inter/Geist type system, the contextual tool bar ([ADR 0031](decisions/0031-contextual-tool-bar.md),
-  [user guide](user-guide/toolbar.md)) and a UI grammar gate with an empty allowlist. What
-  shipped, the validation evidence and the macOS/Windows gaps are in the
-  [release record](plans/ui-kit-polish-release.md).
-- The deterministic CPU preview vertical slice through Batch 3 is implemented and locally verified;
-  qualified shared and desktop CI on all three product platforms will remain the cross-platform
-  qualification authority. The current automated merge gate is Linux native/core only.
-- Batch 4's rational-time, animation, and interaction contracts are accepted. Durable curves,
-  authoring commands, exact sampling, CPU evaluator integration, exact session time, and the
-  one-active/one-newest preview-request gate are implemented. The 16 ms pointer cadence, timeline
-  key projection, and direct manipulation remain active work.
-- Persistence, project-session, color-management, frame-output, and dependency-intake contracts now
-  define Batches 5–7. Initial persistence foundations now include budget-enforced I/O allocation,
-  strict text/decimal/Base64 primitives, bounded canonical JSON layout writing, canonical manifest
-  encoding and schema checks, manifest dependency validation, durable allocator and extension
-  state, application-wide publication ordering, a Linux staged-artifact foundation with mandatory
-  close/reopen verification, and synchronous Qt-free project-session ownership. Complete JSON
-  parsing/document encoding, the document schema, ZIP, format-specific semantic verification,
-  non-Linux publication, and async Open/Save remain pending. Standalone durable color-setting
-  values and versioned OCIO content-revision primitives are implemented without inventing a default
-  digest; Project ownership waits for the qualified Bloom Neutral v1 asset and profile. ADR 0019
-  accepts the dependency mechanism, while concrete prefixes and profiles remain pending
-  qualification.
-- A shared GPU scene prepares every current compiled pixel operation under a strict fail-closed
-  operation and render-route coverage contract, with no pixel exception. The resident preview and
-  final-render routes both evaluate through it, including the general GPU output-color production
-  context, a 6000x4000 media+CST+text export with locally verified native execution, and
-  capacity-aware resident sizing. The CPU reference evaluator remains the correctness oracle and
-  explicit supported fallback; GPU execution has been exercised on Linux, macOS and Windows
-  ([platform support](architecture/platform-support.md)). Vulkan/MoltenVK remains a working GPU direction
-  until its cross-platform parity and lifecycle spike passes.
-- Ordinary Viewer preview now uses genuine GPU scene/display preparation followed by an asynchronous
-  final RGBA8 transfer and QWidget painting, shown in the status bar as "GPU render". Bounded
-  private Linux checks qualify clipping, ROI, coherent outlines, host-only Full/Half 100-frame reuse,
-  real animated text manipulation and short useful cold progress. Channel remapping is a bounded
-  CPU worker with explicit provenance. Native preview/final GPU coverage remains required. These
-  Linux qualification now includes ten Half100 fill/purge cycles, 60 seconds of retained painted
-  playback and bounded command batching in the [current record](plans/gpu-304-linux-qualification.md).
-  Cross-platform native execution, physical scanout and whole-process memory guarantees remain
-  unqualified.
-- Shared preview completion now uses callback-free neutral runtime subscriptions and one coalesced
-  queued UI drain. RAM/background refill and typed Viewer/asset/bootstrap/export/purge consumers
-  receive completed results independently of Jobs progress snapshots. Bounded private tests qualify
-  burst coalescing, held-worker UI activity and GPU Half100 refill; native acknowledgements,
-  separate text-layout/ProjectHost I/O polling and platform gates remain separate. The Linux
-  sustained packed playback result is recorded above.
-- Playback now derives cache-independent targets from elapsed rational wall/audio time, using checked
-  valid-grid origins, live reanchoring and absolute intent-time deadlines. Five competing 60-second
-  CPU-reference sessions show zero exact desired-grid mismatches; private GPU animation pixels
-  separately qualify short visible progress. This is clock/image correctness, not painted FPS or
-  real-audio/sustained/platform qualification.
+  [user guide](user-guide/toolbar.md)) and a UI grammar gate with an empty allowlist
+  ([release record](plans/ui-kit-polish-release.md)).
+- The shipped node families are listed in the [node catalogue](product/node-catalogue.md), and
+  Python, `bloom-cli` and MCP automation are documented in the user guides.
 
-- Reusable cache retention now uses off-UI process-aware sampling, pairing visible Linux cgroup v2
-  limits/usage with zero reclaimable credit. Explicit retention preferences are authoritative;
-  only observed absolute OS limits constrain their combined allowances. Cold zero retention preserves
-  foreground preparation and separate live export reservations. Saved requests, configured ceilings
-  and effective reusable allowances remain distinct; unsupported platforms disclose host-only fallback.
-  Bounded policy/lifetime tests and a private capped helper pass. This is not an aggregate process/OOM
-  guarantee. Broader reservations and remaining G4–G10 gates stay open.
+The roadmap lists what has shipped, what is queued and what is parked.
 
-- Typed task results now belong to live handles rather than retained terminal history. Weak writers,
-  admission pins and pointer-only lock exchange preserve take-once delivery while releasing abandoned
-  results outside locks. CPU/I/O and mock GPU forced/late/reentrant lifetime gates pass; scheduler
-  history, accounting and completion ordering remain unchanged. Processing-phase admission is
-  documented separately and adds no whole-process memory guarantee beyond the headroom.
-
-- Processing-phase admission uses measured capacity minus the RAM/VRAM headroom preferences
-  (default 2 GiB each) and each phase's actual need: explicit shared roots, checked host/device/count
-  claims, typed waits that resume on release, refusal only when one frame cannot fit the whole usable
-  capacity, strict Viewer priority for exports, retirement/quarantine lifetime and recovery of a
-  generation latched by an unproven retirement; see the
-  [owning GPU contract](architecture/gpu-backend.md#processing-phase-admission-by-measured-capacity-and-actual-need).
-
-- Rooted packed-host RGBA8 payload ownership and conservation are accepted within
-  [a separate bounded slice](architecture/gpu-backend.md#rooted-packed-host-payload-ownership-bounded-ownership-slice).
-  Its off-UI published-retirement follow-on implements charged worker freeing with explicit
-  shutdown ownership; core/GUI, headless, Linux CPU-only and all 103 affected strict checks pass.
-  No whole-process accounting is implied.
-
-The detailed implementation status and next merge gates live in [`roadmap.md`](roadmap.md).
-
-The [performance and reliability sprint](plans/performance-reliability-sprint.md) tracks the ordered
-node, recovery, RAM preview, cache, audio, media and document work under #306, with
+The [performance and reliability sprint](plans/performance-reliability-sprint.md) records the
+ordered node, recovery, RAM preview, cache, audio, media and document work under #306, with
 [local milestone validation](development/local-validation.md). Performance and colour/format
 accuracy are measured with the [benchmark suite](development/benchmarks.md).
 
 The [production workflows release](plans/production-workflows-release.md) records what landed under
-#374 (timeline, footage, masking, EXR, composition settings and Assets) and the work still open.
+#374 (timeline, footage, masking, EXR, composition settings and Assets).
 
-See [The Export panel](user-guide/exporting-video.md) for the render queue and
-[Export presets](user-guide/exporting-video.md) for presets, audio, verification and cancellation.
+See [The Export panel](user-guide/exporting-video.md) for the render queue, presets, audio,
+verification and cancellation.
+
+## More Documents
+
+- [Color Management](user-guide/color-management.md) — project color configuration, input
+  interpretation and the display and output transforms.
+- [Image filters](architecture/image-filters.md), [path processing](architecture/path-processing.md),
+  [data blocks](architecture/data-blocks.md), [point tracking and Stabilize](architecture/point-tracking.md)
+  and [instancing](architecture/instancing.md) (designed, not yet built) — the contracts of the node
+  families that have their own document.
+- [COLOR-5 identity oracle](architecture/color5-identity-oracle.md) — an independent calculation
+  of the display and media digest pins.
+- [UI grammar](ux/ui-grammar.md) and its [validation and captures](ux/grammar1-validation.md) — the
+  rules every control follows and how they are enforced.
+- [Node delivery plan](plans/node-delivery-plan.md) and the
+  [user control policy audit](plans/user-control-policy-audit.md).
+- Benchmark records: [2026-10-31](development/benchmark-results-2026-10-31.md),
+  [2026-11-03](development/benchmark-results-2026-11-03.md),
+  [2026-11-05 scenarios](development/benchmark-results-2026-11-05-scenarios.md),
+  [#386](development/benchmark-results-2026-11-06-386.md),
+  [#457](development/benchmark-results-2026-11-06-457.md),
+  [#549](development/benchmark-results-2026-11-06-549.md) and
+  [#549 decode](development/benchmark-results-2026-11-06-549-decode.md).
 
 ## Status Vocabulary
 
@@ -280,6 +248,9 @@ See [The Export panel](user-guide/exporting-video.md) for the render queue and
 - `working`: the current direction, expected to be tested and refined.
 - `proposed`: an option under discussion.
 - `superseded`: retained for history but no longer current.
+- `amended`: an accepted decision whose text stands, with a dated note where the code or a later
+  decision changed part of it.
+- Plans under `plans/` open with their state: `complete`, `in progress` or `superseded`.
 
 Documents should separate accepted decisions from working assumptions and open questions. Avoid
 presenting deferred product scope as an implementation commitment.

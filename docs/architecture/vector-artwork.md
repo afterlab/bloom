@@ -22,7 +22,7 @@ limits and what is reported rather than imported.
 and so one undo step, in one of two modes (`SvgImportMode`, spelled `layer` and `shapes`):
 
 - **As one layer** (`layer`, the operation's default): one entry layer whose source is one
-  **Vector Artwork** node (`bloom.vector-artwork`, `src/document/vector_artwork_nodes.hpp`). The
+  **Vector Artwork** node (`bloom.vector-artwork`, `src/document/include/bloom/document/vector_artwork_nodes.hpp`). The
   graph holds that layer and that node, nothing else. The file's bytes are held in the project, so
   the layer renders, saves and reopens with the file gone.
 - **As editable shapes** (`shapes`): the breakdown described under [Structure](#structure), every

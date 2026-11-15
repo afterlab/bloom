@@ -451,7 +451,7 @@ attribute and storage caps with their diagnostics. Attributes come only from the
 ordinary scalar broadcast in this slice -- no arrays yet, so an instancer draws N copies in one place
 until INSTANCE-2 gives it a layout. That is deliberately a boring picture and a complete vertical.
 
-Fence: `src/document/node_definition_registry.*`, `src/runtime/compiled_plan.hpp`,
+Fence: `src/document/node_definition_registry.*`, `src/runtime/include/bloom/runtime/compiled_plan.hpp`,
 `snapshot_compiler*`, `cpu_composition_evaluator.cpp` and its tests.
 
 Gates: evaluator tests pinning one, two and 500 elements against independently stated pixel

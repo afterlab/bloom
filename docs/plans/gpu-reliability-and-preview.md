@@ -269,7 +269,7 @@ destroyed, then reaches zero. This witnesses independent legacy-native sticky ow
 not execute the new resident OverBudget branch. That branch has the explicit-256-MiB actual-path
 proof and separately reviewed downstream guards. Unknown work remains charged/sticky. The
 earlier B budget failure remains preserved. The
-[GPU contract](../architecture/gpu-backend.md#preview-default-propagation-follow-on)
+[GPU contract](../architecture/gpu-backend.md#preview-default-propagation)
 and [Tasks boundary](../architecture/task-system.md#delivered-default-admission-budgets)
 own implemented semantics. This is not allocation-owned native or whole-process accounting.
 
@@ -1906,7 +1906,7 @@ larger cache are insufficient substitutes.
 
 
 Shared prepared HOST retention shipping checkpoint (2026-10-10):
-the [owning contract](../architecture/gpu-backend.md#shared-prepared-host-retention-bounded-source-reuse)
+the [owning contract](../architecture/gpu-backend.md#prepared-host-retention-removed)
 uses one existing OperationCache registration/LRU and namespace-safe prepared facade, not another
 participant or fixed one-sixteenth quota. Shared omitted entry count is memory-only; a 4,100-entry
 one-pixel test under 8 MiB admits metadata and retires through the existing host owner. Explicit

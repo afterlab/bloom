@@ -7,7 +7,7 @@ face. No font file is bundled into a project, saved, or copied by Collect Files.
 ## The font ID
 
 A text node's `font` parameter is a String holding the encoded font ID
-(`src/document/font_id.hpp`):
+(`src/document/include/bloom/document/font_id.hpp`):
 
 ```
 source=google;family=Roboto;style=Bold;weight=700;italic=false;axes=wdth:100;version=v51
@@ -32,7 +32,7 @@ The parameter is a String; the writer emits no Font assets.
 
 ## Resolution
 
-`FontResolver` (`src/runtime/font_resolver.hpp`) turns an ID into a font file in this order:
+`FontResolver` (`src/runtime/include/bloom/runtime/font_resolver.hpp`) turns an ID into a font file in this order:
 
 1. An installed system font: the PostScript name first, then family and style, then the same family
    with equal weight and slope. A different weight is never taken as the requested one.

@@ -32,7 +32,7 @@ The owner's decisions (2026-10-31) replace that posture:
 | macOS | VideoToolbox/AVFoundation → bundled FFmpeg |
 | Linux | FFmpeg with VA-API (when hardware is requested) → FFmpeg software |
 
-`MediaProviderChainV1` (`src/media/provider/provider_chain.hpp`, codec-free) selects **per
+`MediaProviderChainV1` (`src/media/provider/include/bloom/media/provider/provider_chain.hpp`, codec-free) selects **per
 operation**: one direction (decode or encode) of one codec family, plus the container for encode.
 A candidate is skipped when it is not installed (its worker executable or platform framework is
 absent), when its handshake does not declare the operation, or when it fails the attempt with any

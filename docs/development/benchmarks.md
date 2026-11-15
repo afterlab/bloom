@@ -519,7 +519,7 @@ leave the existing ones unchanged, so their baselines stay comparable.
 
 ### The instance
 
-The runner starts a separate Bloom (`apps/bloom/Bloom`) for every measurement, offscreen
+The runner starts a separate Bloom (the built `Bloom` executable) for every measurement, offscreen
 (`QT_QPA_PLATFORM=offscreen`, no `DISPLAY`/`WAYLAND_DISPLAY`, no session bus, so no desktop
 notifications), in a scratch home of its own: `HOME` and every XDG folder point into
 `<work-dir>/scratch`, so its preferences, MCP token, crash recovery and caches are its own and are

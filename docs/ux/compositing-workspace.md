@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-10-30
+Updated: 2026-11-15
 
 Source: user-provided Bloom UI sketch dated 2026-08-25.
 
@@ -15,8 +15,9 @@ observe and manipulate one composition without creating competing sources of tru
 
 The initial sketch contains:
 
-- global File, Edit, View, Window, and Help menus
-- Compositing, Editing, Grading, Scripting, and Rendering workspaces
+- global menus; the app now has File, Edit, Composition, View, Window, and Help
+- Compositing, Editing, Grading, Scripting, and Rendering workspaces; the app ships the Default,
+  Node, Export and Animation presets instead ([Workspace presets](../user-guide/workspace-presets.md))
 - a compositor viewer with direct manipulation tools and playback controls
 - a node editor showing source data and transforms
 - an Assets browser
@@ -24,8 +25,8 @@ The initial sketch contains:
 - a layer and animation timeline
 - contextual editor headers with editor type and target selectors
 
-Only Compositing is active in the initial scaffold. Other workspace labels communicate direction but
-must not imply implemented scope.
+The sketch's other workspace labels communicated direction. Bloom does not ship Editing, Grading or
+Scripting workspaces; the built-in presets are arrangements of the same panels.
 
 ## Shared Context Contract
 
@@ -60,7 +61,7 @@ Scrubbing requests interactive previews through a bounded newest-wins cadence; o
 publish after the desired time advances.
 
 Viewer translation starts only through the active transform tool, a valid target, and a current
-non-empty composition mapping rectangle. Batch 4 has no durable layer lock field.
+non-empty composition mapping rectangle. A locked layer refuses the edit.
 Pointer motion previews a typed session override through the canonical compiler and evaluator while
 leaving project revision and undo history unchanged. Release commits one constant edit or one exact-
 time key insertion/update. Escape, secondary-button cancellation, pointer-capture loss, a stale
