@@ -19,8 +19,8 @@ quietly change your picture.
 
 > [!IMPORTANT]
 > Bloom is pre-release software. There are no downloadable builds yet (installers for the first
-> alpha are in progress), so you build it from source. Day-to-day development and testing happen on
-> Linux, and macOS and Windows builds are supported.
+> alpha are planned in #734), so you build it from source. Day-to-day development and testing
+> happen on Linux, and macOS and Windows builds are supported.
 
 ## A look around
 
