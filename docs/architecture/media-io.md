@@ -1555,7 +1555,7 @@ documents.
 | --- | --- |
 | Media disk cache budget | `min(10% of free disk space, 32 GiB)` default; settings override |
 | Media disk cache entry count | 200,000 |
-| Media disk cache async write queue | 64 pending writes, oldest-blocking dropped when full |
+| Media disk cache write queue | 256 MiB of encoded source bytes (`kSourceMirrorWriteQueueByteCapacity`), lowered under memory pressure; the oldest pending write is dropped when full |
 
 ## Export Pipeline
 

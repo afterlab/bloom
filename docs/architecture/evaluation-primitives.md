@@ -206,9 +206,10 @@ Version 2 freezes these additional details:
   are evaluated in the parenthesized order printed in the table, with separate unfused operations;
   the compiler may not contract them.
 
-Wrap is deferred until half-open endpoint and
-extreme-range reduction behavior is frozen. Snap is deferred until its anchor, signed increment,
-halfway tie, and overflow rules are frozen. Omitting these operations is preferable to exposing
+Wrap and Snap are not `ScalarPrimitive` operations. The Wrap and Snap value nodes define their own
+half-open endpoint, nearest-multiple and zero-step rules in
+[`value-node-library.md`](value-node-library.md); the shared primitive set stays limited to
+operations whose rules are frozen, because omitting an operation is preferable to exposing
 backend-dependent math under a stable ID.
 
 These are kernels, not artist-visible node records. Artist nodes add typed ports, defaults, units,
@@ -1345,19 +1346,19 @@ status bar shows the operation/preview accounts; other counters support tests an
 | `OperationCache`, decoded media entries | operation budget (shared) | `retainedBytes(DecodedMedia)` |
 | `PreviewFrameCache` display buffers | preview budget | `residentBytes()` |
 | `DecodedVideoCache` frames | weighted video allowance | `residentBytes()` |
-| `MediaDiskCache` pending async writes | 64 entries **and** up to 256 MiB, scaled by ledger | `statistics().asyncQueueBytes`, `peakAsyncQueueBytes` |
+| `SourceMirror` pending writes (the media disk cache) | up to 256 MiB of encoded source bytes, scaled by ledger | `statistics().pendingWriteBytes`, `peakPendingWriteBytes` |
 | `AssetController` proxy thumbnails | 512 entries **and** up to 8 MiB, scaled by ledger | `proxyCacheBytes()` |
 | `AssetController` decoded audio buffers | up to 2 GiB aggregate, scaled by ledger | `decodedAudioBytes()` |
 | `ExportResourceLedgerV1` export frame queue | sampled processing-root headroom, plus any explicit caller cap; legacy unrooted 4 GiB service/2 GiB job defaults | `chargedBytes()`, root reservations |
 | Viewer display buffers | one retained frame plus at most one channel-remap copy, per open viewer | -- |
 
-The disk cache's pending-write queue is the pool that mattered. It was bounded at 64 entries and
-never at bytes, and a queued write owns the last reference to a decoded Float32 image: 64 pending
-4K RGBA32F frames are 7.9 GiB and 64 pending 8K frames are 31.6 GiB of process memory no budget ever
-saw. It is now bounded by bytes as well, and the byte bound is the binding one -- a write whose
-payload alone exceeds the capacity is refused at `storeAsync()` rather than staged and then
-discarded by the writer thread. A refused write is counted in `droppedAsyncWrites` and only means
-the next read decodes again; it can never mean incorrect pixels.
+The disk cache's pending-write queue is the pool that mattered. A queued write used to own the last
+reference to a decoded Float32 image, so 64 pending 4K RGBA32F frames were 7.9 GiB and 64 pending 8K
+frames 31.6 GiB of process memory no budget ever saw. The source mirror (#718, ADR 0040) queues the
+encoded source bytes instead, bounded by bytes only (`kSourceMirrorWriteQueueByteCapacity`, 256 MiB):
+a full queue drops its oldest pending write, and a source larger than the whole capacity is taken
+only while the queue is empty. A dropped write is counted in `droppedWrites` and only means the
+next read reads the source again; it can never mean incorrect pixels.
 
 No pool above is keyed by window size, screen or device pixel ratio. A resize, a move to another
 screen or virtual desktop, a ratio change or a hide/show re-lays out and repaints the retained

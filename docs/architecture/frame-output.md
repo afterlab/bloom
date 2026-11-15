@@ -9,10 +9,11 @@ digest, preset-specific bound-analysis products, the module-private Output Seman
 1 streaming serializer/preparer, portable golden vectors, the flat OpenEXR adapter with its
 semantic reopen verifier and verifier-product issuance, and headless end-to-end EXR export
 publication (analysis attempt graph, immutable export request, and the shared-coordinator
-publication job), the interactive frame-export command with explicit digest approval, the
+publication job), the frame-export approval step (approval by policy in the export queue since
+ADR 0033; see "Export Queue" below), the
 constrained PNG codec with strict chunk-profile verification and kind-1 identity issuance, and
 the PNG export path end to end (attempt color preparation, prepared-stream production, and the
-export command's preset choice) are implemented. MEDIA-4 enables TIFF through the isolated worker
+queue's preset choice) are implemented. MEDIA-4 enables TIFF through the isolated worker
 and adds ProRes MOV, DNxHR MXF and PCM WAV composition export. A project-relative archive, an
 external archive and an external loose OCIO config resolve through the supervised helper on Linux
 for every output path (color-management.md, "The config request group as implemented"); on macOS
@@ -1253,7 +1254,7 @@ and [Export](../user-guide/exporting-video.md) for artist-facing controls.
 
 ## Deliverable presets and sequence names (COLOR-5)
 
-The dialog places two deliverables above the raw presets. **VFX handoff EXR (ACES2065-1, PIZ,
+The Export panel's preset list places two deliverables above the raw presets (`builtin:vfx-handoff-exr` and `builtin:review-h264`). **VFX handoff EXR (ACES2065-1, PIZ,
 1001, ####)** fills output space `ACES2065-1`, PIZ, Start frame 1001, Padding 4 and Pattern
 `<base>.####.<ext>`. It captures `bypassLookNodes=true` for this export only. **Review H.264
 (Rec.709, look on)** captures `bypassLookNodes=false` and the ACES config's
@@ -1270,7 +1271,7 @@ Unknown tokens, repeated/missing frame tokens, overflow, invalid path components
 extensions are refused before publication. A 48-frame handoff to `shot.exr` yields
 `shot.1001.exr` through `shot.1048.exr`.
 
-EXR color preparation runs as cancellable scheduler work before approval. The approval dialog
+EXR color preparation runs as cancellable scheduler work before approval. The approval record
 shows the captured output space and compression and **Look: OFF (handoff)**, or
 `look: baked (N look-tagged effects)`. A Viewer setting cannot change this policy. When a frame
 contains look-tagged effects or explicitly bypasses them, its analysis record appends the domain

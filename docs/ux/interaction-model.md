@@ -45,6 +45,7 @@ with a modifier — bare letters belong to tools.
 | `Ctrl+O` | Open project |
 | `Ctrl+S` / `Ctrl+Shift+S` | Save / Save As |
 | `Ctrl+Q` | Quit |
+| The platform's Preferences key (`QKeySequence::Preferences`, `Cmd+,` on macOS) | Edit → Preferences… |
 | `Ctrl+Alt+N` | New Composition… |
 | `Ctrl+Alt+K` | Composition Settings… for the active composition (the compositor-standard `Ctrl+K` splits layers here) |
 | `Space` | Play/pause immediately from cache in any panel; focused text entry keeps Space |

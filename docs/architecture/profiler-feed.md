@@ -131,7 +131,7 @@ registration. A registered pool without a profile is one "Unnamed pool" row with
 | Decoded video (cache) | frames held | `DecodedVideoCache::find` | `store` | budget eviction and release outside the playback window (plane bytes) | a frame larger than the budget |
 | Proxies (cache) | thumbnails held | the thumbnail lookups of the asset preview worker | a kept thumbnail | trimming (thumbnail bytes) | a thumbnail larger than the allowance |
 | Decoded audio (cache) | buffers held | reusing a cached buffer | a kept buffer | trimming (buffer bytes) | a buffer sent for delivery only |
-| Media disk cache write queue (scratch) | queued writes | disk-cache lookups | disk writes | disk entries evicted (bytes on disk) | writes the queue refused |
+| Source mirror write queue (scratch; the media disk cache) | queued writes | disk-cache lookups | disk writes | disk entries evicted (bytes on disk) | writes the queue refused |
 
 **Telemetry counters.** `bloom::core::telemetry` (`src/core/include/bloom/core/telemetry_counters.hpp`)
 holds the process-wide always-on counters, in the core module because render, media, output and

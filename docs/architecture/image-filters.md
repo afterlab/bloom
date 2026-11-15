@@ -2474,16 +2474,13 @@ of the same, a smaller and a larger window to the CPU oracle; `node.bloom.image-
 
 ## Image Statistics
 
-Not built. Histogram and Image Compare are image nodes whose result stays on the GPU. Image
-Statistics is meant to give the value graph numbers (a minimum, a maximum, a mean) that drive other
-nodes, for instance a Map Range that normalizes a depth pass. That is not an image: the number would
-have to come from the frame's pixels. The value graph is evaluated before the image pass, and Layer
-Bounds is read after it only because bounds need no pixels. A GPU frame is rendered without
-returning any value to the host, and a value read back in the middle of a frame is neither the one
-final readback of the coverage contract nor a host-preparation step it lists. Making it so is a
-decision for the coverage contract and the GPU frame loop, not an addition to a node, and it also
-needs the image pass to follow a value that depends on its own pixels. The reduction by tiles of the
-Histogram's `Bin` and `Sum` passes (and of Auto Exposure's) is the part that carries over.
+Built (#349). Histogram and Image Compare are image nodes whose result stays on the GPU. Image
+Statistics gives the value graph numbers (a minimum, a maximum, a mean, a deviation and a count)
+that drive other nodes, for instance a Map Range that normalizes a depth pass. Its reduction is the
+tile reduction of the Histogram's `Bin` and `Sum` passes (and of Auto Exposure's), and its one
+named result readback is the coverage contract entry `prep.statistics.result_readback`. The node,
+its routes, its readback decision and its evidence are specified in
+[`image-statistics.md`](image-statistics.md).
 
 ## Lens Distortion
 

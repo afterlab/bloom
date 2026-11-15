@@ -418,7 +418,7 @@ primitives 7 -- stand, and no cached or exported frame digest shifts. If a condi
 lane reproduces every current pin through `s5-identity-oracle.py` BEFORE deriving replacements, the
 discipline every previous identity move has followed.
 
-The document schema floor stays 1.16. A new node type stores only its type id, and an attribute
+The document schema stays 1.0. A new node type stores only its type id, and an attribute
 binding is the existing `DriverBinding` record. Array operands carry no authored constant, which is
 what keeps a stored array out of the format.
 

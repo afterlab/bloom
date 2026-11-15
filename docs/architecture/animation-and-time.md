@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-11-01
+Updated: 2026-11-15
 
 ## Geometry and transform levels
 
@@ -601,7 +601,8 @@ them:
   one
 - every frame produces its own analysis attempt, its own digest, and its own publication intent
   through `approveFrameExportV1()`; the byte-equality guard is never bypassed
-- the artist approves ONCE, from the first frame's completed attempt. Asking per frame would make a
+- no frame asks the artist: the queue approves each frame's analysis by policy against the preset's
+  declared expected preservation (frame-output.md, "Export Queue"). Asking per frame would make a
   hundred-frame range a hundred modal dialogs, which is not an approval but an obstacle.
 - file names are the destination's stem, a dot, the frame index zero-padded to at least four digits,
   then the destination's extension -- so one range always sorts lexicographically in frame order
@@ -1414,8 +1415,9 @@ decoded still-image source entry (CACHE-1); an explicit evaluation bypass
 - a RAM preview of a twenty-four frame composition caching every frame, then playing all of them in
   order with nothing evaluated and no frame dropped, and its cancellation keeping what it cached
 
-Curve modifiers, procedural extrapolation, expression sampling, shared curves, playback audio
-sync, multi-layer transform gestures, and onion skinning are explicitly deferred.
+Curve modifiers, procedural extrapolation, expression sampling, shared curves, multi-layer
+transform gestures, and onion skinning are explicitly deferred. Playback audio sync is built (see
+Audio Clock Master).
 
 ## Operation memoization
 

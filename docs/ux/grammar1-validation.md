@@ -1,5 +1,10 @@
 # UI grammar validation and captures
 
+Status: complete, a record of the UI-3 and GRAMMAR-1/2 validation as it was run. The current
+metrics, tokens and object names are owned by [ui-grammar.md](ui-grammar.md); where a figure here
+differs (the toolbar now has eight tool slots, and the Workspace dropdown is 160 wide), the grammar
+is current.
+
 The UI-3 fixture renders the real MainWindow with Viewer, Nodes, Timeline, Assets and
 Properties. It uses a CPU-ready preview, isolated settings, a selected Solid background with its timeline groups expanded and its Properties visible, plus a
 text layer, with its node positions authored through MoveNodes. Focus and pointer hover are cleared before every capture.
@@ -21,8 +26,8 @@ allowlist itself fails the scanner; every live violation is reported. Bare defau
 controls and literal extent arguments following nested token expressions are covered.
 
 The common metrics are Control 26, HeaderRow/FooterRow/ListRow 32, PropertyRow 28,
-IconMedium 16, IconLarge 20 and ToggleCell 24. Dropdown widths are 100, 108, 120 and a
-240 maximum for expanded header selectors. Compact density changes width, not control height.
+IconMedium 16, IconLarge 20 and ToggleCell 24. Dropdown widths are 100, 108, 120 and 160 (the
+Workspace field), and a 240 maximum for expanded header selectors. Compact density changes width, not control height.
 KMenuButton, KIconButton, KIconToggle, KLabel, KSearchField, KRow and KPropertyRow belong to
 the kit, as does `makeMenu`. KPanelSwitcher is a compatibility alias of KDropdown, sharing its
 model, popup and paint path. The icon variant retains the legacy default name.

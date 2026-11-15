@@ -369,7 +369,8 @@ Workspace field on the right:
 
 - **Tools**, on the left: eleven tools in eight `KIconToggle` slots in three groups separated by a
   `ChromeGroupGap`: navigation (Select V, Hand H, Zoom Z), creation (the shape slot, Line, Pen P,
-  Text T) and the Cryptomatte eyedropper. Rectangle R, Ellipse E, Polygon and Star share one slot
+  Text T) and the Cryptomatte eyedropper, which is shown only while a Cryptomatte node is selected
+  or its picker is the active tool (#686). Rectangle R, Ellipse E, Polygon and Star share one slot
   that shows the last shape chosen and carries a small corner mark; a press and hold or a
   right-click opens its flyout menu of all four (a compositor's shape tool slot). Each slot wears
   the one control look with the Selected plate when its tool is active (the tool-column Ghost
@@ -768,7 +769,7 @@ upstream it is (its column is the longest path to the output side), so every Lay
 column and the sources the next. Rows follow the stack top to bottom, as the Timeline lists it:
 each node's upstream subtree owns a horizontal band, its inputs in their own order (Merge's slots
 top first, other ports in declaration order), and a node is centerd on its band. Columns use the
-widest measured card plus `NodeArrangeGap`, bands are `NodeArrangeGap` apart, and every position
+widest measured card plus the arrange gap (`kNodeLayoutSpacing`), bands are the arrange gap (`kNodeLayoutSpacing`) apart, and every position
 lands on the `NodeGrid` lattice. Disconnected graphs stack below the output's. Nodes in a group
 stay adjacent among their siblings, and the frame is recomputed from its members after the
 transaction. `Arrange Selection` applies the same rule to the induced selection and preserves its
@@ -789,7 +790,7 @@ right-click point (the header's Add starts at the pointer when it is over the ca
 middle of the view). Over a link the node can be inserted into, the link takes its hover emphasis
 and the preview an `Accent` outline at `SelectionEdge`. The click places the card where the preview
 is. When that spot would touch another card, the new card alone moves to the
-nearest `NodeGrid` position `NodeArrangeGap` past its neighbour. A new layer's Layer card goes into
+nearest `NodeGrid` position the arrange gap (`kNodeLayoutSpacing`) past its neighbour. A new layer's Layer card goes into
 the layer column at its stack position (above the layer under it) and its source on the same row
 to the left, each moved off any card it would touch. This rule also applies to Assets drops and
 viewer/timeline layer actions, so existing cards never move and a new card never touches another
@@ -951,7 +952,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `NodeSocketDot / NodeRerouteDot` | 8 / 10 | Scene port geometry |
 | `NodeLinkHandleMin` | 32 | Minimum spline tangent |
 | `NodeColumnGap / NodeRowGap` | 80 / 24 | Legacy unplaced-node grid |
-| `NodeArrangeGap` | 64 (four `NodeGrid` steps) | Column, band and creation clearance |
+| `kNodeLayoutSpacing` (the arrange gap) | 64 (four `NodeGrid` steps; `document/node_layout.hpp`, not a `kit::Size`) | Column, band and creation clearance |
 | `GraphValueAxis / GraphHandleDot` | 48 / 6 | Graph editor value gutter / ease-handle dot |
 | `Hairline / SelectionEdge` | 1 / 2 | Pixel-edge arithmetic / scene selection outline |
 | `NodeGrid` | 16 | Node snap grid |

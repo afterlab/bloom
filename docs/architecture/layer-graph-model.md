@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-11-10
+Updated: 2026-11-15
 
 ## Geometry and transform levels
 
@@ -227,7 +227,7 @@ primitive semantics remains 5; existing unparented pixel behavior is unchanged. 
 `bloom.composition-source` is a Sources node with image and audio outputs. Its ordinary parameters
 are the constant Integer `composition` ID, animatable Float64 `timeOffset` (seconds, default 0)
 and `timeScale` (default 1), and constant Integer `loopMode` (Hold/Loop/PingPong as 0/1/2).
-No additional document record is needed; the document schema remains 1.16. The built-in registry
+No additional document record is needed; the document schema remains 1.0. The built-in registry
 also reserves this type for manifest purposes.
 
 A composition may reference another composition at any nesting depth within runtime resource limits.
@@ -623,9 +623,10 @@ The first document/runtime slice should prove:
 6. Save and reopen stable IDs, order, parameter source, animation, and graph connectivity.
 7. Compile one immutable snapshot and render the same result through the canonical evaluation path.
 
-Full effects, masks, mattes, folders and groups, nested compositions, arbitrary
-graph-to-layer conversion and multi-selection editor gestures remain deferred. Their contracts are
-reserved here so the first proof does not create incompatible shortcuts.
+The first proof is complete. Image effects, masks and mattes ([Layer Masks And Track
+Mattes](#layer-masks-and-track-mattes)), nested compositions ([Composition Sources](#composition-sources))
+and node groups have since shipped. Timeline Folders, Layer Groups and arbitrary graph-to-layer
+conversion are not built; their contracts are reserved here so no shortcut makes them incompatible.
 
 
 ## Node Layout
