@@ -8,7 +8,7 @@ dirty state, application-owned runtime session identity, checked content-bound O
 generations, sealed Save/Save-As path authority with typed abandonment, generation-scoped
 publication-intent-ordered savepoint acceptance, asynchronous Open, Save, Save As and Save Copy with
 staged, verified publication, unsaved-change continuations and crash-recovery offers (`ProjectHost`,
-`src/host/session_open.hpp`, `session_save.hpp`, `session_recovery.hpp`) are on main. The recent
+`session_open.hpp`, `session_save.hpp` and `session_recovery.hpp` in `src/host/include/bloom/host`) are on main. The recent
 projects list described under "Recent Paths And Presentation State" is not built: there is no Open
 Recent menu.
 
