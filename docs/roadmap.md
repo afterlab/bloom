@@ -24,7 +24,7 @@ Everything in this section is on `main` and covered by tests. Each row names the
 | Nodes | The shipped node families listed in the [node catalogue](product/node-catalogue.md): sources, color, blur, stylize, warp, channels, masks and mattes, paths and shapes, fields, number lists, audio | [`product/node-catalogue.md`](product/node-catalogue.md) |
 | Scripting and agents | Python package and embedding, `bloom-cli` headless render, the MCP server (stdio and the in-app server) | [`architecture/scripting-and-addons.md`](architecture/scripting-and-addons.md), [ADR 0034](decisions/0034-in-app-mcp-server.md) |
 | Platforms | Linux, macOS and Windows builds with packaging, and the parity work that followed | [`architecture/platform-support.md`](architecture/platform-support.md) |
-| Panels | Viewer, Timeline, Nodes, Properties, Assets, Jobs, Export, Scopes, Profiler, MCP Server; the contextual tool bar; workspace presets | [`ux/compositing-workspace.md`](ux/compositing-workspace.md) |
+| Panels | Viewer, Timeline, Nodes, Properties, Assets, Jobs, Export, Scopes, Profiler, MCP Server, Script; the contextual tool bar; workspace presets | [`ux/compositing-workspace.md`](ux/compositing-workspace.md) |
 
 ### Recently landed
 
