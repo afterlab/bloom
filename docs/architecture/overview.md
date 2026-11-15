@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-10-30
+Updated: 2026-11-15
 
 ## Objective
 
@@ -103,8 +103,10 @@ Platform/GPU capability -> project semantics
 
 | Area | Responsibility |
 | --- | --- |
-| `apps/bloom` | process entry point and final service wiring |
-| `src/host` | Qt-free application services and `ProjectSession`, compiled-in module catalog, dependency validation, registries |
+| `apps/bloom` | the desktop application's process entry point and final service wiring |
+| `apps/bloom-cli`, `apps/bloom-mcp` | the headless command line and the stdio MCP server, over the same host, scripting and runtime modules |
+| `apps/bloom-media-worker` | the isolated media-provider process |
+| `src/host` | Qt-free application services: `ProjectSession`, the export queue, save, open and recovery, and publication ordering |
 | `src/ui` | Qt shell, editor panels including the Assets composition browser, view models, interaction adapters |
 | `src/core` | IDs, rational time, diagnostics, math, small value types, and the process-wide telemetry counters the Profiler reads ([profiler feed](profiler-feed.md)) |
 | `src/document` | persistent project authoring model and validation |
@@ -112,14 +114,14 @@ Platform/GPU capability -> project semantics
 | `src/project` | schemas, atomic `.bloom` read/write |
 | `src/runtime` | task scheduling, snapshot compilation, evaluation, cache contracts |
 | `src/render` | image resources, node execution, CPU/GPU backend interfaces |
-| `src/media` | standards-backed image/media discovery, decode, metadata, and proxies |
+| `src/media` | standards-backed image/media discovery, decode and metadata (proxy generation is planned, #372) |
 | `src/color` | qualified OCIO configuration resolution and Qt-free CPU display-processing adapters |
 | `src/output` | output analysis, still/video/audio adapter orchestration, offline export mixing, verification, and atomic publication requests |
 | `src/platform` | narrow filesystem, system, and packaging services with OS parity, including loopback sockets and owner-only secret files (ADR 0034) |
 | `src/scripting` | optional Python runtime, stable proxies, package/add-on lifecycle, API bridge, and the shared live session host (`LiveSessionHost`) |
 | `src/mcp` | the one MCP server core (JSON-RPC, handshake, tools, projections), the stdio transport, Streamable HTTP framing and admission, and the in-app server service (ADR 0034); depends on scripting, host, output, runtime, commands, document, platform and core, and only `src/ui` and the apps link it |
 | `src/svgartwork` | the SVG artwork builder and the Vector Artwork layer's compile-time expansion (`bloom/svgartwork/svg_artwork.hpp`, ADR 0038); depends on core, document, media and platform, and only `src/commands` and `src/runtime` link it |
-| `modules` | optional source-built pipeline modules that register coherent capabilities |
+| `modules` | reserved for optional source-built pipeline modules that register coherent capabilities; the directory does not exist yet, and every pipeline today lives in a `src/` module |
 
 `ProjectSession` belongs in `src/host` because it coordinates document, command history, persistence
 round-trip state, path, editability, saved revision, and asynchronous open/save intent without
@@ -131,12 +133,11 @@ rows and submits Add, Rename, Duplicate, and Delete operations through the share
 `CompositionSession`. Opening a row changes session composition context; it does not create a
 second document, command stack, or project owner.
 
-`src/core`, `src/document`, `src/commands`, `src/project`, `src/host`, `src/render`, `src/runtime`,
-`src/ui`, and `apps/bloom` now contain proven behavior. Project I/O currently provides bounded
-memory and canonical primitive codecs rather than a complete archive reader/writer; host currently
-provides synchronous project ownership and publication ordering rather than the complete async
-lifecycle. `src/color`, `src/output`, `src/scripting`, and `modules` should be created when the first
-proof needs their behavior rather than as empty speculative libraries.
+Every module in the table except `modules` exists and carries proven behavior. `src/project` reads
+and writes the `.bloom` container, `src/host` owns the asynchronous project lifecycle, `src/color`
+resolves OCIO configurations, `src/output` runs export and `src/scripting` embeds Python. The
+isolated worker processes (`apps/bloom-media-worker` and the color and LUT helpers in `src/color`)
+keep decoding and config parsing out of the application process.
 
 ## Module Composition
 
@@ -232,12 +233,13 @@ The complete contract and game-engine pipeline fitness test are defined in
 - Professional time-based media remains a qualified-provider pipeline rather than an FFmpeg-shaped
   document model. Provider-neutral ingest/export semantics, isolated codec workers, hardware-surface
   containment, reopen/QC publication, and the unresolved cross-platform ProRes authorization gap are
-  defined as working research in [`media-io.md`](media-io.md) and proposed
-  [ADR 0020](../decisions/0020-qualified-media-codec-providers.md).
+  defined in [`media-io.md`](media-io.md) and
+  [ADR 0020](../decisions/0020-qualified-media-codec-providers.md), amended by
+  [ADR 0035](../decisions/0035-media-provider-fallback-chain.md) (the provider chain) and
+  [ADR 0036](../decisions/0036-bundled-codec-libraries.md) (the bundled codecs).
 - The offline superbuild, reviewed lock, and qualified-prefix intake mechanism are accepted in
-  [ADR 0019](../decisions/0019-reproducible-dependency-intake.md). Exact dependency profiles remain
-  pending implementation and cross-platform qualification; see
-  [`dependency-intake.md`](dependency-intake.md).
+  [ADR 0019](../decisions/0019-reproducible-dependency-intake.md). The reviewed lock covers every
+  component of the qualified prefix; see [`dependency-intake.md`](dependency-intake.md).
 
 The modular-monolith structure and optional pipeline model are accepted. The exact public SDK and
 binary loading strategy remain deferred until an external extension workflow enters scope.

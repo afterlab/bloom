@@ -5,8 +5,7 @@ Status: working
 Implementation status: the portable staged-artifact interface has tested Linux, macOS and Windows
 providers with checked writer close, no-follow exact-stage reopen, bounded verifier reads, explicit
 acceptance or rejection, and publication blocked until acceptance. Any other system fails
-explicitly as unsupported. Format-specific semantic validators and cancellation/progress
-integration remain pending. What was measured on each platform is in the macOS and Windows
+explicitly as unsupported. Save and open use them with cancellation and progress. What was measured on each platform is in the macOS and Windows
 sections below.
 
 Updated: 2026-11-12

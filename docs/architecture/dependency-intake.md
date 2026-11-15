@@ -22,16 +22,17 @@ Implementation status: the two exact Draft 2020-12 schemas, one lock schema and 
 schema, each at version 1.0, the offline checker for synthetic contract fixtures, and production lock
 validation are implemented — including the reviewed Unicode 15.1 bootstrap tables with two-source
 digest equality, repository-artifact digest binding, and an ASCII-strict v1 string tightening that
-defers NFC machinery. The reviewed production lock contains the static baseline and FFmpeg 8.1.2,
-the first shared component. FFmpeg builds offline from its digest-verified official archive as a
+defers NFC machinery. The reviewed production lock (`dependencies/dependencies.lock.json`, assembled from
+`dependencies/lock-components`) now covers every component of the qualified prefix, among them Qt,
+CPython with numpy, FFmpeg, the Vulkan stack and MoltenVK, OpenSSL and the codec libraries. FFmpeg builds offline from its digest-verified official archive as a
 worker-only LGPL candidate with a corresponding-source obligation, an explicit configure-argument
 allow-list, and an optional VA-API feature. `cmake/BloomDependencyPrefix.cmake` implements
 explicit `qualified`/`developer-system` consumption with restricted package search, the
 ABI-relevant toolchain-agreement subset, and Linux shared-library SONAME inventory checks;
 `tests/dependency-consumption` exercises both the FFmpeg package wrapper and the desktop boundary.
-The supervised worker now exists with a synthetic provider only. Its
+The supervised FFmpeg media worker ships. Its
 [worker rpath policy](media-io.md#worker-rpath-policy) keeps each provider generation’s shared
-dependencies private; MEDIA-3 owns FFmpeg linkage and installed-package verification.
+dependencies private.
 Still pending: the production prefix manifest and its validator (with complete filesystem
 inventory and no-follow/hardlink/link-chain evidence), a trusted qualified identity capability,
 full Unicode collision data behind the ASCII tightening, exact tool-identity capture at the

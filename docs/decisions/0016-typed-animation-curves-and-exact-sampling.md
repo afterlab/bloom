@@ -50,3 +50,11 @@ The implementation contract is maintained in
 - The first UI may frame-snap playhead gestures without destroying exact subframe key times.
 - Cubic interpolation, tangent editing, expression/driver evaluation, curve sharing, modifiers,
   cycles, and procedural extrapolation require later explicit contracts.
+
+## Amendment note
+
+Added 2026-11-15; the decision text above stands. The code no longer matches the version 1 scope
+stated above: interpolation includes `EaseInOut` beside `Hold` and `Linear`, many parameters beyond
+Layer Output position and opacity animate (including colors), and curves can be per component.
+Shared curves remain deferred. [`animation-and-time.md`](../architecture/animation-and-time.md) is
+the current contract for the keyframe model and the sampling semantics.

@@ -9,8 +9,9 @@ composition working-space selection, config-managed asset input transforms, and 
 alpha/pixel flow are implemented and qualified on Linux. The blend
 modes under "Blend modes" below are implemented in the CPU reference compositing kernel and the GPU
 BlendV1 kernels and qualified by per-mode goldens and CPU/GPU parity. The
-supervised helper, the archive and loose locator kinds, staged-graph integration, and the
-processor cache remain pending.
+supervised helper (`bloom-color-worker`) and the archive and loose locator kinds are implemented
+on Linux, as described under "The config request group as implemented". Loading custom `.ocio` and
+`.ocioz` configs and more official configs as a product feature is parked as #725.
 
 Updated: 2026-11-06
 

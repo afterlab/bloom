@@ -228,9 +228,8 @@ coalescing, cancellation, and revision/generation publication checks remain mand
 
 The accepted interaction contract additionally requires an injectable 16 ms trailing cadence for
 pointer-driven scrub and direct-manipulation storms. Gesture end bypasses that delay for the newest
-desired request without bypassing the active-request gate. The cadence, timeline projection, and
-direct-manipulation request source remain pending; this document does not report them as live merely
-because the active/pending gate is implemented.
+desired request without bypassing the active-request gate. The cadence (a 16 ms window in the composition preview controller), the timeline
+projection, and the Viewer's direct manipulation are implemented on top of the active/pending gate.
 
 Tasks declare the resources they need where practical: CPU, blocking I/O, GPU device/queue, external
 process, and estimated memory. Executors use bounded queues, concurrency limits, and memory budgets.
@@ -519,8 +518,8 @@ and transient jobs only ever wrote staged files.
 The implemented composition root intercepts both window-close and application-level quit, closes
 admission, cancels replaceable preview work, continues processing Qt events, and permits process
 exit only after the bridge has published stable terminal snapshots and observed runtime quiescence.
-Panels never own that drain. Save/export resolution policy remains future work because those task
-kinds do not yet exist.
+Panels never own that drain. Save, open and export are task kinds today; the export queue's own
+resolution policy is in the next section.
 
 ## Export Queue Runs
 
@@ -576,11 +575,10 @@ the implementation grows.
 
 The bounded CPU/I/O executors, generation-scoped deferred GPU continuation path, snapshot compiler,
 revision/generation-safe preview controller, exact session time, one-active/one-newest preview gate,
-Qt bridge, Jobs surface, clean application quiescence, and Batch 3 CPU preview path are implemented.
+Qt bridge, Jobs surface, clean application quiescence, and the CPU and GPU preview paths are implemented.
 The immutable typed plan is consumed by a deterministic CPU evaluator that publishes real pixels
 without weakening the established ownership, cancellation, color, alpha, or stale-result contracts.
-The 16 ms pointer cadence, timeline key projection, and direct manipulation remain pending
-interaction work.
+The 16 ms pointer cadence, timeline key projection, and direct manipulation are implemented.
 
 Distributed rendering, persistent job databases, and a general workflow engine are not required.
 The contract above is intentionally broader than the first implementation so later media and GPU

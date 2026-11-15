@@ -16,8 +16,10 @@ staged-artifact close/reopen verification foundation, the canonical document wri
 snapshots with explicitly supplied color settings, strict bounded JSON parsing into a Bloom-owned
 DOM, typed document decode and reconstruction through checked model surfaces, newer-minor
 unknown-member round-trip capture and write overlay, and the constrained ZIP container reader and
-writer are implemented. Format-specific semantic verification of the complete save/reopen
-pipeline, and cross-platform publication parity remain pending.
+writer are implemented, and the save and open pipeline is complete: session save, Save As, Save
+Copy and open run as asynchronous tasks with staged, verified publication, driven by the File menu.
+Cross-platform publication parity is covered by the platform parity work in
+[`platform-support.md`](platform-support.md).
 
 Updated: 2026-11-12
 

@@ -2,7 +2,9 @@
 
 Status: accepted direction
 
-Updated: 2026-08-25
+Implementation status: the first-party modules are CMake targets under `src/` with declared, acyclic dependencies enforced by the architecture-boundary check. The typed registries that exist are the node definition registry (`src/document`), the editor registry (`src/ui`), the operation registry and the capability registry. A compiled-in module catalog with dependency validation, and the `modules/` directory for optional pipelines, are not built; they are the design below.
+
+Updated: 2026-11-15
 
 ## Objective
 

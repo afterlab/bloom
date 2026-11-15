@@ -878,14 +878,15 @@ output-color production context resolves the OCIO display/effect program on the 
 the shared scene composes and reads the single combined process-plus-encoded result back once at the
 codec/file boundary, and a 6000x4000 media+CST+text export has locally verified native execution.
 The CPU reference evaluator remains the correctness oracle and the explicit supported fallback. GPU
-execution is locally exercised on Linux only; macOS and Windows have an explicit supported CPU
-fallback, not a GPU parity claim.
+execution is exercised on Linux, on macOS through MoltenVK and on Windows; what was measured on each
+is in [`platform-support.md`](platform-support.md), and hosted CI, sustained memory tests and
+further native runs are tracked in #304. A device that cannot run a route reports an explicit
+CPU fallback, never a CPU frame labelled GPU.
 
 Genuinely unimplemented / future work. A whole-application benchmark; the full per-operation
 qualification fixtures for a future `ReferenceParity` profile (the qualified display transform and
-the resident scene route remain `PreviewOnly`; no operation reaches `ReferenceParity`); the
-cross-platform Linux/macOS/Windows parity spike; Windows/macOS GPU support; and a reviewed
-XCB/Xlib/Xrandr presentation intake. The scene evaluator now prepares every current compiled pixel
+the resident scene route remain `PreviewOnly`; no operation reaches `ReferenceParity`); and a
+reviewed XCB/Xlib/Xrandr presentation intake. The scene evaluator now prepares every current compiled pixel
 operation through one shared scene, including a requested region of interest. The qualified Linux
 prefix manifest remains pending, so this direction stays `working`.
 
@@ -1020,7 +1021,7 @@ admission.
 This continuation path, exactly-once terminalization, strict service-thread completion, independent
 admission caps, generation loss/recovery, and scheduler shutdown fallback are implemented and
 locally exercised on Linux. The Vulkan device service, fence integration, and resource retirement
-are implemented; the cross-platform Linux/macOS/Windows qualification spike remains pending, and a
+are implemented; hosted and sustained cross-platform qualification stays open in #304, and a
 synchronous fence wait hidden inside a task function is not a valid interim implementation.
 
 ### Bounded Native Command Batches
