@@ -252,10 +252,11 @@ class TimelineWorkAreaRow final : public QWidget {
 // bloom::ui::KeyframeSelection alternative (curveId + KeyframeId) as its primary selection, so this
 // panel no longer keeps a local selectedKeyframe_ -- it reads/writes CompositionSession::
 // selection()/selectKeyframe()/deleteSelectedKeyframe()/moveSelectedKeyframe(), the one
-// primary/contextual selection truth every other editor already shares (docs/roadmap.md's Batch-4
-// gate). Pruning a vanished key is likewise centralized: CompositionSession::normalizeSelection()
-// (run after every session-mediated execute/undo/redo) already invalidates any selection kind that
-// no longer resolves against the current snapshot, so this panel needs no local prune pass.
+// primary/contextual selection truth every other editor already shares (docs/roadmap.md,
+// Selection And Direct Manipulation). Pruning a vanished key is likewise centralized:
+// CompositionSession::normalizeSelection() (run after every session-mediated execute/undo/redo)
+// already invalidates any selection kind that no longer resolves against the current snapshot, so
+// this panel needs no local prune pass.
 class TimelineKeyframePanel final : public QWidget {
     Q_OBJECT
 

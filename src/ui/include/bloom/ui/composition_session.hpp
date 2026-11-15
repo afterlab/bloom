@@ -387,9 +387,9 @@ class CompositionSession final : public QObject {
     void clearMaskSelection();
     [[nodiscard]] std::optional<MaskSelection> selectedMask() const;
     // Selecting a keyframe REPLACES the primary selection like every other select* method (one
-    // primary/contextual selection truth -- docs/roadmap.md's Batch-4 gate). A missing curve/key
-    // reports unavailable and leaves the selection untouched, mirroring selectLayer/selectNode/
-    // selectParameter's own not-found handling.
+    // primary/contextual selection truth -- docs/roadmap.md, Selection And Direct Manipulation).
+    // A missing curve/key reports unavailable and leaves the selection untouched, mirroring
+    // selectLayer/selectNode/selectParameter's own not-found handling.
     void selectKeyframe(document::AnimationCurveId curveId, document::KeyframeId keyframeId,
                         bool extend = false);
     void selectKeyframe(document::AnimationCurveId curveId, document::AnimationComponent component,
