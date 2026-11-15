@@ -642,3 +642,7 @@ reports the number of export jobs running or waiting, and offers **Stop and Cont
 **Cancel**, with Cancel the default. It appears for Quit, Close, New and Open alike. Stopping still
 begins an orderly shutdown of the queue and leaves files already published in place. The user guide
 ([Exporting video](../user-guide/exporting-video.md)) describes the current dialog.
+
+Also added 2026-11-15: the macOS and Windows export and media-provider work that this record names
+as open under #371 and #370 is closed; [`platform-support.md`](../architecture/platform-support.md)
+("Export Queue Platforms") records the current behavior on each platform.
