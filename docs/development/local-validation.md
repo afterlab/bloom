@@ -72,6 +72,8 @@ python3 tools/local/sprint_validation.py milestone \
 
 The default mode is CMake `qualified`, which currently reports
 `Qualified-pending-manifest` provenance rather than claiming completed dependency qualification.
+A qualified configure also needs a compiler that matches a profile in the lock (on Linux, Clang of
+the major version the lock names; set `CC` and `CXX`), and CMake refuses any other toolchain.
 Use `--dependency-mode developer-system` explicitly when working without a prefix; that result is
 reported `Unqualified`. A later run without `--configure` must use a build directory with the same
 configured dependency mode. For single-configuration generators, `CMAKE_BUILD_TYPE` must match

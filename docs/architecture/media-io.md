@@ -1,8 +1,8 @@
 # Professional Media I/O And Codec Providers
 
-Status: working research
+Status: working; image, video, audio and export are implemented, and the sections marked as research are not
 
-Updated: 2026-10-31
+Updated: 2026-11-15
 
 ## v0 implemented boundary
 
@@ -10,7 +10,9 @@ The accepted v0 amendment in ADR 0020 admits the image pipeline under `src/media
 a private, pinned stb_image PNG/JPEG decoder and a bounded OpenEXR reader compiled in process with
 hard input and allocation limits. PNG16 is included. Images and numbered sequences become asset
 records; authoring source nodes reference stable asset IDs. Linux video preview read is implemented
-by MEDIA-3, described in [Video Read Implementation](#video-read-implementation-media-3). Other
+by MEDIA-3, described in [Video Read Implementation](#video-read-implementation-media-3). The
+Windows Media Foundation and macOS VideoToolbox providers are implemented (#370 and #371) behind the
+fallback chain of [ADR 0035](../decisions/0035-media-provider-fallback-chain.md). Other
 delivery paths remain working research below. Linux export is described under
 [Time-based Export](#time-based-export-media-4).
 The v0 gap rule is hold-previous with a visible warning; it supersedes the policy-selection

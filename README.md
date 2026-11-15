@@ -13,13 +13,14 @@ layer-based compositor, you'll feel at home: layers on a timeline, keyframes, pr
 track mattes and a render queue. Underneath, every composition is also a node graph. Open the Nodes panel and
 you're looking at the same shot, not a copy of it. Change either one and the other follows.
 
-Bloom is written in C++20 and Qt 6. On Linux, the Viewer and final renders run on the GPU through
-Vulkan. A CPU reference renderer defines what every frame should look like, so the GPU can't
+Bloom is written in C++20 and Qt 6. On Linux, macOS and Windows, the Viewer and final renders run
+on the GPU through Vulkan (MoltenVK on macOS). A CPU reference renderer defines what every frame should look like, so the GPU can't
 quietly change your picture.
 
 > [!IMPORTANT]
-> Bloom is pre-release software. There are no downloadable builds yet, so you build it from source,
-> and day-to-day development and testing happen on Linux.
+> Bloom is pre-release software. There are no downloadable builds yet (installers for the first
+> alpha are in progress), so you build it from source. Day-to-day development and testing happen on
+> Linux, and macOS and Windows builds are supported.
 
 ## A look around
 
