@@ -44,26 +44,24 @@ time and tells you how long is left. You can keep working while it runs.
 
 ## Build from source
 
-You need:
+There are two ways to build, and they need different things.
 
-- a C++20 compiler
-- CMake 3.25 or newer
-- Ninja
-- Qt 6.8 or newer with Qt Widgets (the `dev` preset; a `qualified` build takes the one locked
-  Qt from its dependency prefix instead)
+- **Qualified** (the reproducible build, required on Linux): every library Bloom uses, including Qt,
+  comes from a dependency prefix that you build once from a reviewed lock file. This is the build
+  that is validated on Linux, macOS and Windows.
+- **`dev`** (macOS and Windows only): uses the libraries installed on your system. It is labeled
+  Unqualified: your library versions may differ from the locked ones, and the build cannot produce
+  a release package.
 
-```sh
-cmake --preset dev
-cmake --build --preset dev
-ctest --preset dev
-```
+### Linux
 
-On Linux, the app is written to `build/dev/apps/bloom/Bloom`.
+The `dev` preset does not work on Linux: the media worker requires the locked FFmpeg from the
+dependency prefix. Build the prefix first, then Bloom.
 
-The `dev` preset uses the packages on your system. CI uses the `qualified` dependency mode instead,
-which takes every dependency from a prefix built against a reviewed lock file. To reproduce the
-Qt-free Linux CI build, build that prefix once per checkout (and again after the lock changes),
-then use the CI preset:
+You need Clang 22 (the qualified build checks the compiler against the lock), CMake 3.25 or newer,
+Ninja, Meson, Python 3, `patchelf` and the Fontconfig development files. The superbuild downloads
+every locked archive, checks its SHA-256 and builds it into the prefix; build it again after the
+lock changes.
 
 ```sh
 cmake -S dependencies/superbuild -B build/dependency-superbuild \
@@ -71,10 +69,43 @@ cmake -S dependencies/superbuild -B build/dependency-superbuild \
     -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
 cmake --build build/dependency-superbuild
 
-CC=clang CXX=clang++ cmake --preset ci-linux-native
-cmake --build --preset ci-linux-native
-ctest --preset ci-linux-native
+CC=clang CXX=clang++ cmake --preset desktop-release
+cmake --build --preset desktop-release
+ctest --preset desktop-release
 ```
+
+The app is written to `build/desktop-release/apps/bloom/Bloom`. The `ci-linux-native` preset builds
+the same thing without the desktop app.
+
+### macOS and Windows with the `dev` preset
+
+You need a C++20 compiler, CMake 3.25 or newer, Ninja, and these packages, each findable by CMake as
+a package (`find_package`):
+
+- Qt 6.8 or newer: Widgets, Network, Svg, and Test for the tests
+- OpenColorIO, OpenEXR with Imath, libzip, zlib and yyjson
+
+Optional, with what you lose without them:
+
+- FFmpeg: without it there is no FFmpeg media worker, and media goes through the operating system's
+  decoders only.
+- Vulkan Headers and Vulkan Memory Allocator (as CMake packages): without them Bloom builds a
+  CPU-only stand-in for the GPU device, so the Viewer and renders use the CPU reference path.
+  Bloom never reports GPU rendering in such a build.
+- `glslangValidator` and `spirv-val`: without them the checked-in shaders are used as they are
+  (their pinned digests are still checked); they are only needed to regenerate shaders.
+- CPython 3.10 or newer with its development files, and nanobind: on Windows the Python scripting
+  bridge is built when they are found. A macOS `dev` build leaves Python off.
+
+```sh
+cmake --preset dev
+cmake --build --preset dev
+ctest --preset dev
+```
+
+Tests that need a GPU device are skipped on a machine or build without one. For the qualified build
+on macOS and Windows (Apple Clang, or MSVC with MSYS2 for the codec libraries), see
+[`docs/architecture/dependency-intake.md`](docs/architecture/dependency-intake.md).
 
 ## Documentation
 
