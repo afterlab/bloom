@@ -1297,7 +1297,11 @@ is written to a temporary file in its own directory and renamed over the target,
 never sees a torn file. The pending-write queue is bounded in bytes
 (`kSourceMirrorWriteQueueByteCapacity`, 256 MiB, lowered under memory pressure): a full queue
 drops its oldest pending write, and a source larger than the whole capacity is taken only while
-the queue is empty. A dropped write only means that source is read once more later. The index
+the queue is empty. A dropped write only means that source is read once more later. Known gap,
+queued in #732: the memory ledger counts this queue as reusable cache, so during a RAM Preview
+fill its capacity drops to zero and most writes are dropped, while outside a fill it can grow past
+256 MiB; and when a playback loop needs more than the cache budget, least-recently-used eviction
+leaves no hits on the next pass. The index
 (`index.v2`) is rewritten in batches and on idle; the index is read, and anything left by the
 retired store removed, on the writer thread, so startup never waits on the cache directory.
 
