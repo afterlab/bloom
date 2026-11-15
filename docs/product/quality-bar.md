@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-08-25
+Updated: 2026-11-15
 
 ## Product Standard
 

@@ -194,8 +194,10 @@ With a cap set, a job that reaches it waits for the worker instead of using more
 with a message naming the memory and the cap if the worker still cannot go on. A job's result
 reports the worker's peak memory.
 
-Quitting or closing the project while exports run asks "N exports are running. Stop them and
-quit?"; **Keep Exporting** is the default. Saving the project during an export is allowed.
+Quitting, or closing, creating or opening a project, while exports run asks "Stop the running
+exports?" and says how many export jobs are running or waiting. **Stop and Continue** stops them
+(files already published stay) and carries on; **Cancel** is the default and leaves everything as it
+was. Saving the project during an export is allowed.
 
 ## Verification
 

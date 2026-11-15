@@ -6,6 +6,9 @@ Updated: 2026-10-25
 
 Parent: [#374](https://github.com/afterlab/bloom/issues/374)
 
+Note: the schema minor versions named below (1.23 and later) were folded into one current document
+schema `1.0`; see [project format](../architecture/project-format.md).
+
 ## Scope
 
 This release makes the timeline, footage, masking and EXR workflows usable in production on Linux.

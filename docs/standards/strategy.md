@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-08-25
+Updated: 2026-11-15
 
 ## Accepted Policy
 
@@ -46,13 +46,13 @@ owning workflow is active.
 
 | Domain | Contract or implementation | Bloom direction | Timing |
 | --- | --- | --- | --- |
-| Color management | [OpenColorIO][ocio] (OCIO) configuration and C++ implementation | Foundational choice. New v1 projects start from immutable Bloom Neutral v1 at `bloom://ocio/neutral-v1/config.ocio`; projects retain exact locator and content revision. Other explicitly selected configs must qualify the same required process/output identities. Bloom v1 process images remain `lin_rec709_scene`; selecting a configuration does not silently redefine that identity. | Required before claiming a production color-managed viewer or render path |
+| Color management | [OpenColorIO][ocio] (OCIO) configuration and C++ implementation | Foundational choice. New v1 projects start from immutable Bloom Neutral v1 at `bloom://ocio/neutral-v1/config.ocio`; projects retain exact locator and content revision. Other explicitly selected configs must qualify the same required process/output identities. Bloom v1 process images remain `lin_rec709_scene`; selecting a configuration does not silently redefine that identity. | Shipped: the Viewer and every render route are color-managed through OCIO |
 | Color workflow | [ACES][aces] encodings and transforms | Support through validated OCIO configurations as an option. ACES is not forced as every project's working space. | Alongside production color management |
-| HDR/VFX images | [OpenEXR][openexr] format and reference libraries | Primary high-dynamic-range image interchange. Preserve windows, channels, alpha convention, pixel aspect, compression intent where supported, and relevant attributes. | Early image import/output; flat frames first, advanced multipart/deep features declared separately |
-| General image I/O | [OpenImageIO][oiio] (OIIO) | Preferred C++ library candidate for format-agnostic image access, metadata, and processing utilities. OIIO is a library, not Bloom's interchange standard or canonical image model. | Evaluate when still and sequence I/O enters the vertical proof |
+| HDR/VFX images | [OpenEXR][openexr] format and reference libraries | Primary high-dynamic-range image interchange. Preserve windows, channels, alpha convention, pixel aspect, compression intent where supported, and relevant attributes. | Shipped: OpenEXR import and output including multipart and layers; deep images are declared separately |
+| General image I/O | [OpenImageIO][oiio] (OIIO) | Preferred C++ library candidate for format-agnostic image access, metadata, and processing utilities. OIIO is a library, not Bloom's interchange standard or canonical image model. | Not adopted: stills and sequences are read by Bloom's image provider (OpenEXR and DPX) and the FFmpeg media worker |
 | Editorial interchange | [OpenTimelineIO][otio] (OTIO) | Adopt for editorial cut structure and metadata. OTIO references external media rather than embedding audio or video, so media relinking remains a separate responsibility. | When sequence/editorial work enters scope |
 | Image-effect plug-ins | [OpenFX][openfx] API | Adopt for third-party image-effect hosting rather than inventing a Bloom-only native effect ABI. Host capability reporting, isolation, threading, color, and failure containment need dedicated design. | Deferred until the internal effect/runtime contract is stable |
-| Audio/video containers and codecs | Published container/codec specifications; [FFmpeg][ffmpeg] as an implementation candidate | Treat each container, codec, pixel format, time-base, licensing, and metadata behavior explicitly. FFmpeg is a library suite, not one media standard. | When video/audio ingest and delivery enter scope |
+| Audio/video containers and codecs | Published container/codec specifications; [FFmpeg][ffmpeg] as an implementation candidate | Treat each container, codec, pixel format, time-base, licensing, and metadata behavior explicitly. FFmpeg is a library suite, not one media standard. | Shipped: FFmpeg runs in the isolated media worker ([ADR 0036](../decisions/0036-bundled-codec-libraries.md)) |
 | 3D scene interchange | [OpenUSD][openusd] | Preferred ecosystem to evaluate for future composed 3D scene data; it is not Bloom's 2D composition graph or project format. | Deferred until a concrete 3D workflow exists |
 | Materials and looks | [MaterialX][materialx] | Preferred open specification to evaluate for future renderer-independent material/look exchange. Do not map Bloom's 2D node vocabulary onto it artificially. | Deferred with 3D/look-development scope |
 | Asset resolution | [OpenAssetIO][openassetio] | Evaluate for future integration with external asset-management systems while retaining stable internal asset identity. | Deferred until managed-pipeline integration is required |

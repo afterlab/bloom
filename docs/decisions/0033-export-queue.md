@@ -633,3 +633,12 @@ Viewer priority for GPU admission), `architecture/project-format.md` (1.29),
 `architecture/platform-support.md` (export on Linux only in this version),
 `user-guide/exporting-video.md` (the Export panel), `user-guide/mcp.md` and
 `user-guide/scripting.md` (operations and `bloom-cli export`).
+
+## Amendment note: the confirmation wording
+
+Added 2026-11-15; the decision text above stands. The code asks the question differently from the
+"Safe shutdown" bullet: the dialog is titled "Exports Are Running", asks "Stop the running exports?",
+reports the number of export jobs running or waiting, and offers **Stop and Continue** and
+**Cancel**, with Cancel the default. It appears for Quit, Close, New and Open alike. Stopping still
+begins an orderly shutdown of the queue and leaves files already published in place. The user guide
+([Exporting video](../user-guide/exporting-video.md)) describes the current dialog.

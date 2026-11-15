@@ -184,8 +184,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 - The v0.1.0-alpha.1 release comes first: the disk cache headroom (#732), Scopes counted at display
   time (#733) and the installers, self-update and release build (#734). The three node groups
   follow, then tests and performance. The [roadmap](roadmap.md) holds the order.
-- Projects save, open and round-trip through the deterministic `.bloom` container, with schema
-  migrations, preserved unknown data and the File menu driving it
+- Projects save, open and round-trip through the deterministic `.bloom` container, with one
+  current document schema, preserved unknown data and the File menu driving it
   ([project format](architecture/project-format.md),
   [project session](architecture/project-session.md)).
 - A shared GPU scene prepares every current compiled pixel operation under a strict fail-closed

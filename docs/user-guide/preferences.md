@@ -28,6 +28,7 @@ or create, is refused under the field and OK waits.
 | Timeline | Time format, snapping, keyframes, graph editor, layer column width | Immediately |
 | Node Graph | Link style, snap to grid, grid size, **Show minimap** (the overview in the canvas corner, with its zoom row) and **Show zoom controls** (the zoom buttons and slider under the minimap); both on by default | Immediately |
 | Memory & Caches | RAM and VRAM headroom, **Worker memory cap** and **Worker threads** for export workers, media disk cache enable/directory/budget, **Keep local copies of source media** and its folder rules | Headroom on Apply or OK; worker limits on the next export you start; disk cache after restart |
+| Shortcuts | The keys of the two Purge commands, **Purge preview cache** and **Purge media cache**. A key another command already answers to is refused under the field, and clearing a field leaves the command without a key | On Apply or OK |
 | Performance | Read-only acceleration status | Not a preference |
 
 Immediate changes reach every open panel: the window hands the committed value to each editor,

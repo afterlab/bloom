@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-10-30
+Updated: 2026-11-15
 
 ## Product Identity
 
@@ -10,8 +10,9 @@ Bloom is a motion graphics and visual effects workspace for carrying an idea fro
 final frame. Its defining promise is that creative iteration remains immediate while project state,
 image intent, and production handoffs remain explicit and trustworthy.
 
-The initial product wedge is compositing and motion. Editorial, grading, scripting, and delivery
-remain part of the broader direction but are not commitments for the first implementation proof.
+The product wedge is compositing and motion. Scripting (Python, `bloom-cli` and MCP) and delivery
+(the Export queue) have shipped. Editorial and grading remain part of the broader direction but are
+not commitments.
 
 ## Accepted Decisions
 
@@ -69,13 +70,16 @@ an editorial sequence.
 
 ## First Vertical Proof
 
-The first useful Bloom should demonstrate this complete workflow:
+Status: complete. Every step below works in the shipped application; the proof stays as the
+acceptance boundary for the foundation.
+
+The first useful Bloom demonstrates this complete workflow:
 
 1. Create a project and composition.
 2. Add a deterministic solid source, or a text source that renders on the portable CPU path with an
    embedded or system font reference, multiline alignment, line height, letter spacing, and an
-   optional box layout. Text shaping remains a later extension; font portability is reference-based
-   and never embeds source bytes in the project.
+   optional box layout. Fonts are referenced by ID and never embed source bytes in the project
+   ([`fonts.md`](../architecture/fonts.md)); shaped text layout is planned (#345).
 3. Represent it coherently in the layer timeline and canonical node graph.
 4. Synchronize selection across viewer, timeline, graph, and properties.
 5. Edit transform and opacity through properties and direct viewer manipulation.
@@ -105,15 +109,17 @@ should normally wait.
 - Project data owned by an unavailable optional module is preserved and diagnosed rather than
   silently discarded.
 
-## Initial Non-Goals
+## Non-Goals
+
+Video delivery, codec coverage and the Python scripting APIs were non-goals of the first proof and
+have shipped; they are no longer listed here.
 
 - Full nonlinear editing.
 - A DAW-grade audio system.
 - Grading and color-finishing workspaces.
 - OpenFX hosting.
-- Native addon packaging or scripting APIs.
+- Native addon packaging and a stable native plug-in ABI.
 - Network-dependent graph evaluation.
-- Video delivery and broad codec coverage.
 - Render farms or distributed evaluation.
 - Reimplementing a general-purpose UI toolkit.
 
