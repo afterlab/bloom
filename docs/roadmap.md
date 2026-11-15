@@ -71,7 +71,7 @@ Each group is one coherent area with one validation and one landing.
 
 | Group | Issues | What it is |
 | --- | --- | --- |
-| 1. Compositing: keying, time, motion, rig and camera | #485 #515 #520 #346 #531 #522 #513 #591 #606 #605 | Channel Key, Chroma Key, Despill; Matte Refine; Transition / Wipe Matte; Time Offset, Frame Hold, Time Remap; Image Switch; Flow Retime; Tracker (point and planar) and Stabilize; named coordinate spaces; 2D rig and puppet deformation; 3D camera and 3D layer space |
+| 1. Compositing: keying, time, motion, rig and camera | #485 #515 #520 #346 #531 #522 #513 #591 #606 #605 | Channel Key, Chroma Key, Despill; Matte Refine; Transition / Wipe Matte; Time Offset, Frame Hold, Time Remap; Image Switch; Flow Retime; the planar tracker and tracks applied to Corner Pin (the point tracker and Stabilize have shipped); named coordinate spaces; 2D rig and puppet deformation; 3D camera and 3D layer space |
 | 2. Procedural and vector: lists, instancing, particles, simulation, text | #628 #629 #526 #521 #594 #345 #592 #529 #593 #607 #601 #596 | Per-item list math; List to Path, Image and Points; Instancer and Clone To Points; Particle System; seekable Simulation; shaped text layout, animator and text on path; text as paths; Text To Shape / Mask; LaTeX math as paths; vector sharpness through nesting; measured bounds; axes with tick labels |
 | 3. Platform and agents: MCP, proxies, color picker, title bar | #491 #573 #574 #578 #580 #640 #649 #372 #551 #552 | Blind MCP field test; id maps; names and roles; error messages; frame statistics; audit gaps; capture display and view; proxy generation and proxy-aware playback; color picker system and unified Gradient node; Windows one-row title bar |
 

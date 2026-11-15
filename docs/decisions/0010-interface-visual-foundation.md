@@ -1,6 +1,6 @@
 # ADR 0010: Interface Visual Foundation
 
-Status: accepted
+Status: accepted; amended: the primary interface typeface is Inter Variable, not DejaVu Sans (see the note at the end)
 
 Date: 2026-08-25
 
@@ -38,3 +38,10 @@ The implementation and usage contract is defined in
   and on Linux, macOS, and Windows.
 - Platform-managed application chrome may use the operating-system font while Bloom-controlled
   surfaces use the selected families.
+
+## Amendment note
+
+Added 2026-11-15; the decision text above stands. The code no longer follows the DejaVu Sans line:
+the interface typeface is Inter Variable, with Geist Mono for values and code, bundled as one
+variable face per family on every platform. The icon family (Phosphor) and the monospaced family
+are unchanged. [`ux/visual-language.md`](../ux/visual-language.md) is the current contract.

@@ -1,8 +1,16 @@
 # ADR 0020: Qualified And Isolated Media Codec Providers
 
-Status: proposed
+Status: proposed; amended (see the dated amendments below, [ADR 0035](0035-media-provider-fallback-chain.md) and [ADR 0036](0036-bundled-codec-libraries.md))
 
 Date: 2026-08-25
+
+## Amendment note (2026-11-15)
+
+The isolated provider worker described here is built (`apps/bloom-media-worker`, `src/media`), and
+the platform providers and the fallback chain that the amendments below call for have landed (Media
+Foundation in #370, VideoToolbox in #371). The decision text itself stays as written and stays
+`proposed`; ADR 0035 and ADR 0036 are the accepted records for the provider chain and the bundled
+libraries.
 
 ## Amendment: provider fallback chain on every platform (2026-10-31)
 

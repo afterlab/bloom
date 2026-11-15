@@ -1,6 +1,6 @@
 # UI kit polish release
 
-Status: shipped
+Status: complete; shipped
 
 Updated: 2026-10-30
 

@@ -50,3 +50,11 @@ The detailed runtime, packaging, lifecycle, UI, security, project-data, and roll
 - Missing add-on data and editor IDs remain preservable and diagnosable.
 - A credible release requires API versioning, stubs, documentation, package validation, safe mode,
   diagnostics, headless parity, and Linux/macOS/Windows fixtures.
+
+## Amendment: locked interpreter
+
+Added 2026-11-15, as an amendment note; the decision text above stands. The first target named
+above, CPython 3.13.x for CY2026, is not what the qualified build embeds. The dependency superbuild
+builds CPython 3.14.7 with numpy from locked source (`python-3.14.7` in the dependency lock), and
+a qualified build embeds it. The Reference Platform minor remains compatibility guidance. See
+[`scripting-and-addons.md`](../architecture/scripting-and-addons.md).

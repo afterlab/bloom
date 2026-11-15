@@ -18,11 +18,13 @@ composition proof.
 ## Language And Compatibility
 
 - Python is Bloom's only core scripting and add-on language.
-- Follow the Python minor version selected by the supported VFX Reference Platform generation. The
-  initial CY2026 target is CPython 3.13.x.
-- Packaged releases must bundle and pin their interpreter, standard library, private native bridge
-  and Python facade. The SCRIPT-1 development intake uses an explicitly build-selected host
-  CPython instead; it is not a qualified bundled release interpreter.
+- The VFX Reference Platform's CY2026 minor is CPython 3.13.x. The qualified build embeds the
+  CPython 3.14.7 the dependency superbuild builds from locked source (with numpy), as recorded in
+  the [dependency lock](../decisions/0012-python-scripting-and-addon-tiers.md#amendment-locked-interpreter);
+  the platform reference is guidance, not the pin.
+- Packaged releases bundle and pin their interpreter, standard library, private native bridge
+  and Python facade. A development build without a locked prefix uses an explicitly
+  build-selected host CPython instead; it is not a qualified bundled release interpreter.
 - Pin an exact Python patch release in each Bloom build manifest while publishing compatibility at
   the declared minor-version boundary.
 - Lua is not a second Bloom API. An optional future pipeline may own a narrowly scoped Lua runtime
@@ -32,7 +34,7 @@ composition proof.
 
 The current platform reference is the
 [VFX Reference Platform](https://vfxplatform.com/), which specifies Python 3.13.x and Qt/PySide
-6.8.x for CY2026.
+6.8.x for CY2026. Bloom's locked interpreter is newer (see above).
 
 ## Extension Tiers
 
@@ -237,10 +239,10 @@ installs a relocatable imported target. Normal Bloom builds compile Bloom's bind
 `BLOOM_BUILD_PYTHON` defaults ON when a GIL-enabled CPython 3.10 or newer, its module headers and
 embedding library are found. Explicit ON requires those host prerequisites; OFF avoids development
 library discovery and disables the Python clients. MCP pipe tests can still discover an interpreter.
-Linux CI installs `python3-dev` and enables the option. The local SCRIPT-1 gate uses CPython 3.14.7;
-CI uses its installed host minor. The prefix checks exact Python SOABI and must be rebuilt for a
-minor/ABI change. This is a development exception to the bundled release policy above. The
-interpreter itself is not intaken into the dependency lock.
+Linux CI installs `python3-dev` and enables the option. A qualified build uses the
+locked CPython 3.14.7 (`python-3.14.7` in the dependency lock) instead; CI without a prefix uses its
+installed host minor. The prefix checks exact Python SOABI and must be rebuilt for a minor/ABI
+change. The host interpreter is a development exception to the bundled release policy above.
 
 The typed pure-Python package supplies `app`, live GUI/headless `context`, read-only `data` proxies,
 registry-driven `ops`, atomic `transactions`, `tasks`, immutable file-render results and pumped
@@ -615,7 +617,7 @@ The stable public UI tier is schema-driven. An add-on declares property bindings
 lists, trees, actions, validation, diagnostics, task controls, and editor descriptors. Bloom owns
 the QWidget tree, so the UI automatically follows:
 
-- DejaVu Sans, Geist Mono roles, and Phosphor icon IDs
+- Inter and Geist Mono roles, and Phosphor icon IDs
 - palette, spacing, density, and high-DPI behavior
 - keyboard focus, shortcut, and screen-reader semantics
 - panel replacement, persistence, missing-editor placeholders, and platform parity

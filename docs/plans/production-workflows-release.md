@@ -1,6 +1,6 @@
 # Production workflows release
 
-Status: landed on main; open work tracked in issues
+Status: complete; landed on main
 
 Updated: 2026-10-25
 
@@ -42,16 +42,11 @@ Also landed: Viewer tools return to Select after creation and Escape confirms ev
 concurrent GPU preparations share device memory instead of the first taking all of it; one GPU device
 per Python interpreter with serialized teardown; a Transform node category.
 
-## Open
+## Open at landing
 
-| Issue | Work |
-| --- | --- |
-| [#377](https://github.com/afterlab/bloom/issues/377) | Blocking, cancellable import progress dialog |
-| [#369](https://github.com/afterlab/bloom/issues/369) | Export verified end to end on every route, then color tags, MP4/H.264, HEVC, DPX, threading and size limits |
-| [#368](https://github.com/afterlab/bloom/issues/368) | Codec coverage expansion |
-| [#372](https://github.com/afterlab/bloom/issues/372) | Proxy generation and proxy-aware playback |
-| [#359](https://github.com/afterlab/bloom/issues/359) | Nodes canvas rebuild and lookup costs |
-| [#370](https://github.com/afterlab/bloom/issues/370), [#371](https://github.com/afterlab/bloom/issues/371) | Windows Media Foundation and macOS VideoToolbox providers |
+Closed since: #377 (import progress), #369 (video export), #368 (codec coverage), #359 (Nodes
+canvas), and #370 and #371 (the Windows and macOS media providers). Proxy generation and
+proxy-aware playback is still open as #372, queued in the roadmap.
 
 Known validation gaps at landing: `bloom.quality.architecture_boundaries` and `bloom.quality.ui_grammar`
 report existing findings, `bloom.ui.live-value-edit` can abort under parallel load (passes alone), and

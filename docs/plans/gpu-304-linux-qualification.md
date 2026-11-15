@@ -1,6 +1,6 @@
 # Issue 304: Linux implementation and qualification
 
-Status: Linux implementation and local qualification complete
+Status: complete for Linux; hosted CI, sustained memory tests, LeakSanitizer and native macOS and Windows runs stay open in #304 (queued under Tests in the roadmap)
 
 Updated: 2026-10-14
 

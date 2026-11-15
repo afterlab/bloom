@@ -1,6 +1,6 @@
 # GPU reliability, media preparation, and preview execution plan
 
-Status: Linux implementation locally qualified; cross-platform gates remain
+Status: complete for Linux, and superseded as the current evidence by [the Linux qualification record](gpu-304-linux-qualification.md) and [the GPU contract](../architecture/gpu-backend.md); the cross-platform gates remain open in #304
 
 Updated: 2026-10-14
 

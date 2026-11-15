@@ -1,6 +1,6 @@
 # User control and policy simplification
 
-Status: active implementation and source audit; runtime qualification is recorded separately
+Status: complete; the parent #320 and the items below are closed
 
 Updated: 2026-10-23
 
@@ -125,7 +125,9 @@ execution. The preceding 18-node milestone has five passing required-device nati
   current provider implementation limits, not user cache settings or measured hardware limits.
   Negotiate capacity and bound indexing/transport before expanding those capabilities.
 
-Video provider expansion and native Windows cross-drive/UNC media qualification remain open.
+Update: #352 (provider capacity negotiation) and #329 (video-container audio streaming and MP3
+seeking) are closed, so the video-provider limit above and the buffered video-audio path described
+under #329 no longer apply. Native Windows cross-drive and UNC media behavior is tracked by #612.
 This closeout does not claim every policy or planned media/node capability is implemented.
 
 ## Validation and supervision

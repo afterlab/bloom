@@ -1,6 +1,6 @@
 # Planned node delivery
 
-Status: first 18 nodes implemented and locally checked; later chunks remain planned
+Status: in progress; chunks 1 to 13 and 16 to 18 are delivered, and #345 and #346 remain queued in the roadmap's node groups (the node catalogue lists every shipped node)
 
 Updated: 2026-11-04
 
@@ -26,9 +26,12 @@ Separate Channels and Combine Channels are implemented by #479 (see
 [image filters](../architecture/image-filters.md#separate-channels-and-combine-channels)).
 Drop Shadow, Glow and Light Wrap are implemented by #339 (see
 [image filters](../architecture/image-filters.md#drop-shadow-glow-and-light-wrap)).
-Chunks #341–#349 remain planned. The
-inventory below records
-the original audit baseline rather than claiming those delivered nodes remain absent.
+Chunks #341 to #344 and #347 to #349 have since been delivered (#341 deterministic scalar and motion
+utilities, #342 node groups, #343 SVG vector source, #344 path processing, #347 audio analysis,
+#348 Corner Pin, ST Map and Displace, #349 Histogram, Image Statistics and Compare). #345 (shaped
+text) and #346 (time nodes) remain planned. The inventory below records the original audit baseline
+rather than claiming those delivered nodes remain absent; the
+[node catalogue](../product/node-catalogue.md) is the current list.
 
 ## Verified inventory
 

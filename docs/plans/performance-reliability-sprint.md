@@ -1,6 +1,6 @@
 # Performance and reliability sprint
 
-Status: active
+Status: complete; the sprint parent #306 is closed
 
 Updated: 2026-10-22
 
