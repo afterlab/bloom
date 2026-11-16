@@ -361,9 +361,12 @@ and runner in `tools/bench/` (`bench_media.py`, `bench_spec.py`, `blender_scene.
 `build_projects.py`, `chart.py`, `chart_check.py`, `imageio_min.py`, `node_cost.py`,
 `run_bench.py`, `run_scenarios.py`, `scenario_spec.py`, `test_run_scenarios.py`, see
 [Performance benchmarks](../development/benchmarks.md)); they measure and qualify Bloom from outside
-and are likewise never imported by product code or run by the application build. The hygiene gate
-admits exactly these files and rejects other infrastructure Python sources and misplaced type stubs;
-this is not a general Python tools root.
+and are likewise never imported by product code or run by the application build. The release
+tools in `tools/release/` (`appcast.py`, `changelog.py`, `feed.py`, `make_update_fixtures.py`,
+`sums.py` and their test `test_release_tools.py`, see
+[ADR 0041](../decisions/0041-self-update.md)) write and check what a release publishes and are
+named the same way. The hygiene gate admits exactly these files and rejects other infrastructure
+Python sources and misplaced type stubs; this is not a general Python tools root.
 
 See [Scripting Bloom with Python](../user-guide/python.md) and
 [Using Bloom from an agent](../user-guide/mcp.md) for executable API examples and limits.

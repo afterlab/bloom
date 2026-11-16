@@ -121,6 +121,7 @@ Platform/GPU capability -> project semantics
 | `src/scripting` | optional Python runtime, stable proxies, package/add-on lifecycle, API bridge, and the shared live session host (`LiveSessionHost`) |
 | `src/mcp` | the one MCP server core (JSON-RPC, handshake, tools, projections), the stdio transport, Streamable HTTP framing and admission, and the in-app server service (ADR 0034); depends on scripting, host, output, runtime, commands, document, platform and core, and only `src/ui` and the apps link it |
 | `src/svgartwork` | the SVG artwork builder and the Vector Artwork layer's compile-time expansion (`bloom/svgartwork/svg_artwork.hpp`, ADR 0038); depends on core, document, media and platform, and only `src/commands` and `src/runtime` link it |
+| `src/update` | the self-update core (ADR 0041): the signed update feed and its reader, Ed25519 and checksum verification of downloaded files, the daily check policy, and how this copy was installed; Qt-free, depends on core and platform, and `src/ui` and the applications link it |
 | `modules` | reserved for optional source-built pipeline modules that register coherent capabilities; the directory does not exist yet, and every pipeline today lives in a `src/` module |
 
 `ProjectSession` belongs in `src/host` because it coordinates document, command history, persistence

@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Signs the files of a Bloom release with the release's Ed25519 key.
+
+This is the only program of the release tools that reads the private key. It uses the `openssl`
+program (OpenSSL 3) and the Python standard library, and makes plain Ed25519 signatures over the
+bytes of each file, which is the form Bloom, the install script and the platform updaters check.
+
+    sign_release files --key-file KEY FILE ...
+        writes FILE.sig (the signature in Base64) beside each file.
+    sign_release detached --key-file KEY --out SIGNATURE FILE
+        writes the signature as 64 raw bytes (for SHA256SUMS, which the install script checks
+        with `openssl pkeyutl -verify -rawin -sigfile`).
+    sign_release feed --key-file KEY --payload PAYLOAD --out FEED
+        signs a feed payload (tools/release/feed.py) and writes the published feed.
+    sign_release public-key --key-file KEY
+        prints the public key as Base64 (the value of the build setting BLOOM_UPDATE_PUBLIC_KEYS).
+
+KEY is a PKCS#8 file without a passphrase, as PEM or as DER. In place of --key-file,
+--key-variable NAME reads the PEM text from that environment variable; it is written to a private
+temporary file for `openssl` and removed afterwards.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import importlib.util
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+
+
+def load_feed_module():
+    spec = importlib.util.spec_from_file_location("bloom_release_feed", HERE / "feed.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def run(command: list[str]) -> bytes:
+    result = subprocess.run(command, capture_output=True, check=False)
+    if result.returncode != 0:
+        raise ValueError(f"{command[0]} {command[1]} failed: "
+                         f"{result.stderr.decode('utf-8', 'replace').strip()}")
+    return result.stdout
+
+
+def key_form(key: Path) -> str:
+    """How the key file is written, as `openssl` names it."""
+    with key.open("rb") as file:
+        return "PEM" if file.read(5) == b"-----" else "DER"
+
+
+def public_key(key: Path) -> bytes:
+    """The 32 bytes of the key's public half."""
+    der = run(["openssl", "pkey", "-in", str(key), "-inform", key_form(key), "-pubout",
+               "-outform", "DER"])
+    prefix = bytes.fromhex("302a300506032b6570032100")
+    if len(der) != len(prefix) + 32 or not der.startswith(prefix):
+        raise ValueError("the key is not an Ed25519 key")
+    return der[len(prefix):]
+
+
+def sign(key: Path, path: Path) -> bytes:
+    """The Ed25519 signature of the file's bytes."""
+    with tempfile.TemporaryDirectory() as work:
+        out = Path(work) / "signature"
+        run(["openssl", "pkeyutl", "-sign", "-inkey", str(key), "-keyform", key_form(key),
+             "-rawin", "-in", str(path), "-out", str(out)])
+        signature = out.read_bytes()
+    if len(signature) != 64:
+        raise ValueError(f"the signature of {path} is not 64 bytes")
+    return signature
+
+
+def main(arguments: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Signs the files of a Bloom release.")
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    def add(name: str) -> argparse.ArgumentParser:
+        command = commands.add_parser(name)
+        source = command.add_mutually_exclusive_group(required=True)
+        source.add_argument("--key-file", type=Path)
+        source.add_argument("--key-variable")
+        return command
+
+    files = add("files")
+    files.add_argument("paths", nargs="+", type=Path)
+    detached = add("detached")
+    detached.add_argument("--out", required=True, type=Path)
+    detached.add_argument("path", type=Path)
+    feed = add("feed")
+    feed.add_argument("--payload", required=True, type=Path)
+    feed.add_argument("--out", required=True, type=Path)
+    add("public-key")
+    options = parser.parse_args(arguments)
+
+    try:
+        with tempfile.TemporaryDirectory() as private:
+            key = options.key_file
+            if key is None:
+                text = os.environ.get(options.key_variable, "")
+                if "PRIVATE KEY" not in text:
+                    raise ValueError(f"{options.key_variable} does not hold a PEM private key")
+                key = Path(private) / "key.pem"
+                # The directory is this user's alone (mkdtemp); so is the file.
+                descriptor = os.open(key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(descriptor, "w", encoding="ascii") as file:
+                    file.write(text if text.endswith("\n") else text + "\n")
+            public = public_key(key)
+            if options.command == "files":
+                for path in options.paths:
+                    signature = base64.b64encode(sign(key, path)).decode("ascii")
+                    path.with_name(path.name + ".sig").write_bytes(
+                        (signature + "\n").encode("ascii"))
+            elif options.command == "detached":
+                options.out.write_bytes(sign(key, options.path))
+            elif options.command == "feed":
+                module = load_feed_module()
+                payload = options.payload.read_bytes()
+                message = Path(private) / "signed-bytes"
+                message.write_bytes(module.signed_bytes(payload))
+                signature = base64.b64encode(sign(key, message)).decode("ascii")
+                options.out.write_bytes(
+                    module.envelope_bytes(payload, [(module.key_id(public), signature)]))
+            else:
+                print(base64.b64encode(public).decode("ascii"))
+    except (OSError, ValueError) as error:
+        print(f"sign_release: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

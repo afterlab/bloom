@@ -14,3 +14,6 @@ src/ui/kit/third_party/** -text
 
 # A project and document as an older build wrote them: the migration test compares their exact bytes.
 tests/fixtures/paths/** -text
+
+# The update tests' fixtures are signed: a signature covers their exact bytes.
+src/update/tests/fixtures/** -text

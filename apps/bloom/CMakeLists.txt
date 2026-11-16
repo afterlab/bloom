@@ -189,6 +189,13 @@ if(APPLE)
                 "$<TARGET_FILE_DIR:bloom>/")
         list(APPEND bloom_bundle_worker_targets bloom-color-worker)
     endif()
+    # The update helper (ADR 0041), beside the application.
+    if(TARGET bloom-update-helper)
+        list(APPEND bloom_bundle_worker_commands
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:bloom-update-helper>"
+                "$<TARGET_FILE_DIR:bloom>/")
+        list(APPEND bloom_bundle_worker_targets bloom-update-helper)
+    endif()
     # The command-line programs, beside the application (macos/bundle_tool.cmake): a package
     # is the bundle, and scripts and agents run the same programs on every platform.
     foreach(bloom_bundle_tool IN ITEMS bloom-cli bloom-mcp)

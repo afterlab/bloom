@@ -75,7 +75,12 @@ constexpr auto kPythonQualificationTools = std::to_array<std::string_view>(
      "tools/bench/build_projects.py", "tools/bench/chart.py", "tools/bench/chart_check.py",
      "tools/bench/imageio_min.py", "tools/bench/node_cost.py", "tools/bench/run_bench.py",
      "tools/bench/run_scenarios.py", "tools/bench/scenario_spec.py",
-     "tools/bench/test_run_scenarios.py"});
+     "tools/bench/test_run_scenarios.py",
+     // The release tools (docs/decisions/0041-self-update.md), named file by file: they write
+     // and check what a release publishes, from outside the application build.
+     "tools/release/appcast.py", "tools/release/changelog.py", "tools/release/feed.py",
+     "tools/release/make_update_fixtures.py", "tools/release/sums.py",
+     "tools/release/test_release_tools.py"});
 
 template <std::size_t Size>
 [[nodiscard]] constexpr auto contains(const std::array<std::string_view, Size>& values,
@@ -363,7 +368,7 @@ void appendRepositoryPolicyFindings(const Path& root, const std::span<const Path
 
 constexpr auto kKnownModules = std::to_array<std::string_view>(
     {"core", "platform", "document", "commands", "project", "render", "runtime", "media", "color",
-     "output", "host", "scripting", "mcp", "svgartwork"});
+     "output", "host", "scripting", "mcp", "svgartwork", "update"});
 constexpr auto kAllowedModuleDependencies =
     std::to_array<std::pair<std::string_view, std::string_view>>({
         {"platform", "core"},      {"document", "core"},      {"commands", "core"},
@@ -394,6 +399,7 @@ constexpr auto kAllowedModuleDependencies =
         {"svgartwork", "core"},    {"svgartwork", "document"}, {"svgartwork", "media"},
         {"svgartwork", "platform"}, {"commands", "svgartwork"},
         {"runtime", "svgartwork"}, /* ADR 0038: the SVG artwork builder and expansion. */
+        {"update", "core"},        {"update", "platform"}, /* ADR 0041: the self-update core. */
     });
 
 [[nodiscard]] constexpr auto isAllowedDependency(const std::string_view module,
