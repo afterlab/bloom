@@ -583,6 +583,9 @@ target_sources(
         font_service.hpp
         qt_font_transport.cpp
         qt_font_transport.hpp
+        qt_update_transport.cpp
+        qt_update_transport.hpp
+        update_service.cpp
         tool_controller.cpp
         composition_thumbnail_controller.cpp
         scopes_drawing.cpp
@@ -862,6 +865,7 @@ target_sources(
             include/bloom/ui/qualified_display_processor_bootstrap.hpp
             include/bloom/ui/task_monitor_model.hpp
             include/bloom/ui/task_ui_bridge.hpp
+            include/bloom/ui/update_service.hpp
             include/bloom/ui/application_identity.hpp
             include/bloom/ui/preview_frame_trace.hpp
             include/bloom/ui/text_box_overlay.hpp
@@ -915,6 +919,8 @@ target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler bloom_media_image 
                                         bloom_media_vector)
 # ADR 0034: the live session adapter feeds scripting::LiveSessionHost.
 target_link_libraries(bloom_ui PUBLIC bloom_scripting)
+# ADR 0041: the update service runs the Qt-free update core as background jobs.
+target_link_libraries(bloom_ui PUBLIC bloom_update)
 bloom_enable_warnings(bloom_ui)
 
 # macOS notifications go through UNUserNotificationCenter (system_notifier_macos.mm); every other

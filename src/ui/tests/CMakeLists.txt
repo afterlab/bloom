@@ -3443,3 +3443,20 @@ bloom_add_test(
     TIMEOUT 300
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
+
+# ADR 0041, #734: the update check and download as background jobs of the update service, and
+# what the request says, against a web server on this machine inside the test.
+foreach(bloom_update_ui_test IN ITEMS check download)
+    add_executable(bloom_update_${bloom_update_ui_test}_test update_${bloom_update_ui_test}_tests.cpp)
+    target_include_directories(bloom_update_${bloom_update_ui_test}_test
+                               PRIVATE .. "${PROJECT_SOURCE_DIR}/tests/support")
+    target_link_libraries(bloom_update_${bloom_update_ui_test}_test
+                          PRIVATE bloom_ui bloom_update Qt6::Network)
+    target_compile_definitions(bloom_update_${bloom_update_ui_test}_test PRIVATE
+        BLOOM_UPDATE_FIXTURES="${PROJECT_SOURCE_DIR}/src/update/tests/fixtures")
+    bloom_enable_warnings(bloom_update_${bloom_update_ui_test}_test)
+    bloom_add_test(NAME bloom.update.${bloom_update_ui_test}_tests
+                   COMMAND bloom_update_${bloom_update_ui_test}_test
+                   LABELS ui integration update TIMEOUT 120
+                   ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endforeach()
