@@ -234,8 +234,8 @@ class SparkleDriver final : public PlatformUpdateDriver {
 
   private:
     SPUUpdater* updater_ = nil;
-    // The updater and the user driver do not keep these alive themselves.
-    id<SPUUserDriver> userDriver_ = nil;
+    // The updater does not keep these alive itself. The user driver is only held.
+    [[maybe_unused]] id<SPUUserDriver> userDriver_ = nil;
     BloomSparkleDelegate* delegate_ = nil;
     bool started_ = false;
 };
