@@ -576,6 +576,27 @@ loaded came from the folder or from Windows. That was on the one Windows compute
 built it; a computer that never had the build tools was not available, and the load record is
 what stands in for it.
 
+### Updates
+
+Every package kind has one update path, chosen by `bloom::update::detectInstall` from the
+package's records ([ADR 0041](../decisions/0041-self-update.md) holds the design and the full
+table). Bloom first checks its own signed feed; only a newer version of the build's channel is
+offered, and a downloaded file is used only when its size, SHA-256 and Ed25519 signature match the
+feed.
+
+| Package | Update |
+| --- | --- |
+| macOS bundle | The platform's updater replaces `Bloom.app` from the appcast the feed names. |
+| Windows installer | The platform's updater runs the next installer silently with `/RELAUNCH=1`. |
+| Windows zip | Bloom says where the next version is and changes nothing. |
+| AppImage | Bloom downloads the next AppImage (a delta from the `.zsync` file when it can) and `bloom-update-helper` replaces the file. |
+| Install script, tar in a folder the user can write | Bloom downloads the tar and `bloom-update-helper` swaps the folder. |
+| System-wide install, package manager | Bloom says the installer must be run again, or that the package manager owns the update. |
+
+On every platform the previous version is kept until the next update succeeds and is put back when
+the new one does not confirm its start. A build folder is never updated. The user's view of this is
+in the [installing guide](../user-guide/installing.md).
+
 ## Capability Reporting And Graceful Degradation
 
 Runtime capability checks produce structured data that both the UI and headless tools can inspect.

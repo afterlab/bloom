@@ -79,7 +79,9 @@ tells you and asks whether to install it. If there is none, or the server cannot
 see nothing.
 
 While it is off, Bloom never checks by itself. **Help > Check for Updates…** always checks when you
-ask, whatever this switch says. Changing the switch takes effect at once.
+ask, whatever this switch says. Changing the switch takes effect at once. What the update window
+shows and how each kind of install updates are in
+[Installing Bloom](installing.md#updates).
 
 ## Import
 

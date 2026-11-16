@@ -9,6 +9,10 @@ follows the backlog tracker (#384), which owns the
 priority order; the tracker wins when the two differ. The focused architecture and product
 documents own detailed semantics and must not be duplicated here.
 
+Bloom is in alpha. Download the latest alpha from the
+[GitHub releases page](https://github.com/afterlab/bloom/releases) and install it as the
+[installing guide](user-guide/installing.md) describes, or build it from source.
+
 ## Shipped
 
 Everything in this section is on `main` and covered by tests. Each row names the owning document.
@@ -63,7 +67,7 @@ code.
 | --- | --- |
 | #732 | Disk cache: a live headroom like RAM and VRAM instead of a fixed budget; loop-resistant eviction; no dropped writes during a RAM Preview fill; an accurate status bar; video and audio readers through the cache |
 | #733 | Scopes: count the frame on screen at display time instead of storing tables with every cached frame |
-| #734 | Installers, self-update and the release build on all three platforms |
+| #734 | Installers, self-update and the release workflow on all three platforms: a disk image and an installer package on macOS, an installer and a zip on Windows, an install script, an AppImage and a tar on Linux, signed update feeds that Bloom checks before it installs anything, and the user guide for installing, updating and uninstalling |
 
 ### 2. Node groups
 

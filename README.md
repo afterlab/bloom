@@ -4,7 +4,7 @@
 composition.**
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-![Status: pre-release](https://img.shields.io/badge/status-pre--release-orange)
+![Status: alpha](https://img.shields.io/badge/status-alpha-orange)
 
 ![Bloom's Default workspace: Assets, the Viewer showing a title card, Properties for the selected Title layer, and a Timeline of colored layers with keyframes](docs/images/readme/default-workspace.webp)
 
@@ -18,9 +18,11 @@ on the GPU through Vulkan (MoltenVK on macOS). A CPU reference renderer defines 
 quietly change your picture.
 
 > [!IMPORTANT]
-> Bloom is pre-release software. There are no downloadable builds yet (installers for the first
-> alpha are planned in #734), so you build it from source. Day-to-day development and testing
-> happen on Linux, and macOS and Windows builds are supported.
+> Bloom is in alpha. Download the latest alpha from the
+> [GitHub releases page](https://github.com/afterlab/bloom/releases) and install it as
+> [Installing, updating and uninstalling Bloom](docs/user-guide/installing.md) describes, or
+> [build it from source](#build-from-source). Day-to-day development and testing happen on Linux,
+> and macOS and Windows builds are supported.
 
 ## A look around
 
@@ -109,6 +111,8 @@ on macOS and Windows (Apple Clang, or MSVC with MSYS2 for the codec libraries), 
 
 ## Documentation
 
+- [Installing Bloom](docs/user-guide/installing.md): download, install, update and uninstall on
+  Linux, macOS and Windows.
 - [User guides](docs/README.md#user-guides): the Viewer, keyframes and easing, workspaces,
   exporting, color management, Python, `bloom-cli` and MCP.
 - [Documentation index](docs/README.md): Bloom's canonical docs, in reading order.

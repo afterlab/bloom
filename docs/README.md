@@ -7,6 +7,11 @@ Updated: 2026-11-15
 This directory is Bloom's current source of truth. Historical notes outside this repository may
 provide research or rationale, but they are not binding until adopted here.
 
+Bloom is in alpha. Download the latest alpha from the
+[GitHub releases page](https://github.com/afterlab/bloom/releases) and install it as the
+[installing guide](user-guide/installing.md) describes, or build it from source as the
+[README](../README.md#build-from-source) describes.
+
 ## Reading Order
 
 1. [`product/foundation.md`](product/foundation.md) — product identity, current decisions, v0 proof,
@@ -68,6 +73,9 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 
 ## User Guides
 
+- [Installing, updating and uninstalling Bloom](user-guide/installing.md) — download the latest alpha from
+  the GitHub releases page, install it on Linux, macOS and Windows, first-run notes, updates and the
+  command-line program.
 - [The Export panel](user-guide/exporting-video.md) — the render queue, outputs, destinations and replacing files.
 - [Denoise & Smooth](user-guide/denoise.md) — Median, Bilateral, Spatial and Temporal noise reduction.
 - [Vector Artwork](user-guide/vector-artwork.md) — keying a Path node from its card, Properties and the timeline.
