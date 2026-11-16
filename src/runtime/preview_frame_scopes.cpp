@@ -100,7 +100,7 @@ makePreviewFrameScopes(const ScopeMeasureSettings& settings, ScopeFrameMeasure m
     case ScopeFrameStatus::Measured: {
         auto scopes = std::make_shared<PreviewFrameScopes>();
         scopes->settings = settings;
-        scopes->reduction = measure.counts.layout.reduction;
+        scopes->reduction = reduction;
         scopes->status = PreviewFrameScopesStatus::Measured;
         scopes->tables = ScopeTables::pack(measure.counts, measure.route);
         scopes->area = measure.area;
@@ -188,6 +188,7 @@ FrameScopeMeasurePreparation prepareFrameScopeMeasure(const PreviewScopeRequest&
     auto programs = std::make_shared<const ColorPrograms>(ColorPrograms{color, ocio});
     auto prepared = std::make_shared<PreparedFrameScopeMeasure>();
     prepared->settings = request.settings;
+    prepared->reduction = request.reduction;
     prepared->color = color;
     prepared->work.job =
         makeScopeMeasureJob(request.settings, *programs->color, *programs->ocio, programs);

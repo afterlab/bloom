@@ -142,6 +142,9 @@ std::optional<ScopeMeasureFault> prepareScopeMeasureForPicture(
         return std::nullopt;
     }
     work.area = *area;
+    // #733: the job names the table size asked for; the measure counts at the size that gives
+    // the area's width (applied here, once).
+    work.job.reduction = render::scopeReductionForWidth(job.reduction, area->width);
     const auto extent = dataWindow.extent();
     constexpr std::uint64_t limit = std::numeric_limits<std::uint32_t>::max();
     if (extent.width() == 0 || extent.height() == 0 || extent.width() > limit ||

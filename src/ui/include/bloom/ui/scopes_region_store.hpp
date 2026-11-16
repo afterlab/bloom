@@ -11,7 +11,8 @@
 //   - the settings every Scopes panel draws with (the header menu's Signal, Working axis maximum,
 //     Ignore Transparent Pixels, and each scope's mode). One set per session: a frame carries one
 //     set of tables, so two panels never ask for different ones;
-//   - the size of the tables the panels draw (the largest any visible panel draws);
+//   - what the open panes of the visible panels draw: the tables asked for are those any of them
+//     draws, at the largest size any of them draws (a collapsed or hidden pane asks for none);
 //   - how many Scopes panels are visible. While one is and the signal is Working, every Viewer,
 //     read-ahead and RAM Preview request asks its frame's preparation to count the scope tables
 //     too (request()). The Display signal is counted from the frame a Viewer shows, at display
@@ -82,20 +83,24 @@ class ScopesRegionStore final : public QObject {
     void setWorkingAxisMaximum(std::uint32_t axisMaximum);
     [[nodiscard]] bool ignoreTransparent() const noexcept { return ignoreTransparent_; }
     void setIgnoreTransparent(bool ignore);
-    // The settings a frame of `key`'s composition is counted under: every table, the signal, the
-    // axis maximum, the composition's region and Ignore Transparent Pixels.
+    // The settings a frame of `key`'s composition is counted under: the tables the open panes
+    // draw, the signal, the axis maximum, the composition's region and Ignore Transparent Pixels.
     [[nodiscard]] runtime::ScopeMeasureSettings settings(const Key& key) const;
     // What a request for a frame of `key`'s composition asks its preparation to count: the Working
-    // signal's tables at the size the panels draw. Null while no Scopes panel is visible, and for
-    // the Display signal, which is counted from the shown frame. The same object is returned
-    // until the settings change.
+    // signal's tables at the size the panels draw. Null while no Scopes panel is visible or every
+    // pane is collapsed, and for the Display signal, which is counted from the shown frame. The
+    // same object is returned until the settings change.
     [[nodiscard]] std::shared_ptr<const runtime::PreviewScopeRequest> request(const Key& key) const;
-    // The size of the tables the panels draw (render/scope_table_layout.hpp); the full tables
-    // until a panel says otherwise. An invalid reduction is ignored.
+    // #733: what a panel's open panes draw (runtime/scope_picture.hpp). The tables asked for are
+    // those any reporting panel draws, at the largest size any draws; with no panel reporting,
+    // every table at full size. A change emits measureChanged while a panel is visible.
+    void setPaneCells(const QObject* panel, const runtime::scopes::ScopePaneCells& cells);
+    void clearPaneCells(const QObject* panel);
+    // The tables asked for (render::kScopeTable* bits; 0: every pane is collapsed) and their size.
+    [[nodiscard]] std::uint32_t tables() const noexcept { return tables_; }
     [[nodiscard]] render::ScopeTableReduction tableReduction() const noexcept {
         return tableReduction_;
     }
-    void setTableReduction(render::ScopeTableReduction reduction);
 
     // The shared OCIO context the device's scope color steps are prepared from (resolved on a
     // worker). Without one the frames of the device route count their tables on the CPU.
@@ -134,6 +139,7 @@ class ScopesRegionStore final : public QObject {
 
   private:
     void measureSettingsChanged();
+    void paneCellsChanged();
 
     std::map<Key, runtime::ScopeRegion> regions_;
     bool armed_ = false;
@@ -141,6 +147,8 @@ class ScopesRegionStore final : public QObject {
     runtime::ScopeSignal signal_ = runtime::ScopeSignal::Display;
     std::uint32_t axisMaximum_ = 1;
     bool ignoreTransparent_ = false;
+    std::map<const QObject*, runtime::scopes::ScopePaneCells> paneCells_;
+    std::uint32_t tables_ = render::kScopeTableAll;
     render::ScopeTableReduction tableReduction_{};
     Drawing drawing_;
     std::shared_ptr<runtime::ScopeSignalColorCache> colors_;

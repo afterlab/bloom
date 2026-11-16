@@ -196,10 +196,12 @@ bool run(Expectations& checks, const TestOptions& options,
             if (frame == nullptr)
                 continue;
             const auto& carried = frame->scopes();
+            // The frame keeps the asked reduction; the counted one is resolved for its width.
+            const auto counted = bloom::render::scopeReductionForWidth(reduction, kSize);
             checks.expect(carried != nullptr &&
                               carried->status == PreviewFrameScopesStatus::Measured &&
                               carried->settings == settings && carried->reduction == reduction &&
-                              carried->tables.layout().reduction == reduction &&
+                              carried->tables.layout().reduction == counted &&
                               carried->tables.route() == bloom::runtime::ScopeRoute::Gpu,
                           name + ": the frame carries tables its device job counted" +
                               (carried != nullptr ? ": " + carried->message : std::string()));
@@ -218,7 +220,7 @@ bool run(Expectations& checks, const TestOptions& options,
             checks.expect(counts.counted() == kSize * kSize, name + ": every pixel is counted");
             const auto after = counters();
             const auto bytes =
-                bloom::render::scopeTableLayout(scopes, kSize, reduction).byteCount();
+                bloom::render::scopeTableLayout(scopes, kSize, counted).byteCount();
             std::cout << name << (scopes == kNoChromaticity ? ", no CIE table" : ", all tables")
                       << ": table readback " << bytes << " bytes\n";
             checks.expect(after.scopeFramesMeasured == before.scopeFramesMeasured + 1 &&

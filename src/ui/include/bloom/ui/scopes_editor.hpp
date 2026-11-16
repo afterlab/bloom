@@ -134,6 +134,9 @@ class ScopesEditor final : public QWidget, public EditorChromeProvider {
     void onViewerState();
     void measureShown(const PreparedPreviewFrameHandle& frame,
                       const runtime::ScopeMeasureSettings& settings);
+    // #733: tells the session what this panel's open panes draw, so the tables are counted at
+    // that size and a collapsed or hidden pane asks for none.
+    void reportPanes();
     void forgetMeasure();
     void onMeasureReady();
     void handOut(std::shared_ptr<const runtime::PreviewFrameScopes> scopes);

@@ -90,6 +90,27 @@ inline constexpr std::uint8_t kScopeChromaticityShiftMaximum = 5U;
     return shift;
 }
 
+// A reduction as a panel asks for it names its Waveform columns against the widest table: it wants
+// at least kScopeWaveformMaxColumns >> waveformColumnShift columns. A measured area narrower than
+// that table has fewer full columns, so the shift that still gives as many (or else every full
+// column) is smaller. This is the reduction a measure of an area `measuredWidth` pixels wide
+// counts with; the other axes do not depend on the picture. A frame-level measure applies it once
+// to the reduction it was asked for (it is not its own inverse: never apply it to its result).
+[[nodiscard]] constexpr ScopeTableReduction
+scopeReductionForWidth(ScopeTableReduction asked, const std::uint32_t measuredWidth) noexcept {
+    const std::uint32_t fullColumns =
+        measuredWidth < kScopeWaveformMaxColumns ? (measuredWidth == 0U ? 1U : measuredWidth)
+                                                 : kScopeWaveformMaxColumns;
+    const std::uint8_t askedShift =
+        asked.waveformColumnShift < kScopeWaveformColumnShiftMaximum
+            ? asked.waveformColumnShift
+            : kScopeWaveformColumnShiftMaximum;
+    const std::uint32_t wanted = kScopeWaveformMaxColumns >> askedShift;
+    asked.waveformColumnShift =
+        scopeAxisShift(fullColumns, wanted, kScopeWaveformColumnShiftMaximum);
+    return asked;
+}
+
 struct ScopeTableLayout final {
     std::uint32_t scopes = 0;
     // Waveform columns of this table (reduced when `reduction` says so); 0 without the Waveform.

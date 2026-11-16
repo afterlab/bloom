@@ -4,7 +4,9 @@
 #include <bloom/render/scope_table_layout.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
 
 namespace bloom::runtime::scopes {
 namespace {
@@ -63,31 +65,66 @@ struct Span final {
 // mirrored back into it (level -1 onto 0, 1024 onto 1023), which keeps a flat spread flat to its
 // ends. Values under and over the axis are not spread: they stay on the 0 and 1023 lines and in the
 // end bins.
+//
+// #733: a table counted at pane size has cells of 2^shift codes. The same tent, in codes, is then
+// applied to a count taken to lie evenly over its cell: cell c + d takes the mean, over the codes
+// a of cell c, of the tent's weights that fall in cell c + d. For shift 0 that is the tent itself;
+// the weights always add up to 1, and a picture in 8-bit steps still draws a continuous trace.
 constexpr int kLevelSpread = 4;
 
-void spreadLevels(const std::vector<double>& counts, std::vector<double>& spread) {
+struct LevelSpread final {
+    // Cells on each side that take a share: 3, 2, or 1 for cells of four codes and more.
+    int reach = kLevelSpread - 1;
+    // weights[reach + d] for d in -reach..reach.
+    std::array<double, 2 * kLevelSpread - 1> weights{};
+};
+
+[[nodiscard]] LevelSpread levelSpread(const std::uint8_t shift) {
+    LevelSpread spread;
+    const int cell = 1 << shift;
+    spread.reach = std::min(kLevelSpread - 1, (cell + kLevelSpread - 2) / cell);
+    constexpr double kNorm = static_cast<double>(kLevelSpread * kLevelSpread);
+    for (int offset = -spread.reach; offset <= spread.reach; ++offset) {
+        std::int64_t sum = 0;
+        for (int from = 0; from < cell; ++from) {
+            // The codes of cell `offset` within the tent around `from`.
+            const int first = std::max(offset * cell, from - kLevelSpread + 1);
+            const int last = std::min(offset * cell + cell - 1, from + kLevelSpread - 1);
+            for (int to = first; to <= last; ++to)
+                sum += kLevelSpread - std::abs(to - from);
+        }
+        spread.weights[static_cast<std::size_t>(spread.reach + offset)] =
+            static_cast<double>(sum) / (kNorm * static_cast<double>(cell));
+    }
+    return spread;
+}
+
+void spreadLevels(const std::vector<double>& counts, std::vector<double>& spread,
+                  const LevelSpread& kernel) {
     const auto levels = static_cast<int>(counts.size());
     std::fill(spread.begin(), spread.end(), 0.0);
-    constexpr double kNorm = static_cast<double>(kLevelSpread * kLevelSpread);
     for (int level = 0; level < levels; ++level) {
         const double count = counts[static_cast<std::size_t>(level)];
         if (count <= 0.0)
             continue;
-        for (int offset = 1 - kLevelSpread; offset < kLevelSpread; ++offset) {
+        for (int offset = -kernel.reach; offset <= kernel.reach; ++offset) {
             int target = level + offset;
             if (target < 0)
                 target = -target - 1;
             else if (target >= levels)
                 target = 2 * levels - 1 - target;
+            // A table of very few levels: what would fall outside twice stays on the end cell.
+            target = std::clamp(target, 0, levels - 1);
             spread[static_cast<std::size_t>(target)] +=
-                count * static_cast<double>(kLevelSpread - std::abs(offset)) / kNorm;
+                count * kernel.weights[static_cast<std::size_t>(kernel.reach + offset)];
         }
     }
 }
 
-// One pane of a Waveform or Parade. Each screen column sums the table columns it shows into 1024
-// levels, spread by the 8-bit step tent (values under the axis on level 0, over it on level 1023),
-// and divides by the pixels those columns hold; each screen row sums the levels it covers.
+// One pane of a Waveform or Parade. Each screen column sums the table columns it shows into the
+// table's levels (1024 in the full table), spread by the 8-bit step tent (values under the axis on
+// the first level, over it on the last), and divides by the pixels those columns hold; each screen
+// row sums the levels it covers.
 void paintWaveformPane(ScopeImage& image, const int paneX, const int paneWidth,
                        const ScopeTables& tables, const std::vector<std::uint32_t>& channels,
                        const Cancelled& cancelled) {
@@ -95,7 +132,9 @@ void paintWaveformPane(ScopeImage& image, const int paneX, const int paneWidth,
     if (columns == 0 || paneWidth <= 0)
         return;
     const int height = image.height;
-    constexpr auto kLevels = render::kScopeWaveformLevels;
+    const auto& layout = tables.layout();
+    const auto kLevels = layout.waveformLevels();
+    const auto kernel = levelSpread(layout.reduction.waveformLevelShift);
     std::vector<Span> rows(static_cast<std::size_t>(height));
     for (int y = 0; y < height; ++y)
         rows[static_cast<std::size_t>(y)] = spanOf(height - 1 - y, height, kLevels);
@@ -120,10 +159,10 @@ void paintWaveformPane(ScopeImage& image, const int paneX, const int paneWidth,
                 counts[level] = static_cast<double>(count);
             }
             for (auto column = cells.first; column < cells.last; ++column) {
-                under += tables.waveform(channel, column, render::kScopeWaveformLevelUnder);
-                over += tables.waveform(channel, column, render::kScopeWaveformLevelOver);
+                under += tables.waveform(channel, column, layout.waveformLevelUnder());
+                over += tables.waveform(channel, column, layout.waveformLevelOver());
             }
-            spreadLevels(counts, spread);
+            spreadLevels(counts, spread, kernel);
             spread[0] += static_cast<double>(under);
             spread[kLevels - 1U] += static_cast<double>(over);
             prefix[0] = 0.0;
@@ -238,8 +277,9 @@ ScopeImage mapVectorscope(const ScopeTables& tables, const ScopeLuma& luma, cons
     const double counted = tables.counted();
     if (counted <= 0.0)
         return image;
-    constexpr auto kCells = render::kScopeVectorscopeCells;
-    constexpr double kGrid = static_cast<double>(kCells) * static_cast<double>(kCells);
+    // #733: the table may be counted at pane size; a cell then covers more of the plane.
+    const auto kCells = tables.layout().vectorscopeCells();
+    const double kGrid = static_cast<double>(kCells) * static_cast<double>(kCells);
     constexpr double kCodeStep = static_cast<double>(1U << render::kScopeVectorscopeLumaShift);
     for (int y = 0; y < size.height; ++y) {
         if (cancelledNow(cancelled))
@@ -299,7 +339,7 @@ ScopeImage mapChromaticity(const ScopeTables& tables, const PixelSize size,
     if (size.isEmpty() || !tables.layout().has(render::kScopeTableChromaticity))
         return {};
     auto image = makeImage(size);
-    constexpr auto kCells = render::kScopeChromaticityCells;
+    const auto kCells = tables.layout().chromaticityCells();
     for (int y = 0; y < size.height; ++y) {
         if (cancelledNow(cancelled))
             return {};
@@ -330,6 +370,8 @@ ScopeImage mapHistogram(const ScopeTables& tables, const HistogramChannels chann
     const auto list = histogramChannelList(channels);
     auto image = makeImage({width, rowHeight * static_cast<int>(list.size())});
     constexpr auto kCodes = render::kScopeCodes;
+    // The Histogram is never counted smaller: its bins are the codes.
+    const auto kernel = levelSpread(0);
     // The mean count of the bins of every screen column, values outside the axis in the end bins.
     const auto columns = static_cast<std::size_t>(width);
     std::vector<double> means(list.size() * columns, 0.0);
@@ -340,7 +382,7 @@ ScopeImage mapHistogram(const ScopeTables& tables, const HistogramChannels chann
         const auto channel = list[slot];
         for (std::uint32_t code = 0; code < kCodes; ++code)
             counts[code] = static_cast<double>(tables.histogram(channel, code));
-        spreadLevels(counts, spread);
+        spreadLevels(counts, spread, kernel);
         spread[0] += static_cast<double>(tables.histogram(channel, render::kScopeCodeUnder));
         spread[kCodes - 1U] +=
             static_cast<double>(tables.histogram(channel, render::kScopeCodeOver));
@@ -402,6 +444,85 @@ ScopeImage mapHistogram(const ScopeTables& tables, const HistogramChannels chann
         }
     }
     return image;
+}
+
+ScopePaneCells scopePaneCells(const Kind kind, const PixelSize traceSize,
+                              const int paradeGapPixels) {
+    ScopePaneCells cells;
+    if (traceSize.isEmpty())
+        return cells;
+    const auto width = static_cast<std::uint32_t>(traceSize.width);
+    const auto height = static_cast<std::uint32_t>(traceSize.height);
+    switch (kind) {
+    case Kind::Waveform:
+        cells.waveformColumns = width;
+        cells.waveformLevels = height;
+        break;
+    case Kind::Parade: {
+        // The channel pane mapParade() paints.
+        const int gap = std::max(0, paradeGapPixels);
+        cells.waveformColumns =
+            static_cast<std::uint32_t>(std::max(1, (traceSize.width - 2 * gap) / 3));
+        cells.waveformLevels = height;
+        break;
+    }
+    case Kind::Vectorscope:
+        cells.vectorscope = std::max(width, height);
+        break;
+    case Kind::Histogram:
+        cells.histogram = true;
+        break;
+    case Kind::Chromaticity: {
+        // The image renderTrace() maps for an axes' side of `traceSize.width`.
+        const auto image = chromaticityImageSize(traceSize.width);
+        cells.chromaticity = static_cast<std::uint32_t>(std::max(image.width, image.height));
+        break;
+    }
+    }
+    return cells;
+}
+
+ScopePaneCells mergeScopePaneCells(const ScopePaneCells& left,
+                                   const ScopePaneCells& right) noexcept {
+    return {.waveformColumns = std::max(left.waveformColumns, right.waveformColumns),
+            .waveformLevels = std::max(left.waveformLevels, right.waveformLevels),
+            .vectorscope = std::max(left.vectorscope, right.vectorscope),
+            .chromaticity = std::max(left.chromaticity, right.chromaticity),
+            .histogram = left.histogram || right.histogram};
+}
+
+std::uint32_t scopeTablesFor(const ScopePaneCells& cells) noexcept {
+    std::uint32_t tables = 0;
+    if (cells.histogram)
+        tables |= render::kScopeTableHistogram;
+    if (cells.waveformColumns != 0U && cells.waveformLevels != 0U)
+        tables |= render::kScopeTableWaveform;
+    if (cells.vectorscope != 0U)
+        tables |= render::kScopeTableVectorscope;
+    if (cells.chromaticity != 0U)
+        tables |= render::kScopeTableChromaticity;
+    return tables;
+}
+
+render::ScopeTableReduction scopeTableReductionFor(const ScopePaneCells& cells) noexcept {
+    render::ScopeTableReduction reduction;
+    if (cells.waveformColumns != 0U && cells.waveformLevels != 0U) {
+        reduction.waveformColumnShift =
+            render::scopeAxisShift(render::kScopeWaveformMaxColumns, cells.waveformColumns,
+                                   render::kScopeWaveformColumnShiftMaximum);
+        reduction.waveformLevelShift =
+            render::scopeAxisShift(render::kScopeWaveformLevels, cells.waveformLevels,
+                                   render::kScopeWaveformLevelShiftMaximum);
+    }
+    if (cells.vectorscope != 0U)
+        reduction.vectorscopeShift =
+            render::scopeAxisShift(render::kScopeVectorscopeCells, cells.vectorscope,
+                                   render::kScopeVectorscopeShiftMaximum);
+    if (cells.chromaticity != 0U)
+        reduction.chromaticityShift =
+            render::scopeAxisShift(render::kScopeChromaticityCells, cells.chromaticity,
+                                   render::kScopeChromaticityShiftMaximum);
+    return reduction;
 }
 
 ScopeImage renderTrace(const TraceRequest& request, const Cancelled& cancelled) {

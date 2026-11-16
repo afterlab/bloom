@@ -262,11 +262,13 @@ void ScopeView::resizeEvent(QResizeEvent* const event) {
     const auto request = currentRequest();
     if (measures(scopes_.get()) && request.size != requestedSize_)
         requestTrace();
+    emit traceSizeChanged();
 }
 
 void ScopeView::showEvent(QShowEvent* const event) {
     QWidget::showEvent(event);
     requestTrace();
+    emit traceSizeChanged();
 }
 
 int ScopeView::heightForWidth(const int width) const {
@@ -398,7 +400,8 @@ QString ScopeView::readoutAt(const QPointF& position) const {
             static_cast<std::uint32_t>(std::max<qreal>(0, local) / paneWidth * columns));
         const int code = std::clamp(
             static_cast<int>((plot.bottom() - position.y()) / plot.height() * 1024.0), 0, 1023);
-        const auto level = static_cast<std::uint32_t>(code);
+        // #733: a table counted at pane size holds the code in a cell of several codes.
+        const auto level = tables.layout().waveformLevel(static_cast<std::uint32_t>(code));
         QStringList counts;
         const auto channels = parade ? std::vector<std::uint32_t>{static_cast<std::uint32_t>(pane)}
                                      : scopes::waveformChannelList(shownDrawing_.waveformChannels);
@@ -440,11 +443,13 @@ QString ScopeView::readoutAt(const QPointF& position) const {
         const double cb = ((position.x() - plot.left()) / plot.width() * 2.0 - 1.0) * extent;
         const double cr = (1.0 - (position.y() - plot.top()) / plot.height() * 2.0) * extent;
         const double side = render::kScopeVectorscopeCells;
-        const auto cell = [side](const double value) {
+        const auto shift = tables.layout().reduction.vectorscopeShift;
+        const auto cell = [side, shift](const double value) {
             return static_cast<std::uint32_t>(
-                std::clamp(std::floor((value + scopes_rt::kVectorscopeExtent) *
-                                      render::kScopeVectorscopeCellsPerUnit),
-                           0.0, side - 1.0));
+                       std::clamp(std::floor((value + scopes_rt::kVectorscopeExtent) *
+                                             render::kScopeVectorscopeCellsPerUnit),
+                                  0.0, side - 1.0)) >>
+                   shift;
         };
         double angle = std::atan2(cr, cb) * 180.0 / std::numbers::pi;
         if (angle < 0)
@@ -466,7 +471,9 @@ QString ScopeView::readoutAt(const QPointF& position) const {
             const double side = static_cast<double>(cells);
             const auto xCell = static_cast<std::uint32_t>(x / scopes::kChromaticityXMaximum * side);
             const auto yCell = static_cast<std::uint32_t>(y / scopes::kChromaticityYMaximum * side);
-            count = tables.chromaticity(std::min(xCell, cells - 1U), std::min(yCell, cells - 1U));
+            const auto shift = tables.layout().reduction.chromaticityShift;
+            count = tables.chromaticity(std::min(xCell, cells - 1U) >> shift,
+                                        std::min(yCell, cells - 1U) >> shift);
         }
         return tr("x %1 · y %2 · Count %3").arg(x, 0, 'f', 4).arg(y, 0, 'f', 4).arg(count);
     }

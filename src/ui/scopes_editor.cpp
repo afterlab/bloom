@@ -146,6 +146,7 @@ ScopesEditor::ScopesEditor(const ScopesServices& services, QWidget* const parent
 ScopesEditor::~ScopesEditor() {
     // No result callback runs once this returned.
     measurer_.reset();
+    store_->clearPaneCells(this);
     if (countedVisible_)
         store_->panelHidden();
     QObject::disconnect(viewerConnection_);
@@ -292,6 +293,7 @@ void ScopesEditor::buildSections(QWidget* const parent) {
         layout->addWidget(section);
         connect(section, &kit::KSection::collapsedChanged, this,
                 [this](bool) { refreshViewsActive(); });
+        connect(view, &ScopeView::traceSizeChanged, this, [this] { reportPanes(); });
     }
     layout->addStretch(1);
 }
@@ -347,6 +349,26 @@ void ScopesEditor::refreshViewsActive() {
         const auto slot = static_cast<std::size_t>(spec.kind);
         views_[slot]->setActive(shown_ && !sections_[slot]->isCollapsed());
     }
+    reportPanes();
+}
+
+void ScopesEditor::reportPanes() {
+    if (!shown_) {
+        store_->clearPaneCells(this);
+        return;
+    }
+    runtime::scopes::ScopePaneCells cells;
+    for (const auto& spec : kSections) {
+        const auto slot = static_cast<std::size_t>(spec.kind);
+        if (sections_[slot] == nullptr || views_[slot] == nullptr || sections_[slot]->isCollapsed())
+            continue;
+        const auto request = views_[slot]->currentRequest();
+        cells = runtime::scopes::mergeScopePaneCells(
+            cells, runtime::scopes::scopePaneCells(
+                       spec.kind, {request.size.width(), request.size.height()},
+                       request.gapPixels));
+    }
+    store_->setPaneCells(this, cells);
 }
 
 void ScopesEditor::handOut(std::shared_ptr<const runtime::PreviewFrameScopes> scopes) {
@@ -365,8 +387,9 @@ void ScopesEditor::forgetMeasure() {
 
 void ScopesEditor::measureShown(const PreparedPreviewFrameHandle& frame,
                                 const runtime::ScopeMeasureSettings& settings) {
-    // A hidden panel counts nothing; it asks when it is shown again.
-    if (measurer_ == nullptr || !shown_)
+    // A hidden panel counts nothing; it asks when it is shown again. Neither does a panel whose
+    // panes are all collapsed.
+    if (measurer_ == nullptr || !shown_ || settings.scopes == 0U)
         return;
     const auto reduction = store_->tableReduction();
     if (askedMeasure_ && askedMeasure_->frame.lock() == frame &&
@@ -482,6 +505,9 @@ void ScopesEditor::pickViewer() {
 void ScopesEditor::showEvent(QShowEvent* const event) {
     QWidget::showEvent(event);
     shown_ = true;
+    // What the open panes draw is known to the session before the panel counts as visible, so
+    // the first measure is asked at that size.
+    reportPanes();
     if (!countedVisible_) {
         countedVisible_ = true;
         store_->panelShown();

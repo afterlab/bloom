@@ -79,6 +79,11 @@ class ScopeView final : public QWidget {
     [[nodiscard]] QSize sizeHint() const override;
     [[nodiscard]] QSize minimumSizeHint() const override;
 
+  signals:
+    // #733: the size of the trace this scope draws may have changed (the panel then reports what
+    // its open panes draw, so the tables are counted at that size).
+    void traceSizeChanged();
+
   protected:
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;

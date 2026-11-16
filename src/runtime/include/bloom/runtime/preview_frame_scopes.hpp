@@ -61,7 +61,9 @@ class ScopeSignalColorCache final {
 // What a preview request asks its frame's preparation to count: the Working signal's tables.
 struct PreviewScopeRequest final {
     ScopeMeasureSettings settings;
-    // #733: the size of the tables (render/scope_table_layout.hpp): the size the panes draw.
+    // #733: the size of the tables asked for (render/scope_table_layout.hpp): the size the panes
+    // draw. Its Waveform columns are named against the widest table
+    // (render::scopeReductionForWidth).
     render::ScopeTableReduction reduction{};
     std::shared_ptr<ScopeSignalColorCache> colors;
     // The shared OCIO context the device's color steps are prepared with; empty or null means the
@@ -83,7 +85,8 @@ enum class PreviewFrameScopesStatus : std::uint8_t {
 // The scope tables of one frame, immutable once published.
 struct PreviewFrameScopes final {
     ScopeMeasureSettings settings;
-    // #733: the table size that was asked for (the size of `tables` when Measured).
+    // #733: the table size that was asked for. The tables are counted at
+    // render::scopeReductionForWidth of it for the measured area (`tables.layout().reduction`).
     render::ScopeTableReduction reduction{};
     PreviewFrameScopesStatus status = PreviewFrameScopesStatus::Failed;
     ScopeTables tables; // packed; names the route that counted
@@ -100,8 +103,7 @@ struct PreviewFrameScopes final {
 };
 
 // The record of a measure: Measured with the packed tables, EmptyArea, or Failed with the reason
-// (also for Unavailable and Cancelled). `reduction` is the table size that was asked for; a
-// Measured record takes it from its tables.
+// (also for Unavailable and Cancelled). `reduction` is the table size that was asked for.
 [[nodiscard]] std::shared_ptr<const PreviewFrameScopes>
 makePreviewFrameScopes(const ScopeMeasureSettings& settings, ScopeFrameMeasure measure,
                        std::shared_ptr<const ScopeSignalColor> color,

@@ -17,7 +17,7 @@ failed(const PreparedFrameScopeMeasure& prepared, std::string message) {
     measure.status = ScopeFrameStatus::Failed;
     measure.message = std::move(message);
     return makePreviewFrameScopes(prepared.settings, std::move(measure), nullptr,
-                                  prepared.work.job.reduction);
+                                  prepared.reduction);
 }
 
 void finishMeasure(PreviewDisplayServiceCore& core, PreviewDisplayStageRecord& stage) noexcept {
@@ -36,8 +36,8 @@ void finishMeasure(PreviewDisplayServiceCore& core, PreviewDisplayStageRecord& s
             measure.colorDispatches = stage.scopeWork->colorDispatches;
             measure.tableReadbacks = stage.scopeWork->tableReadbacks;
             measure.tableReadbackBytes = stage.scopeWork->tableReadbackBytes;
-            stage.scopes =
-                makePreviewFrameScopes(prepared->settings, std::move(measure), prepared->color);
+            stage.scopes = makePreviewFrameScopes(prepared->settings, std::move(measure),
+                                                  prepared->color, prepared->reduction);
             counters.framesMeasured.fetch_add(1, std::memory_order_relaxed);
             counters.tableReadbacks.fetch_add(stage.scopeWork->tableReadbacks,
                                               std::memory_order_relaxed);

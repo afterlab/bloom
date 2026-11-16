@@ -14,6 +14,8 @@ namespace bloom::runtime {
 class PreparedFrameScopeMeasure final {
   public:
     ScopeMeasureSettings settings;
+    // The table size the request asked for (`work.job.reduction` is the size counted).
+    render::ScopeTableReduction reduction{};
     std::shared_ptr<const ScopeSignalColor> color;
     // The job, the measured area and the color programs; the owner fills a copy's counts.
     detail::ScopeMeasureWork work;

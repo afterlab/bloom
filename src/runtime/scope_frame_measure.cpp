@@ -301,7 +301,7 @@ ScopeFrameMeasure measureScopeFrameCpu(const ProcessFrame& frame,
         input.axisMaximum = settings.axisMaximum;
         input.luma = color.luma();
         input.ignoreTransparent = settings.ignoreTransparent;
-        input.reduction = reduction;
+        input.reduction = render::scopeReductionForWidth(reduction, area->width);
         auto counts = measureScopesCpu(
             input, [&cancellation] { return cancellation.isCancellationRequested(); });
         if (!counts)
@@ -386,7 +386,7 @@ ScopeFrameMeasure measureScopeStoredFrameCpu(const ScopeStoredFrame& frame,
         input.axisMaximum = settings.axisMaximum;
         input.luma = color.luma();
         input.ignoreTransparent = settings.ignoreTransparent;
-        input.reduction = reduction;
+        input.reduction = render::scopeReductionForWidth(reduction, area->width);
         auto counts = measureScopesCpu(input, isCancelled);
         if (!counts)
             return isCancelled() ? cancelledMeasure()

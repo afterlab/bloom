@@ -42,6 +42,8 @@ struct GpuScopeMeasureJob final {
     // In composition pixels; the whole picture when not set.
     std::optional<ScopeRegion> region;
     // #733: the size of the tables (render/scope_table_layout.hpp); the full tables by default.
+    // As asked for until the measure is prepared, which makes it the size counted
+    // (render::scopeReductionForWidth for the measured area's width).
     render::ScopeTableReduction reduction{};
     // The Display signal: a GpuOcioTransformKind::ScopeDisplay program. Empty measures the Working
     // signal, the scene-linear picture as it is.

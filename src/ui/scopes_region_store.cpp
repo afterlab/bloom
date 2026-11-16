@@ -73,7 +73,7 @@ void ScopesRegionStore::setIgnoreTransparent(const bool ignore) {
 
 runtime::ScopeMeasureSettings ScopesRegionStore::settings(const Key& key) const {
     runtime::ScopeMeasureSettings settings;
-    settings.scopes = render::kScopeTableAll;
+    settings.scopes = tables_;
     settings.signal = signal_;
     settings.axisMaximum = signal_ == runtime::ScopeSignal::Working ? axisMaximum_ : 1U;
     settings.region = region(key);
@@ -84,7 +84,7 @@ runtime::ScopeMeasureSettings ScopesRegionStore::settings(const Key& key) const 
 std::shared_ptr<const runtime::PreviewScopeRequest>
 ScopesRegionStore::request(const Key& key) const {
     // #733: the Display signal is counted from the shown frame, never with a frame's preparation.
-    if (!active() || signal_ != runtime::ScopeSignal::Working)
+    if (!active() || signal_ != runtime::ScopeSignal::Working || tables_ == 0U)
         return nullptr;
     auto& slot = requests_[key];
     if (slot == nullptr)
@@ -96,9 +96,35 @@ ScopesRegionStore::request(const Key& key) const {
     return slot;
 }
 
-void ScopesRegionStore::setTableReduction(const render::ScopeTableReduction reduction) {
-    if (!render::validScopeTableReduction(reduction) || tableReduction_ == reduction)
+void ScopesRegionStore::setPaneCells(const QObject* const panel,
+                                     const runtime::scopes::ScopePaneCells& cells) {
+    if (panel == nullptr)
         return;
+    const auto found = paneCells_.find(panel);
+    if (found != paneCells_.end() && found->second == cells)
+        return;
+    paneCells_[panel] = cells;
+    paneCellsChanged();
+}
+
+void ScopesRegionStore::clearPaneCells(const QObject* const panel) {
+    if (paneCells_.erase(panel) != 0)
+        paneCellsChanged();
+}
+
+void ScopesRegionStore::paneCellsChanged() {
+    std::uint32_t tables = render::kScopeTableAll;
+    render::ScopeTableReduction reduction;
+    if (!paneCells_.empty()) {
+        runtime::scopes::ScopePaneCells merged;
+        for (const auto& [panel, cells] : paneCells_)
+            merged = runtime::scopes::mergeScopePaneCells(merged, cells);
+        tables = runtime::scopes::scopeTablesFor(merged);
+        reduction = runtime::scopes::scopeTableReductionFor(merged);
+    }
+    if (tables == tables_ && reduction == tableReduction_)
+        return;
+    tables_ = tables;
     tableReduction_ = reduction;
     requests_.clear();
     if (active())

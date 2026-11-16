@@ -66,11 +66,12 @@ struct ColorPrograms final {
 
 [[nodiscard]] std::shared_ptr<const PreviewFrameScopes>
 failedScopes(const ScopeMeasureSettings& settings, std::string message,
-             std::shared_ptr<const ScopeSignalColor> color = {}) {
+             std::shared_ptr<const ScopeSignalColor> color = {},
+             const render::ScopeTableReduction reduction = {}) {
     ScopeFrameMeasure measure;
     measure.status = ScopeFrameStatus::Failed;
     measure.message = std::move(message);
-    return makePreviewFrameScopes(settings, std::move(measure), std::move(color));
+    return makePreviewFrameScopes(settings, std::move(measure), std::move(color), reduction);
 }
 
 void publish(const StatePtr& state, const Run& run, ShownFrameScopes result) {
@@ -123,7 +124,8 @@ void countOnWorker(const StatePtr& state, const Run& run, const CancellationToke
     if (measure.status == ScopeFrameStatus::Cancelled)
         return;
     auto result =
-        resultOf(run, makePreviewFrameScopes(run.request.settings, std::move(measure), run.color));
+        resultOf(run, makePreviewFrameScopes(run.request.settings, std::move(measure), run.color,
+                                             run.request.reduction));
     result.deviceMessage = std::move(deviceMessage);
     publish(state, run, std::move(result));
 }
@@ -252,7 +254,7 @@ void continueAfterDevice(const StatePtr& state, std::shared_ptr<Run> run,
         measure.status = ScopeFrameStatus::EmptyArea;
         publish(state, *run,
                 resultOf(*run, makePreviewFrameScopes(request.settings, std::move(measure),
-                                                      run->color)));
+                                                      run->color, request.reduction)));
         ended = true;
         return false;
     }
@@ -382,7 +384,7 @@ void continueAfterDevice(const StatePtr& state, std::shared_ptr<Run> run,
                         measure.area = *area;
                     auto published = resultOf(
                         *run, makePreviewFrameScopes(run->request.settings, std::move(measure),
-                                                     run->color));
+                                                     run->color, run->request.reduction));
                     published.uploads = result.uploads;
                     published.colorDispatches = result.colorDispatches;
                     published.tableReadbacks = result.tableReadbacks;

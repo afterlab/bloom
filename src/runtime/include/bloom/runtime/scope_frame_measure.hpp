@@ -148,8 +148,9 @@ struct ScopeFrameMeasure final {
 };
 
 // The CPU reference: counts `frame`, an evaluated process frame of `plan`'s composition.
-// `settings.signal` must be `color`'s signal. `reduction` is the table size (#733); the full
-// tables by default.
+// `settings.signal` must be `color`'s signal. `reduction` is the table size asked for (#733; the
+// full tables by default); the tables are counted at render::scopeReductionForWidth of it for
+// the measured area's width.
 [[nodiscard]] ScopeFrameMeasure measureScopeFrameCpu(const ProcessFrame& frame,
                                                      const ScopeMeasureSettings& settings,
                                                      const ScopeSignalColor& color,
@@ -174,7 +175,8 @@ struct ScopeStoredFrame final {
 };
 
 // The CPU reference of a stored display frame's Display signal: counts the cells as they are
-// (measureScopesCpu with `packed`), at the table size `reduction` gives, and converts them to
+// (measureScopesCpu with `packed`), at the table size `reduction` asks for
+// (render::scopeReductionForWidth of it for the measured area's width), and converts them to
 // CIE XYZ only for the Chromaticity table. `settings.signal` and `color`'s signal must be Display
 // and the axis maximum 1. Nothing is rendered and no display transform runs. `cancelled`, when
 // set, is asked between rows.

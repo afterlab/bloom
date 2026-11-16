@@ -184,6 +184,37 @@ struct TraceRequest final {
 // Maps one request. Pure; runs on the calling thread.
 [[nodiscard]] ScopeImage renderTrace(const TraceRequest& request, const Cancelled& cancelled = {});
 
+// ---- #733: the table size a panel draws ---------------------------------------------------------
+//
+// A measure for a panel is counted at the size its open panes draw, so its readback is small. The
+// cells the open panes of a panel draw along each table axis, in device pixels; 0 (false for the
+// Histogram, which is never counted smaller): no open pane draws that table.
+struct ScopePaneCells final {
+    // The widest trace of a Waveform or of one Parade channel, and the tallest.
+    std::uint32_t waveformColumns = 0;
+    std::uint32_t waveformLevels = 0;
+    // The longer side of the Vectorscope's trace and of the Chromaticity's trace.
+    std::uint32_t vectorscope = 0;
+    std::uint32_t chromaticity = 0;
+    bool histogram = false;
+
+    friend bool operator==(const ScopePaneCells&, const ScopePaneCells&) = default;
+};
+
+// What one open pane of `kind` draws: `traceSize` is its trace request's size in device pixels
+// (TraceRequest::size), `paradeGapPixels` the gap between the Parade's three channels.
+[[nodiscard]] ScopePaneCells scopePaneCells(Kind kind, PixelSize traceSize, int paradeGapPixels);
+// The larger of the two along every axis: what two panes, or two panels, draw together.
+[[nodiscard]] ScopePaneCells mergeScopePaneCells(const ScopePaneCells& left,
+                                                 const ScopePaneCells& right) noexcept;
+// The tables those panes draw (render::kScopeTable* bits); 0 when none is open.
+[[nodiscard]] std::uint32_t scopeTablesFor(const ScopePaneCells& cells) noexcept;
+// The size those tables are asked at: along every axis the smallest table (the full table halved
+// a whole number of times) that is not below the pane's device pixels. An axis no pane draws is
+// left at the full size. The Waveform's columns are named against the widest table
+// (render::scopeReductionForWidth gives the size a picture is counted at).
+[[nodiscard]] render::ScopeTableReduction scopeTableReductionFor(const ScopePaneCells& cells) noexcept;
+
 // ---------------------------------------------------------------------------------------------
 // The palette
 

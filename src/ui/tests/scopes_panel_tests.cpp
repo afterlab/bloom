@@ -15,6 +15,10 @@
 //   * #733, testSettingsChangeRendersNothing: Ignore Transparent Pixels, a region and the signal
 //     each recount the frame on show with one measure and ask no frame's preparation for
 //     anything; the Working axis maximum is not a Display setting and counts nothing;
+//   * #733, pane size: the session asks for the tables the open panes draw, at the smallest size
+//     not below their device pixels; the panel's tables are of that size; a collapsed pane asks
+//     for no table, and a pane resize or collapse counts the frame on show again and nothing
+//     else;
 //   * the Working signal: the panel draws the tables the frame carries, when they were counted
 //     under the session's settings; a shown panel then makes requests ask for every table, a
 //     hidden one for none;
@@ -514,6 +518,37 @@ int main(int argc, char** argv) {
         }
         e.expect(titlesOk, "five panes in order, open by default");
 
+        // ---- #733: the tables are asked at the size the open panes draw -----------------------
+        const auto panesOf = [&](const std::vector<scopes::Kind>& open) {
+            runtime::scopes::ScopePaneCells cells;
+            for (const auto kind : open) {
+                const auto request = panel->view(kind)->currentRequest();
+                cells = runtime::scopes::mergeScopePaneCells(
+                    cells, runtime::scopes::scopePaneCells(
+                               kind, {request.size.width(), request.size.height()},
+                               request.gapPixels));
+            }
+            return cells;
+        };
+        const std::vector<scopes::Kind> everyKind(kKinds.begin(), kKinds.end());
+        {
+            const auto cells = panesOf(everyKind);
+            const auto reduction = runtime::scopes::scopeTableReductionFor(cells);
+            e.expect(cells.waveformColumns > 0U && cells.waveformLevels > 0U &&
+                         cells.vectorscope > 0U && cells.chromaticity > 0U && cells.histogram,
+                     "every open pane draws a trace of some size");
+            e.expect(store.tables() == render::kScopeTableAll &&
+                         store.tableReduction() == reduction &&
+                         store.settings(key).scopes == render::kScopeTableAll,
+                     "the session asks for every table at the size the open panes draw");
+            e.expect(reduction.waveformLevelShift > 0U &&
+                         (render::kScopeWaveformLevels >> reduction.waveformLevelShift) >=
+                             cells.waveformLevels &&
+                         (render::kScopeWaveformLevels >> (reduction.waveformLevelShift + 1U)) <
+                             cells.waveformLevels,
+                     "the Waveform's levels are the smallest table not below the pane");
+        }
+
         // ---- Frames and their tables ---------------------------------------------------------
         // #733: on the Display signal the panel hands the frame on show to the runtime's
         // shown-frame measure, which counts its stored cells off this thread.
@@ -546,6 +581,24 @@ int main(int argc, char** argv) {
                  "the panel takes Display tables of every pixel of the shown frame");
         e.expect(measureThreads.counted.load() == 1 && measureThreads.onInterfaceThread.load() == 0,
                  "the frame was counted on a worker, not the interface thread");
+        {
+            const auto asked = store.tableReduction();
+            const auto counted =
+                render::scopeReductionForWidth(asked, static_cast<std::uint32_t>(format().width()));
+            const auto full =
+                render::scopeTableLayout(render::kScopeTableAll,
+                                         static_cast<std::uint32_t>(format().width()))
+                    .byteCount();
+            e.expect(redScopes != nullptr && redScopes->reduction == asked &&
+                         redScopes->tables.layout().reduction == counted &&
+                         redScopes->tables.layout().byteCount() < full,
+                     "the tables are counted at the size the panes draw, smaller than the full "
+                     "tables: " +
+                         std::to_string(redScopes != nullptr
+                                            ? redScopes->tables.layout().byteCount()
+                                            : 0U) +
+                         " of " + std::to_string(full) + " bytes");
+        }
         panel->showViewerFrame(red);
         e.expect(panel->measureCounters().requested == countersBefore.requested + 1,
                  "the same frame under the same settings is not asked for twice");
@@ -682,6 +735,66 @@ int main(int argc, char** argv) {
         e.expect(awaitQtCondition("the red traces are mapped again",
                                   [&] { return tracesSettled(*panel); }),
                  "the red traces are mapped again");
+
+        // ---- #733: a collapsed pane asks for no table; a pane change counts the shown frame ----
+        {
+            const auto before = panel->measureCounters();
+            panel->section(scopes::Kind::Vectorscope)->setCollapsed(true);
+            e.expect(store.tables() ==
+                             (render::kScopeTableAll & ~render::kScopeTableVectorscope) &&
+                         store.request(key) == nullptr,
+                     "a collapsed pane asks for no table and no frame is asked for anything");
+            const auto scopes = countShown(e, *panel, red, "the shown frame is counted again");
+            e.expect(scopes != nullptr &&
+                         scopes->status == runtime::PreviewFrameScopesStatus::Measured &&
+                         !scopes->tables.layout().has(render::kScopeTableVectorscope) &&
+                         scopes->tables.layout().has(render::kScopeTableWaveform) &&
+                         panel->measureCounters().requested == before.requested + 1,
+                     "one measure of the frame on show, without the collapsed pane's table");
+            panel->section(scopes::Kind::Vectorscope)->setCollapsed(false);
+            e.expect(awaitQtCondition("the pane is open again",
+                                      [&] { return store.tables() == render::kScopeTableAll; }),
+                     "an opened pane asks for its table again");
+            const auto again = countShown(e, *panel, red, "the shown frame is counted once more");
+            e.expect(again != nullptr &&
+                         again->tables.layout().has(render::kScopeTableVectorscope),
+                     "the opened pane's table is counted");
+            e.expect(awaitQtCondition("the traces settle after the pane changes",
+                                      [&] {
+                                          return tracesSettled(*panel) &&
+                                                 !panel->view(scopes::Kind::Vectorscope)
+                                                      ->traceImage()
+                                                      .isNull();
+                                      }),
+                     "the opened pane draws its trace");
+        }
+        {
+            // A narrower panel: smaller panes, smaller tables, one measure, no frame request.
+            const auto wide = store.tableReduction();
+            const auto before = panel->measureCounters();
+            host.resize(260, 1500);
+            e.expect(awaitQtCondition("the panes take the narrower size",
+                                      [&] {
+                                          return store.tableReduction() ==
+                                                     runtime::scopes::scopeTableReductionFor(
+                                                         panesOf(everyKind)) &&
+                                                 store.tableReduction() != wide;
+                                      }),
+                     "narrower panes ask for smaller tables");
+            e.expect(store.request(key) == nullptr, "a pane resize asks no frame for anything");
+            const auto scopes = countShown(e, *panel, red, "the shown frame is counted smaller");
+            e.expect(scopes != nullptr && scopes->reduction == store.tableReduction() &&
+                         panel->measureCounters().requested == before.requested + 1,
+                     "one measure of the frame on show at the new size");
+            host.resize(520, 1500);
+            e.expect(awaitQtCondition("the panes take the first size again",
+                                      [&] { return store.tableReduction() == wide; }),
+                     "the first size asks for the first tables");
+            (void)countShown(e, *panel, red, "the shown frame is counted at the first size");
+            e.expect(awaitQtCondition("the traces settle after the resize",
+                                      [&] { return tracesSettled(*panel); }),
+                     "the traces settle after the resize");
+        }
 
         // ---- #733: a settings change renders nothing ------------------------------------------
         testSettingsChangeRendersNothing(e, *panel, store, key, red, measureThreads);

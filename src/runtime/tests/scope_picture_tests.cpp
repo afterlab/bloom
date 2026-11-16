@@ -94,7 +94,8 @@ constexpr double kKb = 0.0722;
 
 [[nodiscard]] runtime::ScopeTables tablesOf(const std::vector<Rgba32f>& signal,
                                             const std::uint32_t width, const std::uint32_t height,
-                                            const std::uint32_t scopeBits) {
+                                            const std::uint32_t scopeBits,
+                                            const render::ScopeTableReduction reduction = {}) {
     std::vector<Rgba32f> xyz;
     for (const auto& pixel : signal)
         xyz.push_back(xyzOf(pixel));
@@ -108,6 +109,7 @@ constexpr double kKb = 0.0722;
     input.scopes = scopeBits;
     input.axisMaximum = 1;
     input.luma = rec709();
+    input.reduction = reduction;
     const auto counts = runtime::measureScopesCpu(input);
     if (!counts)
         throw std::logic_error("the fixture could not be measured");
@@ -732,6 +734,225 @@ void testOutsideTheAxis(Expectations& e) {
              "under and over are drawn in the Histogram's end bins");
 }
 
+// #733: the size a panel's panes ask their tables at.
+void testPaneTableSize(Expectations& e) {
+    using scopes::Kind;
+    const auto waveform = scopes::scopePaneCells(Kind::Waveform, {300, 256}, 4);
+    const auto parade = scopes::scopePaneCells(Kind::Parade, {608, 200}, 4);
+    const auto vectorscope = scopes::scopePaneCells(Kind::Vectorscope, {300, 280}, 4);
+    const auto histogram = scopes::scopePaneCells(Kind::Histogram, {400, 56}, 4);
+    const auto chromaticity = scopes::scopePaneCells(Kind::Chromaticity, {400, 400}, 4);
+    e.expect(waveform.waveformColumns == 300U && waveform.waveformLevels == 256U &&
+                 parade.waveformColumns == 200U && parade.waveformLevels == 200U &&
+                 vectorscope.vectorscope == 300U && histogram.histogram &&
+                 chromaticity.chromaticity == 360U,
+             "a pane draws its trace's device pixels along its table's axes");
+    e.expect(scopes::scopeTablesFor(waveform) == render::kScopeTableWaveform &&
+                 scopes::scopeTablesFor(parade) == render::kScopeTableWaveform &&
+                 scopes::scopeTablesFor(vectorscope) == render::kScopeTableVectorscope &&
+                 scopes::scopeTablesFor(histogram) == render::kScopeTableHistogram &&
+                 scopes::scopeTablesFor(chromaticity) == render::kScopeTableChromaticity &&
+                 scopes::scopeTablesFor({}) == 0U &&
+                 scopes::scopeTablesFor(scopes::scopePaneCells(Kind::Waveform, {0, 0}, 4)) == 0U,
+             "a pane asks for its own table, and no open pane for none");
+    auto all = scopes::mergeScopePaneCells(waveform, parade);
+    all = scopes::mergeScopePaneCells(all, vectorscope);
+    all = scopes::mergeScopePaneCells(all, histogram);
+    all = scopes::mergeScopePaneCells(all, chromaticity);
+    e.expect(all.waveformColumns == 300U && all.waveformLevels == 256U &&
+                 scopes::scopeTablesFor(all) == render::kScopeTableAll,
+             "panes together draw the larger size along every axis and every table");
+    // Along every axis the smallest table not below the pane: 512 columns (256 is below 300),
+    // 256 levels, 320 Vectorscope cells (160 is below 300), 512 CIE cells (256 is below 360).
+    const auto reduction = scopes::scopeTableReductionFor(all);
+    e.expect(reduction == render::ScopeTableReduction{0, 2, 1, 0},
+             "the tables are asked at the smallest size not below the panes");
+    const auto small = scopes::scopeTableReductionFor(
+        scopes::mergeScopePaneCells(scopes::scopePaneCells(Kind::Waveform, {100, 60}, 4),
+                                    scopes::scopePaneCells(Kind::Vectorscope, {90, 90}, 4)));
+    e.expect(small == render::ScopeTableReduction{2, 4, 2, 0} &&
+                 render::validScopeTableReduction(small),
+             "small panes ask for small tables; an axis no pane draws stays full");
+    e.expect(scopes::scopeTableReductionFor({}) == render::ScopeTableReduction{},
+             "no open pane names the full size");
+    // The Waveform's columns are asked against the widest table; a narrower picture is counted
+    // with the shift that still gives as many columns, or every column it has.
+    const render::ScopeTableReduction asked{2, 0, 0, 0}; // at least 128 columns
+    e.expect(render::scopeReductionForWidth(asked, 1920).waveformColumnShift == 2U &&
+                 render::scopeReductionForWidth(asked, 512).waveformColumnShift == 2U &&
+                 render::scopeReductionForWidth(asked, 300).waveformColumnShift == 1U &&
+                 render::scopeReductionForWidth(asked, 128).waveformColumnShift == 0U &&
+                 render::scopeReductionForWidth(asked, 64).waveformColumnShift == 0U &&
+                 render::scopeReductionForWidth({2, 3, 4, 5}, 300) ==
+                     render::ScopeTableReduction{1, 3, 4, 5},
+             "a narrower picture keeps the columns the pane draws");
+    for (const std::uint32_t width : {64U, 128U, 300U, 512U, 1920U}) {
+        const auto counted = render::scopeReductionForWidth(asked, width);
+        const auto layout = render::scopeTableLayout(render::kScopeTableWaveform, width, counted);
+        e.expect(layout.columns >= std::min<std::uint32_t>(128U, layout.fullColumns),
+                 "the counted table has the columns asked for at width " + std::to_string(width));
+    }
+}
+
+// The tables a pane of `size` asks for, of a picture `width` wide.
+[[nodiscard]] render::ScopeTableReduction paneReduction(const scopes::Kind kind,
+                                                        const scopes::PixelSize size,
+                                                        const std::uint32_t width) {
+    return render::scopeReductionForWidth(
+        scopes::scopeTableReductionFor(scopes::scopePaneCells(kind, size, 4)), width);
+}
+
+// #733: the trace facts hold for tables counted at the size the pane draws.
+void testTracesAtPaneSize(Expectations& e) {
+    // No column stripes.
+    for (const std::uint32_t width : {640U, 1000U, 1920U}) {
+        const std::vector<Rgba32f> pixels(width, px(0.4F, 0.5F, 0.6F));
+        for (const int screen : {512, 300, 100}) {
+            const auto reduction = paneReduction(scopes::Kind::Waveform, {screen, 128}, width);
+            const auto tables = tablesOf(pixels, width, 1, render::kScopeTableWaveform, reduction);
+            e.expect(tables.layout().columns >= static_cast<std::uint32_t>(std::min(screen, 512)) &&
+                         tables.layout().waveformLevels() >= 128U &&
+                         tables.layout().waveformLevels() < 256U,
+                     "the table is the smallest not below the pane");
+            const auto image =
+                scopes::mapWaveform(tables, scopes::WaveformChannels::Rgb, {screen, 128});
+            bool same = !image.empty();
+            const auto first = image.empty() ? std::vector<std::uint32_t>{} : column(image, 0);
+            bool lit = false;
+            for (const auto pixel : first)
+                lit = lit || pixel != 0U;
+            for (int x = 1; same && x < image.width; ++x)
+                same = column(image, x) == first;
+            e.expect(same && lit, "pane size: no column stripes, measured " +
+                                      std::to_string(width) + " wide, drawn " +
+                                      std::to_string(screen) + " wide");
+        }
+    }
+    // A 10-bit ramp is one continuous rising line.
+    {
+        std::vector<Rgba32f> pixels;
+        for (int code = 0; code < 1024; ++code) {
+            const float v = static_cast<float>(code) / 1023.0F;
+            pixels.push_back(px(v, v, v));
+        }
+        for (const scopes::PixelSize size : {scopes::PixelSize{512, 256}, {256, 128}, {200, 90}}) {
+            const auto tables = tablesOf(pixels, 1024, 1, render::kScopeTableWaveform,
+                                         paneReduction(scopes::Kind::Waveform, size, 1024));
+            const auto waveform = scopes::mapWaveform(tables, scopes::WaveformChannels::Rgb, size);
+            bool continuous = !waveform.empty();
+            int previousTop = waveform.height;
+            for (int x = 0; continuous && x < waveform.width; ++x) {
+                const auto rows = litRows(waveform, x);
+                continuous = !rows.empty() && rows.back() - rows.front() + 1 ==
+                                                  static_cast<int>(rows.size());
+                if (!continuous)
+                    break;
+                continuous =
+                    rows.front() <= previousTop && (x == 0 || rows.back() >= previousTop - 1);
+                previousTop = rows.front();
+            }
+            e.expect(continuous, "pane size: a 10-bit ramp draws one continuous rising trace " +
+                                     std::to_string(size.height) + " pixels tall");
+        }
+    }
+    // Every code equally often in one column: the column is evenly bright from end to end, at
+    // every table size (the spread adds up to 1 and stays flat at the ends of the axis).
+    {
+        std::vector<Rgba32f> pixels;
+        for (int code = 0; code < 1024; ++code) {
+            const float v = static_cast<float>(code) / 1023.0F;
+            pixels.push_back(px(v, v, v));
+        }
+        for (const std::uint8_t shift : {std::uint8_t{0}, std::uint8_t{1}, std::uint8_t{2},
+                                         std::uint8_t{3}, std::uint8_t{6}}) {
+            const auto tables = tablesOf(pixels, 1, 1024, render::kScopeTableWaveform,
+                                         render::ScopeTableReduction{0, shift, 0, 0});
+            const int levels = static_cast<int>(tables.layout().waveformLevels());
+            const auto waveform =
+                scopes::mapWaveform(tables, scopes::WaveformChannels::Luma, {1, levels});
+            const auto pixelsDrawn =
+                waveform.empty() ? std::vector<std::uint32_t>{} : column(waveform, 0);
+            bool even = !pixelsDrawn.empty() && pixelsDrawn.front() != 0U;
+            for (const auto pixel : pixelsDrawn)
+                even = even && pixel == pixelsDrawn.front();
+            e.expect(even, "a flat spread stays flat to its ends at " + std::to_string(levels) +
+                               " levels");
+        }
+    }
+    // An 8-bit ramp draws no comb.
+    {
+        std::vector<Rgba32f> pixels;
+        for (int value = 0; value < 256; ++value)
+            for (int copy = 0; copy < 8; ++copy) {
+                const float v = static_cast<float>(value) / 255.0F;
+                pixels.push_back(px(v, v, v));
+            }
+        for (const int height : {64, 256, 333, 700, 1024, 1500}) {
+            const auto tables = tablesOf(pixels, 1, 2048, render::kScopeTableWaveform,
+                                         paneReduction(scopes::Kind::Waveform, {4, height}, 1));
+            const auto waveform =
+                scopes::mapWaveform(tables, scopes::WaveformChannels::Luma, {4, height});
+            const auto rows = waveform.empty() ? std::vector<int>{} : litRows(waveform, 0);
+            e.expect(static_cast<int>(rows.size()) == height,
+                     "pane size: an 8-bit ramp draws an unbroken Waveform line " +
+                         std::to_string(height) + " pixels tall");
+        }
+    }
+    // Values outside the axis stay on the 0 and 1023 lines.
+    {
+        std::vector<Rgba32f> pixels(8 * 8, px(0.5F, 0.5F, 0.5F));
+        pixels[3] = px(2.0F, 2.0F, 2.0F);
+        pixels[5] = px(-0.5F, -0.5F, -0.5F);
+        const auto tables = tablesOf(pixels, 8, 8, render::kScopeTableWaveform,
+                                     paneReduction(scopes::Kind::Waveform, {8, 64}, 8));
+        const auto waveform = scopes::mapWaveform(tables, scopes::WaveformChannels::Luma, {8, 64});
+        e.expect(tables.layout().waveformLevels() == 64U && !waveform.empty() &&
+                     waveform.pixel(3, 0) != 0U && waveform.pixel(3, 63) == 0U &&
+                     waveform.pixel(5, 63) != 0U && waveform.pixel(5, 0) == 0U,
+                 "pane size: over is drawn on the 1023 line and under on the 0 line");
+    }
+    // The Vectorscope and the Chromaticity: a table of exactly the pane's cells draws the very
+    // image the full table draws there (a smaller cell is the exact sum of the full cells).
+    {
+        std::vector<Rgba32f> pixels;
+        for (int y = 0; y < 64; ++y)
+            for (int x = 0; x < 64; ++x)
+                pixels.push_back(px(static_cast<float>(x) / 63.0F, static_cast<float>(y) / 63.0F,
+                                    static_cast<float>((x * 5 + y * 3) % 64) / 63.0F));
+        const auto full = tablesOf(pixels, 64, 64, kAllScopes);
+        const auto luma = rec709();
+        for (const int side : {320, 160}) {
+            const auto reduction = paneReduction(scopes::Kind::Vectorscope, {side, side}, 64);
+            const auto reduced = tablesOf(pixels, 64, 64, kAllScopes, reduction);
+            const auto fromFull = scopes::mapVectorscope(full, luma, {side, side});
+            const auto fromReduced = scopes::mapVectorscope(reduced, luma, {side, side});
+            e.expect(reduced.layout().vectorscopeCells() == static_cast<std::uint32_t>(side) &&
+                         !fromFull.empty() && fromFull.pixels == fromReduced.pixels,
+                     "pane size: the Vectorscope of " + std::to_string(side) +
+                         " cells draws the full table's image");
+        }
+        {
+            const render::ScopeTableReduction reduction{0, 0, 0, 1};
+            const auto reduced = tablesOf(pixels, 64, 64, kAllScopes, reduction);
+            const auto fromFull = scopes::mapChromaticity(full, {256, 256});
+            const auto fromReduced = scopes::mapChromaticity(reduced, {256, 256});
+            e.expect(reduced.layout().chromaticityCells() == 256U && !fromFull.empty() &&
+                         fromFull.pixels == fromReduced.pixels,
+                     "pane size: the Chromaticity of 256 cells draws the full table's image");
+        }
+        // One flat color at pane size is still one dot.
+        const auto barsSmall =
+            tablesOf(std::vector<Rgba32f>(64 * 64, px(0.75F, 0.0F, 0.75F)), 64, 64, kAllScopes,
+                     paneReduction(scopes::Kind::Vectorscope, {200, 200}, 64));
+        const auto dot = scopes::mapVectorscope(barsSmall, luma, {200, 200});
+        int lit = 0;
+        for (const auto pixel : dot.pixels)
+            lit += pixel != 0U ? 1 : 0;
+        e.expect(!dot.empty() && lit >= 1 && lit <= 4,
+                 "pane size: one flat color is one Vectorscope dot");
+    }
+}
+
 void testSinglePixelVisible(Expectations& e) {
     const auto tables = grayWithOddPixel();
     const auto luma = rec709();
@@ -1145,6 +1366,8 @@ int main() {
         testEightBitNoComb(e);
         testWaveformIndependence(e);
         testOutsideTheAxis(e);
+        testPaneTableSize(e);
+        testTracesAtPaneSize(e);
         testSinglePixelVisible(e);
         testHistogramHeights(e);
         testChromaticityPresence(e);

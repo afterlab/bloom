@@ -230,7 +230,10 @@ void testPausedFrameIsExact(const std::shared_ptr<const ScopeSignalColor>& color
                 check(scopes.tables.unpack() == expected.counts && scopes.area == expected.area &&
                           scopes.settings == settings && result->reduction == reduction,
                       name + ": the tables equal the CPU reference's");
-                check(scopes.tables.layout().reduction == reduction,
+                // The asked reduction names Waveform columns against the widest table; the
+                // counted one is resolved for the measured width.
+                check(scopes.tables.layout().reduction ==
+                          render::scopeReductionForWidth(reduction, scopes.area.width),
                       name + ": the tables have the asked size");
                 check(scopes.color == color, name + ": the result carries the color objects");
                 ++tag;

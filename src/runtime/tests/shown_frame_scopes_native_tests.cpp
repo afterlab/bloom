@@ -321,14 +321,19 @@ void testStoredFrames(Expectations& checks, Rig& rig) {
                                       counts.counted() == expected.counts.counted(),
                                   name + ": every count is within one cell of the CPU "
                                          "reference's");
+                // The asked reduction names Waveform columns against the widest table; the
+                // counted one is resolved for the measured width.
+                const auto counted =
+                    bloom::render::scopeReductionForWidth(reduction, kStoredWidth);
                 const auto bytes =
-                    bloom::render::scopeTableLayout(scopes, kStoredWidth, reduction).byteCount();
+                    bloom::render::scopeTableLayout(scopes, kStoredWidth, counted).byteCount();
                 const auto after = rig.counters();
                 std::cout << name << ": table readback " << result->scopes->tableReadbackBytes
                           << " bytes\n";
                 checks.expect(result->uploads == 1 && result->tableReadbacks == 1 &&
                                   result->scopes->tableReadbackBytes == bytes &&
-                                  counts.layout.reduction == reduction,
+                                  counts.layout.reduction == counted &&
+                                  result->reduction == reduction,
                               name + ": one upload and one table readback of the layout's bytes");
                 checks.expect(result->colorDispatches == (scopes == kScopeTableAll ? 1U : 0U),
                               name + ": the XYZ color step runs only with the CIE table");
