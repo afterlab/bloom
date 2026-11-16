@@ -417,6 +417,8 @@ void advanceResidentAhead(const std::shared_ptr<PreviewDisplayServiceCore>& core
         if (next == nullptr)
             return;
         const auto& phase = next->gpuStage ? next->gpuStage->phaseLease() : nullptr;
+        // #733: a shown-frame scope measure in flight holds the device's second phase slot; the
+        // stage then starts by the ordinary path once the active stage is done.
         selectStagePhase(core, *active);
         if (next->cancellationRequested || !phase || !core->device->parkProcessingPhase()) {
             core->residentNativeReady.push_front(next);
@@ -852,6 +854,9 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             return;
         }
         const auto& phase = stage->gpuStage->phaseLease();
+        // #733: a shown-frame scope measure in flight never holds a frame back: its phase is
+        // parked so this stage's can be retained.
+        shownFrameScopesGiveWay(core);
         // Recover a phase latched by an earlier unproven retirement (device-wide idle proof).
         if (phase && core->device && core->device->processingPhaseOccupied())
             static_cast<void>(core->device->recoverUnprovenProcessingPhase());

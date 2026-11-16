@@ -60,7 +60,9 @@ class GpuNeutralDisplayQualificationReport;
 
 namespace detail {
 struct GpuPreviewDisplayServiceTestAccess;
-}
+struct PreviewDisplayServiceCore;
+struct ShownFrameScopePortAccess;
+} // namespace detail
 
 enum class GpuPreviewDisplayServiceState : std::uint8_t {
     // The scheduler GPU startup task (device bootstrap + exact embedded neutral CPU processor
@@ -257,6 +259,21 @@ struct GpuPreviewDisplayServiceCounters final {
     std::uint64_t scopeTableReadbackBytes = 0;
     std::uint64_t scopeTableReadbackBytesTotal = 0;
 
+    // Display signal tables of shown frames, counted at display time (#733,
+    // runtime/shown_frame_scopes.hpp): measures the device counted, measures it did not take or
+    // had no room for (their callers count on a worker), measures that failed, the frame
+    // uploads, color program dispatches and table readbacks of the counted ones, the bytes of
+    // the last table readback, and frame jobs that took the device while a measure was in
+    // flight. A measure never runs a scene and never reads a picture back.
+    std::uint64_t shownScopeMeasures = 0;
+    std::uint64_t shownScopeDrops = 0;
+    std::uint64_t shownScopeFailures = 0;
+    std::uint64_t shownScopeUploads = 0;
+    std::uint64_t shownScopeColorDispatches = 0;
+    std::uint64_t shownScopeTableReadbacks = 0;
+    std::uint64_t shownScopeTableReadbackBytes = 0;
+    std::uint64_t shownScopeFramesStartedDuringMeasure = 0;
+
     friend bool operator==(const GpuPreviewDisplayServiceCounters&,
                            const GpuPreviewDisplayServiceCounters&) = default;
 };
@@ -380,6 +397,19 @@ struct GpuPreviewDisplayServiceOptions final {
     std::chrono::milliseconds idleTrimDelay{1000};
 };
 
+// #733: where a ShownFrameScopeMeasurer posts its measures (runtime/shown_frame_scopes.hpp): the
+// service's device. Copyable, usable from any thread, and safe to keep after the service is gone
+// (a measure is then counted on a worker). A default-constructed port has no device.
+class GpuShownFrameScopePort final {
+  public:
+    GpuShownFrameScopePort() = default;
+
+  private:
+    friend class GpuPreviewDisplayService;
+    friend struct detail::ShownFrameScopePortAccess;
+    std::weak_ptr<detail::PreviewDisplayServiceCore> core_;
+};
+
 class GpuPreviewDisplayService final {
   public:
     GpuPreviewDisplayService(const GpuPreviewDisplayService&) = delete;
@@ -429,6 +459,9 @@ class GpuPreviewDisplayService final {
     // expired.
     [[nodiscard]] std::optional<std::uint64_t>
     purgeRetainedCaches(std::chrono::milliseconds timeout) noexcept;
+
+    // #733: the port a ShownFrameScopeMeasurer posts shown-frame scope measures to.
+    [[nodiscard]] GpuShownFrameScopePort shownFrameScopePort() const noexcept;
 
     // Non-blocking. Closes admission for this service's own tasks, requests cancellation on the
     // tasks it submitted (including ordinary CPU fallback roots), and wakes the service thread.

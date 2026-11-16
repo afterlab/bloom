@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/render/display_pixel_packing.hpp>
 #include <bloom/runtime/channel_inspection.hpp>
 #include <bloom/runtime/gpu_resident_frame_lease.hpp>
 #include <bloom/runtime/qualified_display_preparation.hpp>
@@ -96,6 +97,8 @@ struct PreviewDisplayBufferView final {
     bool isOcioQualified = false;
     // Packed ROI products own only this pixel extent; absent means the whole display window.
     std::optional<render::ImageWindow> dataWindow = std::nullopt;
+    // #733: how the 4 bytes of a cell are laid out (render/display_pixel_packing.hpp).
+    render::DisplayPixelLayout pixelLayout = render::DisplayPixelLayout::Straight8888;
 };
 
 class GpuNeutralDisplayQualificationReport;

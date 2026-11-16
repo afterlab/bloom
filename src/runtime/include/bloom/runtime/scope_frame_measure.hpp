@@ -24,6 +24,10 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/color/scope_colorimetry.hpp>
+#include <bloom/core/pixel_aspect_ratio.hpp>
+#include <bloom/render/display_pixel_packing.hpp>
+#include <bloom/render/image_types.hpp>
+#include <bloom/render/scope_table_layout.hpp>
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/gpu_scope_measure.hpp>
@@ -35,6 +39,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -148,6 +153,33 @@ struct ScopeFrameMeasure final {
                                                      const ScopeMeasureSettings& settings,
                                                      const ScopeSignalColor& color,
                                                      const CancellationToken& cancellation = {});
+
+// #733: a stored display frame, whose 4-byte cells are the Display signal of its picture
+// (render/display_pixel_packing.hpp): the frame the Viewer shows, or the packed result of a
+// frame a headless read rendered.
+struct ScopeStoredFrame final {
+    // Row-major over `dataWindow`.
+    std::span<const render::Rgba8> cells;
+    render::DisplayPixelLayout layout = render::DisplayPixelLayout::Straight8888;
+    render::ImageWindow dataWindow;
+    render::ImageWindow displayWindow;
+    core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
+    // The region of interest the frame was prepared for, when it had one.
+    std::optional<render::ImageWindow> roi;
+    // The frame's composition, in pixels: a measure's region is in these.
+    std::uint32_t compositionWidth = 0;
+    std::uint32_t compositionHeight = 0;
+};
+
+// The CPU reference of a stored display frame's Display signal: counts the cells as they are
+// (measureScopesCpu with `packed`), at the table size `reduction` gives, and converts them to
+// CIE XYZ only for the Chromaticity table. `settings.signal` and `color`'s signal must be Display
+// and the axis maximum 1. Nothing is rendered and no display transform runs. `cancelled`, when
+// set, is asked between rows.
+[[nodiscard]] ScopeFrameMeasure
+measureScopeStoredFrameCpu(const ScopeStoredFrame& frame, const ScopeMeasureSettings& settings,
+                           render::ScopeTableReduction reduction, const ScopeSignalColor& color,
+                           const std::function<bool()>& cancelled = {});
 
 // The device measure job of `settings`: the counting settings and the factories that prepare the
 // display and CIE XYZ programs on the calling worker. The factories borrow `ocio` and `color`,

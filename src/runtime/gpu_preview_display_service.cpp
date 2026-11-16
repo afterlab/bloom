@@ -22,7 +22,8 @@ serviceWaitInterval(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
     // Any preview stage, queued native job, or in-flight native submission needs the short poll.
     const bool previewActive = !core->stages.empty() || core->nativeInFlight ||
                                core->residentNativeInFlight || !core->nativeReady.empty() ||
-                               !core->residentNativeReady.empty();
+                               !core->residentNativeReady.empty() ||
+                               detail::shownFrameScopesActive(*core);
     if (core->packedTransferLate) {
         return std::chrono::milliseconds(50);
     }
@@ -59,6 +60,8 @@ struct NativeProgress final {
     std::size_t stages = 0;
     bool nativeInFlight = false;
     bool residentInFlight = false;
+    // #733: the shown-frame scope measure's state changes.
+    std::uint64_t shownScopeProgress = 0;
 
     bool operator==(const NativeProgress&) const = default;
 };
@@ -76,7 +79,8 @@ nativeProgress(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core) n
             .ready = core->nativeReady.size(),
             .stages = core->stages.size(),
             .nativeInFlight = core->nativeInFlight,
-            .residentInFlight = core->residentNativeInFlight};
+            .residentInFlight = core->residentNativeInFlight,
+            .shownScopeProgress = core->shownScopes.progress};
 }
 
 // Samples no state; the caller captures the wake generation BEFORE doing work, so a notification
@@ -159,8 +163,9 @@ void drainService(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core
     }
 
     // Never return with stages remaining: a wait/cancellation/lock failure is caught inside the
-    // loop and the iteration is retried after yielding.
-    while (!core->stages.empty()) {
+    // loop and the iteration is retried after yielding. A shown-frame scope measure in flight is
+    // cancelled and stepped until nothing of it is unretired (#733).
+    while (detail::drainShownFrameScopes(core) || !core->stages.empty()) {
         try {
             std::uint64_t observed = 0;
             {
@@ -233,6 +238,8 @@ void runServiceLoop(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
                 detail::processNativeDisplay(core);
                 charge(core->counterOwnerStageNanoseconds);
                 detail::processResidentNativeDisplay(core);
+                // #733: after the turn's frame steps, one step of a shown-frame scope measure.
+                detail::processShownFrameScopes(core);
                 charge(core->counterOwnerResidentNanoseconds);
                 detail::processServiceCachePurge(core);
                 detail::pollServiceQueueTimings(core);
@@ -790,6 +797,18 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
         scope.tableReadbackBytes.load(std::memory_order_relaxed);
     result.counters.scopeTableReadbackBytesTotal =
         scope.tableReadbackBytesTotal.load(std::memory_order_relaxed);
+    const auto& shown = core.shownScopes;
+    result.counters.shownScopeMeasures = shown.measured.load(std::memory_order_relaxed);
+    result.counters.shownScopeDrops = shown.dropped.load(std::memory_order_relaxed);
+    result.counters.shownScopeFailures = shown.failed.load(std::memory_order_relaxed);
+    result.counters.shownScopeUploads = shown.uploads.load(std::memory_order_relaxed);
+    result.counters.shownScopeColorDispatches =
+        shown.colorDispatches.load(std::memory_order_relaxed);
+    result.counters.shownScopeTableReadbacks = shown.tableReadbacks.load(std::memory_order_relaxed);
+    result.counters.shownScopeTableReadbackBytes =
+        shown.tableReadbackBytes.load(std::memory_order_relaxed);
+    result.counters.shownScopeFramesStartedDuringMeasure =
+        shown.framesStartedDuringMeasure.load(std::memory_order_relaxed);
     return result;
 }
 
@@ -950,6 +969,13 @@ GpuPreviewDisplayService::purgeRetainedCaches(const std::chrono::milliseconds ti
     return impl_ == nullptr || impl_->core == nullptr
                ? std::nullopt
                : detail::purgeServiceCaches(impl_->core, timeout);
+}
+
+GpuShownFrameScopePort GpuPreviewDisplayService::shownFrameScopePort() const noexcept {
+    GpuShownFrameScopePort port;
+    if (impl_ != nullptr)
+        port.core_ = impl_->core;
+    return port;
 }
 
 void GpuPreviewDisplayService::beginShutdown() noexcept {

@@ -6,6 +6,7 @@
 #include "gpu_preview_display_service_presentation_private.hpp"
 #include "gpu_preview_display_service_resident_private.hpp"
 #include "gpu_preview_display_service_scope_private.hpp"
+#include "gpu_preview_display_service_shown_scopes_private.hpp"
 
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/document/document.hpp>
@@ -407,6 +408,8 @@ struct PreviewDisplayServiceCore final {
 
     // The scope tables frames count in their jobs (#730): the native stage and the counters.
     ScopeJobState scope;
+    // The Display tables of shown frames, counted at display time (#733).
+    ShownScopeState shownScopes;
 
     // Service-thread-owned stage bookkeeping.
     std::vector<std::shared_ptr<PreviewDisplayStageRecord>> stages;
@@ -693,6 +696,15 @@ struct ResidentSparseSampleResult final {
     std::uint32_t height = 0;
 };
 
+// #733: the service behind a shown-frame scope port, for the measurer
+// (runtime/shown_frame_scopes.cpp); null once the service is gone.
+struct ShownFrameScopePortAccess final {
+    [[nodiscard]] static std::shared_ptr<PreviewDisplayServiceCore>
+    core(const GpuShownFrameScopePort& port) noexcept {
+        return port.core_.lock();
+    }
+};
+
 // Narrow test access hook. Tests may hold a completion/child retirement open to prove accounting is
 // not released early. It fabricates nothing about qualification.
 struct GpuPreviewDisplayServiceTestAccess final {
@@ -747,6 +759,12 @@ struct GpuPreviewDisplayServiceTestAccess final {
         PreviewDisplayServiceCore& core,
         std::function<render::GpuScopeTablesState(render::GpuScopeTables&)> poll) {
         core.scopeTablesPollOverride = std::move(poll);
+    }
+    // #733 hold seam for a shown-frame measure's upload (see ShownScopeState::uploadPollOverride).
+    static void setShownScopeUploadPollOverride(
+        PreviewDisplayServiceCore& core,
+        std::function<render::GpuImageUploadPollResult(render::GpuImageUpload&)> poll) {
+        core.shownScopes.uploadPollOverride = std::move(poll);
     }
 
     // Presentation ownership probes. All read-only and owner-thread-created state; no native object

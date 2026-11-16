@@ -41,6 +41,8 @@ struct GpuScopeMeasureJob final {
     bool ignoreTransparent = false;
     // In composition pixels; the whole picture when not set.
     std::optional<ScopeRegion> region;
+    // #733: the size of the tables (render/scope_table_layout.hpp); the full tables by default.
+    render::ScopeTableReduction reduction{};
     // The Display signal: a GpuOcioTransformKind::ScopeDisplay program. Empty measures the Working
     // signal, the scene-linear picture as it is.
     GpuScopeCommandFactory displayCommand;

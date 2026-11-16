@@ -476,6 +476,7 @@ ScopeMeasureStepper::State ScopeMeasureStepper::advance(const bool stop,
             .cbDenominator = job.luma.cbDenominator,
             .crDenominator = job.luma.crDenominator,
             .ignoreTransparent = job.ignoreTransparent,
+            .reduction = job.reduction,
         };
         began_ = true;
         if (!tables.begin(request, byteBudget_)) {

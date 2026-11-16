@@ -90,7 +90,8 @@ static void trimIdleDeviceRetention(const std::shared_ptr<PreviewDisplayServiceC
                                     const std::chrono::steady_clock::time_point now) noexcept {
     const bool busy = !core->stages.empty() || !core->residentNativeReady.empty() ||
                       core->residentNativeInFlight || core->residentAhead != nullptr ||
-                      !core->nativeReady.empty() || core->nativeInFlight;
+                      !core->nativeReady.empty() || core->nativeInFlight ||
+                      shownFrameScopesActive(*core);
     if (busy) {
         core->residentBusyAt = now;
         core->idleTrimmed = false;
@@ -102,6 +103,7 @@ static void trimIdleDeviceRetention(const std::shared_ptr<PreviewDisplayServiceC
     // The scope measure's stage (its color programs and count buffers) goes with the rest of the
     // idle retention; the next frame that asks for tables creates it again.
     releaseScopeStageIdle(core);
+    releaseShownFrameScopesIdle(core);
     std::uint64_t released = 0;
     if (core->residentSceneCache != nullptr)
         released += core->residentSceneCache->reclaim(core->residentSceneCache->retainedBytes());

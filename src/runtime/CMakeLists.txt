@@ -290,8 +290,10 @@ target_sources(
         gpu_preview_display_service_resident_jobs.cpp
         gpu_preview_display_service_resident_private.hpp
         gpu_preview_display_service_scope.cpp
+        gpu_preview_display_service_shown_scopes.cpp
         gpu_preview_display_service_scope_private.hpp
         preview_frame_scopes.cpp
+        shown_frame_scopes.cpp
         preview_frame_scopes_private.hpp
         gpu_scene_cache.cpp
         gpu_scene_executor.cpp

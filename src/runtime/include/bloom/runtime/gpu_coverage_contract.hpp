@@ -638,13 +638,16 @@ struct GpuCoverageContractDiagnostic final {
         // Decision O1 of the Scopes specification (#724, #730), recorded in
         // docs/architecture/scopes.md; it lands only with the owner's approval. One named, bounded
         // readback: the count tables of one scope measure (at most 12,746,816 bytes,
-        // render::kScopeTablesMaxBytes, whatever the picture's size). For a preview frame (the
-        // Viewer's, read-ahead's or a RAM Preview fill's) the readback is part of the frame's own
-        // job on the preview device, from the scene picture that job computed, before the frame's
-        // final transfer; a headless read of the scopes (MCP, Python) with no cached tables reads
-        // it back from the final-render device. Either way the display transform, the conversion
-        // to XYZ and the counting are device work, and no picture and no per-node full-frame
-        // roundtrip is ever read back.
+        // render::kScopeTablesMaxBytes, whatever the picture's size; fewer when the tables are
+        // counted at the size the panes draw, #733). The Working signal's tables of a preview
+        // frame are read back in the frame's own job on the preview device, from the scene
+        // picture that job computed, before the frame's final transfer. The Display signal's
+        // tables are read back by the measure of the frame the Viewer shows, a job of the preview
+        // device at display time that counts the frame's stored display cells (uploaded once and
+        // unpacked on the device) and runs no scene (#733). A headless read of the scopes (MCP,
+        // Python) with no cached tables reads them back from the final-render device. In every
+        // case the conversion to XYZ and the counting are device work, and no picture and no
+        // per-node full-frame roundtrip is ever read back.
         GpuCoverageEntry{
             "prep.scopes.result_readback",
             "bounded readback of the count tables of a scope measure so the Scopes panel and the "

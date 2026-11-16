@@ -2369,6 +2369,31 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
         LABELS runtime integration gpu color preview scopes TIMEOUT 300)
     set_tests_properties(bloom.runtime.preview_frame_scopes_native PROPERTIES SKIP_RETURN_CODE 77)
 
+    # #733 Scopes: the Display signal tables of a shown frame, counted at display time as a job
+    # of the preview display service's device (stored cells uploaded and unpacked, the count
+    # kernel, one table readback), against the CPU reference, on the same harness as the test
+    # above with a real processing phase policy. Skips (exit 77) without a device;
+    # --require-device fails closed. Registered with the packed service test on all three
+    # platforms.
+    add_executable(bloom_runtime_shown_frame_scopes_native_test
+        shown_frame_scopes_native_tests.cpp)
+    target_include_directories(bloom_runtime_shown_frame_scopes_native_test PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/runtime" "${PROJECT_SOURCE_DIR}/src/render/vulkan"
+        "${PROJECT_SOURCE_DIR}/tests/support")
+    target_link_libraries(bloom_runtime_shown_frame_scopes_native_test PRIVATE
+        bloom_runtime_evaluator bloom_render bloom_render_display_transfer_test_faults
+        bloom_color_gpu_shader)
+    target_compile_definitions(bloom_runtime_shown_frame_scopes_native_test PRIVATE
+        "BLOOM_SHOWN_FRAME_SCOPES_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_shown_frame_scopes_native_test>\"")
+    include(BloomGpuShaderTools)
+    bloom_package_gpu_shader_tools(bloom_runtime_shown_frame_scopes_native_test)
+    bloom_enable_warnings(bloom_runtime_shown_frame_scopes_native_test)
+    bloom_enable_strict_floating_point(bloom_runtime_shown_frame_scopes_native_test)
+    bloom_add_test(NAME bloom.runtime.shown_frame_scopes_native
+        COMMAND bloom_runtime_shown_frame_scopes_native_test
+        LABELS runtime integration gpu color preview scopes TIMEOUT 300)
+    set_tests_properties(bloom.runtime.shown_frame_scopes_native PROPERTIES SKIP_RETURN_CODE 77)
+
     add_executable(bloom_runtime_gpu_preview_display_service_general_test
         gpu_preview_display_service_general_tests.cpp
         gpu_preview_display_service_general_fixture.ipp)
@@ -2999,6 +3024,18 @@ target_link_libraries(bloom_runtime_scope_measure_test PRIVATE bloom_runtime_eva
 bloom_enable_warnings(bloom_runtime_scope_measure_test)
 bloom_enable_strict_floating_point(bloom_runtime_scope_measure_test)
 bloom_add_test(NAME bloom.runtime.scope_measure COMMAND bloom_runtime_scope_measure_test LABELS unit runtime render)
+
+# #733 Scopes: the Display signal tables of a shown frame counted at display time on a worker (the
+# route without a device): exact against the CPU reference, one measure in flight with the newest
+# request replacing a waiting one, clear() and the measurer's lifetime. Stored frames are built in
+# the test; nothing is rendered.
+add_executable(bloom_runtime_shown_frame_scopes_test shown_frame_scopes_tests.cpp)
+target_include_directories(bloom_runtime_shown_frame_scopes_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/.." "${PROJECT_SOURCE_DIR}/tests/support")
+target_link_libraries(bloom_runtime_shown_frame_scopes_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_shown_frame_scopes_test)
+bloom_enable_strict_floating_point(bloom_runtime_shown_frame_scopes_test)
+bloom_add_test(NAME bloom.runtime.shown_frame_scopes COMMAND bloom_runtime_shown_frame_scopes_test LABELS unit runtime render scopes)
 
 # #724 Scopes: the CPU reference and the GPU kernel give equal tables for the same float pictures,
 # every scope and both signals, at 256 x 256 on a real device. Skips (exit 77) without a device.

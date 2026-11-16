@@ -210,7 +210,8 @@ void retireResidentRoute(const std::shared_ptr<PreviewDisplayServiceCore>& core)
 }
 
 void retireNativeOnOwner(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
-    // The scope measure's native stage goes before anything it read or was computed on.
+    // The scope measures' native stages go before anything they read or were computed on.
+    retireShownFrameScopesNative(core);
     retireScopeNative(core);
     core->nativeReady.clear();
     core->nativeActive.reset();

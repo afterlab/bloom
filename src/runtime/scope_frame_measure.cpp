@@ -124,23 +124,25 @@ constexpr std::size_t kChunkPixels = 16384;
     return true;
 }
 
-// The CIE XYZ of every pixel of `signal` (its stored color, not divided by alpha). A pixel that
-// is not finite, or whose XYZ is not, is zero: the measure counts it as having no chromaticity.
-[[nodiscard]] bool xyzPicture(const std::span<const render::Rgba32f> signal,
-                              const ScopeSignalColor& color, const CancellationToken& cancellation,
-                              std::vector<render::Rgba32f>& xyz, bool& cancelled) {
-    xyz.assign(signal.size(), render::Rgba32f::transparent());
-    const std::size_t chunk = std::min(kChunkPixels, signal.size());
+// The CIE XYZ of every pixel of a signal picture of `pixels` pixels, `pixelAt(index)` each (its
+// stored color, not divided by alpha). A pixel that is not finite, or whose XYZ is not, is zero:
+// the measure counts it as having no chromaticity.
+template <typename PixelAt, typename Cancelled>
+[[nodiscard]] bool xyzPictureOf(const std::size_t pixels, const PixelAt& pixelAt,
+                                const ScopeSignalColor& color, const Cancelled& isCancelled,
+                                std::vector<render::Rgba32f>& xyz, bool& cancelled) {
+    xyz.assign(pixels, render::Rgba32f::transparent());
+    const std::size_t chunk = std::min(kChunkPixels, pixels);
     std::vector<float> rgb(chunk * 3);
     std::vector<float> out(chunk * 3);
-    for (std::size_t first = 0; first < signal.size(); first += kChunkPixels) {
-        if (cancellation.isCancellationRequested()) {
+    for (std::size_t first = 0; first < pixels; first += kChunkPixels) {
+        if (isCancelled()) {
             cancelled = true;
             return false;
         }
-        const std::size_t count = std::min(kChunkPixels, signal.size() - first);
+        const std::size_t count = std::min(kChunkPixels, pixels - first);
         for (std::size_t index = 0; index < count; ++index) {
-            const auto& pixel = signal[first + index];
+            const render::Rgba32f pixel = pixelAt(first + index);
             const bool good = finite(pixel.red(), pixel.green(), pixel.blue());
             rgb[index * 3 + 0] = good ? pixel.red() : 0.0F;
             rgb[index * 3 + 1] = good ? pixel.green() : 0.0F;
@@ -161,7 +163,7 @@ constexpr std::size_t kChunkPixels = 16384;
             }
         }
         for (std::size_t index = 0; index < count; ++index) {
-            const auto& pixel = signal[first + index];
+            const render::Rgba32f pixel = pixelAt(first + index);
             if (!finite(pixel.red(), pixel.green(), pixel.blue()))
                 continue;
             xyz[first + index] = pixelOf(outChunk[index * 3 + 0], outChunk[index * 3 + 1],
@@ -169,6 +171,14 @@ constexpr std::size_t kChunkPixels = 16384;
         }
     }
     return true;
+}
+
+[[nodiscard]] bool xyzPicture(const std::span<const render::Rgba32f> signal,
+                              const ScopeSignalColor& color, const CancellationToken& cancellation,
+                              std::vector<render::Rgba32f>& xyz, bool& cancelled) {
+    return xyzPictureOf(
+        signal.size(), [&signal](const std::size_t index) { return signal[index]; }, color,
+        [&cancellation] { return cancellation.isCancellationRequested(); }, xyz, cancelled);
 }
 
 [[nodiscard]] std::string deviceMessage(const GpuScopeMeasureOutcome& outcome) {
@@ -296,6 +306,89 @@ ScopeFrameMeasure measureScopeFrameCpu(const ProcessFrame& frame,
             return cancellation.isCancellationRequested()
                        ? cancelledMeasure()
                        : failed("The scope settings are not valid for this frame.");
+        result.status = ScopeFrameStatus::Measured;
+        result.counts = std::move(*counts);
+        return result;
+    } catch (const std::bad_alloc&) {
+        return failed("The scope measure could not allocate its pictures.");
+    }
+}
+
+ScopeFrameMeasure measureScopeStoredFrameCpu(const ScopeStoredFrame& frame,
+                                             const ScopeMeasureSettings& settings,
+                                             const render::ScopeTableReduction reduction,
+                                             const ScopeSignalColor& color,
+                                             const std::function<bool()>& cancelled) {
+    try {
+        const auto isCancelled = [&cancelled] { return cancelled && cancelled(); };
+        if (settings.signal != ScopeSignal::Display || color.signal() != ScopeSignal::Display ||
+            settings.axisMaximum != 1U)
+            return failed("A stored display frame is measured as the Display signal.");
+        const auto extent = frame.dataWindow.extent();
+        const std::uint64_t width = extent.width();
+        const std::uint64_t height = extent.height();
+        if (frame.cells.empty() || width == 0 || height == 0 ||
+            width > std::numeric_limits<std::uint32_t>::max() ||
+            height > std::numeric_limits<std::uint32_t>::max() ||
+            frame.cells.size() != width * height)
+            return failed("The stored frame has no picture to measure.");
+        const auto area =
+            scopeMeasuredArea(frame.dataWindow, frame.displayWindow, frame.roi, settings.region,
+                              frame.compositionWidth, frame.compositionHeight);
+        ScopeFrameMeasure result;
+        result.route = ScopeRoute::Cpu;
+        if (!area) {
+            result.status = ScopeFrameStatus::EmptyArea;
+            return result;
+        }
+        result.area = *area;
+
+        // Only the rows the area reaches are read: a region's measure touches no other cell.
+        const auto firstRow = static_cast<std::uint64_t>(
+            std::clamp<std::int64_t>(area->y, 0, static_cast<std::int64_t>(height)));
+        const auto endRow = static_cast<std::uint64_t>(std::clamp<std::int64_t>(
+            static_cast<std::int64_t>(area->y) + static_cast<std::int64_t>(area->height), 0,
+            static_cast<std::int64_t>(height)));
+        if (endRow <= firstRow) {
+            result.status = ScopeFrameStatus::EmptyArea;
+            return result;
+        }
+        const auto rows = frame.cells.subspan(static_cast<std::size_t>(firstRow * width),
+                                              static_cast<std::size_t>((endRow - firstRow) * width));
+        std::vector<render::Rgba32f> xyz;
+        if ((settings.scopes & render::kScopeTableChromaticity) != 0U) {
+            bool wasCancelled = false;
+            const auto layout = frame.layout;
+            if (!xyzPictureOf(
+                    rows.size(),
+                    [&rows, layout](const std::size_t index) {
+                        return std::bit_cast<render::Rgba32f>(
+                            render::displaySignalPixel(layout, rows[index]));
+                    },
+                    color, isCancelled, xyz, wasCancelled))
+                return wasCancelled
+                           ? cancelledMeasure()
+                           : failed("The conversion to CIE XYZ could not run on the frame.");
+        }
+        ScopeMeasureInput input;
+        input.packed = rows;
+        input.packedLayout = frame.layout;
+        input.width = static_cast<std::uint32_t>(width);
+        input.height = static_cast<std::uint32_t>(endRow - firstRow);
+        input.xyz = xyz;
+        input.areaX = area->x;
+        input.areaY = area->y - static_cast<std::int32_t>(firstRow);
+        input.areaWidth = area->width;
+        input.areaHeight = area->height;
+        input.scopes = settings.scopes;
+        input.axisMaximum = settings.axisMaximum;
+        input.luma = color.luma();
+        input.ignoreTransparent = settings.ignoreTransparent;
+        input.reduction = reduction;
+        auto counts = measureScopesCpu(input, isCancelled);
+        if (!counts)
+            return isCancelled() ? cancelledMeasure()
+                                 : failed("The scope settings are not valid for this frame.");
         result.status = ScopeFrameStatus::Measured;
         result.counts = std::move(*counts);
         return result;

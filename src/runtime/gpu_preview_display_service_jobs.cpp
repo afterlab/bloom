@@ -670,6 +670,8 @@ void processNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core
             const std::uint64_t allowance = stage->gpuByteAllowance != 0
                                                 ? stage->gpuByteAllowance
                                                 : core->previewByteAllowance();
+            // #733: a shown-frame scope measure in flight gives the retained slot up.
+            shownFrameScopesGiveWay(core);
             if (stage->cpuNativePhase && core->device && core->device->processingPhaseOccupied())
                 static_cast<void>(core->device->recoverUnprovenProcessingPhase());
             if (!stage->cpuNativePhase || !core->device ||
