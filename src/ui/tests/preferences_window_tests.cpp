@@ -1,7 +1,9 @@
 #include "await_qt.hpp"
 #include "preferences_window.hpp"
 
+#include <bloom/media/cache/source_mirror.hpp>
 #include <bloom/ui/acceleration_status.hpp>
+#include <bloom/ui/media_disk_cache_settings.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/radio_group.hpp>
@@ -13,6 +15,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QDir>
+#include <QSettings>
 #include <QEventLoop>
 #include <QFile>
 #include <QFontMetrics>
@@ -36,6 +39,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <optional>
 #include <iostream>
 #include <limits>
 #include <source_location>
@@ -578,21 +583,143 @@ void testExportWorkerFields(Expectations& check) {
                  "saved worker limits are shown");
 }
 
+// #732: the Disk headroom row sits under VRAM headroom in the Memory section, applies live, and the
+// line under it shows the disk cache's live figures.
+void testDiskHeadroomRowAndFigures(Expectations& check) {
+    constexpr auto gib = std::uint64_t{1024} * 1024 * 1024;
+    ui::PreferencesWindow window(owner(), ui::ApplicationPreferences{});
+    window.resize(900, 900);
+    window.show();
+    for (auto* rail : window.findChildren<QListWidget*>())
+        for (int row = 0; row < rail->count(); ++row)
+            if (rail->item(row)->text() == QStringLiteral("Memory & Caches"))
+                rail->setCurrentRow(row);
+    QCoreApplication::processEvents();
+    auto* field = window.findChild<ui::kit::KValueField*>(
+        QStringLiteral("preferencesMediaDiskHeadroomField"));
+    const auto* mode =
+        window.findChild<QWidget*>(QStringLiteral("preferencesMediaDiskHeadroomFieldMode"));
+    const auto* vram = window.findChild<QWidget*>(QStringLiteral("preferencesVramHeadroomField"));
+    const auto* workers =
+        window.findChild<QWidget*>(QStringLiteral("preferencesExportWorkerMemoryCapFieldMode"));
+    auto* hint = window.findChild<QLabel*>(QStringLiteral("preferencesMediaDiskHeadroomHint"));
+    check.expect(field && mode && vram && workers && hint &&
+                     field->minimum() == 0.0 && field->maximum() == 4096.0 &&
+                     field->value() == 0.0 &&
+                     window.findChild<QWidget*>(
+                         QStringLiteral("preferencesMediaDiskCacheBudgetField")) == nullptr,
+                 "Disk headroom is a 0 to 4096 GiB row, Automatic by default, and the budget row "
+                 "is gone");
+    if (!field || !mode || !vram || !workers || !hint)
+        return;
+    check.expect(!hint->isVisibleTo(&window),
+                 "the figures line is absent until a provider is set");
+
+    field->setValue(40.0);
+    check.expect(window.preferences().mediaDiskHeadroomBytes == 40 * gib,
+                 "the Disk headroom field edits the draft in bytes");
+    field->setValue(9000.0);
+    check.expect(window.preferences().mediaDiskHeadroomBytes == 4096 * gib,
+                 "the Disk headroom clamps to 4096 GiB");
+    field->setValue(0.0);
+    check.expect(window.preferences().mediaDiskHeadroomBytes == 0, "zero is the default");
+
+    // The figures line, for each state of the cache.
+    std::optional<bloom::media::cache::SourceMirrorStatistics> stats;
+    stats.emplace();
+    int calls = 0;
+    window.setDiskCacheFigures([&] {
+        ++calls;
+        return stats;
+    });
+    check.expect(hint->isVisibleTo(&window) &&
+                     hint->text() == QStringLiteral("Measuring the cache drive…"),
+                 "nothing measured yet reads as measuring");
+    QCoreApplication::processEvents();
+    const auto y = [&window](const QWidget* widget) {
+        return widget->mapTo(&window, QPoint(0, 0)).y();
+    };
+    check.expect(y(vram) < y(mode) && y(mode) < y(hint) && y(hint) < y(workers),
+                 "Disk headroom and its figures line sit under VRAM headroom, before the export "
+                 "worker rows");
+    stats->driveMeasured = true;
+    stats->capacityBytes = 500 * gib;
+    stats->freeBytes = 120 * gib;
+    stats->headroomBytes = 32 * gib;
+    stats->storedBytes = 12 * gib + gib / 2;
+    stats->availableBytes = 100 * gib;
+    check.expect(ui::diskHeadroomFiguresText(stats) ==
+                     QStringLiteral("Keeping 32.0 GB free · Disk cache 12.5 GB of 100.0 GB "
+                                    "available · 120.0 GB free on the cache drive"),
+                 "measured figures read as headroom, stored of available, and free space");
+    stats->driveMeasured = false;
+    stats->capacityBytes = stats->freeBytes = stats->headroomBytes = 0;
+    stats->availableBytes = 32 * gib;
+    check.expect(ui::diskHeadroomFiguresText(stats) ==
+                     QStringLiteral("The cache drive cannot be read · The disk cache is limited to "
+                                    "32.0 GB · Disk cache 12.5 GB stored"),
+                 "an unreadable drive says the cache is limited to 32 GB");
+    check.expect(ui::diskHeadroomFiguresText(std::nullopt) ==
+                     QStringLiteral("The disk cache is off."),
+                 "no cache reads as off");
+
+    // The timer follows the figures while the window is shown (a hidden window stops it).
+    auto* timer = window.findChild<QTimer*>(QStringLiteral("preferencesDiskCacheFiguresTimer"));
+    check.expect(timer && timer->isActive() && timer->interval() == 1000,
+                 "the figures refresh about every second while the window is shown");
+    stats.reset();
+    const int before = calls;
+    timer->setInterval(1);
+    QTest::qWait(30);
+    check.expect(calls > before && hint->text() == QStringLiteral("The disk cache is off."),
+                 "the line follows the cache as it changes");
+    window.hide();
+    check.expect(!timer->isActive(), "the figures stop refreshing when the window is hidden");
+}
+
+// #732: Apply carries the Disk headroom to the running cache and publishes the settings again.
+void testApplyReachesTheDiskCache(Expectations& check) {
+    constexpr auto gib = std::uint64_t{1024} * 1024 * 1024;
+    QTemporaryDir directory;
+    QSettings settings(directory.filePath(QStringLiteral("bloom.ini")), QSettings::IniFormat);
+    bloom::media::cache::SourceMirrorConfig config;
+    config.rootDirectory = std::filesystem::path(directory.filePath("media").toStdString());
+    config.driveSpace = bloom::media::cache::roomyDriveSpaceForTest();
+    bloom::media::cache::SourceMirror mirror(config);
+    check.expect(mirror.headroom() == 0, "the cache starts on the default headroom");
+
+    ui::PreferencesWindow window(owner(), ui::ApplicationPreferences{});
+    QObject::connect(&window, &ui::PreferencesWindow::preferencesApplied, &window,
+                     [&](const ui::ApplicationPreferences& committed) {
+                         ui::saveApplicationPreferences(settings, committed);
+                         ui::applyMediaDiskCacheSettings(&mirror, settings);
+                     });
+    window.findChild<ui::kit::KValueField*>(QStringLiteral("preferencesMediaDiskHeadroomField"))
+        ->setValue(50.0);
+    window.findChild<QAbstractButton*>(QStringLiteral("preferencesApplyButton"))->click();
+    check.expect(mirror.headroom() == 50 * gib, "Apply sets the running cache's headroom");
+    window.findChild<ui::kit::KValueField*>(QStringLiteral("preferencesMediaDiskHeadroomField"))
+        ->setValue(0.0);
+    window.findChild<QAbstractButton*>(QStringLiteral("preferencesApplyButton"))->click();
+    check.expect(mirror.headroom() == 0, "Apply with the default headroom returns the cache to it");
+    ui::applyMediaDiskCacheSettings(nullptr, settings);
+}
+
 void testLargeBudgetPreferencesRemainExactOnApply(Expectations& check) {
     constexpr auto gib = std::uint64_t{1024} * 1024 * 1024;
     auto preferences = samplePreferences();
-    preferences.mediaDiskCacheBudgetBytes = 16384 * gib;
+    preferences.mediaDiskHeadroomBytes = 4096 * gib;
     ui::PreferencesWindow window(owner(), preferences);
     const auto* disk = window.findChild<ui::kit::KValueField*>(
-        QStringLiteral("preferencesMediaDiskCacheBudgetField"));
-    check.expect(disk && disk->value() == 16384, "the disk budget has no arbitrary GiB ceiling");
+        QStringLiteral("preferencesMediaDiskHeadroomField"));
+    check.expect(disk && disk->value() == 4096, "the disk headroom shows up to 4096 GiB");
     ui::ApplicationPreferences applied;
     QObject::connect(&window, &ui::PreferencesWindow::preferencesApplied, &window,
                      [&](const auto& value) { applied = value; });
     window.findChild<QAbstractButton*>(QStringLiteral("preferencesAudioEnabledSwitch"))
         ->setChecked(true);
     window.findChild<QAbstractButton*>(QStringLiteral("preferencesApplyButton"))->click();
-    check.expect(applied.mediaDiskCacheBudgetBytes == preferences.mediaDiskCacheBudgetBytes &&
+    check.expect(applied.mediaDiskHeadroomBytes == preferences.mediaDiskHeadroomBytes &&
                      applied.ramHeadroomBytes == preferences.ramHeadroomBytes,
                  "an unrelated Apply preserves large saved byte counts exactly");
 }
@@ -982,6 +1109,8 @@ int main(int argc, char** argv) {
     testHeadroomFields(check);
     testExportWorkerFields(check);
     testLargeBudgetPreferencesRemainExactOnApply(check);
+    testDiskHeadroomRowAndFigures(check);
+    testApplyReachesTheDiskCache(check);
     testLocalCopyPreferences(check);
     testPreferenceLabelsRemainReadable(check);
     testWindowFitsItsContent(check);

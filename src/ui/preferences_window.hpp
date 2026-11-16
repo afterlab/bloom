@@ -1,10 +1,12 @@
 #pragma once
 
+#include <bloom/media/cache/source_mirror.hpp>
 #include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/kit/dialog.hpp>
 
 #include <functional>
 #include <initializer_list>
+#include <optional>
 #include <vector>
 
 class QListWidget;
@@ -24,6 +26,7 @@ class AccelerationStatusProvider;
 namespace kit {
 class KButton;
 class KDropdown;
+class KLabel;
 class KSection;
 class KSwitch;
 class KValueField;
@@ -37,6 +40,11 @@ class KValueField;
 // That keeps the dialog testable without a preferences file and keeps persistence ownership in one
 // place (MainWindow, which broadcasts the result to live panels). A kit::KDialog shown with exec()
 // by MainWindow (the commit path is its preferencesApplied signal).
+// The live figures line under Disk headroom, from the disk cache's statistics (nullopt: the disk
+// cache is off). Pure text, so it is testable without a window.
+[[nodiscard]] QString diskHeadroomFiguresText(
+    const std::optional<media::cache::SourceMirrorStatistics>& statistics);
+
 class PreferencesWindow final : public kit::KDialog {
     Q_OBJECT
 
@@ -53,6 +61,12 @@ class PreferencesWindow final : public kit::KDialog {
     // Adds a "keep copies" rule for an absolute folder to the edited values (#718): what the
     // Add Folder button does with the folder the artist chose.
     void addLocalCopyFolder(const QString& folder);
+    // The disk cache's live figures for the line under Disk headroom: the statistics of the running
+    // cache, or nothing while it is off. The provider only reads what the cache already measured
+    // (SourceMirror::statistics() does no I/O); it runs on the UI thread about once a second while
+    // the window is shown, and must outlive the window. Without a provider the line is absent.
+    void setDiskCacheFigures(
+        std::function<std::optional<media::cache::SourceMirrorStatistics>()> provider);
 
   signals:
     // Emitted when Apply or OK commits the edited value. Apply keeps the window open; OK accepts
@@ -154,6 +168,11 @@ class PreferencesWindow final : public kit::KDialog {
     QWidget* performanceDeviceRow_ = nullptr;
     QWidget* performanceDriverRow_ = nullptr;
     QTimer* performanceRefreshTimer_ = nullptr;
+
+    void refreshDiskCacheFigures();
+    std::function<std::optional<media::cache::SourceMirrorStatistics>()> diskCacheFigures_;
+    kit::KLabel* diskHeadroomHint_ = nullptr;
+    QTimer* diskCacheFiguresTimer_ = nullptr;
 };
 
 } // namespace bloom::ui

@@ -27,10 +27,15 @@ namespace bloom::ui {
 // "use the platform default" (bloom::platform::userCacheDirectory() plus a "media" leaf).
 [[nodiscard]] std::filesystem::path mediaDiskCacheDirectoryFromSettings(const QSettings& settings);
 
-// "media/disk-cache-budget-bytes": missing, zero, unparseable, or negative reads as `fallback`.
-// The disk cache no longer has a byte budget (#732), so the value does not reach it.
-[[nodiscard]] std::uint64_t mediaDiskCacheByteBudgetFromSettings(const QSettings& settings,
-                                                                 std::uint64_t fallback);
+// "media/disk-cache-headroom-bytes": the space to keep free on the cache drive (#732), a decimal
+// byte string. Missing, zero, unparseable or above the largest accepted value reads as 0, the
+// default (the smaller of 10% of the drive and 32 GiB).
+[[nodiscard]] std::uint64_t mediaDiskHeadroomFromSettings(const QSettings& settings);
+
+// Removes the settings of earlier builds that no longer mean anything: the disk cache's byte
+// budget ("media/disk-cache-budget-bytes", #732). Run once at startup, before the cache is made;
+// the value is never read, so it cannot reach the cache.
+void dropObsoleteMediaDiskCacheSettings(QSettings& settings);
 
 // "media/local-copies" ("automatic", "always" or "never"; anything else reads as automatic) and
 // "media/local-copies-folders" (a list of "keep:<absolute folder>" and "skip:<absolute folder>"):
@@ -50,6 +55,12 @@ sourceMirrorSettingsFromSettings(const QSettings& settings);
 // (derived caches are optional runtime state per media-io.md).
 [[nodiscard]] std::shared_ptr<media::cache::SourceMirror>
 makeMediaDiskCacheFromSettings(const QSettings& settings);
+
+// Applies the committed settings to the running disk cache (Preferences Apply or OK, #732): the
+// Disk headroom reaches the cache at once (the cache's own thread does the work) and the settings
+// the headless tools read are published again. Enable, folder and local copies are read at startup
+// only. `cache` may be null (the disk cache is off this session).
+void applyMediaDiskCacheSettings(media::cache::SourceMirror* cache, const QSettings& settings);
 
 // The "Purge media cache" effect: clears every local copy of source media AND the evaluator's
 // in-memory decoded-media entries. This is the owning API the purge worker calls; it must never

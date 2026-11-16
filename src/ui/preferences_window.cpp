@@ -1,6 +1,7 @@
 #include "preferences_window.hpp"
 
 #include "properties_sections.hpp"
+#include "window_status_bar_segments.hpp"
 
 #include <bloom/host/export_worker_limits.hpp>
 
@@ -50,7 +51,6 @@ namespace {
 constexpr double kBytesPerGiB = 1024.0 * 1024.0 * 1024.0;
 constexpr auto kMaximumBudgetBytes = std::min<std::uint64_t>(
     std::numeric_limits<std::uint64_t>::max(), std::numeric_limits<std::size_t>::max());
-constexpr double kMaximumBudgetGiB = static_cast<double>(kMaximumBudgetBytes) / kBytesPerGiB;
 
 [[nodiscard]] std::uint64_t budgetBytesFromGiB(const double value) {
     const auto bytes = std::round(static_cast<long double>(std::max(0.0, value)) *
@@ -620,6 +620,7 @@ QWidget* PreferencesWindow::buildMemoryPage() {
     resetSection(*memory, [](ApplicationPreferences& draft, const ApplicationPreferences& base) {
         draft.ramHeadroomBytes = base.ramHeadroomBytes;
         draft.vramHeadroomBytes = base.vramHeadroomBytes;
+        draft.mediaDiskHeadroomBytes = base.mediaDiskHeadroomBytes;
         draft.exportWorkerMemoryCapBytes = base.exportWorkerMemoryCapBytes;
         draft.exportWorkerThreads = base.exportWorkerThreads;
     });
@@ -652,6 +653,34 @@ QWidget* PreferencesWindow::buildMemoryPage() {
         content);
     hint->setObjectName(QStringLiteral("preferencesMemoryHint"));
     addHelperRow(memoryRows, content, hint);
+
+    // Disk headroom (#732): the space to keep free on the cache drive. Applies at once; Automatic
+    // is the smaller of 10% of the drive and 32 GiB. The line under it shows what the cache is
+    // doing now, from the figures provider (absent until MainWindow sets one).
+    auto* diskHeadroom = addAutomaticRow(
+        memoryRows, content, QStringLiteral("preferencesMediaDiskHeadroomField"),
+        tr("Disk headroom"),
+        static_cast<double>(kMaximumMediaDiskHeadroomBytes) / kBytesPerGiB, 2,
+        QStringLiteral("GiB"), 32.0);
+    diskHeadroom->setValue(static_cast<double>(draft_.mediaDiskHeadroomBytes) / kBytesPerGiB);
+    connect(diskHeadroom, &kit::KValueField::valueChanged, this, [this](const double value) {
+        draft_.mediaDiskHeadroomBytes =
+            std::min(budgetBytesFromGiB(value), kMaximumMediaDiskHeadroomBytes);
+        updateApplyEnabled();
+    });
+    refreshCallbacks_.push_back([this, diskHeadroom] {
+        const QSignalBlocker blocker(diskHeadroom);
+        diskHeadroom->setValue(static_cast<double>(draft_.mediaDiskHeadroomBytes) / kBytesPerGiB);
+    });
+    diskHeadroomHint_ = new kit::KLabel(QString{}, content);
+    diskHeadroomHint_->setObjectName(QStringLiteral("preferencesMediaDiskHeadroomHint"));
+    addHelperRow(memoryRows, content, diskHeadroomHint_);
+    diskHeadroomHint_->parentWidget()->hide(); // the row of the line; shown with a provider
+    diskCacheFiguresTimer_ = new QTimer(this);
+    diskCacheFiguresTimer_->setObjectName(QStringLiteral("preferencesDiskCacheFiguresTimer"));
+    diskCacheFiguresTimer_->setInterval(1000);
+    connect(diskCacheFiguresTimer_, &QTimer::timeout, this,
+            [this] { refreshDiskCacheFigures(); });
 
     // Export workers (#581): opt-in limits on the helper processes that encode movies. Both rows
     // are Automatic-style rows: zero is "No limit" and "Automatic", and nothing changes until
@@ -699,7 +728,6 @@ QWidget* PreferencesWindow::buildMemoryPage() {
     resetSection(*disk, [](ApplicationPreferences& draft, const ApplicationPreferences& base) {
         draft.mediaDiskCacheEnabled = base.mediaDiskCacheEnabled;
         draft.mediaDiskCacheDirectory = base.mediaDiskCacheDirectory;
-        draft.mediaDiskCacheBudgetBytes = base.mediaDiskCacheBudgetBytes;
         draft.mediaLocalCopies = base.mediaLocalCopies;
     });
     auto* diskRows = disk->bodyLayout();
@@ -773,22 +801,6 @@ QWidget* PreferencesWindow::buildMemoryPage() {
     directoryReason->hide();
     registerReason(directory, directoryReason);
     (void)directoryRow;
-
-    auto* budget =
-        addAutomaticRow(diskRows, content, QStringLiteral("preferencesMediaDiskCacheBudgetField"),
-                        tr("Disk cache budget"), kMaximumBudgetGiB, 2, QStringLiteral("GiB"), 1.0);
-    budget->setValue(static_cast<double>(draft_.mediaDiskCacheBudgetBytes) / kBytesPerGiB);
-    connect(budget, &kit::KValueField::valueChanged, this, [this](const double value) {
-        draft_.mediaDiskCacheBudgetBytes = budgetBytesFromGiB(value);
-        updateApplyEnabled();
-    });
-    refreshCallbacks_.push_back([this, budget] {
-        const QSignalBlocker blocker(budget);
-        budget->setValue(static_cast<double>(draft_.mediaDiskCacheBudgetBytes) / kBytesPerGiB);
-    });
-    auto* budgetHint = new kit::KLabel(tr("Automatic chooses a budget for this machine."), content);
-    budgetHint->setObjectName(QStringLiteral("preferencesMediaDiskCacheBudgetHint"));
-    addHelperRow(diskRows, content, budgetHint);
 
     // #718: which source media gets a local copy in the disk cache.
     using media::cache::LocalCopyPreference;
@@ -1225,6 +1237,46 @@ QWidget* PreferencesWindow::buildViewerPage() {
 
     layout->addStretch(1);
     return wrapPage(content, QStringLiteral("preferencesViewerPage"));
+}
+
+// The fixed limit the disk cache keeps while it cannot read its drive (32 GiB).
+constexpr std::uint64_t kUnreadableDriveLimit = std::uint64_t{32} << 30U;
+
+QString diskHeadroomFiguresText(
+    const std::optional<media::cache::SourceMirrorStatistics>& statistics) {
+    using statusbar::formatBytes;
+    if (!statistics)
+        return PreferencesWindow::tr("The disk cache is off.");
+    const auto& stats = *statistics;
+    if (!stats.driveMeasured && stats.availableBytes == 0)
+        return PreferencesWindow::tr("Measuring the cache drive…");
+    if (!stats.driveMeasured)
+        return PreferencesWindow::tr(
+                   "The cache drive cannot be read · The disk cache is limited to %1 · "
+                   "Disk cache %2 stored")
+            .arg(formatBytes(kUnreadableDriveLimit), formatBytes(stats.storedBytes));
+    return PreferencesWindow::tr(
+               "Keeping %1 free · Disk cache %2 of %3 available · %4 free on the cache drive")
+        .arg(formatBytes(stats.headroomBytes), formatBytes(stats.storedBytes),
+             formatBytes(stats.availableBytes), formatBytes(stats.freeBytes));
+}
+
+void PreferencesWindow::setDiskCacheFigures(
+    std::function<std::optional<media::cache::SourceMirrorStatistics>()> provider) {
+    diskCacheFigures_ = std::move(provider);
+    if (diskHeadroomHint_ != nullptr)
+        diskHeadroomHint_->parentWidget()->setVisible(static_cast<bool>(diskCacheFigures_));
+    refreshDiskCacheFigures();
+    if (diskCacheFiguresTimer_ != nullptr && diskCacheFigures_ && isVisible())
+        diskCacheFiguresTimer_->start();
+}
+
+void PreferencesWindow::refreshDiskCacheFigures() {
+    if (diskHeadroomHint_ == nullptr || !diskCacheFigures_)
+        return;
+    const auto text = diskHeadroomFiguresText(diskCacheFigures_());
+    if (diskHeadroomHint_->text() != text)
+        diskHeadroomHint_->setText(text);
 }
 
 } // namespace bloom::ui

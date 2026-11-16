@@ -116,6 +116,10 @@ void PreferencesWindow::refreshPerformancePage() {
 void PreferencesWindow::showEvent(QShowEvent* event) {
     fitPagesToContent();
     kit::KDialog::showEvent(event);
+    if (diskCacheFiguresTimer_ != nullptr && diskCacheFigures_) {
+        refreshDiskCacheFigures();
+        diskCacheFiguresTimer_->start();
+    }
     if (performanceRefreshTimer_ == nullptr) {
         return;
     }
@@ -124,6 +128,9 @@ void PreferencesWindow::showEvent(QShowEvent* event) {
 }
 
 void PreferencesWindow::hideEvent(QHideEvent* event) {
+    if (diskCacheFiguresTimer_ != nullptr) {
+        diskCacheFiguresTimer_->stop();
+    }
     if (performanceRefreshTimer_ != nullptr) {
         performanceRefreshTimer_->stop();
     }

@@ -236,7 +236,9 @@ int main(int argc, char* argv[]) try {
     // settings alongside the operation cache's own settings-derived budget just above; null when
     // disabled in settings or no cache directory can be resolved at all (never a startup failure).
     const std::shared_ptr<bloom::media::cache::SourceMirror> mediaDiskCache = [] {
-        const QSettings mediaDiskCacheSettings;
+        QSettings mediaDiskCacheSettings;
+        // #732: the byte budget of earlier builds is dropped, never read.
+        bloom::ui::dropObsoleteMediaDiskCacheSettings(mediaDiskCacheSettings);
         return bloom::ui::makeMediaDiskCacheFromSettings(mediaDiskCacheSettings);
     }();
     // #718: memory, then the local mirror, then the source, for every route this evaluator's
@@ -1042,6 +1044,14 @@ int main(int argc, char* argv[]) try {
     // Memory headroom: the committed value reaches the processing policy and the ledger on Apply
     // and OK.
     QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &window, applyHeadroom);
+    // Disk headroom (#732): the committed value reaches the running disk cache, and the settings
+    // the headless tools read are published again. Enable, folder and local copies wait for a
+    // restart.
+    QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &window,
+                     [mirror = mediaDiskCache] {
+                         const QSettings settings;
+                         bloom::ui::applyMediaDiskCacheSettings(mirror.get(), settings);
+                     });
     QObject::connect(&window, &bloom::ui::MainWindow::soundTestRequested, &window,
                      [&uiFeedback](const bloom::ui::ApplicationPreferences& draft) {
                          uiFeedback.playTest(bloom::ui::feedbackSettingsFrom(draft));

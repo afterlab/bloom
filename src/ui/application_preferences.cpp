@@ -23,7 +23,8 @@ constexpr auto kLoopPlaybackKey = "playback/loop";
 constexpr auto kCrashRecoveryKey = "recovery/enabled";
 constexpr auto kMediaDiskCacheEnabledKey = "media/disk-cache-enabled";
 constexpr auto kMediaDiskCacheDirectoryKey = "media/disk-cache-directory";
-constexpr auto kMediaDiskCacheBudgetKey = "media/disk-cache-budget-bytes";
+constexpr auto kObsoleteMediaDiskCacheBudgetKey = "media/disk-cache-budget-bytes";
+constexpr auto kMediaDiskHeadroomKey = "media/disk-cache-headroom-bytes";
 constexpr auto kExportWorkerMemoryCapKey = "export/worker-memory-cap-bytes";
 constexpr auto kExportWorkerThreadsKey = "export/worker-threads";
 constexpr auto kTimelineTimeFormatKey = "timeline/time-format";
@@ -213,8 +214,11 @@ ApplicationPreferences loadApplicationPreferences(const QSettings& settings) {
     preferences.mediaDiskCacheEnabled =
         settings.value(QLatin1String(kMediaDiskCacheEnabledKey), true).toBool();
     preferences.mediaDiskCacheDirectory = absoluteDirectoryFromSettings(settings);
-    preferences.mediaDiskCacheBudgetBytes =
-        byteBudgetFromSettings(settings, kMediaDiskCacheBudgetKey);
+    // The old byte budget key is never read (#732); an unset, zero, unreadable or out-of-range
+    // headroom is the default.
+    if (const auto headroom = byteBudgetFromSettings(settings, kMediaDiskHeadroomKey);
+        headroom <= kMaximumMediaDiskHeadroomBytes)
+        preferences.mediaDiskHeadroomBytes = headroom;
     preferences.mediaLocalCopies = localCopyPolicyFromSettings(settings);
     // Zero (missing, unreadable or above the largest accepted cap) is "no cap".
     if (const auto cap = byteBudgetFromSettings(settings, kExportWorkerMemoryCapKey);
@@ -327,7 +331,10 @@ void saveApplicationPreferences(QSettings& settings, const ApplicationPreference
         settings.remove(QLatin1String(kMediaDiskCacheDirectoryKey));
     else
         settings.setValue(QLatin1String(kMediaDiskCacheDirectoryKey), directoryText);
-    writeByteBudget(settings, kMediaDiskCacheBudgetKey, preferences.mediaDiskCacheBudgetBytes);
+    writeByteBudget(settings, kMediaDiskHeadroomKey,
+                    std::min(preferences.mediaDiskHeadroomBytes, kMaximumMediaDiskHeadroomBytes));
+    // The byte budget the disk cache had before #732 is gone; saving never leaves it behind.
+    settings.remove(QLatin1String(kObsoleteMediaDiskCacheBudgetKey));
     writeLocalCopyPolicy(settings, preferences.mediaLocalCopies);
     writeByteBudget(settings, kExportWorkerMemoryCapKey,
                     std::min(preferences.exportWorkerMemoryCapBytes,

@@ -2,6 +2,7 @@
 
 #include <bloom/platform/cache_directory.hpp>
 #include <bloom/runtime/operation_cache.hpp>
+#include <bloom/ui/application_preferences.hpp>
 
 #include <QSettings>
 #include <QString>
@@ -12,7 +13,8 @@ namespace bloom::ui {
 namespace {
 constexpr auto kEnabledKey = "media/disk-cache-enabled";
 constexpr auto kDirectoryKey = "media/disk-cache-directory";
-constexpr auto kBudgetBytesKey = "media/disk-cache-budget-bytes";
+constexpr auto kObsoleteBudgetBytesKey = "media/disk-cache-budget-bytes";
+constexpr auto kHeadroomBytesKey = "media/disk-cache-headroom-bytes";
 constexpr auto kLocalCopiesKey = "media/local-copies";
 constexpr auto kLocalCopiesFoldersKey = "media/local-copies-folders";
 
@@ -37,13 +39,18 @@ std::filesystem::path mediaDiskCacheDirectoryFromSettings(const QSettings& setti
     return path.is_absolute() ? path : std::filesystem::path{};
 }
 
-std::uint64_t mediaDiskCacheByteBudgetFromSettings(const QSettings& settings,
-                                                   const std::uint64_t fallback) {
+std::uint64_t mediaDiskHeadroomFromSettings(const QSettings& settings) {
     bool parsed = false;
-    const auto value = settings.value(QLatin1String(kBudgetBytesKey)).toLongLong(&parsed);
-    if (!parsed || value <= 0)
-        return fallback;
-    return static_cast<std::uint64_t>(value);
+    const auto value =
+        settings.value(QLatin1String(kHeadroomBytesKey)).toString().toULongLong(&parsed);
+    if (!parsed || value == 0 || value > kMaximumMediaDiskHeadroomBytes)
+        return 0;
+    return value;
+}
+
+void dropObsoleteMediaDiskCacheSettings(QSettings& settings) {
+    if (settings.contains(QLatin1String(kObsoleteBudgetBytesKey)))
+        settings.remove(QLatin1String(kObsoleteBudgetBytesKey));
 }
 
 media::cache::LocalCopyPolicy localCopyPolicyFromSettings(const QSettings& settings) {
@@ -98,6 +105,7 @@ media::cache::SourceMirrorUserSettings sourceMirrorSettingsFromSettings(const QS
     result.directory = mediaDiskCacheDirectoryFromSettings(settings);
     // #732: the mirror has no byte budget any more. It keeps a headroom free on the cache
     // volume instead, and an earlier build's budget value is not carried over.
+    result.headroomBytes = mediaDiskHeadroomFromSettings(settings);
     result.policy = localCopyPolicyFromSettings(settings);
     return result;
 }
@@ -108,6 +116,14 @@ makeMediaDiskCacheFromSettings(const QSettings& settings) {
     // The headless tools read this copy; a platform without a cache folder publishes nothing.
     static_cast<void>(media::cache::publishSourceMirrorSettings(mirrorSettings));
     return media::cache::makeSourceMirror(mirrorSettings);
+}
+
+void applyMediaDiskCacheSettings(media::cache::SourceMirror* const cache,
+                                 const QSettings& settings) {
+    const auto mirrorSettings = sourceMirrorSettingsFromSettings(settings);
+    if (cache != nullptr)
+        cache->setHeadroom(mirrorSettings.headroomBytes);
+    static_cast<void>(media::cache::publishSourceMirrorSettings(mirrorSettings));
 }
 
 bool purgeMediaCaches(media::cache::SourceMirror* const cache,

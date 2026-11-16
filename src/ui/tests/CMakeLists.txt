@@ -1435,6 +1435,13 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# #732 review captures of the disk cache's Preferences page and status bar cell (a tool, not a
+# test): bloom_dcache_capture <directory> <before|after>, with QT_SCALE_FACTOR 1 or 1.5.
+add_executable(bloom_dcache_capture dcache_capture.cpp)
+target_include_directories(bloom_dcache_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_dcache_capture PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_dcache_capture)
+
 # The shared global-preferences model: defaults, round-trip, invalid-value fallback, and the
 # absolute-path/zero-budget rules the existing readers rely on. Also covers non-finite grid values.
 add_executable(bloom_application_preferences_test application_preferences_tests.cpp)

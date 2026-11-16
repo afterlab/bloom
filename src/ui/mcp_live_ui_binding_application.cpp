@@ -189,9 +189,9 @@ const std::vector<PreferenceKey>& preferenceKeys() {
                  p.mediaDiskCacheDirectory = *text;
                  return std::optional<QString>{};
              }});
-        list.push_back(bytesKey("mediaDiskCacheBudgetBytes",
-                                &ApplicationPreferences::mediaDiskCacheBudgetBytes,
-                                std::uint64_t{1} << 50U));
+        list.push_back(bytesKey("mediaDiskHeadroomBytes",
+                                &ApplicationPreferences::mediaDiskHeadroomBytes,
+                                kMaximumMediaDiskHeadroomBytes));
         list.push_back(
             {"mediaLocalCopies",
              [](const ApplicationPreferences& p) {

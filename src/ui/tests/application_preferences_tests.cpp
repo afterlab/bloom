@@ -63,7 +63,7 @@ void testFullRoundTrip(Expectations& check) {
     prefs.vramHeadroomBytes = 512ULL * 1024 * 1024;
     prefs.mediaDiskCacheEnabled = false;
     prefs.mediaDiskCacheDirectory = directory.filePath(QStringLiteral("media-cache")).toStdString();
-    prefs.mediaDiskCacheBudgetBytes = 2ULL * 1024 * 1024 * 1024;
+    prefs.mediaDiskHeadroomBytes = 2ULL * 1024 * 1024 * 1024;
     // #718: the local-copy mode and its folder rules.
     prefs.mediaLocalCopies.preference = bloom::media::cache::LocalCopyPreference::Never;
     prefs.mediaLocalCopies.folders = {
@@ -275,7 +275,7 @@ void testInvalidValuesFallBack(Expectations& check) {
     settings.setValue(QStringLiteral("viewer/resolution"), QStringLiteral("nonsense"));
     settings.setValue(QStringLiteral("viewer/background"), QStringLiteral("nonsense"));
     settings.setValue(QStringLiteral("nodes/grid-size"), QStringLiteral("not-a-number"));
-    settings.setValue(QStringLiteral("media/disk-cache-budget-bytes"), QStringLiteral("0"));
+    settings.setValue(QStringLiteral("media/disk-cache-headroom-bytes"), QStringLiteral("0"));
 
     const auto loaded = ui::loadApplicationPreferences(settings);
     check.expect(loaded.timelineTimeFormat == ui::TimelineTimeFormat::Frames,
@@ -288,8 +288,8 @@ void testInvalidValuesFallBack(Expectations& check) {
                      !loaded.viewerTransparencyGrid,
                  "an unrecognized background reads as Solid with the grid off");
     check.expect(loaded.nodeGridSize == 16.0, "an unparseable grid size reads as 16");
-    check.expect(loaded.mediaDiskCacheBudgetBytes == 0,
-                 "an explicit zero disk budget reads as the default");
+    check.expect(loaded.mediaDiskHeadroomBytes == 0,
+                 "an explicit zero disk headroom reads as the default");
 }
 
 // The pre-split Checkerboard background (which drew the checker in the frame) keeps showing a
@@ -377,21 +377,55 @@ void testDirectoryOverrideMustBeAbsolute(Expectations& check) {
         "saving a relative disk-cache directory refuses it and clears the stored override");
 }
 
-void testZeroBudgetClearsOverride(Expectations& check) {
+void testDiskHeadroomPreference(Expectations& check) {
     QTemporaryDir directory;
     auto settings = openSettings(directory);
+    check.expect(ui::defaultApplicationPreferences().mediaDiskHeadroomBytes == 0 &&
+                     ui::loadApplicationPreferences(settings).mediaDiskHeadroomBytes == 0,
+                 "the disk headroom is the default (0) when nothing is stored");
     ui::ApplicationPreferences prefs;
-    prefs.mediaDiskCacheBudgetBytes = 1024;
+    prefs.mediaDiskHeadroomBytes = 1024;
     ui::saveApplicationPreferences(settings, prefs);
-    check.expect(settings.contains(QStringLiteral("media/disk-cache-budget-bytes")),
-                 "a non-zero budget is written as an override");
+    check.expect(settings.value(QStringLiteral("media/disk-cache-headroom-bytes")).toString() ==
+                     QStringLiteral("1024"),
+                 "a disk headroom is written as a decimal byte string");
+    check.expect(ui::loadApplicationPreferences(settings).mediaDiskHeadroomBytes == 1024,
+                 "a stored disk headroom reads back");
 
-    prefs.mediaDiskCacheBudgetBytes = 0;
+    prefs.mediaDiskHeadroomBytes = 0;
     ui::saveApplicationPreferences(settings, prefs);
+    check.expect(!settings.contains(QStringLiteral("media/disk-cache-headroom-bytes")),
+                 "the default headroom is not stored");
+
+    for (const auto* bad : {"-1", "not-a-number", "99999999999999999999999"}) {
+        settings.setValue(QStringLiteral("media/disk-cache-headroom-bytes"),
+                          QString::fromLatin1(bad));
+        check.expect(ui::loadApplicationPreferences(settings).mediaDiskHeadroomBytes == 0,
+                     "an unreadable disk headroom reads as the default");
+    }
+    settings.setValue(QStringLiteral("media/disk-cache-headroom-bytes"),
+                      QString::number(ui::kMaximumMediaDiskHeadroomBytes + 1));
+    check.expect(ui::loadApplicationPreferences(settings).mediaDiskHeadroomBytes == 0,
+                 "a disk headroom above 4096 GiB reads as the default");
+    prefs.mediaDiskHeadroomBytes = ui::kMaximumMediaDiskHeadroomBytes * 2;
+    ui::saveApplicationPreferences(settings, prefs);
+    check.expect(ui::loadApplicationPreferences(settings).mediaDiskHeadroomBytes ==
+                     ui::kMaximumMediaDiskHeadroomBytes,
+                 "a disk headroom above 4096 GiB is stored as 4096 GiB");
+}
+
+// #732: the disk cache's byte budget is gone. Saving removes the old key and loading never reads it.
+void testObsoleteDiskBudgetIsDropped(Expectations& check) {
+    QTemporaryDir directory;
+    auto settings = openSettings(directory);
+    settings.setValue(QStringLiteral("media/disk-cache-budget-bytes"),
+                      QStringLiteral("4294967296"));
+    const auto loaded = ui::loadApplicationPreferences(settings);
+    check.expect(loaded.mediaDiskHeadroomBytes == 0,
+                 "an old byte budget never becomes the disk headroom");
+    ui::saveApplicationPreferences(settings, loaded);
     check.expect(!settings.contains(QStringLiteral("media/disk-cache-budget-bytes")),
-                 "a zero budget clears the override so the machine default applies");
-    check.expect(ui::loadApplicationPreferences(settings).mediaDiskCacheBudgetBytes == 0,
-                 "a cleared budget reads back as the default");
+                 "saving the preferences removes the old byte budget key");
 }
 
 void testStoredSpellingsMatchReaders(Expectations& check) {
@@ -434,7 +468,8 @@ int main(int argc, char** argv) {
     testLegacyCheckerboardMigrates(check);
     testNonFiniteGridSizeFallsBack(check);
     testDirectoryOverrideMustBeAbsolute(check);
-    testZeroBudgetClearsOverride(check);
+    testDiskHeadroomPreference(check);
+    testObsoleteDiskBudgetIsDropped(check);
     testStoredSpellingsMatchReaders(check);
     return check.failures() == 0 ? 0 : 1;
 }

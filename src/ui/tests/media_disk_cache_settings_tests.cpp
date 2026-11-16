@@ -6,6 +6,7 @@
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/cache_purge_controller.hpp>
 #include <bloom/ui/media_disk_cache_settings.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -88,21 +89,46 @@ void testDirectoryOverrideMustBeAbsolute(Expectations& check) {
                  "an absolute directory override is honored verbatim");
 }
 
-void testByteBudgetFallsBackOnInvalidValues(Expectations& check) {
+void testDiskHeadroomSetting(Expectations& check) {
     QTemporaryDir directory;
     QSettings settings(directory.filePath(QStringLiteral("bloom.ini")), QSettings::IniFormat);
-    constexpr std::uint64_t fallback = 123'456'789ULL;
-    check.expect(ui::mediaDiskCacheByteBudgetFromSettings(settings, fallback) == fallback,
-                 "an unset budget uses the caller's fallback");
-    for (const auto* value : {"0", "-1", "not-a-number"}) {
-        settings.setValue(QStringLiteral("media/disk-cache-budget-bytes"),
+    check.expect(ui::mediaDiskHeadroomFromSettings(settings) == 0,
+                 "an unset headroom is the default (0)");
+    for (const auto* value : {"0", "-1", "not-a-number", "99999999999999999999999"}) {
+        settings.setValue(QStringLiteral("media/disk-cache-headroom-bytes"),
                           QString::fromLatin1(value));
-        check.expect(ui::mediaDiskCacheByteBudgetFromSettings(settings, fallback) == fallback,
-                     "an invalid budget falls back rather than being silently accepted");
+        check.expect(ui::mediaDiskHeadroomFromSettings(settings) == 0,
+                     "an invalid headroom reads as the default rather than being accepted");
     }
-    settings.setValue(QStringLiteral("media/disk-cache-budget-bytes"), QStringLiteral("4096"));
-    check.expect(ui::mediaDiskCacheByteBudgetFromSettings(settings, fallback) == 4096,
-                 "a valid positive budget is honored");
+    settings.setValue(QStringLiteral("media/disk-cache-headroom-bytes"),
+                      QString::number(ui::kMaximumMediaDiskHeadroomBytes + 1));
+    check.expect(ui::mediaDiskHeadroomFromSettings(settings) == 0,
+                 "a headroom above the largest accepted value reads as the default");
+    settings.setValue(QStringLiteral("media/disk-cache-headroom-bytes"),
+                      QStringLiteral("5368709120"));
+    check.expect(ui::mediaDiskHeadroomFromSettings(settings) == 5368709120ULL &&
+                     ui::sourceMirrorSettingsFromSettings(settings).headroomBytes ==
+                         5368709120ULL,
+                 "a valid headroom is honored and reaches the cache settings record");
+}
+
+// #732: the byte budget of earlier builds is dropped at startup and its value never reaches the
+// cache, whether or not the startup drop ran.
+void testObsoleteBudgetIsDropped(Expectations& check) {
+    QTemporaryDir directory;
+    QSettings settings(directory.filePath(QStringLiteral("bloom.ini")), QSettings::IniFormat);
+    settings.setValue(QStringLiteral("media/disk-cache-budget-bytes"),
+                      QStringLiteral("4294967296"));
+    check.expect(ui::mediaDiskHeadroomFromSettings(settings) == 0 &&
+                     ui::sourceMirrorSettingsFromSettings(settings).headroomBytes == 0,
+                 "an old byte budget is not read as a headroom");
+    ui::dropObsoleteMediaDiskCacheSettings(settings);
+    check.expect(!settings.contains(QStringLiteral("media/disk-cache-budget-bytes")),
+                 "the startup drop removes the old byte budget key");
+    settings.setValue(QStringLiteral("media/disk-cache-headroom-bytes"), QStringLiteral("2048"));
+    ui::dropObsoleteMediaDiskCacheSettings(settings);
+    check.expect(ui::mediaDiskHeadroomFromSettings(settings) == 2048,
+                 "the startup drop leaves the headroom alone");
 }
 
 void testMakeMediaDiskCacheFromSettings(Expectations& check) {
@@ -551,7 +577,8 @@ int main(int argc, char** argv) {
     Expectations check;
     testEnabledDefaultsTrue(check);
     testDirectoryOverrideMustBeAbsolute(check);
-    testByteBudgetFallsBackOnInvalidValues(check);
+    testDiskHeadroomSetting(check);
+    testObsoleteBudgetIsDropped(check);
     testMakeMediaDiskCacheFromSettings(check);
     testMediaDiskCacheStatusText(check);
     testPurgeMediaCachesClearsDiskAndDecodedMemory(check);

@@ -1084,6 +1084,13 @@ void MainWindow::showPreferences() {
                              accelerationStatus_);
     connect(&dialog, &PreferencesWindow::preferencesApplied, this,
             [this](const ApplicationPreferences& preferences) { commitPreferences(preferences); });
+    // The live figures under Disk headroom: what the running cache already measured (no disk I/O).
+    dialog.setDiskCacheFigures(
+        [cache = mediaDiskCache_]() -> std::optional<media::cache::SourceMirrorStatistics> {
+            if (cache == nullptr || !cache->enabled())
+                return std::nullopt;
+            return cache->statistics();
+        });
     connect(&dialog, &PreferencesWindow::soundTestRequested, this, &MainWindow::soundTestRequested);
     connect(&dialog, &PreferencesWindow::mcpSettingsRequested, this, [this, &dialog] {
         dialog.reject();

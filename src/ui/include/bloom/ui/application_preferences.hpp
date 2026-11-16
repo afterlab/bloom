@@ -88,7 +88,9 @@ struct ApplicationPreferences final {
     std::uint64_t vramHeadroomBytes = runtime::defaultVramHeadroomBytes();
     bool mediaDiskCacheEnabled = true;
     std::string mediaDiskCacheDirectory;
-    std::uint64_t mediaDiskCacheBudgetBytes = 0;
+    // Disk headroom (#732): the space to keep free on the cache drive. 0 is the default, the
+    // smaller of 10% of the drive and 32 GiB. Applies live; the cache has no byte budget.
+    std::uint64_t mediaDiskHeadroomBytes = 0;
     // Keep local copies of source media (#718): Automatic copies media on slow storage; the
     // folder rules override it for everything under a folder (the longest folder wins). Read at
     // startup with the rest of the disk cache settings.
@@ -199,6 +201,9 @@ struct ViewerBackdropSetting final {
     bool transparencyGrid = false;
 };
 [[nodiscard]] ViewerBackdropSetting viewerBackdropFromSettings(const QSettings& settings);
+// The largest Disk headroom the preference accepts (4096 GiB); larger stored values read as the
+// default.
+inline constexpr std::uint64_t kMaximumMediaDiskHeadroomBytes = std::uint64_t{4096} << 30U;
 inline constexpr auto kViewerBackgroundSettingKey = "viewer/background";
 inline constexpr auto kViewerTransparencyGridSettingKey = "viewer/transparency-grid";
 
