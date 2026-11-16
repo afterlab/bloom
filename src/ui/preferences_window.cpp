@@ -1239,9 +1239,6 @@ QWidget* PreferencesWindow::buildViewerPage() {
     return wrapPage(content, QStringLiteral("preferencesViewerPage"));
 }
 
-// The fixed limit the disk cache keeps while it cannot read its drive (32 GiB).
-constexpr std::uint64_t kUnreadableDriveLimit = std::uint64_t{32} << 30U;
-
 QString diskHeadroomFiguresText(
     const std::optional<media::cache::SourceMirrorStatistics>& statistics) {
     using statusbar::formatBytes;
@@ -1254,7 +1251,7 @@ QString diskHeadroomFiguresText(
         return PreferencesWindow::tr(
                    "The cache drive cannot be read · The disk cache is limited to %1 · "
                    "Disk cache %2 stored")
-            .arg(formatBytes(kUnreadableDriveLimit), formatBytes(stats.storedBytes));
+            .arg(formatBytes(media::cache::kSourceMirrorUnmeasuredByteLimit), formatBytes(stats.storedBytes));
     return PreferencesWindow::tr(
                "Keeping %1 free · Disk cache %2 of %3 available · %4 free on the cache drive")
         .arg(formatBytes(stats.headroomBytes), formatBytes(stats.storedBytes),
