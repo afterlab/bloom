@@ -275,8 +275,20 @@ class VolumeTests(unittest.TestCase):
         (self.volume / "Bloom.app").mkdir()
         (self.volume / "Applications").mkdir()
 
+    def numbers_fit(self) -> bool:
+        # An alias record holds 32-bit file numbers, which is what a disk image's volume has.
+        # The folder these tests stand in with may be on a file system with wider numbers
+        # (NTFS always, others when they are large); the tool then refuses, and says so.
+        picture = self.volume / ".background" / "dmg-background.tiff"
+        return max(picture.stat().st_ino, picture.parent.stat().st_ino) < 2**32
+
     def test_a_volume_gets_a_layout_that_read_accepts(self) -> None:
         status, _, err = run("write", "--volume", str(self.volume))
+        if not self.numbers_fit():
+            self.assertEqual(status, 1)
+            self.assertIn("32-bit file number", err)
+            self.assertFalse((self.volume / ".DS_Store").exists())
+            return
         self.assertEqual(status, 0, err)
         layout = read_json(self.volume / ".DS_Store")
         self.assertEqual(layout["window"], {"width": 660, "height": 400, "left": 200, "top": 120})
@@ -285,7 +297,10 @@ class VolumeTests(unittest.TestCase):
         self.assertEqual([path.name for path in self.volume.iterdir() if path.name.startswith(".dmg_layout")], [])
 
     def test_the_alias_carries_the_numbers_of_the_volume(self) -> None:
-        run("write", "--volume", str(self.volume))
+        status, _, err = run("write", "--volume", str(self.volume))
+        if not self.numbers_fit():
+            self.assertEqual((status, len(err.strip().splitlines())), (1, 1), err)
+            return
         data = (self.volume / ".DS_Store").read_bytes()
         icons = tool.plistlib.loads(
             next(value for name, code, _, value in records_of(data)
