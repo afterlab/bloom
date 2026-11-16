@@ -934,6 +934,26 @@ target_link_libraries(bloom_ui PUBLIC bloom_scripting)
 target_link_libraries(bloom_ui PUBLIC bloom_update)
 bloom_enable_warnings(bloom_ui)
 
+# The platform's own updater (ADR 0041). Neither library is linked: each driver loads the copy
+# inside the installed package at run time, so a test program or a build folder never needs it.
+#   * Windows: WinSparkle.dll is found by name beside the program
+#     (platform_update_driver_windows.cpp), so the driver is in every Windows build.
+#   * macOS: Sparkle's classes are found by name once the bundle's framework is loaded
+#     (platform_update_driver_macos.mm). The source needs the framework's headers, so the driver
+#     is built when the dependency prefix has the framework (dependencies/update-runtime).
+# A build without a driver says where the next version is and installs nothing.
+if(WIN32)
+    target_sources(bloom_ui PRIVATE platform_update_driver_windows.cpp)
+    target_compile_definitions(bloom_ui PRIVATE BLOOM_UI_HAS_PLATFORM_UPDATER=1)
+elseif(APPLE AND DEFINED BLOOM_DEPENDENCY_PREFIX
+       AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/sparkle/Sparkle.framework/Headers/Sparkle.h")
+    target_sources(bloom_ui PRIVATE platform_update_driver_macos.mm)
+    set_source_files_properties(platform_update_driver_macos.mm PROPERTIES
+        COMPILE_OPTIONS "-fobjc-arc;-iframework${BLOOM_DEPENDENCY_PREFIX}/sparkle")
+    target_compile_definitions(bloom_ui PRIVATE BLOOM_UI_HAS_PLATFORM_UPDATER=1)
+    target_link_libraries(bloom_ui PRIVATE "-framework Foundation")
+endif()
+
 # macOS notifications go through UNUserNotificationCenter (system_notifier_macos.mm); every other
 # platform uses QtDBus or the tray message in system_notifier.cpp.
 if(APPLE)

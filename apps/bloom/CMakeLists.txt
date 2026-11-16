@@ -25,6 +25,26 @@ if(APPLE)
     endif()
     target_sources(bloom PRIVATE macos/Bloom.icns)
     set_source_files_properties(macos/Bloom.icns PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    # What the platform's updater reads from the bundle (ADR 0041), only in a build that is set
+    # up for updates: the public key it verifies an update's archive with (the first of the
+    # build's keys), and that it neither checks by itself nor sends a profile of the computer.
+    # The address of the update list is not here; Bloom gives it at run time from its verified
+    # feed. A test build reads that list from this machine over plain HTTP, which the updater
+    # allows only with this exception; such a build is never published.
+    set(BLOOM_MACOS_UPDATER_PLIST_KEYS "")
+    if(BLOOM_UPDATE_PUBLIC_KEYS)
+        string(REGEX REPLACE ",.*$" "" bloom_update_first_key "${BLOOM_UPDATE_PUBLIC_KEYS}")
+        string(CONCAT BLOOM_MACOS_UPDATER_PLIST_KEYS
+            "\t<key>SUPublicEDKey</key>\n\t<string>${bloom_update_first_key}</string>\n"
+            "\t<key>SUEnableAutomaticChecks</key>\n\t<false/>\n"
+            "\t<key>SUAllowsAutomaticUpdates</key>\n\t<false/>\n"
+            "\t<key>SUEnableSystemProfiling</key>\n\t<false/>\n")
+        if(BLOOM_UPDATE_TEST_BUILD)
+            string(APPEND BLOOM_MACOS_UPDATER_PLIST_KEYS
+                "\t<key>NSAppTransportSecurity</key>\n\t<dict>\n"
+                "\t\t<key>NSAllowsLocalNetworking</key>\n\t\t<true/>\n\t</dict>\n")
+        endif()
+    endif()
     # The short version is the label; the build version is its compact form, which the system
     # ranks below the release (cmake/BloomVersion.cmake).
     bloom_build_version(bloom_bundle_build_version "${BLOOM_PACKAGE_VERSION}")
@@ -331,6 +351,25 @@ if(APPLE)
             VERBATIM
         )
         add_dependencies(bloom-bundle-records bloom)
+        # The platform's updater (dependencies/update-runtime), when the dependency prefix has
+        # it: the framework as published, with its own signature, and its license files. After
+        # the Qt and record steps, which start their directories afresh.
+        if(EXISTS "${BLOOM_DEPENDENCY_PREFIX}/sparkle/Sparkle.framework")
+            add_custom_target(
+                bloom-bundle-update-runtime ALL
+                COMMAND ${CMAKE_COMMAND} "-DROOT=${bloom_bundle_root}"
+                    "-DRUNTIME=${BLOOM_DEPENDENCY_PREFIX}/sparkle"
+                    "-DRECORD=${PROJECT_SOURCE_DIR}/dependencies/update-runtime/sparkle.json"
+                    "-DSOURCE=${PROJECT_SOURCE_DIR}"
+                    -DOPERATING_SYSTEM=macos
+                    "-DLIBRARY_DIR=${BLOOM_PACKAGE_LIBRARY_DIR}"
+                    "-DRECORD_DIR=${BLOOM_PACKAGE_RECORD_DIR}"
+                    -P "${bloom_package_scripts}/stage_update_runtime.cmake"
+                COMMENT "Putting the platform updater inside Bloom.app"
+                VERBATIM
+            )
+            add_dependencies(bloom-bundle-update-runtime bloom-bundle-qt bloom-bundle-records)
+        endif()
         if(bloom_bundle_python)
             set(bloom_bundle_complete ON)
         endif()
@@ -377,7 +416,7 @@ if(APPLE)
         )
         foreach(bloom_bundle_part IN ITEMS bloom-bundle-workers bloom-bundle-python
                                            bloom-bundle-qt bloom-bundle-records
-                                           bloom-bundle-assets)
+                                           bloom-bundle-assets bloom-bundle-update-runtime)
             if(TARGET ${bloom_bundle_part})
                 add_dependencies(bloom-deploy-macos ${bloom_bundle_part})
             endif()

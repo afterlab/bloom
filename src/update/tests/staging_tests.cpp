@@ -101,6 +101,52 @@ int main() {
                       "plan: without the helper nothing is started");
     }
 
+    // The plan for an update the platform's own updater installs.
+    {
+        const auto root = base / "watch";
+        UpdateFolders folders{root / "data" / "updates"};
+        InstallFacts bundle;
+        bundle.kind = InstallKind::MacBundle;
+        bundle.root = root / "Applications" / "Bloom.app";
+        const auto mac = makeWatchPlan(bundle, "2.0.0", folders, 11);
+        checks.expect(mac.mode == ApplyMode::Watch && mac.installed == bundle.root &&
+                          mac.staged.empty() &&
+                          mac.previous == folders.root / "previous" / "Bloom.app" &&
+                          mac.program == bundle.root / "Contents" / "MacOS" / "Bloom" &&
+                          mac.version == "2.0.0" && mac.processId == 11 &&
+                          mac.confirmation == folders.confirmation() &&
+                          mac.notice == folders.notice(),
+                      "watch: a bundle's previous version is kept in the update folder");
+        InstallFacts installed;
+        installed.kind = InstallKind::WindowsInstaller;
+        installed.root = root / "Programs" / "Bloom";
+        const auto windows = makeWatchPlan(installed, "2.0.0", folders, 12);
+        checks.expect(windows.mode == ApplyMode::Watch &&
+                          windows.previous.parent_path() == installed.root.parent_path() &&
+                          windows.previous.filename() == "Bloom.previous" &&
+                          windows.program == installed.root / "Bloom.exe",
+                      "watch: an installed folder's previous version is beside it");
+        checks.expect(windows.confirmTimeout > ApplyPlan{}.confirmTimeout,
+                      "watch: the helper waits longer for a start an installer comes before");
+        InstallFacts folder;
+        folder.kind = InstallKind::UserFolder;
+        folder.root = root / "opt" / "bloom";
+        checks.expect(watchedPreviousVersion(folder, folders).empty(),
+                      "watch: an install Bloom replaces itself has no watched version");
+        write(root / "helper", "helper program");
+        const auto helper = writePlanAndHelper(windows, root / "helper", folders);
+        const auto written = readApplyPlan(folders.plan());
+        checks.expect(helper.has_value() && written.has_value() &&
+                          written->mode == ApplyMode::Watch &&
+                          written->previous == windows.previous &&
+                          written->confirmTimeout == windows.confirmTimeout,
+                      "watch: the plan is written for the helper as it was made");
+        // The new version starts while the helper still watches: the plan is the helper's.
+        const auto result = settleAtStartup(folders, "2.0.0");
+        checks.expect(!result.finishPlan && std::filesystem::exists(folders.plan()),
+                      "watch: a start leaves a watched plan to the helper that watches it");
+    }
+
     // A start.
     {
         const auto root = base / "start";

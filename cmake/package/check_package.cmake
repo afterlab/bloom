@@ -501,6 +501,62 @@ if(COMPLETE AND "contents" IN_LIST ONLY AND system STREQUAL "linux")
     endif()
 endif()
 
+# The platform's own updater in a macOS or Windows package (dependencies/update-runtime): the
+# library and its record come together, and every license file the record names is there as
+# the record has it. A package without the updater is whole too (a developer's prefix has none);
+# whether a release may lack it is the release's own rule.
+if("contents" IN_LIST ONLY AND (system STREQUAL "macos" OR system STREQUAL "windows"))
+    if(system STREQUAL "macos")
+        set(updater "${libraries}/Sparkle.framework")
+    else()
+        set(updater "${libraries}/WinSparkle.dll")
+    endif()
+    set(updater_record "${records}/update-runtime.json")
+    if(EXISTS "${updater}" AND NOT EXISTS "${updater_record}")
+        bloom_shown("${updater}" shown)
+        bloom_fail("the package carries ${shown} without the record of where it came from "
+                   "(update-runtime.json)")
+    elseif(EXISTS "${updater_record}" AND NOT EXISTS "${updater}")
+        bloom_fail("the package has the update runtime's record and not the library it names")
+    elseif(EXISTS "${updater_record}")
+        file(READ "${updater_record}" updater_inventory)
+        set(updater_files "")
+        string(JSON updater_path GET "${updater_inventory}" license file path)
+        string(JSON updater_digest GET "${updater_inventory}" license file sha256)
+        list(APPEND updater_files "${updater_path}|${updater_digest}")
+        string(JSON updater_count LENGTH "${updater_inventory}" components)
+        math(EXPR updater_last "${updater_count} - 1")
+        foreach(index RANGE 0 ${updater_last})
+            string(JSON updater_file_count LENGTH "${updater_inventory}" components ${index} files)
+            math(EXPR updater_file_last "${updater_file_count} - 1")
+            foreach(file RANGE 0 ${updater_file_last})
+                string(JSON updater_path GET "${updater_inventory}"
+                       components ${index} files ${file} path)
+                string(JSON updater_digest GET "${updater_inventory}"
+                       components ${index} files ${file} sha256)
+                list(APPEND updater_files "${updater_path}|${updater_digest}")
+            endforeach()
+        endforeach()
+        list(REMOVE_DUPLICATES updater_files)
+        foreach(entry IN LISTS updater_files)
+            string(REGEX MATCH "^dependencies/update-runtime/licenses/(.*)\\|([0-9a-f]+)$"
+                   matched "${entry}")
+            set(carried "${records}/licenses/update-runtime/${CMAKE_MATCH_1}")
+            set(updater_digest "${CMAKE_MATCH_2}")
+            if(NOT matched OR NOT EXISTS "${carried}")
+                bloom_fail("no license file licenses/update-runtime/${CMAKE_MATCH_1} for the "
+                           "platform updater")
+            else()
+                file(SHA256 "${carried}" actual)
+                if(NOT actual STREQUAL updater_digest)
+                    bloom_fail("licenses/update-runtime/${CMAKE_MATCH_1} is not the file the "
+                               "update runtime's record names")
+                endif()
+            endif()
+        endforeach()
+    endif()
+endif()
+
 # --- resolution --------------------------------------------------------------------------------
 set(floors ${FLOOR})
 foreach(floor IN LISTS floors)

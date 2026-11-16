@@ -76,5 +76,5 @@
 	<true/>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
-</dict>
+${BLOOM_MACOS_UPDATER_PLIST_KEYS}</dict>
 </plist>

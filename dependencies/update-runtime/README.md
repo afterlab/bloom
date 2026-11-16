@@ -22,9 +22,17 @@ the archive's signing and appcast tools.
   and its own code signature files. Its license text goes with the other notices. The framework is
   universal (Intel and Apple silicon).
 - Windows: `WinSparkle.dll` goes beside the programs. The import library and the headers are
-  used at build time only and are not packaged. The license texts of WinSparkle and of the four
-  libraries linked into the DLL go with the other notices.
+  not packaged. The license texts of WinSparkle and of the four libraries linked into the DLL go
+  with the other notices.
 - Linux: nothing.
+
+Bloom links neither library. Each is loaded at run time from inside the package and its classes
+or functions are found by name ([ADR 0041](../../docs/decisions/0041-self-update.md), "The
+platform updaters"), so a build, a test program and a package without the library all work
+without it. The macOS driver is compiled against the framework's headers in the prefix; the
+Windows driver declares the few functions it calls as the header of this release declares them.
+A package carries the library together with the record `update-runtime.json` of the files it
+took, and the package check requires the two to agree.
 
 ## Inside WinSparkle
 

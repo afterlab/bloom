@@ -128,6 +128,38 @@ not confirm its start.
 A package tar is unpacked with the system's `tar` and `xz` programs, which the install script
 needs as well.
 
+### The platform updaters
+
+On macOS and Windows Bloom still checks and verifies its own feed first. Only then does it give
+the platform's updater the address of the appcast the feed names
+(`bloom::ui::PlatformUpdateDriver`, one driver per platform). The updater never checks by
+itself: its own automatic check, its own permission question and its system profile are off, so
+the automatic check stays Bloom's, at most once a day, behind Bloom's one switch.
+
+Neither library is linked. The macOS driver loads `Sparkle.framework` from the bundle's
+`Frameworks` folder and finds its classes by name; the Windows driver loads `WinSparkle.dll` by
+its full path from beside the program and finds its functions by name. A build folder, a test
+program and an unpacked Windows zip therefore never need the library, and a copy that lacks it
+simply has no driver: the update window then says where the next version is. The driver exists
+only in a build with an update key, for a copy the platform's updater can replace (`Bloom.app`,
+or a copy the Windows installer installed).
+
+Before the installation is replaced, the driver starts the helper in its watch mode:
+
+- macOS: when Sparkle is about to replace the bundle and start Bloom again, the installed bundle
+  is copied to `previous/Bloom.app` in the update folder (a clone on the system's own volume
+  format, made off the interface thread), and the helper is started with a plan that names it.
+- Windows: WinSparkle first asks whether Bloom can close. Bloom answers yes only when nothing is
+  unsaved and nothing is running, because the installer needs Bloom gone and a close that stops
+  to ask would leave it waiting. WinSparkle then starts the installer, which waits for Bloom to
+  close and renames the installed folder to `<folder>.previous`; Bloom starts the helper with a
+  plan that names that folder, and closes.
+
+The helper waits for Bloom to exit and then for the new version to confirm its start. The wait
+is long (15 minutes), because the installation itself happens inside it. When the confirmation
+does not come and the kept version exists, the helper puts it back, starts it and leaves the
+notice that version shows. When the watch cannot be started the update goes on without it.
+
 ### The AppImage's delta
 
 An AppImage is one large file of which little changes between two alphas, so a release publishes

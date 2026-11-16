@@ -252,9 +252,14 @@ end;
 // Bloom's updater can put it back when the new version does not start (ADR 0041). When the
 // folder cannot be renamed (a file in it is in use) the upgrade goes on over the existing
 // folder and no previous version is kept.
+//
+// Bloom's updater starts this installer and then closes Bloom (/RELAUNCH=1), so the folder is
+// still in use for a moment. In that run the rename is tried again for up to a minute, until
+// Bloom has gone.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Folder, Previous: String;
+  Tries: Integer;
 begin
   Result := '';
   Folder := RemoveBackslash(ExpandConstant('{app}'));
@@ -263,8 +268,19 @@ begin
   Previous := Folder + '.previous';
   if DirExists(Previous) then
     DelTree(Previous, True, True, True);
-  if not RenameFile(Folder, Previous) then
-    Log('The installed folder could not be renamed; installing over it.');
+  Tries := 1;
+  if RelaunchRequested() then
+    Tries := 120;
+  while not RenameFile(Folder, Previous) do
+  begin
+    Tries := Tries - 1;
+    if Tries <= 0 then
+    begin
+      Log('The installed folder could not be renamed; installing over it.');
+      Exit;
+    end;
+    Sleep(500);
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

@@ -56,6 +56,20 @@ void removeStagingLeftovers(const std::filesystem::path& installed);
                                      std::string_view version, const UpdateFolders& folders,
                                      std::uint64_t processId);
 
+// Where the version a platform's own updater replaces is kept for going back: beside the
+// installation on Windows (the next installer moves the installed folder there), and in the
+// update folder on macOS (Bloom copies the bundle there before the updater installs). Empty for
+// an install no platform updater replaces.
+[[nodiscard]] std::filesystem::path watchedPreviousVersion(const InstallFacts& install,
+                                                           const UpdateFolders& folders);
+
+// The plan for the helper to watch an update the platform's own updater installs (Sparkle, or
+// the Windows installer that WinSparkle starts): it waits for Bloom to exit and for `version` to
+// confirm its start, and puts the kept previous version back when it does not. The installer
+// may take a while, so the helper waits longer for the start than after a swap of its own.
+[[nodiscard]] ApplyPlan makeWatchPlan(const InstallFacts& install, std::string_view version,
+                                      const UpdateFolders& folders, std::uint64_t processId);
+
 // Copies the helper out of the installation (which it is about to move) and writes the plan.
 // The path of the copy to start with `--plan <folders.plan()>`, or nothing.
 [[nodiscard]] std::optional<std::filesystem::path>

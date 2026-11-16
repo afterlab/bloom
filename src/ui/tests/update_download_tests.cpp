@@ -3,6 +3,7 @@
 // hand-over to the helper. The server is on this machine, inside the test.
 #include "update_test_support.hpp"
 
+#include <bloom/ui/platform_update_driver.hpp>
 #include <bloom/update/apply.hpp>
 
 #include <QCoreApplication>
@@ -257,10 +258,52 @@ void testDownload() {
     }
 }
 
+// The watch a platform updater's install runs under: the helper is given a plan that names the
+// kept previous version and the program whose start it waits for.
+void testWatch() {
+    Loopback server;
+    Bench bench("watch");
+    auto environment = bench.environment(server.origin());
+    environment.install.kind = update::InstallKind::WindowsInstaller;
+    environment.install.root = bench.root / "Programs" / "Bloom";
+    environment.processId = 4242;
+    auto started = std::make_shared<std::vector<std::filesystem::path>>();
+    environment.startHelper = [started](const std::filesystem::path& helper,
+                                        const std::filesystem::path& plan) {
+        started->push_back(helper);
+        started->push_back(plan);
+        return true;
+    };
+    expect(!ui::startUpdateWatch(environment, "0.2.0-alpha.3") && started->empty(),
+           "watch: nothing is started for a copy without a helper");
+
+    environment.installedHelper = bench.root / "helper-in-package";
+    std::ofstream(environment.installedHelper) << "helper\n";
+    expect(ui::startUpdateWatch(environment, "0.2.0-alpha.3"), "watch: the helper is started");
+    const auto plan = update::readApplyPlan(environment.folders.plan());
+    expect(started->size() == 2 && started->front() == environment.folders.helper() &&
+               started->back() == environment.folders.plan() &&
+               std::filesystem::exists(environment.folders.helper()),
+           "watch: the helper's copy is started with the plan");
+    expect(plan.has_value() && plan->mode == update::ApplyMode::Watch &&
+               plan->version == "0.2.0-alpha.3" && plan->processId == 4242 &&
+               plan->installed == environment.install.root &&
+               plan->previous == bench.root / "Programs" / "Bloom.previous" &&
+               plan->program == environment.install.root / "Bloom.exe",
+           "watch: the plan names the kept version and the program to wait for");
+
+    // A copy that no platform updater replaces is never watched.
+    started->clear();
+    environment.install.kind = update::InstallKind::UserFolder;
+    expect(!ui::startUpdateWatch(environment, "0.2.0-alpha.3") && started->empty(),
+           "watch: nothing is started for a copy Bloom updates itself");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     testDownload();
+    testWatch();
     return failures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

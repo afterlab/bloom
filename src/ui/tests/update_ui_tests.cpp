@@ -238,7 +238,11 @@ void stage(ui::UpdateEnvironment& environment, const std::filesystem::path& stag
 
 struct DriverStandIn final : ui::PlatformUpdateDriver {
     std::vector<std::string> shown;
-    void showUpdate(const std::string& appcastUrl) override { shown.push_back(appcastUrl); }
+    std::vector<std::string> versions;
+    void showUpdate(const std::string& appcastUrl, const std::string& version) override {
+        shown.push_back(appcastUrl);
+        versions.push_back(version);
+    }
 };
 
 [[nodiscard]] QByteArray newer() { return fixture("feed.json"); }

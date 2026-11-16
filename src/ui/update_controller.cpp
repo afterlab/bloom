@@ -243,7 +243,9 @@ void UpdateController::onCheckFinished(const bool automatic) {
         if (!window_.isNull()) {
             window_->hide();
         }
-        driver_->showUpdate(check->decision.appcastUrl);
+        driver_->showUpdate(check->decision.appcastUrl,
+                            check->feed.has_value() ? check->feed->version.text()
+                                                    : std::string{});
         return;
     }
     if (!automatic) {

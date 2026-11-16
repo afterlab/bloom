@@ -1,7 +1,9 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace bloom::ui {
 
@@ -20,15 +22,31 @@ class PlatformUpdateDriver {
     PlatformUpdateDriver& operator=(const PlatformUpdateDriver&) = delete;
     virtual ~PlatformUpdateDriver() = default;
 
-    // Shows the platform updater's window for the update at this list. `appcastUrl` comes from
-    // a verified feed and nowhere else.
-    virtual void showUpdate(const std::string& appcastUrl) = 0;
+    // Shows the platform updater's window for the update at this list. `appcastUrl` and
+    // `version` (the new version's label) come from a verified feed and nowhere else.
+    virtual void showUpdate(const std::string& appcastUrl, const std::string& version) = 0;
 };
+
+// What a driver asks of the application. Both are called on the interface thread.
+struct PlatformUpdateHooks final {
+    // True when Bloom can close at once, without a question: nothing unsaved, nothing running.
+    // The platform's updater asks before it starts an installer that needs Bloom closed.
+    std::function<bool()> readyToClose;
+    // Closes Bloom the normal way.
+    std::function<void()> requestClose;
+};
+
+// Starts the update helper in its watch mode for `version`, which the platform's updater is
+// about to install: the helper waits for Bloom to exit and for that version to confirm its
+// start, and puts the kept previous version back when it does not (ADR 0041). False when the
+// install has no helper or the plan could not be written; the update then goes on unwatched.
+[[nodiscard]] bool startUpdateWatch(const UpdateEnvironment& environment,
+                                    std::string_view version);
 
 // The driver of this platform and install, or nothing where Bloom installs updates itself
 // (Linux), where the copy is not one the platform's updater can replace, or in a build without
 // the updater's library.
 [[nodiscard]] std::unique_ptr<PlatformUpdateDriver>
-makePlatformUpdateDriver(const UpdateEnvironment& environment);
+makePlatformUpdateDriver(const UpdateEnvironment& environment, PlatformUpdateHooks hooks);
 
 } // namespace bloom::ui

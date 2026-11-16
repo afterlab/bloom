@@ -185,6 +185,41 @@ ApplyPlan makeSwapPlan(const InstallFacts& install, const std::filesystem::path&
     return plan;
 }
 
+std::filesystem::path watchedPreviousVersion(const InstallFacts& install,
+                                             const UpdateFolders& folders) {
+    switch (install.kind) {
+    case InstallKind::MacBundle:
+        return folders.root / "previous" / install.root.filename();
+    case InstallKind::WindowsInstaller:
+        return beside(install.root, ".previous");
+    case InstallKind::Development:
+    case InstallKind::WindowsPortable:
+    case InstallKind::AppImage:
+    case InstallKind::UserFolder:
+    case InstallKind::ReadOnlyFolder:
+    case InstallKind::PackageManager:
+        break;
+    }
+    return {};
+}
+
+ApplyPlan makeWatchPlan(const InstallFacts& install, const std::string_view version,
+                        const UpdateFolders& folders, const std::uint64_t processId) {
+    ApplyPlan plan;
+    plan.mode = ApplyMode::Watch;
+    plan.processId = processId;
+    plan.installed = install.root;
+    plan.previous = watchedPreviousVersion(install, folders);
+    plan.program = install.kind == InstallKind::MacBundle
+                       ? install.root / "Contents" / "MacOS" / "Bloom"
+                       : install.root / "Bloom.exe";
+    plan.confirmation = folders.confirmation();
+    plan.notice = folders.notice();
+    plan.version = std::string(version);
+    plan.confirmTimeout = std::chrono::minutes(15);
+    return plan;
+}
+
 std::optional<std::filesystem::path>
 writePlanAndHelper(const ApplyPlan& plan, const std::filesystem::path& installedHelper,
                    const UpdateFolders& folders) {

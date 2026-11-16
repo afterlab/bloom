@@ -1042,7 +1042,15 @@ int main(int argc, char* argv[]) try {
     // joins Help > Check for Updates, the window and the automatic check to it.
     bloom::ui::UpdateService updateService(taskScheduler, taskUiBridge,
                                            bloom::ui::applicationUpdateEnvironment());
-    const auto updateDriver = bloom::ui::makePlatformUpdateDriver(updateService.environment());
+    const auto updateDriver = bloom::ui::makePlatformUpdateDriver(
+        updateService.environment(),
+        {.readyToClose =
+             [&projectHost] {
+                 const auto* exports = projectHost.exportQueue();
+                 return !projectHost.isBusy() && !projectHost.isDirty() &&
+                        (exports == nullptr || exports->activeJobCount() == 0);
+             },
+         .requestClose = [&window] { window.close(); }});
     bloom::ui::UpdateController updateController(
         updateService, updateDriver.get(),
         bloom::ui::applicationUpdateHooks([&window] { window.close(); }), window);

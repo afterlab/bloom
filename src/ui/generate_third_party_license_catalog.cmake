@@ -166,6 +166,57 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endforeach()
 endif()
 
+# A macOS or Windows package carries the platform's own updater
+# (dependencies/update-runtime): the license files its record names, one entry for each part
+# that is inside it. The first part is the updater itself and has its name; the others are
+# named after it, because the lock has libraries of the same names in other versions.
+set(_bloom_update_runtime_record "")
+if(APPLE)
+    set(_bloom_update_runtime_record "sparkle.json")
+elseif(WIN32)
+    set(_bloom_update_runtime_record "winsparkle.json")
+endif()
+if(_bloom_update_runtime_record)
+    set(_bloom_update_runtime_root
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../dependencies/update-runtime")
+    file(READ "${_bloom_update_runtime_root}/${_bloom_update_runtime_record}"
+         _bloom_update_runtime_inventory)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${_bloom_update_runtime_root}/${_bloom_update_runtime_record}")
+    string(JSON _bloom_update_runtime_title GET "${_bloom_update_runtime_inventory}" name)
+    string(JSON _bloom_update_runtime_count LENGTH "${_bloom_update_runtime_inventory}" components)
+    math(EXPR _bloom_update_runtime_last "${_bloom_update_runtime_count} - 1")
+    foreach(_bloom_i RANGE 0 ${_bloom_update_runtime_last})
+        string(JSON _bloom_update_runtime_name GET "${_bloom_update_runtime_inventory}"
+               components ${_bloom_i} name)
+        if(_bloom_i EQUAL 0)
+            set(_bloom_update_runtime_name "${_bloom_update_runtime_title}")
+        else()
+            set(_bloom_update_runtime_name
+                "${_bloom_update_runtime_title}: ${_bloom_update_runtime_name}")
+        endif()
+        string(JSON _bloom_update_runtime_file_count LENGTH "${_bloom_update_runtime_inventory}"
+               components ${_bloom_i} files)
+        set(_bloom_update_runtime_files "")
+        math(EXPR _bloom_update_runtime_file_last "${_bloom_update_runtime_file_count} - 1")
+        foreach(_bloom_j RANGE 0 ${_bloom_update_runtime_file_last})
+            string(JSON _bloom_update_runtime_path GET "${_bloom_update_runtime_inventory}"
+                   components ${_bloom_i} files ${_bloom_j} path)
+            set(_bloom_update_runtime_file
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../${_bloom_update_runtime_path}")
+            if(NOT EXISTS "${_bloom_update_runtime_file}")
+                message(FATAL_ERROR
+                    "${_bloom_update_runtime_path} does not exist -- the Open Source Licenses "
+                    "window would ship without the license of ${_bloom_update_runtime_name}.")
+            endif()
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                "${_bloom_update_runtime_file}")
+            list(APPEND _bloom_update_runtime_files "${_bloom_update_runtime_file}")
+        endforeach()
+        _bloom_license_add_entry("${_bloom_update_runtime_name}" ${_bloom_update_runtime_files})
+    endforeach()
+endif()
+
 list(LENGTH _bloom_license_component_names _bloom_license_component_count)
 if(_bloom_license_component_count EQUAL 0)
     message(FATAL_ERROR

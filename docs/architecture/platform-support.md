@@ -326,6 +326,15 @@ its own names as soon as the check's variable is set, and when the value is not 
 directory it refuses to start rather than run as Bloom. On Linux the run is offered no GPU
 driver, so that what it loads does not depend on the machine's.
 
+The macOS bundle and the Windows package also carry the platform's updater when the dependency
+prefix has it: `Sparkle.framework` in `Frameworks`, `WinSparkle.dll` beside the programs
+([ADR 0041](../decisions/0041-self-update.md), `dependencies/update-runtime/README.md`).
+`cmake/package/stage_update_runtime.cmake` copies the library, its license texts and the record
+`update-runtime.json`, and the check fails when a package has the library without the record,
+the record without the library, or a license text that is not the one the record names. Bloom
+loads the library at run time and links nothing of it, so a package without it starts and runs
+the same and only has no platform updater.
+
 The `bloom.package.check` test runs the check on the package of the build and then on a copy
 broken in each way that matters: the interpreter removed, a license file removed or changed, a
 program made to load a library from outside, a program given a search path outside the

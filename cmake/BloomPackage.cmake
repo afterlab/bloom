@@ -127,6 +127,26 @@ function(bloom_add_package_rules)
                         -P \"${scripts}/stage_msvc_runtime.cmake\"
                     COMMAND_ERROR_IS_FATAL ANY)
             ")
+            # The platform's updater (dependencies/update-runtime), when the dependency prefix
+            # has it: WinSparkle.dll beside the programs, which Bloom loads from there when an
+            # installed copy shows an update, and its license files.
+            if(EXISTS "${BLOOM_DEPENDENCY_PREFIX}/winsparkle/x64/Release/WinSparkle.dll")
+                install(CODE "
+                    execute_process(
+                        COMMAND \"${CMAKE_COMMAND}\" \"-DROOT=\${bloom_package_root}\"
+                            \"-DRUNTIME=${BLOOM_DEPENDENCY_PREFIX}/winsparkle\"
+                            \"-DRECORD=${PROJECT_SOURCE_DIR}/dependencies/update-runtime/winsparkle.json\"
+                            \"-DSOURCE=${PROJECT_SOURCE_DIR}\"
+                            -DOPERATING_SYSTEM=windows
+                            \"-DLIBRARY_DIR=${BLOOM_PACKAGE_LIBRARY_DIR}\"
+                            \"-DRECORD_DIR=${BLOOM_PACKAGE_RECORD_DIR}\"
+                            -P \"${scripts}/stage_update_runtime.cmake\"
+                        COMMAND_ERROR_IS_FATAL ANY)
+                ")
+            else()
+                message(STATUS "Bloom package: no platform updater (the dependency prefix has no "
+                               "WinSparkle); an installed copy says where the next version is")
+            endif()
             # The program of the `cli` folder, which the installer's PATH option adds to the
             # user's PATH (apps/bloom-cli-launcher/main.cpp). Installed after the runtime is
             # staged, so that no runtime library is copied into `cli` beside it: that folder
