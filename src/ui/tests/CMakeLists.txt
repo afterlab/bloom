@@ -3490,3 +3490,17 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                    LABELS ui integration update TIMEOUT 120
                    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
+
+# #734: Help > Install Command-Line Tool… and the link it makes: every outcome of the link
+# function in a temporary folder, the administrator prompt's arguments, and the menu item
+# (present on macOS, absent elsewhere). Linux and macOS only: Windows has no such link, its PATH
+# entry is the launcher the installer adds (bloom.package.installers).
+if(NOT WIN32)
+    add_executable(bloom_cli_link_test command_line_tool_link_tests.cpp)
+    target_link_libraries(bloom_cli_link_test PRIVATE bloom_ui)
+    bloom_enable_warnings(bloom_cli_link_test)
+    bloom_add_test(NAME bloom.ui.cli_link_tests
+                   COMMAND bloom_cli_link_test
+                   LABELS ui update TIMEOUT 120
+                   ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()

@@ -1,0 +1,35 @@
+#!/bin/sh
+# Runs as the last step of installing Bloom's installer package (cmake/package/make_macos_installers.cmake).
+# The installer passes four arguments: the package, the install location, the target volume and
+# the system root of the target volume. Only the target volume matters here.
+#
+# Links <volume>/usr/local/bin/bloom-cli to the program inside the installed bundle, the same link
+# Help > Install Command-Line Tool... makes. The link text is the path as the installed system
+# sees it, so it never contains the volume. A link is a convenience and never stops an install:
+# whatever cannot be done is said on standard error and the script still succeeds. A file that is
+# not a link and has the name is left alone.
+
+umask 022
+
+volume="${3:-/}"
+case "$volume" in
+    /) volume="" ;;
+    */) volume="${volume%/}" ;;
+esac
+
+program="/Applications/Bloom.app/Contents/MacOS/bloom-cli"
+folder="$volume/usr/local/bin"
+link="$folder/bloom-cli"
+
+if [ -e "$link" ] && [ ! -L "$link" ]; then
+    echo "Bloom: $link is not a link, so it was left as it is." >&2
+    exit 0
+fi
+if [ ! -d "$folder" ] && ! /bin/mkdir -p "$folder"; then
+    echo "Bloom: $folder could not be made, so bloom-cli was not linked." >&2
+    exit 0
+fi
+if ! /bin/ln -sfn "$program" "$link"; then
+    echo "Bloom: $link could not be made." >&2
+fi
+exit 0

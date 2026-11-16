@@ -18,6 +18,7 @@ class QCloseEvent;
 class QLabel;
 class QMenu;
 class QMenuBar;
+class QProcess;
 class QJsonArray;
 class QJsonValue;
 class QSettings;
@@ -170,6 +171,10 @@ class MainWindow final : public QMainWindow {
     // null leaves the item present and doing nothing.
     void setUpdateController(UpdateController* controller) { updateController_ = controller; }
     [[nodiscard]] QAction* checkForUpdatesAction() const noexcept { return checkForUpdatesAction_; }
+    // Help > Install Command-Line Tool… (#734): macOS only; null on the other platforms.
+    [[nodiscard]] QAction* installCommandLineToolAction() const noexcept {
+        return installCommandLineToolAction_;
+    }
     // Test-only seam (same terms as the other test/diagnostic accessors): applies committed
     // preferences exactly as the Preferences dialog's approved path does, without presenting the
     // modal dialog, so a test can assert the View action mirror and the open-editor propagation.
@@ -210,6 +215,8 @@ class MainWindow final : public QMainWindow {
     void createViewMenu(QMenu& viewMenu);
     void revealMcpServerPanel();
     void createHelpMenu(QMenu& helpMenu);
+    // macOS: Help > Install Command-Line Tool… (command_line_tool_link.hpp).
+    void installCommandLineTool();
     void updatePurgeActions();
     void createEditorLayout(const EditorRegistry& editorRegistry);
     void connectWorkspaceHost(WorkspaceHost& host);
@@ -312,6 +319,9 @@ class MainWindow final : public QMainWindow {
     QAction* viewMaximizePanelAction_ = nullptr;
     QAction* viewAudioEnabledAction_ = nullptr;
     QAction* checkForUpdatesAction_ = nullptr;
+    QAction* installCommandLineToolAction_ = nullptr;
+    // The administrator prompt's helper process while one runs (installCommandLineTool).
+    QPointer<QProcess> installCommandLineToolProcess_;
     UpdateController* updateController_ = nullptr;
     QAction* reportIssueAction_ = nullptr;
     QAction* openSourceLicensesAction_ = nullptr;

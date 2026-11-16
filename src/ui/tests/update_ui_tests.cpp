@@ -257,8 +257,15 @@ void testHelpMenu() {
     if (help != nullptr && report != nullptr) {
         const auto actions = help->actions();
         const auto at = actions.indexOf(action);
+#ifdef Q_OS_MACOS
+        // macOS has Install Command-Line Tool… right after it.
+        ordered = at == 0 && actions.size() > 3 &&
+                  actions[1] == window.installCommandLineToolAction() &&
+                  actions[2]->isSeparator() && actions[3] == report;
+#else
         ordered = at == 0 && actions.size() > 2 && actions[1]->isSeparator() &&
                   actions[2] == report;
+#endif
     }
     expect(ordered, "help menu: it is first, with a separator before Report an Issue…");
 

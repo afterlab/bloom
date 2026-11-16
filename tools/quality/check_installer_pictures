@@ -87,7 +87,9 @@ def main() -> int:
     for name in sorted(MASTERS):
         if not (FOLDER / name).is_file():
             problems.append(f"apps/bloom/installer/{name} is missing")
-    allowed = set(expected) | MASTERS
+    # The disk image window's layout is made once on a Mac and may not be there yet
+    # (docs/architecture/platform-support.md, "Installers").
+    allowed = set(expected) | MASTERS | {"macos/dmg-DS_Store"}
     for folder in ("macos", "windows"):
         for path in sorted((FOLDER / folder).iterdir()) if (FOLDER / folder).is_dir() else []:
             name = f"{folder}/{path.name}"

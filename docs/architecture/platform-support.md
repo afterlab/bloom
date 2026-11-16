@@ -722,6 +722,54 @@ The 0.1.0 zip was unpacked into a second folder with a space in its name on the 
 it: the signature verifies, and the package check with a run passes there with only the
 system's directories on `PATH`. A second Mac was not available.
 
+### Installers
+
+`bloom-package-archives` makes three files from the signed bundle, side by side in
+`<build>/package`. The zip is what the updater downloads. The other two are for people.
+`cmake/package/make_macos_installers.cmake` makes them. It copies the bundle with `ditto`, so the
+links and signatures survive, and signs nothing again.
+
+- `Bloom-<version>-macos-<processor>.dmg` is the disk image. Its volume is named `Bloom`. It
+  holds `Bloom.app`, a link named `Applications` to `/Applications`, and the background picture
+  in the hidden folder `.background` as one TIFF with both sizes (660 x 400 and 1320 x 800; the
+  pictures are in `apps/bloom/installer/macos`). When the file
+  `apps/bloom/installer/macos/dmg-DS_Store` is checked in, it is copied into the image as
+  `.DS_Store`: that is the window's size, icon view, background and icon places. Without it the
+  image opens with the system's default window.
+- `Bloom-<version>-macos-<processor>.pkg` installs `Bloom.app` into `/Applications` with no
+  window (`installer -pkg`). The app always goes to `/Applications`, never over another copy found
+  elsewhere, and an older package may be installed over a newer version. Its `postinstall` script
+  (`packaging/macos/postinstall`) links `/usr/local/bin/bloom-cli` to the program in the bundle. A
+  link that cannot be made never stops the installation, and a file that is not a link and has that
+  name is left alone.
+
+Help > Install Command-Line Tool... (macOS only) makes the same link from a copy of Bloom that was
+dragged out of the disk image or unpacked from the zip. It links `/usr/local/bin/bloom-cli` to the
+`bloom-cli` beside the running program. A link to another copy is changed, and a file that is not
+a link is never deleted. When this user cannot write `/usr/local/bin`, the system's administrator
+prompt makes the link; the program's path is passed to the prompt's script as an argument. The
+function behind it (`src/ui/command_line_tool_link.cpp`) uses only `std::filesystem`.
+
+Making the window layout file, once, on a Mac: make the image, open it read-write
+(`hdiutil convert <image>.dmg -format UDRW -o rw.dmg`, then open `rw.dmg`), and choose
+View > Show View Options. Set icon view, icon size 100, and the background picture
+`.background/dmg-background.tiff`. Set the window to 660 x 400 and hide the toolbar and status
+bar. Put the `Bloom` icon on the left mark of the picture (center 165, 180) and `Applications`
+on the right mark (center 495, 180). Eject the image, mount it again, and copy its `.DS_Store`
+to `apps/bloom/installer/macos/dmg-DS_Store`. The volume is always named `Bloom`, so the layout
+keeps finding its picture.
+
+The `bloom.package.installers` test (macOS here; Windows has a test of the same name) copies the
+built bundle, signs the copy, makes both installers from it and looks inside them. It attaches
+the image read-only and without showing it, and checks the application, the `Applications` link
+and its target, the background file and its two pictures, the layout file when there is one, and
+that the signature still verifies. It expands the package and checks the payload, the install
+location, that the app is not relocatable or version checked, and that the postinstall script is
+executable and is the checked-in one. It runs the script with a target volume inside its work
+folder and checks the link. It never runs `installer -pkg` and never writes outside its work
+folder. A linked `bloom-cli` renders a frame headless through the installed package in
+`bloom.package.check`.
+
 ### Worker Memory
 
 Bloom runs media, color and export work in worker processes, each launched with a memory budget

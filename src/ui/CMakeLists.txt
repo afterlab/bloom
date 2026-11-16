@@ -554,6 +554,7 @@ target_sources(
         mcp_server_text.cpp
         licenses_window.cpp
         main_window.cpp
+        command_line_tool_link.cpp
         assets_editor.cpp
         assets_editor_model.cpp
         assets_editor_tree.cpp
@@ -814,6 +815,7 @@ target_sources(
             include/bloom/ui/ui_feedback.hpp
             include/bloom/ui/ui_sound_engine.hpp
             include/bloom/ui/main_window.hpp
+            include/bloom/ui/command_line_tool_link.hpp
             include/bloom/ui/viewer_preview_pool.hpp
             include/bloom/ui/workspace_window.hpp
             include/bloom/ui/assets_editor.hpp

@@ -25,9 +25,14 @@
 #                         control file, on a stand-in tree (cmake/package/make_archives_test.cmake)
 #   bloom.package.installers   (Windows) installs, upgrades and uninstalls the installer under a
 #                         test identity (cmake/package/check_windows_installer.cmake)
+#   bloom.package.installers   (macOS) makes the disk image and the installer package from a
+#                         signed copy of the bundle and looks inside both, without installing
+#                         anything (cmake/package/check_macos_installers.cmake)
 #
 # macOS: the bundle is filled in the build tree by apps/bloom/CMakeLists.txt with the same
-# scripts, so that it can be signed once it is complete; installing copies it.
+# scripts, so that it can be signed once it is complete; installing copies it. Its
+# bloom-package-archives makes the zip, the disk image and the installer package
+# (cmake/package/make_macos_installers.cmake, packaging/macos/postinstall).
 include_guard(GLOBAL)
 include(BloomPackageLayout)
 
@@ -268,6 +273,23 @@ function(bloom_add_package_rules)
                     "-DSOURCE=${PROJECT_SOURCE_DIR}" "-DVERSION=${BLOOM_PACKAGE_VERSION}"
                     "-DWORK=${CMAKE_BINARY_DIR}/package-installer-test"
                     -P "${scripts}/check_windows_installer.cmake"
+                LABELS package integration
+                RUN_SERIAL
+                TIMEOUT 1800)
+            set_tests_properties(bloom.package.installers PROPERTIES
+                SKIP_REGULAR_EXPRESSION "SKIPPED:")
+        endif()
+        if(APPLE)
+            # macOS only: the disk image and the installer package are made and read by macOS
+            # programs (hdiutil, pkgbuild, pkgutil, tiffutil, codesign). Same name as the Windows
+            # test: one platform registers one. It makes both installers from a signed copy of
+            # the built bundle and never runs `installer -pkg`, which needs an administrator.
+            bloom_add_test(
+                NAME bloom.package.installers
+                COMMAND ${CMAKE_COMMAND} "-DBUNDLE=$<TARGET_BUNDLE_DIR:bloom>"
+                    "-DSOURCE=${PROJECT_SOURCE_DIR}"
+                    "-DWORK=${CMAKE_BINARY_DIR}/package-installer-test"
+                    -P "${scripts}/check_macos_installers.cmake"
                 LABELS package integration
                 RUN_SERIAL
                 TIMEOUT 1800)

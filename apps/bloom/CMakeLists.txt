@@ -382,18 +382,28 @@ if(APPLE)
                 add_dependencies(bloom-deploy-macos ${bloom_bundle_part})
             endif()
         endforeach()
-        # The published form of the macOS package: the deployed bundle as a zip, made by the
-        # system's ditto so the links inside the frameworks and the signatures survive.
+        # The published forms of the macOS package: the deployed bundle as a zip, made by the
+        # system's ditto so the links inside the frameworks and the signatures survive (the
+        # updater downloads the zip), and beside it the disk image and the installer package
+        # (cmake/package/make_macos_installers.cmake).
         if(bloom_bundle_complete)
             string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" bloom_zip_processor)
-            set(bloom_macos_zip
-                "${CMAKE_BINARY_DIR}/package/Bloom-${BLOOM_PACKAGE_VERSION}-macos-${bloom_zip_processor}.zip")
+            set(bloom_macos_package_name
+                "Bloom-${BLOOM_PACKAGE_VERSION}-macos-${bloom_zip_processor}")
+            set(bloom_macos_zip "${CMAKE_BINARY_DIR}/package/${bloom_macos_package_name}.zip")
             add_custom_target(
                 bloom-package-archives
                 COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/package"
                 COMMAND ${CMAKE_COMMAND} -E rm -f "${bloom_macos_zip}"
                 COMMAND ditto -c -k --keepParent "$<TARGET_BUNDLE_DIR:bloom>" "${bloom_macos_zip}"
-                COMMENT "Making the zip of the deployed Bloom.app"
+                COMMAND ${CMAKE_COMMAND} "-DBUNDLE=$<TARGET_BUNDLE_DIR:bloom>"
+                    "-DSOURCE=${PROJECT_SOURCE_DIR}" "-DVERSION=${BLOOM_PACKAGE_VERSION}"
+                    "-DBUILD_VERSION=${bloom_bundle_build_version}"
+                    "-DOUTPUT=${CMAKE_BINARY_DIR}/package"
+                    "-DWORK=${CMAKE_BINARY_DIR}/package/installer-work"
+                    "-DNAME=${bloom_macos_package_name}"
+                    -P "${bloom_package_scripts}/make_macos_installers.cmake"
+                COMMENT "Making the zip, the disk image and the installer package of the deployed Bloom.app"
                 VERBATIM
             )
             add_dependencies(bloom-package-archives bloom-deploy-macos)

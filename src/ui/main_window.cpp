@@ -5,6 +5,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <bloom/ui/asset_controller.hpp>
+#include <bloom/ui/command_line_tool_link.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dialog_prompts.hpp>
 #include <bloom/ui/main_window.hpp>
@@ -51,6 +52,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QCoreApplication>
 #include <QDesktopServices>
 #include <QDialog>
 #include <QAbstractSpinBox>
@@ -61,6 +63,7 @@
 #include <QKeySequence>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QProcess>
 #include <QTextEdit>
 #include <QLabel>
 #include <QLatin1StringView>
@@ -974,6 +977,16 @@ void MainWindow::createHelpMenu(QMenu& helpMenu) {
         if (updateController_ != nullptr)
             updateController_->checkNow();
     });
+#ifdef Q_OS_MACOS
+    // "Install Command-Line Tool…" (#734): links /usr/local/bin/bloom-cli into this bundle. Only
+    // macOS has the item: Linux packages carry the install script's link, and the Windows
+    // installer adds the launcher's folder to PATH.
+    installCommandLineToolAction_ = helpMenu.addAction(tr("Install Command-Line Tool…"));
+    installCommandLineToolAction_->setObjectName(QStringLiteral("installCommandLineToolAction"));
+    installCommandLineToolAction_->setMenuRole(QAction::NoRole);
+    connect(installCommandLineToolAction_, &QAction::triggered, this,
+            [this] { installCommandLineTool(); });
+#endif
     helpMenu.addSeparator();
 
     // "Report an Issue…" (decision 2): opens the repository's issue tracker via QDesktopServices,
@@ -1620,5 +1633,89 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         setActiveWorkspaceHost(workspaceHost_);
     return QMainWindow::eventFilter(watched, event);
 }
+
+#ifdef Q_OS_MACOS
+void MainWindow::installCommandLineTool() {
+    if (installCommandLineToolProcess_ != nullptr &&
+        installCommandLineToolProcess_->state() != QProcess::NotRunning) {
+        return; // the administrator prompt is already open
+    }
+    const std::filesystem::path program =
+        std::filesystem::path(QCoreApplication::applicationDirPath().toStdString()) /
+        "bloom-cli";
+    const QString linkPath = QString::fromStdString(
+        (std::filesystem::path(kCommandLineToolLinkFolder) / kCommandLineToolLinkName).string());
+    const auto noticeName = QStringLiteral("installCommandLineToolNotice");
+    const auto title = tr("Install Command-Line Tool");
+
+    switch (linkCommandLineTool(program, kCommandLineToolLinkFolder)) {
+    case CommandLineToolLinkOutcome::Linked:
+        kit::inform(*this, kit::KPromptTone::Info, title,
+                    tr("bloom-cli is now on your PATH as %1").arg(linkPath), {}, noticeName);
+        return;
+    case CommandLineToolLinkOutcome::Replaced:
+        kit::inform(*this, kit::KPromptTone::Info, title,
+                    tr("bloom-cli is now on your PATH as %1").arg(linkPath),
+                    tr("The link named another copy of Bloom. It now names this one."), noticeName);
+        return;
+    case CommandLineToolLinkOutcome::AlreadyLinked:
+        kit::inform(*this, kit::KPromptTone::Info, title,
+                    tr("bloom-cli is already on your PATH as %1").arg(linkPath), {}, noticeName);
+        return;
+    case CommandLineToolLinkOutcome::Blocked:
+        kit::inform(*this, kit::KPromptTone::Warning, title,
+                    tr("%1 is not a link Bloom made").arg(linkPath),
+                    tr("A file with that name is already there, so Bloom left it alone. Move or "
+                       "delete it, then try again."),
+                    noticeName);
+        return;
+    case CommandLineToolLinkOutcome::NeedsAdministrator:
+        break;
+    }
+
+    // This user cannot write the folder: the system asks for an administrator password and makes
+    // the link. The program's path goes in as an argument of the script, never into its text.
+    auto* process = new QProcess(this);
+    installCommandLineToolProcess_ = process;
+    connect(process, &QProcess::finished, this,
+            [this, process, linkPath, title, noticeName](int exitCode, QProcess::ExitStatus status) {
+                const QString errorText =
+                    QString::fromUtf8(process->readAllStandardError()).trimmed();
+                process->deleteLater();
+                if (status == QProcess::NormalExit && exitCode == 0) {
+                    kit::inform(*this, kit::KPromptTone::Info, title,
+                                tr("bloom-cli is now on your PATH as %1").arg(linkPath), {},
+                                noticeName);
+                } else if (errorText.contains(QStringLiteral("(-128)"))) {
+                    // The system's own words for a cancelled password prompt.
+                    kit::inform(*this, kit::KPromptTone::Info, title,
+                                tr("bloom-cli was not linked"),
+                                tr("The request for an administrator password was cancelled."),
+                                noticeName);
+                } else {
+                    kit::inform(*this, kit::KPromptTone::Error, title,
+                                tr("bloom-cli could not be linked"),
+                                errorText.isEmpty() ? tr("The system did not say why.") : errorText,
+                                noticeName);
+                }
+            });
+    connect(process, &QProcess::errorOccurred, this,
+            [this, process, title, noticeName](QProcess::ProcessError error) {
+                if (error != QProcess::FailedToStart) {
+                    return; // finished() reports every other failure
+                }
+                process->deleteLater();
+                kit::inform(*this, kit::KPromptTone::Error, title,
+                            tr("bloom-cli could not be linked"),
+                            tr("The system's administrator prompt could not be started."),
+                            noticeName);
+            });
+    QStringList arguments;
+    for (const auto& argument : administratorLinkArguments(program)) {
+        arguments << QString::fromStdString(argument);
+    }
+    process->start(QStringLiteral("/usr/bin/osascript"), arguments);
+}
+#endif
 
 } // namespace bloom::ui

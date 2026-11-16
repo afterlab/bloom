@@ -18,6 +18,11 @@ Applications folder, and one line: "Drag Bloom to the Applications folder to ins
 
 Both PNG files are 8-bit RGBA. Only the dark background is used.
 
+`macos/dmg-DS_Store`, when it is there, is the window's layout (its size, the icon positions and
+the background picture). It is made once on a Mac and copied into every disk image; how is in
+[`docs/architecture/platform-support.md`](../../../docs/architecture/platform-support.md),
+"Installers". Without it the image opens with the system's default window.
+
 ## Windows installer
 
 Inno Setup's wizard shows the large picture on the welcome and finish pages and the small picture
