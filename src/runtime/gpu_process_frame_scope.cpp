@@ -55,7 +55,7 @@ using namespace std::chrono_literals;
     case Code::None:
     case Code::DispatchRefused:
     case Code::InternalInvariant:
-    case Code::LayoutRefused: // #733: preview display commands only; the scope steps run none
+    case Code::LayoutRefused: // #733: the display step runs a refused frame again as 8:8:8:8
         break;
     }
     return fault(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::InternalInvariant,
@@ -94,6 +94,13 @@ using namespace std::chrono_literals;
     }
     return fault(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::InternalInvariant,
                  "the scope count kernel failed");
+}
+
+// #733: a display step with a preview packing unpacks the frame's stored cells, whose layout the
+// device learns only by packing: 10:10:10:2 is asked first and a frame that does not allow it is
+// run once more as straight 8:8:8:8.
+[[nodiscard]] bool storedDisplayStep(const ScopeMeasureWork& work) noexcept {
+    return work.display != nullptr && work.display->displayPacking().preview();
 }
 
 } // namespace
@@ -239,9 +246,10 @@ ScopeMeasureFault runScopeMeasure(ScopeMeasureStage& stage, ScopeMeasureWork& wo
     const auto runColor =
         [&](const std::shared_ptr<const PreparedGpuOcioCommand>& command,
             const std::shared_ptr<const render::GpuImage>& input,
-            std::shared_ptr<const render::GpuImage>& output) -> std::optional<ScopeMeasureFault> {
+            std::shared_ptr<const render::GpuImage>& output,
+            const render::DisplayPixelLayout layout) -> std::optional<ScopeMeasureFault> {
         nativeRetirementProven = false; // begin may upload a LUT
-        const auto accepted = color.begin(command, input, {}, byteBudget);
+        const auto accepted = color.begin(command, input, {}, byteBudget, layout);
         if (accepted.code != GpuOcioExecutorDiagnosticCode::None) {
             nativeRetirementProven = !color.hasUnretiredSubmission();
             return colorFault(accepted);
@@ -295,15 +303,25 @@ ScopeMeasureFault runScopeMeasure(ScopeMeasureStage& stage, ScopeMeasureWork& wo
         return fault(GpuProcessFrameStatus::Cancelled, GpuProcessFrameDiagnosticCode::Cancelled,
                      "cancelled before the scope measure");
     std::shared_ptr<const render::GpuImage> signal = std::move(picture);
+    constexpr auto straight = render::DisplayPixelLayout::Straight8888;
     if (work.display != nullptr) {
         std::shared_ptr<const render::GpuImage> displayed;
-        if (auto failed = runColor(work.display, signal, displayed))
+        const bool stored = storedDisplayStep(work);
+        auto failed = runColor(work.display, signal, displayed,
+                               stored ? render::DisplayPixelLayout::Rgb10A2 : straight);
+        if (failed && stored && nativeRetirementProven && !cancelled() &&
+            color.diagnostic().code == GpuOcioExecutorDiagnosticCode::LayoutRefused) {
+            failed = runColor(work.display, signal, displayed, straight);
+        }
+        if (failed)
             return *failed;
+        if (stored)
+            work.displayReport = color.displayPackReport();
         signal = std::move(displayed);
     }
     std::shared_ptr<const render::GpuImage> xyz;
     if (work.xyz != nullptr) {
-        if (auto failed = runColor(work.xyz, signal, xyz))
+        if (auto failed = runColor(work.xyz, signal, xyz, straight))
             return *failed;
     }
     work.colorDispatches = color.counters().dispatches - dispatchesBefore;
@@ -451,8 +469,11 @@ ScopeMeasureStepper::State ScopeMeasureStepper::advance(const bool stop,
         if (colorStep) {
             const bool display = work_.display != nullptr && !displayDone_;
             began_ = true;
+            const auto layout = display && storedDisplayStep(work_) && !displayStraight_
+                                    ? render::DisplayPixelLayout::Rgb10A2
+                                    : render::DisplayPixelLayout::Straight8888;
             const auto accepted =
-                color.begin(display ? work_.display : work_.xyz, signal_, {}, byteBudget_);
+                color.begin(display ? work_.display : work_.xyz, signal_, {}, byteBudget_, layout);
             if (accepted.code != GpuOcioExecutorDiagnosticCode::None) {
                 failAndDrain(colorFault(accepted));
                 return phase_ == Phase::Settled ? State::Settled : State::Running;
@@ -495,9 +516,18 @@ ScopeMeasureStepper::State ScopeMeasureStepper::advance(const bool stop,
         if (polled == GpuOcioExecutorPollResult::Pending)
             return State::Running;
         if (polled != GpuOcioExecutorPollResult::Ready) {
+            // #733: the frame does not allow 10:10:10:2; its display step runs again as 8:8:8:8.
+            if (!stop && work_.display != nullptr && !displayDone_ && storedDisplayStep(work_) &&
+                !displayStraight_ && !color.hasUnretiredSubmission() &&
+                color.diagnostic().code == GpuOcioExecutorDiagnosticCode::LayoutRefused) {
+                displayStraight_ = true;
+                phase_ = Phase::Next;
+                return State::Running;
+            }
             failAndDrain(stop ? stopFault(cancelRequested) : colorFault(color.diagnostic()));
             return phase_ == Phase::Settled ? State::Settled : State::Running;
         }
+        const auto report = color.displayPackReport();
         auto output = color.takeEffectOutput();
         if (output == nullptr) {
             failAndDrain(makeFault(GpuProcessFrameStatus::Failed,
@@ -507,6 +537,8 @@ ScopeMeasureStepper::State ScopeMeasureStepper::advance(const bool stop,
         }
         if (work_.display != nullptr && !displayDone_) {
             displayDone_ = true;
+            if (storedDisplayStep(work_))
+                work_.displayReport = report;
             signal_ = std::move(output);
         } else {
             xyzDone_ = true;
@@ -570,6 +602,10 @@ GpuScopeMeasureOutcome GpuProcessFrameEvaluator::measureScopes(
     outcome.tableReadbacks = work->tableReadbacks;
     outcome.tableReadbackBytes = work->tableReadbackBytes;
     outcome.pictureReadbacks = frame.counters.readbacks;
+    if (work->displayReport) {
+        outcome.frameCounters = work->displayReport->counters;
+        outcome.frameLayout = work->displayReport->frameLayout();
+    }
     using Code = GpuProcessFrameDiagnosticCode;
     if (work->emptyArea) {
         outcome.status = GpuScopeMeasureStatus::EmptyArea;

@@ -18,6 +18,10 @@ namespace bloom::runtime {
 //            10:10:10:2 (render/display_pixel_packing.hpp) for a frame whose every pixel allows
 //            it. A 10:10:10:2 dispatch of a frame that does not allow it is refused by the native
 //            program, and the same program packs that frame again as 8:8:8:8.
+// The scopes' display step (GpuOcioTransformKind::ScopeDisplay) takes Preview too: its program
+// finds each pixel's stored cell with the same statements and writes, instead of the cell, the
+// float signal a scope counts for it (render::displaySignalPixel), with the same status block. It
+// is the Display signal of a frame no Viewer prepared, packed and unpacked in one dispatch.
 // One layout holds for a whole frame and the device learns which only by packing, so the layout is
 // a word of the dispatch and not a program of its own: a refused frame is packed again without a
 // second shader. The luma coefficients of the counters are the display's, a constant of the

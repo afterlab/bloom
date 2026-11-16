@@ -67,7 +67,7 @@ void GpuOcioProgram::Impl::beginImpl(const bool display, std::shared_ptr<const G
                                      const std::span<const std::byte> uniformBytes,
                                      const std::uint64_t byteBudget,
                                      const std::optional<GpuDisplayPackRequest>& pack) {
-    jobPack = display ? pack : std::nullopt;
+    jobPack = pack;
     jobReport.reset();
     control->bufferStorageRefusal.reset();
     control->imageStorageRefusal.reset();
@@ -380,8 +380,8 @@ bool GpuOcioProgram::Impl::checkStatus() {
     }
     // #733: a preview pack's status block also says whether the frame allows the layout it was
     // packed in. Words packed as 10:10:10:2 from a frame that does not allow it are never handed
-    // on.
-    if (jobPack.has_value() && jobDisplayImage != nullptr) {
+    // on, and neither is the float picture of an effect that unpacked them.
+    if (jobPack.has_value() && (jobDisplayImage != nullptr || effectOutput != nullptr)) {
         const auto report =
             gpuDisplayPackReport(words, jobPack->layout, jobPack->luma.has_value());
         jobReport = report;
@@ -391,7 +391,9 @@ bool GpuOcioProgram::Impl::checkStatus() {
                                "the frame holds a pixel that does not allow the 10:10:10:2 layout");
             return false;
         }
-        jobDisplayImage->packReport = report;
+        if (jobDisplayImage != nullptr) {
+            jobDisplayImage->packReport = report;
+        }
     }
     return true;
 }

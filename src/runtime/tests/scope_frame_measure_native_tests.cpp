@@ -480,6 +480,98 @@ int run(int argc, char** argv) {
                             "the Display and Working signals differ");
     }
 
+    // #733: the Display signal of a rendered frame is the frame's stored display cells. The
+    // frame above has partly transparent pixels, so both routes count it from straight 8:8:8:8
+    // cells (the device after its 10:10:10:2 dispatch was refused); a frame whose pixels are all
+    // opaque or exactly transparent is counted from 10:10:10:2 cells in one display dispatch.
+    // What the display encoding leaves outside 0..1 is in the frame counters, equal on the two
+    // routes, and never in the tables (the counters are of the signal over black, so the opaque
+    // frame carries the value above 1).
+    {
+        using bloom::render::DisplayPixelLayout;
+        const auto settings = settingsFor(ScopeSignal::Display, kNoChromaticity);
+        const auto soft = onDevice(request, settings, *display);
+        const auto softReference =
+            bloom::runtime::measureScopeFrameCpu(*fullPicture, settings, *display);
+        expectations.expect(soft.status == ScopeFrameStatus::Measured &&
+                                softReference.status == ScopeFrameStatus::Measured &&
+                                soft.frameLayout == DisplayPixelLayout::Straight8888 &&
+                                softReference.frameLayout == DisplayPixelLayout::Straight8888,
+                            "a frame with partly transparent pixels is counted from straight "
+                            "cells on both routes: " +
+                                soft.message);
+        expectations.expect(soft.colorDispatches == 2 && soft.tableReadbacks == 1 &&
+                                soft.pictureReadbacks == 0,
+                            "the refused 10:10:10:2 dispatch is followed by one straight "
+                            "dispatch, and no picture is read back");
+        expectations.expect(soft.frameCounters.has_value() &&
+                                soft.frameCounters == softReference.frameCounters,
+                            "the device's frame counters equal the CPU packer's");
+        bool inside = true;
+        for (std::uint32_t channel = 0; channel < kScopeChannels; ++channel) {
+            inside = inside && soft.counts.histogram(channel, kScopeCodeOver) == 0 &&
+                     soft.counts.histogram(channel, kScopeCodeUnder) == 0 &&
+                     softReference.counts.histogram(channel, kScopeCodeOver) == 0 &&
+                     softReference.counts.histogram(channel, kScopeCodeUnder) == 0;
+        }
+        expectations.expect(inside,
+                            "a stored code is never outside the axis: the tables hold no under "
+                            "or over");
+
+        const auto opaquePlan =
+            twoSolidPlan(format(256, 256), Color4d{0.43, 0.27, 0.13, 1.0},
+                         LayerValues{.position = {10.0, 20.0}}, Color4d{0.05, 3.2, 0.35, 1.0},
+                         LayerValues{.position = {60.0, 50.0}}, 180.0, 150.0, 7100);
+        const auto opaqueRequest = requestFor(*opaquePlan);
+        const auto opaquePicture = evaluator->evaluate(opaquePlan, opaqueRequest);
+        expectations.expect(opaquePicture.status == GpuProcessFrameStatus::Evaluated &&
+                                opaquePicture.frame != nullptr,
+                            "the device evaluates the opaque frame: " +
+                                opaquePicture.diagnostic.message);
+        if (opaquePicture.frame != nullptr) {
+            const auto wide = bloom::runtime::measureScopeFrameOnDevice(
+                *evaluator, *ocioContext, opaquePlan, opaqueRequest, settings, *display);
+            const auto wideReference =
+                bloom::runtime::measureScopeFrameCpu(*opaquePicture.frame, settings, *display);
+            expectations.expect(wide.status == ScopeFrameStatus::Measured &&
+                                    wideReference.status == ScopeFrameStatus::Measured &&
+                                    wide.frameLayout == DisplayPixelLayout::Rgb10A2 &&
+                                    wideReference.frameLayout == DisplayPixelLayout::Rgb10A2,
+                                "a frame of opaque and exactly transparent pixels is counted "
+                                "from 10:10:10:2 cells on both routes: " +
+                                    wide.message);
+            expectations.expect(wide.colorDispatches == 1 && wide.tableReadbacks == 1 &&
+                                    wide.pictureReadbacks == 0,
+                                "10:10:10:2: one display dispatch, one table readback and no "
+                                "picture");
+            expectations.expect(tablesWithinOneCell(wide.counts, wideReference.counts),
+                                "10:10:10:2: no pixel is more than one cell away");
+            expectations.expect(wide.frameCounters.has_value() &&
+                                    wide.frameCounters == wideReference.frameCounters &&
+                                    wide.counts.counted() == 256U * 256U,
+                                "10:10:10:2: the frame counters are equal and every pixel is "
+                                "counted");
+            bool wideInside = true;
+            for (std::uint32_t channel = 0; channel < kScopeChannels; ++channel) {
+                wideInside = wideInside && wide.counts.histogram(channel, kScopeCodeOver) == 0 &&
+                             wideReference.counts.histogram(channel, kScopeCodeOver) == 0;
+            }
+            expectations.expect(wide.frameCounters.has_value() &&
+                                    wide.frameCounters->lumaCounted() &&
+                                    wide.frameCounters->over[1] != 0 &&
+                                    wide.frameCounters->over[0] == 0 && wideInside,
+                                "the green above 1 is counted over in the frame counters and in "
+                                "no table");
+        }
+        auto wrongAxis = settings;
+        wrongAxis.axisMaximum = 2;
+        expectations.expect(
+            onDevice(request, wrongAxis, *display).status == ScopeFrameStatus::Failed &&
+                bloom::runtime::measureScopeFrameCpu(*fullPicture, wrongAxis, *display).status ==
+                    ScopeFrameStatus::Failed,
+            "the Display signal's axis is 0 to 1 on both routes");
+    }
+
     // measureScopeFrame: the route is named, and the CPU reference says why it counted.
     {
         const auto settings = settingsFor(ScopeSignal::Working, kNoChromaticity);

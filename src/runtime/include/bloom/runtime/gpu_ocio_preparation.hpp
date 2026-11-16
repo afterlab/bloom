@@ -82,8 +82,9 @@ enum class GpuOcioTransformKind : std::uint8_t {
     // (detail::denoiseProgramData) is its storage-buffer data.
     Denoise = 15,
     // #724 Scopes. ScopeDisplay: `display`/`view` as a float effect to which `viewAdjust` is
-    // applied unquantized (the Display signal). ScopeXyz: `fromId` to CIE XYZ D65, applied to the
-    // stored color as it is.
+    // applied unquantized; with a preview `displayPacking` (#733) the effect's picture is the
+    // Display signal of the frame's stored cells (gpu_ocio_display_packing.hpp). ScopeXyz:
+    // `fromId` to CIE XYZ D65, applied to the stored color as it is.
     ScopeDisplay = 16,
     ScopeXyz = 17,
 };
@@ -135,10 +136,10 @@ struct GpuOcioTransformSpec final {
     // Neutral for every other kind; a non-neutral adjustment on a non-display kind is refused. Both
     // fields are folded into the preparer warm key.
     ViewAdjust viewAdjust{};
-    // #733, Display only: how the display program packs. The default is the long-standing RGBA8
-    // pack; a preview pack names the layout and the display's luma coefficients for the frame
-    // counters. Folded into the preparer warm key when it is not the default, so every earlier
-    // key keeps its bytes.
+    // #733, Display and ScopeDisplay only: how the display program packs. The default is the
+    // long-standing RGBA8 pack (for ScopeDisplay, the float display result); a preview pack names
+    // the layout and the display's luma coefficients for the frame counters. Folded into the
+    // preparer warm key when it is not the default, so every earlier key keeps its bytes.
     GpuOcioDisplayPacking displayPacking{};
 };
 

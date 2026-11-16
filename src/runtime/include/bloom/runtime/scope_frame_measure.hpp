@@ -5,21 +5,28 @@
 //
 // The measured signal of a frame is
 //   Working: the frame's scene-linear picture as stored (its color over black and its alpha);
-//   Display: every pixel's straight color through the frame's display and view (the display
-//            transform's float result, before any packing to 8 bits), then multiplied by the
-//            pixel's alpha again. Values the display encoding leaves outside 0..1 are counted as
-//            under and over.
+//   Display: the frame's stored display cells (#733, render/display_pixel_packing.hpp): every
+//            pixel's straight color through the frame's display and view, packed as a preview
+//            display frame packs it (10:10:10:2, or straight 8:8:8:8 for a frame with a partly
+//            transparent pixel), read as the cell's Display code over black. A stored code is
+//            inside 0..1, so the values the display encoding leaves outside are not in the
+//            tables: they are the frame counters (ScopeFrameMeasure::frameCounters), of the whole
+//            frame.
 // The Chromaticity table places every pixel by the CIE XYZ (D65) of that signal, converted by the
 // config's own transform from the signal's color space (color/scope_colorimetry.hpp).
 //
-// The tables of a preview frame are counted by the frame's own preparation (the preview display
-// service's frame job on the device, measureScopeFrameCpu on the CPU route) and travel with the
-// frame. measureScopeFrame is the same measure for a frame no Viewer prepared (MCP and Python
-// reads): the device route runs the frame as a job of the final-render evaluator
-// (runtime/gpu_scope_measure.hpp) and reads back only the tables, and the CPU reference evaluates
-// the frame with the CPU evaluator and counts with measureScopesCpu. A result always names the
-// route that counted it; a frame the device could not measure is counted by the CPU reference and
-// says why.
+// The Working tables of a preview frame are counted by the frame's own preparation and travel
+// with the frame; the Display tables of the frame a Viewer shows are counted from its stored
+// cells at display time (runtime/shown_frame_scopes.hpp). measureScopeFrame is the same measure
+// for a frame no Viewer prepared (MCP and Python reads), at the full table size: it renders the
+// frame, packs it as a preview display frame and counts the stored cells. The device route runs
+// the frame as a job of the final-render evaluator (runtime/gpu_scope_measure.hpp), packs and
+// unpacks on the device and reads back only the tables; the CPU reference evaluates the frame
+// with the CPU evaluator, packs it with the preview frame's CPU packer and counts the cells with
+// measureScopeStoredFrameCpu, the call that counts a shown frame. A result always names the route
+// that counted it; a frame the device could not measure is counted by the CPU reference and says
+// why. A frame with a pixel that is not finite has no display frame, on either route and in a
+// Viewer alike: its Display read fails with the reason, and its Working signal is still counted.
 
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
@@ -47,6 +54,7 @@ namespace bloom::runtime {
 
 class GpuProcessFrameEvaluator;
 struct GpuSceneOcioContext;
+class PreparedPreviewFrame;
 struct PreviewDisplayBufferView;
 
 struct ScopeSignalColorRequest final {
@@ -145,12 +153,22 @@ struct ScopeFrameMeasure final {
     std::uint64_t tableReadbacks = 0;
     std::uint64_t tableReadbackBytes = 0;
     std::uint64_t pictureReadbacks = 0;
+    // #733, Display signal of a rendered frame: the counters of the frame's display picture
+    // (under and over for red, green, blue and luma, and not finite; of the whole frame, whatever
+    // the region and Ignore Transparent Pixels) and the layout its stored cells take. They are
+    // the read's under and over: a stored code is never outside 0..1, so the tables' own under
+    // and over cells are 0. Empty for the Working signal, for a frame that was not measured and
+    // for measureScopeStoredFrameCpu, whose caller holds the stored frame's counters.
+    std::optional<render::DisplayFrameCounters> frameCounters;
+    std::optional<render::DisplayPixelLayout> frameLayout;
 };
 
 // The CPU reference: counts `frame`, an evaluated process frame of `plan`'s composition.
 // `settings.signal` must be `color`'s signal. `reduction` is the table size asked for (#733; the
 // full tables by default); the tables are counted at render::scopeReductionForWidth of it for
-// the measured area's width.
+// the measured area's width. The Display signal (axis maximum 1) packs the frame with the preview
+// frame's CPU packer (color::produceBloomNeutralDisplayFrame, 10:10:10:2 where the frame allows
+// it) and counts the cells with measureScopeStoredFrameCpu.
 [[nodiscard]] ScopeFrameMeasure measureScopeFrameCpu(const ProcessFrame& frame,
                                                      const ScopeMeasureSettings& settings,
                                                      const ScopeSignalColor& color,
@@ -184,6 +202,13 @@ struct ScopeStoredFrame final {
 measureScopeStoredFrameCpu(const ScopeStoredFrame& frame, const ScopeMeasureSettings& settings,
                            render::ScopeTableReduction reduction, const ScopeSignalColor& color,
                            const std::function<bool()>& cancelled = {});
+
+// The stored display frame of a prepared preview frame (a frame a Viewer shows or its cache
+// holds), for a composition of that size. The cells are borrowed from `frame`, which must
+// outlive the result. Nothing for a frame held on the device only, which has no stored cells.
+[[nodiscard]] std::optional<ScopeStoredFrame> scopeStoredFrameOf(const PreparedPreviewFrame& frame,
+                                                                 std::uint32_t compositionWidth,
+                                                                 std::uint32_t compositionHeight);
 
 // The device measure job of `settings`: the counting settings and the factories that prepare the
 // display and CIE XYZ programs on the calling worker. The factories borrow `ocio` and `color`,

@@ -170,8 +170,9 @@ void continueAfterDevice(const StatePtr& state, std::shared_ptr<Run> run,
                                                            : std::move(message))));
         return false;
     }
-    const auto view = request.frame->displayBufferView();
-    if (!view) {
+    auto stored =
+        scopeStoredFrameOf(*request.frame, request.compositionWidth, request.compositionHeight);
+    if (!stored) {
         publish(state, run,
                 resultOf(run, failedScopes(request.settings,
                                            "The shown frame is held on the device only: it has "
@@ -180,14 +181,7 @@ void continueAfterDevice(const StatePtr& state, std::shared_ptr<Run> run,
         return false;
     }
     run.frameCounters = request.frame->displayCounters();
-    run.stored = ScopeStoredFrame{.cells = view->pixels,
-                                  .layout = view->pixelLayout,
-                                  .dataWindow = view->dataWindow.value_or(view->displayWindow),
-                                  .displayWindow = view->displayWindow,
-                                  .pixelAspect = view->pixelAspect,
-                                  .roi = request.frame->desiredIdentity().roi,
-                                  .compositionWidth = request.compositionWidth,
-                                  .compositionHeight = request.compositionHeight};
+    run.stored = std::move(stored);
     run.owner = request.frame;
     return true;
 }

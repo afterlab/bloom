@@ -300,9 +300,10 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
                        "a non-neutral view adjustment is only valid for the display kinds");
     }
     if (!transform.displayPacking.valid() ||
-        (transform.displayPacking.preview() && transform.kind != GpuOcioTransformKind::Display)) {
+        (transform.displayPacking.preview() && transform.kind != GpuOcioTransformKind::Display &&
+         transform.kind != GpuOcioTransformKind::ScopeDisplay)) {
         return failure(GpuOcioPreparationError::InvalidRequest,
-                       "a preview display packing is only valid for the Display kind");
+                       "a preview display packing is only valid for the display kinds");
     }
     if (cancel && cancel()) {
         return failure(GpuOcioPreparationError::CompileCancelled, "cancelled before extraction");

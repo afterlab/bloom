@@ -199,9 +199,10 @@ GpuOcioProgramDiagnostic GpuOcioProgram::Impl::authorityDiagnostic() const {
     return {};
 }
 
-GpuOcioProgramDiagnostic GpuOcioProgram::beginEffect(std::shared_ptr<const GpuImage> input,
-                                                     std::span<const std::byte> uniformBytes,
-                                                     const std::uint64_t byteBudget) {
+GpuOcioProgramDiagnostic
+GpuOcioProgram::beginEffect(std::shared_ptr<const GpuImage> input,
+                            std::span<const std::byte> uniformBytes, const std::uint64_t byteBudget,
+                            const std::optional<GpuDisplayPackRequest>& pack) {
     if (impl_ == nullptr) {
         return makeDiagnostic(GpuOcioProgramDiagnosticCode::DeviceUnavailable,
                               "no pipeline was created");
@@ -232,7 +233,7 @@ GpuOcioProgramDiagnostic GpuOcioProgram::beginEffect(std::shared_ptr<const GpuIm
     if (impl.jobState != GpuOcioProgramJobState::Idle) {
         impl.clearJob();
     }
-    impl.beginImpl(false, std::move(input), uniformBytes, byteBudget);
+    impl.beginImpl(false, std::move(input), uniformBytes, byteBudget, pack);
     return beginDiagnostic(impl.jobDiagnostic);
 }
 

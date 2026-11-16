@@ -136,8 +136,9 @@ class GpuOcioProgramExecutor final {
     // Returns None when the command was accepted and submitted. `uniformOverride` is an optional
     // same-size replacement for the command's immutable OCIO uniform snapshot (empty selects the
     // snapshot). `byteBudget` bounds the native transient bytes. #733: `displayLayout` is the
-    // layout a preview display command packs this dispatch in; every other command has the one
-    // layout and is refused another.
+    // layout a preview display command packs this dispatch in, or the layout of the stored cells
+    // a scope display command unpacks; every other command has the one layout and is refused
+    // another.
     [[nodiscard]] GpuOcioExecutorDiagnostic
     begin(std::shared_ptr<const PreparedGpuOcioCommand> command,
           std::shared_ptr<const render::GpuImage> input, std::span<const std::byte> uniformOverride,
@@ -152,9 +153,10 @@ class GpuOcioProgramExecutor final {
     // Valid only after a Ready DisplayRgba8 job; moves the resident RGBA8 output out. Nullopt for
     // any other state. (GpuDisplayImage is not default-constructible outside src/render.)
     [[nodiscard]] std::optional<render::GpuDisplayImage> takeDisplayOutput() noexcept;
-    // #733: what the last finished preview display job reported (the layout flag and the frame
-    // counters): after Ready, and after a LayoutRefused failure. Empty for every other job. The
-    // taken image carries the same report.
+    // #733: what the last finished preview display job, or scope display job with a preview
+    // packing, reported (the layout flag and the frame counters): after Ready, and after a
+    // LayoutRefused failure. Empty for every other job. A taken display image carries the same
+    // report.
     [[nodiscard]] std::optional<render::GpuDisplayPackReport> displayPackReport() const noexcept;
 
     // Requests cancellation. Resources are retained until the native submission retires; no output

@@ -48,82 +48,6 @@ constexpr std::size_t kChunkPixels = 16384;
     return std::isfinite(a) && std::isfinite(b) && std::isfinite(c);
 }
 
-// A pixel the measure counts as not finite.
-[[nodiscard]] render::Rgba32f notFinitePixel() noexcept {
-    const float nan = std::numeric_limits<float>::quiet_NaN();
-    return pixelOf(nan, nan, nan, nan);
-}
-
-// The Display signal of `source`: straight color through the display transform, then alpha again.
-// False when the processor could not run or on cancellation
-// (`cancelled` set).
-[[nodiscard]] bool displaySignal(const std::span<const render::Rgba32f> source,
-                                 const ScopeSignalColor& color,
-                                 const CancellationToken& cancellation,
-                                 std::vector<render::Rgba32f>& signal, bool& cancelled) {
-    const auto* const processor = color.displayProcessor();
-    if (processor == nullptr)
-        return false;
-    signal.resize(source.size(), render::Rgba32f::transparent());
-    std::vector<float> scratch(std::min(kChunkPixels, source.size()) * 4);
-    for (std::size_t first = 0; first < source.size(); first += kChunkPixels) {
-        if (cancellation.isCancellationRequested()) {
-            cancelled = true;
-            return false;
-        }
-        const std::size_t count = std::min(kChunkPixels, source.size() - first);
-        for (std::size_t index = 0; index < count; ++index) {
-            const auto& pixel = source[first + index];
-            const float alpha = pixel.alpha();
-            float red = 0.0F;
-            float green = 0.0F;
-            float blue = 0.0F;
-            if (finite(pixel.red(), pixel.green(), pixel.blue()) && std::isfinite(alpha) &&
-                alpha != 0.0F) {
-                red = pixel.red() / alpha;
-                green = pixel.green() / alpha;
-                blue = pixel.blue() / alpha;
-                if (!finite(red, green, blue))
-                    red = green = blue = 0.0F;
-            }
-            scratch[index * 4 + 0] = red;
-            scratch[index * 4 + 1] = green;
-            scratch[index * 4 + 2] = blue;
-            scratch[index * 4 + 3] = alpha;
-        }
-        if (color::applyDisplayFloatChunk(*processor, std::span<float>(scratch).first(count * 4))
-                .has_value())
-            return false;
-        for (std::size_t index = 0; index < count; ++index) {
-            const auto& pixel = source[first + index];
-            const float alpha = pixel.alpha();
-            if (!finite(pixel.red(), pixel.green(), pixel.blue()) || !std::isfinite(alpha)) {
-                signal[first + index] = notFinitePixel();
-                continue;
-            }
-            // A pixel with no alpha is stored as it is, as the device's display step stores it.
-            if (alpha == 0.0F) {
-                signal[first + index] = pixel;
-                continue;
-            }
-            if (!finite(pixel.red() / alpha, pixel.green() / alpha, pixel.blue() / alpha)) {
-                signal[first + index] = notFinitePixel();
-                continue;
-            }
-            const float red = scratch[index * 4 + 0];
-            const float green = scratch[index * 4 + 1];
-            const float blue = scratch[index * 4 + 2];
-            const float storedRed = red * alpha;
-            const float storedGreen = green * alpha;
-            const float storedBlue = blue * alpha;
-            signal[first + index] = finite(storedRed, storedGreen, storedBlue)
-                                        ? pixelOf(storedRed, storedGreen, storedBlue, alpha)
-                                        : notFinitePixel();
-        }
-    }
-    return true;
-}
-
 // The CIE XYZ of every pixel of a signal picture of `pixels` pixels, `pixelAt(index)` each (its
 // stored color, not divided by alpha). A pixel that is not finite, or whose XYZ is not, is zero:
 // the measure counts it as having no chromaticity.
@@ -271,16 +195,44 @@ ScopeFrameMeasure measureScopeFrameCpu(const ProcessFrame& frame,
         }
         result.area = *area;
 
-        const auto source = image.pixels();
-        std::vector<render::Rgba32f> displayed;
-        std::span<const render::Rgba32f> signal = source;
-        bool cancelled = false;
         if (settings.signal == ScopeSignal::Display) {
-            if (!displaySignal(source, color, cancellation, displayed, cancelled))
-                return cancelled ? cancelledMeasure()
-                                 : failed("The display transform could not run on the frame.");
-            signal = displayed;
+            // #733: the frame as a preview display frame stores it, then the stored cells.
+            if (settings.axisMaximum != 1U)
+                return failed("A stored display frame is measured as the Display signal.");
+            const auto* const processor = color.displayProcessor();
+            const auto view = image.view();
+            if (processor == nullptr || !view)
+                return failed("The display transform could not run on the frame.");
+            auto isCancelled = [&cancellation]() noexcept {
+                return cancellation.isCancellationRequested();
+            };
+            const auto packed = color::produceBloomNeutralDisplayFrame(
+                *processor, *view.value(), kChunkPixels, std::numeric_limits<std::size_t>::max(),
+                isCancelled,
+                color::DisplayFramePacking{.allowRgb10A2 = true, .luma = processor->displayLuma()});
+            if (!packed)
+                return cancellation.isCancellationRequested()
+                           ? cancelledMeasure()
+                           : failed("The display transform could not run on the frame.");
+            const ScopeStoredFrame stored{.cells = packed.value()->pixels(),
+                                          .layout = packed.value()->pixelLayout(),
+                                          .dataWindow = descriptor->dataWindow(),
+                                          .displayWindow = descriptor->displayWindow(),
+                                          .pixelAspect = descriptor->pixelAspect(),
+                                          .roi = frame.identity().roi,
+                                          .compositionWidth = plan->format().width(),
+                                          .compositionHeight = plan->format().height()};
+            auto measured =
+                measureScopeStoredFrameCpu(stored, settings, reduction, color, isCancelled);
+            if (measured.status == ScopeFrameStatus::Measured) {
+                measured.frameCounters = packed.value()->counters();
+                measured.frameLayout = packed.value()->pixelLayout();
+            }
+            return measured;
         }
+        const auto source = image.pixels();
+        const std::span<const render::Rgba32f> signal = source;
+        bool cancelled = false;
         std::vector<render::Rgba32f> xyz;
         if ((settings.scopes & render::kScopeTableChromaticity) != 0U) {
             if (!xyzPicture(signal, color, cancellation, xyz, cancelled))
@@ -399,6 +351,22 @@ ScopeFrameMeasure measureScopeStoredFrameCpu(const ScopeStoredFrame& frame,
     }
 }
 
+std::optional<ScopeStoredFrame> scopeStoredFrameOf(const PreparedPreviewFrame& frame,
+                                                   const std::uint32_t compositionWidth,
+                                                   const std::uint32_t compositionHeight) {
+    const auto view = frame.displayBufferView();
+    if (!view)
+        return std::nullopt;
+    return ScopeStoredFrame{.cells = view->pixels,
+                            .layout = view->pixelLayout,
+                            .dataWindow = view->dataWindow.value_or(view->displayWindow),
+                            .displayWindow = view->displayWindow,
+                            .pixelAspect = view->pixelAspect,
+                            .roi = frame.desiredIdentity().roi,
+                            .compositionWidth = compositionWidth,
+                            .compositionHeight = compositionHeight};
+}
+
 GpuScopeMeasureJob makeScopeMeasureJob(const ScopeMeasureSettings& settings,
                                        const ScopeSignalColor& color,
                                        const GpuSceneOcioContext& ocio,
@@ -424,11 +392,17 @@ GpuScopeMeasureJob makeScopeMeasureJob(const ScopeMeasureSettings& settings,
             };
     };
     if (settings.signal == ScopeSignal::Display) {
+        // #733: the display step packs each pixel as a preview display frame packs it and
+        // unpacks the cell again, with the display's own luma coefficients for the frame
+        // counters (the CPU packer's).
         GpuOcioTransformSpec spec;
         spec.kind = GpuOcioTransformKind::ScopeDisplay;
         spec.display = color.display();
         spec.view = color.view();
         spec.workingSpaceId = std::string(color.config().processColorSpaceId());
+        spec.displayPacking.mode = GpuOcioDisplayPackingMode::Preview;
+        if (const auto* const processor = color.displayProcessor())
+            spec.displayPacking.luma = processor->displayLuma();
         job.displayCommand = factory(std::move(spec));
     }
     if ((settings.scopes & render::kScopeTableChromaticity) != 0U) {
@@ -448,6 +422,8 @@ measureScopeFrameOnDevice(GpuProcessFrameEvaluator& evaluator, const GpuSceneOci
                           const std::optional<std::filesystem::path>& assetBaseDirectory) {
     if (settings.signal != color.signal())
         return failed("The scope signal and its color objects do not match.");
+    if (settings.signal == ScopeSignal::Display && settings.axisMaximum != 1U)
+        return failed("A stored display frame is measured as the Display signal.");
     const auto job = makeScopeMeasureJob(settings, color, ocio);
     auto outcome =
         evaluator.measureScopes(std::move(plan), request, job, cancellation, assetBaseDirectory);
@@ -462,6 +438,8 @@ measureScopeFrameOnDevice(GpuProcessFrameEvaluator& evaluator, const GpuSceneOci
         result.status = ScopeFrameStatus::Measured;
         result.counts = std::move(outcome.counts);
         result.tableReadbackBytes = outcome.tableReadbackBytes;
+        result.frameCounters = outcome.frameCounters;
+        result.frameLayout = outcome.frameLayout;
         break;
     case GpuScopeMeasureStatus::EmptyArea:
         result.status = ScopeFrameStatus::EmptyArea;

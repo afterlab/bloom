@@ -125,9 +125,14 @@ class GpuOcioProgram final {
     // refused OverBudget before anything is submitted or published. Input geometry may change
     // between jobs on the same program; the packed buffer is resized only after the prior
     // submission is proven retired. Returns None when the job was accepted and submitted.
-    [[nodiscard]] GpuOcioProgramDiagnostic beginEffect(std::shared_ptr<const GpuImage> input,
-                                                       std::span<const std::byte> uniformBytes,
-                                                       std::uint64_t byteBudget);
+    // #733: `pack` is set for an effect whose shader writes the display pack's status block (the
+    // scopes' stored display signal, runtime/gpu_ocio_display_packing.hpp): the layout the
+    // shader's stored cells take and whether it counts luma. The output is the float picture
+    // either way; a 10:10:10:2 dispatch of a frame that does not allow it fails LayoutRefused and
+    // publishes nothing.
+    [[nodiscard]] GpuOcioProgramDiagnostic
+    beginEffect(std::shared_ptr<const GpuImage> input, std::span<const std::byte> uniformBytes,
+                std::uint64_t byteBudget, const std::optional<GpuDisplayPackRequest>& pack = {});
     // #733: `pack` is set for a program whose shader is a preview pack (it writes the display
     // pack's status block, gpu_display_pack.hpp): it names the layout the shader packs, which is
     // the output image's, and whether the shader counts luma. Empty: the long-standing RGBA8
@@ -142,8 +147,9 @@ class GpuOcioProgram final {
     [[nodiscard]] std::shared_ptr<GpuImage> takeEffectOutput() noexcept;
     // Valid only after a Ready display job; moves the resident packed result out.
     [[nodiscard]] GpuDisplayImage takeDisplayOutput() noexcept;
-    // What the last finished preview pack reported: after Ready, and after a LayoutRefused
-    // failure. Empty otherwise, and once the output was taken (the image carries it then).
+    // What the last finished job with a pack request reported: after Ready, and after a
+    // LayoutRefused failure. Empty otherwise, and once a display output was taken (the image
+    // carries it then).
     [[nodiscard]] std::optional<GpuDisplayPackReport> displayPackReport() const noexcept;
 
     [[nodiscard]] bool hasUnretiredSubmission() const noexcept;

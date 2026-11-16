@@ -7,15 +7,17 @@
 // docs/architecture/scopes.md is the specification.
 //
 // The frame's scene runs on the evaluator's device exactly as a final frame does. Instead of the
-// final picture readback, the owner converts the resident picture to the measured signal (the
-// display transform as a float picture for the Display signal; the picture itself for Working),
-// converts that to CIE XYZ when the Chromaticity table is asked for, counts the tables with
-// render::GpuScopeTables and reads back only the tables: the named bounded readback
+// final picture readback, the owner converts the resident picture to the measured signal (for the
+// Display signal the float picture of the frame's stored display cells: one program packs each
+// pixel as a preview display frame packs it and unpacks the cell again, #733; the picture itself
+// for Working), converts that to CIE XYZ when the Chromaticity table is asked for, counts the
+// tables with render::GpuScopeTables and reads back only the tables: the named bounded readback
 // `prep.scopes.result_readback`. No picture leaves the device.
 //
 // The color programs are prepared on the calling worker, never on the device owner: the job
 // carries two factories that are called there with the picture's extent.
 
+#include <bloom/render/display_pixel_packing.hpp>
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/gpu_ocio_command.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
@@ -45,8 +47,9 @@ struct GpuScopeMeasureJob final {
     // As asked for until the measure is prepared, which makes it the size counted
     // (render::scopeReductionForWidth for the measured area's width).
     render::ScopeTableReduction reduction{};
-    // The Display signal: a GpuOcioTransformKind::ScopeDisplay program. Empty measures the Working
-    // signal, the scene-linear picture as it is.
+    // The Display signal: a GpuOcioTransformKind::ScopeDisplay program with a preview packing
+    // (the frame's stored cells, unpacked; the layout is found by the dispatch, 10:10:10:2 first).
+    // Empty measures the Working signal, the scene-linear picture as it is.
     GpuScopeCommandFactory displayCommand;
     // The signal to CIE XYZ (D65): a GpuOcioTransformKind::ScopeXyz program from the signal's
     // color space. Required with, and used only for, the Chromaticity table.
@@ -77,6 +80,10 @@ struct GpuScopeMeasureOutcome final {
     std::uint64_t tableReadbacks = 0;
     std::uint64_t tableReadbackBytes = 0; // the bytes those readbacks moved
     std::uint64_t pictureReadbacks = 0; // always zero
+    // #733, Display signal: the counters of the frame's display picture and the layout its stored
+    // cells take, as the display step reported them.
+    std::optional<render::DisplayFrameCounters> frameCounters;
+    std::optional<render::DisplayPixelLayout> frameLayout;
 };
 
 } // namespace bloom::runtime

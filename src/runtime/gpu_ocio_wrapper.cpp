@@ -173,13 +173,54 @@ bool bloom_ocio_finite(float value)
 }
 )";
 
+// numerator / denominator, correctly rounded to binary32, for 0 <= numerator <= denominator and
+// 0 < denominator < 65536: the statements of the DisplayUnpackV1 kernel (display_unpack.comp). A
+// device's own float division is not required to be correctly rounded.
+constexpr std::string_view kStoredSignalGlsl = R"(
+float bloom_ocio_ratio(uint numerator, uint denominator)
+{
+    if (numerator == 0u) { return 0.0; }
+    int exponent = 0;
+    uint remainder = numerator;
+    while (remainder < denominator) {
+        remainder <<= 1u;
+        exponent -= 1;
+    }
+    uint quotient = 0u;
+    for (int bit = 0; bit < 25; ++bit) {
+        quotient <<= 1u;
+        if (remainder >= denominator) {
+            remainder -= denominator;
+            quotient |= 1u;
+        }
+        remainder <<= 1u;
+    }
+    uint guard = quotient & 1u;
+    quotient >>= 1u;
+    if (guard == 1u && (remainder != 0u || (quotient & 1u) == 1u)) { quotient += 1u; }
+    if (quotient == 0x1000000u) {
+        quotient >>= 1u;
+        exponent += 1;
+    }
+    return uintBitsToFloat((uint(exponent + 127) << 23u) | (quotient & 0x7FFFFFu));
+}
+)";
+
 // One pixel of a preview pack and the workgroup's gathering main(). The pixel function returns
 // what it found: bit 0 the pixel refuses 10:10:10:2, bits 1..4 under (red, green, blue, luma),
 // bits 5..8 over, bit 9 not finite, bit 16 the error. `wide` is the dispatch's layout word, which
 // the host wrote into the status block before the dispatch (kGpuDisplayPackStatusLayout): the
 // same program packs either layout.
-void emitPreviewPack(std::ostringstream& out, const std::string& functionName,
-                     const bool adjusted, const GpuOcioDisplayPacking& packing) {
+//
+// `stored` (the scopes' Display signal of a frame no Viewer prepared): the same statements find
+// the pixel's stored cell, and instead of the cell the program writes the float signal picture a
+// scope counts for it (render::displaySignalPixel, the DisplayUnpackV1 kernel's result): the
+// frame is packed and unpacked in one dispatch and never leaves the device.
+void emitPreviewPack(std::ostringstream& out, const std::string& functionName, const bool adjusted,
+                     const GpuOcioDisplayPacking& packing, const bool stored) {
+    const char* const refused = stored ? "return 1u << 16u; }\n"
+                                       : "bloom_ocio_output.words[index] = 0u; return 1u << 16u; "
+                                         "}\n";
     out << "uint bloom_ocio_pack_pixel(uint index, bool wide) {\n";
     out << "  ivec2 c = ivec2(int(index % bloom_ocio_push.width), int(index / "
            "bloom_ocio_push.width));\n";
@@ -187,11 +228,9 @@ void emitPreviewPack(std::ostringstream& out, const std::string& functionName,
     out << "  float a = p.a;\n";
     out << "  vec3 s = (a != 0.0) ? vec3(bloom_ocio_cpu_div(p.r, a), "
            "bloom_ocio_cpu_div(p.g, a), bloom_ocio_cpu_div(p.b, a)) : vec3(0.0);\n";
-    out << "  if (any(isnan(s)) || any(isinf(s))) { bloom_ocio_output.words[index] = 0u; return "
-           "1u << 16u; }\n";
+    out << "  if (any(isnan(s)) || any(isinf(s))) { " << refused;
     out << "  vec4 t = " << functionName << "(vec4(s, 1.0));\n";
-    out << "  if (any(isnan(t.rgb)) || any(isinf(t.rgb))) { bloom_ocio_output.words[index] = 0u; "
-           "return 1u << 16u; }\n";
+    out << "  if (any(isnan(t.rgb)) || any(isinf(t.rgb))) { " << refused;
     // The frame counters: the display color over black, before the Viewer's adjustment and
     // before any clamp.
     out << "  uint events = 0u;\n";
@@ -235,23 +274,48 @@ void emitPreviewPack(std::ostringstream& out, const std::string& functionName,
     out << "  uint qa = bloom_ocio_quantize(a);\n";
     out << "  bool allowed = a == 0.0 || qa == 255u;\n";
     out << "  if (!allowed) { events |= 1u; }\n";
-    // 10:10:10:2: a transparent pixel is the word 0. So is a pixel that is not allowed: the frame
-    // is then refused and packed again as 8:8:8:8.
-    out << "  if (wide) {\n";
-    out << "    uint word = 0u;\n";
-    out << "    if (allowed && a != 0.0) {\n";
-    out << "      word = bloom_ocio_code10(shown.r) | (bloom_ocio_code10(shown.g) << 10u) | "
-           "(bloom_ocio_code10(shown.b) << 20u) | (3u << 30u);\n";
-    out << "    }\n";
-    out << "    bloom_ocio_output.words[index] = word;\n";
-    out << "  } else {\n";
-    out << "    uint r = bloom_ocio_quantize(shown.r);\n";
-    out << "    uint g = bloom_ocio_quantize(shown.g);\n";
-    out << "    uint b = bloom_ocio_quantize(shown.b);\n";
-    out << "    bloom_ocio_output.words[index] = r | (g << 8) | (b << 16) | (qa << 24);\n";
-    out << "  }\n";
-    out << "  return events;\n";
-    out << "}\n";
+    if (stored) {
+        // The Display code of each channel over black and the stored alpha, in whole numbers,
+        // then code / 1023 correctly rounded: 10:10:10:2 keeps the code of an opaque pixel and
+        // is 0 for any other; straight 8:8:8:8 is round(c8 * a8 * 1023 / 65025) with alpha
+        // a8 / 255.
+        out << "  uvec3 codes = uvec3(0u);\n";
+        out << "  float alpha = 0.0;\n";
+        out << "  if (wide) {\n";
+        out << "    if (allowed && a != 0.0) {\n";
+        out << "      codes = uvec3(bloom_ocio_code10(shown.r), bloom_ocio_code10(shown.g), "
+               "bloom_ocio_code10(shown.b));\n";
+        out << "      alpha = 1.0;\n";
+        out << "    }\n";
+        out << "  } else {\n";
+        out << "    uvec3 color = uvec3(bloom_ocio_quantize(shown.r), "
+               "bloom_ocio_quantize(shown.g), bloom_ocio_quantize(shown.b));\n";
+        out << "    codes = (color * qa * 2046u + uvec3(65025u)) / uvec3(130050u);\n";
+        out << "    alpha = bloom_ocio_ratio(qa, 255u);\n";
+        out << "  }\n";
+        out << "  imageStore(bloom_ocio_output, c, vec4(bloom_ocio_ratio(codes.r, 1023u), "
+               "bloom_ocio_ratio(codes.g, 1023u), bloom_ocio_ratio(codes.b, 1023u), alpha));\n";
+        out << "  return events;\n";
+        out << "}\n";
+    } else {
+        // 10:10:10:2: a transparent pixel is the word 0. So is a pixel that is not allowed: the
+        // frame is then refused and packed again as 8:8:8:8.
+        out << "  if (wide) {\n";
+        out << "    uint word = 0u;\n";
+        out << "    if (allowed && a != 0.0) {\n";
+        out << "      word = bloom_ocio_code10(shown.r) | (bloom_ocio_code10(shown.g) << 10u) | "
+               "(bloom_ocio_code10(shown.b) << 20u) | (3u << 30u);\n";
+        out << "    }\n";
+        out << "    bloom_ocio_output.words[index] = word;\n";
+        out << "  } else {\n";
+        out << "    uint r = bloom_ocio_quantize(shown.r);\n";
+        out << "    uint g = bloom_ocio_quantize(shown.g);\n";
+        out << "    uint b = bloom_ocio_quantize(shown.b);\n";
+        out << "    bloom_ocio_output.words[index] = r | (g << 8) | (b << 16) | (qa << 24);\n";
+        out << "  }\n";
+        out << "  return events;\n";
+        out << "}\n";
+    }
     out << "void main() {\n";
     out << "  const uint bloom_ocio_stride_x = gl_NumWorkGroups.x * gl_WorkGroupSize.x;\n";
     out << "  uint index = gl_GlobalInvocationID.y * bloom_ocio_stride_x + "
@@ -319,8 +383,9 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
             return failure(GpuOcioWrapperError::UnsupportedViewAdjust);
         }
         const bool adjusted = (display || scopeDisplay) && !viewAdjust.neutral();
-        // #733: only a display pack can be a preview pack, and its coefficients are finite.
-        if (!packing.valid() || (packing.preview() && !display)) {
+        // #733: only a display pack and the scopes' display step can be a preview pack, and its
+        // coefficients are finite.
+        if (!packing.valid() || (packing.preview() && !display && !scopeDisplay)) {
             return failure(GpuOcioWrapperError::InvalidDisplayPacking);
         }
         if (packing.luma.has_value() &&
@@ -329,6 +394,9 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
             return failure(GpuOcioWrapperError::InvalidDisplayPacking);
         }
         const bool preview = display && packing.preview();
+        // The scopes' Display signal of a frame no Viewer prepared: the frame's stored cells,
+        // unpacked (emitPreviewPack).
+        const bool stored = scopeDisplay && packing.preview();
 
         // Shared versioned per-sampler precise-sampling adapter. OCIO's generated body samples LUT
         // resources with the built-in texture(), whose hardware filtering is not full precision;
@@ -364,16 +432,19 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
         }
         out << sampling.definitions;
         out << color::ocioGpuPreciseDivisionGlsl();
-        if (display) {
+        if (display || stored) {
             out << kQuantizerGlsl;
         }
         if (adjusted) {
             out << viewAdjustGlsl(viewAdjust);
         }
-        if (preview) {
+        if (preview || stored) {
             // The preview packs have their own pixel function and gathering main().
             out << kPreviewPackGlsl;
-            emitPreviewPack(out, program.functionName, adjusted, packing);
+            if (stored) {
+                out << kStoredSignalGlsl;
+            }
+            emitPreviewPack(out, program.functionName, adjusted, packing, stored);
             return finish(out.str());
         }
         out << "void main() {\n";

@@ -383,8 +383,7 @@ GpuOcioProgramExecutor::begin(std::shared_ptr<const PreparedGpuOcioCommand> comm
                               "the uniform override does not match the declared UBO size");
     }
     const bool display = command->encoding() == GpuOcioOutputEncoding::DisplayRgba8;
-    if (!command->displayPacking().packs(displayLayout) ||
-        (!display && displayLayout != render::DisplayPixelLayout::Straight8888)) {
+    if (!command->displayPacking().packs(displayLayout)) {
         return makeDiagnostic(GpuOcioExecutorDiagnosticCode::InvalidArgument,
                               "the command does not pack the layout the dispatch asks for");
     }
@@ -400,7 +399,8 @@ GpuOcioProgramExecutor::begin(std::shared_ptr<const PreparedGpuOcioCommand> comm
     const auto nativeDiagnostic =
         display ? native->beginDisplay(input, uniformBytes, byteBudget,
                                        command->displayPacking().nativeRequest(displayLayout))
-                : native->beginEffect(input, uniformBytes, byteBudget);
+                : native->beginEffect(input, uniformBytes, byteBudget,
+                                      command->displayPacking().nativeRequest(displayLayout));
     if (nativeDiagnostic.code != render::GpuOcioProgramDiagnosticCode::None) {
         static_cast<void>(native->discardRetiredFailure(*impl.device));
         const auto code = mapProgramCode(nativeDiagnostic.code);

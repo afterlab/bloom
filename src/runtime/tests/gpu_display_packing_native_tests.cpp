@@ -831,6 +831,101 @@ void testGeneralDisplay(Expectations& checks, GpuDevice& device,
     checks.expect(adjustedRun.report.has_value() &&
                       adjustedRun.report->counters == cpuWide->counters,
                   "general: the counters are the display signal's, before the adjustment");
+
+    // The scopes' display step of a frame no Viewer prepared (a headless read). One program
+    // finds each pixel's stored cell with the preview pack's statements and writes the float
+    // signal a scope counts for it, so its picture is the display arm's packed cells, unpacked,
+    // bit for bit, with the same report; the frame never leaves the device as a picture.
+    GpuOcioTransformSpec storedSpec;
+    storedSpec.kind = GpuOcioTransformKind::ScopeDisplay;
+    storedSpec.display = displayName;
+    storedSpec.view = viewName;
+    storedSpec.workingSpaceId = std::string(config.processColorSpaceId());
+    storedSpec.displayPacking = preview;
+    const auto storedCommand =
+        preparer.prepare(config, storedSpec, geometry, compileOptions()).command;
+    auto scopeExecutor = bloom::runtime::GpuOcioProgramExecutor::create(device);
+    checks.expect(storedCommand != nullptr && scopeExecutor.hasValue(),
+                  "stored signal: the scope display command and its executor prepare");
+    if (storedCommand == nullptr || !scopeExecutor) {
+        return;
+    }
+    struct StoredRun final {
+        GpuOcioExecutorPollResult poll = GpuOcioExecutorPollResult::Failure;
+        GpuOcioExecutorDiagnosticCode code = GpuOcioExecutorDiagnosticCode::None;
+        std::optional<GpuDisplayPackReport> report;
+        std::vector<Rgba32f> pixels;
+    };
+    const auto runStored = [&](const std::shared_ptr<const GpuImage>& input,
+                               const DisplayPixelLayout layout) {
+        StoredRun run;
+        auto& executor = *scopeExecutor.executor;
+        if (executor.begin(storedCommand, input, {}, kBudget, layout).code !=
+            GpuOcioExecutorDiagnosticCode::None) {
+            return run;
+        }
+        run.poll = GpuOcioExecutorPollResult::Pending;
+        while (run.poll == GpuOcioExecutorPollResult::Pending) {
+            run.poll = executor.poll();
+        }
+        run.report = executor.displayPackReport();
+        run.code = executor.diagnostic().code;
+        if (run.poll != GpuOcioExecutorPollResult::Ready) {
+            return run;
+        }
+        const auto output = executor.takeEffectOutput();
+        if (output != nullptr) {
+            auto readback = bloom::render::readbackResidentImage(*output, kBudget);
+            if (readback.hasValue()) {
+                run.pixels = std::move(readback.pixels);
+            }
+        }
+        return run;
+    };
+    const auto unpacks = [](const std::span<const Rgba32f> signal, const DisplayPixelLayout layout,
+                            const std::span<const Rgba8> cells) {
+        if (signal.empty() || signal.size() != cells.size()) {
+            return false;
+        }
+        for (std::size_t index = 0; index < cells.size(); ++index) {
+            const auto expected = bloom::render::displaySignalPixel(layout, cells[index]);
+            if (std::bit_cast<std::array<std::uint32_t, 4>>(signal[index]) !=
+                std::bit_cast<std::array<std::uint32_t, 4>>(expected)) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const auto storedWide = runStored(mixedInput, DisplayPixelLayout::Rgb10A2);
+    checks.expect(storedWide.poll == GpuOcioExecutorPollResult::Ready &&
+                      unpacks(storedWide.pixels, DisplayPixelLayout::Rgb10A2, wideRun.cells) &&
+                      storedWide.report == wideRun.report,
+                  "stored signal 10:10:10:2: the picture is the packed cells, unpacked, and the "
+                  "report is the pack's");
+    const auto storedRefused = runStored(softInput, DisplayPixelLayout::Rgb10A2);
+    checks.expect(storedRefused.poll == GpuOcioExecutorPollResult::Failure &&
+                      storedRefused.code == GpuOcioExecutorDiagnosticCode::LayoutRefused &&
+                      storedRefused.report.has_value() && !storedRefused.report->allowsRgb10A2 &&
+                      storedRefused.pixels.empty(),
+                  "stored signal: a soft frame refuses 10:10:10:2 and publishes no picture");
+    const auto storedSoft = runStored(softInput, DisplayPixelLayout::Straight8888);
+    checks.expect(storedSoft.poll == GpuOcioExecutorPollResult::Ready &&
+                      unpacks(storedSoft.pixels, DisplayPixelLayout::Straight8888, softRun.cells) &&
+                      storedSoft.report == softRun.report,
+                  "stored signal 8:8:8:8: the picture is the packed cells, unpacked, and the "
+                  "report is the pack's");
+    // The float display step keeps the one layout.
+    GpuOcioTransformSpec floatSpec = storedSpec;
+    floatSpec.displayPacking = {};
+    const auto floatCommand =
+        preparer.prepare(config, floatSpec, geometry, compileOptions()).command;
+    checks.expect(
+        floatCommand != nullptr && floatCommand->identity() != storedCommand->identity() &&
+            scopeExecutor.executor
+                    ->begin(floatCommand, mixedInput, {}, kBudget, DisplayPixelLayout::Rgb10A2)
+                    .code == GpuOcioExecutorDiagnosticCode::InvalidArgument,
+        "stored signal: a scope display command without the packing is a command of "
+        "its own and takes no layout");
 }
 
 #endif // BLOOM_GPUSHADER_TOOLS_DIR

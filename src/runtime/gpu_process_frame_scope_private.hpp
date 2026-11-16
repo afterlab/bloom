@@ -6,6 +6,7 @@
 // queue, bootstrap or lifecycle.
 
 #include <bloom/render/gpu_device.hpp>
+#include <bloom/render/gpu_display_pack.hpp>
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/gpu_scope_tables.hpp>
 #include <bloom/runtime/gpu_ocio_program_executor.hpp>
@@ -36,6 +37,10 @@ struct ScopeMeasureWork final {
 
     // Owner.
     std::optional<ScopeCounts> counts;
+    // #733, a display step with a preview packing (the Display signal of a frame no Viewer
+    // prepared): what the step reported, the layout the frame's stored cells take and the frame
+    // counters.
+    std::optional<render::GpuDisplayPackReport> displayReport;
     std::uint64_t colorDispatches = 0;
     std::uint64_t tableReadbacks = 0;
     std::uint64_t tableReadbackBytes = 0;
@@ -163,6 +168,8 @@ class ScopeMeasureStepper final {
     std::uint64_t dispatchesBefore_ = 0;
     Phase phase_ = Phase::Next;
     bool displayDone_ = false;
+    // The display step's 10:10:10:2 dispatch was refused: the frame is straight 8:8:8:8.
+    bool displayStraight_ = false;
     bool xyzDone_ = false;
     bool colorDispatchCounted_ = false;
     bool stopIssued_ = false;
