@@ -1333,6 +1333,7 @@ bool GpuPreviewDisplayServiceTestAccess::sampleResidentFrameSparse(
                 return;
             }
             shared->pixels = readback.pixels;
+            shared->layout = pinned.pin.image().pixelLayout();
             shared->width = pinned.pin.image().width();
             shared->height = pinned.pin.image().height();
             shared->ran = true;

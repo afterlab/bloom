@@ -276,6 +276,19 @@ selectSampleCoordinates(const PreparedPreviewFrame& cpuFrame, const std::size_t 
     return coordinates;
 }
 
+// A cell sampled from a resident image against the CPU oracle's cell of the same pixel. The two
+// are packed by one rule, so they are in the same layout, and they agree as the host-painted
+// evidence holds whole frames to: alpha exactly, color within one code of the layout (of 255 for a
+// straight frame, of 1023 for a 10:10:10:2 frame). A sampled cell is never read as four 8-bit
+// channels without its layout: a 10:10:10:2 cell is one packed word.
+[[nodiscard]] inline bool residentCellMatchesOracle(const render::DisplayPixelLayout gpuLayout,
+                                                    const render::Rgba8 gpuCell,
+                                                    const render::DisplayPixelLayout cpuLayout,
+                                                    const render::Rgba8 cpuCell) noexcept {
+    return render::displayFramesAgree(gpuLayout, std::span<const render::Rgba8>(&gpuCell, 1),
+                                      cpuLayout, std::span<const render::Rgba8>(&cpuCell, 1), 1U);
+}
+
 // The per-frame verification evidence: the production identity digest plus paired actual-GPU and
 // CPU-oracle sparse samples. It is produced only when the real owner-thread sparse readback ran and
 // every sampled GPU value matched the CPU oracle within one code (RGB) and exactly (alpha). The
@@ -335,20 +348,29 @@ struct FrameEvidence final {
         std::cout << "PHASE sparse-readback-retry firstAttempt=" << firstAttemptDiagnostic << '\n';
     }
     const auto width = view->displayWindow.extent().width();
-    const auto channelDelta = [](const std::uint8_t a, const std::uint8_t b) {
-        return std::abs(static_cast<int>(a) - static_cast<int>(b));
-    };
+    if (sampled.layout != view->pixelLayout) {
+        detail = "the resident image is " + std::string(render::displayPixelLayoutId(sampled.layout)) +
+                 " and the CPU oracle " +
+                 std::string(render::displayPixelLayoutId(view->pixelLayout));
+        return false;
+    }
     for (std::size_t index = 0; index < coordinates.size(); ++index) {
         const auto x = coordinates[index].x;
         const auto y = coordinates[index].y;
-        // The oracle may be a 10:10:10:2 frame; the sparse copy is an 8-bit readback, so the two
-        // meet at the presented pixel.
-        const auto cpu = view->presentedPixel(static_cast<std::size_t>(y) * width + x);
-        const auto gpu = sampled.pixels[index];
-        if (channelDelta(gpu.red, cpu.red) > 1 || channelDelta(gpu.green, cpu.green) > 1 ||
-            channelDelta(gpu.blue, cpu.blue) > 1 || gpu.alpha != cpu.alpha) {
+        // Both are cells of the one layout; the evidence records the pixel each presents.
+        const auto cpuCell = view->pixels[static_cast<std::size_t>(y) * width + x];
+        const auto gpuCell = sampled.pixels[index];
+        const auto cpu = render::presentedRgba8(view->pixelLayout, cpuCell);
+        const auto gpu = render::presentedRgba8(sampled.layout, gpuCell);
+        if (!residentCellMatchesOracle(sampled.layout, gpuCell, view->pixelLayout, cpuCell)) {
+            const auto text = [](const render::Rgba8 pixel) {
+                return std::to_string(pixel.red) + "," + std::to_string(pixel.green) + "," +
+                       std::to_string(pixel.blue) + "," + std::to_string(pixel.alpha);
+            };
             detail = "the actual GPU pixel differs from the CPU oracle at (" + std::to_string(x) +
-                     "," + std::to_string(y) + ")";
+                     "," + std::to_string(y) + "): GPU presents " + text(gpu) + ", CPU " +
+                     text(cpu) + " (" +
+                     std::string(render::displayPixelLayoutId(view->pixelLayout)) + ")";
             return false;
         }
         out.samples.push_back(SparseSample{x, y, cpu, gpu});

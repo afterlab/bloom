@@ -450,19 +450,20 @@ struct StatisticsLog final {
         detail = "the dense sample was unavailable: " + sampled.diagnostic;
         return false;
     }
-    gpu = sampled.pixels;
+    if (sampled.layout != view->pixelLayout) {
+        detail = "the resident image and the CPU oracle are in different layouts";
+        return false;
+    }
+    // The samples are the image's cells in its layout; `gpu` is given the pixels they present.
+    gpu.clear();
+    gpu.reserve(sampled.pixels.size());
     std::size_t differing = 0;
     for (std::size_t index = 0; index < coordinates.size(); ++index) {
-        // The oracle may be a 10:10:10:2 frame and the sample is an 8-bit readback: compare the
-        // pixel the oracle presents.
-        const auto cpu = view->presentedPixel(
-            static_cast<std::size_t>(coordinates[index].y) * width + coordinates[index].x);
-        const auto& sample = gpu[index];
-        const auto delta = [](const std::uint8_t a, const std::uint8_t b) {
-            return std::abs(static_cast<int>(a) - static_cast<int>(b));
-        };
-        if (delta(sample.red, cpu.red) > 1 || delta(sample.green, cpu.green) > 1 ||
-            delta(sample.blue, cpu.blue) > 1 || sample.alpha != cpu.alpha)
+        const auto cpuCell = view->pixels[static_cast<std::size_t>(coordinates[index].y) * width +
+                                          coordinates[index].x];
+        gpu.push_back(render::presentedRgba8(sampled.layout, sampled.pixels[index]));
+        if (!routeproof::residentCellMatchesOracle(sampled.layout, sampled.pixels[index],
+                                                   view->pixelLayout, cpuCell))
             ++differing;
     }
     detail =

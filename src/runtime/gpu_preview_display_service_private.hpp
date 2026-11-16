@@ -707,12 +707,15 @@ struct PreviewDisplayBenchmarkSample final {
 runGpuPreviewDisplayBenchmark(const std::filesystem::path& loader);
 
 // Test-only result of one owner-thread sparse copy out of a resident frame lease. `pixels` is one
-// entry per requested coordinate. The sparse byte and submission totals this represents are
-// test-only and are never folded into the production full-frame readback counters.
+// entry per requested coordinate: the image's own cells, in the image's `layout` (#733: a
+// 10:10:10:2 image gives packed words, read through render/display_pixel_packing.hpp, never as
+// four 8-bit channels). The sparse byte and submission totals this represents are test-only and
+// are never folded into the production full-frame readback counters.
 struct ResidentSparseSampleResult final {
     bool ran = false;
     std::string diagnostic;
     std::vector<render::Rgba8> pixels;
+    render::DisplayPixelLayout layout = render::DisplayPixelLayout::Straight8888;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
 };

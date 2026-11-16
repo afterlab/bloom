@@ -121,9 +121,10 @@ struct ImagePixelCoordinate final {
 };
 
 // The test-only sparse counterpart of the full readback: it copies exactly the requested pixels
-// from the resident RGBA8 display image on the owner thread, so a route proof can compare a handful
+// from the resident display image on the owner thread, so a route proof can compare a handful
 // of actual GPU values (content, alpha edges, transparent pixels) against the CPU oracle without a
-// full-frame transfer. It never increments a production readback counter; a caller reports its own
+// full-frame transfer. Each entry is the image's cell in the image's own layout (pixelLayout()):
+// four 8-bit channels of an RGBA8 image, one packed word of a 10:10:10:2 image. It never increments a production readback counter; a caller reports its own
 // sparse byte/submission totals separately. Owner-thread only; debug/parity use.
 struct GpuDisplayImageSparseReadback final {
     GpuDisplayImageReadbackCode code = GpuDisplayImageReadbackCode::None;
