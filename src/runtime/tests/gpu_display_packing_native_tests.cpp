@@ -625,10 +625,11 @@ struct ArmRun final {
 [[nodiscard]] ArmRun runArm(GpuOcioDisplayArm& arm,
                             const std::shared_ptr<const PreparedGpuOcioCommand>& command,
                             const std::shared_ptr<const GpuImage>& input, const Frame& frame,
-                            const ViewAdjust adjust = {}) {
+                            const DisplayPixelLayout layout, const ViewAdjust adjust = {}) {
     ArmRun run;
     GpuOcioDisplayRequest request;
     request.command = command;
+    request.layout = layout;
     request.input = input;
     request.width = frame.width;
     request.height = frame.height;
@@ -683,24 +684,19 @@ void testGeneralDisplay(Expectations& checks, GpuDevice& device,
         spec.displayPacking = packing;
         return preparer.prepare(config, spec, geometry, compileOptions()).command;
     };
-    const GpuOcioDisplayPacking wide{GpuOcioDisplayPackingMode::PreviewRgb10A2, kLuma};
-    const GpuOcioDisplayPacking straight{GpuOcioDisplayPackingMode::PreviewStraight8888, kLuma};
+    const GpuOcioDisplayPacking preview{GpuOcioDisplayPackingMode::Preview, kLuma};
     const auto legacy = prepare({}, {});
-    const auto wideCommand = prepare(wide, {});
-    const auto straightCommand = prepare(straight, {});
-    checks.expect(legacy != nullptr && wideCommand != nullptr && straightCommand != nullptr,
-                  "general: the three display commands prepare");
-    if (legacy == nullptr || wideCommand == nullptr || straightCommand == nullptr) {
+    const auto previewCommand = prepare(preview, {});
+    checks.expect(legacy != nullptr && previewCommand != nullptr,
+                  "general: the two display commands prepare");
+    if (legacy == nullptr || previewCommand == nullptr) {
         return;
     }
-    checks.expect(legacy->identity() != wideCommand->identity() &&
-                      legacy->identity() != straightCommand->identity() &&
-                      wideCommand->identity() != straightCommand->identity() &&
+    checks.expect(legacy->identity() != previewCommand->identity() &&
                       !legacy->displayPacking().preview() &&
-                      wideCommand->displayPacking() == wide &&
-                      straightCommand->displayPacking() == straight,
-                  "general: each packing is a command of its own");
-    checks.expect(prepare(wide, {}) == wideCommand && prepare({}, {}) == legacy,
+                      previewCommand->displayPacking() == preview,
+                  "general: the preview pack is a command of its own, one for both layouts");
+    checks.expect(prepare(preview, {}) == previewCommand && prepare({}, {}) == legacy,
                   "general: a prepared packing is served again from the preparer's cache");
     checks.expect(
         bloom::runtime::buildGpuOcioWrapperGlsl(legacy->program(), {}, {}).sourceDigest ==
@@ -730,17 +726,18 @@ void testGeneralDisplay(Expectations& checks, GpuDevice& device,
         return;
     }
 
-    // The program qualification holds each command to the CPU packer of its own layout.
-    for (const auto& command : {wideCommand, straightCommand, legacy}) {
+    // The program qualification holds a preview command to the CPU packer in both layouts.
+    for (const auto& command : {previewCommand, legacy}) {
         const auto report = bloom::runtime::qualifyGpuOcioDisplay(
             command, *cpuHandle.handle(), device,
             bloom::runtime::GpuOcioDisplayQualificationBudgets{kBudget, kBudget});
         checks.expect(report.outcome() == bloom::runtime::GpuOcioDisplayOutcome::PreviewOnly &&
                           report.eligibleFor(device, *command),
-                      "general: each packing's command qualifies against the CPU packer");
+                      "general: each command qualifies against the CPU packer");
     }
 
-    const auto wideRun = runArm(*arm.arm, wideCommand, mixedInput, mixed);
+    const auto wideRun =
+        runArm(*arm.arm, previewCommand, mixedInput, mixed, DisplayPixelLayout::Rgb10A2);
     checks.expect(wideRun.poll == GpuOcioExecutorPollResult::Ready &&
                       wideRun.layout == DisplayPixelLayout::Rgb10A2 &&
                       cellsMatch(DisplayPixelLayout::Rgb10A2, wideRun.cells, cpuWide->cells, 1),
@@ -750,13 +747,17 @@ void testGeneralDisplay(Expectations& checks, GpuDevice& device,
                       wideRun.imageReport == wideRun.report,
                   "general 10:10:10:2: the layout flag and the counters equal the CPU's");
 
-    const auto refused = runArm(*arm.arm, wideCommand, softInput, soft);
+    // One layout holds for a frame and the device learns which by packing: the refused frame
+    // is packed again by the same command, from the same picture, as 8:8:8:8.
+    const auto refused =
+        runArm(*arm.arm, previewCommand, softInput, soft, DisplayPixelLayout::Rgb10A2);
     checks.expect(refused.poll == GpuOcioExecutorPollResult::Failure &&
                       refused.code == GpuOcioExecutorDiagnosticCode::LayoutRefused &&
                       refused.report.has_value() && !refused.report->allowsRgb10A2 &&
                       refused.cells.empty(),
                   "general: a 10:10:10:2 pack of a soft frame is refused, nothing published");
-    const auto softRun = runArm(*arm.arm, straightCommand, softInput, soft);
+    const auto softRun =
+        runArm(*arm.arm, previewCommand, softInput, soft, DisplayPixelLayout::Straight8888);
     checks.expect(softRun.poll == GpuOcioExecutorPollResult::Ready &&
                       softRun.layout == DisplayPixelLayout::Straight8888 &&
                       cellsMatch(DisplayPixelLayout::Straight8888, softRun.cells, cpuSoft->cells,
@@ -764,22 +765,41 @@ void testGeneralDisplay(Expectations& checks, GpuDevice& device,
                       softRun.report.has_value() && !softRun.report->allowsRgb10A2 &&
                       softRun.report->counters == cpuSoft->counters,
                   "general 8:8:8:8: the soft frame packs with the CPU's pixels and counters");
-    const auto legacyRun = runArm(*arm.arm, legacy, softInput, soft);
+    // A straight pack of a frame that allows 10:10:10:2 says so, and that frame is packed again.
+    const auto fitsRun =
+        runArm(*arm.arm, previewCommand, mixedInput, mixed, DisplayPixelLayout::Straight8888);
+    checks.expect(fitsRun.poll == GpuOcioExecutorPollResult::Ready &&
+                      fitsRun.layout == DisplayPixelLayout::Straight8888 &&
+                      fitsRun.report.has_value() && fitsRun.report->allowsRgb10A2 &&
+                      fitsRun.report->counters == cpuWide->counters,
+                  "general 8:8:8:8: a frame that allows 10:10:10:2 is reported as such");
+    const auto wideAgain =
+        runArm(*arm.arm, previewCommand, mixedInput, mixed, DisplayPixelLayout::Rgb10A2);
+    checks.expect(wideAgain.poll == GpuOcioExecutorPollResult::Ready &&
+                      wideAgain.cells == wideRun.cells && wideAgain.report == wideRun.report,
+                  "general: the same frame packs to the same words whatever was packed before");
+    const auto legacyRun =
+        runArm(*arm.arm, legacy, softInput, soft, DisplayPixelLayout::Straight8888);
     checks.expect(legacyRun.poll == GpuOcioExecutorPollResult::Ready &&
                       legacyRun.cells == softRun.cells && !legacyRun.report.has_value() &&
                       !legacyRun.imageReport.has_value(),
                   "general: the long-standing pack gives the same words and reports nothing");
+    const auto legacyWide =
+        runArm(*arm.arm, legacy, mixedInput, mixed, DisplayPixelLayout::Rgb10A2);
+    checks.expect(legacyWide.begun == GpuOcioDisplayArmDiagnosticCode::InvalidRequest,
+                  "general: the long-standing pack has one layout and refuses another");
 
     // The Viewer's exposure and gamma change the packed codes, never the frame counters.
     constexpr ViewAdjust adjust{.exposure = 1.0, .gamma = 0.8};
-    const auto adjustedCommand = prepare(wide, adjust);
+    const auto adjustedCommand = prepare(preview, adjust);
     checks.expect(adjustedCommand != nullptr &&
-                      adjustedCommand->identity() != wideCommand->identity(),
+                      adjustedCommand->identity() != previewCommand->identity(),
                   "general: an adjusted pack is a command of its own");
     if (adjustedCommand == nullptr) {
         return;
     }
-    const auto adjustedRun = runArm(*arm.arm, adjustedCommand, mixedInput, mixed, adjust);
+    const auto adjustedRun = runArm(*arm.arm, adjustedCommand, mixedInput, mixed,
+                                    DisplayPixelLayout::Rgb10A2, adjust);
     bool adjustedMatch = adjustedRun.poll == GpuOcioExecutorPollResult::Ready &&
                          adjustedRun.cells.size() == mixed.pixels.size();
     for (std::size_t index = 0; adjustedMatch && index < mixed.pixels.size(); ++index) {

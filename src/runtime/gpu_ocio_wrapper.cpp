@@ -175,10 +175,12 @@ bool bloom_ocio_finite(float value)
 
 // One pixel of a preview pack and the workgroup's gathering main(). The pixel function returns
 // what it found: bit 0 the pixel refuses 10:10:10:2, bits 1..4 under (red, green, blue, luma),
-// bits 5..8 over, bit 9 not finite, bit 16 the error.
+// bits 5..8 over, bit 9 not finite, bit 16 the error. `wide` is the dispatch's layout word, which
+// the host wrote into the status block before the dispatch (kGpuDisplayPackStatusLayout): the
+// same program packs either layout.
 void emitPreviewPack(std::ostringstream& out, const std::string& functionName,
                      const bool adjusted, const GpuOcioDisplayPacking& packing) {
-    out << "uint bloom_ocio_pack_pixel(uint index) {\n";
+    out << "uint bloom_ocio_pack_pixel(uint index, bool wide) {\n";
     out << "  ivec2 c = ivec2(int(index % bloom_ocio_push.width), int(index / "
            "bloom_ocio_push.width));\n";
     out << "  vec4 p = imageLoad(bloom_ocio_input, c);\n";
@@ -233,30 +235,32 @@ void emitPreviewPack(std::ostringstream& out, const std::string& functionName,
     out << "  uint qa = bloom_ocio_quantize(a);\n";
     out << "  bool allowed = a == 0.0 || qa == 255u;\n";
     out << "  if (!allowed) { events |= 1u; }\n";
-    if (packing.mode == GpuOcioDisplayPackingMode::PreviewRgb10A2) {
-        // A transparent pixel is the word 0. So is a pixel that is not allowed: the frame is
-        // then refused and packed again as 8:8:8:8.
-        out << "  uint word = 0u;\n";
-        out << "  if (allowed && a != 0.0) {\n";
-        out << "    word = bloom_ocio_code10(shown.r) | (bloom_ocio_code10(shown.g) << 10u) | "
-               "(bloom_ocio_code10(shown.b) << 20u) | (3u << 30u);\n";
-        out << "  }\n";
-        out << "  bloom_ocio_output.words[index] = word;\n";
-    } else {
-        out << "  uint r = bloom_ocio_quantize(shown.r);\n";
-        out << "  uint g = bloom_ocio_quantize(shown.g);\n";
-        out << "  uint b = bloom_ocio_quantize(shown.b);\n";
-        out << "  bloom_ocio_output.words[index] = r | (g << 8) | (b << 16) | (qa << 24);\n";
-    }
+    // 10:10:10:2: a transparent pixel is the word 0. So is a pixel that is not allowed: the frame
+    // is then refused and packed again as 8:8:8:8.
+    out << "  if (wide) {\n";
+    out << "    uint word = 0u;\n";
+    out << "    if (allowed && a != 0.0) {\n";
+    out << "      word = bloom_ocio_code10(shown.r) | (bloom_ocio_code10(shown.g) << 10u) | "
+           "(bloom_ocio_code10(shown.b) << 20u) | (3u << 30u);\n";
+    out << "    }\n";
+    out << "    bloom_ocio_output.words[index] = word;\n";
+    out << "  } else {\n";
+    out << "    uint r = bloom_ocio_quantize(shown.r);\n";
+    out << "    uint g = bloom_ocio_quantize(shown.g);\n";
+    out << "    uint b = bloom_ocio_quantize(shown.b);\n";
+    out << "    bloom_ocio_output.words[index] = r | (g << 8) | (b << 16) | (qa << 24);\n";
+    out << "  }\n";
     out << "  return events;\n";
     out << "}\n";
     out << "void main() {\n";
     out << "  const uint bloom_ocio_stride_x = gl_NumWorkGroups.x * gl_WorkGroupSize.x;\n";
     out << "  uint index = gl_GlobalInvocationID.y * bloom_ocio_stride_x + "
            "gl_GlobalInvocationID.x;\n";
+    out << "  const bool wide = bloom_ocio_status.flags[" << render::kGpuDisplayPackStatusLayout
+        << "] != 0u;\n";
     out << "  uint events = 0u;\n";
-    out << "  if (index < bloom_ocio_push.pixelCount) { events = bloom_ocio_pack_pixel(index); "
-           "}\n";
+    out << "  if (index < bloom_ocio_push.pixelCount) { events = bloom_ocio_pack_pixel(index, "
+           "wide); }\n";
     out << "  bloom_ocio_events[gl_LocalInvocationIndex] = events;\n";
     out << "  memoryBarrierShared();\n";
     out << "  barrier();\n";

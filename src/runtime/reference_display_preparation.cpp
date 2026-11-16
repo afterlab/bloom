@@ -110,9 +110,10 @@ referenceDisplayDiagnosticCodeId(const ReferenceDisplayDiagnosticCode code) noex
 
 ReferenceDisplayFrame::ReferenceDisplayFrame(ReferenceDisplayFrameIdentity identity,
                                              std::shared_ptr<const ProcessFrame> processFrame,
-                                             render::PreparedReferenceDisplayBuffer buffer) noexcept
+                                             render::PreparedReferenceDisplayBuffer buffer,
+                                             const render::DisplayFrameCounters counters) noexcept
     : identity_(std::move(identity)), processFrame_(std::move(processFrame)),
-      buffer_(std::move(buffer)) {}
+      buffer_(std::move(buffer)), counters_(counters) {}
 
 ReferenceDisplayPreparationResult
 ReferenceDisplayPreparationResult::prepared(std::shared_ptr<const ReferenceDisplayFrame> frame,
@@ -226,10 +227,15 @@ ReferenceDisplayPreparationResult CpuReferenceDisplayPreparer::prepare(
             {.stage = ReferenceDisplayProgressStage::Mapping, .completed = 0, .total = height});
         auto& buffer = *displayBuilder.value();
         const auto& source = *processView.value();
+        // #733: each row counts into its own slot (a band runs on another thread), and the slots
+        // are summed after the pass, so the counters are the same whatever the bands were.
+        std::vector<render::DisplayFrameCounters> rowCounters(height);
         const auto outcome = runRowBandPass(
             rowBands, cancellation, height, window.originY(),
-            [&buffer, &source, adjust = request.viewAdjust, window,
+            [&buffer, &source, &rowCounters, adjust = request.viewAdjust, window,
              wide](const std::int64_t y) -> std::optional<ReferenceDisplayDiagnostic> {
+                render::countLinearRec709SceneDisplayRow(
+                    source, window, y, rowCounters[static_cast<std::size_t>(y - window.originY())]);
                 auto outputRow = buffer.row(y);
                 if (!outputRow) {
                     return imageDiagnostic(*outputRow.error(),
@@ -310,8 +316,13 @@ ReferenceDisplayPreparationResult CpuReferenceDisplayPreparer::prepare(
             .viewName = request.viewName,
             .showLook = request.showLook,
         };
-        auto frame = std::shared_ptr<const ReferenceDisplayFrame>(new ReferenceDisplayFrame(
-            std::move(identity), std::move(processFrame), std::move(*displayBuffer.value())));
+        render::DisplayFrameCounters counters;
+        for (const auto& row : rowCounters) {
+            counters.add(row);
+        }
+        auto frame = std::shared_ptr<const ReferenceDisplayFrame>(
+            new ReferenceDisplayFrame(std::move(identity), std::move(processFrame),
+                                      std::move(*displayBuffer.value()), counters));
         return ReferenceDisplayPreparationResult::prepared(std::move(frame));
     } catch (const std::bad_alloc&) {
         return ReferenceDisplayPreparationResult::failed(

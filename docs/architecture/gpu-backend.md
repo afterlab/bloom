@@ -126,7 +126,9 @@ and not finite, counted from the float display result before the pack clamps it)
 a pixel read back. One layout holds for a whole frame and the device learns which only by packing:
 a 10:10:10:2 pack of a frame that does not allow it fails with the typed `LayoutRefused`, publishes
 nothing, and the caller packs that frame again as straight RGBA8. The general OCIO display program
-has the same two preview packs (`runtime::GpuOcioDisplayPacking`), each a program of its own. `GpuPathCoverage` is the vector coverage producer: the CPU builds the immutable
+has the same two preview packs (`runtime::GpuOcioDisplayPacking`) in one program: the host writes
+the dispatch's layout into word 11 of the status block, so a refused frame is packed again by the
+same program without a second shader. `GpuPathCoverage` is the vector coverage producer: the CPU builds the immutable
 `PathRasterCoverageGeometry` (bounded integer scanline sample spans, O(edges x rows), with no
 per-pixel mask and the exact `coverageRow` boundary comparison preserved through a bounded binary
 search over the real quarter-sample positions), and one pure-integer compute dispatch turns those

@@ -71,6 +71,10 @@ struct GpuOcioDisplayRequest final {
     ViewAdjust viewAdjust{};
     // Native transient byte budget for this one dispatch.
     std::uint64_t byteBudget = 0;
+    // #733: the layout this dispatch packs in. Only a preview command (GpuOcioDisplayPacking)
+    // packs Rgb10A2; a frame that does not allow it fails with LayoutRefused and the same command
+    // packs it again as Straight8888.
+    render::DisplayPixelLayout layout = render::DisplayPixelLayout::Straight8888;
 };
 
 enum class GpuOcioDisplayArmDiagnosticCode : std::uint8_t {
@@ -213,9 +217,9 @@ class GpuOcioDisplayQualificationReport;
 // native RGBA8 output to the independent CPU OCIO display oracle `cpuOracle` (the qualified CPU
 // display processor built for the SAME display/view the command was extracted for). Owner thread
 // only. The readback here exists ONLY to prove parity; the production route never calls it.
-// #733: a preview command (GpuOcioDisplayPacking) is qualified in its own layout against the CPU
-// packer of that layout, one code of the layout's scale with alpha exact, and must report the
-// layout flag its frame has; a 10:10:10:2 command is given a frame that layout can hold.
+// #733: a preview command (GpuOcioDisplayPacking) is qualified in both layouts, each against the
+// CPU packer of that layout, one code of the layout's scale with alpha exact, and must report the
+// layout flag its frame has; the 10:10:10:2 dispatch is given a frame that layout can hold.
 [[nodiscard]] GpuOcioDisplayQualificationReport
 qualifyGpuOcioDisplay(std::shared_ptr<const PreparedGpuOcioCommand> command,
                       const color::PreparedCpuDisplayProcessorHandle& cpuOracle,

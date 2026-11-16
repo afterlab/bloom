@@ -200,6 +200,58 @@ pollNative(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
                                     : core->display->poll();
 }
 
+// #733: what the host route's display pack is asked: a layout, and the luma coefficients of the
+// qualified display for the frame counters.
+[[nodiscard]] render::GpuDisplayPackRequest
+hostDisplayPack(const PreviewDisplayServiceCore& core, const render::DisplayPixelLayout layout) {
+    return render::GpuDisplayPackRequest{
+        .layout = layout,
+        .luma = core.processor != nullptr ? core.processor->displayLuma() : std::nullopt};
+}
+
+// #733: called once the host route's pack settled. One layout holds for a whole frame and the
+// device learns which only by packing it: when the frame's layout is not the one the pack was
+// asked for (a refused 10:10:10:2 pack, or an 8:8:8:8 pack whose report says every pixel allows
+// 10:10:10:2), the frame is packed once more in its own layout from the same process picture, and
+// nothing of the first pack is read back. True: that second pack is in flight. False: `poll`
+// stands, also when the second pack could not begin (the frame then ends as a native failure).
+[[nodiscard]] bool hostDisplayRepack(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                                     PreviewDisplayStageRecord& stage,
+                                     const render::GpuNeutralDisplayPollResult poll) {
+    if (stage.displayRepacked || stage.cancellationRequested || stage.nativeDiscard ||
+        stage.stage == nullptr || stage.stage->processFrame() == nullptr ||
+        core->display == nullptr || core->display->hasUnretiredSubmission() ||
+        core->stopping.load(std::memory_order_acquire)) {
+        return false;
+    }
+    const auto report = core->display->packReport();
+    if (!report.has_value()) {
+        return false;
+    }
+    const auto& identity = stage.stage->desiredIdentity();
+    render::DisplayPixelLayout next = render::DisplayPixelLayout::Straight8888;
+    if (poll == render::GpuNeutralDisplayPollResult::Ready) {
+        if (report->frameLayout() == stage.displayLayoutAsked) {
+            noteDisplayLayout(*core, identity, stage.displayLayoutAsked);
+            return false;
+        }
+        next = report->frameLayout();
+    } else if (poll != render::GpuNeutralDisplayPollResult::Failure ||
+               core->display->diagnostic().code !=
+                   render::GpuNeutralDisplayDiagnosticCode::LayoutRefused) {
+        return false;
+    }
+    noteDisplayLayout(*core, identity, next);
+    stage.displayRepacked = true;
+    stage.displayLayoutAsked = next;
+    const std::uint64_t allowance =
+        stage.gpuByteAllowance != 0 ? stage.gpuByteAllowance : core->previewByteAllowance();
+    return core->display
+               ->begin(stage.stage->processFrame()->processImage().pixels(), allowance,
+                       hostDisplayPack(*core, next))
+               .code == render::GpuNeutralDisplayDiagnosticCode::None;
+}
+
 // Bounded native-dispatch deadline expiry: retire/quarantine the native pipeline on the owner
 // thread first, disable the GPU, then take the same-stage CPU fallback (or cancel if requested).
 // Never completes early while native ownership is unretired.
@@ -692,7 +744,12 @@ void processNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core
             int fault = 1;
             if (core->testNativeExceptionPhase.compare_exchange_strong(fault, 0))
                 throw std::runtime_error("injected pre-begin exception");
-            const auto diagnostic = core->display->begin(pixels, allowance);
+            // #733: asked for the layout the composition's last frame took.
+            stage->displayRepacked = false;
+            stage->displayLayoutAsked =
+                displayLayoutGuess(*core, stage->stage->desiredIdentity());
+            const auto diagnostic = core->display->begin(
+                pixels, allowance, hostDisplayPack(*core, stage->displayLayoutAsked));
             if (diagnostic.code == render::GpuNeutralDisplayDiagnosticCode::None) {
                 stage->nativeDispatched = true;
                 stage->nativeStartedAt = nativeNow(core);
@@ -737,6 +794,15 @@ void processNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core
 
         core->nativeInFlight = false;
         core->nativeActive.reset();
+
+        // #733: a frame whose layout is not the one its pack was asked for is packed once more,
+        // in its own layout, before anything is read back.
+        if (hostDisplayRepack(core, *stage, poll)) {
+            stage->nativeStartedAt = nativeNow(core);
+            core->nativeActive = stage;
+            core->nativeInFlight = true;
+            return;
+        }
 
         if (poll == render::GpuNeutralDisplayPollResult::Ready) {
             releaseCpuNativePhase(core, stage, true);

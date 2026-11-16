@@ -204,7 +204,9 @@ CpuQualifiedDisplayPreparer::prepare(std::shared_ptr<const ProcessFrame> process
     };
     auto produced = color::produceBloomNeutralDisplayFrame(
         *handle_, *processView.value(), request.chunkPixelCount,
-        request.aggregatePixelStorageByteLimit, isCancelled);
+        request.aggregatePixelStorageByteLimit, isCancelled,
+        color::DisplayFramePacking{.allowRgb10A2 = request.allowRgb10A2,
+                                   .luma = handle_->displayLuma()});
     if (!produced) {
         if (cancellation.isCancellationRequested()) {
             return QualifiedDisplayPreparationResult::cancelled();
@@ -236,9 +238,10 @@ CpuQualifiedDisplayPreparer::prepare(std::shared_ptr<const ProcessFrame> process
             return QualifiedDisplayPreparationResult::failed(
                 diagnostic(QualifiedDisplayDiagnosticCode::PixelStorageBudgetExceeded,
                            "Viewer adjustment exceeds its pixel-storage budget"));
+        // The viewport buffer shows the same frame in the same layout.
         auto result = detail::adjustedQualifiedBuffer(
             *handle_, *processView.value(), request.viewAdjust, request.chunkPixelCount,
-            budget - processBytes - displayBytes, cancellation);
+            budget - processBytes - displayBytes, cancellation, produced.value()->pixelLayout());
         if (cancellation.isCancellationRequested())
             return QualifiedDisplayPreparationResult::cancelled();
         if (!result)

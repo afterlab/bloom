@@ -135,11 +135,14 @@ class GpuOcioProgramExecutor final {
 
     // Returns None when the command was accepted and submitted. `uniformOverride` is an optional
     // same-size replacement for the command's immutable OCIO uniform snapshot (empty selects the
-    // snapshot). `byteBudget` bounds the native transient bytes.
+    // snapshot). `byteBudget` bounds the native transient bytes. #733: `displayLayout` is the
+    // layout a preview display command packs this dispatch in; every other command has the one
+    // layout and is refused another.
     [[nodiscard]] GpuOcioExecutorDiagnostic
     begin(std::shared_ptr<const PreparedGpuOcioCommand> command,
           std::shared_ptr<const render::GpuImage> input, std::span<const std::byte> uniformOverride,
-          std::uint64_t byteBudget);
+          std::uint64_t byteBudget,
+          render::DisplayPixelLayout displayLayout = render::DisplayPixelLayout::Straight8888);
 
     // Non-blocking; advances the single in-flight job.
     [[nodiscard]] GpuOcioExecutorPollResult poll();

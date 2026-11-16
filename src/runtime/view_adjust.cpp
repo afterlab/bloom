@@ -10,7 +10,8 @@ render::ImageResult<render::PreparedReferenceDisplayBuffer>
 adjustedQualifiedBuffer(const color::PreparedCpuDisplayProcessorHandle& handle,
                         const render::Rgba32fImageView source, const ViewAdjust adjust,
                         const std::size_t chunkPixels, const std::size_t byteLimit,
-                        const CancellationToken& cancellation) {
+                        const CancellationToken& cancellation,
+                        const render::DisplayPixelLayout layout) {
     using Result = render::ImageResult<render::PreparedReferenceDisplayBuffer>;
     const auto fail = [](render::ImageErrorCode code) {
         return Result::failure(render::ImageError::codeOnly(code));
@@ -19,7 +20,7 @@ adjustedQualifiedBuffer(const color::PreparedCpuDisplayProcessorHandle& handle,
     if (!descriptor || !adjust.valid() || chunkPixels == 0)
         return fail(render::ImageErrorCode::InvalidParameter);
     const auto display = render::ReferenceDisplayBufferDescriptor::create(
-        descriptor->displayWindow(), descriptor->pixelAspect());
+        descriptor->displayWindow(), descriptor->pixelAspect(), layout);
     if (!display)
         return Result::failure(*display.error());
     const auto chunk =
@@ -55,9 +56,24 @@ adjustedQualifiedBuffer(const color::PreparedCpuDisplayProcessorHandle& handle,
                 const auto values =
                     input.value()->subspan(static_cast<std::size_t>(x - data.originX()), count);
                 if (const auto error = color::applyBloomNeutralDisplayChunk(
-                        handle, values, std::span(scratch).first(count * 4), pixels))
+                        handle, values, std::span(scratch).first(count * 4), pixels,
+                        color::DisplayChunkPacking{.layout = layout}))
                     return Result::failure(*error);
                 for (std::size_t i = 0; i < count; ++i) {
+                    if (layout == render::DisplayPixelLayout::Rgb10A2) {
+                        // A transparent pixel stays the word 0; every other pixel is opaque.
+                        if (render::rgb10A2Codes(pixels[i]).alpha == 0U)
+                            continue;
+                        pixels[i] = render::rgb10A2Cell(
+                            {ViewAdjust::quantize10(
+                                 adjust.fromEncoded(static_cast<double>(scratch[i * 4]))),
+                             ViewAdjust::quantize10(
+                                 adjust.fromEncoded(static_cast<double>(scratch[i * 4 + 1]))),
+                             ViewAdjust::quantize10(
+                                 adjust.fromEncoded(static_cast<double>(scratch[i * 4 + 2]))),
+                             render::kDisplayAlpha2Opaque});
+                        continue;
+                    }
                     pixels[i].red = ViewAdjust::quantize(
                         adjust.fromEncoded(static_cast<double>(scratch[i * 4])));
                     pixels[i].green = ViewAdjust::quantize(

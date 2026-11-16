@@ -95,9 +95,11 @@ PreparedPreviewFrame::createQualified(const std::uint64_t requestGeneration,
 PreviewDisplayOnlyFrame::PreviewDisplayOnlyFrame(
     PreviewRequestIdentity desiredIdentity, ProcessFrameIdentity processIdentity,
     render::PreparedReferenceDisplayBuffer buffer, PreviewDisplayProvenance provenance,
-    std::vector<EvaluatedOperationBounds> bounds) noexcept
+    std::vector<EvaluatedOperationBounds> bounds,
+    const std::optional<render::DisplayFrameCounters> counters) noexcept
     : desiredIdentity_(std::move(desiredIdentity)), processIdentity_(std::move(processIdentity)),
-      buffer_(std::move(buffer)), provenance_(std::move(provenance)), bounds_(std::move(bounds)) {}
+      buffer_(std::move(buffer)), provenance_(std::move(provenance)), bounds_(std::move(bounds)),
+      counters_(counters) {}
 
 std::optional<PreviewDisplayOnlyFrame>
 PreviewDisplayOnlyFrame::create(const PreparedPreviewFrame& source,
@@ -119,10 +121,11 @@ PreviewDisplayOnlyFrame::create(const PreparedPreviewFrame& source,
         return std::nullopt;
     }
     const auto geometry = source.evaluatedBounds();
+    const auto counters = source.displayCounters();
     const auto metadata =
         source.provenance().provider == PreviewDisplayProvider::GpuPreparedPacked
             ? gpuPreparedPackedMetadataByteCost(source.desiredIdentity(), geometry.size())
-            : geometry.size_bytes();
+            : geometry.size_bytes() + previewDisplayCountersByteCost(counters.has_value());
     if (metadata > pixelStorageByteLimit)
         return std::nullopt;
     auto buffer = render::PreparedReferenceDisplayBuffer::create(*descriptor.value(), view->pixels,
@@ -134,7 +137,7 @@ PreviewDisplayOnlyFrame::create(const PreparedPreviewFrame& source,
         return PreviewDisplayOnlyFrame(
             source.desiredIdentity(), source.processIdentity(), std::move(*buffer.value()),
             source.provenance(),
-            std::vector<EvaluatedOperationBounds>(geometry.begin(), geometry.end()));
+            std::vector<EvaluatedOperationBounds>(geometry.begin(), geometry.end()), counters);
     } catch (const std::exception&) {
         return std::nullopt;
     }
@@ -167,7 +170,8 @@ std::size_t PreviewDisplayOnlyFrame::displayByteCost() const noexcept {
             return std::numeric_limits<std::size_t>::max();
         return buffer_.pixelStorageByteCost() + metadata;
     }
-    return buffer_.pixels().size_bytes() + std::span(bounds_).size_bytes();
+    return buffer_.pixels().size_bytes() + std::span(bounds_).size_bytes() +
+           previewDisplayCountersByteCost(counters_.has_value());
 }
 
 // --- Resident arm ------------------------------------------------------------------------------
@@ -176,10 +180,11 @@ PreviewResidentDisplayFrame::PreviewResidentDisplayFrame(
     PreviewRequestIdentity desiredIdentity, ProcessFrameIdentity processIdentity,
     GpuResidentFrameLease lease,
     std::shared_ptr<const GpuResidentPreviewQualificationReport> qualification,
-    std::vector<EvaluatedOperationBounds> bounds) noexcept
+    std::vector<EvaluatedOperationBounds> bounds,
+    const std::optional<render::DisplayFrameCounters> counters) noexcept
     : desiredIdentity_(std::move(desiredIdentity)), processIdentity_(std::move(processIdentity)),
       lease_(std::move(lease)), qualification_(std::move(qualification)),
-      bounds_(std::move(bounds)) {}
+      bounds_(std::move(bounds)), counters_(counters) {}
 
 std::size_t PreviewResidentDisplayFrame::retainedByteCost() const noexcept {
     // The ACTUAL native allocation the lease charges is the dominant and honest term. The retained
@@ -399,6 +404,22 @@ std::optional<PreviewDisplayBufferView> PreparedPreviewFrame::displayBufferView(
         .dataWindow = std::nullopt,
         .pixelLayout = buffer.pixelLayout(),
     };
+}
+
+std::optional<render::DisplayFrameCounters> PreparedPreviewFrame::displayCounters() const noexcept {
+    if (const auto* resident = std::get_if<ResidentPtr>(&displayFrame_)) {
+        return (*resident)->displayCounters();
+    }
+    if (const auto* displayOnly = std::get_if<DisplayOnlyPtr>(&displayFrame_)) {
+        return (*displayOnly)->displayCounters();
+    }
+    if (const auto* reference = std::get_if<ReferencePtr>(&displayFrame_)) {
+        return (*reference)->counters();
+    }
+    // The qualified product counted its display result before any Viewer adjustment; the adjusted
+    // buffer shows the same frame.
+    const auto& buffer = std::get_if<QualifiedPtr>(&displayFrame_)->get()->buffer();
+    return buffer.isValid() ? std::optional(buffer.counters()) : std::nullopt;
 }
 
 bool PreparedPreviewFrame::isDisplayValid() const noexcept {

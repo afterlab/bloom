@@ -38,6 +38,27 @@ constexpr std::array<const char*, 4> kChannelLetters{"R", "G", "B", "Y"};
 
 [[nodiscard]] QString percentText(const double value) { return QString::number(value, 'f', 1); }
 
+// How many values of a channel lie outside the axis. The Display signal's tables are counted from
+// the shown frame's stored codes, which hold no value outside the axis, so its counts are the
+// frame's own counters (#733): of the whole frame, absent for luma when the display's
+// coefficients could not be resolved. Tables counted with a frame hold them in their end cells.
+struct OutsideAxis final {
+    std::uint64_t under = 0;
+    std::uint64_t over = 0;
+};
+[[nodiscard]] OutsideAxis outsideAxis(const runtime::PreviewFrameScopes& scopes,
+                                      const std::uint32_t channel) {
+    if (scopes.frameCounters.has_value()) {
+        const auto& counters = *scopes.frameCounters;
+        if (channel >= render::kDisplayCounterChannels ||
+            (channel == render::kDisplayCounterChannels - 1 && !counters.lumaCounted()))
+            return {};
+        return {counters.under[channel], counters.over[channel]};
+    }
+    return {scopes.tables.histogram(channel, render::kScopeCodeUnder),
+            scopes.tables.histogram(channel, render::kScopeCodeOver)};
+}
+
 [[nodiscard]] QRectF toQRectF(const scopes_rt::Rect& rect) {
     return {rect.x, rect.y, rect.width, rect.height};
 }
@@ -432,10 +453,11 @@ QString ScopeView::readoutAt(const QPointF& position) const {
                         .arg(axisLabel(code))
                         .arg(tables.histogram(channel, static_cast<std::uint32_t>(code)));
         // Values outside the axis are drawn in its end bins; the readout names them.
-        if (code == 0 && tables.histogram(channel, render::kScopeCodeUnder) != 0)
-            text += tr(" · Under %1").arg(tables.histogram(channel, render::kScopeCodeUnder));
-        if (code == 1023 && tables.histogram(channel, render::kScopeCodeOver) != 0)
-            text += tr(" · Over %1").arg(tables.histogram(channel, render::kScopeCodeOver));
+        const auto outside = outsideAxis(*shown_, channel);
+        if (code == 0 && outside.under != 0)
+            text += tr(" · Under %1").arg(outside.under);
+        if (code == 1023 && outside.over != 0)
+            text += tr(" · Over %1").arg(outside.over);
         return text;
     }
     case scopes::Kind::Vectorscope: {

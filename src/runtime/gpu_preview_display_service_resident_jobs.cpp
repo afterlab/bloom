@@ -134,6 +134,9 @@ void selectStagePhase(const std::shared_ptr<PreviewDisplayServiceCore>& core,
 void releaseProcessingPhase(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                             const std::shared_ptr<PreviewDisplayStageRecord>& stage,
                             const bool proven) noexcept {
+    // #733: the display step's alias of the scene picture goes first, so a failed attempt finds
+    // its picture unique.
+    stage->displayPicture.reset();
     if (stage->processingPhaseArmed && core->device && stage->gpuStage &&
         stage->gpuStage->phaseLease()) {
         selectStagePhase(core, *stage);
@@ -822,6 +825,24 @@ void continueAfterDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core
     return;
 }
 
+// The display pack could not begin: the frame ends as a begin refusal always has.
+void residentDisplayBeginRefused(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                                 const std::shared_ptr<PreviewDisplayStageRecord>& stage,
+                                 const std::string& reason) {
+    publishResidentJobDetail(core,
+                             "resident display begin refused: " + reason + " [admittedBytes=" +
+                                 std::to_string(residentStageAdmittedBytes(core, *stage)) + ']');
+    if (residentDisplayHasUnretiredSubmission(core) ||
+        residentExecutorHasUnretiredSubmission(core) || residentOwnerDrainRequired(core)) {
+        beginResidentRetirement(core, stage);
+    } else {
+        core->residentNativeInFlight = false;
+        core->residentNativeActive.reset();
+        stage->residentPhase = ResidentNativePhase::Done;
+        finishResidentImmediately(core, stage, true);
+    }
+}
+
 void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
     // The general display route needs only the scene executor; the Neutral fast path additionally
     // requires the resident display (checked per-stage in
@@ -982,18 +1003,7 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             stage->gpuStage->phaseLease()->endDeviceExecution();
         std::string reason;
         if (!residentDisplayBegin(core, *stage, reason)) {
-            publishResidentJobDetail(
-                core, "resident display begin refused: " + reason + " [admittedBytes=" +
-                          std::to_string(residentStageAdmittedBytes(core, *stage)) + ']');
-            if (residentDisplayHasUnretiredSubmission(core) ||
-                residentExecutorHasUnretiredSubmission(core) || residentOwnerDrainRequired(core)) {
-                beginResidentRetirement(core, stage);
-            } else {
-                core->residentNativeInFlight = false;
-                core->residentNativeActive.reset();
-                stage->residentPhase = ResidentNativePhase::Done;
-                finishResidentImmediately(core, stage, true);
-            }
+            residentDisplayBeginRefused(core, stage, reason);
             return;
         }
         stage->residentPhase = ResidentNativePhase::Display;
@@ -1006,9 +1016,25 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             if (cancelled ||
                 nativeNow(core) - stage->nativeStartedAt >= core->options.nativeDispatchDeadline) {
                 stage->nativeDeadlineExceeded = !cancelled;
+                stage->displayPicture.reset();
                 beginResidentRetirement(core, stage, !cancelled);
             }
             return;
+        }
+        {
+            // #733: a frame whose layout is not the one its pack was asked for is packed once
+            // more, in its own layout, from the same scene picture.
+            std::string reason;
+            switch (residentDisplayRepack(core, *stage, poll, cancelled, reason)) {
+            case ResidentDisplayRepack::Begun:
+                stage->nativeStartedAt = nativeNow(core);
+                return;
+            case ResidentDisplayRepack::Refused:
+                residentDisplayBeginRefused(core, stage, reason);
+                return;
+            case ResidentDisplayRepack::None:
+                break;
+            }
         }
         const bool expectedCancellation = cancelled &&
                                           poll == render::GpuResidentDisplayPollResult::Failure &&

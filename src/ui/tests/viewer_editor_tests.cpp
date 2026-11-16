@@ -1317,7 +1317,8 @@ void testChannelDropdownRemapsOnlyThePresentedImage(Expectations& expectations) 
     const auto bufferAfter = fixture.controller.state().frame->displayBufferView();
     expectations.expect(
         bufferBefore.has_value() && bufferAfter.has_value() &&
-            bufferBefore->pixels.data() == bufferAfter->pixels.data(),
+            bufferBefore->pixels.data() == bufferAfter->pixels.data() &&
+            bufferBefore->pixelLayout == bufferAfter->pixelLayout,
         "and it never touches the delivered display buffer -- the viewer is looking "
         "at the SAME bytes, which is why a channel view can never reach an export");
 
@@ -1465,10 +1466,12 @@ void testChannelPendingRefusalAndSupersession(Expectations& checks) {
                           }),
                       "rebind rejects old work and publishes only the new domain/channel");
         const auto rebound = fixture.viewer.displayedFrameForTest()->displayBufferView();
-        checks.expect(rebound && std::ranges::any_of(rebound->pixels,
-                                                     [](const auto pixel) {
-                                                         return pixel.blue == 255 && pixel.red == 0;
-                                                     }),
+        bool paintsBlue = false;
+        for (std::size_t index = 0; rebound && index < rebound->pixels.size(); ++index) {
+            const auto pixel = rebound->presentedPixel(index);
+            paintsBlue = paintsBlue || (pixel.blue == 255 && pixel.red == 0);
+        }
+        checks.expect(paintsBlue,
                       "the painted channel source belongs to distinct replacement content");
     }
     fixture.scheduler.beginShutdown();

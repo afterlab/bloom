@@ -192,7 +192,8 @@ class Expectations final {
 }
 
 [[nodiscard]] std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>
-makePlan(const std::uint32_t w, const std::uint32_t h) {
+makePlan(const std::uint32_t w, const std::uint32_t h,
+         const bloom::document::Vec2d position = bloom::document::Vec2d{2.0, 1.0}) {
     const auto compositionFormat = format(w, h);
     std::vector<bloom::runtime::CompiledOperation> ops;
     ops.emplace_back(bloom::runtime::CompiledSolid{
@@ -204,7 +205,7 @@ makePlan(const std::uint32_t w, const std::uint32_t h) {
          static_cast<double>(compositionFormat.height())}});
     ops.emplace_back(bloom::runtime::CompiledLayerOutput{
         kLayerNode, kLayer, bloom::runtime::OperationIndex::fromRaw(0),
-        bloom::runtime::CompiledVec2Parameter{kPosP, bloom::document::Vec2d{2.0, 1.0}},
+        bloom::runtime::CompiledVec2Parameter{kPosP, position},
         bloom::runtime::CompiledVec2Parameter{kAnchorP, bloom::document::kDefaultAnchor},
         bloom::runtime::CompiledVec2Parameter{kScaleP, bloom::document::kDefaultScale},
         bloom::runtime::CompiledScalarParameter{kRotP, bloom::document::kDefaultRotationDegrees},

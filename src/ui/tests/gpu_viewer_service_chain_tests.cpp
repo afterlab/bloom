@@ -206,9 +206,10 @@ struct ViewerSample final {
         const int compY =
             std::clamp(originY + static_cast<int>(fraction.y() * static_cast<double>(height)),
                        originY, originY + static_cast<int>(height) - 1);
-        const render::Rgba8 referencePixel =
-            view->pixels[static_cast<std::size_t>(compY - originY) * width +
-                         static_cast<std::size_t>(compX - originX)];
+        // The window capture is 8-bit, so the reference is the pixel the frame presents.
+        const render::Rgba8 referencePixel = view->presentedPixel(
+            static_cast<std::size_t>(compY - originY) * width +
+            static_cast<std::size_t>(compX - originX));
         ViewerSample sample;
         sample.widgetLocal = local;
         // Wayland does not expose a window's global position to the client, so the reference is
@@ -265,9 +266,10 @@ buildBackgroundSamples(ui::ViewerEditor& viewer, QWidget& host,
         const int compY =
             std::clamp(originY + static_cast<int>(fraction.y() * static_cast<double>(height)),
                        originY, originY + static_cast<int>(height) - 1);
-        const render::Rgba8 referencePixel =
-            view->pixels[static_cast<std::size_t>(compY - originY) * width +
-                         static_cast<std::size_t>(compX - originX)];
+        // The window capture is 8-bit, so the reference is the pixel the frame presents.
+        const render::Rgba8 referencePixel = view->presentedPixel(
+            static_cast<std::size_t>(compY - originY) * width +
+            static_cast<std::size_t>(compX - originX));
         const int deviceX = static_cast<int>(std::lround((local.x() - container.left()) * dpr));
         const int deviceY = static_cast<int>(std::lround((local.y() - container.top()) * dpr));
         const render::Rgba8 backdrop = cpuFrameBackdrop(frame, grid, deviceX, deviceY, dpr);

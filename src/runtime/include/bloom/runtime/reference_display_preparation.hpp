@@ -131,17 +131,25 @@ class ReferenceDisplayFrame final {
         return buffer_;
     }
     [[nodiscard]] const render::PreparedReferenceDisplayBuffer& buffer() const&& = delete;
+    // #733: the frame counters of the reference display (render/display_pixel_packing.hpp): the
+    // sRGB encoding of each color over black against the display axis, luma with the Rec. 709
+    // coefficients, counted before the Viewer's exposure and gamma.
+    [[nodiscard]] const render::DisplayFrameCounters& counters() const noexcept {
+        return counters_;
+    }
 
   private:
     friend class CpuReferenceDisplayPreparer;
 
     ReferenceDisplayFrame(ReferenceDisplayFrameIdentity identity,
                           std::shared_ptr<const ProcessFrame> processFrame,
-                          render::PreparedReferenceDisplayBuffer buffer) noexcept;
+                          render::PreparedReferenceDisplayBuffer buffer,
+                          render::DisplayFrameCounters counters) noexcept;
 
     ReferenceDisplayFrameIdentity identity_;
     std::shared_ptr<const ProcessFrame> processFrame_;
     render::PreparedReferenceDisplayBuffer buffer_;
+    render::DisplayFrameCounters counters_;
 };
 
 class ReferenceDisplayPreparationResult final {

@@ -3,6 +3,7 @@
 #include "gpu_preview_display_service_general_support.hpp"
 #include <algorithm>
 #include <atomic>
+#include <bloom/render/display_pack_parity.hpp>
 #include <bloom/render/gpu_display_transfer.hpp>
 #include <bloom/runtime/gpu_prepared_packed_preview_product.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
@@ -196,6 +197,8 @@ packedResult(const std::optional<TaskResult<PreviewPreparationResultHandle>>& re
     bloom::runtime::QualifiedDisplayPreparationRequest request;
     request.aggregatePixelStorageByteLimit = kBudget;
     request.viewAdjust = identity.viewAdjust;
+    // #733: the preview's frame takes the layout its picture allows on both routes.
+    request.allowRgb10A2 = true;
     auto reference = preparer.prepare(evaluated.frame(), request, {});
     checks.expect(reference.frame() != nullptr, "CPU oracle display prepared");
     if (!reference.frame())
@@ -214,17 +217,23 @@ packedResult(const std::optional<TaskResult<PreviewPreparationResultHandle>>& re
     const auto data = packed->dataWindow.value_or(packed->displayWindow);
     const auto width = data.extent().width();
     const auto fullWidth = oracle->displayWindow.extent().width();
+    // A straight frame is held equal to the CPU's, as always; a 10:10:10:2 frame to one code of
+    // 1023, the display transform's float allowance at that scale (render/display_pack_parity.hpp).
     bool equal = true;
     for (std::uint32_t y = 0; y < data.extent().height(); ++y) {
         const auto offset =
             static_cast<std::size_t>(data.originY() + y - oracle->displayWindow.originY()) *
                 fullWidth +
             static_cast<std::size_t>(data.originX() - oracle->displayWindow.originX());
-        equal = equal && std::ranges::equal(
+        equal = equal && bloom::render::displayFramesAgree(
+                             packed->pixelLayout,
                              packed->pixels.subspan(static_cast<std::size_t>(y) * width, width),
-                             oracle->pixels.subspan(offset, width));
+                             oracle->pixelLayout, oracle->pixels.subspan(offset, width), 0);
     }
-    checks.expect(equal, "every transferred RGBA8 data-window pixel exactly matches CPU oracle");
+    checks.expect(equal, "every transferred data-window pixel matches the CPU oracle in its layout");
+    checks.expect(frame.displayCounters().has_value() &&
+                      frame.displayCounters()->lumaCounted(),
+                  "the transferred frame carries the frame counters its pack counted");
 }
 #endif
 } // namespace

@@ -15,6 +15,7 @@
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/render/display_pack_parity.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/evaluation.hpp>
@@ -362,14 +363,18 @@ void testGpuProvenanceAndParity(Expectations& expectations, const std::string& l
     runtime::CpuQualifiedDisplayPreparer preparer(*fixture.processor);
     runtime::QualifiedDisplayPreparationRequest oracleRequest;
     oracleRequest.aggregatePixelStorageByteLimit = kBudget;
+    // #733: the preview's frame takes the layout its picture allows on both routes.
+    oracleRequest.allowRgb10A2 = true;
     auto oracle = preparer.prepare(runtime::detail::testEvaluateFrame(fixture.plan, kBudget),
                                    oracleRequest, runtime::CancellationToken{});
     const auto gpuView = displayOnly->displayBufferView();
     expectations.expect(oracle.status() == runtime::QualifiedDisplayPreparationStatus::Prepared &&
                             gpuView.has_value() &&
-                            gpuView->pixels.size() == oracle.frame()->buffer().pixels().size() &&
-                            std::equal(gpuView->pixels.begin(), gpuView->pixels.end(),
-                                       oracle.frame()->buffer().pixels().begin()),
+                            render::displayFramesAgree(gpuView->pixelLayout, gpuView->pixels,
+                                                       oracle.frame()->buffer().pixelLayout(),
+                                                       oracle.frame()->buffer().pixels(), 0) &&
+                            displayOnly->displayCounters() ==
+                                std::optional(oracle.frame()->buffer().counters()),
                         "GPU packed pixels match the CPU qualified render");
     expectations.expect(bloom::test_support::awaitCondition(
                             "the qualified path leaves the scheduler quiescent",

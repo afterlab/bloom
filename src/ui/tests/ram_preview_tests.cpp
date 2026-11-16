@@ -366,6 +366,8 @@ void testCacheHitPublishesWithoutEvaluating(Expectations& expectations) {
         fixture.controller.frameCache().statistics().uiPixelCopies == 0,
         "Full CPU retention arrives pre-stripped from the worker without a UI pixel copy");
     const bool freshQualified = freshView.has_value() && freshView->isOcioQualified;
+    const auto freshLayout = freshView.has_value() ? freshView->pixelLayout
+                                                   : render::DisplayPixelLayout::Straight8888;
     const std::vector<render::Rgba8> freshPixels =
         freshView.has_value()
             ? std::vector<render::Rgba8>(freshView->pixels.begin(), freshView->pixels.end())
@@ -410,8 +412,10 @@ void testCacheHitPublishesWithoutEvaluating(Expectations& expectations) {
     const auto cachedView =
         cachedFrame == nullptr ? std::nullopt : cachedFrame->displayBufferView();
     expectations.expect(cachedView.has_value() && freshPixels.size() == cachedView->pixels.size() &&
+                            cachedView->pixelLayout == freshLayout &&
                             std::ranges::equal(freshPixels, cachedView->pixels),
-                        "a cache hit paints exactly the pixels the evaluation published");
+                        "a cache hit paints exactly the pixels, in the layout, the evaluation "
+                        "published");
     expectations.expect(cachedFrame != nullptr && freshFrame != nullptr &&
                             cachedFrame->isOcioQualified() == freshFrame->isOcioQualified() &&
                             cachedView.has_value() && cachedView->isOcioQualified == freshQualified,
@@ -440,7 +444,10 @@ void testCachingReleasesTheProcessImage(Expectations& expectations) {
     const std::weak_ptr<const runtime::ProcessFrame> processFrame = firstFrame->processFrame();
     const auto displayBytes = ui::PreviewFrameCache::frameByteCost(*firstFrame);
     const auto processBytes = firstFrame->processImage().pixels().size_bytes();
-    const auto geometryBytes = firstFrame->evaluatedBounds().size_bytes();
+    // The retained frame is charged for its geometry and its frame counters beside the pixels.
+    const auto geometryBytes =
+        firstFrame->evaluatedBounds().size_bytes() +
+        runtime::previewDisplayCountersByteCost(firstFrame->displayCounters().has_value());
     // Released here, so that from this line on the cache is the only thing that could still be
     // holding that frame -- which is exactly what the weak handle below is asking about.
     firstFrame.reset();

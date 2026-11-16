@@ -211,6 +211,12 @@ void GpuOcioProgram::Impl::beginImpl(const bool display, std::shared_ptr<const G
     }
     ocio_program_detail::writeImageDescriptor(ioSet, state, 0, inputImpl->view);
     std::memset(statusMapped, 0, static_cast<std::size_t>(ocio_program_detail::kStatusBytes));
+    if (jobPack.has_value()) {
+        // #733: a preview program packs either layout and reads which from the status block.
+        const std::uint32_t layoutWord = gpuDisplayPackLayoutWord(jobPack->layout);
+        std::memcpy(statusMapped + kGpuDisplayPackStatusLayout * sizeof(std::uint32_t),
+                    &layoutWord, sizeof(layoutWord));
+    }
     if (vmaFlushAllocation(state.allocator, status.allocation, 0,
                            static_cast<VkDeviceSize>(ocio_program_detail::kStatusBytes)) !=
         VK_SUCCESS) {

@@ -812,6 +812,49 @@ int main(int argc, char** argv) {
                      "the Histogram's readout names the code and the count: " + text.toStdString());
             e.expect(histogram->readoutAt(QPointF(-5, -5)).isEmpty(),
                      "outside the plot there is no readout");
+
+            // #733: values outside the axis are named from the shown frame's own counters. The
+            // Display tables are counted from the frame's stored codes, which hold no value
+            // outside the axis.
+            const auto bright = cpuFrame(oneSolidPlan(Color4d{2.0, 0.25, 0.0, 1.0}), 60, 9);
+            const auto counters = bright != nullptr ? bright->displayCounters() : std::nullopt;
+            e.expect(counters.has_value() && counters->over[0] > 0 && counters->over[1] == 0 &&
+                         counters->under[0] == 0,
+                     "a frame brighter than the display's white carries its over count");
+            const auto brightScopes = countShown(e, *panel, bright, "the bright frame is counted");
+            e.expect(awaitQtCondition("the bright frame's histogram is on show",
+                                      [&] {
+                                          return tracesSettled(*panel) &&
+                                                 histogram->shownScopes() == brightScopes;
+                                      }),
+                     "the bright frame's histogram is on show");
+            e.expect(brightScopes != nullptr && brightScopes->frameCounters == counters &&
+                         brightScopes->tables.histogram(0, render::kScopeCodeOver) == 0,
+                     "the tables are handed the frame's counters; their own end cells are empty");
+            const auto shownPlot = histogram->plotRect();
+            QString redEnd;
+            QString redStart;
+            QString greenEnd;
+            for (qreal y = shownPlot.top() + 0.5; y < shownPlot.bottom(); y += 1.0) {
+                const auto atEnd = histogram->readoutAt(QPointF(shownPlot.right(), y));
+                if (redEnd.isEmpty() && atEnd.startsWith(QStringLiteral("R "))) {
+                    redEnd = atEnd;
+                    redStart = histogram->readoutAt(QPointF(shownPlot.left(), y));
+                }
+                if (greenEnd.isEmpty() && atEnd.startsWith(QStringLiteral("G ")))
+                    greenEnd = atEnd;
+            }
+            const auto overText =
+                QStringLiteral("Over %1").arg(counters.has_value() ? counters->over[0] : 0U);
+            e.expect(redEnd.contains(QStringLiteral("Code 1023")) && redEnd.endsWith(overText),
+                     "the red row's last code names the frame's over count: " +
+                         redEnd.toStdString());
+            e.expect(redStart.contains(QStringLiteral("Code 0 ")) &&
+                         !redStart.contains(QStringLiteral("Under")) &&
+                         greenEnd.contains(QStringLiteral("Code 1023")) &&
+                         !greenEnd.contains(QStringLiteral("Over")),
+                     "a channel with nothing outside the axis names nothing: " +
+                         redStart.toStdString() + " / " + greenEnd.toStdString());
         }
 
         // ---- Sections persist per panel area; a hidden panel asks for nothing ----------------

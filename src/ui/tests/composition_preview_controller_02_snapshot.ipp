@@ -267,6 +267,7 @@ prepareLiveOracle(bloom::runtime::TaskScheduler& scheduler,
     return leftView.has_value() && rightView.has_value() &&
            leftView->displayWindow == rightView->displayWindow &&
            leftView->pixels.size() == rightView->pixels.size() &&
+           leftView->pixelLayout == rightView->pixelLayout &&
            std::ranges::equal(leftView->pixels, rightView->pixels);
 }
 

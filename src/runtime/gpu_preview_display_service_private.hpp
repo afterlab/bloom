@@ -112,6 +112,19 @@ struct PreviewDisplayStageRecord final {
     std::unique_ptr<ScopeMeasureStepper> scopeStepper;
     std::shared_ptr<const PreviewFrameScopes> scopes;
 
+    // #733 the display pack's layout. One layout holds for a whole frame and the device learns
+    // which only by packing it, so the pack is asked for a guessed layout (the layout the
+    // composition's last frame took) and a frame whose layout is the other one is packed once
+    // more: a refused 10:10:10:2 pack as 8:8:8:8, and an 8:8:8:8 pack whose report says the frame
+    // allows 10:10:10:2 as 10:10:10:2. The layout of a published frame is therefore the frame's
+    // own, the same the CPU route gives it. `displayLayoutAsked` is the layout of the pack in
+    // flight and `displayRepacked` that this frame was already packed twice. `displayPicture`
+    // aliases the scene picture a resident pack consumes, held from its begin until its poll
+    // settles so the second pack has its input; every other end drops it with the phase.
+    render::DisplayPixelLayout displayLayoutAsked = render::DisplayPixelLayout::Straight8888;
+    bool displayRepacked = false;
+    std::shared_ptr<const render::GpuImage> displayPicture;
+
     TaskPriority priority = TaskPriority::Background;
     TaskOwner owner;
     std::optional<TaskGroupId> groupId;
@@ -216,6 +229,14 @@ struct PreviewDisplayServiceCore final {
     std::unique_ptr<render::GpuDevice> device;
     std::unique_ptr<render::GpuNeutralDisplay> display;
     std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> processor;
+    // #733: the layout the last frame of a composition took, for the few compositions shown last
+    // (owner thread only). It is the first guess for that composition's next frame and never
+    // decides a frame's layout (PreviewDisplayStageRecord::displayLayoutAsked).
+    struct DisplayLayoutGuess final {
+        document::CompositionId composition;
+        render::DisplayPixelLayout layout = render::DisplayPixelLayout::Rgb10A2;
+    };
+    std::vector<DisplayLayoutGuess> displayLayoutGuesses;
 
     // Resident route, service-thread-owned. Created only on the device owner thread when
     // `gpuStageFunction` is set; destroyed before `device`. `residentDisplay` is the single
@@ -819,6 +840,36 @@ struct GpuPreviewDisplayServiceTestAccess final {
                               std::span<const render::ImagePixelCoordinate> coordinates,
                               ResidentSparseSampleResult& out, std::chrono::milliseconds timeout);
 };
+
+// #733: the layout a composition's next display pack is asked for first, and the record of the
+// layout a frame took. Owner thread only. A composition not seen lately is asked for 10:10:10:2.
+inline constexpr std::size_t kDisplayLayoutGuessCapacity = 8;
+[[nodiscard]] inline render::DisplayPixelLayout
+displayLayoutGuess(const PreviewDisplayServiceCore& core,
+                   const PreviewRequestIdentity& identity) noexcept {
+    for (const auto& guess : core.displayLayoutGuesses) {
+        if (guess.composition == identity.compositionId)
+            return guess.layout;
+    }
+    return render::DisplayPixelLayout::Rgb10A2;
+}
+inline void noteDisplayLayout(PreviewDisplayServiceCore& core,
+                              const PreviewRequestIdentity& identity,
+                              const render::DisplayPixelLayout layout) noexcept {
+    for (auto& guess : core.displayLayoutGuesses) {
+        if (guess.composition == identity.compositionId) {
+            guess.layout = layout;
+            return;
+        }
+    }
+    try {
+        if (core.displayLayoutGuesses.size() >= kDisplayLayoutGuessCapacity)
+            core.displayLayoutGuesses.erase(core.displayLayoutGuesses.begin());
+        core.displayLayoutGuesses.push_back({identity.compositionId, layout});
+    } catch (...) {
+        // A guess that could not be kept costs one more pack of a later frame, nothing else.
+    }
+}
 
 } // namespace detail
 } // namespace bloom::runtime

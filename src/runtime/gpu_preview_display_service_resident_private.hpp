@@ -93,6 +93,16 @@ residentExecutorPoll(const std::shared_ptr<PreviewDisplayServiceCore>& core) noe
 [[nodiscard]] bool residentDisplayBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                                         PreviewDisplayStageRecord& stage,
                                         std::string& reason) noexcept;
+// #733: called once the display pack's poll settled (`poll` is not Pending). Drops the stage's
+// alias of the picture and, when the frame's layout is not the one the pack was asked for, begins
+// the one second pack in the frame's own layout: Begun (the stage polls again), or Refused with
+// `reason` (the begin failed as residentDisplayBegin can). None: nothing to pack again; `poll`
+// stands.
+enum class ResidentDisplayRepack : std::uint8_t { None, Begun, Refused };
+[[nodiscard]] ResidentDisplayRepack
+residentDisplayRepack(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                      PreviewDisplayStageRecord& stage, render::GpuResidentDisplayPollResult poll,
+                      bool cancelled, std::string& reason) noexcept;
 [[nodiscard]] render::GpuResidentDisplayPollResult
 residentDisplayPoll(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
 // Takes the resident display output and publishes the product. `std::nullopt` on any refusal

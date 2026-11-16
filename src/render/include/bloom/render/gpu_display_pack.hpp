@@ -63,9 +63,12 @@ inline constexpr std::size_t kGpuDisplayPackStatusMisfit = 1;   // nonzero: a pi
 inline constexpr std::size_t kGpuDisplayPackStatusUnder = 2;    // red, green, blue, luma
 inline constexpr std::size_t kGpuDisplayPackStatusOver = 6;     // red, green, blue, luma
 inline constexpr std::size_t kGpuDisplayPackStatusNotFinite = 10;
-// Word 11 is reserved and stays zero.
+// Word 11 is the one word the host writes after it zeroes the block, and only for a program that
+// packs either layout (the general display program): the layout word of this dispatch. A kernel
+// that is pushed its layout leaves the word zero. No kernel writes it.
+inline constexpr std::size_t kGpuDisplayPackStatusLayout = 11;
 
-// The layout word a kernel is pushed.
+// The layout word a kernel is pushed, or reads from the status block.
 [[nodiscard]] constexpr std::uint32_t
 gpuDisplayPackLayoutWord(const DisplayPixelLayout layout) noexcept {
     return layout == DisplayPixelLayout::Rgb10A2 ? 1U : 0U;

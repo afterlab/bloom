@@ -52,6 +52,23 @@ inline constexpr DisplayLumaCoefficients kDisplayPackParityLuma{0.2126F, 0.7152F
     return true;
 }
 
+// Two frames of the same picture agree: the same layout, every alpha exact, and every color code
+// within the comparison's allowance. A comparison keeps the allowance it always had for a straight
+// frame (`straightToleranceCodes`, in codes of 255: 0 where the two were held equal, 1 where the
+// display transform's float difference was allowed); a 10:10:10:2 frame is held to one code of
+// 1023, the same float difference at that scale and narrower than a code of 255.
+inline constexpr std::uint32_t kDisplayRgb10A2ParityCodes = 1;
+[[nodiscard]] constexpr bool displayFramesAgree(const DisplayPixelLayout leftLayout,
+                                                const std::span<const Rgba8> left,
+                                                const DisplayPixelLayout rightLayout,
+                                                const std::span<const Rgba8> right,
+                                                const std::uint32_t straightToleranceCodes) noexcept {
+    return leftLayout == rightLayout &&
+           displayCellsWithin(leftLayout, left, right,
+                              leftLayout == DisplayPixelLayout::Rgb10A2 ? kDisplayRgb10A2ParityCodes
+                                                                        : straightToleranceCodes);
+}
+
 // The frame a pack qualification packs: opaque grays below, inside and above the display axis, a
 // few saturated colors, and exactly transparent pixels, so every counter counts something. Under
 // the Bloom Neutral display no value lies near an end of the axis, so the float difference between

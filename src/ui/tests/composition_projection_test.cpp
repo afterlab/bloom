@@ -305,7 +305,7 @@ parameterForRole(const bloom::document::Composition& composition,
         return false;
     }
 
-    // Visible in the viewer, asserted on the exact packed RGBA8 buffer the viewer paints rather
+    // Visible in the viewer, asserted on the exact packed display buffer the viewer paints rather
     // than on the activity state alone: a text layer whose frame existed but held no ink would
     // satisfy every check above and still show nothing.
     {
@@ -313,8 +313,8 @@ parameterForRole(const bloom::document::Composition& composition,
         const auto buffer = frame == nullptr ? std::nullopt : frame->displayBufferView();
         std::size_t inkPixels = 0;
         if (buffer.has_value()) {
-            for (const auto& pixel : buffer->pixels) {
-                inkPixels += pixel.alpha == 0 ? 0U : 1U;
+            for (std::size_t index = 0; index < buffer->pixels.size(); ++index) {
+                inkPixels += buffer->presentedPixel(index).alpha == 0 ? 0U : 1U;
             }
         }
         if (!require(buffer.has_value() && inkPixels > 0 && inkPixels < buffer->pixels.size(),

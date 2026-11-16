@@ -18,6 +18,7 @@
 // frame the Viewer shows, at display time (shown_frame_scopes.hpp). A request that asks a frame's
 // preparation for the Display signal gets a Failed record that says so.
 
+#include <bloom/render/display_pixel_packing.hpp>
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/scope_frame_measure.hpp>
 #include <bloom/runtime/scope_measure.hpp>
@@ -27,6 +28,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -96,6 +98,11 @@ struct PreviewFrameScopes final {
     std::string message;
     // The bytes the device read back for these tables (0 on the CPU route).
     std::uint64_t tableReadbackBytes = 0;
+    // #733: the frame counters of the frame a shown-frame measure counted (the Display signal):
+    // how many pixels of the whole frame lie under and over the display axis, which its stored
+    // cells cannot say. Empty for tables counted with a frame (the Working signal), whose under
+    // and over cells hold those counts for the measured area, and for a frame that carries none.
+    std::optional<render::DisplayFrameCounters> frameCounters;
 
     [[nodiscard]] std::size_t byteSize() const noexcept {
         return sizeof(PreviewFrameScopes) + tables.byteSize() + message.size();
@@ -107,7 +114,8 @@ struct PreviewFrameScopes final {
 [[nodiscard]] std::shared_ptr<const PreviewFrameScopes>
 makePreviewFrameScopes(const ScopeMeasureSettings& settings, ScopeFrameMeasure measure,
                        std::shared_ptr<const ScopeSignalColor> color,
-                       render::ScopeTableReduction reduction = {});
+                       render::ScopeTableReduction reduction = {},
+                       std::optional<render::DisplayFrameCounters> frameCounters = std::nullopt);
 
 // True when a cached frame's tables are what `request` asks for: the same settings at the same
 // table size. Any thread.

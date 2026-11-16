@@ -166,8 +166,12 @@ GpuOcioDisplayArmDiagnostic GpuOcioDisplayArm::begin(const GpuOcioDisplayRequest
         return displayDiagnostic(GpuOcioDisplayArmDiagnosticCode::IdentityMismatch,
                                  "the input image geometry does not match the prepared command");
     }
-    const auto diagnostic =
-        executor_->begin(request.command, request.input, {}, request.byteBudget);
+    if (!request.command->displayPacking().packs(request.layout)) {
+        return displayDiagnostic(GpuOcioDisplayArmDiagnosticCode::InvalidRequest,
+                                 "the prepared display command does not pack the asked layout");
+    }
+    const auto diagnostic = executor_->begin(request.command, request.input, {},
+                                             request.byteBudget, request.layout);
     return displayDiagnostic(mapExecutorCode(diagnostic.code), diagnostic.message);
 }
 
@@ -316,127 +320,145 @@ qualifyGpuOcioDisplay(std::shared_ptr<const PreparedGpuOcioCommand> command,
         if (!descriptor.hasValue()) {
             return fail(GpuOcioDisplayDiagnosticCode::InternalInvariant);
         }
-        // #733: a preview command is qualified in its own layout. A 10:10:10:2 command can only
-        // pack a frame of opaque and exactly transparent pixels, so it is given one.
-        const GpuOcioDisplayPacking packing = command->displayPacking();
-        const bool tenBit = packing.mode == GpuOcioDisplayPackingMode::PreviewRgb10A2;
-        const auto fixture = makeDisplayFixturePixels(geometry.width, geometry.height, tenBit);
-        if (fixture.size() != descriptor.value()->layout().pixelCount) {
-            return fail(GpuOcioDisplayDiagnosticCode::FixtureMismatch);
-        }
-        auto imageBuilder =
-            render::Rgba32fImageBuilder::create(*descriptor.value(), budgets.maxImageBytes);
-        if (!imageBuilder.hasValue()) {
-            return fail(GpuOcioDisplayDiagnosticCode::OverBudget);
-        }
-        for (std::uint32_t y = 0; y < geometry.height; ++y) {
-            const auto row = imageBuilder.value()->row(y);
-            if (!row.hasValue()) {
-                return fail(GpuOcioDisplayDiagnosticCode::InternalInvariant);
-            }
-            for (std::uint32_t x = 0; x < geometry.width; ++x) {
-                (*row.value())[x] = fixture[static_cast<std::size_t>(y) * geometry.width + x];
-            }
-        }
-        auto frozen = std::move(*imageBuilder.value()).freeze();
-        if (!frozen.hasValue()) {
-            return fail(GpuOcioDisplayDiagnosticCode::FixtureMismatch);
-        }
-        const auto source =
-            std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
-
-        auto upload = render::GpuImageUpload::create(device);
-        if (!upload) {
-            return fail(GpuOcioDisplayDiagnosticCode::DeviceUnavailable);
-        }
-        const render::GpuImageUploadParameters uploadParameters{
-            .source = source, .phase = device.retainedProcessingPhase()};
-        const auto uploadDiagnostic = upload.upload->begin(uploadParameters, budgets.maxImageBytes);
-        if (uploadDiagnostic.code != render::GpuImageUploadDiagnosticCode::None) {
-            return fail(GpuOcioDisplayDiagnosticCode::NativeFailure);
-        }
-        for (;;) {
-            const auto polled = upload.upload->poll();
-            if (polled == render::GpuImageUploadPollResult::Ready) {
-                break;
-            }
-            if (polled != render::GpuImageUploadPollResult::Pending) {
-                return fail(GpuOcioDisplayDiagnosticCode::NativeFailure);
-            }
-        }
-        auto input = upload.upload->takeImage();
-
         auto armResult = GpuOcioDisplayArm::create(device);
         if (!armResult) {
             return fail(GpuOcioDisplayDiagnosticCode::DeviceUnavailable);
         }
         auto& arm = *armResult.arm;
-        GpuOcioDisplayRequest request;
-        request.command = std::move(command);
-        request.input = std::make_shared<const render::GpuImage>(std::move(input));
-        request.width = geometry.width;
-        request.height = geometry.height;
-        request.byteBudget = budgets.maxImageBytes;
-        const auto begun = arm.begin(request);
-        if (begun.code != GpuOcioDisplayArmDiagnosticCode::None) {
-            return fail(GpuOcioDisplayDiagnosticCode::NativeFailure);
-        }
-        GpuOcioDisplayDiagnostic pollDiagnostic;
-        if (!pollDisplayArm(arm, kDeadlineNanoseconds, pollDiagnostic)) {
-            return fail(pollDiagnostic.code == GpuOcioDisplayDiagnosticCode::None
-                            ? GpuOcioDisplayDiagnosticCode::NativeFailure
-                            : pollDiagnostic.code);
-        }
-        auto display = arm.takeDisplayImage();
-        if (!display.has_value()) {
-            return fail(GpuOcioDisplayDiagnosticCode::NativeFailure);
-        }
-        const auto readback = render::readbackResidentDisplayImage(*display, budgets.maxImageBytes);
-        if (!readback.hasValue()) {
-            return fail(GpuOcioDisplayDiagnosticCode::NativeFailure);
-        }
+        // #733: a preview command packs either layout and is qualified in both, each against the
+        // CPU packer of that layout. A 10:10:10:2 dispatch can only pack a frame of opaque and
+        // exactly transparent pixels, so it is given one.
+        const GpuOcioDisplayPacking packing = command->displayPacking();
+        const auto qualifyLayout =
+            [&](const render::DisplayPixelLayout layout) -> GpuOcioDisplayDiagnosticCode {
+            const bool tenBit = layout == render::DisplayPixelLayout::Rgb10A2;
+            const auto fixture = makeDisplayFixturePixels(geometry.width, geometry.height, tenBit);
+            if (fixture.size() != descriptor.value()->layout().pixelCount) {
+                return GpuOcioDisplayDiagnosticCode::FixtureMismatch;
+            }
+            auto imageBuilder =
+                render::Rgba32fImageBuilder::create(*descriptor.value(), budgets.maxImageBytes);
+            if (!imageBuilder.hasValue()) {
+                return GpuOcioDisplayDiagnosticCode::OverBudget;
+            }
+            for (std::uint32_t y = 0; y < geometry.height; ++y) {
+                const auto row = imageBuilder.value()->row(y);
+                if (!row.hasValue()) {
+                    return GpuOcioDisplayDiagnosticCode::InternalInvariant;
+                }
+                for (std::uint32_t x = 0; x < geometry.width; ++x) {
+                    (*row.value())[x] = fixture[static_cast<std::size_t>(y) * geometry.width + x];
+                }
+            }
+            auto frozen = std::move(*imageBuilder.value()).freeze();
+            if (!frozen.hasValue()) {
+                return GpuOcioDisplayDiagnosticCode::FixtureMismatch;
+            }
+            const auto source =
+                std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
 
-        // Independent CPU OCIO display oracle for the SAME display/view: the unchanged CPU display
-        // frame path applied to the exact fixture. The native output must match it within one code
-        // (alpha exact), the documented resident display numeric contract. A preview command is
-        // compared with the CPU packer of its layout, one code of that layout's scale, and must
-        // report the layout flag the frame has. Its counters are proven equal by the native pack
-        // acceptance test on a frame whose signal keeps away from the ends of the axis; this
-        // arbitrary display's frame does not, so only the count no float difference can move is
-        // compared here.
-        const auto sourceView = source->view();
-        if (!sourceView.hasValue()) {
-            return fail(GpuOcioDisplayDiagnosticCode::CpuOracleFailure);
+            auto upload = render::GpuImageUpload::create(device);
+            if (!upload) {
+                return GpuOcioDisplayDiagnosticCode::DeviceUnavailable;
+            }
+            const render::GpuImageUploadParameters uploadParameters{
+                .source = source, .phase = device.retainedProcessingPhase()};
+            const auto uploadDiagnostic =
+                upload.upload->begin(uploadParameters, budgets.maxImageBytes);
+            if (uploadDiagnostic.code != render::GpuImageUploadDiagnosticCode::None) {
+                return GpuOcioDisplayDiagnosticCode::NativeFailure;
+            }
+            for (;;) {
+                const auto polled = upload.upload->poll();
+                if (polled == render::GpuImageUploadPollResult::Ready) {
+                    break;
+                }
+                if (polled != render::GpuImageUploadPollResult::Pending) {
+                    return GpuOcioDisplayDiagnosticCode::NativeFailure;
+                }
+            }
+            auto input = upload.upload->takeImage();
+
+            GpuOcioDisplayRequest request;
+            request.command = command;
+            request.layout = layout;
+            request.input = std::make_shared<const render::GpuImage>(std::move(input));
+            request.width = geometry.width;
+            request.height = geometry.height;
+            request.byteBudget = budgets.maxImageBytes;
+            const auto begun = arm.begin(request);
+            if (begun.code != GpuOcioDisplayArmDiagnosticCode::None) {
+                return GpuOcioDisplayDiagnosticCode::NativeFailure;
+            }
+            GpuOcioDisplayDiagnostic pollDiagnostic;
+            if (!pollDisplayArm(arm, kDeadlineNanoseconds, pollDiagnostic)) {
+                return pollDiagnostic.code == GpuOcioDisplayDiagnosticCode::None
+                           ? GpuOcioDisplayDiagnosticCode::NativeFailure
+                           : pollDiagnostic.code;
+            }
+            auto display = arm.takeDisplayImage();
+            if (!display.has_value()) {
+                return GpuOcioDisplayDiagnosticCode::NativeFailure;
+            }
+            const auto readback =
+                render::readbackResidentDisplayImage(*display, budgets.maxImageBytes);
+            if (!readback.hasValue()) {
+                return GpuOcioDisplayDiagnosticCode::NativeFailure;
+            }
+
+            // Independent CPU OCIO display oracle for the SAME display/view: the unchanged CPU
+            // display frame path applied to the exact fixture. The native output must match it
+            // within one code (alpha exact), the documented resident display numeric contract. A
+            // preview command is compared with the CPU packer of the dispatch's layout, one code
+            // of that layout's scale, and must report the layout flag the frame has. Its counters
+            // are proven equal by the native pack acceptance test on a frame whose signal keeps
+            // away from the ends of the axis; this arbitrary display's frame does not, so only
+            // the count no float difference can move is compared here.
+            const auto sourceView = source->view();
+            if (!sourceView.hasValue()) {
+                return GpuOcioDisplayDiagnosticCode::CpuOracleFailure;
+            }
+            auto cpuFrame =
+                packing.preview()
+                    ? color::produceBloomNeutralDisplayFrame(
+                          cpuOracle, *sourceView.value(), 65536, budgets.maxImageBytes, {},
+                          color::DisplayFramePacking{.allowRgb10A2 = tenBit, .luma = packing.luma})
+                    : color::produceBloomNeutralDisplayFrame(cpuOracle, *sourceView.value(), 65536,
+                                                             budgets.maxImageBytes);
+            if (!cpuFrame.hasValue()) {
+                return GpuOcioDisplayDiagnosticCode::CpuOracleFailure;
+            }
+            if (display->pixelLayout() != layout || cpuFrame.value()->pixelLayout() != layout ||
+                !render::displayCellsWithin(layout, readback.pixels, cpuFrame.value()->pixels(),
+                                            kGpuOcioDisplayRgbToleranceCodes)) {
+                return GpuOcioDisplayDiagnosticCode::ParityFailure;
+            }
+            const auto packReport = display->packReport();
+            if (packReport.has_value() != packing.preview()) {
+                return GpuOcioDisplayDiagnosticCode::ParityFailure;
+            }
+            if (packReport.has_value() &&
+                (packReport->layout != layout || packReport->allowsRgb10A2 != tenBit ||
+                 packReport->counters.lumaCounted() != packing.luma.has_value() ||
+                 packReport->counters.notFinite != cpuFrame.value()->counters().notFinite)) {
+                return GpuOcioDisplayDiagnosticCode::ParityFailure;
+            }
+
+            return GpuOcioDisplayDiagnosticCode::None;
+        };
+        if (const auto code = qualifyLayout(render::DisplayPixelLayout::Straight8888);
+            code != GpuOcioDisplayDiagnosticCode::None) {
+            return fail(code);
         }
-        auto cpuFrame =
-            packing.preview()
-                ? color::produceBloomNeutralDisplayFrame(
-                      cpuOracle, *sourceView.value(), 65536, budgets.maxImageBytes, {},
-                      color::DisplayFramePacking{.allowRgb10A2 = tenBit, .luma = packing.luma})
-                : color::produceBloomNeutralDisplayFrame(cpuOracle, *sourceView.value(), 65536,
-                                                         budgets.maxImageBytes);
-        if (!cpuFrame.hasValue()) {
-            return fail(GpuOcioDisplayDiagnosticCode::CpuOracleFailure);
-        }
-        const auto layout = display->pixelLayout();
-        if (layout != packing.layout() || cpuFrame.value()->pixelLayout() != layout ||
-            !render::displayCellsWithin(layout, readback.pixels, cpuFrame.value()->pixels(),
-                                        kGpuOcioDisplayRgbToleranceCodes)) {
-            return fail(GpuOcioDisplayDiagnosticCode::ParityFailure);
-        }
-        const auto packReport = display->packReport();
-        if (packReport.has_value() != packing.preview()) {
-            return fail(GpuOcioDisplayDiagnosticCode::ParityFailure);
-        }
-        if (packReport.has_value() &&
-            (packReport->layout != layout || packReport->allowsRgb10A2 != tenBit ||
-             packReport->counters.lumaCounted() != packing.luma.has_value() ||
-             packReport->counters.notFinite != cpuFrame.value()->counters().notFinite)) {
-            return fail(GpuOcioDisplayDiagnosticCode::ParityFailure);
+        if (packing.preview()) {
+            if (const auto code = qualifyLayout(render::DisplayPixelLayout::Rgb10A2);
+                code != GpuOcioDisplayDiagnosticCode::None) {
+                return fail(code);
+            }
         }
 
         GpuOcioDisplayQualificationReport report;
-        report.commandIdentity_ = request.command->identity();
+        report.commandIdentity_ = command->identity();
         report.ownershipEpoch_ = device.ownershipEpoch();
         report.outcome_ = GpuOcioDisplayOutcome::PreviewOnly;
         report.numericContract_ = std::string(kGpuOcioDisplayNumericContract);

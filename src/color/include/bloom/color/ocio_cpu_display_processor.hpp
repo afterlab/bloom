@@ -4,6 +4,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/sha256.hpp>
+#include <bloom/render/display_pixel_packing.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -112,6 +113,17 @@ class PreparedCpuDisplayProcessorHandle final {
     [[nodiscard]] const DisplayProcessorExecutionProvenance& provenance() const&& = delete;
     [[nodiscard]] const DisplayProcessorLease& lease() const& noexcept { return lease_; }
     [[nodiscard]] const DisplayProcessorLease& lease() const&& = delete;
+    // #733: the luma coefficients of the display's color space (the Y of its red, green and blue,
+    // normalized to sum 1), measured through OCIO when the handle is built, exactly as the scopes
+    // measure them (scope_colorimetry.hpp), so a frame's luma counters and the scopes' luma are the
+    // same quantity. Empty when the config gives the display's color space no conversion to CIE
+    // XYZ: a frame's luma counters are then absent.
+    [[nodiscard]] const std::optional<render::DisplayLumaCoefficients>&
+    displayLuma() const& noexcept {
+        return displayLuma_;
+    }
+    [[nodiscard]] const std::optional<render::DisplayLumaCoefficients>&
+    displayLuma() const&& = delete;
 
     // Straight authoring colours: RGB uses the prepared forward/inverse OCIO transform;
     // alpha is preserved exactly. Forward output clamps to the display gamut [0, 1].
@@ -148,6 +160,7 @@ class PreparedCpuDisplayProcessorHandle final {
     DisplayProcessorIdentityV1 identity_;
     DisplayProcessorExecutionProvenance provenance_;
     DisplayProcessorLease lease_;
+    std::optional<render::DisplayLumaCoefficients> displayLuma_;
 };
 
 class [[nodiscard]] OcioBuildProcessorResult final {

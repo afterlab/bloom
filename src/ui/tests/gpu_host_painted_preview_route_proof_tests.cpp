@@ -162,7 +162,9 @@ void verifyPainted(ui::ViewerEditor& viewer, const runtime::PreparedPreviewFrame
     }
     const auto width = view->displayWindow.extent().width();
     const auto height = view->displayWindow.extent().height();
-    const auto expected = view->pixels[static_cast<std::size_t>(height / 2U) * width + width / 2U];
+    // The Viewer shows the presented pixel of the cell, whichever layout the frame has.
+    const auto expected =
+        view->presentedPixel(static_cast<std::size_t>(height / 2U) * width + width / 2U);
     const QImage painted = viewer.grab().toImage().convertToFormat(QImage::Format_RGBA8888);
     const auto ratio = painted.devicePixelRatio();
     const QPointF center = mapping->displayRect.center() * ratio;

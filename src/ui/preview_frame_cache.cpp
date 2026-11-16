@@ -220,8 +220,11 @@ std::size_t PreviewFrameCache::frameByteCost(const runtime::PreparedPreviewFrame
     }
     // What RETAINING a CPU frame costs, which is not what holding it costs right now: insertion
     // keeps packed display pixels and evaluated geometry while dropping the Float32 process image.
+    // #733: the frame counters travel with the retained frame and are charged with it.
     const auto view = frame.displayBufferView();
-    const auto geometryBytes = frame.evaluatedBounds().size_bytes();
+    const auto geometryBytes =
+        frame.evaluatedBounds().size_bytes() +
+        runtime::previewDisplayCountersByteCost(frame.displayCounters().has_value());
     if (!view ||
         geometryBytes > std::numeric_limits<std::size_t>::max() - view->pixels.size_bytes())
         return 0;

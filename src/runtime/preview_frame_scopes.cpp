@@ -95,7 +95,8 @@ ScopeSignalColorCache::colorFor(const PreviewRequestIdentity& frame, const Scope
 std::shared_ptr<const PreviewFrameScopes>
 makePreviewFrameScopes(const ScopeMeasureSettings& settings, ScopeFrameMeasure measure,
                        std::shared_ptr<const ScopeSignalColor> color,
-                       const render::ScopeTableReduction reduction) {
+                       const render::ScopeTableReduction reduction,
+                       const std::optional<render::DisplayFrameCounters> frameCounters) {
     switch (measure.status) {
     case ScopeFrameStatus::Measured: {
         auto scopes = std::make_shared<PreviewFrameScopes>();
@@ -106,6 +107,7 @@ makePreviewFrameScopes(const ScopeMeasureSettings& settings, ScopeFrameMeasure m
         scopes->area = measure.area;
         scopes->color = std::move(color);
         scopes->tableReadbackBytes = measure.tableReadbackBytes;
+        scopes->frameCounters = frameCounters;
         return scopes;
     }
     case ScopeFrameStatus::EmptyArea: {

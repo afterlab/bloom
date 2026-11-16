@@ -262,13 +262,25 @@ bool gpuResidentDisplayProductIsEligible(render::GpuDevice& device,
     }
 }
 
+namespace {
+
+// #733: the frame counters the device's display pack reported for this image.
+[[nodiscard]] std::optional<render::DisplayFrameCounters>
+displayPackCounters(const render::GpuDisplayImage& display) noexcept {
+    const auto report = display.packReport();
+    return report.has_value() ? std::optional(report->counters) : std::nullopt;
+}
+
+} // namespace
+
 namespace detail {
 
 std::optional<PreparedPreviewFrame> buildResidentPreviewFrame(
     PreviewRequestIdentity identity, ProcessFrameIdentity processIdentity,
     GpuResidentFrameLease lease,
     std::shared_ptr<const GpuResidentPreviewQualificationReport> qualification,
-    std::vector<EvaluatedOperationBounds> bounds) noexcept {
+    std::vector<EvaluatedOperationBounds> bounds,
+    const std::optional<render::DisplayFrameCounters> counters) noexcept {
     try {
         // This is the only place a PreviewResidentDisplayFrame private storage is built. The
         // factory has already verified the report, device, registry, request/process identity and
@@ -279,7 +291,7 @@ std::optional<PreparedPreviewFrame> buildResidentPreviewFrame(
         auto resident =
             std::shared_ptr<const PreviewResidentDisplayFrame>(new PreviewResidentDisplayFrame(
                 std::move(identity), std::move(processIdentity), std::move(lease),
-                std::move(qualification), std::move(bounds)));
+                std::move(qualification), std::move(bounds), counters));
         if (!resident->isDisplayValid()) {
             return std::nullopt;
         }
@@ -321,7 +333,8 @@ makeGpuResidentDisplayPreview(render::GpuDevice& device, GpuResidentFrameLeaseRe
 
         auto frame = detail::buildResidentPreviewFrame(
             std::move(request.identity), std::move(request.processIdentity),
-            std::move(published.lease), std::move(report), std::move(request.bounds));
+            std::move(published.lease), std::move(report), std::move(request.bounds),
+            displayPackCounters(*request.display));
         if (!frame || !request.display->promoteStorageOwnership())
             return std::nullopt;
         return frame;
@@ -436,7 +449,8 @@ makeGpuGeneralDisplayPreview(render::GpuDevice& device, GpuResidentFrameLeaseReg
         // identity is retained by the caller (the service stage/status). No report is fabricated.
         auto frame = detail::buildResidentPreviewFrame(
             std::move(request.identity), std::move(request.processIdentity),
-            std::move(published.lease), nullptr, std::move(request.bounds));
+            std::move(published.lease), nullptr, std::move(request.bounds),
+            displayPackCounters(*request.display));
         if (!frame || !request.display->promoteStorageOwnership())
             return std::nullopt;
         return frame;

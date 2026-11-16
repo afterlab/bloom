@@ -14,6 +14,7 @@
 #include "gpu_service_chain_fixture.hpp"
 
 #include <bloom/core/sha256.hpp>
+#include <bloom/render/display_pack_parity.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
 
@@ -218,7 +219,10 @@ selectSampleCoordinates(const PreparedPreviewFrame& cpuFrame, const std::size_t 
     if (width == 0 || height == 0) {
         return coordinates;
     }
-    const auto& pixels = view->pixels;
+    // Alpha is read from the presented pixel: a 10:10:10:2 cell has no 8-bit alpha member.
+    const auto alphaAt = [&](const std::uint32_t x, const std::uint32_t y) {
+        return view->presentedPixel(static_cast<std::size_t>(y) * width + x).alpha;
+    };
     const auto add = [&](const std::uint32_t x, const std::uint32_t y) {
         if (x >= width || y >= height || coordinates.size() >= maximum) {
             return;
@@ -241,8 +245,8 @@ selectSampleCoordinates(const PreparedPreviewFrame& cpuFrame, const std::size_t 
     bool edgeFound = false;
     for (std::uint32_t y = 0; y < height && !edgeFound; ++y) {
         for (std::uint32_t x = 1; x < width; ++x) {
-            const auto left = pixels[static_cast<std::size_t>(y) * width + (x - 1)].alpha;
-            const auto right = pixels[static_cast<std::size_t>(y) * width + x].alpha;
+            const auto left = alphaAt(x - 1, y);
+            const auto right = alphaAt(x, y);
             if ((left == 0) != (right == 0)) {
                 add(x - 1, y);
                 add(x, y);
@@ -253,7 +257,7 @@ selectSampleCoordinates(const PreparedPreviewFrame& cpuFrame, const std::size_t 
     }
     for (std::uint32_t y = 0; y < height; ++y) {
         for (std::uint32_t x = 0; x < width; ++x) {
-            if (pixels[static_cast<std::size_t>(y) * width + x].alpha == 255U) {
+            if (alphaAt(x, y) == 255U) {
                 add(x, y);
                 y = height;
                 break;
@@ -262,7 +266,7 @@ selectSampleCoordinates(const PreparedPreviewFrame& cpuFrame, const std::size_t 
     }
     for (std::uint32_t y = 0; y < height; ++y) {
         for (std::uint32_t x = 0; x < width; ++x) {
-            if (pixels[static_cast<std::size_t>(y) * width + x].alpha == 0U) {
+            if (alphaAt(x, y) == 0U) {
                 add(x, y);
                 y = height;
                 break;
@@ -337,7 +341,9 @@ struct FrameEvidence final {
     for (std::size_t index = 0; index < coordinates.size(); ++index) {
         const auto x = coordinates[index].x;
         const auto y = coordinates[index].y;
-        const auto cpu = view->pixels[static_cast<std::size_t>(y) * width + x];
+        // The oracle may be a 10:10:10:2 frame; the sparse copy is an 8-bit readback, so the two
+        // meet at the presented pixel.
+        const auto cpu = view->presentedPixel(static_cast<std::size_t>(y) * width + x);
         const auto gpu = sampled.pixels[index];
         if (channelDelta(gpu.red, cpu.red) > 1 || channelDelta(gpu.green, cpu.green) > 1 ||
             channelDelta(gpu.blue, cpu.blue) > 1 || gpu.alpha != cpu.alpha) {
@@ -382,18 +388,14 @@ struct FrameEvidence final {
         return false;
     }
     const auto width = cpuView->displayWindow.extent().width();
-    const auto channelDelta = [](const std::uint8_t a, const std::uint8_t b) {
-        return std::abs(static_cast<int>(a) - static_cast<int>(b));
-    };
-    for (std::size_t index = 0; index < cpuView->pixels.size(); ++index) {
-        const auto cpu = cpuView->pixels[index];
-        const auto gpu = gpuView->pixels[index];
-        if (channelDelta(gpu.red, cpu.red) > 1 || channelDelta(gpu.green, cpu.green) > 1 ||
-            channelDelta(gpu.blue, cpu.blue) > 1 || gpu.alpha != cpu.alpha) {
-            detail = "the GPU-prepared pixel differs from the CPU oracle at (" +
-                     std::to_string(index % width) + "," + std::to_string(index / width) + ")";
-            return false;
-        }
+    // Same picture in the same layout: alpha exactly, color within one code of 255 for a straight
+    // frame and one code of 1023 for a 10:10:10:2 frame.
+    if (!render::displayFramesAgree(gpuView->pixelLayout, gpuView->pixels, cpuView->pixelLayout,
+                                    cpuView->pixels, 1U)) {
+        detail = "the GPU-prepared pixels differ from the CPU oracle (GPU layout " +
+                 std::to_string(static_cast<int>(gpuView->pixelLayout)) + ", oracle layout " +
+                 std::to_string(static_cast<int>(cpuView->pixelLayout)) + ")";
+        return false;
     }
     const auto coordinates = selectSampleCoordinates(cpuFrame);
     if (coordinates.empty()) {
@@ -402,8 +404,9 @@ struct FrameEvidence final {
     }
     for (const auto& coordinate : coordinates) {
         const auto offset = static_cast<std::size_t>(coordinate.y) * width + coordinate.x;
-        out.samples.push_back(SparseSample{coordinate.x, coordinate.y, cpuView->pixels[offset],
-                                           gpuView->pixels[offset]});
+        out.samples.push_back(SparseSample{coordinate.x, coordinate.y,
+                                           cpuView->presentedPixel(offset),
+                                           gpuView->presentedPixel(offset)});
     }
     out.oraclePixelCount = cpuView->pixels.size();
     CanonicalWriter frameWriter;

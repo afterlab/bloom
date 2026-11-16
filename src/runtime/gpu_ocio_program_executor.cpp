@@ -339,7 +339,8 @@ GpuOcioExecutorDiagnostic
 GpuOcioProgramExecutor::begin(std::shared_ptr<const PreparedGpuOcioCommand> command,
                               std::shared_ptr<const render::GpuImage> input,
                               const std::span<const std::byte> uniformOverride,
-                              const std::uint64_t byteBudget) {
+                              const std::uint64_t byteBudget,
+                              const render::DisplayPixelLayout displayLayout) {
     if (impl_ == nullptr) {
         return makeDiagnostic(GpuOcioExecutorDiagnosticCode::DeviceUnavailable,
                               "no executor was created");
@@ -381,11 +382,16 @@ GpuOcioProgramExecutor::begin(std::shared_ptr<const PreparedGpuOcioCommand> comm
         return makeDiagnostic(GpuOcioExecutorDiagnosticCode::InvalidArgument,
                               "the uniform override does not match the declared UBO size");
     }
+    const bool display = command->encoding() == GpuOcioOutputEncoding::DisplayRgba8;
+    if (!command->displayPacking().packs(displayLayout) ||
+        (!display && displayLayout != render::DisplayPixelLayout::Straight8888)) {
+        return makeDiagnostic(GpuOcioExecutorDiagnosticCode::InvalidArgument,
+                              "the command does not pack the layout the dispatch asks for");
+    }
     render::GpuOcioProgram* const native = impl.getOrCreateProgram(*command);
     if (native == nullptr) {
         return impl.jobDiagnostic;
     }
-    const bool display = command->encoding() == GpuOcioOutputEncoding::DisplayRgba8;
     const auto uniformBytes = uniformOverride.empty()
                                   ? std::span<const std::byte>(program.uniformBufferData.data(),
                                                                program.uniformBufferData.size())
@@ -393,7 +399,7 @@ GpuOcioProgramExecutor::begin(std::shared_ptr<const PreparedGpuOcioCommand> comm
     impl.packReport.reset();
     const auto nativeDiagnostic =
         display ? native->beginDisplay(input, uniformBytes, byteBudget,
-                                       command->displayPacking().nativeRequest())
+                                       command->displayPacking().nativeRequest(displayLayout))
                 : native->beginEffect(input, uniformBytes, byteBudget);
     if (nativeDiagnostic.code != render::GpuOcioProgramDiagnosticCode::None) {
         static_cast<void>(native->discardRetiredFailure(*impl.device));

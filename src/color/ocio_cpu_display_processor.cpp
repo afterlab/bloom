@@ -3,6 +3,7 @@
 #include "ocio_config_protocol.hpp"
 #include "ocio_internal.hpp"
 #include <bloom/color/display_processor_identity.hpp>
+#include <bloom/color/scope_colorimetry.hpp>
 
 #include <bloom/core/floating_point.hpp>
 
@@ -11,6 +12,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -21,6 +23,58 @@ using bloom::color::DisplayProcessorContextVariableV1View;
 using bloom::color::DisplayProcessorIdentityV1InputView;
 using bloom::color::DisplayProcessorLookModeV1;
 using bloom::color::ResolvedBloomNeutralConfig;
+
+// #733: the luma coefficients of a display's color space, measured through OCIO as the scopes
+// measure them (ScopeXyzProcessor). A display entry names its color space, or OCIO's
+// <USE_DISPLAY_NAME>, for which the display's own name is the color space. The measurement is a
+// function of the config's content and the color space alone, and a handle is built for every
+// frame of a display and view that is not the default pair, so the last few answers are kept: a
+// short list behind a mutex. An answer that may change (the transform could not be built now) is
+// measured again the next time.
+[[nodiscard]] std::optional<bloom::render::DisplayLumaCoefficients>
+measuredDisplayLuma(const ResolvedBloomNeutralConfig& resolved, const std::string_view displayName,
+                    const std::string_view colourSpaceId) noexcept {
+    try {
+        constexpr std::string_view kUseDisplayName = "<USE_DISPLAY_NAME>";
+        constexpr std::size_t kCapacity = 16;
+        struct Entry final {
+            bloom::core::Sha256Digest revision;
+            std::string colorSpaceId;
+            std::optional<bloom::render::DisplayLumaCoefficients> luma;
+        };
+        static std::mutex mutex;
+        static std::vector<Entry> answers;
+        const std::string id(colourSpaceId.empty() || colourSpaceId == kUseDisplayName
+                                 ? displayName
+                                 : colourSpaceId);
+        {
+            const std::lock_guard lock(mutex);
+            for (const auto& entry : answers) {
+                if (entry.revision == resolved.expectedRevision() && entry.colorSpaceId == id) {
+                    return entry.luma;
+                }
+            }
+        }
+        std::optional<bloom::render::DisplayLumaCoefficients> luma;
+        const auto xyz = bloom::color::ScopeXyzProcessor::prepare(resolved, id);
+        if (xyz.succeeded()) {
+            const auto& measured = xyz.processor->colorimetry().luma;
+            luma = bloom::render::DisplayLumaCoefficients{measured[0], measured[1], measured[2]};
+        } else if (xyz.error == bloom::color::ScopeXyzError::TransformBuildFailed ||
+                   xyz.error == bloom::color::ScopeXyzError::CpuProcessorUnavailable ||
+                   xyz.error == bloom::color::ScopeXyzError::UnsupportedFloatingPointEnvironment) {
+            return std::nullopt;
+        }
+        const std::lock_guard lock(mutex);
+        if (answers.size() >= kCapacity) {
+            answers.erase(answers.begin());
+        }
+        answers.push_back(Entry{resolved.expectedRevision(), id, luma});
+        return luma;
+    } catch (...) {
+        return std::nullopt;
+    }
+}
 
 // Builds the version 1 canonical DisplayProcessorIdentity for the Bloom Neutral request: empty
 // context, look bypass, quality "reference", packing "straight-rgba8", the frozen semantics
@@ -244,6 +298,7 @@ OcioBuildProcessorResult buildCpuDisplayProcessorForView(const ResolvedBloomNeut
             PreparedCpuDisplayProcessorHandle handle(std::move(impl), std::move(*identity),
                                                      std::move(provenance),
                                                      DisplayProcessorLease::helperToken());
+            handle.displayLuma_ = measuredDisplayLuma(resolved, displayName, entry->colourSpaceId);
             return OcioBuildProcessorResult(std::move(handle));
         } catch (const std::exception&) {
             return OcioBuildProcessorResult(OcioBuildProcessorError::GetProcessorFailed);
@@ -310,6 +365,7 @@ OcioBuildProcessorResult buildCpuDisplayProcessorForView(const ResolvedBloomNeut
     PreparedCpuDisplayProcessorHandle handle(std::move(impl), std::move(*identity),
                                              std::move(provenance),
                                              DisplayProcessorLease::inProcess());
+    handle.displayLuma_ = measuredDisplayLuma(resolved, displayName, entry->colourSpaceId);
     return OcioBuildProcessorResult(std::move(handle));
 }
 

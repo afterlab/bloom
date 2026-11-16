@@ -180,7 +180,8 @@ namespace detail {
     PreviewRequestIdentity identity, ProcessFrameIdentity processIdentity,
     GpuResidentFrameLease lease,
     std::shared_ptr<const GpuResidentPreviewQualificationReport> qualification,
-    std::vector<EvaluatedOperationBounds> bounds) noexcept;
+    std::vector<EvaluatedOperationBounds> bounds,
+    std::optional<render::DisplayFrameCounters> counters = std::nullopt) noexcept;
 
 } // namespace detail
 
@@ -235,7 +236,16 @@ class PreviewDisplayOnlyFrame final {
         return provenance_.provider != PreviewDisplayProvider::CpuReference;
     }
     [[nodiscard]] std::optional<PreviewDisplayBufferView> displayBufferView() const noexcept;
-    // What retaining this frame costs: packed display pixels plus evaluated geometry.
+    // #733: what the packed pixels cannot carry: the frame counters of the product this frame was
+    // copied from (render/display_pixel_packing.hpp). Empty when that product counted none.
+    [[nodiscard]] const std::optional<render::DisplayFrameCounters>&
+    displayCounters() const& noexcept {
+        return counters_;
+    }
+    [[nodiscard]] const std::optional<render::DisplayFrameCounters>&
+    displayCounters() const&& = delete;
+    // What retaining this frame costs: packed display pixels plus evaluated geometry, and the
+    // frame counters when it carries them.
     [[nodiscard]] std::size_t displayByteCost() const noexcept;
     [[nodiscard]] render::PackedRgba8Ownership packedHostOwnership() const noexcept {
         return buffer_.pixelOwnership();
@@ -262,7 +272,8 @@ class PreviewDisplayOnlyFrame final {
                             ProcessFrameIdentity processIdentity,
                             render::PreparedReferenceDisplayBuffer buffer,
                             PreviewDisplayProvenance provenance,
-                            std::vector<EvaluatedOperationBounds> bounds) noexcept;
+                            std::vector<EvaluatedOperationBounds> bounds,
+                            std::optional<render::DisplayFrameCounters> counters) noexcept;
 
     PreviewRequestIdentity desiredIdentity_;
     ProcessFrameIdentity processIdentity_;
@@ -272,7 +283,14 @@ class PreviewDisplayOnlyFrame final {
     render::PreparedReferenceDisplayBuffer buffer_;
     PreviewDisplayProvenance provenance_;
     std::vector<EvaluatedOperationBounds> bounds_;
+    std::optional<render::DisplayFrameCounters> counters_;
 };
+
+// #733: what the frame counters add to a retained host frame's cost.
+[[nodiscard]] constexpr std::size_t
+previewDisplayCountersByteCost(const bool carried) noexcept {
+    return carried ? sizeof(render::DisplayFrameCounters) : 0U;
+}
 
 // The fourth, closed display arm: a GPU-resident frame whose pixels never left the device. Its only
 // pixel storage is the opaque GpuResidentFrameLease, which owns the native GpuDisplayImage through
@@ -333,26 +351,39 @@ class PreviewResidentDisplayFrame final {
 
     // What retaining this frame costs: the ACTUAL native allocation the lease charges (allocator
     // granularity included), plus the retained evaluated geometry and the small identity/report
-    // metadata. Unlike the packed CPU arm this is a real GPU-resident allocation, not a host copy.
+    // metadata (the frame counters are part of the frame object it already counts). Unlike the
+    // packed CPU arm this is a real GPU-resident allocation, not a host copy.
     [[nodiscard]] std::size_t retainedByteCost() const noexcept;
+
+    // #733: the frame counters the device's display pack reported for the image the lease holds.
+    // Empty when the pack reported none.
+    [[nodiscard]] const std::optional<render::DisplayFrameCounters>&
+    displayCounters() const& noexcept {
+        return counters_;
+    }
+    [[nodiscard]] const std::optional<render::DisplayFrameCounters>&
+    displayCounters() const&& = delete;
 
   private:
     friend std::optional<PreparedPreviewFrame> detail::buildResidentPreviewFrame(
         PreviewRequestIdentity, ProcessFrameIdentity, GpuResidentFrameLease,
         std::shared_ptr<const GpuResidentPreviewQualificationReport>,
-        std::vector<EvaluatedOperationBounds>) noexcept;
+        std::vector<EvaluatedOperationBounds>,
+        std::optional<render::DisplayFrameCounters>) noexcept;
 
     PreviewResidentDisplayFrame(
         PreviewRequestIdentity desiredIdentity, ProcessFrameIdentity processIdentity,
         GpuResidentFrameLease lease,
         std::shared_ptr<const GpuResidentPreviewQualificationReport> qualification,
-        std::vector<EvaluatedOperationBounds> bounds) noexcept;
+        std::vector<EvaluatedOperationBounds> bounds,
+        std::optional<render::DisplayFrameCounters> counters) noexcept;
 
     PreviewRequestIdentity desiredIdentity_;
     ProcessFrameIdentity processIdentity_;
     GpuResidentFrameLease lease_;
     std::shared_ptr<const GpuResidentPreviewQualificationReport> qualification_;
     std::vector<EvaluatedOperationBounds> bounds_;
+    std::optional<render::DisplayFrameCounters> counters_;
 };
 
 // A closed alternative over the production display products (issue #97, task C3, design decision 2)
@@ -448,6 +479,12 @@ class PreparedPreviewFrame final {
     // by construction. Geometry and identity remain available on a resident frame regardless; use
     // residentFrame()/isDisplayValid() rather than inferring from this nullopt.
     [[nodiscard]] std::optional<PreviewDisplayBufferView> displayBufferView() const noexcept;
+    // #733: the frame counters, which travel with the frame on every arm: how many pixels of the
+    // display result lie under and over the display axis, per channel and for luma, and how many
+    // are not finite, counted before the pack clamped them and before the Viewer's exposure and
+    // gamma (render/display_pixel_packing.hpp). The resident arm answers too: its device pack
+    // reported them. Empty only for a frame whose product counted none.
+    [[nodiscard]] std::optional<render::DisplayFrameCounters> displayCounters() const noexcept;
     [[nodiscard]] std::optional<core::Color4d> displayLinearProbe() const noexcept;
 
     // The one display validity test that covers all four arms. For the resident arm this is exactly

@@ -6,13 +6,16 @@
 #include <bloom/runtime/gpu_preview_display_product.hpp>
 
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_cpu_display_frame.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/render/display_buffer.hpp>
+#include <bloom/render/display_pack_parity.hpp>
 #include <bloom/render/gpu_device.hpp>
+#include <bloom/render/gpu_display_pack.hpp>
 #include <bloom/render/gpu_neutral_display.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -419,6 +422,97 @@ void testQualifiedNativeProduct(
                                 view->displayWindow ==
                                     processFrame->processImage().descriptor()->displayWindow(),
                             "the product's display window is the process display window");
+
+        // #733: the long-standing pack request is a straight frame, and its counters carry no
+        // luma because it names no coefficients.
+        expectations.expect(view.has_value() &&
+                                view->pixelLayout ==
+                                    bloom::render::DisplayPixelLayout::Straight8888 &&
+                                product->displayCounters().has_value() &&
+                                !product->displayCounters()->lumaCounted(),
+                            "a pack without coefficients is a straight frame with no luma counts");
+
+        // #733: the preview's pack. One layout holds for a whole frame and the device learns
+        // which only by packing it, so a pack asked for the other layout reports the frame's own
+        // and the frame is packed again; the product then carries that layout and the counters,
+        // and both equal the CPU packer's.
+        {
+            using bloom::render::DisplayPixelLayout;
+            const auto luma = sharedProcessor->displayLuma();
+            expectations.expect(luma.has_value(),
+                                "the qualified display resolves its luma coefficients");
+            const auto sourceView = processFrame->processImage().view();
+            expectations.expect(sourceView.hasValue(), "the process picture has a view");
+            if (!sourceView.hasValue()) {
+                return;
+            }
+            const auto oracle = bloom::color::produceBloomNeutralDisplayFrame(
+                *sharedProcessor, *sourceView.value(), 65536, kBudget, {},
+                bloom::color::DisplayFramePacking{.allowRgb10A2 = true, .luma = luma});
+            expectations.expect(oracle.hasValue(), "the CPU packs the same picture");
+            if (!oracle.hasValue()) {
+                return;
+            }
+            const auto runPack = [&](const DisplayPixelLayout layout) {
+                const auto begun =
+                    pipeline.begin(processFrame->processImage().pixels(), kBudget,
+                                   bloom::render::GpuDisplayPackRequest{.layout = layout,
+                                                                        .luma = luma});
+                auto poll = bloom::render::GpuNeutralDisplayPollResult::Failure;
+                if (begun.code != bloom::render::GpuNeutralDisplayDiagnosticCode::None) {
+                    return poll;
+                }
+                for (int spin = 0; spin < 1'000'000; ++spin) {
+                    poll = pipeline.poll();
+                    if (poll != bloom::render::GpuNeutralDisplayPollResult::Pending) {
+                        break;
+                    }
+                }
+                return poll;
+            };
+            const auto frameLayout = oracle.value()->pixelLayout();
+            const bool wideFrame = frameLayout == DisplayPixelLayout::Rgb10A2;
+            const auto first =
+                runPack(wideFrame ? DisplayPixelLayout::Straight8888 : DisplayPixelLayout::Rgb10A2);
+            const auto firstReport = pipeline.packReport();
+            expectations.expect(
+                firstReport.has_value() && firstReport->frameLayout() == frameLayout &&
+                    (wideFrame
+                         ? first == bloom::render::GpuNeutralDisplayPollResult::Ready
+                         : first == bloom::render::GpuNeutralDisplayPollResult::Failure &&
+                               pipeline.diagnostic().code ==
+                                   bloom::render::GpuNeutralDisplayDiagnosticCode::LayoutRefused),
+                "a pack asked for the other layout reports the frame's own layout");
+            expectations.expect(runPack(frameLayout) ==
+                                    bloom::render::GpuNeutralDisplayPollResult::Ready,
+                                "the frame is packed again in its own layout");
+            auto packed = pipeline.readback();
+            expectations.expect(packed.hasValue() && packed.pixelLayout == frameLayout &&
+                                    packed.report.has_value() &&
+                                    packed.report->counters == oracle.value()->counters() &&
+                                    bloom::render::displayCellsWithin(frameLayout, packed.pixels,
+                                                                      oracle.value()->pixels(), 1),
+                                "the device's frame is the CPU's: its layout, its counters, and "
+                                "every code within one");
+            if (!packed.hasValue() || !packed.report.has_value()) {
+                return;
+            }
+            const auto packedCounters = packed.report->counters;
+            const auto packedProduct =
+                bloom::runtime::makeGpuNeutralDisplayPreview(stage, report, std::move(packed));
+            const auto packedView =
+                packedProduct.has_value() ? packedProduct->displayBufferView() : std::nullopt;
+            expectations.expect(
+                packedProduct.has_value() && packedView.has_value() &&
+                    packedView->pixelLayout == frameLayout &&
+                    packedProduct->displayCounters() == packedCounters &&
+                    packedProduct->displayCounters()->lumaCounted() &&
+                    packedProduct->displayOnlyFrame()->displayByteCost() ==
+                        expectedPixels * sizeof(Rgba8) +
+                            processFrame->evaluatedBounds().size_bytes() +
+                            sizeof(bloom::render::DisplayFrameCounters),
+                "the product carries the layout and the counters, charged with its pixels");
+        }
 
         // A typed native failure publishes nothing.
         bloom::render::GpuNeutralDisplayReadback failed;

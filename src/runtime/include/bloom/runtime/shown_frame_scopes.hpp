@@ -56,6 +56,10 @@ struct ShownFrameScopeRequest final {
     std::optional<ScopeStoredFrame> stored;
     std::shared_ptr<const void> storedOwner;
     std::shared_ptr<const ScopeSignalColor> storedColor;
+    // The frame counters of that stored frame, when its producer counted them. A `frame` brings
+    // its own (PreparedPreviewFrame::displayCounters). They are handed on with the tables
+    // (PreviewFrameScopes::frameCounters).
+    std::optional<render::DisplayFrameCounters> storedCounters;
     // `signal` must be ScopeSignal::Display and `axisMaximum` 1.
     ScopeMeasureSettings settings;
     // The size of the tables: what the panes draw (render/scope_table_layout.hpp).

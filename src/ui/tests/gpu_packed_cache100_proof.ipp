@@ -25,6 +25,9 @@ ui::PreparedPreviewFrameHandle footageCpuReference(
     runtime::CpuQualifiedDisplayPreparer preparer(*fixture.processor);
     runtime::QualifiedDisplayPreparationRequest request;
     request.aggregatePixelStorageByteLimit = pixelBudget;
+    // The GPU preview routes emit a 10:10:10:2 frame whenever the frame allows it; the oracle
+    // they are compared with takes the same layout.
+    request.allowRgb10A2 = true;
     const auto prepared = preparer.prepare(evaluated.frame(), request, {});
     if (prepared.status() != runtime::QualifiedDisplayPreparationStatus::Prepared ||
         !prepared.frame())
@@ -773,19 +776,20 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                 if (y >= margin && y < height - margin)
                     continue;
                 for (std::uint32_t x = 0; x < width; ++x) {
-                    const auto pixel = view->pixels[static_cast<std::size_t>(y) * width + x];
+                    const auto pixel = view->presentedPixel(static_cast<std::size_t>(y) * width + x);
                     blackMargins = blackMargins && pixel.red == 0 && pixel.green == 0 &&
                                    pixel.blue == 0 && pixel.alpha == 255;
                 }
             }
             checks.expect(blackMargins, "every explicit black margin pixel is opaque black");
-            const auto firstSourcePixel = view->pixels[static_cast<std::size_t>(margin) * width];
+            const auto firstSourcePixel = view->presentedPixel(static_cast<std::size_t>(margin) * width);
             bool nonuniform = false;
             for (std::uint32_t y = margin; y < height - margin; ++y)
                 for (std::uint32_t x = 0; x < width; ++x)
                     nonuniform =
                         nonuniform ||
-                        view->pixels[static_cast<std::size_t>(y) * width + x] != firstSourcePixel;
+                        view->presentedPixel(static_cast<std::size_t>(y) * width + x) !=
+                            firstSourcePixel;
             checks.expect(nonuniform, "mounted source region contains genuine nonuniform footage");
         }
         measured += bytes;
@@ -855,7 +859,7 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                   << " index=" << index << " width=" << width << " height=" << height
                   << " host=" << frame->provenance().gpuPreparedPacked->transfer.hostStorageBytes
                   << " actualCharge=" << bytes
-                  << " red=" << static_cast<int>(view->pixels.front().red) << '\n';
+                  << " red=" << static_cast<int>(view->presentedPixel(0).red) << '\n';
         retainedTimes.push_back(*time);
     }
     checks.expect(measured == cache->residentBytes(),

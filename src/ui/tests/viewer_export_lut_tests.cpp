@@ -140,7 +140,8 @@ struct Pixels final {
         return out;
     }
     out.rgba.reserve(view->pixels.size() * 4U);
-    for (const auto& pixel : view->pixels) {
+    for (std::size_t index = 0; index < view->pixels.size(); ++index) {
+        const auto pixel = view->presentedPixel(index);
         out.rgba.insert(out.rgba.end(), {pixel.red, pixel.green, pixel.blue, pixel.alpha});
     }
     out.ok = true;

@@ -37,7 +37,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <cstring>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -378,10 +377,15 @@ void testOverrideChangesPixels(Expectations& expectations) {
     if (!baselineView.has_value() || !overriddenView.has_value()) {
         return;
     }
-    expectations.expect(baselineView->pixels.size() == overriddenView->pixels.size() &&
-                            !baselineView->pixels.empty() &&
-                            std::memcmp(baselineView->pixels.data(), overriddenView->pixels.data(),
-                                        baselineView->pixels.size_bytes()) != 0,
+    bool presentedDiffers = false;
+    if (baselineView->pixels.size() == overriddenView->pixels.size()) {
+        for (std::size_t index = 0; index < baselineView->pixels.size() && !presentedDiffers;
+             ++index) {
+            presentedDiffers =
+                baselineView->presentedPixel(index) != overriddenView->presentedPixel(index);
+        }
+    }
+    expectations.expect(presentedDiffers,
                         "the override changes the prepared pixels");
     expectations.expect(overriddenStage->processFrame() != baselineStage->processFrame(),
                         "the override evaluates its own ProcessFrame");

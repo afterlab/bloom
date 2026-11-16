@@ -154,7 +154,8 @@ int main(int argc, char** argv) {
             std::vector<render::Rgba8> before;
             if (controller.state().frame) {
                 if (const auto view = controller.state().frame->displayBufferView())
-                    before.assign(view->pixels.begin(), view->pixels.end());
+                    for (std::size_t index = 0; index < view->pixels.size(); ++index)
+                        before.push_back(view->presentedPixel(index));
             }
             expect(!before.empty(), "and publishes a display buffer");
 
@@ -172,7 +173,8 @@ int main(int argc, char** argv) {
             std::vector<render::Rgba8> after;
             if (controller.state().frame) {
                 if (const auto view = controller.state().frame->displayBufferView())
-                    after.assign(view->pixels.begin(), view->pixels.end());
+                    for (std::size_t index = 0; index < view->pixels.size(); ++index)
+                        after.push_back(view->presentedPixel(index));
             }
             expect(!after.empty() && after != before,
                    "and the published display buffer the viewer paints actually changes");

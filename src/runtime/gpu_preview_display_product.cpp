@@ -138,7 +138,9 @@ bool gpuNeutralDisplayStageIsEligible(const PreviewCpuStage& stage,
         }
         const std::size_t packedBytes =
             static_cast<std::size_t>(pixelCount) * sizeof(render::Rgba8);
-        const std::size_t geometryBytes = processFrame->evaluatedBounds().size_bytes();
+        // The retained frame also carries the frame counters the pack reports (#733).
+        const std::size_t geometryBytes = processFrame->evaluatedBounds().size_bytes() +
+                                          previewDisplayCountersByteCost(true);
         if (packedBytes > stage.pixelStorageByteLimit() ||
             geometryBytes > stage.pixelStorageByteLimit() - packedBytes) {
             reason = "the adopted display pixels plus evaluated geometry exceed the request budget";
@@ -189,17 +191,26 @@ makeGpuNeutralDisplayPreview(const PreviewCpuStage& stage,
         if (processDescriptor == nullptr) {
             return std::nullopt;
         }
+        // #733: the words are in the layout the device packed them in, and its status block
+        // carried the frame counters.
         const auto displayDescriptor = render::ReferenceDisplayBufferDescriptor::create(
-            processDescriptor->displayWindow(), processDescriptor->pixelAspect());
+            processDescriptor->displayWindow(), processDescriptor->pixelAspect(),
+            readback.pixelLayout);
         if (!displayDescriptor) {
             return std::nullopt;
         }
+        const std::optional<render::DisplayFrameCounters> counters =
+            readback.report.has_value() ? std::optional(readback.report->counters) : std::nullopt;
         // adopt() re-checks size and budget; this size check only orders the metadata allocation
         // before the payload move.
         if (readback.pixels.size() != displayDescriptor.value()->layout().pixelCount) {
             return std::nullopt;
         }
-        const std::size_t geometryBytes = processFrame->evaluatedBounds().size_bytes();
+        const std::size_t geometryBytes = processFrame->evaluatedBounds().size_bytes() +
+                                          previewDisplayCountersByteCost(counters.has_value());
+        if (geometryBytes > stage.pixelStorageByteLimit()) {
+            return std::nullopt;
+        }
 
         // Metadata is allocated before the payload move so a metadata allocation failure is still a
         // rejection-before-adoption that preserves the caller's bytes.
@@ -224,7 +235,7 @@ makeGpuNeutralDisplayPreview(const PreviewCpuStage& stage,
         // strings, so its throw is caught by the enclosing handler rather than terminating.
         PreviewDisplayOnlyFrame displayOnly(stage.desiredIdentity(), processFrame->identity(),
                                             std::move(*buffer.value()), std::move(provenance),
-                                            std::move(bounds));
+                                            std::move(bounds), counters);
         auto shared = std::make_shared<const PreviewDisplayOnlyFrame>(std::move(displayOnly));
         // #730: the scope tables the CPU stage counted travel with the frame.
         return PreparedPreviewFrame::createDisplayOnly(stage.desiredIdentity().requestGeneration,

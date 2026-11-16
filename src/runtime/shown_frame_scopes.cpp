@@ -51,6 +51,8 @@ struct Run final {
     std::optional<ScopeStoredFrame> stored;
     // Keeps `stored->cells` alive.
     std::shared_ptr<const void> owner;
+    // The frame's own counters, handed on with its tables.
+    std::optional<render::DisplayFrameCounters> frameCounters;
 };
 
 // What the device job's XYZ program factory borrows.
@@ -125,7 +127,7 @@ void countOnWorker(const StatePtr& state, const Run& run, const CancellationToke
         return;
     auto result =
         resultOf(run, makePreviewFrameScopes(run.request.settings, std::move(measure), run.color,
-                                             run.request.reduction));
+                                             run.request.reduction, run.frameCounters));
     result.deviceMessage = std::move(deviceMessage);
     publish(state, run, std::move(result));
 }
@@ -153,6 +155,7 @@ void continueAfterDevice(const StatePtr& state, std::shared_ptr<Run> run,
         run.stored = request.stored;
         run.owner = request.storedOwner;
         run.color = request.storedColor;
+        run.frameCounters = request.storedCounters;
         return true;
     }
     std::string message;
@@ -176,6 +179,7 @@ void continueAfterDevice(const StatePtr& state, std::shared_ptr<Run> run,
                                            run.color)));
         return false;
     }
+    run.frameCounters = request.frame->displayCounters();
     run.stored = ScopeStoredFrame{.cells = view->pixels,
                                   .layout = view->pixelLayout,
                                   .dataWindow = view->dataWindow.value_or(view->displayWindow),
@@ -254,7 +258,8 @@ void continueAfterDevice(const StatePtr& state, std::shared_ptr<Run> run,
         measure.status = ScopeFrameStatus::EmptyArea;
         publish(state, *run,
                 resultOf(*run, makePreviewFrameScopes(request.settings, std::move(measure),
-                                                      run->color, request.reduction)));
+                                                      run->color, request.reduction,
+                                                      run->frameCounters)));
         ended = true;
         return false;
     }
@@ -384,7 +389,8 @@ void continueAfterDevice(const StatePtr& state, std::shared_ptr<Run> run,
                         measure.area = *area;
                     auto published = resultOf(
                         *run, makePreviewFrameScopes(run->request.settings, std::move(measure),
-                                                     run->color, run->request.reduction));
+                                                     run->color, run->request.reduction,
+                                                     run->frameCounters));
                     published.uploads = result.uploads;
                     published.colorDispatches = result.colorDispatches;
                     published.tableReadbacks = result.tableReadbacks;

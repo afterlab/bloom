@@ -69,8 +69,13 @@ std::optional<PreparedPreviewFrame> makeGpuPreparedPackedPreview(
                    !(identity.viewAdjust == ViewAdjust{})) {
             return std::nullopt;
         }
+        // #733: the transferred words are in the layout the device packed the image in, and the
+        // pack's status block carried the frame counters.
         const auto descriptor = render::ReferenceDisplayBufferDescriptor::create(
-            expected.dataWindow(), expected.pixelAspect());
+            expected.dataWindow(), expected.pixelAspect(), transfer.pixelLayout());
+        const auto packReport = transfer.packReport();
+        const std::optional<render::DisplayFrameCounters> counters =
+            packReport.has_value() ? std::optional(packReport->counters) : std::nullopt;
         if (!descriptor || transfer.pixels().size() != descriptor.value()->layout().pixelCount ||
             transfer.accounting().submissions != 1 ||
             transfer.accounting().hostStorageBytes < transfer.pixels().size_bytes())
@@ -96,7 +101,7 @@ std::optional<PreparedPreviewFrame> makeGpuPreparedPackedPreview(
                                         {.provider = PreviewDisplayProvider::GpuPreparedPacked,
                                          .gpuQualification = nullptr,
                                          .gpuPreparedPacked = std::move(proof)},
-                                        std::move(bounds));
+                                        std::move(bounds), counters);
         return PreparedPreviewFrame::createDisplayOnly(
             identity.requestGeneration,
             std::make_shared<const PreviewDisplayOnlyFrame>(std::move(display)));

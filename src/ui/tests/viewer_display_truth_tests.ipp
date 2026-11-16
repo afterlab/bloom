@@ -140,12 +140,9 @@ void testViewerActualAdjustmentFailureAndCover(Expectations& checks) {
         const auto point = rect.topLeft() + QPointF(rect.width() * 0.25, rect.height() * 0.25);
         const auto local = (point - descriptor.captureRect.topLeft()) * descriptor.devicePixelRatio;
         const auto image = snapshot.toImage();
-        const auto expected =
-            QImage(reinterpret_cast<const uchar*>(pixels->pixels.data()),
-                   static_cast<int>(pixels->displayWindow.extent().width()),
-                   static_cast<int>(pixels->displayWindow.extent().height()),
-                   static_cast<qsizetype>(pixels->layout.rowStrideBytes), QImage::Format_RGBA8888)
-                .pixelColor(0, 0);
+        // The cell the Viewer shows, whichever layout the cached frame has.
+        const auto cell = pixels->presentedPixel(0);
+        const QColor expected(cell.red, cell.green, cell.blue, cell.alpha);
         if (!image.rect().contains(local.toPoint()))
             return false;
         const auto actual = image.pixelColor(local.toPoint());

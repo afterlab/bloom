@@ -49,8 +49,9 @@ void testPauseReplacesCancelledSameTime(Expectations& expectations) {
         "stopped newest green source becomes Current after cancelled playback drains");
     const auto frame = controller.state().frame;
     const auto pixels = frame ? frame->displayBufferView() : std::nullopt;
-    expectations.expect(pixels && !pixels->pixels.empty() &&
-                            pixels->pixels.front().green > pixels->pixels.front().red &&
+    const auto firstShown = pixels && !pixels->pixels.empty() ? pixels->presentedPixel(0)
+                                                              : bloom::render::Rgba8{};
+    expectations.expect(pixels && !pixels->pixels.empty() && firstShown.green > firstShown.red &&
                             invocations.load() == 3,
                         "one newest replacement actually publishes green pixels with bounded work");
     const auto readyGeneration = generation(controller.state());

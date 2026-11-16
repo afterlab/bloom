@@ -453,8 +453,10 @@ struct StatisticsLog final {
     gpu = sampled.pixels;
     std::size_t differing = 0;
     for (std::size_t index = 0; index < coordinates.size(); ++index) {
-        const auto cpu = view->pixels[static_cast<std::size_t>(coordinates[index].y) * width +
-                                      coordinates[index].x];
+        // The oracle may be a 10:10:10:2 frame and the sample is an 8-bit readback: compare the
+        // pixel the oracle presents.
+        const auto cpu = view->presentedPixel(
+            static_cast<std::size_t>(coordinates[index].y) * width + coordinates[index].x);
         const auto& sample = gpu[index];
         const auto delta = [](const std::uint8_t a, const std::uint8_t b) {
             return std::abs(static_cast<int>(a) - static_cast<int>(b));
@@ -491,7 +493,7 @@ void writePpm(const std::filesystem::path& path, const std::vector<render::Rgba8
     const auto height = view->displayWindow.extent().height();
     for (std::uint32_t y = 0; y < height; y += stride)
         for (std::uint32_t x = 0; x < width; x += stride)
-            out.push_back(view->pixels[static_cast<std::size_t>(y) * width + x]);
+            out.push_back(view->presentedPixel(static_cast<std::size_t>(y) * width + x));
     return out;
 }
 
@@ -1427,7 +1429,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             const auto shownView = frame->displayBufferView();
             const auto referenceView =
                 reference != nullptr ? reference->displayBufferView() : std::nullopt;
+            // Both frames come from the CPU route: the same layout and the same cells.
             samePixels = shownView && referenceView &&
+                         shownView->pixelLayout == referenceView->pixelLayout &&
                          std::ranges::equal(shownView->pixels, referenceView->pixels);
         }
         checks.expect(samePixels, "the CPU frame shows the CPU reference's pixels");

@@ -208,6 +208,10 @@ GpuDisplayProgramResult GpuDisplayProgramService::prepare(const GpuDisplayColorB
     spec.view = binding.view.empty() ? std::string(config->viewName()) : binding.view;
     spec.workingSpaceId = std::string(config->processColorSpaceId());
     spec.viewAdjust = viewAdjust;
+    // #733: the preview's display program packs either layout and counts the frame counters, luma
+    // with the display's own coefficients (the CPU oracle's, so the two routes count alike).
+    spec.displayPacking = GpuOcioDisplayPacking{.mode = GpuOcioDisplayPackingMode::Preview,
+                                                .luma = oracle->displayLuma()};
 
     const auto prepared = context.preparer->prepare(
         *config, spec, GpuOcioCommandGeometry{width, height}, context.compileOptions, cancel);

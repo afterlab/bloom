@@ -18,6 +18,7 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/render/display_pack_parity.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_neutral_display.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -271,20 +272,9 @@ serviceSubmitter(runtime::GpuPreviewDisplayService& service,
         gpuView->pixels.size() != cpuView->pixels.size()) {
         return false;
     }
-    for (std::size_t index = 0; index < gpuView->pixels.size(); ++index) {
-        const auto& a = gpuView->pixels[index];
-        const auto& b = cpuView->pixels[index];
-        if (a.alpha != b.alpha) {
-            return false;
-        }
-        const auto close = [](const std::uint8_t lhs, const std::uint8_t rhs) {
-            return lhs > rhs ? lhs - rhs <= 1 : rhs - lhs <= 1;
-        };
-        if (!close(a.red, b.red) || !close(a.green, b.green) || !close(a.blue, b.blue)) {
-            return false;
-        }
-    }
-    return true;
+    // Same picture in the same layout: alpha exact, color within one code of the old comparison.
+    return render::displayFramesAgree(gpuView->pixelLayout, gpuView->pixels, cpuView->pixelLayout,
+                                      cpuView->pixels, 1U);
 }
 
 // Gate 2: real service through the foreground controller at 1080p: actual GPU provenance and
@@ -387,6 +377,8 @@ void testControllerGpuPathAndParity(Expectations& expectations, const Options& o
             runtime::CpuQualifiedDisplayPreparer preparer(*fixture.provider.handle());
             runtime::QualifiedDisplayPreparationRequest request;
             request.aggregatePixelStorageByteLimit = kBudget;
+            // The GPU preview route emits a 10:10:10:2 frame whenever the frame allows it.
+            request.allowRgb10A2 = true;
             auto prepared =
                 preparer.prepare(oracleFrame.frame(), request, runtime::CancellationToken{});
             auto cpuFrame = runtime::PreparedPreviewFrame::createQualified(

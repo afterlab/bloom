@@ -426,7 +426,7 @@ void testRebindWithCollidingIdentitiesRendersNewPixels(Expectations& expectation
         reachQuiescence(controller, bridge, scheduler, expectations);
         return;
     }
-    const auto firstCentre = firstBuffer->pixels[firstBuffer->pixels.size() / 2];
+    const auto firstCentre = firstBuffer->presentedPixel(firstBuffer->pixels.size() / 2);
     expectations.expect(firstCentre.red > firstCentre.blue,
                         "the first document's pixels are the red solid");
     const auto firstPlan = firstFrame->processIdentity().plan;
@@ -445,7 +445,7 @@ void testRebindWithCollidingIdentitiesRendersNewPixels(Expectations& expectation
     expectations.expect(secondBuffer.has_value() && !secondBuffer->pixels.empty(),
                         "the rebound frame has a display buffer");
     if (secondBuffer.has_value() && !secondBuffer->pixels.empty()) {
-        const auto secondCentre = secondBuffer->pixels[secondBuffer->pixels.size() / 2];
+        const auto secondCentre = secondBuffer->presentedPixel(secondBuffer->pixels.size() / 2);
         expectations.expect(secondCentre.blue > secondCentre.red,
                             "the rebound document displays its own blue pixels, not the previous "
                             "document's red ones");
@@ -509,7 +509,7 @@ void testRebindInFlightFrameCannotPublishOldPixels(Expectations& expectations) {
     expectations.expect(buffer.has_value() && !buffer->pixels.empty(),
                         "the rebound frame has a display buffer");
     if (buffer.has_value() && !buffer->pixels.empty()) {
-        const auto centre = buffer->pixels[buffer->pixels.size() / 2];
+        const auto centre = buffer->presentedPixel(buffer->pixels.size() / 2);
         expectations.expect(centre.blue > centre.red,
                             "the released old in-flight frame never publishes its red pixels");
     }

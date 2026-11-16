@@ -12,6 +12,7 @@
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
+#include <bloom/render/display_pixel_packing.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/render/scope_table_layout.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
@@ -86,12 +87,13 @@ constexpr auto kSlot = document::LayerSlotId::fromRaw(30);
 
 [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
 oneSolidPlan(const document::ProjectId projectId = kProjectId,
-             const document::Revision revision = document::Revision::fromRaw(7)) {
+             const document::Revision revision = document::Revision::fromRaw(7),
+             const Color4d color = Color4d{1.0, 0.0, 0.0, 1.0}) {
     const auto compositionFormat = format();
     std::vector<runtime::CompiledOperation> operations;
     operations.emplace_back(
         runtime::CompiledSolid{kSolidNode,
-                               {document::ParameterId::fromRaw(40), Color4d{1.0, 0.0, 0.0, 1.0}},
+                               {document::ParameterId::fromRaw(40), color},
                                {document::ParameterId::fromRaw(kSolidNode.value() * 100 + 1000),
                                 static_cast<double>(compositionFormat.width())},
                                {document::ParameterId::fromRaw(kSolidNode.value() * 100 + 1001),
@@ -120,7 +122,7 @@ oneSolidPlan(const document::ProjectId projectId = kProjectId,
 
 [[nodiscard]] std::shared_ptr<const PreparedPreviewFrame>
 cpuFrame(const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan,
-         const std::uint64_t generation) {
+         const std::uint64_t generation, const bool allowRgb10A2 = false) {
     const runtime::CpuCompositionEvaluator evaluator;
     const auto evaluated = evaluator.evaluate(
         plan,
@@ -143,7 +145,8 @@ cpuFrame(const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan,
                              .viewAdjust = {},
                              .displayName = {},
                              .viewName = {},
-                             .showLook = true},
+                             .showLook = true,
+                             .allowRgb10A2 = allowRgb10A2},
                          {});
     if (display.frame() == nullptr) {
         return nullptr;
@@ -294,6 +297,80 @@ void testNoDisplayTablesStored(Expectations& expectations,
     scopeCache.clear();
     expectations.expect(scopeCache.scopeTableBytes() == 0,
                         "scopes: a cleared cache holds no tables");
+}
+
+// #733: a cached display frame is four bytes a pixel in either layout, and the frame counters
+// (what the packed pixels cannot carry) travel with it: nine 32-bit counts, charged with the frame
+// and handed back by the cache.
+void testDisplayFrameBytesAndCounters(Expectations& expectations, const std::size_t budget) {
+    // A solid brighter than the display's white in red: every covered pixel is over the axis.
+    const auto plan =
+        oneSolidPlan(kProjectId, document::Revision::fromRaw(9), Color4d{2.0, 0.25, 0.0, 1.0});
+    const auto wide = cpuFrame(plan, 1, true);
+    const auto straight = cpuFrame(plan, 1, false);
+    expectations.expect(wide != nullptr && straight != nullptr, "counters: the frames are built");
+    if (wide == nullptr || straight == nullptr) {
+        return;
+    }
+    const auto wideView = wide->displayBufferView();
+    const auto straightView = straight->displayBufferView();
+    expectations.expect(wideView.has_value() && straightView.has_value() &&
+                            wideView->pixelLayout == render::DisplayPixelLayout::Rgb10A2 &&
+                            straightView->pixelLayout == render::DisplayPixelLayout::Straight8888,
+                        "counters: a frame of opaque and transparent pixels is 10:10:10:2 when "
+                        "its producer allows it, straight otherwise");
+    if (!wideView.has_value() || !straightView.has_value()) {
+        return;
+    }
+    const std::size_t pixels = std::size_t{format().width()} * format().height();
+    expectations.expect(wideView->pixels.size() == pixels &&
+                            wideView->pixels.size_bytes() == pixels * 4 &&
+                            straightView->pixels.size_bytes() == pixels * 4,
+                        "counters: either layout is four bytes a pixel");
+    std::uint32_t covered = 0;
+    bool codesMatch = true;
+    for (std::size_t index = 0; index < pixels; ++index) {
+        const auto codes = render::rgb10A2Codes(wideView->pixels[index]);
+        const bool opaque = straightView->pixels[index].alpha == 255;
+        covered += opaque ? 1U : 0U;
+        codesMatch = codesMatch &&
+                     (opaque ? codes.alpha == render::kDisplayAlpha2Opaque &&
+                                   codes.red == render::kDisplayCode10Maximum && codes.blue == 0
+                             : render::displayWord(wideView->pixels[index]) == 0U);
+    }
+    expectations.expect(covered > 0 && codesMatch,
+                        "counters: the 10-bit words hold the same picture as the straight frame");
+    const auto counters = wide->displayCounters();
+    expectations.expect(counters.has_value() && counters == straight->displayCounters(),
+                        "counters: the layout does not change the frame counters");
+    if (!counters.has_value()) {
+        return;
+    }
+    const render::DisplayFrameCounters expected{.under = {0, 0, 0, 0},
+                                                .over = {covered, 0, 0, 0},
+                                                .notFinite = 0};
+    expectations.expect(*counters == expected && counters->lumaCounted(),
+                        "counters: every covered pixel is over the axis in red, and nothing else");
+
+    static_assert(sizeof(render::DisplayFrameCounters) == 36);
+    const auto cost = PreviewFrameCache::frameByteCost(*wide);
+    expectations.expect(cost == pixels * 4 + wide->evaluatedBounds().size_bytes() +
+                                    sizeof(render::DisplayFrameCounters) &&
+                            cost == PreviewFrameCache::frameByteCost(*straight),
+                        "counters: a frame is charged its pixels, its geometry and the 36 bytes of "
+                        "its counters, the same in either layout");
+    PreviewFrameCache cache(budget);
+    expectations.expect(cache.insert(wide).retained() && cache.hostBytes() == cost,
+                        "counters: the cache charges exactly that");
+    const auto taken = cache.take(wide->desiredIdentity());
+    const auto takenView = taken != nullptr ? taken->displayBufferView() : std::nullopt;
+    expectations.expect(taken != nullptr && !taken->hasProcessFrame() && takenView.has_value() &&
+                            takenView->pixelLayout == render::DisplayPixelLayout::Rgb10A2 &&
+                            std::equal(takenView->pixels.begin(), takenView->pixels.end(),
+                                       wideView->pixels.begin(), wideView->pixels.end()) &&
+                            taken->displayCounters() == counters &&
+                            PreviewFrameCache::frameByteCost(*taken) == cost,
+                        "counters: the cached copy keeps the layout, every word and the counters");
 }
 
 } // namespace
@@ -541,6 +618,7 @@ int main(int argc, char** argv) {
         }
 
         testNoDisplayTablesStored(expectations, frameA1, keyA, kBudget);
+        testDisplayFrameBytesAndCounters(expectations, kBudget);
 
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " cache CPU edge expectation(s) failed\n";

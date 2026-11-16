@@ -454,6 +454,84 @@ void startupQueuedRequestProof(
     serviceOwner.reset();
 }
 
+// #733: one layout holds for a whole frame and the device learns which only by packing it, so a
+// frame whose layout is not the one its composition's last frame took is packed once more. Every
+// frame the service hands out then has the layout its own picture gives it, the one the CPU route
+// gives it too, whatever was packed before: the full frame of a layer at a half-pixel position
+// (its edges are partly transparent: straight), a region inside the layer (every pixel opaque:
+// 10:10:10:2), and the full frame again.
+void frameLayoutProof(
+    Expectations& checks, const TestOptions& options,
+    const std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle>& processor,
+    const std::shared_ptr<const GpuDisplayProgramService>& programs,
+    const bloom::document::Snapshot& snapshot) {
+    const std::string variant = programs ? "general display" : "neutral display";
+    const auto plan = makePlan(1920, 1080, bloom::document::Vec2d{2.5, 1.5});
+    PackedRetirementScope retirement;
+    TaskScheduler scheduler(schedulerConfig());
+    auto policy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(32, retirement.owner);
+    auto sample = bloom::test_support::fixedMemoryBudgetSample();
+    bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
+                                              sample.machine.availableBytes.value_or(0));
+    ledger.beginProcessSampling();
+    const auto refresh = [&] {
+        auto refreshed = bloom::test_support::fixedMemoryBudgetSample();
+        const auto at = bloom::runtime::GpuProcessingPhasePolicy::Clock::now();
+        const auto state = ledger.applySample(std::move(refreshed), at);
+        policy->applyHostSample(state, ledger.physicalByteBudget(), at);
+    };
+    refresh();
+    auto builder = std::make_shared<CpuGpuSceneBuilder>(
+        nullptr, bloom::runtime::GpuSceneMediaContext{}, bloom::runtime::GpuSceneOcioContext{},
+        bloom::runtime::GpuScenePreparationPhase{
+            .policy = policy,
+            .envelope = {.metadataBytes = 1024ULL * 1024,
+                         .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
+                         .requestedExecutorBytes = kBudget,
+                         .deviceWorkingBytes = 832ULL * 1024 * 1024}});
+    auto configured = packedOptions(options);
+    configured.processingPhasePolicy = policy;
+    auto serviceOwner = std::make_unique<GpuPreviewDisplayService>(
+        scheduler, packedStageFunction(plan, builder, programs, processor),
+        generalCpuStageFunction(plan, processor, std::make_shared<CpuCompositionEvaluator>()),
+        generalFallback(processor), configured);
+    auto& service = *serviceOwner;
+    checks.expect(
+        waitUntil(
+            [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; },
+            30s) &&
+            service.status().state == GpuPreviewDisplayServiceState::Ready,
+        variant + ": the service is ready for the layout proof");
+    if (service.status().state == GpuPreviewDisplayServiceState::Ready) {
+        auto identity = makeIdentity(*plan, 950, {}, {}, {});
+        const auto inside = bloom::render::ImageWindow::create(64, 64, 800, 400);
+        const auto step = [&](const std::string& what, const bool region,
+                              const bloom::render::DisplayPixelLayout expected) {
+            ++identity.requestGeneration;
+            identity.roi.reset();
+            if (region)
+                identity.roi = *inside.value();
+            refresh();
+            const auto frame = requestPacked(checks, service, snapshot, identity);
+            const auto view = frame ? frame->displayBufferView() : std::nullopt;
+            checks.expect(view.has_value() && view->pixelLayout == expected,
+                          variant + ": " + what + " has the layout of its own picture");
+            if (frame)
+                compareCpu(checks, *frame, plan, *processor);
+        };
+        step("the full frame with soft edges", false,
+             bloom::render::DisplayPixelLayout::Straight8888);
+        step("a region of opaque pixels after a straight frame", true,
+             bloom::render::DisplayPixelLayout::Rgb10A2);
+        step("the soft frame after a 10:10:10:2 frame", false,
+             bloom::render::DisplayPixelLayout::Straight8888);
+        checks.expect(service.status().counters.cpuFallbacks == 0,
+                      variant + ": no frame of the layout proof took the CPU route");
+    }
+    service.beginShutdown();
+    serviceOwner.reset();
+}
+
 int run(int argc, char** argv) {
     bool shutdownProof = false;
     std::vector<char*> arguments;
@@ -519,6 +597,8 @@ int run(int argc, char** argv) {
                                             processor, document.snapshot(), true);
         payloadAllocationFailureProof(checks, packedOptions(options), plan, processor,
                                       document.snapshot());
+        frameLayoutProof(checks, options, processor, {}, document.snapshot());
+        frameLayoutProof(checks, options, processor, programs, document.snapshot());
     }
     heldTransferProof(checks, packedOptions(options), plan, processor, programs,
                       document.snapshot(), shutdownProof);

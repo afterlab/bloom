@@ -42,6 +42,12 @@ struct QualifiedDisplayPreparationRequest final {
     std::string displayName;
     std::string viewName;
     bool showLook = true;
+    // #733: a preview frame whose every pixel is opaque or exactly transparent is packed as
+    // 10:10:10:2 words (render/display_pixel_packing.hpp); any other frame, and every frame
+    // without this, is straight RGBA8. The layout is the frame's content, not its identity. The
+    // frame counters are counted either way, luma with the display's own coefficients
+    // (PreparedCpuDisplayProcessorHandle::displayLuma).
+    bool allowRgb10A2 = false;
 };
 
 enum class QualifiedDisplayProvider : std::uint8_t {

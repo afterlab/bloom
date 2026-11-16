@@ -282,7 +282,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             if (index < viewRef->pixels.size()) {
                 phase("media-sample", "composition=" + std::to_string(sampleX) + "," +
                                           std::to_string(sampleY) +
-                                          " cpuReference=" + hexOf(viewRef->pixels[index]) +
+                                          " cpuReference=" + hexOf(viewRef->presentedPixel(index)) +
                                           " resident=" + (isResident(supportedFrame) ? "1" : "0"));
             }
         }

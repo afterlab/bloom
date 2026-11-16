@@ -159,7 +159,7 @@ void boundaryPins() {
     const auto frame = preview.state().frame;
     const auto display = frame ? frame->displayBufferView() : std::nullopt;
     expect(frame && frame->isOcioQualified() && display && !display->pixels.empty() &&
-               display->pixels.front() == render::Rgba8{240, 59, 46, 255},
+               display->presentedPixel(0) == render::Rgba8{240, 59, 46, 255},
            "the viewer pipeline frame pixel equals the picked F03B2E after display processing");
 
     auto* red = properties->findChild<ui::kit::KValueField*>("solidColorRedEditor");

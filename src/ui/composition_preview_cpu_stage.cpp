@@ -340,6 +340,7 @@ runtime::PreviewCpuDisplayFallback makeCompositionPreviewCpuDisplayFallback(
                 .displayName = desiredIdentity.displayName,
                 .viewName = desiredIdentity.viewName,
                 .showLook = desiredIdentity.showLook,
+                .allowRgb10A2 = true,
             };
             auto qualifiedResult = qualifiedPreparer.prepare(
                 stage.processFrame(), qualifiedRequest, context.cancellation(),
@@ -380,6 +381,7 @@ runtime::PreviewCpuDisplayFallback makeCompositionPreviewCpuDisplayFallback(
                 .displayName = desiredIdentity.displayName,
                 .viewName = desiredIdentity.viewName,
                 .showLook = desiredIdentity.showLook,
+                .allowRgb10A2 = true,
             };
             auto displayResult = displayPreparer.prepare(
                 stage.processFrame(), displayRequest, context.cancellation(),

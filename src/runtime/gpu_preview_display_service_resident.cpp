@@ -472,17 +472,17 @@ residentExecutorPoll(const std::shared_ptr<PreviewDisplayServiceCore>& core) noe
     return core->residentExecutor->poll();
 }
 
-bool residentDisplayBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core,
-                          PreviewDisplayStageRecord& stage, std::string& reason) noexcept {
-    if (core->residentExecutor == nullptr) {
-        reason = "the resident scene executor is unavailable";
-        return false;
-    }
-    auto input = core->residentExecutor->takeImage(false);
-    if (input == nullptr) {
-        reason = "the resident scene executor produced no output image";
-        return false;
-    }
+namespace {
+
+// Begins the display pack of `input` in `layout` (#733). On success the stage aliases the picture
+// until the pack's poll settles (residentDisplayRepack).
+[[nodiscard]] bool residentDisplayBeginWith(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                                            PreviewDisplayStageRecord& stage,
+                                            std::shared_ptr<const render::GpuImage> input,
+                                            const render::DisplayPixelLayout layout,
+                                            std::string& reason) noexcept {
+    stage.displayPicture.reset();
+    stage.displayLayoutAsked = layout;
     const std::uint64_t budget =
         stage.gpuByteAllowance != 0 ? stage.gpuByteAllowance : core->previewByteAllowance();
     // #730: a weak alias, so a refused begin still finds its attempt's image unique and retires it
@@ -512,6 +512,11 @@ bool residentDisplayBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core
         request.height = program.height;
         request.viewAdjust = program.viewAdjust;
         request.byteBudget = budget;
+        // A program that is not a preview pack has the one layout.
+        request.layout = program.command != nullptr && program.command->displayPacking().preview()
+                             ? layout
+                             : render::DisplayPixelLayout::Straight8888;
+        stage.displayLayoutAsked = request.layout;
         const auto diagnostic = core->residentGeneralDisplay->begin(request);
         if (diagnostic.code != GpuOcioDisplayArmDiagnosticCode::None) {
             core->residentGeneralDisplay->executor().discardRetiredFailures();
@@ -521,8 +526,9 @@ bool residentDisplayBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core
                                                 : diagnostic.message;
             return false;
         }
+        stage.displayPicture = scopeAlias.lock();
         if (tapWanted)
-            stage.scopePicture = scopeAlias.lock();
+            stage.scopePicture = stage.displayPicture;
         return true;
     }
 
@@ -530,7 +536,12 @@ bool residentDisplayBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core
         reason = "the resident display is unavailable";
         return false;
     }
-    const auto diagnostic = core->residentDisplay->begin(input, budget);
+    const auto diagnostic = core->residentDisplay->begin(
+        input, budget,
+        render::GpuDisplayPackRequest{.layout = layout,
+                                      .luma = stage.residentProcessor != nullptr
+                                                  ? stage.residentProcessor->displayLuma()
+                                                  : std::nullopt});
     if (diagnostic.code != render::GpuResidentDisplayDiagnosticCode::None) {
         static_cast<void>(core->residentDisplay->discardRetiredFailure(*core->device));
         static_cast<void>(render::retireFailedAttemptGpuImage(input, *core->device));
@@ -538,9 +549,80 @@ bool residentDisplayBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core
                                             : diagnostic.message;
         return false;
     }
+    stage.displayPicture = scopeAlias.lock();
     if (tapWanted)
-        stage.scopePicture = scopeAlias.lock();
+        stage.scopePicture = stage.displayPicture;
     return true;
+}
+
+} // namespace
+
+bool residentDisplayBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                          PreviewDisplayStageRecord& stage, std::string& reason) noexcept {
+    if (core->residentExecutor == nullptr) {
+        reason = "the resident scene executor is unavailable";
+        return false;
+    }
+    auto input = core->residentExecutor->takeImage(false);
+    if (input == nullptr) {
+        reason = "the resident scene executor produced no output image";
+        return false;
+    }
+    stage.displayRepacked = false;
+    const auto guess = stage.gpuStage != nullptr
+                           ? displayLayoutGuess(*core, stage.gpuStage->desiredIdentity())
+                           : render::DisplayPixelLayout::Straight8888;
+    return residentDisplayBeginWith(core, stage, std::move(input), guess, reason);
+}
+
+ResidentDisplayRepack residentDisplayRepack(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                                            PreviewDisplayStageRecord& stage,
+                                            const render::GpuResidentDisplayPollResult poll,
+                                            const bool cancelled, std::string& reason) noexcept {
+    // The pack settled: the alias is dropped whatever follows, so a failed attempt still finds
+    // its picture unique.
+    auto picture = std::move(stage.displayPicture);
+    stage.displayPicture.reset();
+    if (cancelled || stage.displayRepacked || picture == nullptr || stage.gpuStage == nullptr ||
+        residentDeviceLost(core) || residentDisplayHasUnretiredSubmission(core) ||
+        residentDisplayHasUnretiredSubmissionGeneral(core)) {
+        return ResidentDisplayRepack::None;
+    }
+    const bool general = residentStageIsGeneralDisplay(stage);
+    if (general ? core->residentGeneralDisplay == nullptr : core->residentDisplay == nullptr) {
+        return ResidentDisplayRepack::None;
+    }
+    const auto report = general ? core->residentGeneralDisplay->packReport()
+                                : core->residentDisplay->packReport();
+    if (!report.has_value()) {
+        return ResidentDisplayRepack::None;
+    }
+    const auto& identity = stage.gpuStage->desiredIdentity();
+    render::DisplayPixelLayout next = render::DisplayPixelLayout::Straight8888;
+    if (poll == render::GpuResidentDisplayPollResult::Ready) {
+        if (report->frameLayout() == stage.displayLayoutAsked) {
+            noteDisplayLayout(*core, identity, stage.displayLayoutAsked);
+            return ResidentDisplayRepack::None;
+        }
+        // Packed as 8:8:8:8, and every pixel allows 10:10:10:2: those words are not published.
+        next = report->frameLayout();
+        if (general) {
+            static_cast<void>(core->residentGeneralDisplay->takeDisplayImage());
+        } else {
+            static_cast<void>(core->residentDisplay->takeImage());
+        }
+    } else if (poll != render::GpuResidentDisplayPollResult::Failure ||
+               !(general ? core->residentGeneralDisplay->executor().diagnostic().code ==
+                               GpuOcioExecutorDiagnosticCode::LayoutRefused
+                         : core->residentDisplay->diagnostic().code ==
+                               render::GpuResidentDisplayDiagnosticCode::LayoutRefused)) {
+        return ResidentDisplayRepack::None;
+    }
+    noteDisplayLayout(*core, identity, next);
+    stage.displayRepacked = true;
+    return residentDisplayBeginWith(core, stage, std::move(picture), next, reason)
+               ? ResidentDisplayRepack::Begun
+               : ResidentDisplayRepack::Refused;
 }
 
 render::GpuResidentDisplayPollResult

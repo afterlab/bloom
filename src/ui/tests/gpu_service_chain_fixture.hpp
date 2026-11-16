@@ -21,6 +21,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/render/display_pack_parity.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_presentation_coordinator.hpp>
@@ -320,6 +321,9 @@ planCpuReference(Fixture& fixture,
     CpuQualifiedDisplayPreparer preparer(*fixture.processor);
     runtime::QualifiedDisplayPreparationRequest request;
     request.aggregatePixelStorageByteLimit = kBudget;
+    // The application's CPU route and every GPU preview route emit a 10:10:10:2 frame whenever the
+    // frame allows it, so the oracle they are compared with takes the same layout.
+    request.allowRgb10A2 = true;
     const auto prepared = preparer.prepare(evaluated.frame(), request, {});
     if (prepared.status() != runtime::QualifiedDisplayPreparationStatus::Prepared ||
         prepared.frame() == nullptr) {
@@ -373,7 +377,7 @@ samePixels(const std::shared_ptr<const runtime::PreparedPreviewFrame>& a,
     if (!va.has_value() || !vb.has_value() || va->pixels.size() != vb->pixels.size()) {
         return false;
     }
-    return std::memcmp(va->pixels.data(), vb->pixels.data(), va->pixels.size_bytes()) == 0;
+    return render::displayFramesAgree(va->pixelLayout, va->pixels, vb->pixelLayout, vb->pixels, 0U);
 }
 
 struct UiSurface final {
