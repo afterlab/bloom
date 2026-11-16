@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QStringList>
 
 namespace bloom::ui {
 
@@ -38,5 +39,19 @@ struct ApplicationIdentity final {
 
 // Applies the identity to QCoreApplication and QSettings and returns what it applied.
 ApplicationIdentity installApplicationIdentity();
+
+// The icon files of the package the program in `programDirectory` belongs to, smallest first:
+// share/icons/hicolor/<size>x<size>/apps/id.afterlab.bloom.png beside the program's folder, as
+// every Linux package and the AppImage carry them. Empty for a program that belongs to no
+// package.
+[[nodiscard]] QStringList packagedWindowIconFiles(const QString& programDirectory);
+
+// Gives Bloom's windows their icon on Linux, once the application object exists. An X11 desktop
+// shows the icon a window carries itself (title bar, task bar, window switcher); a Wayland
+// desktop takes it from the desktop entry named above and ignores this. The icon is the
+// package's own files, so a copy that was only unpacked shows it too; a program outside a
+// package asks the desktop's icon theme. macOS and Windows take the icon from the bundle and
+// from the program file, and nothing is set there.
+void installWindowIcon();
 
 } // namespace bloom::ui

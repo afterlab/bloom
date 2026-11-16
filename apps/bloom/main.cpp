@@ -154,6 +154,7 @@ int main(int argc, char* argv[]) try {
         std::fprintf(stderr, "Bloom: %s\n", identity.refusal.toUtf8().constData());
         return 2;
     }
+    bloom::ui::installWindowIcon();
 
     // The Afterlab visual language is installed once, application-wide, before any widget exists
     // (task U1, issue #117). It replaces MainWindow::applyFoundationTheme(): the palette, the

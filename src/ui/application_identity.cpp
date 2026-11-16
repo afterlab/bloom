@@ -4,7 +4,9 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFileInfo>
 #include <QGuiApplication>
+#include <QIcon>
 #include <QSettings>
 
 #include <string_view>
@@ -40,6 +42,38 @@ ApplicationIdentity installApplicationIdentity() {
     // desktop finds the icon and name of the window's application.
     QGuiApplication::setDesktopFileName(QStringLiteral("id.afterlab.bloom"));
     return identity;
+}
+
+QStringList packagedWindowIconFiles(const QString& programDirectory) {
+    QStringList files;
+    if (programDirectory.isEmpty()) {
+        return files;
+    }
+    const QDir programs(programDirectory);
+    for (const int size : {16, 24, 32, 48, 64, 128, 256, 512}) {
+        const QString file = QDir::cleanPath(programs.absoluteFilePath(
+            QStringLiteral("../share/icons/hicolor/%1x%1/apps/id.afterlab.bloom.png").arg(size)));
+        if (QFileInfo(file).isFile()) {
+            files.append(file);
+        }
+    }
+    return files;
+}
+
+void installWindowIcon() {
+#if defined(Q_OS_LINUX)
+    QIcon icon;
+    for (const QString& file :
+         packagedWindowIconFiles(QCoreApplication::applicationDirPath())) {
+        icon.addFile(file);
+    }
+    if (icon.isNull()) {
+        icon = QIcon::fromTheme(QGuiApplication::desktopFileName());
+    }
+    if (!icon.isNull()) {
+        QGuiApplication::setWindowIcon(icon);
+    }
+#endif
 }
 
 } // namespace bloom::ui

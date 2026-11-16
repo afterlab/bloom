@@ -4,6 +4,7 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QSettings>
@@ -40,6 +41,37 @@ int main(int argc, char** argv) {
            "the window's application is named after Bloom's desktop entry");
 
     expect(identity.refusal.isEmpty(), "nothing is refused without the check's variable");
+
+    // The window icon of a Linux package: the icon files beside the program's folder, smallest
+    // first, and none for a program that belongs to no package.
+    {
+        QTemporaryDir package;
+        expect(package.isValid(), "temporary package directory");
+        const QDir root(package.path());
+        expect(root.mkpath(QStringLiteral("bin")), "the package's program folder");
+        expect(bloom::ui::packagedWindowIconFiles(root.filePath(QStringLiteral("bin"))).isEmpty(),
+               "a program outside a package has no icon files");
+        expect(bloom::ui::packagedWindowIconFiles(QString{}).isEmpty(),
+               "no program folder, no icon files");
+        for (const int size : {512, 16, 48}) {
+            const QString folder =
+                QStringLiteral("share/icons/hicolor/%1x%1/apps").arg(size);
+            expect(root.mkpath(folder), "an icon folder of the package");
+            QFile file(root.filePath(folder + QStringLiteral("/id.afterlab.bloom.png")));
+            expect(file.open(QIODevice::WriteOnly) && file.write("png") == 3, "an icon file");
+        }
+        // A folder of that name is not an icon file.
+        expect(root.mkpath(QStringLiteral(
+                   "share/icons/hicolor/64x64/apps/id.afterlab.bloom.png")),
+               "a folder in place of an icon");
+        const QStringList files =
+            bloom::ui::packagedWindowIconFiles(root.filePath(QStringLiteral("bin")));
+        expect(files.size() == 3, "the package's three icon files are found");
+        expect(files.size() == 3 && files.at(0).contains(QStringLiteral("/16x16/")) &&
+                   files.at(1).contains(QStringLiteral("/48x48/")) &&
+                   files.at(2).contains(QStringLiteral("/512x512/")),
+               "smallest first");
+    }
 
     // A relative directory is not a profile, and it is not a reason to run as Bloom either:
     // the names are the check's from the moment the variable is set, and the run is refused.
