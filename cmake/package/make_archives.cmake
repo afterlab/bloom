@@ -5,11 +5,20 @@
 #         -DOUTPUT=<directory for the two files> -DWORK=<work directory>
 #         -DSOURCE=<source tree> -DRUNTIME=<dependency prefix>/appimage-runtime
 #         [-DEPOCH=<seconds; the time every file in both forms carries, default 0>]
+#         [-DUPDATE_INFORMATION=<the AppImage's update information>]
+#         [-DZSYNC_MAKE=<bloom-zsync-make>]
 #         -P make_archives.cmake
 #
 #   <OUTPUT>/<name>.tar.xz     the tree under a top directory of its own name
 #   <OUTPUT>/<name>.AppImage   the AppImage project's runtime followed by the tree as a
 #                              zstd-compressed SquashFS image
+#   <OUTPUT>/<name>.AppImage.zsync   (with ZSYNC_MAKE) the control file an installed AppImage
+#                              reads to download only the blocks it lacks (ADR 0041)
+#
+# UPDATE_INFORMATION is written into the runtime's `.upd_info` section, where AppImage tools
+# look for the place a newer version is published; it is the build setting
+# BLOOM_UPDATE_APPIMAGE_INFORMATION and empty in a developer build, which leaves the section as
+# the runtime has it.
 #
 # The image holds the tree unchanged, and beside it what an AppImage has at its top: `AppRun`
 # (a link to bin/Bloom), the desktop entry and the icon (copies of the tree's own), and `.DirIcon`.
@@ -56,7 +65,7 @@ endif()
 file(MAKE_DIRECTORY "${OUTPUT}")
 set(tar "${OUTPUT}/${name}.tar.xz")
 set(appimage "${OUTPUT}/${name}.AppImage")
-file(REMOVE "${tar}" "${appimage}")
+file(REMOVE "${tar}" "${appimage}" "${appimage}.zsync")
 
 # The tar.
 execute_process(
@@ -139,6 +148,40 @@ execute_process(
 if(NOT result EQUAL 0)
     message(FATAL_ERROR "mksquashfs failed: ${output}${error}")
 endif()
+# The update information goes into a copy of the runtime, at the place of its `.upd_info`
+# section: zero-filled room the runtime's build left for exactly this text.
+if(UPDATE_INFORMATION)
+    if(UPDATE_INFORMATION MATCHES "[^-A-Za-z0-9_.|*:/]")
+        message(FATAL_ERROR "make_archives.cmake: the update information holds a character it "
+                            "cannot: '${UPDATE_INFORMATION}'")
+    endif()
+    execute_process(COMMAND readelf -S -W "${runtime}" OUTPUT_VARIABLE sections
+                    RESULT_VARIABLE result ERROR_VARIABLE error)
+    if(NOT result EQUAL 0 OR NOT sections MATCHES
+       "\\.upd_info +PROGBITS +[0-9a-f]+ +([0-9a-f]+) +([0-9a-f]+) ")
+        message(FATAL_ERROR "make_archives.cmake: the runtime has no .upd_info section: ${error}")
+    endif()
+    math(EXPR section_offset "0x${CMAKE_MATCH_1}")
+    math(EXPR section_size "0x${CMAKE_MATCH_2}")
+    string(LENGTH "${UPDATE_INFORMATION}" information_length)
+    if(NOT information_length LESS section_size)
+        message(FATAL_ERROR "make_archives.cmake: the update information is longer than the "
+                            "runtime has room for (${section_size} bytes)")
+    endif()
+    set(patched "${WORK}/runtime-${architecture}")
+    file(COPY_FILE "${runtime}" "${patched}")
+    file(WRITE "${WORK}/update-information" "${UPDATE_INFORMATION}")
+    execute_process(
+        COMMAND dd "if=${WORK}/update-information" "of=${patched}" bs=1 "seek=${section_offset}"
+                conv=notrunc status=none
+        RESULT_VARIABLE result ERROR_VARIABLE error)
+    file(SIZE "${runtime}" runtime_size)
+    file(SIZE "${patched}" patched_size)
+    if(NOT result EQUAL 0 OR NOT runtime_size EQUAL patched_size)
+        message(FATAL_ERROR "the update information could not be written: ${error}")
+    endif()
+    set(runtime "${patched}")
+endif()
 execute_process(COMMAND cat "${runtime}" "${image}" OUTPUT_FILE "${appimage}"
                 RESULT_VARIABLE result ERROR_VARIABLE error)
 if(NOT result EQUAL 0)
@@ -147,6 +190,16 @@ endif()
 file(CHMOD "${appimage}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ
      GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 file(REMOVE_RECURSE "${WORK}")
+
+# The control file of the AppImage's delta update, published beside it under its name.
+if(ZSYNC_MAKE)
+    execute_process(
+        COMMAND "${ZSYNC_MAKE}" "${appimage}" "${name}.AppImage" "${appimage}.zsync" "${EPOCH}"
+        RESULT_VARIABLE result ERROR_VARIABLE error)
+    if(NOT result EQUAL 0 OR NOT EXISTS "${appimage}.zsync")
+        message(FATAL_ERROR "the AppImage's control file could not be written: ${error}")
+    endif()
+endif()
 
 file(SIZE "${tar}" tar_size)
 file(SIZE "${appimage}" appimage_size)

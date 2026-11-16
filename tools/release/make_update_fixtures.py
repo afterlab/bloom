@@ -157,6 +157,19 @@ def main() -> int:
         tool("files", "--key-file", str(keys[1]), str(work / "update.bin"))
         (out / "update.bin.other-key.sig").write_bytes((work / "update.bin.sig").read_bytes())
 
+        # The delta update's release file (see src/update/tests/reference/README.md) and the
+        # reference tool's control file for it: their checksums and signatures, as a feed
+        # would give them. The file itself is made again by the test.
+        new = b"".join(hashlib.sha256(b"bloom zsync fixture %d" % index).digest()
+                       for index in range(9375))
+        control = (ROOT / "src" / "update" / "tests" / "reference" / "zsync-0.6.6.zsync")
+        for name, content in (("zsync-new.bin", new), ("zsync-control", control.read_bytes())):
+            (work / name).write_bytes(content)
+            tool("files", "--key-file", str(keys[0]), str(work / name))
+            (out / (name + ".sig")).write_bytes((work / (name + ".sig")).read_bytes())
+            (out / (name + ".sha256")).write_bytes(
+                (hashlib.sha256(content).hexdigest() + "\n").encode("ascii"))
+
         base = "https://github.com/afterlab/bloom/releases/download/v0.2.0-alpha.3/"
 
         def entry(kind: str, name: str, address: str = base) -> dict:

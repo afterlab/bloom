@@ -21,6 +21,8 @@
 #                         (cmake/package/make_windows_installer.cmake, packaging/windows/bloom.iss)
 #   bloom.package.check   the same check as a test, with the cases it must reject
 #                         (cmake/package/check_package_test.cmake)
+#   bloom.package.archive_update_information   (Linux) the AppImage's update information and
+#                         control file, on a stand-in tree (cmake/package/make_archives_test.cmake)
 #   bloom.package.installers   (Windows) installs, upgrades and uninstalls the installer under a
 #                         test identity (cmake/package/check_windows_installer.cmake)
 #
@@ -202,8 +204,10 @@ function(bloom_add_package_rules)
                     "-DWORK=${CMAKE_BINARY_DIR}/package/archive-work"
                     "-DSOURCE=${PROJECT_SOURCE_DIR}"
                     "-DRUNTIME=${BLOOM_DEPENDENCY_PREFIX}/appimage-runtime"
+                    "-DUPDATE_INFORMATION=${BLOOM_UPDATE_APPIMAGE_INFORMATION}"
+                    "-DZSYNC_MAKE=$<TARGET_FILE:bloom-zsync-make>"
                     -P "${scripts}/make_archives.cmake"
-                DEPENDS bloom-package
+                DEPENDS bloom-package bloom-zsync-make
                 COMMENT "Making ${BLOOM_PACKAGE_NAME}.tar.xz and ${BLOOM_PACKAGE_NAME}.AppImage"
                 VERBATIM
             )
@@ -236,6 +240,22 @@ function(bloom_add_package_rules)
                 -P "${scripts}/check_package_test.cmake"
             LABELS ${labels}
             TIMEOUT 1800)
+        if(BLOOM_PACKAGE_OPERATING_SYSTEM STREQUAL "linux")
+            # Linux only: the AppImage is a Linux form of the package, and its runtime is a
+            # Linux program. The tree is a stand-in of a few files; without readelf or the
+            # runtime the script says "SKIPPED:".
+            bloom_add_test(
+                NAME bloom.package.archive_update_information
+                COMMAND ${CMAKE_COMMAND} "-DSOURCE=${PROJECT_SOURCE_DIR}"
+                    "-DRUNTIME=${BLOOM_DEPENDENCY_PREFIX}/appimage-runtime"
+                    "-DZSYNC_MAKE=$<TARGET_FILE:bloom-zsync-make>"
+                    "-DWORK=${CMAKE_BINARY_DIR}/package-archive-test"
+                    -P "${scripts}/make_archives_test.cmake"
+                LABELS package
+                TIMEOUT 120)
+            set_tests_properties(bloom.package.archive_update_information PROPERTIES
+                SKIP_REGULAR_EXPRESSION "SKIPPED:")
+        endif()
         if(BLOOM_PACKAGE_OPERATING_SYSTEM STREQUAL "windows")
             # Windows only: the installer is a Windows program. macOS registers its own test
             # of the same name for the disk image, and a Linux package has no installer file.

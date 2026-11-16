@@ -3,6 +3,7 @@
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/update/check.hpp>
 #include <bloom/update/staging.hpp>
+#include <bloom/update/zsync.hpp>
 
 #include <QObject>
 
@@ -49,6 +50,9 @@ struct UpdateDownloadOutcome final {
     // The version that was downloaded.
     std::string version;
     update::DownloadResult download;
+    // An AppImage's delta: how much came from the installed file, or why the whole file was
+    // downloaded.
+    update::DeltaStatistics delta;
     // The prepared version, when the download was accepted.
     update::StagingResult staging;
     bool cancelled = false;

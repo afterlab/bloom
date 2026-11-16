@@ -188,12 +188,23 @@ bool UpdateService::startDownload() {
     }
     const auto entry = *lastCheck_->decision.file;
     const auto version = lastCheck_->feed->version.text();
+    // An AppImage takes what it can from the installed file, when the release has the control
+    // file for that.
+    std::optional<update::FeedFile> control;
+    if (lastCheck_->decision.action == update::UpdateAction::ReplaceAppImage) {
+        if (const auto* platform = lastCheck_->feed->platform(environment_->platformKey);
+            platform != nullptr) {
+            if (const auto* file = platform->file("zsync"); file != nullptr) {
+                control = *file;
+            }
+        }
+    }
     progress_ = std::make_shared<Progress>();
     progress_->total.store(entry.size, std::memory_order_relaxed);
     reportedReceived_ = 0;
     auto submission = scheduler_.submit<std::shared_ptr<UpdateDownloadOutcome>>(
         request("Download Bloom " + version, runtime::TaskPriority::Foreground),
-        [environment = environment_, entry, version,
+        [environment = environment_, entry, version, control,
          progress = progress_](runtime::TaskContext& context) {
             using Result = runtime::TaskResult<std::shared_ptr<UpdateDownloadOutcome>>;
             const auto cancelled = [&context] { return context.isCancellationRequested(); };
@@ -208,14 +219,22 @@ bool UpdateService::startDownload() {
             shown.phase = "Downloading";
             shown.total = entry.size;
             context.reportProgress(shown);
-            outcome->download = update::downloadUpdateFile(
-                *transport, entry, environment->configuration.keys,
-                environment->folders.downloads() / downloadName(entry.url), cancelled,
-                [&](const std::uint64_t received, std::uint64_t /*announced*/) {
-                    progress->received.store(received, std::memory_order_relaxed);
-                    shown.completed = received;
-                    context.reportProgress(shown);
-                });
+            const auto destination = environment->folders.downloads() / downloadName(entry.url);
+            const update::TransportProgress report = [&](const std::uint64_t received,
+                                                         std::uint64_t /*announced*/) {
+                progress->received.store(received, std::memory_order_relaxed);
+                shown.completed = received;
+                context.reportProgress(shown);
+            };
+            outcome->download =
+                control.has_value()
+                    ? update::downloadWithDelta(*transport, entry, *control,
+                                                environment->install.root,
+                                                environment->configuration.keys, destination,
+                                                cancelled, report, &outcome->delta)
+                    : update::downloadUpdateFile(*transport, entry,
+                                                 environment->configuration.keys, destination,
+                                                 cancelled, report);
             if (outcome->download.succeeded() && !cancelled()) {
                 shown.phase = "Preparing";
                 shown.completed = 0;

@@ -385,6 +385,12 @@ made without an AppImage tool (`cmake/package/make_archives.cmake`). Running it 
 tar is the form for such a system. The AppImage starts the application; `bloom-cli` and
 `bloom-mcp` are in the tar and in the unpacked AppImage, under `bin`.
 
+A release publishes `<name>.AppImage.zsync` beside the AppImage: the control file from which an
+installed AppImage downloads only the blocks it lacks
+([ADR 0041](../decisions/0041-self-update.md)). `bloom-zsync-make`, a build tool that is in no
+package, writes it, and a release build writes the place the control file is published into
+the runtime's update information (`BLOOM_UPDATE_APPIMAGE_INFORMATION`).
+
 **Where it was started.** `tools/ci/linux-package/start.sh` unpacks a package on a clean
 system, runs the package check's contents and run rules there, and refuses a system that has
 Python, Qt's tools or a compiler. Both forms of the 0.1.0 package passed it on:

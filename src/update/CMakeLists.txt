@@ -62,6 +62,7 @@ add_library(bloom_update STATIC
     release_version.cpp
     sha512.cpp
     staging.cpp
+    zsync.cpp
 )
 target_sources(bloom_update PUBLIC FILE_SET HEADERS BASE_DIRS include
     FILES include/bloom/update/apply.hpp
@@ -78,7 +79,8 @@ target_sources(bloom_update PUBLIC FILE_SET HEADERS BASE_DIRS include
           include/bloom/update/release_version.hpp
           include/bloom/update/sha512.hpp
           include/bloom/update/staging.hpp
-          include/bloom/update/transport.hpp)
+          include/bloom/update/transport.hpp
+          include/bloom/update/zsync.hpp)
 target_compile_features(bloom_update PUBLIC cxx_std_20)
 target_link_libraries(bloom_update PUBLIC bloom_core PRIVATE bloom_platform yyjson::yyjson)
 bloom_enable_warnings(bloom_update)
@@ -91,11 +93,17 @@ endif()
 set_source_files_properties(built_in_configuration.cpp PROPERTIES COMPILE_DEFINITIONS
     "BLOOM_UPDATE_FEED_URL=\"${BLOOM_UPDATE_FEED_URL}\";BLOOM_UPDATE_PUBLIC_KEYS=\"${BLOOM_UPDATE_PUBLIC_KEYS}\";BLOOM_UPDATE_APPIMAGE_INFORMATION=\"${BLOOM_UPDATE_APPIMAGE_INFORMATION}\";BLOOM_UPDATE_TEST_BUILD=${bloom_update_test_build}")
 
+# The writer of an AppImage's delta control file: a build tool of the release
+# (cmake/package/make_archives.cmake), not part of any package.
+add_executable(bloom-zsync-make zsync_make_main.cpp)
+target_link_libraries(bloom-zsync-make PRIVATE bloom_update)
+bloom_enable_warnings(bloom-zsync-make)
+
 if(BUILD_TESTING)
     include(BloomTesting)
 
     set(bloom_update_fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
-    foreach(bloom_update_test IN ITEMS ed25519 feed verify policy install_kind helper staging)
+    foreach(bloom_update_test IN ITEMS ed25519 feed verify policy install_kind helper staging zsync)
         add_executable(bloom_update_${bloom_update_test}_test
                        tests/${bloom_update_test}_tests.cpp)
         target_link_libraries(bloom_update_${bloom_update_test}_test PRIVATE bloom_update)

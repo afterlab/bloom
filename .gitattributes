@@ -17,6 +17,7 @@ tests/fixtures/paths/** -text
 
 # The update tests' fixtures are signed: a signature covers their exact bytes.
 src/update/tests/fixtures/** -text
+src/update/tests/reference/*.zsync -text
 
 # Licenses of the prebuilt update runtimes and installer tool are digest-bound in their records.
 dependencies/update-runtime/licenses/** -text

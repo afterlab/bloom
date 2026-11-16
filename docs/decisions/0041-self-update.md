@@ -128,6 +128,28 @@ not confirm its start.
 A package tar is unpacked with the system's `tar` and `xz` programs, which the install script
 needs as well.
 
+### The AppImage's delta
+
+An AppImage is one large file of which little changes between two alphas, so a release publishes
+a control file beside it (`<name>.AppImage.zsync`, the zsync 0.6.6 format that AppImage tools
+read): the file's length and, for each block, a short rolling checksum and a short MD4 checksum.
+Bloom reads the control file, finds the blocks the installed AppImage already holds, and asks
+the server for the other byte ranges only.
+
+The control file is listed in the signed feed like every other release file and is checked the
+same way before it is read. Its block checksums are short and prove nothing; they only decide
+which bytes are copied and which are fetched. The file put together from both is then checked
+exactly as a whole download is (size, SHA-256, Ed25519 signature), so a wrong block can only
+cause a refusal. Anything that goes wrong on the way (no control file, a server without range
+requests, too little in common, a damaged range) ends in the ordinary whole download; a delta
+never makes an update fail that a whole download would complete.
+
+`bloom-zsync-make`, a build tool from the same source as the reader, writes the control file
+when the AppImage is made; a test compares its output with the reference tool's, byte for byte.
+The AppImage's runtime also carries the update information text (`.upd_info`) that says where
+the control file is published; it is the build setting `BLOOM_UPDATE_APPIMAGE_INFORMATION` and
+empty in a developer build.
+
 ### The check
 
 Help > Check for Updates checks on demand. An automatic check is on by default and runs at most
