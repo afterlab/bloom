@@ -586,6 +586,7 @@ target_sources(
         qt_update_transport.cpp
         qt_update_transport.hpp
         update_service.cpp
+        platform_update_driver.cpp
         tool_controller.cpp
         composition_thumbnail_controller.cpp
         scopes_drawing.cpp
@@ -866,6 +867,7 @@ target_sources(
             include/bloom/ui/task_monitor_model.hpp
             include/bloom/ui/task_ui_bridge.hpp
             include/bloom/ui/update_service.hpp
+            include/bloom/ui/platform_update_driver.hpp
             include/bloom/ui/application_identity.hpp
             include/bloom/ui/preview_frame_trace.hpp
             include/bloom/ui/text_box_overlay.hpp
