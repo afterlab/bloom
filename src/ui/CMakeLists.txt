@@ -511,6 +511,7 @@ target_sources(
         preferences_window_import.cpp
         preferences_window_shortcuts.cpp
         preferences_window_sounds.cpp
+        preferences_window_updates.cpp
         frameless_window_support.cpp
         jobs_editor.cpp
         export_queue_adapter.cpp
@@ -586,6 +587,9 @@ target_sources(
         qt_update_transport.cpp
         qt_update_transport.hpp
         update_service.cpp
+        update_controller.cpp
+        update_window.cpp
+        update_window.hpp
         platform_update_driver.cpp
         tool_controller.cpp
         composition_thumbnail_controller.cpp
@@ -867,6 +871,7 @@ target_sources(
             include/bloom/ui/task_monitor_model.hpp
             include/bloom/ui/task_ui_bridge.hpp
             include/bloom/ui/update_service.hpp
+            include/bloom/ui/update_controller.hpp
             include/bloom/ui/platform_update_driver.hpp
             include/bloom/ui/application_identity.hpp
             include/bloom/ui/preview_frame_trace.hpp

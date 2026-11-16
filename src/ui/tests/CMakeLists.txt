@@ -3460,3 +3460,16 @@ foreach(bloom_update_ui_test IN ITEMS check download)
                    LABELS ui integration update TIMEOUT 120
                    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endforeach()
+
+# #734: the update interface (Help item, window, Preferences switch, controller), against a web
+# server on this machine inside the test. Offscreen; on every platform.
+add_executable(bloom_update_ui_test update_ui_tests.cpp)
+target_include_directories(bloom_update_ui_test PRIVATE .. "${PROJECT_SOURCE_DIR}/tests/support")
+target_link_libraries(bloom_update_ui_test PRIVATE bloom_ui bloom_update Qt6::Network)
+target_compile_definitions(bloom_update_ui_test PRIVATE
+    BLOOM_UPDATE_FIXTURES="${PROJECT_SOURCE_DIR}/src/update/tests/fixtures")
+bloom_enable_warnings(bloom_update_ui_test)
+bloom_add_test(NAME bloom.ui.update_tests
+               COMMAND bloom_update_ui_test
+               LABELS ui integration update TIMEOUT 120
+               ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

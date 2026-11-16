@@ -102,6 +102,8 @@ class PreferencesWindow final : public kit::KDialog {
     QWidget* buildShortcutsPage();
     QWidget* buildImportPage();
     QWidget* buildPerformancePage();
+    // The General page's Updates section (preferences_window_updates.cpp).
+    void buildUpdatesSection(QVBoxLayout* layout, QWidget* content);
     [[nodiscard]] QWidget* makeScrollPage();
 
     // One Properties row (KPropertyRow) with its label in the label column all pages share.

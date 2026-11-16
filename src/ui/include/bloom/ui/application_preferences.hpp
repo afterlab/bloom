@@ -79,6 +79,9 @@ struct ApplicationPreferences final {
     // Crash recovery (#572): off by default. Off writes no recovery data and offers none at
     // startup; recovery files already on disk are left untouched. Applied live.
     bool crashRecoveryEnabled = false;
+    // Updates (#734): Bloom asks once a day whether a newer version exists. On by default; the
+    // request carries nothing but the request. Help > Check for Updates works either way.
+    bool automaticUpdateCheck = true;
 
     // Memory and caches. Headroom is what Bloom leaves free for the rest of the computer (0 to 256
     // GiB each); Bloom uses everything else. Applied live on Apply and OK. The defaults are

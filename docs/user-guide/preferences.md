@@ -21,7 +21,7 @@ or create, is refused under the field and OK waits.
 
 | Page | What it controls | When it takes effect |
 | --- | --- | --- |
-| General | Audio playback, loop playback, **Crash recovery** (see below), and the two **Agents** switches (see below) | Immediately |
+| General | Audio playback, loop playback, **Crash recovery** (see below), the two **Agents** switches (see below), and **Check for updates automatically** (see below) | Immediately |
 | Import | **Sequence frame rate** (Match composition, or a rate such as 24 or 23.976; default 24) and **Still duration** (Composition length, or a fixed length in seconds) that newly imported footage starts with, and **SVG files** (Ask each time, As one layer or As editable shapes). See [Interpret Footage](interpret-footage.md#import-options-and-preferences) | The next import |
 | Sounds | Play sounds (master), volume, event sounds, interaction sounds, render notifications, and a Play test sound button. See [UI sound feedback](../ux/sound.md) | Immediately |
 | Viewer | Resolution, the background around the composition frame (Solid, Gray, Black, White), the transparency grid inside it, and the safe-areas, center-cross, thirds, rulers and pixel-grid overlays | Immediately |
@@ -68,6 +68,18 @@ project. Both are off by default and only this window turns them on (an agent ca
   edits use the normal undo history. See [Using Bloom from an agent](mcp.md).
 
 Both take effect at once.
+
+## Updates
+
+**Check for updates automatically** (General page, stored as `updates/automatic-check`; an agent
+reads and sets it as `automaticUpdateCheck`) is on by default. While it is on, Bloom asks once a day whether a newer version exists. The request is one
+plain web request for the list of releases. It sends nothing else: no account, no identifier and
+no information about your computer or your projects. If a newer version exists, a small window
+tells you and asks whether to install it. If there is none, or the server cannot be reached, you
+see nothing.
+
+While it is off, Bloom never checks by itself. **Help > Check for Updates…** always checks when you
+ask, whatever this switch says. Changing the switch takes effect at once.
 
 ## Import
 

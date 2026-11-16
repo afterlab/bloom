@@ -30,6 +30,7 @@
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/licenses_window.hpp>
+#include <bloom/ui/update_controller.hpp>
 #include <bloom/ui/media_disk_cache_settings.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/project_host.hpp>
@@ -613,6 +614,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     if (shutdownRequested_) {
         return;
     }
+    emit closeRequested();
     if (projectHost_.isBusy()) {
         // v1 simplification (no progress/cancellation UI in scope): a close request while a
         // project I/O operation or an unsaved-change decision is already in flight is silently
@@ -963,6 +965,17 @@ void MainWindow::createViewMenu(QMenu& viewMenu) {
 }
 
 void MainWindow::createHelpMenu(QMenu& helpMenu) {
+    // "Check for Updates…" (#734): never disabled; a build that was not set up for updates says so
+    // in the window. NoRole keeps it in the Help menu on macOS.
+    checkForUpdatesAction_ = helpMenu.addAction(tr("Check for Updates…"));
+    checkForUpdatesAction_->setObjectName(QStringLiteral("checkForUpdatesAction"));
+    checkForUpdatesAction_->setMenuRole(QAction::NoRole);
+    connect(checkForUpdatesAction_, &QAction::triggered, this, [this] {
+        if (updateController_ != nullptr)
+            updateController_->checkNow();
+    });
+    helpMenu.addSeparator();
+
     // "Report an Issue…" (decision 2): opens the repository's issue tracker via QDesktopServices,
     // whose url handler is Qt's own interception seam for tests (QDesktopServices::setUrlHandler).
     reportIssueAction_ = helpMenu.addAction("Report an Issue…");

@@ -168,7 +168,7 @@ call goes through the same controllers the window uses, and the window shows it 
   dirty, `bloom.mcp.busy` while a project opens.
 - **`preferences.set`** is the Preferences window without the window: the open editors take the new
   values at once and the settings are saved for you, never in the project. The keys are
-  `audioPlayback`, `loopPlayback`, `crashRecovery` (off by default), `ramHeadroomBytes` and `vramHeadroomBytes` (0 to 256 GiB), `exportWorkerMemoryCapBytes` (0 for no
+  `audioPlayback`, `loopPlayback`, `crashRecovery` (off by default), `automaticUpdateCheck` (on by default), `ramHeadroomBytes` and `vramHeadroomBytes` (0 to 256 GiB), `exportWorkerMemoryCapBytes` (0 for no
   cap, to 1 TiB) and `exportWorkerThreads` (0 for automatic, to 64),
   `mediaDiskCache`, `mediaDiskCacheDirectory` (absolute, or empty for the default),
   `mediaDiskHeadroomBytes` (the space to keep free on the cache drive: 0 for the default, to

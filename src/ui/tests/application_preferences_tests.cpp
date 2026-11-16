@@ -59,6 +59,7 @@ void testFullRoundTrip(Expectations& check) {
     prefs.audioEnabled = false;
     prefs.loopPlayback = false;
     prefs.crashRecoveryEnabled = true;
+    prefs.automaticUpdateCheck = false;
     prefs.ramHeadroomBytes = 6ULL * 1024 * 1024 * 1024;
     prefs.vramHeadroomBytes = 512ULL * 1024 * 1024;
     prefs.mediaDiskCacheEnabled = false;
@@ -104,6 +105,8 @@ void testFullRoundTrip(Expectations& check) {
     check.expect(ui::defaultApplicationPreferences().nodeShowZoomControls &&
                      ui::defaultApplicationPreferences().nodeShowMinimap,
                  "the zoom controls and the minimap are on by default");
+    check.expect(ui::defaultApplicationPreferences().automaticUpdateCheck,
+                 "the automatic update check is on by default");
     check.expect(!ui::defaultApplicationPreferences().agentsAnswerDialogs &&
                      !ui::defaultApplicationPreferences().agentsRunScripts,
                  "the agent routes are off by default");

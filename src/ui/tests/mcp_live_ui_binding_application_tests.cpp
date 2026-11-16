@@ -109,6 +109,8 @@ void preferences(const mcp::McpLiveUiPort& port) {
            "preferences.get lists the Preferences window's settings, not layout");
     expect(preference(values, "crashRecovery") == mcp::McpPreferenceValue(false),
            "preferences.get lists crashRecovery, off by default");
+    expect(preference(values, "automaticUpdateCheck") == mcp::McpPreferenceValue(true),
+           "preferences.get lists automaticUpdateCheck, on by default");
     auto result = port.setPreferences({{.key = "crashRecovery", .value = true},
                                        {.key = "loopPlayback", .value = false},
                                        {.key = "timelineTimeFormat",

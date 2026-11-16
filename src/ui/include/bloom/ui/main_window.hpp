@@ -43,6 +43,7 @@ class EditorRegistry;
 class ExportQueueAdapter;
 class LicensesWindow;
 class ProjectHost;
+class UpdateController;
 class RamPreviewController;
 class PlaybackController;
 class WindowStatusBar;
@@ -165,6 +166,10 @@ class MainWindow final : public QMainWindow {
     [[nodiscard]] WorkspacePresets* workspacePresets() const noexcept { return workspacePresets_; }
     // The application's MCP server adapter (ADR 0034): enables the status bar indicator, and reveals the MCP Server panel when either asks. Borrowed; null removes it.
     void setMcpServer(McpServerAdapter* adapter);
+    // Help > Check for Updates… (#734) is handled by the application's update controller. Borrowed;
+    // null leaves the item present and doing nothing.
+    void setUpdateController(UpdateController* controller) { updateController_ = controller; }
+    [[nodiscard]] QAction* checkForUpdatesAction() const noexcept { return checkForUpdatesAction_; }
     // Test-only seam (same terms as the other test/diagnostic accessors): applies committed
     // preferences exactly as the Preferences dialog's approved path does, without presenting the
     // modal dialog, so a test can assert the View action mirror and the open-editor propagation.
@@ -178,6 +183,10 @@ class MainWindow final : public QMainWindow {
     bool purgeMediaCache();
 
   signals:
+    // The window was asked to close and has not closed yet: the request may still be declined
+    // (unsaved changes, running exports, a busy project). `shutdownRequested` follows when it
+    // is not.
+    void closeRequested();
     void shutdownRequested();
     // Emitted after the Preferences window commits and persists a new value, so the composition
     // root can re-apply the preferences it owns (for example the audio engine).
@@ -302,6 +311,8 @@ class MainWindow final : public QMainWindow {
     QAction* viewFullScreenAction_ = nullptr;
     QAction* viewMaximizePanelAction_ = nullptr;
     QAction* viewAudioEnabledAction_ = nullptr;
+    QAction* checkForUpdatesAction_ = nullptr;
+    UpdateController* updateController_ = nullptr;
     QAction* reportIssueAction_ = nullptr;
     QAction* openSourceLicensesAction_ = nullptr;
     QPointer<LicensesWindow> licensesWindow_;

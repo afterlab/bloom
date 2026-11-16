@@ -604,6 +604,8 @@ QWidget* PreferencesWindow::buildGeneralPage() {
     connect(mcpLink, &QAbstractButton::clicked, this, &PreferencesWindow::mcpSettingsRequested);
     layout->addWidget(mcpLink, 0, Qt::AlignLeft);
 
+    buildUpdatesSection(layout, content);
+
     layout->addStretch(1);
     return wrapPage(content, QStringLiteral("preferencesGeneralPage"));
 }

@@ -65,6 +65,7 @@
 #include <bloom/ui/mcp_server_service_port.hpp>
 #include <bloom/ui/media_disk_cache_settings.hpp>
 #include <bloom/ui/memory_budget_controller.hpp>
+#include <bloom/ui/platform_update_driver.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/preview_frame_trace.hpp>
 #include <bloom/ui/profiler_runtime_feed.hpp>
@@ -79,6 +80,8 @@
 #include <bloom/ui/track_controller.hpp>
 #include <bloom/ui/ui_feedback.hpp>
 #include <bloom/ui/ui_sound_engine.hpp>
+#include <bloom/ui/update_controller.hpp>
+#include <bloom/ui/update_service.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/viewer_preview_pool.hpp>
 #include <bloom/ui/window_status_bar.hpp>
@@ -1033,6 +1036,23 @@ int main(int argc, char* argv[]) try {
     bloom::ui::openProjectFromArguments(projectHost, QCoreApplication::arguments());
     // Every default dialog of the project host and the export controller opens over the window.
     window.setMcpServer(&mcpAdapter);
+    // Updates (ADR 0041, #734). Declared after the scheduler and the bridge they borrow, so they
+    // end before either. The service settles what an earlier update left, then the controller
+    // joins Help > Check for Updates, the window and the automatic check to it.
+    bloom::ui::UpdateService updateService(taskScheduler, taskUiBridge,
+                                           bloom::ui::applicationUpdateEnvironment());
+    const auto updateDriver = bloom::ui::makePlatformUpdateDriver(updateService.environment());
+    bloom::ui::UpdateController updateController(
+        updateService, updateDriver.get(),
+        bloom::ui::applicationUpdateHooks([&window] { window.close(); }), window);
+    window.setUpdateController(&updateController);
+    // The restart installs only once the close it asked for is confirmed (unsaved changes and
+    // running exports decided); any other close request forgets it.
+    QObject::connect(&window, &bloom::ui::MainWindow::closeRequested, &updateController,
+                     &bloom::ui::UpdateController::closeRequested);
+    QObject::connect(&window, &bloom::ui::MainWindow::shutdownRequested, &updateController,
+                     &bloom::ui::UpdateController::applicationClosing);
+    const auto updateStartup = updateService.settleAtStartup();
     mcpLiveUi.setWindow(&window);
     mcpLiveUi.setRamPreview(&ramPreviewController);
     mcpLiveUi.setExportQueue(&exportQueueAdapter);
@@ -1206,6 +1226,13 @@ int main(int argc, char* argv[]) try {
             return packedHostRetirement->exitAcknowledged() && mcpService.quiescent();
         });
     window.show();
+    // The artist is told when a version that could not start was put back, and the automatic check
+    // begins. The package check and the tests contact nothing.
+    QTimer::singleShot(0, &updateController, [&updateController, updateStartup] {
+        updateController.noticeAtStartup(updateStartup);
+        if (!qEnvironmentVariableIsSet(bloom::ui::kPackageCheckProfileVariable))
+            updateController.startAutomaticChecks();
+    });
     if (mcpPreferences.autoStart)
         mcpService.requestAutoStart();
 
