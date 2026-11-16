@@ -649,16 +649,16 @@ void testDiskHeadroomRowAndFigures(Expectations& check) {
     stats->storedBytes = 12 * gib + gib / 2;
     stats->availableBytes = 100 * gib;
     check.expect(ui::diskHeadroomFiguresText(stats) ==
-                     QStringLiteral("Keeping 32.0 GB free · Disk cache 12.5 GB of 100.0 GB "
-                                    "available · 120.0 GB free on the cache drive"),
+                     QStringLiteral("Keeping 32.0 GiB free · Disk cache 12.5 GiB of 100.0 GiB "
+                                    "available · 120.0 GiB free on the cache drive"),
                  "measured figures read as headroom, stored of available, and free space");
     stats->driveMeasured = false;
     stats->capacityBytes = stats->freeBytes = stats->headroomBytes = 0;
     stats->availableBytes = 32 * gib;
     check.expect(ui::diskHeadroomFiguresText(stats) ==
                      QStringLiteral("The cache drive cannot be read · The disk cache is limited to "
-                                    "32.0 GB · Disk cache 12.5 GB stored"),
-                 "an unreadable drive says the cache is limited to 32 GB");
+                                    "32.0 GiB · Disk cache 12.5 GiB stored"),
+                 "an unreadable drive says the cache is limited to 32 GiB");
     check.expect(ui::diskHeadroomFiguresText(std::nullopt) ==
                      QStringLiteral("The disk cache is off."),
                  "no cache reads as off");

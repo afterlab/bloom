@@ -871,19 +871,19 @@ void testWindowStatusBarShowsDiskCacheSpaceAndCounters(Expectations& expectation
         QTest::qWait(20);
     }
     WindowStatusBar strip(fixture.compositionSession, nullptr, &mirror);
-    expectations.expect(strip.diskTextForTest() == QStringLiteral("4.0 MB / 100.0 GB"),
+    expectations.expect(strip.diskTextForTest() == QStringLiteral("4.0 MiB / 100.0 GiB"),
                         "disk cell: the cell shows used and available");
     const auto tip = strip.diskToolTipForTest();
     expectations.expect(tip.contains(QStringLiteral("Disk hits 0 · Network reads 0")) &&
                             tip.contains(QStringLiteral(
                                 "Evictions 0 · Refused writes 0 · Dropped writes 0")) &&
-                            tip.contains(QStringLiteral("1 sources · 4.0 MB stored")) &&
+                            tip.contains(QStringLiteral("1 sources · 4.0 MiB stored")) &&
                             tip.contains(QStringLiteral(
-                                "Keeping 20.0 GB free · 120.0 GB free on the cache drive")),
+                                "Keeping 20.0 GiB free · 120.0 GiB free on the cache drive")),
                         "disk cell: the tooltip shows the counters, the headroom and the free space");
     expectations.expect(!tip.contains(QStringLiteral("short of free space")) &&
                             strip.mediaDiskCacheTextForTest() ==
-                                QStringLiteral("Disk 4.0 MB / 100.0 GB"),
+                                QStringLiteral("Disk 4.0 MiB / 100.0 GiB"),
                         "disk cell: no drive-short sentence, and the status text follows the cell");
 }
 

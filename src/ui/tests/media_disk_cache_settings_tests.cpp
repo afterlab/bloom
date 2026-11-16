@@ -174,18 +174,18 @@ void testMediaDiskCacheStatusText(Expectations& check) {
     warm.storedBytes = 2ULL * 1024 * 1024;
     warm.entryCount = 4;
     const auto text = ui::mediaDiskCacheStatusText(warm, /*enabled=*/true);
-    check.expect(text == QStringLiteral("Disk 2.0 MB") &&
-                     ui::mediaDiskCacheUsedText(warm) == QStringLiteral("2.0 MB"),
+    check.expect(text == QStringLiteral("Disk 2.0 MiB") &&
+                     ui::mediaDiskCacheUsedText(warm) == QStringLiteral("2.0 MiB"),
                  "before the first measurement the used figure stands alone, with a readable unit");
     warm.driveMeasured = true;
     warm.availableBytes = 268ULL * 1024 * 1024 * 1024;
     check.expect(ui::mediaDiskCacheStatusText(warm, /*enabled=*/true) ==
-                         QStringLiteral("Disk 2.0 MB / 268.0 GB") &&
-                     ui::mediaDiskCacheUsedText(warm) == QStringLiteral("2.0 MB / 268.0 GB"),
+                         QStringLiteral("Disk 2.0 MiB / 268.0 GiB") &&
+                     ui::mediaDiskCacheUsedText(warm) == QStringLiteral("2.0 MiB / 268.0 GiB"),
                  "a measured drive shows used and available");
     warm.driveMeasured = false;
     warm.availableBytes = 32ULL * 1024 * 1024 * 1024;
-    check.expect(ui::mediaDiskCacheUsedText(warm) == QStringLiteral("2.0 MB / 32.0 GB"),
+    check.expect(ui::mediaDiskCacheUsedText(warm) == QStringLiteral("2.0 MiB / 32.0 GiB"),
                  "an unreadable drive shows the fixed limit as the available figure");
     const auto tiers = ui::mediaDiskCacheTierText(warm, 7);
     check.expect(tiers == QStringLiteral("RAM hits 7 · Disk hits 3 · Network reads 1\n"

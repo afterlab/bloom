@@ -228,9 +228,10 @@ QString mediaDiskCacheUsedText(const media::cache::SourceMirrorStatistics& stats
     // Until the first measurement, and while the drive cannot be read and nothing says how much
     // room there is, the used figure stands alone.
     if (!stats.driveMeasured && stats.availableBytes == 0)
-        return formatBytes(stats.storedBytes);
+        return statusbar::formatBinaryBytes(stats.storedBytes);
     return WindowStatusBar::tr("%1 / %2")
-        .arg(formatBytes(stats.storedBytes), formatBytes(stats.availableBytes));
+        .arg(statusbar::formatBinaryBytes(stats.storedBytes),
+             statusbar::formatBinaryBytes(stats.availableBytes));
 }
 
 QString mediaDiskCacheTierText(const media::cache::SourceMirrorStatistics& stats,

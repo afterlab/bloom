@@ -1241,7 +1241,10 @@ QWidget* PreferencesWindow::buildViewerPage() {
 
 QString diskHeadroomFiguresText(
     const std::optional<media::cache::SourceMirrorStatistics>& statistics) {
-    using statusbar::formatBytes;
+    // The same unit as the field above it: binary values under their own names.
+    const auto formatBytes = [](const std::uint64_t bytes) {
+        return statusbar::formatBinaryBytes(bytes);
+    };
     if (!statistics)
         return PreferencesWindow::tr("The disk cache is off.");
     const auto& stats = *statistics;

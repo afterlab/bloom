@@ -11,6 +11,8 @@
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 
 namespace bloom::ui::statusbar {
@@ -24,6 +26,18 @@ namespace bloom::ui::statusbar {
     return value >= kGibibyte ? QCoreApplication::translate("bloom::ui::WindowStatusBar", "%1 GB")
                                     .arg(value / kGibibyte, 0, 'f', 1)
                               : QCoreApplication::translate("bloom::ui::WindowStatusBar", "%1 MB")
+                                    .arg(value / kMebibyte, 0, 'f', 1);
+}
+
+// The disk cache's figures (#732): binary units under their own names, MiB below one gibibyte and
+// GiB from there on, one decimal either way, the unit the Disk headroom field is entered in.
+[[nodiscard]] inline QString formatBinaryBytes(const std::uint64_t bytes) {
+    constexpr double kMebibyte = 1024.0 * 1024.0;
+    constexpr double kGibibyte = kMebibyte * 1024.0;
+    const auto value = static_cast<double>(bytes);
+    return value >= kGibibyte ? QCoreApplication::translate("bloom::ui::WindowStatusBar", "%1 GiB")
+                                    .arg(value / kGibibyte, 0, 'f', 1)
+                              : QCoreApplication::translate("bloom::ui::WindowStatusBar", "%1 MiB")
                                     .arg(value / kMebibyte, 0, 'f', 1);
 }
 

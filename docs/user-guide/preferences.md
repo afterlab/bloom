@@ -128,7 +128,8 @@ uses the free space beyond it and gives space back when other programs need it. 
 the smaller of 10% of the drive and 32 GiB; **Custom** takes a size up to 4096 GiB, stored as a
 decimal byte string under `media/disk-cache-headroom-bytes`. It applies on Apply or OK. The line
 under the field shows the live figures: the space being kept free, what the cache holds out of
-what it may hold now, and the free space on the cache drive. The disk cache budget of earlier
+what it may hold now, and the free space on the cache drive, in GiB (MiB below one), the unit
+of the field. The disk cache budget of earlier
 versions is gone; a saved value is dropped. See
 [Memory](memory.md#the-disk-cache-disk-headroom) for how the cache uses the space.
 

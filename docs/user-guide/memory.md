@@ -151,7 +151,7 @@ as RAM and VRAM: you set what to leave free, and Bloom uses the rest.
   than making a frame wait; that file is copied the next time it is read.
 
 The status bar's **Disk cache** group shows what the cache holds and what it may hold now, for
-example "12.4 GB / 268 GB". Hover it for disk hits, network reads, evictions, refused writes and
+example "12.4 GiB / 268.0 GiB". Hover it for disk hits, network reads, evictions, refused writes and
 dropped writes since Bloom started (or since the last media purge), the headroom and the free
 space on the cache drive. Refused writes that keep growing while you loop mean the footage of
 that loop is larger than the space: free some space on the cache drive, lower the headroom, or

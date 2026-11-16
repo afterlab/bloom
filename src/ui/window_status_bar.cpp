@@ -258,7 +258,8 @@ void WindowStatusBar::buildSegments() {
     diskSegment_->addLabel(tr("Disk cache"));
     mediaDiskCacheCell_ =
         new ValueLabel(QStringLiteral("windowStatusBarMediaDiskCache"),
-                       QStringLiteral("0000.0 MB / 0000.0 GB"), kit::Color::Foreground, diskSegment_);
+                       QStringLiteral("0000.0 MiB / 0000.0 GiB"), kit::Color::Foreground,
+                       diskSegment_);
     diskSegment_->add(mediaDiskCacheCell_);
     layout->addWidget(diskSegment_);
 
@@ -827,15 +828,17 @@ void WindowStatusBar::refreshMediaDiskCacheCell() {
         detail = tr("%1\n%2 sources · %3 stored")
                      .arg(mediaDiskCacheTierText(stats, platform::sourceTierWork().memoryHits))
                      .arg(stats.entryCount)
-                     .arg(formatBytes(stats.storedBytes));
+                     .arg(statusbar::formatBinaryBytes(stats.storedBytes));
         if (stats.pendingWrites != 0)
             detail += tr(" · %1 being copied").arg(stats.pendingWrites);
         if (stats.driveMeasured) {
             detail += tr("\nKeeping %1 free · %2 free on the cache drive")
-                          .arg(formatBytes(stats.headroomBytes), formatBytes(stats.freeBytes));
+                          .arg(statusbar::formatBinaryBytes(stats.headroomBytes),
+                               statusbar::formatBinaryBytes(stats.freeBytes));
         } else if (stats.availableBytes != 0) {
             detail += tr("\nThe cache drive cannot be read · The disk cache is limited to %1")
-                          .arg(formatBytes(media::cache::kSourceMirrorUnmeasuredByteLimit));
+                          .arg(statusbar::formatBinaryBytes(
+                              media::cache::kSourceMirrorUnmeasuredByteLimit));
         }
     }
     // #718: each source's storage class and cached state, the first few by name.
