@@ -426,6 +426,8 @@ if(APPLE)
         # updater downloads the zip), and beside it the disk image and the installer package
         # (cmake/package/make_macos_installers.cmake).
         if(bloom_bundle_complete)
+            # The disk image's window layout is written by tools/release/dmg_layout.py.
+            find_package(Python3 REQUIRED COMPONENTS Interpreter)
             string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" bloom_zip_processor)
             set(bloom_macos_package_name
                 "Bloom-${BLOOM_PACKAGE_VERSION}-macos-${bloom_zip_processor}")

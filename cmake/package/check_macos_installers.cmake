@@ -46,6 +46,9 @@ if(NOT DEFINED PLISTBUDDY OR "${PLISTBUDDY}" STREQUAL "")
     set(PLISTBUDDY "/usr/libexec/PlistBuddy")
 endif()
 if(NOT DEFINED PYTHON OR "${PYTHON}" STREQUAL "")
+    # An empty value given on the command line would count as an answer to find_program.
+    unset(PYTHON)
+    unset(PYTHON CACHE)
     find_program(PYTHON NAMES python3 REQUIRED)
 endif()
 

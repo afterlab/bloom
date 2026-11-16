@@ -304,6 +304,8 @@ function(bloom_add_package_rules)
             # programs (hdiutil, pkgbuild, pkgutil, tiffutil, codesign). Same name as the Windows
             # test: one platform registers one. It makes both installers from a signed copy of
             # the built bundle and never runs `installer -pkg`, which needs an administrator.
+            # The disk image's window layout is written and read by tools/release/dmg_layout.py.
+            find_package(Python3 REQUIRED COMPONENTS Interpreter)
             bloom_add_test(
                 NAME bloom.package.installers
                 COMMAND ${CMAKE_COMMAND} "-DBUNDLE=$<TARGET_BUNDLE_DIR:bloom>"
