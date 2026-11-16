@@ -4,10 +4,11 @@
 #   cmake -DBUNDLE=<built Bloom.app> -DSOURCE=<source tree> -DWORK=<work directory>
 #         [-DPLISTBUDDY=<PlistBuddy>] -P check_macos_installers.cmake
 #
-# Everything happens inside WORK: the image is attached read-only at WORK/mount and not shown,
-# the package is expanded, never installed (`installer -pkg` needs an administrator), and the
-# postinstall script links inside WORK/volume, never in the real /usr/local/bin. The steps, each
-# reported on one line as it passes:
+# The image is attached read-only where the system puts it, and not shown: a mount point of the
+# caller's own is refused in a session that is not the logged-in desktop, a remote one for
+# instance. Everything else happens inside WORK: the package is expanded, never installed
+# (`installer -pkg` needs an administrator), and the postinstall script links inside WORK/volume,
+# never in the real /usr/local/bin. The steps, each reported on one line as it passes:
 #
 #   1  the bundle is copied and signed as bloom-deploy-macos signs it, and both installers are
 #      made from the copy
@@ -19,7 +20,8 @@
 #   4  the postinstall script links bloom-cli inside the target volume it is given, links again
 #      without complaint, and leaves a file that is not a link alone
 #
-# Whatever fails, the image is detached before the result is reported.
+# Whatever fails, the image is detached before the result is reported, and an image an
+# interrupted earlier run left attached is detached before this run makes its own.
 #
 # On another host than macOS the script says "SKIPPED:" and why, and the test is reported as
 # skipped (cmake/BloomPackage.cmake).
@@ -46,14 +48,14 @@ set(scripts "${CMAKE_CURRENT_LIST_DIR}")
 set(copy "${WORK}/Bloom.app")
 set(output "${WORK}/installers")
 set(make_work "${WORK}/make")
-set(mount "${WORK}/mount")
+set(mount "")
+set(attached "")
 set(expanded "${WORK}/expanded")
 set(name "Bloom-installer-check")
 set(dmg "${output}/${name}.dmg")
 set(pkg "${output}/${name}.pkg")
 set(layout "${SOURCE}/apps/bloom/installer/macos/dmg-DS_Store")
 set(postinstall "${SOURCE}/packaging/macos/postinstall")
-set(mounted FALSE)
 
 # --- Helpers -------------------------------------------------------------------------------------
 function(fail text)
@@ -134,16 +136,97 @@ function(step_make)
     passed("both installers were made from the signed copy")
 endfunction()
 
+# One value of a property list file, empty when it is not there.
+function(plist_entry plist entry result_variable)
+    execute_process(COMMAND "${PLISTBUDDY}" -c "Print ${entry}" "${plist}"
+        RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_QUIET)
+    string(STRIP "${output}" output)
+    if(NOT result EQUAL 0)
+        set(output "")
+    endif()
+    set(${result_variable} "${output}" PARENT_SCOPE)
+endfunction()
+
+# Writes the property list a hdiutil command printed, without anything printed around it.
+function(write_plist text path)
+    string(FIND "${text}" "<?xml" first)
+    string(FIND "${text}" "</plist>" last REVERSE)
+    if(first EQUAL -1 OR last EQUAL -1)
+        file(WRITE "${path}" "")
+        return()
+    endif()
+    math(EXPR length "${last} + 8 - ${first}")
+    string(SUBSTRING "${text}" ${first} ${length} text)
+    file(WRITE "${path}" "${text}\n")
+endfunction()
+
+# Detaches this check's image when an interrupted earlier run left it attached. Only an image
+# whose file is this check's own is touched.
+function(detach_earlier_image)
+    if(NOT EXISTS "${dmg}")
+        return()
+    endif()
+    file(REAL_PATH "${dmg}" wanted)
+    execute_process(COMMAND hdiutil info -plist
+        RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_QUIET)
+    if(NOT result EQUAL 0)
+        return()
+    endif()
+    # Beside the work folder, which is cleared after this.
+    get_filename_component(plist "${WORK}" DIRECTORY)
+    set(plist "${plist}/bloom-installer-check-attached.plist")
+    write_plist("${output}" "${plist}")
+    foreach(image RANGE 0 255)
+        plist_entry("${plist}" ":images:${image}:image-path" path)
+        if(path STREQUAL "")
+            break()
+        endif()
+        if(EXISTS "${path}")
+            file(REAL_PATH "${path}" path)
+        endif()
+        if(path STREQUAL wanted)
+            plist_entry("${plist}" ":images:${image}:system-entities:0:dev-entry" device)
+            if(NOT device STREQUAL "")
+                execute_process(COMMAND hdiutil detach -force "${device}" OUTPUT_QUIET ERROR_QUIET)
+            endif()
+        endif()
+    endforeach()
+    file(REMOVE "${plist}")
+endfunction()
+
 function(step_image)
-    file(MAKE_DIRECTORY "${mount}")
-    execute_process(COMMAND hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "${mount}"
-                            "${dmg}"
+    execute_process(COMMAND hdiutil attach -readonly -nobrowse -noautoopen -plist "${dmg}"
         RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
     if(NOT result EQUAL 0)
         fail("the disk image could not be attached (${result}):\n${output}${error}")
         return()
     endif()
-    set(mounted TRUE PARENT_SCOPE)
+    # What was attached: the first device stands for the whole image when it is detached, and
+    # the one entry with a mount point is the volume.
+    set(plist "${WORK}/attached.plist")
+    write_plist("${output}" "${plist}")
+    plist_entry("${plist}" ":system-entities:0:dev-entry" attached)
+    set(mount "")
+    foreach(entity RANGE 0 31)
+        plist_entry("${plist}" ":system-entities:${entity}:dev-entry" device)
+        if(device STREQUAL "")
+            break()
+        endif()
+        plist_entry("${plist}" ":system-entities:${entity}:mount-point" point)
+        if(NOT point STREQUAL "")
+            set(mount "${point}")
+        endif()
+    endforeach()
+    set(attached "${attached}" PARENT_SCOPE)
+    set(mount "${mount}" PARENT_SCOPE)
+    if(attached STREQUAL "")
+        fail("hdiutil did not say which device the disk image is attached as:\n${output}${error}")
+        return()
+    endif()
+    if(mount STREQUAL "" OR NOT IS_DIRECTORY "${mount}")
+        fail("the disk image was attached without a volume to read:\n${output}${error}")
+        return()
+    endif()
 
     expect_file("the image holds the application" "${mount}/Bloom.app/Contents/MacOS/Bloom")
     expect_file("the image holds the command-line program"
@@ -196,13 +279,8 @@ endfunction()
 
 # The value of a key of one entry of the component plist, empty when it is not there.
 function(plist_value plist index key result_variable)
-    execute_process(COMMAND "${PLISTBUDDY}" -c "Print :${index}:${key}" "${plist}"
-        RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_QUIET)
-    string(STRIP "${output}" output)
-    if(NOT result EQUAL 0)
-        set(output "")
-    endif()
-    set(${result_variable} "${output}" PARENT_SCOPE)
+    plist_entry("${plist}" ":${index}:${key}" value)
+    set(${result_variable} "${value}" PARENT_SCOPE)
 endfunction()
 
 function(step_package)
@@ -233,12 +311,16 @@ function(step_package)
         if(NOT info MATCHES "[ \t]version=\"${wanted_version}\"")
             fail("the package's version is not the bundle's build version ${build_version}:\n${info}")
         endif()
-        # A relocatable bundle is listed under <relocate>, a version checked one under
-        # <bundle-version>.
-        if(info MATCHES "<relocate")
+        # A relocatable bundle is listed inside <relocate>, a version checked one inside
+        # <bundle-version>. Both elements are written empty when no bundle is either, so it is
+        # a bundle listed inside them that fails, and the package's own relocatable flag.
+        if(info MATCHES "relocatable=\"true\"" OR info MATCHES "<relocate>[^<]*<bundle")
             fail("the package lets the installer move the application to another copy:\n${info}")
         endif()
-        if(info MATCHES "<bundle-version")
+        if(NOT info MATCHES "relocatable=\"false\"")
+            fail("the package does not say that it is not relocatable:\n${info}")
+        endif()
+        if(info MATCHES "<bundle-version>[^<]*<bundle")
             fail("the package checks the version of the application it replaces:\n${info}")
         endif()
     endif()
@@ -322,10 +404,7 @@ function(step_postinstall)
 endfunction()
 
 # --- Run -----------------------------------------------------------------------------------------
-# A volume left mounted from an earlier run would hide this run's image under the same mount point.
-if(IS_DIRECTORY "${mount}")
-    execute_process(COMMAND hdiutil detach -force "${mount}" OUTPUT_QUIET ERROR_QUIET)
-endif()
+detach_earlier_image()
 file(REMOVE_RECURSE "${WORK}")
 file(MAKE_DIRECTORY "${WORK}")
 
@@ -334,8 +413,8 @@ failed(bad)
 if(NOT bad)
     step_image()
     # Detached whatever happened, before anything else is read from the work folder.
-    if(mounted)
-        execute_process(COMMAND hdiutil detach -force "${mount}"
+    if(NOT attached STREQUAL "")
+        execute_process(COMMAND hdiutil detach -force "${attached}"
             RESULT_VARIABLE detached OUTPUT_VARIABLE detach_output ERROR_VARIABLE detach_error)
         if(NOT detached EQUAL 0)
             fail("the disk image could not be detached (${detached}):\n${detach_output}${detach_error}")
