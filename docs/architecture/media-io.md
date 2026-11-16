@@ -1320,12 +1320,33 @@ does depends on the work:
   then follows the playback rule). A fill has no frame deadline, and an idle-priority writer is
   slower than the reads of a fill; that is why the reads wait here and nowhere else.
 
+**One read of a source (#732).** A copy that is still on its way to the disk already counts as
+held, and a source is read by one reader at a time:
+
+- `find()` answers from a write that is still queued or being written (the same bytes under the
+  same identity, hashed on the calling worker), counted as `pendingHits`. The writer runs at idle
+  priority and can be far behind while the machine renders; without this every evaluation that
+  asked for the source meanwhile read it from its storage again, and a source read while its
+  write was in flight was written twice.
+- A reader that found nothing takes the load of that source (`SourceStore::beginLoad()`), looks
+  once more as its only reader, reads the source and holds the load until it has handed the bytes
+  to `keep()`. Another reader of the same source waits meanwhile, on its worker and with its own
+  cancellation, and then finds the first reader's bytes. Readers of other sources never wait for
+  it. The wait ends when the holder lets go (also when it failed or was cancelled; the waiting
+  reader then reads the source itself), at a purge and at shutdown.
+
+So a source that has a place on the cache volume is read from its storage once and written once,
+however many evaluations ask for it at the same moment and however long its write stays pending
+(`testOneReadOfASource`, `testOneReadThroughTheImageReader`). A source that has no place is still
+read whenever it is needed; each of those reads ends in a refused write.
+
 Shutdown never waits for the queue. `SourceMirror::beginShutdown()`, called when the application
 starts to quit, takes no further write, returns a read waiting in `keep()` at once whether or not
 its fill has ended, and has the writer abandon the pending writes, leave the index current and
 stop; lookups keep working. Each write abandoned this way is counted as dropped, and its source
-is read again in another session. The destructor does the same and returns only after the writer
-and any read still inside `keep()` have left (`testShutdownReleasesAWaitingRead`).
+is read again in another session. The destructor does the same and returns only after the writer,
+any read still inside `keep()` and any reader waiting for a load have left
+(`testShutdownReleasesAWaitingRead`, `testOneReadOfASource`).
 
 The index (`index.v2`) is rewritten in batches and on idle; the index is read, and anything left
 by the retired store removed, on the writer thread, so startup never waits on the cache directory.

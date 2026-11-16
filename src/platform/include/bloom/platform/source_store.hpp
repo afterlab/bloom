@@ -48,10 +48,24 @@ class SourceStore {
         return nullptr;
     }
     // The stored bytes of `source` when the store holds them for exactly this identity (size,
-    // modification time and file id); nullopt otherwise. Never reads the source.
+    // modification time and file id); nullopt otherwise. Never reads the source. Bytes a reader
+    // handed to keep() that are still on their way to the disk count as held.
     [[nodiscard]] virtual std::optional<StoredSourceBytes>
     find(const std::filesystem::path& source, const FileIdentity& identity,
          const std::function<bool()>& cancel) = 0;
+    // One read of a source at a time (#732). A reader that found nothing says so before it reads
+    // the source itself, and holds the returned token until it has handed the bytes to keep() or
+    // given up. While one reader holds the token of a source, another reader's call for the same
+    // source waits for it and then returns null: that reader looks again with find(), which now
+    // usually has the first reader's bytes, and asks again only when it still finds nothing. So
+    // two workers that miss the same source at the same moment read it once. A cancelled wait
+    // also returns null. A store that keeps nothing in memory never waits.
+    [[nodiscard]] virtual std::shared_ptr<void>
+    beginLoad(const std::filesystem::path& source, const std::function<bool()>& cancel) {
+        static_cast<void>(source);
+        static_cast<void>(cancel);
+        return std::make_shared<int>(0);
+    }
     // Write-through: asks the store to keep `bytes`, which were just read from `source` while it
     // had `identity`. Returns at once; the write happens in the background and may be dropped.
     // `owner` keeps `bytes` alive until then.

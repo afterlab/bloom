@@ -122,6 +122,12 @@ This amends decision 4 and the consequence about the byte budget:
    a frame has a deadline, and makes the read wait during a RAM Preview fill, where it has none.
    Decision 4's "never a wait" now holds for every read with a deadline; a fill trades a short
    wait for leaving everything it read on disk.
+5. **A copy on its way to the disk already counts.** A lookup is answered from a write that is
+   still queued or being written, and one reader at a time reads a source: a second reader of the
+   same source waits for the first and takes its bytes. The writer runs at idle priority and
+   falls behind while the machine renders, so without this a source was read again by every
+   evaluation that asked for it before its write was done, and could be written twice. The
+   alternative, raising the writer's priority, would put the copy in the way of the frames.
 
 Consequences: the disk cache follows the free space of the machine instead of a figure chosen at
 startup, so on a mostly empty drive it holds far more than before and on a nearly full one it

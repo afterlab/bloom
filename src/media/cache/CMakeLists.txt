@@ -24,6 +24,9 @@ if(BUILD_TESTING)
     # #718: the local mirror of source media on slow storage.
     add_executable(bloom_media_source_mirror_test tests/source_mirror_tests.cpp)
     target_link_libraries(bloom_media_source_mirror_test PRIVATE bloom_media_cache)
+    # The one-read case reads a real image: the small JPEG the image tests carry.
+    target_include_directories(bloom_media_source_mirror_test
+                               PRIVATE ${PROJECT_SOURCE_DIR}/src/media/image/tests)
     bloom_enable_warnings(bloom_media_source_mirror_test)
     bloom_add_test(NAME bloom.media.source-mirror COMMAND bloom_media_source_mirror_test
                    LABELS unit media cache TIMEOUT 120)

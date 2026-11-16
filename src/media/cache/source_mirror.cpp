@@ -339,6 +339,22 @@ struct SourceMirror::Hub final {
     SourceMirror* mirror = nullptr;
 };
 
+// What beginLoad() hands a reader: letting go of it, wherever the reader returns from, ends the
+// load and wakes the readers waiting for that source. It may outlive the mirror.
+struct SourceMirror::LoadToken final {
+    LoadToken(std::shared_ptr<Hub> owner, std::string source)
+        : hub(std::move(owner)), key(std::move(source)) {}
+    LoadToken(const LoadToken&) = delete;
+    LoadToken& operator=(const LoadToken&) = delete;
+    ~LoadToken() {
+        const std::shared_lock lock(hub->mutex);
+        if (hub->mirror != nullptr)
+            hub->mirror->endLoad(key);
+    }
+    std::shared_ptr<Hub> hub;
+    std::string key;
+};
+
 // One source's chunk file. Reads and writes are positional, so any number of threads fill and
 // read at once; no lock is held across file I/O or hashing. A chunk's bytes are written before
 // its slot, so a write that was cut short leaves the chunk missing, and a slot whose bytes did
@@ -552,6 +568,7 @@ SourceMirror::~SourceMirror() {
         // A read still waiting for room in keep() leaves before the queue it waits on is gone.
         std::unique_lock lock(queueMutex_);
         roomCv_.wait(lock, [this] { return waitingKeepers_ == 0; });
+        loadCv_.wait(lock, [this] { return waitingLoads_ == 0; });
     }
     if (writer_.joinable())
         writer_.join();
@@ -566,6 +583,7 @@ void SourceMirror::beginShutdown() noexcept {
     }
     queueCv_.notify_all();
     roomCv_.notify_all();
+    loadCv_.notify_all();
 }
 
 std::filesystem::path SourceMirror::entryPath(const std::string& key) const {
@@ -742,6 +760,53 @@ SourceMirror::find(const std::filesystem::path& source, const platform::FileIden
     const auto key = sourceKey(source);
     if (key.empty())
         return std::nullopt;
+    // A write of this source that has not reached the disk yet answers the lookup from memory
+    // (#732): the bytes a reader handed over are the source under that identity, so no second
+    // reader reads the source while the first one's copy is on its way. Copied and hashed on the
+    // calling worker with no lock held, like a read of the entry.
+    {
+        std::shared_ptr<const void> owner;
+        std::span<const std::byte> pending;
+        bool found = false;
+        {
+            const std::lock_guard lock(queueMutex_);
+            const auto matches = [&](const PendingWrite& write) {
+                return write.key == key && write.identity == identity;
+            };
+            const PendingWrite* match = nullptr;
+            if (inFlightWrite_ && matches(*inFlightWrite_))
+                match = &*inFlightWrite_;
+            else if (const auto queued = std::ranges::find_if(queue_, matches);
+                     queued != queue_.end())
+                match = &*queued;
+            if (match != nullptr) {
+                owner = match->owner;
+                pending = match->bytes;
+                found = true;
+            }
+        }
+        if (found) {
+            platform::StoredSourceBytes result;
+            result.bytes.resize(pending.size());
+            core::Sha256Hasher hasher;
+            for (std::size_t offset = 0; offset < pending.size();) {
+                if (cancel && cancel())
+                    return std::nullopt;
+                const auto count = std::min(kIoChunkBytes, pending.size() - offset);
+                std::copy_n(pending.data() + offset, count, result.bytes.data() + offset);
+                if (!hasher.update(pending.subspan(offset, count)))
+                    return std::nullopt;
+                offset += count;
+            }
+            result.digest = hasher.finalize();
+            platform::recordSourceStoreHit(result.bytes.size());
+            counters_.hit();
+            const std::lock_guard lock(queueMutex_);
+            ++pendingHits_;
+            pendingHitBytes_ += result.bytes.size();
+            return result;
+        }
+    }
     const auto path = entryPath(key);
     const auto miss = [&] {
         const std::lock_guard lock(mutex_);
@@ -824,9 +889,12 @@ void SourceMirror::keep(const std::filesystem::path& source, const platform::Fil
     bool filling = ledger_.previewFillActive();
     {
         std::unique_lock lock(queueMutex_);
+        // Already on its way to the disk: queued, or being written under this very identity.
         const auto queued = [&] {
-            return std::ranges::any_of(
-                queue_, [&](const PendingWrite& pending) { return pending.key == key; });
+            return (inFlightWrite_ && inFlightWrite_->key == key &&
+                    inFlightWrite_->identity == identity) ||
+                   std::ranges::any_of(
+                       queue_, [&](const PendingWrite& pending) { return pending.key == key; });
         };
         if (stopping_.load() || queued())
             return;
@@ -936,16 +1004,67 @@ void SourceMirror::forget(const std::filesystem::path& source) {
     }
 }
 
-void SourceMirror::clear() {
+std::shared_ptr<void> SourceMirror::beginLoad(const std::filesystem::path& source,
+                                              const std::function<bool()>& cancel) {
+    // A reader the mirror has nothing to coordinate for reads at once.
+    const auto unshared = [] { return std::shared_ptr<void>(std::make_shared<int>(0)); };
+    if (!enabled() || root_.empty())
+        return unshared();
+    auto key = sourceKey(source);
+    if (key.empty())
+        return unshared();
+    std::unique_lock lock(queueMutex_);
+    if (stopping_.load())
+        return unshared();
+    if (!loads_.contains(key)) {
+        loads_.insert(key);
+        lock.unlock();
+        return std::make_shared<LoadToken>(hub_, std::move(key));
+    }
+    // Another reader is reading this source now. Wait for it to let go (it has then handed its
+    // bytes to keep(), or given up), and send the caller back to find().
+    const auto purges = queuePurges_;
+    ++waitingLoads_;
+    while (loads_.contains(key) && !stopping_.load() && queuePurges_ == purges) {
+        loadCv_.wait_for(lock, std::chrono::milliseconds(50));
+        if (!cancel)
+            continue;
+        lock.unlock();
+        const bool cancelled = cancel();
+        lock.lock();
+        if (cancelled)
+            break;
+    }
+    --waitingLoads_;
+    loadCv_.notify_all(); // the destructor waits for the last waiting reader
+    return nullptr;
+}
+
+void SourceMirror::endLoad(const std::string& key) noexcept {
     {
         const std::lock_guard lock(queueMutex_);
+        loads_.erase(key);
+    }
+    loadCv_.notify_all();
+}
+
+void SourceMirror::clear() {
+    {
+        // A write in flight is abandoned with the pending ones: no lookup is answered from it any
+        // more. Its bytes are let go of after the lock.
+        std::optional<PendingWrite> abandoned;
+        const std::lock_guard lock(queueMutex_);
+        abandoned.swap(inFlightWrite_);
         for (const auto& pending : queue_)
             queuedBytes_ -= pending.bytes.size();
         queue_.clear();
         ++queuePurges_;
         droppedWrites_ = 0; // the counts start again with a purge, this one with the others
+        pendingHits_ = 0;
+        pendingHitBytes_ = 0;
     }
     roomCv_.notify_all();
+    loadCv_.notify_all();
     {
         const std::lock_guard lock(mutex_);
         ++generation_;
@@ -1019,6 +1138,9 @@ SourceMirrorStatistics SourceMirror::statistics() const {
     result.pendingWriteBytes = queuedBytes_;
     result.waitingWrites = waitingKeepers_;
     result.peakPendingWriteBytes = peakQueuedBytes_;
+    result.pendingHits = pendingHits_;
+    result.pendingHitBytes = pendingHitBytes_;
+    result.waitingLoads = waitingLoads_;
     return result;
 }
 
@@ -1605,6 +1727,7 @@ void SourceMirror::writerLoop() {
             auto write = std::move(queue_.front());
             queue_.pop_front();
             inFlight_ = 1;
+            inFlightWrite_ = write; // a lookup is answered from it until its entry is on disk
             lock.unlock();
             writeEntry(write);
             bool batchFull = false;
@@ -1615,6 +1738,12 @@ void SourceMirror::writerLoop() {
             if (batchFull)
                 writeIndex();
             const auto bytes = write.bytes.size();
+            {
+                std::optional<PendingWrite> written;
+                lock.lock();
+                written.swap(inFlightWrite_);
+                lock.unlock();
+            }
             write = {}; // releases the source bytes before the queue reports itself idle
             lock.lock();
             queuedBytes_ -= std::min<std::uint64_t>(queuedBytes_, bytes);

@@ -312,10 +312,6 @@ void ramPreviewOnASizedVolume(const std::string& label, const std::filesystem::p
     attached = mirror.get();
     mirror->flush();
     platform::setProcessSourceStore(mirror);
-    const auto sourceReads = [&] {
-        const auto statistics = mirror->statistics();
-        return statistics.networkReads + statistics.otherSourceReads;
-    };
 
     const auto format = document::CompositionFormat::create(kWidth, kHeight);
     auto created = scripting::Session::createNew("Routes", "Main",
@@ -401,40 +397,66 @@ void ramPreviewOnASizedVolume(const std::string& label, const std::filesystem::p
                label + ": the " + which + " RAM Preview caches every frame (" +
                    std::to_string(ram.cachedFrameCount()) + " of " +
                    std::to_string(ram.totalFrameCount()) + ")");
+        // The counts are taken when nothing is evaluating any more and every write the pass
+        // handed over was written or refused: they are then exact, whatever the machine was
+        // doing meanwhile.
+        expect(bloom::test_support::awaitQtCondition(
+                   "the pass has settled",
+                   [&] {
+                       return controller.state().activity == ui::PreviewActivity::Ready &&
+                              rig.scheduler.isQuiescent();
+                   }),
+               label + ": the " + which + " pass settles");
         mirror->flush();
+    };
+    // What the assertions below rest on, none of it on how often a frame happened to be
+    // evaluated (the Viewer, the fill and a cancelled request may each evaluate one, and how many
+    // do depends on the machine): a member that has a place on the cache volume is read from its
+    // storage once and written once, however many evaluations ask for it and however long its
+    // write stays pending; a member that has no place is read whenever it is needed, and every
+    // one of those reads ends in a refused write. So the reads that were not refused are exactly
+    // the members on disk.
+    const auto kept = std::min(roomForMembers, kMembers);
+    const auto readsOf = [](const media::cache::SourceMirrorStatistics& statistics) {
+        return statistics.networkReads + statistics.otherSourceReads;
     };
     fill("first");
     const auto afterFirst = mirror->statistics();
-    const auto readsAfterFirst = sourceReads();
-    expect(readsAfterFirst == kMembers,
-           label + ": the first pass reads each member from its storage once (" +
-               std::to_string(readsAfterFirst) + " reads)");
-    expect(afterFirst.droppedWrites == 0, label + ": the first pass drops no write");
+    expect(afterFirst.droppedWrites == 0 && afterFirst.evictions == 0,
+           label + ": the first pass drops no write and evicts nothing");
+    expect(afterFirst.entryCount == kept && afterFirst.writes == kept,
+           label + ": the first pass leaves the members that have a place on disk, each written "
+                   "once (" +
+               std::to_string(afterFirst.entryCount) + " entries, " +
+               std::to_string(afterFirst.writes) + " writes)");
+    expect(readsOf(afterFirst) - afterFirst.refusedWrites == kept,
+           label + ": the first pass reads each member that has a place from its storage once (" +
+               std::to_string(readsOf(afterFirst)) + " reads, " +
+               std::to_string(afterFirst.refusedWrites) + " refused)");
     if (roomForMembers >= kMembers) {
-        expect(afterFirst.entryCount == kMembers && afterFirst.writes == kMembers &&
-                   afterFirst.refusedWrites == 0,
-               label + ": the first RAM Preview pass leaves every member on disk (" +
-                   std::to_string(afterFirst.entryCount) + " entries, " +
-                   std::to_string(afterFirst.writes) + " writes, " +
+        expect(readsOf(afterFirst) == kMembers && afterFirst.refusedWrites == 0,
+               label + ": the first RAM Preview pass reads each member once and refuses none (" +
+                   std::to_string(readsOf(afterFirst)) + " reads, " +
                    std::to_string(afterFirst.refusedWrites) + " refused)");
     } else {
-        expect(afterFirst.entryCount == roomForMembers && afterFirst.writes == roomForMembers &&
-                   afterFirst.refusedWrites == kMembers - roomForMembers &&
-                   afterFirst.evictions == 0,
-               label + ": the first pass keeps the members that fit and refuses the rest (" +
-                   std::to_string(afterFirst.entryCount) + " entries, " +
-                   std::to_string(afterFirst.refusedWrites) + " refused, " +
-                   std::to_string(afterFirst.evictions) + " evictions)");
+        expect(afterFirst.refusedWrites >= kMembers - roomForMembers,
+               label + ": the first pass refuses the member that has no place, and counts it (" +
+                   std::to_string(afterFirst.refusedWrites) + " refused)");
 
         // Edit | Purge… | Purge preview cache, as the main window runs it: the purge controller
         // gates the producers and clears the operation results, the preview controller clears
         // the finished frames. The disk cache is not part of it.
         bool purged = false;
         bool purgeSucceeded = false;
+        // Read when the purge reports its end, not later: once the purge lets the producers go
+        // again the Viewer prepares its own frame anew, and when that frame arrives depends on
+        // the machine.
+        int cachedWhenPurged = -1;
         QObject::connect(&purge, &ui::CachePurgeController::purgeFinished, &purge,
                          [&](const bool success, const QString&) {
                              purged = true;
                              purgeSucceeded = success;
+                             cachedWhenPurged = static_cast<int>(ram.cachedFrameCount());
                          });
         expect(purge.requestPreviewPurge(), label + ": the preview purge starts");
         controller.purgePreviewCache();
@@ -442,7 +464,9 @@ void ramPreviewOnASizedVolume(const std::string& label, const std::filesystem::p
                                                      [&] { return purged; }) &&
                    purgeSucceeded,
                label + ": the preview purge finishes");
-        expect(ram.cachedFrameCount() == 0, label + ": the purge empties the RAM Preview");
+        expect(cachedWhenPurged == 0,
+               label + ": the purge empties the RAM Preview (" +
+                   std::to_string(cachedWhenPurged) + " frames cached when it ended)");
         expect(mirror->statistics().entryCount == roomForMembers,
                label + ": a preview purge leaves the disk cache alone");
         expect(bloom::test_support::awaitQtCondition(
@@ -452,15 +476,17 @@ void ramPreviewOnASizedVolume(const std::string& label, const std::filesystem::p
 
         fill("second");
         const auto afterSecond = mirror->statistics();
-        expect(sourceReads() - readsAfterFirst == kMembers - roomForMembers,
-               label + ": the second pass reads only the member that does not fit (" +
-                   std::to_string(sourceReads() - readsAfterFirst) + " reads)");
+        const auto secondReads = readsOf(afterSecond) - readsOf(afterFirst);
+        const auto secondRefused = afterSecond.refusedWrites - afterFirst.refusedWrites;
+        expect(secondReads == secondRefused && secondReads >= kMembers - roomForMembers,
+               label + ": the second pass reads only the member that has no place (" +
+                   std::to_string(secondReads) + " reads, " + std::to_string(secondRefused) +
+                   " refused)");
         expect(afterSecond.diskHits - afterFirst.diskHits >= roomForMembers,
                label + ": the second pass is served from disk for the members that fit (" +
                    std::to_string(afterSecond.diskHits - afterFirst.diskHits) + " disk hits)");
-        expect(afterSecond.droppedWrites == 0, label + ": the second pass drops no write");
-        expect(afterSecond.refusedWrites > afterFirst.refusedWrites,
-               label + ": the write that does not fit is refused again and counted");
+        expect(afterSecond.droppedWrites == 0 && afterSecond.writes == afterFirst.writes,
+               label + ": the second pass drops no write and writes nothing again");
         expect(afterSecond.evictions == 0 && afterSecond.entryCount == roomForMembers,
                label + ": nothing the loop needs is evicted");
     }

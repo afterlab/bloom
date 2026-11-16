@@ -2,15 +2,20 @@
 // the metadata identity check, the local-copy policy, write-through and its queue, the disk
 // headroom (growing into free space, giving it back, refusing instead of evicting what is in
 // use), corruption, restart, cancellation and shutdown, and the byte ranges of large sources
-// (chunk files). No test here reads a source through the mirror: the mirror never opens a
-// source, which the tests prove by deleting it. No test reads the machine's real free space or
-// waits for time to pass: the cache volume and the clock are injected.
+// (chunk files). The mirror never opens a source, which the tests prove by deleting it; one case
+// reads a source with the image reader, to prove that two readers of one source read it once. No
+// test reads the machine's real free space or waits for time to pass: the cache volume and the
+// clock are injected.
+#include "generated_jpeg.hpp"
+
 #include <bloom/core/sha256.hpp>
 #include <bloom/media/cache/source_mirror.hpp>
 #include <bloom/media/cache/source_mirror_settings.hpp>
+#include <bloom/media/image.hpp>
 #include <bloom/platform/source_identity.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -658,6 +663,294 @@ void testShutdownReleasesAWaitingRead() {
            "and their sources are kept when they are read again");
 }
 
+// #732: a source is read once, however many readers ask for it at the same moment. The two ways a
+// second read could happen are forced here, with a paused writer, a writer held inside its write,
+// and readers observed through the mirror's own counts; nothing depends on timing or on load.
+void testOneReadOfASource() {
+    const Scratch scratch("one-read");
+    const auto first = writeSource(scratch, "a.exr", 3'000, 1);
+    const auto second = writeSource(scratch, "b.exr", 3'000, 2);
+    const auto digestOf = [](const Source& source) {
+        bloom::core::Sha256Hasher hasher;
+        static_cast<void>(hasher.update(std::span<const std::byte>(*source.bytes)));
+        return hasher.finalize();
+    };
+    const auto waitForWaitingLoads = [](const cache::SourceMirror& mirror, const std::uint64_t n) {
+        while (mirror.statistics().waitingLoads != n)
+            std::this_thread::yield();
+    };
+    {
+        // A write still in the queue answers the lookup: the second reader of a source whose copy
+        // has not reached the disk gets the first reader's bytes.
+        cache::SourceMirror mirror(config(scratch));
+        mirror.flush();
+        mirror.setWriterPausedForTest(true);
+        keep(mirror, first);
+        const auto pending = mirror.find(first.path, first.identity, {});
+        expect(pending.has_value() && pending->bytes == *first.bytes &&
+                   pending->digest == digestOf(first),
+               "a queued write answers a lookup with the bytes and their digest");
+        auto statistics = mirror.statistics();
+        expect(statistics.pendingHits == 1 && statistics.pendingHitBytes == 3'000 &&
+                   statistics.diskHits == 0 && statistics.writes == 0 &&
+                   statistics.pendingWrites == 1,
+               "the lookup is counted as answered from the pending write, not from the disk");
+        auto changed = first.identity;
+        ++changed.modifiedNanoseconds;
+        expect(!mirror.find(first.path, changed, {}).has_value() &&
+                   !mirror.find(second.path, second.identity, {}).has_value(),
+               "a pending write answers only for its own source under its own identity");
+        expect(!mirror.find(first.path, first.identity, [] { return true; }).has_value(),
+               "a cancelled lookup of a pending write returns nothing");
+        mirror.setWriterPausedForTest(false);
+        mirror.flush();
+        expect(mirror.find(first.path, first.identity, {}).has_value(),
+               "the same source is found on disk once its write is done");
+        statistics = mirror.statistics();
+        expect(statistics.pendingHits == 1 && statistics.diskHits == 1 && statistics.writes == 1 &&
+                   statistics.networkReads + statistics.otherSourceReads == 1,
+               "one read of the source served every lookup");
+    }
+    {
+        // A write the writer is busy with answers too. The writer is held inside the write: it
+        // measures the cache volume first (the sample is made old by the clock), and the injected
+        // probe waits there.
+        const Scratch held("one-read-in-flight");
+        FakeClock clock;
+        std::atomic<bool> armed{false}, entered{false}, release{false};
+        auto settings = config(held);
+        settings.clock = clock.source();
+        settings.driveSpace = [&, roomy = cache::roomyDriveSpaceForTest()] {
+            if (armed.load()) {
+                entered.store(true);
+                while (!release.load())
+                    std::this_thread::yield();
+            }
+            return roomy();
+        };
+        cache::SourceMirror mirror(settings);
+        mirror.flush();
+        clock.advance(std::chrono::seconds(5));
+        armed.store(true);
+        keep(mirror, first);
+        while (!entered.load())
+            std::this_thread::yield();
+        auto statistics = mirror.statistics();
+        expect(statistics.pendingWrites == 1 && statistics.writes == 0 &&
+                   statistics.entryCount == 0,
+               "the write is in flight: taken from the queue and not on disk yet");
+        const auto inFlight = mirror.find(first.path, first.identity, {});
+        expect(inFlight.has_value() && inFlight->bytes == *first.bytes &&
+                   inFlight->digest == digestOf(first),
+               "a write in flight answers a lookup");
+        keep(mirror, first); // a read that raced it hands the same bytes over again
+        statistics = mirror.statistics();
+        expect(statistics.pendingHits == 1 && statistics.pendingWrites == 1,
+               "a source whose write is in flight is not queued a second time");
+        armed.store(false);
+        release.store(true);
+        mirror.flush();
+        statistics = mirror.statistics();
+        expect(statistics.writes == 1 && statistics.entryCount == 1 &&
+                   statistics.pendingWrites == 0 &&
+                   mirror.find(first.path, first.identity, {}).has_value(),
+               "the source is written exactly once");
+    }
+    {
+        // Two readers miss the same source at the same moment: one takes the load, the other waits
+        // for it and then finds the bytes the first one handed over.
+        const Scratch shared("one-read-shared");
+        cache::SourceMirror mirror(config(shared));
+        mirror.flush();
+        mirror.setWriterPausedForTest(true);
+        expect(!mirror.find(first.path, first.identity, {}).has_value(), "nothing is held yet");
+        auto load = mirror.beginLoad(first.path, {});
+        expect(load != nullptr, "the first reader that found nothing takes the load");
+        auto other = mirror.beginLoad(second.path, {});
+        expect(other != nullptr, "a reader of another source does not wait for it");
+        std::atomic<bool> waited{false};
+        bool waiterGotLoad = true, waiterFound = false;
+        std::thread waiter([&] {
+            waiterGotLoad = mirror.beginLoad(first.path, {}) != nullptr;
+            waited.store(true);
+            const auto found = mirror.find(first.path, first.identity, {});
+            waiterFound = found.has_value() && found->bytes == *first.bytes;
+        });
+        waitForWaitingLoads(mirror, 1);
+        expect(!waited.load(), "the second reader waits while the first one reads");
+        keep(mirror, first); // the first reader's bytes, handed over before it lets go
+        load.reset();
+        waiter.join();
+        auto statistics = mirror.statistics();
+        expect(!waiterGotLoad && waiterFound && statistics.waitingLoads == 0,
+               "the reader that waited is sent back to look, and finds the first reader's bytes");
+        expect(statistics.networkReads + statistics.otherSourceReads == 1 &&
+                   statistics.pendingHits == 1,
+               "two readers that missed at the same moment read the source once");
+        // A reader that gave up (a failed or cancelled read) hands nothing over: the reader that
+        // waited finds nothing and takes the load itself.
+        bool sentBack = false, foundAfterGivingUp = true;
+        std::shared_ptr<void> next;
+        std::thread retry([&] {
+            sentBack = mirror.beginLoad(second.path, {}) == nullptr;
+            foundAfterGivingUp = mirror.find(second.path, second.identity, {}).has_value();
+            next = mirror.beginLoad(second.path, {});
+        });
+        waitForWaitingLoads(mirror, 1);
+        other.reset();
+        retry.join();
+        expect(sentBack && !foundAfterGivingUp && next != nullptr,
+               "after a reader gave up, the one that waited takes the load and reads");
+        next.reset();
+        // A cancelled wait ends although the load is still held.
+        load = mirror.beginLoad(first.path, {});
+        expect(load != nullptr, "a let-go load can be taken again");
+        std::atomic<bool> cancel{false};
+        bool cancelledGotLoad = true;
+        std::thread cancelled([&] {
+            cancelledGotLoad =
+                mirror.beginLoad(first.path, [&] { return cancel.load(); }) != nullptr;
+        });
+        waitForWaitingLoads(mirror, 1);
+        cancel.store(true);
+        cancelled.join();
+        expect(!cancelledGotLoad && mirror.statistics().waitingLoads == 0,
+               "a cancelled reader stops waiting for the load");
+        // "Purge media cache" sends a waiting reader back to look as well.
+        bool purgedGotLoad = true;
+        std::thread purged([&] { purgedGotLoad = mirror.beginLoad(first.path, {}) != nullptr; });
+        waitForWaitingLoads(mirror, 1);
+        mirror.clear();
+        purged.join();
+        expect(!purgedGotLoad && !mirror.find(first.path, first.identity, {}).has_value(),
+               "a purge releases a waiting reader, and the purged pending write answers nothing");
+        // So does the shutdown; after it began nobody waits.
+        bool stoppedGotLoad = true;
+        std::thread stopped([&] { stoppedGotLoad = mirror.beginLoad(first.path, {}) != nullptr; });
+        waitForWaitingLoads(mirror, 1);
+        mirror.beginShutdown();
+        stopped.join();
+        expect(!stoppedGotLoad, "a shutdown releases a waiting reader");
+        expect(mirror.beginLoad(first.path, {}) != nullptr,
+               "after the shutdown began a reader reads at once");
+    }
+    {
+        // The destructor alone, with a reader waiting for a load: it returns after the reader
+        // left, and a load let go of after the mirror is gone does nothing.
+        const Scratch gone("one-read-destroyed");
+        auto mirror = std::make_unique<cache::SourceMirror>(config(gone));
+        mirror->flush();
+        auto load = mirror->beginLoad(first.path, {});
+        std::atomic<bool> returned{false};
+        std::thread waiter([&, heldMirror = mirror.get()] {
+            static_cast<void>(heldMirror->beginLoad(first.path, {}));
+            returned.store(true);
+        });
+        waitForWaitingLoads(*mirror, 1);
+        mirror.reset();
+        waiter.join();
+        expect(returned.load(), "destroying the mirror releases a reader waiting for a load");
+        load.reset();
+    }
+}
+
+// #732: the image reader, which is what reads sequence members, asks the mirror in the order that
+// makes two readers of one member read it once. The first reader is held just before it hands its
+// bytes over (a store in front of the mirror waits there), so the second one arrives while the
+// source is being read: it must wait and then take the first reader's bytes.
+void testOneReadThroughTheImageReader() {
+    namespace media = bloom::media;
+    class HeldKeep final : public platform::SourceStore {
+      public:
+        explicit HeldKeep(cache::SourceMirror& mirror) : mirror_(mirror) {}
+        [[nodiscard]] bool keeps(const std::filesystem::path& source,
+                                 const platform::FileIdentity& identity,
+                                 const platform::LocalCopyOverride asset) const override {
+            return mirror_.keeps(source, identity, asset);
+        }
+        [[nodiscard]] std::optional<platform::StoredSourceBytes>
+        find(const std::filesystem::path& source, const platform::FileIdentity& identity,
+             const std::function<bool()>& cancel) override {
+            return mirror_.find(source, identity, cancel);
+        }
+        [[nodiscard]] std::shared_ptr<void>
+        beginLoad(const std::filesystem::path& source,
+                  const std::function<bool()>& cancel) override {
+            return mirror_.beginLoad(source, cancel);
+        }
+        void keep(const std::filesystem::path& source, const platform::FileIdentity& identity,
+                  std::shared_ptr<const void> owner,
+                  const std::span<const std::byte> bytes) override {
+            reached.store(true);
+            while (!release.load())
+                std::this_thread::yield();
+            mirror_.keep(source, identity, std::move(owner), bytes);
+        }
+        [[nodiscard]] bool underPressure() const override { return mirror_.underPressure(); }
+        std::atomic<bool> reached{false}, release{false};
+
+      private:
+        cache::SourceMirror& mirror_;
+    };
+    const Scratch scratch("one-read-image");
+    const auto path = scratch.root / "sources" / "member.0001.jpg";
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char*>(kGeneratedJpeg.data()),
+                  static_cast<std::streamsize>(kGeneratedJpeg.size()));
+    }
+    auto settings = config(scratch);
+    settings.policy.preference = cache::LocalCopyPreference::Always;
+    cache::SourceMirror mirror(settings);
+    mirror.flush();
+    mirror.setWriterPausedForTest(true);
+    HeldKeep store(mirror);
+    const platform::SourceStoreAccess access{&store, platform::LocalCopyOverride::Inherit};
+    const auto capture = [&] {
+        return media::captureImageSourceRevision(path, media::kMaxImageStorageBytes, {}, {}, {},
+                                                 access);
+    };
+    const auto readsBefore = platform::sourceReadWork().fullReads;
+    std::shared_ptr<const media::ImageSourceRevision> firstRevision, secondRevision;
+    std::thread first([&] {
+        if (auto captured = capture())
+            firstRevision = *captured.value;
+    });
+    while (!store.reached.load())
+        std::this_thread::yield();
+    // The first reader has read the source and still holds its load.
+    std::thread second([&] {
+        if (auto captured = capture())
+            secondRevision = *captured.value;
+    });
+    while (mirror.statistics().waitingLoads != 1)
+        std::this_thread::yield();
+    expect(platform::sourceReadWork().fullReads == readsBefore + 1,
+           "the second reader of a member that is being read does not read it too");
+    store.release.store(true);
+    first.join();
+    second.join();
+    auto statistics = mirror.statistics();
+    expect(firstRevision != nullptr && secondRevision != nullptr &&
+               firstRevision->bytes().size() == kGeneratedJpeg.size() &&
+               std::ranges::equal(firstRevision->bytes(), secondRevision->bytes()),
+           "both readers get the member's bytes");
+    expect(platform::sourceReadWork().fullReads == readsBefore + 1 &&
+               statistics.networkReads + statistics.otherSourceReads == 1 &&
+               statistics.pendingHits == 1 && statistics.pendingWrites == 1 &&
+               statistics.waitingLoads == 0,
+           "two image readers that missed the same member read it from its storage once");
+    mirror.setWriterPausedForTest(false);
+    mirror.flush();
+    statistics = mirror.statistics();
+    expect(statistics.writes == 1 && statistics.entryCount == 1 && statistics.droppedWrites == 0,
+           "and the member is written to the disk cache once");
+    const auto third = capture();
+    expect(third && platform::sourceReadWork().fullReads == readsBefore + 1 &&
+               mirror.statistics().diskHits == 1,
+           "a later reader is served from the disk cache");
+}
+
 void testIdentity() {
     const Scratch scratch("identity");
     cache::SourceMirror mirror(config(scratch));
@@ -1261,6 +1554,8 @@ int main() {
     testWriteQueue();
     testWriteQueueIsLiveWork();
     testShutdownReleasesAWaitingRead();
+    testOneReadOfASource();
+    testOneReadThroughTheImageReader();
     testShutdownAndCancellation();
     testLegacyEntriesRemoved();
     testConcurrency();

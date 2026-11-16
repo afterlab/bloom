@@ -20,6 +20,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // The local mirror of source media that sits on slow storage (#718). See
@@ -147,6 +148,11 @@ struct SourceMirrorStatistics final {
     std::uint64_t pendingWrites = 0, pendingWriteBytes = 0, peakPendingWriteBytes = 0;
     // Reads of a RAM Preview fill that are waiting for room in the write queue right now.
     std::uint64_t waitingWrites = 0;
+    // Lookups answered from a write that had not reached the disk yet (still queued, or being
+    // written): the source was not read a second time. And readers waiting right now for another
+    // reader of the same source (beginLoad).
+    std::uint64_t pendingHits = 0, pendingHitBytes = 0;
+    std::uint64_t waitingLoads = 0;
     std::uint64_t entryCount = 0, storedBytes = 0;
     // The cache volume as last measured (on the mirror's own thread or a worker, never here):
     // its capacity, its free space, the headroom in effect (the setting or the default, never
@@ -210,6 +216,11 @@ class SourceMirror final : public platform::SourceStore {
          const std::function<bool()>& cancel) override;
     void keep(const std::filesystem::path& source, const platform::FileIdentity& identity,
               std::shared_ptr<const void> owner, std::span<const std::byte> bytes) override;
+    // One read of a source at a time: see platform::SourceStore::beginLoad. The token outlives
+    // the mirror safely. The wait ends when the other reader lets go, when `cancel` says so, at a
+    // purge and at shutdown.
+    [[nodiscard]] std::shared_ptr<void>
+    beginLoad(const std::filesystem::path& source, const std::function<bool()>& cancel) override;
     // The byte ranges of one large source: a sparse local file of 1 MiB chunks, each checked
     // against its own hash when it is read back, under the same identity check as a whole entry.
     // Opening it is local file I/O on the calling worker. Null when the mirror is disabled, the
@@ -299,6 +310,7 @@ class SourceMirror final : public platform::SourceStore {
     class ChunkFile;
     // What a chunk file reaches the mirror through: cleared when the mirror goes away.
     struct Hub;
+    struct LoadToken;
     struct PendingWrite final {
         std::string key;
         platform::FileIdentity identity;
@@ -426,6 +438,15 @@ class SourceMirror final : public platform::SourceStore {
     std::uint64_t peakQueuedBytes_ = 0;
     std::uint64_t droppedWrites_ = 0;
     std::size_t inFlight_ = 0;
+    // The write the writer is applying right now (queueMutex_): a lookup is answered from it, and
+    // a second keep() of the same source is not queued behind it.
+    std::optional<PendingWrite> inFlightWrite_;
+    // The sources a reader is reading right now (queueMutex_), and who waits for one of them.
+    std::unordered_set<std::string> loads_;
+    std::condition_variable loadCv_;
+    std::size_t waitingLoads_ = 0;
+    std::uint64_t pendingHits_ = 0, pendingHitBytes_ = 0;
+    void endLoad(const std::string& key) noexcept;
     bool indexRequested_ = false; // flush() asked for the index to be written now
     bool loaded_ = false;         // the startup load finished (queueMutex_ side of indexLoaded_)
     bool writerStopped_ = false;  // after a shutdown: the writer left the index current

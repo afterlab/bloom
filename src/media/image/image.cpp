@@ -254,8 +254,24 @@ ImageResult<std::shared_ptr<const ImageSourceRevision>> captureImageSourceRevisi
         std::optional<core::Sha256Digest> storedDigest;
         const bool mirrored = store.store != nullptr && observedBefore &&
                               store.store->keeps(path, *observedBefore, store.asset);
+        // #732: one read of a source at a time. A reader that finds nothing takes the load of this
+        // source and looks once more as its only reader; any other reader waits for it and then
+        // finds the bytes the first one handed over, so a source that is being read, or whose copy
+        // is still on its way to the disk, is not read a second time. Held until this capture
+        // returns, which is after the bytes went to the store.
+        std::shared_ptr<void> load;
         if (mirrored && !stampChanged) {
-            if (auto stored = store.store->find(path, *observedBefore, cancel)) {
+            std::optional<platform::StoredSourceBytes> stored;
+            for (;;) {
+                stored = store.store->find(path, *observedBefore, cancel);
+                if (stored || load)
+                    break;
+                if (cancelled(cancel))
+                    return {{}, {}, true, ImageDiagnosticCode::Cancelled};
+                load = store.store->beginLoad(path, cancel);
+            }
+            if (stored) {
+                load.reset();
                 constexpr auto storedOverhead = sizeof(ImageSourceRevision) + std::size_t{512};
                 if (hostByteBudget < storedOverhead ||
                     stored->bytes.size() > hostByteBudget - storedOverhead)
