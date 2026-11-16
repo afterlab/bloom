@@ -384,7 +384,7 @@ void testLoopLargerThanTheSpace(const std::chrono::seconds frameInterval, const 
                label + "counts the 6 writes it refuses");
     }
     expect(mirror.statistics().diskPressure, "a refused write is reported as no room");
-    if (frameInterval * frames.size() >= cache::kSourceMirrorHoldWindow)
+    if (frameInterval * static_cast<int>(frames.size()) >= cache::kSourceMirrorHoldWindow)
         return;
 
     // The work stops (after passes shorter than the hold window, so that every entry was used a
