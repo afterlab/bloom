@@ -369,6 +369,31 @@ if(BUILD_TESTING)
     endif()
 endif()
 
+# The changelog (CHANGELOG.md) keeps the Keep a Changelog format and has a section for the
+# configured version; its release data tools (tools/release) are tested with the signing tool and
+# RFC 8032's public test keys. The tools test needs the `openssl` program and reports a skip (exit
+# status 77) where it is missing. Both tests run on all three platforms.
+if(BUILD_TESTING)
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        include(BloomTesting)
+        bloom_add_test(
+            NAME bloom.quality.changelog
+            COMMAND "${Python3_EXECUTABLE}" -I
+                "${PROJECT_SOURCE_DIR}/tools/release/changelog.py" check
+                --file "${PROJECT_SOURCE_DIR}/CHANGELOG.md" --version "${BLOOM_PACKAGE_VERSION}"
+            LABELS quality
+            TIMEOUT 30)
+        bloom_add_test(
+            NAME bloom.release.tools_tests
+            COMMAND "${Python3_EXECUTABLE}" -I
+                "${PROJECT_SOURCE_DIR}/tools/release/test_release_tools.py"
+            LABELS quality
+            SKIP_RETURN_CODE 77
+            TIMEOUT 120)
+    endif()
+endif()
+
 # The application itself refuses a package-check profile that is not an absolute directory,
 # instead of starting under Bloom's own names (src/ui/include/bloom/ui/application_identity.hpp).
 if(BUILD_TESTING)
