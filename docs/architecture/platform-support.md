@@ -622,12 +622,18 @@ is reported the same way. The package check fails on a bundle that does not decl
 
 ### Application Icon
 
-One source image, `apps/bloom/icon/bloom-1024.png`, gives the icon files of all three
-platforms through `tools/quality/generate_app_icons`: the macOS icon file, the Windows icon
-that is compiled into `Bloom.exe`, and the Linux icons from 16 to 512 pixels that a package
-installs with its desktop entry. The `bloom.quality.app_icons` test fails when a checked-in
-icon file is not what the source image gives. The source image is still the generated
-placeholder; the real artwork replaces that one file.
+The layered icon `apps/bloom/icon/Bloom.icon` (a background gradient fill and the foreground
+as SVG, in the macOS 26 layered icon format) is the one source of the artwork. The glass image
+used outside macOS 26 is exported from it at 2048 pixels and checked in beside it
+(`bloom-glass-2048.png`); `apps/bloom/icon/README.md` has the command that exports it again.
+
+`tools/quality/generate_app_icons` takes one source per target. The Windows and Linux tile
+(`bloom-tile-1024.png`, the glass tile with a small margin) gives `Bloom.ico` from 16 to 256
+pixels and the Linux icons from 16 to 512 pixels that a package installs with its desktop entry.
+The older-macOS icon (`bloom-macos-legacy-1024.png`, an 824-pixel body and its shadow on a
+1024-pixel canvas) gives `Bloom.icns` at every size from 16 to 1024 pixels, for macOS 13.3 to 15.
+The `bloom.quality.app_icons` test checks every generated file against its source and names the
+stale file and its source when one differs.
 
 Media on macOS is read and encoded by the Apple frameworks first, with the bundled FFmpeg worker
 behind them ([Media I/O](media-io.md)). Continuous integration builds macOS in qualified mode on

@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""Makes Bloom's application icon files for the three platforms from one source image.
+"""Makes Bloom's application icon files from two source images, one per target.
 
     python3 tools/quality/generate_app_icons            writes the files
-    python3 tools/quality/generate_app_icons --check    fails when a file is not what the source gives
+    python3 tools/quality/generate_app_icons --check    fails when a file is not what its source gives
 
-Source: apps/bloom/icon/bloom-1024.png, a 1024 x 1024 8-bit RGBA PNG. Replacing that one file
-and running this script is all a new icon needs.
+The artwork itself is the layered icon apps/bloom/icon/Bloom.icon; apps/bloom/icon/README.md
+says how the two 1024-pixel sources below come from it. Each source is a 1024 x 1024 8-bit RGBA
+PNG:
 
-    apps/bloom/macos/Bloom.icns                                    16 to 1024 pixels
-    apps/bloom/windows/Bloom.ico                                   16 to 256 pixels
-    apps/bloom/linux/icons/<size>x<size>/id.afterlab.bloom.png     16 to 512 pixels
+    apps/bloom/icon/bloom-tile-1024.png            the glass tile with a small margin
+        apps/bloom/windows/Bloom.ico                                   16 to 256 pixels
+        apps/bloom/linux/icons/<size>x<size>/id.afterlab.bloom.png     16 to 512 pixels
+    apps/bloom/icon/bloom-macos-legacy-1024.png    an 824-pixel body and its shadow on 1024
+        apps/bloom/macos/Bloom.icns                                    16 to 1024 pixels
 
 Only the Python standard library is used, so the result is the same bytes on every machine:
-the PNG reader and writer, the scaling (an area average of premultiplied color) and the three
+the PNG reader and writer, the scaling (an area average of premultiplied color) and the
 containers are in this file.
 """
 
@@ -24,7 +27,8 @@ import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "apps/bloom/icon/bloom-1024.png"
+TILE_SOURCE = ROOT / "apps/bloom/icon/bloom-tile-1024.png"
+MACOS_SOURCE = ROOT / "apps/bloom/icon/bloom-macos-legacy-1024.png"
 ICNS = ROOT / "apps/bloom/macos/Bloom.icns"
 ICO = ROOT / "apps/bloom/windows/Bloom.ico"
 LINUX = ROOT / "apps/bloom/linux/icons"
@@ -217,39 +221,49 @@ def content(path: Path, data: bytes) -> list[object]:
     return parts
 
 
+def load(source: Path, sizes: list[int]) -> tuple[dict[int, list[bytearray]], dict[int, bytes]]:
+    """The pixels and the PNG files of one source at the given sizes."""
+    side, rows = read_png(source)
+    if side != 1024:
+        raise ValueError(f"{source} must be 1024 pixels square, not {side}")
+    pixels = {size: scale(side, rows, size) for size in sizes}
+    return pixels, {size: write_png(size, pixels[size]) for size in sizes}
+
+
 def main() -> int:
     check = sys.argv[1:] == ["--check"]
     if sys.argv[1:] and not check:
         print(__doc__)
         return 2
-    side, rows = read_png(SOURCE)
-    if side != 1024:
-        raise ValueError(f"{SOURCE} must be 1024 pixels square, not {side}")
-    sizes = sorted({size for _, size in ICNS_TYPES} | set(ICO_SIZES) | set(LINUX_SIZES))
-    pixels = {size: scale(side, rows, size) for size in sizes}
-    images = {size: write_png(size, pixels[size]) for size in sizes}
-    outputs = {ICNS: icns(images), ICO: ico(pixels, images)}
+    # Each output is written with the name of the source it comes from.
+    tile_pixels, tile_images = load(TILE_SOURCE, sorted(set(ICO_SIZES) | set(LINUX_SIZES)))
+    mac_pixels, mac_images = load(MACOS_SOURCE, sorted({size for _, size in ICNS_TYPES}))
+    outputs: dict[Path, tuple[bytes, Path]] = {
+        ICO: (ico(tile_pixels, tile_images), TILE_SOURCE),
+        ICNS: (icns(mac_images), MACOS_SOURCE),
+    }
     for size in LINUX_SIZES:
-        outputs[LINUX / f"{size}x{size}" / "id.afterlab.bloom.png"] = images[size]
+        outputs[LINUX / f"{size}x{size}" / "id.afterlab.bloom.png"] = (tile_images[size],
+                                                                        TILE_SOURCE)
     stale = []
-    for path, data in outputs.items():
+    for path, (data, source) in outputs.items():
         if check:
             try:
                 same = path.exists() and content(path, path.read_bytes()) == content(path, data)
             except (ValueError, struct.error, zlib.error, IndexError):
                 same = False
             if not same:
-                stale.append(str(path.relative_to(ROOT)))
+                stale.append(f"{path.relative_to(ROOT)} (from {source.relative_to(ROOT)})")
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
     if stale:
-        print("not what apps/bloom/icon/bloom-1024.png gives (run tools/quality/generate_app_icons):")
+        print("not what its source gives (run tools/quality/generate_app_icons):")
         for name in stale:
             print(f"  {name}")
         return 1
     print(f"{len(outputs)} icon files {'match' if check else 'written from'} "
-          f"{SOURCE.relative_to(ROOT)}")
+          f"{TILE_SOURCE.relative_to(ROOT)} and {MACOS_SOURCE.relative_to(ROOT)}")
     return 0
 
 

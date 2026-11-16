@@ -49,9 +49,9 @@ install(
 )
 bloom_package_search_path(bloom "${BLOOM_PACKAGE_PROGRAM_DIR}")
 
-# The application icon on every platform comes from one source image,
-# apps/bloom/icon/bloom-1024.png, through tools/quality/generate_app_icons: the macOS icon file
-# above, the Windows icon in the program, and the Linux icons at each size.
+# The application icon on every platform comes from the layered icon apps/bloom/icon/Bloom.icon.
+# tools/quality/generate_app_icons makes the platform files from two sources checked in beside it:
+# the tile (Bloom.ico and the Linux icons) and the older-macOS icon (Bloom.icns).
 #
 # Linux: the desktop entry and the icons, where a desktop looks for them under an installation
 # prefix. An AppImage shows the entry and one icon at its top as well
