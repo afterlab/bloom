@@ -448,7 +448,10 @@ class ChainTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    if shutil.which("openssl") is None:
+    # Another program of that name (the one macOS has) cannot sign with Ed25519.
+    version = subprocess.run(["openssl", "version"], capture_output=True, text=True,
+                             check=False) if shutil.which("openssl") else None
+    if version is None or not version.stdout.startswith("OpenSSL 3"):
         print("NotRun: the release tools' test needs the `openssl` program (OpenSSL 3) for "
               "Ed25519 signing, and it is not on PATH.", file=sys.stderr)
         sys.exit(77)

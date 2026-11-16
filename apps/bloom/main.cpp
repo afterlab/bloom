@@ -1252,10 +1252,12 @@ int main(int argc, char* argv[]) try {
     // The artist is told when a version that could not start was put back, and the automatic check
     // begins. The package check and the tests contact nothing.
     // A test build that the end-to-end update test started installs the update it is offered
-    // without a question, under whatever profile it runs.
+    // without a question, under whatever profile it runs. Not when it was just put back in the
+    // place of a version that could not start: that version would only be installed again.
     const bool installUpdateNow =
         updateService.environment().configuration.testBuild &&
-        qEnvironmentVariableIsSet(bloom::ui::kUpdateTestInstallNowVariable);
+        qEnvironmentVariableIsSet(bloom::ui::kUpdateTestInstallNowVariable) &&
+        !updateStartup.restoredFrom.has_value();
     QTimer::singleShot(
         0, &updateController,
         [&updateController, &appImageMenuOffer, updateStartup, installUpdateNow] {

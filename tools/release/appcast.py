@@ -135,7 +135,8 @@ def appcast_text(platform: str, version: str, date: str, notes: str, size: int, 
                  installer_arguments: str | None = None) -> str:
     if platform not in PLATFORMS:
         raise ValueError(f"'{platform}' is not a platform with an appcast")
-    if not url.startswith("https://"):
+    # An address on this machine is for the end-to-end update test, as in feed.py.
+    if not url.startswith("https://") and not url.startswith("http://127.0.0.1"):
         raise ValueError(f"{url} is not an HTTPS address")
     if minimum_system_version and platform != "macos":
         raise ValueError("--minimum-system-version is for macOS")

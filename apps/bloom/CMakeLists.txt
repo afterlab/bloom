@@ -505,6 +505,17 @@ if(BUILD_TESTING)
             LABELS quality
             SKIP_RETURN_CODE 77
             TIMEOUT 120)
+        # The steps the release workflow calls (tools/release/release.py), on a stand-in
+        # release of a few small files: the tag and validation gates, the candidate's files, and
+        # the signed release with its feed, appcasts and channel files. It reports a skip
+        # without `openssl` (OpenSSL 3).
+        bloom_add_test(
+            NAME bloom.release.script_tests
+            COMMAND "${Python3_EXECUTABLE}" -I
+                "${PROJECT_SOURCE_DIR}/tools/release/test_release.py" "${CMAKE_COMMAND}"
+            LABELS quality
+            SKIP_RETURN_CODE 77
+            TIMEOUT 120)
         # Linux only: the install script is the Linux installer and a POSIX shell script
         # (tools/install/install.sh.in); macOS and Windows have installers of their own, with
         # their own tests. It installs a stand-in package of a few small files into folders
