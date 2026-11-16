@@ -155,6 +155,10 @@ add_subdirectory(apps/bloom-media-worker)
 add_subdirectory(apps/bloom-cli)
 add_subdirectory(apps/bloom-mcp)
 add_subdirectory(apps/bloom-update-helper)
+if(WIN32)
+    # The program of the installer's `cli` folder (apps/bloom-cli-launcher/main.cpp).
+    add_subdirectory(apps/bloom-cli-launcher)
+endif()
 
 if(BLOOM_BUILD_SPIKES)
     add_subdirectory(tools/spikes/instance0)

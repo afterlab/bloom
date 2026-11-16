@@ -273,7 +273,7 @@ packaged; a developer build links the host's Qt and Python, which a package cann
   through the shared scripts in `cmake/package` (`stage_qt.cmake`, `stage_python.cmake`,
   `stage_records.cmake`, and on Linux `stage_linux_runtime.cmake`). The `bloom-package` target
   installs into the build tree and checks the result; `bloom-package-archives` then makes the
-  published files, two on Linux and a zip on Windows. A Windows package also gets the Visual
+  published files, two on Linux and, on Windows, a zip and the installer. A Windows package also gets the Visual
   C++ runtime (`stage_msvc_runtime.cmake`). Only the shipped programs have install rules for
   the shader tools (`bloom_package_gpu_shader_tools(<target> INSTALL)`); a test program stages
   them beside itself in the build tree only, so `bloom-package` builds everything the install
@@ -404,10 +404,63 @@ part of this.
 
 ### Windows Package
 
-The Windows package is a folder, published as `Bloom-<version>-windows-x86_64.zip`
-(`bloom-package-archives`). There is no installer and the programs are not signed. Unpacked
-anywhere, it runs from there: nothing is written outside the folder to make it work, and
-nothing has to be installed first.
+The Windows package is a folder, published as `Bloom-<version>-windows-x86_64.zip` and as the
+installer `Bloom-<version>-windows-x86_64-setup.exe` (`bloom-package-archives`). The programs
+are not signed. Unpacked anywhere, the zip runs from there: nothing is written outside the
+folder to make it work, and nothing has to be installed first.
+
+The installer is made with Inno Setup from `packaging/windows/bloom.iss`
+(`cmake/package/make_windows_installer.cmake` runs the compiler). It is made when the
+dependency prefix has the compiler. A developer build has none, makes the zip only and says so
+when it is configured. The installer's welcome and finish pictures and its icon are the
+ones in `apps/bloom/installer/windows` and `apps/bloom/windows`.
+
+The installer installs for the current user only, by default into
+`%LOCALAPPDATA%\Programs\Bloom`. It never asks for administrator rights and writes nothing
+under `HKEY_LOCAL_MACHINE`. It adds:
+
+- a Start menu entry and an uninstall entry, with the version;
+- the project file type: `.bloom` is a "Bloom Project" with the app icon, and opening one
+  starts Bloom with the file as its argument;
+- the file `install-kind` with the line `kind=windows-installer`, which tells the update
+  service that this copy was installed by the installer and can be updated by the next one
+  ([ADR 0041](../decisions/0041-self-update.md)).
+
+The **Add bloom-cli to PATH** option is off by default. It adds the `cli` folder of the
+installation to the user's `Path` (the user's environment, never the system's) unless that
+folder is an entry already. The folder holds one small program, `cli\bloom-cli.exe`. It starts
+the real `bloom-cli.exe` from the installation folder with the same arguments, the same
+handles and the same environment, waits for it and returns its exit code. The real program
+keeps the libraries beside it, so none of the package's libraries enter the user's `PATH`. The
+launcher uses the static C++ runtime and needs nothing beside it. Uninstall removes that one
+entry and nothing else from `Path`.
+
+For a deployment, the installer takes Inno Setup's own switches:
+
+    Bloom-<version>-windows-x86_64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+        [/DIR="<folder>"] [/TASKS="addtopath"]
+
+The updater runs the same with `/RELAUNCH=1`, which starts Bloom again when the install is done.
+A silent install without it starts nothing. A silent uninstall is
+`<folder>\unins000.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`.
+
+A newer installer finds the installed Bloom by its fixed application id and upgrades it in
+place, in the same folder, with the same options. First it renames the installed folder to
+`<folder>.previous`, so the previous version is kept beside the new one: the update helper
+puts it back when the new version does not start ([ADR 0041](../decisions/0041-self-update.md)).
+When the folder cannot be renamed because a file in it is in use, the installer goes on over the
+existing folder and keeps no previous version. Uninstall removes the installation, the kept
+previous version, the entries, the file type and the `Path` entry.
+
+The `bloom.package.installers` test (Windows only, because the installer is a Windows program)
+makes two installers from the built package under a test identity of its own: another
+application id and name, the file type `.bloomcheck`, and the value `BloomPackageCheckPath` in
+place of `Path`. It installs the first silently with the PATH option, checks the files, the
+entries and the `.bloomcheck` keys, and renders a frame with `bloom-cli` from the installed
+`cli` folder. It installs the second over it and checks the upgrade, the kept previous version
+and that `Path` still holds the folder once. It uninstalls and checks that everything is gone.
+Whatever happens, it removes the keys and the shortcut it made. Without the Inno Setup
+compiler the test is reported as skipped.
 
 The Visual C++ runtime is not part of Windows, so the package carries the redistributable
 libraries of the toolset that built it (`cmake/package/stage_msvc_runtime.cmake`). A Windows
@@ -747,7 +800,7 @@ on the graphics device when the computer has one, behind the bundled FFmpeg work
 code; everything else, and anything the system refuses, is the bundled FFmpeg's
 ([Media I/O](media-io.md)). AV1 export holds SVT-AV1 to its SSE4.2 code
 ([Dependency intake](dependency-intake.md)). Installed fonts are the system font collection
-DirectWrite reports, which includes the fonts a user installed for themselves. There is no installer or package yet: Bloom runs from a build folder
+DirectWrite reports, which includes the fonts a user installed for themselves. A developer build runs from its build folder
 with Qt's and the prefix's libraries on the search path. Continuous integration has a Windows job
 on a hosted runner in qualified mode, which is not a required check; a hosted runner has no usable
 GPU device, and its GPU tests then report not run.

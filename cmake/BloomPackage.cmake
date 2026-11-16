@@ -16,9 +16,13 @@
 #   bloom-package         installs the package into <build>/package/<name> and checks it
 #                         (cmake/package/check_package.cmake, with a run of the packaged programs)
 #   bloom-package-archives   that tree in its published form: on Linux a tar and an AppImage
-#                         (cmake/package/make_archives.cmake), on Windows a zip
+#                         (cmake/package/make_archives.cmake), on Windows a zip and, when the
+#                         dependency prefix has the Inno Setup compiler, the installer
+#                         (cmake/package/make_windows_installer.cmake, packaging/windows/bloom.iss)
 #   bloom.package.check   the same check as a test, with the cases it must reject
 #                         (cmake/package/check_package_test.cmake)
+#   bloom.package.installers   (Windows) installs, upgrades and uninstalls the installer under a
+#                         test identity (cmake/package/check_windows_installer.cmake)
 #
 # macOS: the bundle is filled in the build tree by apps/bloom/CMakeLists.txt with the same
 # scripts, so that it can be signed once it is complete; installing copies it.
@@ -116,6 +120,11 @@ function(bloom_add_package_rules)
                         -P \"${scripts}/stage_msvc_runtime.cmake\"
                     COMMAND_ERROR_IS_FATAL ANY)
             ")
+            # The program of the `cli` folder, which the installer's PATH option adds to the
+            # user's PATH (apps/bloom-cli-launcher/main.cpp). Installed after the runtime is
+            # staged, so that no runtime library is copied into `cli` beside it: that folder
+            # holds this one file.
+            install(TARGETS bloom-cli-launcher RUNTIME DESTINATION "cli")
         endif()
         if(BLOOM_PACKAGE_OPERATING_SYSTEM STREQUAL "linux")
             install(CODE "
@@ -131,6 +140,9 @@ function(bloom_add_package_rules)
         endif()
 
         set(programs bloom bloom-cli bloom-mcp bloom-color-worker bloom-update-helper)
+        if(BLOOM_PACKAGE_OPERATING_SYSTEM STREQUAL "windows")
+            list(APPEND programs bloom-cli-launcher)
+        endif()
         if(TARGET bloom-media-worker)
             list(APPEND programs bloom-media-worker)
         endif()
@@ -147,7 +159,26 @@ function(bloom_add_package_rules)
             VERBATIM
         )
         if(BLOOM_PACKAGE_OPERATING_SYSTEM STREQUAL "windows")
-            # The published form: the folder as a zip. No installer.
+            # The published forms: the folder as a zip and, with the Inno Setup compiler in the
+            # dependency prefix, the installer beside it. A developer build has no compiler and
+            # makes the zip only.
+            set(bloom_package_iscc "${BLOOM_DEPENDENCY_PREFIX}/innosetup/ISCC.exe")
+            set(bloom_package_installer_command "")
+            set(bloom_package_installer_comment "")
+            if(EXISTS "${bloom_package_iscc}")
+                set(bloom_package_installer_command
+                    COMMAND ${CMAKE_COMMAND} "-DISCC=${bloom_package_iscc}"
+                        "-DPACKAGE=${package}" "-DSOURCE=${PROJECT_SOURCE_DIR}"
+                        "-DVERSION=${BLOOM_PACKAGE_VERSION}"
+                        "-DOUTPUT_DIR=${CMAKE_BINARY_DIR}/package"
+                        "-DOUTPUT_NAME=${BLOOM_PACKAGE_NAME}-setup"
+                        -P "${scripts}/make_windows_installer.cmake")
+                set(bloom_package_installer_comment " and ${BLOOM_PACKAGE_NAME}-setup.exe")
+            else()
+                message(STATUS "Bloom package: the Windows installer is not made (the "
+                                "dependency prefix has no Inno Setup compiler); a developer "
+                                "build makes the zip only")
+            endif()
             add_custom_target(
                 bloom-package-archives
                 COMMAND ${CMAKE_COMMAND} -E rm -f
@@ -155,8 +186,9 @@ function(bloom_add_package_rules)
                 COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_BINARY_DIR}/package"
                     ${CMAKE_COMMAND} -E tar cf "${BLOOM_PACKAGE_NAME}.zip" --format=zip
                     "${BLOOM_PACKAGE_NAME}"
+                ${bloom_package_installer_command}
                 DEPENDS bloom-package
-                COMMENT "Making ${BLOOM_PACKAGE_NAME}.zip"
+                COMMENT "Making ${BLOOM_PACKAGE_NAME}.zip${bloom_package_installer_comment}"
                 VERBATIM
             )
         endif()
@@ -204,6 +236,24 @@ function(bloom_add_package_rules)
                 -P "${scripts}/check_package_test.cmake"
             LABELS ${labels}
             TIMEOUT 1800)
+        if(BLOOM_PACKAGE_OPERATING_SYSTEM STREQUAL "windows")
+            # Windows only: the installer is a Windows program. macOS registers its own test
+            # of the same name for the disk image, and a Linux package has no installer file.
+            # Without the Inno Setup compiler the script says "SKIPPED:", which ctest reports
+            # as skipped (a cmake script cannot end with a skip return code).
+            bloom_add_test(
+                NAME bloom.package.installers
+                COMMAND ${CMAKE_COMMAND} "-DBUILD=${CMAKE_BINARY_DIR}"
+                    "-DISCC=${BLOOM_DEPENDENCY_PREFIX}/innosetup/ISCC.exe"
+                    "-DSOURCE=${PROJECT_SOURCE_DIR}" "-DVERSION=${BLOOM_PACKAGE_VERSION}"
+                    "-DWORK=${CMAKE_BINARY_DIR}/package-installer-test"
+                    -P "${scripts}/check_windows_installer.cmake"
+                LABELS package integration
+                RUN_SERIAL
+                TIMEOUT 1800)
+            set_tests_properties(bloom.package.installers PROPERTIES
+                SKIP_REGULAR_EXPRESSION "SKIPPED:")
+        endif()
     endif()
     message(STATUS "Bloom package: ${BLOOM_PACKAGE_NAME}")
 endfunction()

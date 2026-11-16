@@ -5,6 +5,7 @@
 #         [-DGPU=ON -DONLY=gpu -DWORK=<empty work directory>]
 #         [-DBASE_LIBRARIES=<linux-base-libraries.txt>] [-DONLY=<rule>...]
 #         [-DFLOOR=<family>=<version>...] [-DVERSION=<the package's version label>]
+#         [-DCLI_PROGRAM=<the bloom-cli program the run rule starts>]
 #         -P check_package.cmake
 #
 # One script for the three operating systems; the rules are the same and each has one part per
@@ -16,7 +17,8 @@
 #               plugins, the dependency lock, and for every component the lock builds for this
 #               system exactly the license files the lock names, byte for byte.
 #               A Linux package also holds the menu entry (MimeType line, Exec line ending in %f)
-#               and the file type description.
+#               and the file type description. A Windows package also holds cli/bloom-cli.exe,
+#               the launcher the installer's PATH option makes available.
 #               Without COMPLETE the package is a developer's (the host's Qt or Python) and only
 #               the next rule applies.
 #
@@ -47,7 +49,9 @@
 #               fails when an image came from outside the package and is not a declared part of
 #               the operating system (on Linux: a named base library, or a library the loader
 #               records one of those as having asked for), or when a library the package carries
-#               was loaded from somewhere else.
+#               was loaded from somewhere else. CLI_PROGRAM names another program to start in
+#               place of the package's own bloom-cli (the installer's test starts the launcher
+#               in the cli folder of an installed copy).
 #               The run has its own settings, data and cache directories under WORK and never
 #               reads or changes Bloom's own (src/ui/include/bloom/ui/application_identity.hpp).
 #               On macOS and Windows Qt also makes a per-user cache or data folder named after
@@ -309,6 +313,9 @@ endfunction()
 if(COMPLETE AND "contents" IN_LIST ONLY)
     bloom_require("${programs}/Bloom${suffix}" "application")
     bloom_require("${programs}/bloom-cli${suffix}" "bloom-cli")
+    if(system STREQUAL "windows")
+        bloom_require("${programs}/cli/bloom-cli.exe" "bloom-cli launcher for the PATH option")
+    endif()
     bloom_require("${programs}/bloom-mcp${suffix}" "bloom-mcp")
     bloom_require("${color}/bloom-color-worker${suffix}" "color worker")
     bloom_require("${color}/bloom-update-helper${suffix}" "update helper")
@@ -1148,8 +1155,12 @@ if(RUN AND "run" IN_LIST ONLY AND NOT failures)
         set(ENV{LD_DEBUG} "files")
         set(ENV{LD_DEBUG_OUTPUT} "${WORK}/loader/log")
     endif()
+    set(cli_program "${programs}/bloom-cli${suffix}")
+    if(CLI_PROGRAM)
+        set(cli_program "${CLI_PROGRAM}")
+    endif()
     execute_process(
-        COMMAND "${programs}/bloom-cli${suffix}" run "${script}"
+        COMMAND "${cli_program}" run "${script}"
         WORKING_DIRECTORY "${WORK}/run"
         RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 600)
     foreach(leftover IN LISTS leftovers)
