@@ -17,7 +17,7 @@
 ;
 ; The installer never asks for administrator rights: it installs for the current user only.
 ;
-; The build gives these values with the compiler's --define option. Each has a default, so the
+; The build gives these values with the compiler's /D option. Each has a default, so the
 ; script also compiles by hand from this folder.
 ;
 ;   AppVersion          the version label, for example 0.1.0-alpha.1

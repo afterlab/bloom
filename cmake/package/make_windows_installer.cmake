@@ -53,18 +53,18 @@ file(TO_NATIVE_PATH "${SOURCE}" native_source)
 file(TO_NATIVE_PATH "${OUTPUT_DIR}" native_output)
 file(TO_NATIVE_PATH "${script}" native_script)
 set(defines
-    "--define=AppVersion=${VERSION}"
-    "--define=NumericVersion=${numeric_version}"
-    "--define=SourceDir=${native_package}"
-    "--define=RepositoryDir=${native_source}"
-    "--define=OutputDir=${native_output}"
-    "--define=OutputBaseFilename=${OUTPUT_NAME}")
+    "/DAppVersion=${VERSION}"
+    "/DNumericVersion=${numeric_version}"
+    "/DSourceDir=${native_package}"
+    "/DRepositoryDir=${native_source}"
+    "/DOutputDir=${native_output}"
+    "/DOutputBaseFilename=${OUTPUT_NAME}")
 foreach(define IN LISTS DEFINES)
-    list(APPEND defines "--define=${define}")
+    list(APPEND defines "/D${define}")
 endforeach()
 
 execute_process(
-    COMMAND "${ISCC}" --quiet ${defines} "${native_script}"
+    COMMAND "${ISCC}" /Q ${defines} "${native_script}"
     RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
 if(NOT result EQUAL 0)
     message(FATAL_ERROR "The Inno Setup compiler failed (${result}):\n${output}${error}")
