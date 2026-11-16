@@ -201,7 +201,7 @@ class WinSparkleDriver final : public PlatformUpdateDriver {
         // A test build that is told to goes on to the install without the update window's
         // question, so the end-to-end test needs nobody at the keyboard.
         if (state_->environment.configuration.testBuild &&
-            qEnvironmentVariableIsSet("BLOOM_UPDATE_TEST_INSTALL_NOW")) {
+            qEnvironmentVariableIsSet(kUpdateTestInstallNowVariable)) {
             functions_.checkWithUiAndInstall();
         } else {
             functions_.checkWithUi();

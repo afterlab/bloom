@@ -45,4 +45,12 @@ inline constexpr std::string_view kTestPublicKeysVariable = "BLOOM_UPDATE_TEST_P
 [[nodiscard]] UpdateConfiguration effectiveConfiguration(const UpdateConfiguration& builtIn,
                                                          const EnvironmentReader& environment);
 
+// What `Bloom --update-settings` prints, for the package check of a release: four lines,
+//     feed <address>
+//     keys <Base64 key>[,<Base64 key>...]
+//     appimage <update information>
+//     test <yes|no>
+// with `-` for a value the build does not have.
+[[nodiscard]] std::string describeConfiguration(const UpdateConfiguration& configuration);
+
 } // namespace bloom::update

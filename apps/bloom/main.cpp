@@ -83,6 +83,7 @@
 #include <bloom/ui/ui_sound_engine.hpp>
 #include <bloom/ui/update_controller.hpp>
 #include <bloom/ui/update_service.hpp>
+#include <bloom/update/configuration.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/viewer_preview_pool.hpp>
 #include <bloom/ui/window_status_bar.hpp>
@@ -119,8 +120,16 @@
 
 int main(int argc, char* argv[]) try {
     // Before anything starts: no display, settings, profile or single-instance logic has run.
-    if (argc == 2 && std::string_view(argv[1]) == "--version") {
-        const std::string text = "Bloom " + std::string(bloom::core::version()) + "\n";
+    const bool reportVersion = argc == 2 && std::string_view(argv[1]) == "--version";
+    // `--update-settings` reports what this build was set up with for updates, for the package
+    // check of a release (cmake/package/check_package.cmake, rule `release`).
+    const bool reportUpdateSettings =
+        argc == 2 && std::string_view(argv[1]) == "--update-settings";
+    if (reportVersion || reportUpdateSettings) {
+        const std::string text = reportVersion
+                                     ? "Bloom " + std::string(bloom::core::version()) + "\n"
+                                     : bloom::update::describeConfiguration(
+                                           bloom::update::builtInConfiguration());
 #if defined(_WIN32)
         // A Windows GUI program has no console; the inherited standard output handle is the pipe
         // or file the caller gave it.
@@ -1242,10 +1251,18 @@ int main(int argc, char* argv[]) try {
     window.show();
     // The artist is told when a version that could not start was put back, and the automatic check
     // begins. The package check and the tests contact nothing.
+    // A test build that the end-to-end update test started installs the update it is offered
+    // without a question, under whatever profile it runs.
+    const bool installUpdateNow =
+        updateService.environment().configuration.testBuild &&
+        qEnvironmentVariableIsSet(bloom::ui::kUpdateTestInstallNowVariable);
     QTimer::singleShot(
-        0, &updateController, [&updateController, &appImageMenuOffer, updateStartup] {
+        0, &updateController,
+        [&updateController, &appImageMenuOffer, updateStartup, installUpdateNow] {
             updateController.noticeAtStartup(updateStartup);
-            if (!qEnvironmentVariableIsSet(bloom::ui::kPackageCheckProfileVariable)) {
+            if (installUpdateNow) {
+                updateController.installWithoutAsking();
+            } else if (!qEnvironmentVariableIsSet(bloom::ui::kPackageCheckProfileVariable)) {
                 updateController.startAutomaticChecks();
                 appImageMenuOffer.start();
             }

@@ -110,6 +110,10 @@ class UpdateController final : public QObject {
     void openDownloadPage() const;
     // At start-up: tells the artist when the version they had was put back.
     void noticeAtStartup(const update::StartupResult& result);
+    // For the end-to-end update test only (a test build told to by its environment,
+    // `kUpdateTestInstallNowVariable`): checks now and goes on through the download and the
+    // restart without a question, so the test needs nobody at the keyboard.
+    void installWithoutAsking();
 
     // The main window was asked to close, by anyone. A request that is not the one
     // `restartAndUpdate` made forgets a restart that an earlier, declined close was to do.
@@ -142,6 +146,8 @@ class UpdateController final : public QObject {
     // True while `restartAndUpdate` is inside its own close request.
     bool requestingClose_ = false;
     bool closing_ = false;
+    // The end-to-end test's run: no question is asked on the way to the install.
+    bool unattended_ = false;
 };
 
 } // namespace bloom::ui

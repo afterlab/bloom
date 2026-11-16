@@ -570,6 +570,21 @@ void testDownload() {
         expect(rig.helperStarts->empty(),
                "restart: a later quit does not install what a declined close asked for");
     }
+    // The end-to-end test's run: check, download and restart follow each other with no window
+    // and no question.
+    {
+        Rig rig("download-unattended", newer(), [](ui::UpdateEnvironment& environment) {
+            stage(environment, environment.install.root.parent_path() / "staged");
+        });
+        rig.acceptClose = true;
+        rig.controller->installWithoutAsking();
+        expect(awaitQtCondition("the helper is started",
+                                [&] { return rig.helperStarts->size() == 1; }),
+               "unattended: the check leads to the download and the restart");
+        expect(rig.checks == 1 && rig.downloads == 1 && rig.closeRequests == 1 &&
+                   !rig.windowShown(),
+               "unattended: one check, one download, one close request and no window");
+    }
     // The close the restart asked for is confirmed later (the artist first answers a prompt):
     // no other close request came between, so the helper starts.
     {

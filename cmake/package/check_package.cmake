@@ -42,6 +42,15 @@
 #               from the package's own name, Bloom-<label>-<system>-<processor>, and a package
 #               with neither is refused.
 #
+#   release     (with RELEASE=ON, FEED_URL and PUBLIC_KEYS; never part of the default rules)
+#               The package is one a release may publish. Its application, asked with
+#               --update-settings, reports the release's feed address and exactly the release's
+#               public keys, and is not a test build (BLOOM_UPDATE_TEST_BUILD), which reads its
+#               feed and key from the environment. On macOS and Windows the package carries the
+#               platform's updater, and on macOS the bundle's Info.plist holds the first key
+#               (SUPublicEDKey), which that updater verifies with. A release's files are checked
+#               with this rule added to the default ones.
+#
 #   run         (with RUN) The package's own bloom-cli runs
 #               tests/fixtures/scripting/package_loaded_images.py in the carried interpreter,
 #               which uses every carried module and then starts the packaged
@@ -106,6 +115,9 @@ file(REAL_PATH "${PACKAGE}" package)
 get_filename_component(package_name "${package}" NAME)
 if(NOT ONLY)
     set(ONLY contents resolution version icons run)
+    if(RELEASE)
+        list(APPEND ONLY release)
+    endif()
 endif()
 set(failures "")
 
@@ -1138,6 +1150,87 @@ if("version" IN_LIST ONLY)
                            "'${program_name} ${expected_label}'")
             endif()
         endforeach()
+    endif()
+endif()
+
+# --- A release's package: set up for updates, and not a test build -----------------------------
+if("release" IN_LIST ONLY)
+    if(NOT FEED_URL OR NOT PUBLIC_KEYS)
+        bloom_fail("the release rule needs the release's settings: pass -DFEED_URL=<address> and "
+                   "-DPUBLIC_KEYS=<keys>")
+    elseif(NOT EXISTS "${programs}/Bloom${suffix}")
+        bloom_fail("the package has no Bloom${suffix} to ask its update settings")
+    else()
+        foreach(variable IN ITEMS LD_LIBRARY_PATH LD_PRELOAD DYLD_LIBRARY_PATH
+                                  DYLD_FRAMEWORK_PATH DYLD_INSERT_LIBRARIES
+                                  DYLD_FALLBACK_LIBRARY_PATH QT_PLUGIN_PATH QT_QPA_PLATFORM
+                                  QT_QPA_PLATFORM_PLUGIN_PATH QTDIR DISPLAY WAYLAND_DISPLAY
+                                  BLOOM_UPDATE_TEST_FEED_URL BLOOM_UPDATE_TEST_PUBLIC_KEYS)
+            unset(ENV{${variable}})
+        endforeach()
+        # The program returns before anything starts, so it reads no settings.
+        execute_process(
+            COMMAND "${programs}/Bloom${suffix}" --update-settings
+            RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 60)
+        string(REPLACE "\r" "" output "${output}")
+        if(NOT result EQUAL 0)
+            bloom_fail("Bloom --update-settings failed (${result}): ${output}${error}")
+        else()
+            set(reported_feed "")
+            set(reported_keys "")
+            set(reported_test "")
+            if(output MATCHES "(^|\n)feed ([^\n]*)")
+                set(reported_feed "${CMAKE_MATCH_2}")
+            endif()
+            if(output MATCHES "(^|\n)keys ([^\n]*)")
+                set(reported_keys "${CMAKE_MATCH_2}")
+            endif()
+            if(output MATCHES "(^|\n)test ([^\n]*)")
+                set(reported_test "${CMAKE_MATCH_2}")
+            endif()
+            if(reported_test STREQUAL "yes")
+                bloom_fail("the package is a test build (BLOOM_UPDATE_TEST_BUILD): it takes its "
+                           "feed and its key from the environment and is never published")
+            elseif(NOT reported_test STREQUAL "no")
+                bloom_fail("Bloom --update-settings did not say whether this is a test build: "
+                           "${output}")
+            endif()
+            if(reported_feed STREQUAL "-" OR reported_keys STREQUAL "-")
+                bloom_fail("the package is not set up for updates: it was built without the "
+                           "feed address or without a public key")
+            else()
+                if(NOT reported_feed STREQUAL "${FEED_URL}")
+                    bloom_fail("the package reads its updates from another address than the "
+                               "release's feed")
+                endif()
+                if(NOT reported_keys STREQUAL "${PUBLIC_KEYS}")
+                    bloom_fail("the package does not carry exactly the release's public keys")
+                endif()
+            endif()
+        endif()
+        if(system STREQUAL "macos" OR system STREQUAL "windows")
+            if(system STREQUAL "macos")
+                set(release_updater "${libraries}/Sparkle.framework")
+            else()
+                set(release_updater "${libraries}/WinSparkle.dll")
+            endif()
+            if(NOT EXISTS "${release_updater}")
+                bloom_fail("a release's package carries the platform's updater, and this one "
+                           "has none (the dependency prefix it was built from lacks it)")
+            endif()
+        endif()
+        if(system STREQUAL "macos")
+            string(REGEX REPLACE ",.*$" "" release_first_key "${PUBLIC_KEYS}")
+            execute_process(
+                COMMAND /usr/libexec/PlistBuddy -c "Print :SUPublicEDKey"
+                        "${package}/Contents/Info.plist"
+                RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+            string(STRIP "${output}" bundle_key)
+            if(NOT result EQUAL 0 OR NOT bundle_key STREQUAL "${release_first_key}")
+                bloom_fail("the bundle's Info.plist does not hold the release's first public key "
+                           "(SUPublicEDKey), which the platform's updater verifies with")
+            endif()
+        endif()
     endif()
 endif()
 

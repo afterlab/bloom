@@ -121,6 +121,12 @@ int main() {
     const auto release = makeConfiguration("https://updates.example.org/alpha.json", key, "", false);
     checks.expect(release.configured() && release.keys.size() == 1 && !release.testBuild,
                   "configuration: an address and a key configure a build");
+    checks.expect(describeConfiguration(release) ==
+                          "feed https://updates.example.org/alpha.json\nkeys " + key +
+                              "\nappimage -\ntest no\n" &&
+                      describeConfiguration(makeConfiguration("", "", "info", true)) ==
+                          "feed -\nkeys -\nappimage info\ntest yes\n",
+                  "configuration: the settings are described for the release check");
     checks.expect(!makeConfiguration("", "", "", false).configured() &&
                       !makeConfiguration("https://updates.example.org/alpha.json", "", "", false)
                            .configured() &&

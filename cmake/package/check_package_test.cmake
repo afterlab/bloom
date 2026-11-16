@@ -295,6 +295,32 @@ else()
     message(STATUS "refused, another version")
 endif()
 
+# 5c. The release rule: a package from a build that was not set up with a release's feed address
+# and public key (or that is a test build) is not one a release may publish. The package of an
+# ordinary build is such a package; a release's own package is checked by the release workflow.
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" "-DPACKAGE=${package}" -DONLY=release
+        -DFEED_URL=https://updates.example.org/alpha.json
+        -DPUBLIC_KEYS=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+        -P "${check}"
+    OUTPUT_VARIABLE output ERROR_VARIABLE error RESULT_VARIABLE result)
+if(result EQUAL 0)
+    list(APPEND problems "the release rule passed a package that is not a release's")
+elseif(NOT "${output}${error}" MATCHES
+       "not set up for updates|is a test build|another address than the release's feed")
+    list(APPEND problems "the release rule failed without saying why the package is not a "
+                         "release's:\n${output}${error}")
+else()
+    message(STATUS "refused, not a release's package")
+endif()
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" "-DPACKAGE=${package}" -DONLY=release -P "${check}"
+    OUTPUT_VARIABLE output ERROR_VARIABLE error RESULT_VARIABLE result)
+if(result EQUAL 0 OR NOT "${output}${error}" MATCHES "needs the release's settings")
+    list(APPEND problems "the release rule without the release's settings was not refused:\n"
+                         "${output}${error}")
+endif()
+
 # 6. Linux: one of the distribution libraries the package carries beside Qt removed.
 if(NOT CMAKE_HOST_APPLE AND NOT CMAKE_HOST_WIN32)
     set(carried "${package}/lib/qt/lib/libxcb-cursor.so.0")

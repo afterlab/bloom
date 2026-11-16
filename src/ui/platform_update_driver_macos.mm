@@ -20,6 +20,7 @@
 
 #include <QDebug>
 #include <QString>
+#include <QtGlobal>
 
 #include <filesystem>
 #include <memory>
@@ -122,13 +123,90 @@ namespace {
 
 @end
 
+// The end-to-end update test's stand-in for Sparkle's own window, used only by a test build that
+// its environment tells to (kUpdateTestInstallNowVariable): every question is answered with
+// "install", nothing is shown, and what Sparkle reports goes to the log.
+@interface BloomUnattendedUserDriver : NSObject <SPUUserDriver>
+@end
+
+@implementation BloomUnattendedUserDriver
+
+- (void)showUpdatePermissionRequest:(SPUUpdatePermissionRequest*)request
+                              reply:(void (^)(SUUpdatePermissionResponse*))reply {
+    // Never asked (the delegate says so); answered all the same, with everything off.
+    Class responseClass = NSClassFromString(@"SUUpdatePermissionResponse");
+    if (responseClass != Nil) {
+        SUUpdatePermissionResponse* response = [responseClass alloc];
+        reply([response initWithAutomaticUpdateChecks:NO sendSystemProfile:NO]);
+    }
+}
+
+- (void)showUserInitiatedUpdateCheckWithCancellation:(void (^)(void))cancellation {
+}
+
+- (void)showUpdateFoundWithAppcastItem:(SUAppcastItem*)appcastItem
+                                 state:(SPUUserUpdateState*)state
+                                 reply:(void (^)(SPUUserUpdateChoice))reply {
+    reply(SPUUserUpdateChoiceInstall);
+}
+
+- (void)showUpdateReleaseNotesWithDownloadData:(SPUDownloadData*)downloadData {
+}
+
+- (void)showUpdateReleaseNotesFailedToDownloadWithError:(NSError*)error {
+}
+
+- (void)showUpdateNotFoundWithError:(NSError*)error
+                    acknowledgement:(void (^)(void))acknowledgement {
+    qWarning().noquote() << "The platform updater found no update:" << describe(error);
+    acknowledgement();
+}
+
+- (void)showUpdaterError:(NSError*)error acknowledgement:(void (^)(void))acknowledgement {
+    qWarning().noquote() << "The platform updater reported:" << describe(error);
+    acknowledgement();
+}
+
+- (void)showDownloadInitiatedWithCancellation:(void (^)(void))cancellation {
+}
+
+- (void)showDownloadDidReceiveExpectedContentLength:(uint64_t)expectedContentLength {
+}
+
+- (void)showDownloadDidReceiveDataOfLength:(uint64_t)length {
+}
+
+- (void)showDownloadDidStartExtractingUpdate {
+}
+
+- (void)showExtractionReceivedProgress:(double)progress {
+}
+
+- (void)showReadyToInstallAndRelaunch:(void (^)(SPUUserUpdateChoice))reply {
+    reply(SPUUserUpdateChoiceInstall);
+}
+
+- (void)showInstallingUpdateWithApplicationTerminated:(BOOL)applicationTerminated
+                          retryTerminatingApplication:(void (^)(void))retryTerminatingApplication {
+}
+
+- (void)showUpdateInstalledAndRelaunched:(BOOL)relaunched
+                         acknowledgement:(void (^)(void))acknowledgement {
+    acknowledgement();
+}
+
+- (void)dismissUpdateInstallation {
+}
+
+@end
+
 namespace bloom::ui {
 
 namespace {
 
 class SparkleDriver final : public PlatformUpdateDriver {
   public:
-    SparkleDriver(SPUUpdater* updater, SPUStandardUserDriver* userDriver,
+    SparkleDriver(SPUUpdater* updater, id<SPUUserDriver> userDriver,
                   BloomSparkleDelegate* delegate)
         : updater_(updater), userDriver_(userDriver), delegate_(delegate) {}
 
@@ -157,7 +235,7 @@ class SparkleDriver final : public PlatformUpdateDriver {
   private:
     SPUUpdater* updater_ = nil;
     // The updater and the user driver do not keep these alive themselves.
-    SPUStandardUserDriver* userDriver_ = nil;
+    id<SPUUserDriver> userDriver_ = nil;
     BloomSparkleDelegate* delegate_ = nil;
     bool started_ = false;
 };
@@ -196,15 +274,21 @@ makePlatformUpdateDriver(const UpdateEnvironment& environment, PlatformUpdateHoo
         }
         BloomSparkleDelegate* delegate = [[BloomSparkleDelegate alloc]
             initWithEnvironment:std::make_shared<const UpdateEnvironment>(environment)];
-        SPUStandardUserDriver* userDriver =
-            [(SPUStandardUserDriver*)[userDriverClass alloc]
-                initWithHostBundle:NSBundle.mainBundle
-                          delegate:nil];
-        SPUUpdater* updater = [(SPUUpdater*)[updaterClass alloc]
-            initWithHostBundle:NSBundle.mainBundle
-             applicationBundle:NSBundle.mainBundle
-                    userDriver:userDriver
-                      delegate:delegate];
+        // A test build that the end-to-end update test started installs without a question.
+        id<SPUUserDriver> userDriver = nil;
+        if (environment.configuration.testBuild &&
+            qEnvironmentVariableIsSet(kUpdateTestInstallNowVariable)) {
+            userDriver = [[BloomUnattendedUserDriver alloc] init];
+        } else {
+            // The classes are found by name, so each is given its type before it is made.
+            SPUStandardUserDriver* standard = [userDriverClass alloc];
+            userDriver = [standard initWithHostBundle:NSBundle.mainBundle delegate:nil];
+        }
+        SPUUpdater* made = [updaterClass alloc];
+        SPUUpdater* updater = [made initWithHostBundle:NSBundle.mainBundle
+                                     applicationBundle:NSBundle.mainBundle
+                                            userDriver:userDriver
+                                              delegate:delegate];
         if (delegate == nil || userDriver == nil || updater == nil) {
             return nullptr;
         }

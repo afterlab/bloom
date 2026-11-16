@@ -72,4 +72,26 @@ std::optional<std::vector<std::uint8_t>> decodeBase64(const std::string_view tex
     return bytes;
 }
 
+std::string encodeBase64(const std::span<const std::uint8_t> bytes) {
+    static constexpr std::string_view alphabet =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string text;
+    text.reserve((bytes.size() + 2) / 3 * 4);
+    for (std::size_t offset = 0; offset < bytes.size(); offset += 3) {
+        const std::size_t count = bytes.size() - offset < 3 ? bytes.size() - offset : 3;
+        std::uint32_t group = static_cast<std::uint32_t>(bytes[offset]) << 16U;
+        if (count > 1) {
+            group |= static_cast<std::uint32_t>(bytes[offset + 1]) << 8U;
+        }
+        if (count > 2) {
+            group |= static_cast<std::uint32_t>(bytes[offset + 2]);
+        }
+        text.push_back(alphabet[(group >> 18U) & 0x3fU]);
+        text.push_back(alphabet[(group >> 12U) & 0x3fU]);
+        text.push_back(count > 1 ? alphabet[(group >> 6U) & 0x3fU] : '=');
+        text.push_back(count > 2 ? alphabet[group & 0x3fU] : '=');
+    }
+    return text;
+}
+
 } // namespace bloom::update

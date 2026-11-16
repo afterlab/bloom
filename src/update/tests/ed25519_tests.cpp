@@ -9,6 +9,7 @@
 #include <bloom/update/sha512.hpp>
 
 #include <algorithm>
+#include <span>
 #include <sstream>
 
 int main() {
@@ -97,6 +98,12 @@ int main() {
                       "base64: '" + std::string(refusedText) + "' is refused");
     }
     checks.expect(decodeBase64("").has_value() && decodeBase64("")->empty(), "base64: empty");
+    const std::vector<std::uint8_t> written{'a', 'b', 'c', 'd', 0xff};
+    checks.expect(encodeBase64(written) == "YWJjZP8=" &&
+                      encodeBase64(std::span(written).first(4)) == "YWJjZA==" &&
+                      encodeBase64(std::span(written).first(3)) == "YWJj" &&
+                      encodeBase64({}).empty() && decodeBase64(encodeBase64(written)) == written,
+                  "base64: written in the one spelling that is read");
 
     // The key list of a build.
     const auto trusted = trimmedFixture("trusted-key.txt");

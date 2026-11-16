@@ -1,5 +1,6 @@
 #include <bloom/update/configuration.hpp>
 
+#include <bloom/update/base64.hpp>
 #include <bloom/update/feed.hpp>
 #include <bloom/update/keys.hpp>
 
@@ -35,6 +36,20 @@ UpdateConfiguration effectiveConfiguration(const UpdateConfiguration& builtIn,
         return builtIn;
     }
     return makeConfiguration(*feedUrl, *publicKeys, builtIn.appImageInformation, true);
+}
+
+std::string describeConfiguration(const UpdateConfiguration& configuration) {
+    std::string keys;
+    for (const auto& key : configuration.keys) {
+        if (!keys.empty()) {
+            keys += ',';
+        }
+        keys += encodeBase64(key);
+    }
+    const auto orDash = [](const std::string& value) { return value.empty() ? "-" : value; };
+    return "feed " + orDash(configuration.feedUrl) + "\nkeys " + orDash(keys) + "\nappimage " +
+           orDash(configuration.appImageInformation) + "\ntest " +
+           (configuration.testBuild ? "yes" : "no") + "\n";
 }
 
 } // namespace bloom::update

@@ -27,6 +27,10 @@ class PlatformUpdateDriver {
     virtual void showUpdate(const std::string& appcastUrl, const std::string& version) = 0;
 };
 
+// The end-to-end update test sets this variable for a test build (BLOOM_UPDATE_TEST_BUILD): the
+// update is then installed without a question. A build that is not a test build never reads it.
+inline constexpr char kUpdateTestInstallNowVariable[] = "BLOOM_UPDATE_TEST_INSTALL_NOW";
+
 // What a driver asks of the application. Both are called on the interface thread.
 struct PlatformUpdateHooks final {
     // True when Bloom can close at once, without a question: nothing unsaved, nothing running.

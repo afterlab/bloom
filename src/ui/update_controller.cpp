@@ -248,6 +248,13 @@ void UpdateController::onCheckFinished(const bool automatic) {
                                                     : std::string{});
         return;
     }
+    if (unattended_ && check->status == update::CheckStatus::Decided &&
+        check->decision.file.has_value() &&
+        (check->decision.action == update::UpdateAction::ReplaceFolder ||
+         check->decision.action == update::UpdateAction::ReplaceAppImage)) {
+        startDownload();
+        return;
+    }
     if (!automatic) {
         showWindow(true);
         return;
@@ -282,6 +289,9 @@ void UpdateController::onDownloadFinished() {
         }
     }
     emit changed();
+    if (unattended_ && service_.state() == UpdateService::State::ReadyToRestart) {
+        restartAndUpdate();
+    }
 }
 
 void UpdateController::startDownload() {
@@ -324,6 +334,13 @@ void UpdateController::applicationClosing() {
     restartArmed_ = false;
     if (!service_.restartIntoUpdate()) {
         qWarning() << "The update helper could not be started; Bloom closes without updating.";
+    }
+}
+
+void UpdateController::installWithoutAsking() {
+    unattended_ = true;
+    if (service_.state() == UpdateService::State::Idle) {
+        (void)service_.checkNow();
     }
 }
 
