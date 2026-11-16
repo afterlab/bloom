@@ -64,6 +64,7 @@ NAME = re.compile(r"^Bloom-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)-(linux|macos|windo
 SYSTEM = {"Linux": "linux", "Darwin": "macos", "Windows": "windows"}.get(platform.system(), "")
 INSTALLER_ARGUMENTS = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
 PROFILE_ORGANIZATION = "BloomPackageCheck"
+PROFILE_VARIABLE = "BLOOM_PACKAGE_CHECK_PROFILE"
 
 
 def load(name: str):
@@ -285,7 +286,7 @@ class Run:
         for folder in (home, profile):
             folder.mkdir(parents=True, exist_ok=True)
         environment = {
-            "BLOOM_PACKAGE_CHECK_PROFILE": str(profile),
+            PROFILE_VARIABLE: str(profile),
             "BLOOM_UPDATE_TEST_FEED_URL": f"{served.address}/alpha.json",
             "BLOOM_UPDATE_TEST_PUBLIC_KEYS": self.public,
             "BLOOM_UPDATE_TEST_INSTALL_NOW": "1",
@@ -352,13 +353,16 @@ class Run:
 
     def processes(self) -> list[int]:
         """The processes this test's Bloom and its helper run as: those whose program file is
-        under DIR (or, on macOS, in the check's own folder, where the helper's copy is)."""
+        under DIR (or, on macOS, in the check's own folder, where the helper's copy is). On
+        Linux also those started with this test's own settings folder: a program inside an
+        AppImage runs from the image's mount, which is not under DIR."""
         found = []
         markers = [str(self.work) + os.sep]
         if SYSTEM == "macos":
             markers.append(str(Path.home() / "Library" / "Application Support"
                                / PROFILE_ORGANIZATION) + os.sep)
         if SYSTEM == "linux":
+            profile = f"{PROFILE_VARIABLE}={self.work}{os.sep}".encode()
             for entry in Path("/proc").iterdir():
                 if entry.name.isdigit() and int(entry.name) != os.getpid():
                     try:
@@ -366,6 +370,13 @@ class Run:
                     except OSError:
                         continue
                     if any(program.startswith(marker) for marker in markers):
+                        found.append(int(entry.name))
+                        continue
+                    try:
+                        variables = (entry / "environ").read_bytes().split(b"\0")
+                    except OSError:
+                        continue
+                    if any(variable.startswith(profile) for variable in variables):
                         found.append(int(entry.name))
         elif SYSTEM == "macos":
             listing = subprocess.run(["ps", "-axo", "pid=,comm="], capture_output=True,
