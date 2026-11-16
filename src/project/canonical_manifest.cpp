@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <bloom/core/utf8.hpp>
+#include <bloom/core/version.hpp>
 #include <bloom/document/persisted_text.hpp>
 #include <compare>
 #include <cstddef>
@@ -9,10 +10,6 @@
 #include <exception>
 #include <span>
 #include <string_view>
-
-#ifndef BLOOM_VERSION
-#error "BLOOM_VERSION must name the build's project version"
-#endif
 
 namespace {
 
@@ -235,7 +232,7 @@ void emitManifest(CanonicalJsonWriter& writer, const CanonicalManifestV1& manife
 
 namespace bloom::project {
 
-ManifestGenerator currentManifestGenerator() noexcept { return {"Bloom", BLOOM_VERSION}; }
+ManifestGenerator currentManifestGenerator() noexcept { return {"Bloom", bloom::core::version()}; }
 
 CanonicalManifestSizeResult canonicalManifestSize(const CanonicalManifestV1& manifest,
                                                   const CanonicalManifestLimits limits) noexcept {

@@ -48,10 +48,11 @@ option(BLOOM_BUILD_DESKTOP "Build the Qt desktop application and UI tests" ON)
 # Throwaway measurement programs under tools/spikes. OFF by default: a spike is evidence for a
 # design decision, never a shipped target, so the product build must not compile or link one.
 option(BLOOM_BUILD_SPIKES "Build the throwaway design spikes under tools/spikes" OFF)
-# The version in the names of the package files. A pre-release passes its own, for example
-# 0.1.0-alpha.1, so that its files are never mistaken for the release's.
-set(BLOOM_PACKAGE_VERSION "${PROJECT_VERSION}" CACHE STRING
-    "The version in the names of the package directory and archives")
+# The label of the release this source tree builds: the version in the names of the package
+# files, and the version the application, bloom-cli and bloom-mcp report (bloom::core::version()).
+# project(VERSION) stays the numeric part. A build of another label passes its own.
+set(BLOOM_PACKAGE_VERSION "0.1.0-alpha.1" CACHE STRING
+    "The version the programs report and the package files carry")
 if(NOT BLOOM_PACKAGE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.]+)?$")
     message(FATAL_ERROR
         "BLOOM_PACKAGE_VERSION '${BLOOM_PACKAGE_VERSION}' is not a version such as 0.1.0 or "
@@ -66,6 +67,7 @@ include(BloomWarnings)
 include(BloomDependencyPrefix)
 include(BloomVulkanRuntime)
 include(BloomPackageLayout)
+include(BloomVersion)
 
 # Before any target is added, so it reaches all of them.
 bloom_disable_floating_point_contraction()

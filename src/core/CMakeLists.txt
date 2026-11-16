@@ -16,6 +16,7 @@ target_sources(
         motion_values.cpp
         sha256.cpp
         utf8.cpp
+        version.cpp
         file_uri.cpp
         float_chars.cpp
         host_block.cpp
@@ -56,6 +57,7 @@ target_sources(
             include/bloom/core/telemetry_counters.hpp
             include/bloom/core/test_fixed_memory_reading.hpp
             include/bloom/core/utf8.hpp
+            include/bloom/core/version.hpp
             include/bloom/core/file_uri.hpp
             include/bloom/core/value_primitives.hpp
             include/bloom/core/worker_thread.hpp
@@ -76,6 +78,11 @@ file(CONFIGURE
     @ONLY)
 target_sources(bloom_core PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/field_kernel_source.cpp")
 
+# The label this build is released under reaches version.cpp alone, so a build under another label
+# compiles one file (version.hpp).
+set_source_files_properties(version.cpp PROPERTIES
+    COMPILE_DEFINITIONS "BLOOM_VERSION_LABEL=\"${BLOOM_PACKAGE_VERSION}\"")
+
 target_compile_features(bloom_core PUBLIC cxx_std_20)
 # worker_thread.cpp starts native threads with a stated stack size.
 find_package(Threads REQUIRED)
@@ -94,6 +101,20 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.core.pixel_aspect_ratio
         COMMAND bloom_core_pixel_aspect_ratio_test
+        LABELS unit
+    )
+
+    # The label the build reports, and its compact form: the CMake function and the C++ one agree.
+    bloom_build_version(bloom_expected_build_version "${BLOOM_PACKAGE_VERSION}")
+    add_executable(bloom_core_version_test tests/version_tests.cpp)
+    target_link_libraries(bloom_core_version_test PRIVATE bloom_core)
+    target_compile_definitions(bloom_core_version_test PRIVATE
+        BLOOM_EXPECTED_PACKAGE_VERSION="${BLOOM_PACKAGE_VERSION}"
+        BLOOM_EXPECTED_BUILD_VERSION="${bloom_expected_build_version}")
+    bloom_enable_warnings(bloom_core_version_test)
+    bloom_add_test(
+        NAME bloom.core.version
+        COMMAND bloom_core_version_test
         LABELS unit
     )
 

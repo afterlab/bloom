@@ -32,7 +32,7 @@ struct ManifestGenerator final {
     friend bool operator==(const ManifestGenerator&, const ManifestGenerator&) = default;
 };
 
-// This build: "Bloom" and the build's project version.
+// This build: "Bloom" and the version this build is released under (bloom::core::version()).
 [[nodiscard]] ManifestGenerator currentManifestGenerator() noexcept;
 
 struct CanonicalManifestV1 final {

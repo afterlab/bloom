@@ -25,14 +25,17 @@ if(APPLE)
     endif()
     target_sources(bloom PRIVATE macos/Bloom.icns)
     set_source_files_properties(macos/Bloom.icns PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    # The short version is the label; the build version is its compact form, which the system
+    # ranks below the release (cmake/BloomVersion.cmake).
+    bloom_build_version(bloom_bundle_build_version "${BLOOM_PACKAGE_VERSION}")
     set_target_properties(
         bloom
         PROPERTIES
             MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/macos/Info.plist.in"
             MACOSX_BUNDLE_GUI_IDENTIFIER "id.afterlab.bloom"
             MACOSX_BUNDLE_BUNDLE_NAME "Bloom"
-            MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
-            MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+            MACOSX_BUNDLE_BUNDLE_VERSION "${bloom_bundle_build_version}"
+            MACOSX_BUNDLE_SHORT_VERSION_STRING "${BLOOM_PACKAGE_VERSION}"
             MACOSX_BUNDLE_ICON_FILE "Bloom"
             MACOSX_BUNDLE_COPYRIGHT "Licensed under the Apache License, Version 2.0"
     )

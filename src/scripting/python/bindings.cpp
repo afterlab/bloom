@@ -1,5 +1,6 @@
 #include "native.hpp"
 
+#include <bloom/core/version.hpp>
 #include <bloom/runtime/headless_font_transport.hpp>
 #include <bloom/scripting/operation_reference.hpp>
 
@@ -11,6 +12,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <iostream>
+#include <string>
 #include <thread>
 
 namespace bloom::scripting::python {
@@ -65,7 +67,7 @@ void bindHost(nb::module_& module) {
         .def_prop_ro("cancellation_requested", &NativeHost::cancellationRequested)
         .def_prop_ro("cancellation_epoch", &NativeHost::cancellationEpoch)
         .def_ro("headless", &NativeHost::headless);
-    module.attr("version") = BLOOM_PYTHON_VERSION;
+    module.attr("version") = std::string(bloom::core::version());
     module.attr("facade_version") = "1.0";
     // The agent reference (scripting::OperationReference) bloom.help() prints: the same text as
     // the MCP help tool and bloom-cli help. Returns (found, text or JSON).

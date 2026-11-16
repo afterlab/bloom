@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <bloom/core/telemetry_counters.hpp>
+#include <bloom/core/version.hpp>
 #include <bloom/core/worker_thread.hpp>
 #include <bloom/host/export_presets.hpp>
 #include <bloom/host/export_queue.hpp>
@@ -104,9 +105,30 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <string_view>
 #include <thread>
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 int main(int argc, char* argv[]) try {
+    // Before anything starts: no display, settings, profile or single-instance logic has run.
+    if (argc == 2 && std::string_view(argv[1]) == "--version") {
+        const std::string text = "Bloom " + std::string(bloom::core::version()) + "\n";
+#if defined(_WIN32)
+        // A Windows GUI program has no console; the inherited standard output handle is the pipe
+        // or file the caller gave it.
+        const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD written = 0;
+        if (out != nullptr && out != INVALID_HANDLE_VALUE)
+            WriteFile(out, text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
+#else
+        std::fwrite(text.data(), 1, text.size(), stdout);
+#endif
+        return 0;
+    }
     QApplication application(argc, argv);
     // Qt's shared pool runs Bloom work too; give its threads the stack every Bloom thread has.
     QThreadPool::globalInstance()->setStackSize(

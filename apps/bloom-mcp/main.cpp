@@ -1,6 +1,7 @@
 // The stdio MCP server's composition root (ADR 0034): open the headless session, construct the
 // headless export queue over it and the shared server core from src/mcp, then serve stdio.
 #include <bloom/core/standard_streams.hpp>
+#include <bloom/core/version.hpp>
 #include <bloom/host/export_presets.hpp>
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
@@ -275,7 +276,7 @@ int serve(scripting::Session& session) {
                      static_cast<void>(profiler.sampleNow());
                      return profiler.readLatest(out, 0);
                  },
-             .serverVersion = BLOOM_VERSION,
+             .serverVersion = std::string(bloom::core::version()),
              .limits = mcp::kMcpMessageLimits});
         corePointer = &core;
         mcp::serveStdio(core, std::cin, std::cout, {});
@@ -301,11 +302,15 @@ int serve(scripting::Session& session) {
 int main(int argc, char** argv) {
     // The same bytes on every platform: no "\r\n" from the C runtime's text mode on Windows.
     bloom::core::useBinaryStandardStreams();
+    if (argc == 2 && std::string_view(argv[1]) == "--version") {
+        std::cout << "bloom-mcp " << bloom::core::version() << '\n';
+        return 0;
+    }
     // An export that needs a Google font waits for the download (docs/architecture/fonts.md).
     bloom::runtime::fonts::installHeadlessFontTransport();
     try {
         if (argc != 1 && !(argc == 3 && std::string_view(argv[1]) == "--project")) {
-            std::cerr << "usage: bloom-mcp [--project <file>]\n";
+            std::cerr << "usage: bloom-mcp [--version] [--project <file>]\n";
             return 2;
         }
         auto opened = argc == 3 ? bloom::scripting::Session::open(argv[2])

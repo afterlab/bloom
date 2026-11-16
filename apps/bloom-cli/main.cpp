@@ -3,6 +3,7 @@
 #endif
 
 #include <bloom/core/standard_streams.hpp>
+#include <bloom/core/version.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/gpu_export_tool_package.hpp>
@@ -73,7 +74,8 @@ class ExportProviderTeardown final {
 }
 
 void printUsage() {
-    std::cerr << "usage: bloom-cli new <file> | open <file> | run <script.json|script.py> | "
+    std::cerr << "usage: bloom-cli --version | new <file> | open <file> | "
+                 "run <script.json|script.py> | "
                  "python | render [--project <file>] (--frame N | --range A-B) --preset <id> --out "
                  "<dir> [--replace] [--require-device] | export --project <file> (--all | --job "
                  "<id>...) [--replace] [--save] | "
@@ -524,6 +526,10 @@ frameRange(std::string_view value) {
 int main(int argc, char** argv) {
     // The same bytes on every platform: no "\r\n" from the C runtime's text mode on Windows.
     bloom::core::useBinaryStandardStreams();
+    if (argc == 2 && std::string_view(argv[1]) == "--version") {
+        std::cout << "bloom-cli " << bloom::core::version() << '\n';
+        return 0;
+    }
     // A render that needs a Google font waits for the download (docs/architecture/fonts.md).
     runtime::fonts::installHeadlessFontTransport();
 #if defined(BLOOM_BUILD_PYTHON)

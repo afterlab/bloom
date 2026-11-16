@@ -25,7 +25,6 @@ bloom_python_require_pic(bloom_scripting)
 add_library(bloom_python_binding OBJECT native.cpp projections.cpp render.cpp scopes.cpp bindings.cpp task_ticket.cpp root_retirements.cpp)
 target_link_libraries(bloom_python_binding PRIVATE bloom_scripting nanobind::core Python3::Module)
 target_compile_features(bloom_python_binding PRIVATE cxx_std_20)
-target_compile_definitions(bloom_python_binding PRIVATE BLOOM_PYTHON_VERSION="${PROJECT_VERSION}")
 set_target_properties(bloom_python_binding PROPERTIES POSITION_INDEPENDENT_CODE ON
     CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 bloom_enable_warnings(bloom_python_binding)

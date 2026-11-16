@@ -282,10 +282,12 @@ packaged; a developer build links the host's Qt and Python, which a package cann
   builds, so that the bundle can be signed once it is complete; `bloom-deploy-macos` signs and
   checks it.
 
-The `<version>` in every package file's name is `BLOOM_PACKAGE_VERSION`, which is the
-project's version unless the configure names another. A pre-release names its own
-(`-DBLOOM_PACKAGE_VERSION=0.1.0-alpha.1`), so its files are never mistaken for the release's.
-The programs report the project's version either way.
+The `<version>` in every package file's name is `BLOOM_PACKAGE_VERSION`: the label of the release
+this source tree builds (`0.1.0-alpha.1` today, written once in the root `CMakeLists.txt`) unless
+the configure names another. A pre-release carries its own label, so its files are never mistaken
+for the release's.
+The application, `bloom-cli` and `bloom-mcp` report that same version; each prints it when run
+with `--version`.
 
 Qt is copied exactly as the Qt Project published it: nothing is patched, stripped or signed
 again, and only the libraries and plugins `dependencies/qt-modules.txt` lists are taken. The
