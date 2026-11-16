@@ -700,6 +700,86 @@ else()
         "sample_convert.comp digest is still enforced.")
 endif()
 
+# --- DisplayUnpackV1 (#733): a stored display frame to the float signal picture a scope measure
+# counts. Same recipe and checks as SampleConvertV1 above.
+# Offline artifact from the existing tools/gpu-shaders compile/validate/embed recipe. The checked-in
+# .comp is pinned here, the manifest must bind that source digest, and, when the locked
+# glslangValidator/spirv-val are present, configure recompiles it and confirms the SPIR-V digest
+# embedded in display_unpack_spirv.inc. Runtime code never compiles or loads a shader.
+set(BLOOM_DISPLAY_UNPACK_COMP
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/display_unpack.comp")
+set(BLOOM_DISPLAY_UNPACK_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/display_unpack.manifest")
+set(BLOOM_DISPLAY_UNPACK_INC
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/display_unpack_spirv.inc")
+set(BLOOM_DISPLAY_UNPACK_COMP_SHA256
+    "7e2396e24a3c57188574734e8912ff801490a5472249eeecb34eeded06ed8c39")
+set(BLOOM_DISPLAY_UNPACK_SPV_SHA256
+    "7208b6a56c093e5ab1c9deb9035c0ba37ceea3c528a1fe0c36c96da6d59f6da1")
+
+file(SHA256 "${BLOOM_DISPLAY_UNPACK_COMP}" bloom_display_unpack_comp_sha256)
+if(NOT bloom_display_unpack_comp_sha256 STREQUAL BLOOM_DISPLAY_UNPACK_COMP_SHA256)
+    message(FATAL_ERROR
+        "display_unpack.comp SHA-256 mismatch: measured ${bloom_display_unpack_comp_sha256}, "
+        "pinned ${BLOOM_DISPLAY_UNPACK_COMP_SHA256}. Regenerate only through the tools/gpu-shaders "
+        "recipe and update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_DISPLAY_UNPACK_MANIFEST}" bloom_display_unpack_manifest_text)
+if(NOT bloom_display_unpack_manifest_text MATCHES "${BLOOM_DISPLAY_UNPACK_COMP_SHA256}")
+    message(FATAL_ERROR
+        "display_unpack.manifest does not bind the pinned display_unpack.comp SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_display_unpack_generated_spv
+        "${CMAKE_CURRENT_BINARY_DIR}/display_unpack.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_DISPLAY_UNPACK_COMP}" -o "${bloom_display_unpack_generated_spv}"
+        RESULT_VARIABLE bloom_display_unpack_glslang_result)
+    if(NOT bloom_display_unpack_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile display_unpack.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2
+                "${bloom_display_unpack_generated_spv}"
+        RESULT_VARIABLE bloom_display_unpack_spirv_val_result)
+    if(NOT bloom_display_unpack_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated DisplayUnpackV1 SPIR-V.")
+    endif()
+    if(BLOOM_SPIRV_DIS)
+        set(bloom_display_unpack_generated_spvasm
+            "${CMAKE_CURRENT_BINARY_DIR}/display_unpack.generated.spvasm")
+        execute_process(
+            COMMAND "${BLOOM_SPIRV_DIS}" "${bloom_display_unpack_generated_spv}" -o
+                    "${bloom_display_unpack_generated_spvasm}"
+            RESULT_VARIABLE bloom_display_unpack_spirv_dis_result)
+        if(NOT bloom_display_unpack_spirv_dis_result EQUAL 0)
+            message(FATAL_ERROR "spirv-dis failed to disassemble the DisplayUnpackV1 SPIR-V.")
+        endif()
+        file(READ "${bloom_display_unpack_generated_spvasm}" bloom_display_unpack_spvasm_text)
+        if(bloom_display_unpack_spvasm_text MATCHES "OpCapability Float64" OR
+           bloom_display_unpack_spvasm_text MATCHES "OpCapability Int64" OR
+           bloom_display_unpack_spvasm_text MATCHES "OpTypeFloat 64" OR
+           bloom_display_unpack_spvasm_text MATCHES "OpTypeInt 64")
+            message(FATAL_ERROR
+                "the DisplayUnpackV1 SPIR-V declares a forbidden Float64/Int64 capability or "
+                "type; it must run on standard Float32 hardware without shaderFloat64.")
+        endif()
+    endif()
+    file(SHA256 "${bloom_display_unpack_generated_spv}" bloom_display_unpack_spv_sha256)
+    if(NOT bloom_display_unpack_spv_sha256 STREQUAL BLOOM_DISPLAY_UNPACK_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated DisplayUnpackV1 SPIR-V SHA-256 ${bloom_display_unpack_spv_sha256} does "
+            "not match the embedded ${BLOOM_DISPLAY_UNPACK_SPV_SHA256}; the checked-in .comp and "
+            "display_unpack_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: display_unpack.comp regenerated, SPIR-V-validated, and "
+        "capability-checked (${bloom_display_unpack_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "display_unpack.comp digest is still enforced.")
+endif()
+
 # --- Fixed CryptomatteCoverageV1 shader: source pin and regeneration check -----------------------------
 #
 # Offline artifact from the existing tools/gpu-shaders compile/validate/embed recipe. The checked-in
@@ -793,9 +873,9 @@ set(BLOOM_SCOPE_TABLES_MANIFEST
 set(BLOOM_SCOPE_TABLES_INC
     "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/scope_tables_spirv.inc")
 set(BLOOM_SCOPE_TABLES_COMP_SHA256
-    "c32016e3e9d7d80a215b6f76d5d92748e8c6af6a588ade4af2f3f92a8aa54a45")
+    "c63191779413296cc1fd907b342114d09f3141af703b0fcc2d087c8a4d837f2a")
 set(BLOOM_SCOPE_TABLES_SPV_SHA256
-    "73082464f039e88cb796a315e36ad824b50b744ab56a5c245ec12b5f35e48be4")
+    "68f2290971b413de00d0aba1903a3497d1f40f6d6c76952f9649bf633e5fb859")
 
 file(SHA256 "${BLOOM_SCOPE_TABLES_COMP}" bloom_scope_tables_comp_sha256)
 if(NOT bloom_scope_tables_comp_sha256 STREQUAL BLOOM_SCOPE_TABLES_COMP_SHA256)

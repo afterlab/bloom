@@ -27,6 +27,7 @@
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/image.hpp>
+#include <bloom/render/image_types.hpp>
 #include <bloom/render/native_samples.hpp>
 
 #include <cstddef>
@@ -34,6 +35,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace bloom::render {
@@ -66,6 +68,19 @@ struct GpuImageUploadDiagnostic final {
                            const GpuImageUploadDiagnostic&) = default;
 };
 
+// #733: a stored display frame to unpack on the device (GpuImageUploadParameters::displayCells):
+// its 4-byte cells, row-major over the data window of the upload's `descriptorOverride`, which
+// this source requires. begin() copies the cells into the staging buffer as they are and one
+// DisplayUnpackV1 dispatch writes the resident RGBA32F picture: red, green and blue the pixel's
+// Display code over black as the correctly rounded code / 1023, alpha the stored alpha
+// (display_pixel_packing.hpp; the CPU reference is runtime::unpackDisplaySignal). `owner` keeps
+// the cells alive through begin(), which is all the call needs.
+struct GpuUploadDisplayCells final {
+    std::shared_ptr<const void> owner;
+    std::span<const Rgba8> cells;
+    DisplayPixelLayout layout = DisplayPixelLayout::Straight8888;
+};
+
 // The host image to upload. It is retained as shared immutable ownership for the duration of
 // begin(); begin() copies the pixels into an owned staging buffer before returning, so no borrowed
 // pointer survives the call and the caller may release its reference immediately afterwards.
@@ -82,6 +97,8 @@ struct GpuImageUploadDiagnostic final {
 // is a data image, not premultiplied colour; only a kernel that reads data lanes consumes it. Its
 // descriptor is the set's windows and pixel aspect (or `descriptorOverride`, whose data-window
 // extent must match the set's).
+//
+// #733: or `displayCells`, a stored display frame (GpuUploadDisplayCells above).
 struct GpuImageUploadParameters final {
     std::shared_ptr<const Rgba32fImage> source;
     // Exact already-retained request authority; null only for an explicitly rootless device.
@@ -103,6 +120,7 @@ struct GpuImageUploadParameters final {
     bool reuseStagingWithinScene = false;
     std::shared_ptr<const NativeSampleImage> samples = {};
     std::shared_ptr<const ChannelSetImage> channels = {};
+    std::optional<GpuUploadDisplayCells> displayCells = {};
 };
 
 // Separately bounded image and staging ceilings. The per-call byteBudget is the peak allowance and
@@ -183,6 +201,8 @@ class GpuImageUpload final {
     [[nodiscard]] std::uint64_t halfStagedUploads() const noexcept;
     // Uploads that crossed as native samples and were converted by SampleConvertV1 (#422).
     [[nodiscard]] std::uint64_t sampleConvertedUploads() const noexcept;
+    // Uploads of a stored display frame that DisplayUnpackV1 unpacked on the device (#733).
+    [[nodiscard]] std::uint64_t displayUnpackedUploads() const noexcept;
 
     // Recoverable bounded-pool pressure, not a permanent fuse: true while a foreign-released or
     // unproven resident is retained for owner drain, and false again once the rightful owner thread

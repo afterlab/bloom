@@ -2,8 +2,10 @@
 // docs/architecture/scopes.md, computed here independently in double from the formulas: flat field,
 // ramp, color bars, the counters, Ignore Transparent Pixels, areas that reach outside the picture,
 // a region, the Waveform columns, the sum rule, the axis maximum, a generated pattern, the packed
-// tables, the summary and cancellation.
+// tables, the summary and cancellation. #733: tables counted at a reduced size against the full
+// tables summed, and a stored display frame of each layout against the integer code rule.
 
+#include <bloom/render/display_pixel_packing.hpp>
 #include <bloom/runtime/scope_measure.hpp>
 
 #include <algorithm>
@@ -899,6 +901,299 @@ void testVectorscopeLuma() {
           "vectorscope luma: the center sums 2 x 32, 63 for over and 0 for under");
 }
 
+// #733: a table counted at a reduced size holds, in every cell, the exact sum of the cells of the
+// full table it covers; the counters and the Histogram are the full measure's.
+void testReducedTables() {
+    using render::ScopeTableReduction;
+    // Values across and beyond the axis, transparent and not-finite pixels, a varying XYZ picture;
+    // 77 columns, which no group size divides.
+    constexpr std::uint32_t kW = 77;
+    constexpr std::uint32_t kH = 23;
+    Picture picture = generate(kW, kH, [](const std::uint32_t x, const std::uint32_t y) {
+        const float r = static_cast<float>((x * 37U + y * 11U) % 160U) / 128.0F - 0.125F;
+        const float g = static_cast<float>((x * 5U + y * 29U) % 144U) / 128.0F;
+        const float b = static_cast<float>((x * 17U + y * 3U) % 150U) / 128.0F - 0.0625F;
+        return px(r, g, b, (x + y) % 9U == 0U ? 0.0F : 1.0F);
+    });
+    for (std::uint32_t y = 0; y < kH; ++y) {
+        for (std::uint32_t x = 0; x < kW; ++x) {
+            const std::size_t i = static_cast<std::size_t>(y) * kW + x;
+            picture.xyz[i] = px(static_cast<float>((x * 7U + y) % 61U) / 64.0F,
+                                static_cast<float>((x + y * 13U) % 53U) / 64.0F,
+                                static_cast<float>((x * 3U + y * 5U) % 47U) / 64.0F);
+        }
+    }
+    picture.signal[5] = rawPixel(kNaN, 0.5F, 0.5F, 1.0F);
+    picture.signal[700] = rawPixel(0.5F, kInf, 0.5F, 1.0F);
+    picture.xyz[40] = px(0.0F, 0.0F, 0.0F);
+    auto input = inputFor(picture, Area{-3, -2, kW + 6U, kH + 4U}, render::kScopeTableAll, 1, false);
+    const auto full = runtime::measureScopesCpu(input);
+    check(full.has_value(), "reduced: the full measure");
+    if (!full) {
+        return;
+    }
+    const std::uint32_t areaWidth = input.areaWidth;
+    for (const ScopeTableReduction reduction :
+         {ScopeTableReduction{1, 1, 1, 1}, ScopeTableReduction{2, 3, 2, 4},
+          ScopeTableReduction{3, 0, 0, 0}, ScopeTableReduction{0, 6, 0, 0},
+          ScopeTableReduction{0, 0, 5, 0}, ScopeTableReduction{0, 0, 0, 5},
+          ScopeTableReduction{9, 6, 5, 5}}) {
+        const std::string name =
+            "reduced " + std::to_string(reduction.waveformColumnShift) + "/" +
+            std::to_string(reduction.waveformLevelShift) + "/" +
+            std::to_string(reduction.vectorscopeShift) + "/" +
+            std::to_string(reduction.chromaticityShift);
+        input.reduction = reduction;
+        const auto reduced = runtime::measureScopesCpu(input);
+        check(reduced.has_value(), name + ": measured");
+        if (!reduced) {
+            continue;
+        }
+        const auto& layout = reduced->layout;
+        const std::uint32_t group = 1U << reduction.waveformColumnShift;
+        check(layout.fullColumns == areaWidth &&
+                  layout.columns == (areaWidth + group - 1U) / group &&
+                  layout.waveformLevels() == (1024U >> reduction.waveformLevelShift) &&
+                  layout.vectorscopeCells() == (640U >> reduction.vectorscopeShift) &&
+                  layout.chromaticityCells() == (512U >> reduction.chromaticityShift) &&
+                  reduced->words.size() == layout.wordCount &&
+                  layout.wordCount ==
+                      8U + 4U * 1026U + 4U * layout.columns * (layout.waveformLevels() + 2U) +
+                          2U * layout.vectorscopeCells() * layout.vectorscopeCells() +
+                          layout.chromaticityCells() * layout.chromaticityCells(),
+              name + ": the layout's sizes");
+        verifySums(*reduced, name);
+        bool same = true;
+        for (std::uint32_t i = 0; i < render::kScopeCounterWords; ++i) {
+            same = same && reduced->words[i] == full->words[i];
+        }
+        for (std::uint32_t channel = 0; channel < 4; ++channel) {
+            for (std::uint32_t i = 0; i < render::kScopeHistogramChannelWords; ++i) {
+                same = same && reduced->histogram(channel, i) == full->histogram(channel, i);
+            }
+        }
+        check(same, name + ": the counters and the Histogram are the full measure's");
+
+        std::vector<std::uint32_t> waveform(4U * layout.waveformChannelWords(), 0U);
+        for (std::uint32_t channel = 0; channel < 4; ++channel) {
+            for (std::uint32_t column = 0; column < full->layout.columns; ++column) {
+                for (std::uint32_t code = 0; code < render::kScopeWaveformColumnWords; ++code) {
+                    const std::uint32_t level =
+                        code < 1024U ? code >> reduction.waveformLevelShift
+                                     : layout.waveformLevels() + (code - 1024U);
+                    waveform[(channel * layout.columns +
+                              (column >> reduction.waveformColumnShift)) *
+                                 layout.waveformColumnWords() +
+                             level] += full->waveform(channel, column, code);
+                }
+            }
+        }
+        std::uint32_t wrong = 0;
+        for (std::uint32_t channel = 0; channel < 4; ++channel) {
+            for (std::uint32_t column = 0; column < layout.columns; ++column) {
+                for (std::uint32_t level = 0; level < layout.waveformColumnWords(); ++level) {
+                    wrong += reduced->waveform(channel, column, level) !=
+                                     waveform[(channel * layout.columns + column) *
+                                                  layout.waveformColumnWords() +
+                                              level]
+                                 ? 1U
+                                 : 0U;
+                }
+            }
+        }
+        check(wrong == 0U, name + ": every Waveform cell is the sum of the full cells it covers");
+
+        const auto grids = [&](const bool chromaticity) {
+            const std::uint32_t fullCells = chromaticity ? 512U : 640U;
+            const std::uint32_t shift =
+                chromaticity ? reduction.chromaticityShift : reduction.vectorscopeShift;
+            const std::uint32_t cells = fullCells >> shift;
+            std::vector<std::uint32_t> count(static_cast<std::size_t>(cells) * cells, 0U);
+            std::vector<std::uint32_t> luma(count.size(), 0U);
+            for (std::uint32_t row = 0; row < fullCells; ++row) {
+                for (std::uint32_t column = 0; column < fullCells; ++column) {
+                    const std::size_t at =
+                        static_cast<std::size_t>(row >> shift) * cells + (column >> shift);
+                    count[at] += chromaticity ? full->chromaticity(column, row)
+                                              : full->vectorscope(column, row);
+                    luma[at] += chromaticity ? 0U : full->vectorscopeLuma(column, row);
+                }
+            }
+            std::uint32_t different = 0;
+            for (std::uint32_t row = 0; row < cells; ++row) {
+                for (std::uint32_t column = 0; column < cells; ++column) {
+                    const std::size_t at = static_cast<std::size_t>(row) * cells + column;
+                    if (chromaticity) {
+                        different += reduced->chromaticity(column, row) != count[at] ? 1U : 0U;
+                    } else {
+                        different += reduced->vectorscope(column, row) != count[at] ? 1U : 0U;
+                        different += reduced->vectorscopeLuma(column, row) != luma[at] ? 1U : 0U;
+                    }
+                }
+            }
+            return different;
+        };
+        check(grids(false) == 0U,
+              name + ": every Vectorscope cell and luma sum is the sum of the full cells");
+        check(grids(true) == 0U, name + ": every Chromaticity cell is the sum of the full cells");
+
+        // The pixels of a reduced column are those of the full columns it covers.
+        std::uint32_t spans = 0;
+        bool spanRule = true;
+        for (std::uint32_t column = 0; column < layout.columns; ++column) {
+            std::uint32_t covered = 0;
+            for (std::uint32_t fullColumn = column << reduction.waveformColumnShift;
+                 fullColumn < std::min((column + 1U) << reduction.waveformColumnShift,
+                                       layout.fullColumns);
+                 ++fullColumn) {
+                covered += render::scopeWaveformColumnSpan(fullColumn, layout.fullColumns,
+                                                           areaWidth);
+            }
+            const std::uint32_t span = render::scopeWaveformColumnSpan(layout, column, areaWidth);
+            spanRule = spanRule && span == covered;
+            spans += span;
+        }
+        check(spanRule && spans == areaWidth, name + ": the columns' pixel spans");
+        roundTrip(*reduced, name);
+
+        // The summary reads a reduced Vectorscope by the centers of its larger cells: the mean
+        // saturation moves by less than a cell.
+        const auto fullSummary = runtime::summarizeScopes(*full);
+        const auto reducedSummary = runtime::summarizeScopes(*reduced);
+        const double cell =
+            static_cast<double>(1U << reduction.vectorscopeShift) / 512.0 / 0.60;
+        check(reducedSummary.vectorscopeAvailable && fullSummary.vectorscopeAvailable &&
+                  std::abs(reducedSummary.meanSaturation - fullSummary.meanSaturation) <= cell &&
+                  reducedSummary.channels == fullSummary.channels,
+              name + ": the summary of a reduced measure");
+    }
+
+    // A wide area: 512 full columns grouped by four, whose spans cover every pixel once.
+    const auto wide = render::scopeTableLayout(render::kScopeTableWaveform, 1200,
+                                               ScopeTableReduction{2, 1, 0, 0});
+    std::uint32_t pixels = 0;
+    for (std::uint32_t column = 0; column < wide.columns; ++column) {
+        pixels += render::scopeWaveformColumnSpan(wide, column, 1200);
+    }
+    check(wide.fullColumns == 512U && wide.columns == 128U && wide.waveformLevels() == 512U &&
+              pixels == 1200U,
+          "reduced: a wide area's columns");
+
+    // The table size a pane asks for: the smallest halving not below its device pixels.
+    check(render::scopeAxisShift(1024, 300, 6) == 1U && render::scopeAxisShift(1024, 1024, 6) == 0U &&
+              render::scopeAxisShift(1024, 2000, 6) == 0U &&
+              render::scopeAxisShift(1024, 5, 6) == 6U && render::scopeAxisShift(640, 320, 5) == 1U &&
+              render::scopeAxisShift(640, 321, 5) == 0U && render::scopeAxisShift(512, 1, 5) == 5U &&
+              render::scopeAxisShift(512, 0, 5) == 5U && render::scopeAxisShift(512, 100, 9) == 2U,
+          "reduced: the shift for a pane's device pixels");
+    input.reduction = ScopeTableReduction{10, 0, 0, 0};
+    check(!runtime::measureScopesCpu(input).has_value() &&
+              !render::validScopeTableReduction(ScopeTableReduction{0, 7, 0, 0}) &&
+              !render::validScopeTableReduction(ScopeTableReduction{0, 0, 6, 0}) &&
+              !render::validScopeTableReduction(ScopeTableReduction{0, 0, 0, 6}) &&
+              render::validScopeTableReduction(ScopeTableReduction{9, 6, 5, 5}),
+          "reduced: a reduction beyond the maxima is refused");
+}
+
+// #733: a stored display frame is measured as it is. The red, green and blue bins of a pixel are
+// its Display codes by the integer rule of each layout, and the whole measure equals the measure
+// of the frame's unpacked float picture.
+void testPackedFrames() {
+    using render::DisplayPixelLayout;
+    constexpr std::uint32_t kW = 64;
+    constexpr std::uint32_t kH = 40;
+    for (const auto layout : {DisplayPixelLayout::Rgb10A2, DisplayPixelLayout::Straight8888}) {
+        const std::string name = layout == DisplayPixelLayout::Rgb10A2 ? "packed 10:10:10:2"
+                                                                       : "packed 8:8:8:8";
+        std::vector<render::Rgba8> cells;
+        std::uint32_t visible = 0;
+        for (std::uint32_t y = 0; y < kH; ++y) {
+            for (std::uint32_t x = 0; x < kW; ++x) {
+                const std::uint32_t i = y * kW + x;
+                if (layout == DisplayPixelLayout::Rgb10A2) {
+                    // Every 10-bit code appears in each channel; some pixels are transparent.
+                    const bool transparent = i % 11U == 3U;
+                    cells.push_back(transparent
+                                        ? render::displayCell(0U)
+                                        : render::rgb10A2Cell({i % 1024U, (i * 7U + 5U) % 1024U,
+                                                               (1023U - i % 1024U),
+                                                               render::kDisplayAlpha2Opaque}));
+                    visible += transparent ? 0U : 1U;
+                } else {
+                    // Every 8-bit color against opaque, absent and partial alpha.
+                    const std::uint8_t alpha = static_cast<std::uint8_t>(
+                        i % 5U == 0U ? 255U : (i % 5U == 1U ? 0U : (i * 3U) % 256U));
+                    cells.push_back(render::Rgba8{static_cast<std::uint8_t>(i % 256U),
+                                                  static_cast<std::uint8_t>((i * 5U + 1U) % 256U),
+                                                  static_cast<std::uint8_t>(255U - i % 256U),
+                                                  alpha});
+                    visible += alpha != 0U ? 1U : 0U;
+                }
+            }
+        }
+        Picture picture = flat(kW, kH, Rgba32f::transparent());
+        auto input = inputFor(picture, whole(picture), render::kScopeTableAll, 1, false);
+        input.signal = {};
+        input.packed = cells;
+        input.packedLayout = layout;
+        const auto counts = runtime::measureScopesCpu(input);
+        check(counts.has_value(), name + ": measured");
+        if (!counts) {
+            continue;
+        }
+        verifySums(*counts, name);
+        std::vector<std::uint32_t> expected(3U * 1026U, 0U);
+        for (const auto cell : cells) {
+            const auto codes = render::displaySignalCodes(layout, cell);
+            for (std::uint32_t channel = 0; channel < 3; ++channel) {
+                ++expected[channel * 1026U + codes[channel]];
+            }
+        }
+        std::uint32_t wrong = 0;
+        for (std::uint32_t channel = 0; channel < 3; ++channel) {
+            for (std::uint32_t i = 0; i < 1026U; ++i) {
+                wrong += counts->histogram(channel, i) != expected[channel * 1026U + i] ? 1U : 0U;
+            }
+        }
+        check(wrong == 0U && counts->counted() == kW * kH && counts->notFinite() == 0U,
+              name + ": the bins are the stored pixels' Display codes, counted in whole numbers");
+
+        const auto unpacked = runtime::unpackDisplaySignal(cells, layout);
+        bool pixels = unpacked.size() == cells.size();
+        for (std::size_t i = 0; pixels && i < cells.size(); ++i) {
+            const auto codes = render::displaySignalCodes(layout, cells[i]);
+            pixels = unpacked[i].red() == static_cast<float>(codes[0]) / 1023.0F &&
+                     unpacked[i].green() == static_cast<float>(codes[1]) / 1023.0F &&
+                     unpacked[i].blue() == static_cast<float>(codes[2]) / 1023.0F &&
+                     unpacked[i].alpha() == render::displaySignalAlpha(layout, cells[i]);
+        }
+        check(pixels, name + ": the unpacked picture is code / 1023 and the stored alpha");
+        auto floatInput = input;
+        floatInput.packed = {};
+        floatInput.signal = unpacked;
+        const auto fromFloat = runtime::measureScopesCpu(floatInput);
+        check(fromFloat.has_value() && *fromFloat == *counts,
+              name + ": the measure of the stored frame equals the measure of its float picture");
+
+        // Ignore Transparent Pixels reads the stored alpha; an area beyond the frame and a
+        // reduced size behave as for a float picture.
+        input.ignoreTransparent = true;
+        floatInput.ignoreTransparent = true;
+        input.areaX = floatInput.areaX = -4;
+        input.areaWidth = floatInput.areaWidth = kW + 9U;
+        input.reduction = floatInput.reduction = render::ScopeTableReduction{2, 2, 1, 1};
+        const auto ignored = runtime::measureScopesCpu(input);
+        const auto ignoredFloat = runtime::measureScopesCpu(floatInput);
+        check(ignored.has_value() && ignoredFloat.has_value() && *ignored == *ignoredFloat &&
+                  ignored->counted() == visible,
+              name + ": transparent stored pixels are ignored, " + std::to_string(visible) +
+                  " counted");
+        input.packed = std::span<const render::Rgba8>(cells).first(cells.size() - 1U);
+        check(!runtime::measureScopesCpu(input).has_value(),
+              name + ": a frame smaller than its extent says is refused");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -919,6 +1214,8 @@ int main() {
         testFixedLayout();
         testWaveformLevels();
         testVectorscopeLuma();
+        testReducedTables();
+        testPackedFrames();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

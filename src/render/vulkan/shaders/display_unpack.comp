@@ -1,0 +1,94 @@
+#version 460
+// Bloom DisplayUnpackV1 compute shader (#733). Offline-generated/embedded; do not edit at runtime.
+//
+// Turns a stored display frame (4-byte cells, render/display_pixel_packing.hpp) into the float
+// signal picture a scope measure counts, on the device, so the host never widens a shown frame to
+// float. The CPU reference is bloom::runtime::unpackDisplaySignal (src/runtime/scope_measure.cpp).
+//
+// Per pixel, in whole numbers until the last step:
+//   layout 0, straight 8:8:8:8 (red | green << 8 | blue << 16 | alpha << 24): the Display code of
+//     a channel over black is round(c8 * a8 * 1023 / 65025) = (c8 * a8 * 2046 + 65025) / 130050,
+//     and alpha is a8 / 255;
+//   layout 1, 10:10:10:2 (red | green << 10 | blue << 20 | alpha << 30): the Display code is the
+//     stored code when the 2-bit alpha is 3 and 0 otherwise, and alpha is 1 or 0.
+// The signal is code / 1023. A device's own float division is not required to be correctly
+// rounded, so both quotients are built from the integers by long division with round to nearest
+// even (bloom_unpack_ratio): the result is the IEEE binary32 quotient the CPU computes, and the
+// scope code rule floor(v * 1023 + 0.5) gives the code back.
+//
+// 2D FLATTENED DISPATCH, as SampleConvertV1: the pixels are flattened row-major into 256-wide
+// workgroups; gl_NumWorkGroups.x * 256 is the flattened row stride. Bindings 1..3 exist in the
+// descriptor set (the upload's native-sample layout) and are not read.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer BloomDisplayCells { uint words[]; } bloom_cells;
+layout(set = 0, binding = 4, rgba32f) uniform writeonly image2D bloom_unpack_output;
+
+layout(push_constant) uniform BloomUnpackPushConstants {
+    uint width;          // the frame's data-window width and height
+    uint height;
+    uint pixelLayout;    // 0 straight 8:8:8:8, 1 10:10:10:2
+} bloom_push;
+
+// numerator / denominator, correctly rounded to binary32, for 0 <= numerator <= denominator and
+// 0 < denominator < 65536.
+float bloom_unpack_ratio(uint numerator, uint denominator)
+{
+    if (numerator == 0u) {
+        return 0.0;
+    }
+    int exponent = 0;
+    uint remainder = numerator;
+    while (remainder < denominator) {
+        remainder <<= 1u;
+        exponent -= 1;
+    }
+    // 25 quotient bits: the leading one, 23 fraction bits and a guard bit.
+    uint quotient = 0u;
+    for (int bit = 0; bit < 25; ++bit) {
+        quotient <<= 1u;
+        if (remainder >= denominator) {
+            remainder -= denominator;
+            quotient |= 1u;
+        }
+        remainder <<= 1u;
+    }
+    uint guard = quotient & 1u;
+    quotient >>= 1u;
+    if (guard == 1u && (remainder != 0u || (quotient & 1u) == 1u)) {
+        quotient += 1u;
+    }
+    if (quotient == 0x1000000u) {
+        quotient >>= 1u;
+        exponent += 1;
+    }
+    return uintBitsToFloat((uint(exponent + 127) << 23u) | (quotient & 0x7FFFFFu));
+}
+
+void main()
+{
+    uvec2 invocation = gl_GlobalInvocationID.xy;
+    uint linear = invocation.y * (gl_NumWorkGroups.x * 256u) + invocation.x;
+    uint total = bloom_push.width * bloom_push.height;
+    if (linear >= total) {
+        return;
+    }
+    uint word = bloom_cells.words[linear];
+    uvec3 codes;
+    float alpha;
+    if (bloom_push.pixelLayout == 1u) {
+        bool opaque = (word >> 30u) == 3u;
+        codes = opaque ? uvec3(word & 1023u, (word >> 10u) & 1023u, (word >> 20u) & 1023u)
+                       : uvec3(0u);
+        alpha = opaque ? 1.0 : 0.0;
+    } else {
+        uint alpha8 = word >> 24u;
+        uvec3 color = uvec3(word & 255u, (word >> 8u) & 255u, (word >> 16u) & 255u);
+        codes = (color * alpha8 * 2046u + uvec3(65025u)) / uvec3(130050u);
+        alpha = bloom_unpack_ratio(alpha8, 255u);
+    }
+    vec4 signal = vec4(bloom_unpack_ratio(codes.r, 1023u), bloom_unpack_ratio(codes.g, 1023u),
+                       bloom_unpack_ratio(codes.b, 1023u), alpha);
+    imageStore(bloom_unpack_output, ivec2(int(linear % bloom_push.width),
+                                          int(linear / bloom_push.width)), signal);
+}

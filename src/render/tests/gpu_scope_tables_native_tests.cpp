@@ -120,11 +120,19 @@ struct Picture final {
                 }
             }
             if (layout.has(bloom::render::kScopeTableWaveform)) {
-                const std::uint32_t column = static_cast<std::uint32_t>(
-                    static_cast<std::uint64_t>(x) * layout.columns / request.areaWidth);
+                // #733: the full column and the code, each shifted right for a reduced table.
+                const std::uint32_t column =
+                    static_cast<std::uint32_t>(static_cast<std::uint64_t>(x) * layout.fullColumns /
+                                               request.areaWidth) >>
+                    layout.reduction.waveformColumnShift;
                 for (std::uint32_t channel = 0; channel < 4; ++channel) {
-                    ++words[layout.waveformOffset + channel * layout.waveformChannelWords() +
-                            column * bloom::render::kScopeWaveformColumnWords + codes[channel]];
+                    const std::uint32_t levels = 1024U >> layout.reduction.waveformLevelShift;
+                    const std::uint32_t level =
+                        codes[channel] < 1024U
+                            ? codes[channel] >> layout.reduction.waveformLevelShift
+                            : levels + (codes[channel] - 1024U);
+                    ++words[layout.waveformOffset + channel * layout.columns * (levels + 2U) +
+                            column * (levels + 2U) + level];
                 }
             }
             if (layout.has(bloom::render::kScopeTableVectorscope)) {
@@ -142,9 +150,13 @@ struct Picture final {
                         codes[3] == bloom::render::kScopeCodeUnder
                             ? 0U
                             : (codes[3] == bloom::render::kScopeCodeOver ? 1023U : codes[3]);
-                    const std::size_t at = static_cast<std::size_t>(row) * 640U + column;
+                    const std::uint32_t shift = layout.reduction.vectorscopeShift;
+                    const std::uint32_t cells = 640U >> shift;
+                    const std::size_t at =
+                        static_cast<std::size_t>(row >> shift) * cells + (column >> shift);
                     ++words[layout.vectorscopeOffset + at];
-                    words[layout.vectorscopeLumaOffset() + at] += lumaCode >> 4U;
+                    words[layout.vectorscopeOffset + static_cast<std::size_t>(cells) * cells +
+                          at] += lumaCode >> 4U;
                 }
             }
             if (layout.has(bloom::render::kScopeTableChromaticity)) {
@@ -164,7 +176,9 @@ struct Picture final {
                     if (column == 512U || row == 512U) {
                         ++words[bloom::render::kScopeCounterChromaticityOutside];
                     } else {
-                        ++words[layout.chromaticityOffset + row * 512U + column];
+                        const std::uint32_t shift = layout.reduction.chromaticityShift;
+                        ++words[layout.chromaticityOffset + (row >> shift) * (512U >> shift) +
+                                (column >> shift)];
                     }
                 }
             }
@@ -257,7 +271,7 @@ void compare(Expectations& expectations, GpuScopeTables& measure, const Picture&
     }
     const GpuScopeTablesResult result = measure.take();
     const ScopeTableLayout layout =
-        bloom::render::scopeTableLayout(request.scopes, request.areaWidth);
+        bloom::render::scopeTableLayout(request.scopes, request.areaWidth, request.reduction);
     expectations.expect(result.layout == layout, label + ": the layout is the request's");
     // The bytes read back are the layout's, exactly: no table that was not asked for.
     expectations.expect(static_cast<std::uint64_t>(result.words.size()) * 4U == layout.byteCount(),
@@ -362,6 +376,28 @@ void testTables(Expectations& expectations, GpuDevice& device) {
         wide.areaX = -300;
         wide.areaWidth = 700;
         compare(expectations, measure, picture, wide, "an area wider than the Waveform's columns");
+        // #733: the same area with the columns grouped by eight and 64 levels a column.
+        wide.reduction = bloom::render::ScopeTableReduction{3, 4, 0, 0};
+        compare(expectations, measure, picture, wide, "a wide area, reduced Waveform");
+    }
+
+    // #733: tables counted at the size a pane draws. The words read back are the reduced
+    // layout's, and every cell is counted by the same rule with its index shifted right.
+    {
+        namespace render = bloom::render;
+        GpuScopeTablesRequest reduced = request;
+        reduced.reduction = render::ScopeTableReduction{1, 2, 1, 2};
+        compare(expectations, measure, picture, reduced, "reduced tables");
+        GpuScopeTablesRequest smallest = outside;
+        smallest.reduction = render::ScopeTableReduction{9, 6, 5, 5};
+        compare(expectations, measure, picture, smallest, "the smallest tables, area past the picture");
+        const auto layout =
+            render::scopeTableLayout(render::kScopeTableAll, kSide, reduced.reduction);
+        expectations.expect(layout.byteCount() <
+                                render::scopeTableLayout(render::kScopeTableAll, kSide).byteCount() /
+                                    4U,
+                            "reduced tables: the readback is a fraction of the full tables' (" +
+                                std::to_string(layout.byteCount()) + " bytes)");
     }
 
     // The tables a measure asks for are the only ones read back: one table is the counters and

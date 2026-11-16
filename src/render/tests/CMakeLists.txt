@@ -297,6 +297,19 @@ bloom_add_test(
     TIMEOUT 300
 )
 
+# DisplayUnpackV1 (#733): a stored display frame unpacked on the device into the float signal
+# picture a scope measure counts, bit for bit against the CPU rule, for both pixel layouts.
+add_executable(bloom_render_gpu_display_unpack_test gpu_display_unpack_native_tests.cpp)
+target_link_libraries(bloom_render_gpu_display_unpack_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_gpu_display_unpack_test)
+bloom_enable_strict_floating_point(bloom_render_gpu_display_unpack_test)
+bloom_add_test(
+    NAME bloom.render.gpu_display_unpack_native
+    COMMAND bloom_render_gpu_display_unpack_test
+    LABELS unit gpu render
+    TIMEOUT 300
+)
+
 # Bounded-resource-retirement tests for GpuSolid/CoveredSolidV1 and GpuImageUpload. They include the
 # Vulkan-free private fault seams, so the targets exist only where the Vulkan backend is built; a
 # hardware-free build prints an explicit skip and --require-device fails closed. The vectors prove

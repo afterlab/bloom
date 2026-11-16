@@ -122,6 +122,8 @@ struct Case final {
     std::uint32_t areaWidth = kSide;
     std::uint32_t areaHeight = kSide;
     bool ignoreTransparent = false;
+    // #733: the size of the tables.
+    bloom::render::ScopeTableReduction reduction{};
 };
 
 void compare(Expectations& expectations, GpuScopeTables& measure, const Pictures& pictures,
@@ -139,6 +141,7 @@ void compare(Expectations& expectations, GpuScopeTables& measure, const Pictures
     input.axisMaximum = test.axisMaximum;
     input.luma = luma;
     input.ignoreTransparent = test.ignoreTransparent;
+    input.reduction = test.reduction;
     const auto reference = measureScopesCpu(input);
     expectations.expect(reference.has_value(), test.label + ": the CPU reference measures");
     if (!reference) {
@@ -160,6 +163,7 @@ void compare(Expectations& expectations, GpuScopeTables& measure, const Pictures
     request.cbDenominator = luma.cbDenominator;
     request.crDenominator = luma.crDenominator;
     request.ignoreTransparent = test.ignoreTransparent;
+    request.reduction = test.reduction;
     expectations.expect(measure.begin(request, kBudget),
                         test.label +
                             ": the device measure begins: " + measure.diagnostic().message);
@@ -262,6 +266,52 @@ void testParity(Expectations& expectations, GpuDevice& device) {
              .scopes = bloom::render::kScopeTableWaveform,
              .areaX = -300,
              .areaWidth = 700});
+
+    // #733: tables counted at a reduced size. The CPU reference of each is tested against the
+    // full tables summed (bloom.runtime.scope_measure); here the device counts the same cells.
+    using bloom::render::ScopeTableReduction;
+    compare(expectations, measure, display, rec709,
+            {.label = "display, every axis halved", .reduction = ScopeTableReduction{1, 1, 1, 1}});
+    compare(expectations, measure, display, rec709,
+            {.label = "display, mixed sizes, transparent ignored",
+             .ignoreTransparent = true,
+             .reduction = ScopeTableReduction{2, 3, 2, 4}});
+    compare(expectations, measure, display, rec709,
+            {.label = "display, the smallest tables", .reduction = ScopeTableReduction{9, 6, 5, 5}});
+    compare(expectations, measure, edges, wide,
+            {.label = "cell edges, reduced", .reduction = ScopeTableReduction{3, 2, 3, 3}});
+    compare(expectations, measure, working, wide,
+            {.label = "working, reduced, a narrow region whose columns do not divide",
+             .axisMaximum = 8,
+             .areaX = 40,
+             .areaY = 12,
+             .areaWidth = 77,
+             .areaHeight = 130,
+             .reduction = ScopeTableReduction{2, 1, 0, 2}});
+    compare(expectations, measure, display, rec709,
+            {.label = "display, reduced, an area wider than the Waveform's columns",
+             .areaX = -300,
+             .areaY = 0,
+             .areaWidth = 700,
+             .areaHeight = kSide,
+             .reduction = ScopeTableReduction{2, 0, 1, 0}});
+    compare(expectations, measure, display, rec709,
+            {.label = "display, Waveform only, reduced",
+             .scopes = bloom::render::kScopeTableWaveform,
+             .reduction = ScopeTableReduction{4, 4, 0, 0}});
+
+    // A reduction beyond the maxima is refused before anything is submitted.
+    GpuScopeTablesRequest invalid;
+    invalid.signal = display.residentSignal;
+    invalid.xyz = display.residentXyz;
+    invalid.scopes = bloom::render::kScopeTableAll;
+    invalid.areaWidth = kSide;
+    invalid.areaHeight = kSide;
+    invalid.reduction = ScopeTableReduction{10, 0, 0, 0};
+    expectations.expect(!measure.begin(invalid, kBudget) &&
+                            measure.diagnostic().code ==
+                                bloom::render::GpuScopeTablesCode::InvalidArgument,
+                        "a table reduction beyond the maxima is refused");
 }
 
 } // namespace

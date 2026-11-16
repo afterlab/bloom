@@ -1,5 +1,5 @@
 #version 460
-// Bloom ScopeTablesV1 compute shader (#724, #730). Offline-generated/embedded; do not edit at runtime.
+// Bloom ScopeTablesV1 compute shader (#724, #730, #733). Offline-generated/embedded; do not edit at runtime.
 //
 // Counts the pixels of a measured area into the scope tables of docs/architecture/scopes.md,
 // exactly as the CPU reference does (src/runtime/scope_measure.cpp). Every table cell is a whole
@@ -22,13 +22,19 @@
 //   vectorscopeOffset:  640 rows (Cr) x 640 (Cb) counts, then 640 x 640 luma sums (the pixel's
 //                       luma code, clipped to 0..1023, shifted right by 4);
 //   chromaticityOffset: 512 rows (y) x 512 (x).
+// #733: `reduction` halves a table axis (render/scope_table_layout.hpp): a pixel's cell in the
+// reduced table is its cell in the full table shifted right, so a reduced cell holds the exact sum
+// of the full cells it covers. The Waveform then has ceil(fullColumns / 2^shift) columns of
+// (1024 >> shift) levels plus under and over, the Vectorscope (640 >> shift) cells an axis and the
+// Chromaticity table (512 >> shift). The sizes above are the full tables (every shift 0).
 //
 // Two passes, selected by `pass`, both flattened into 256-wide workgroups of `groupWidth`
 // invocations a row; invocations past the count return immediately.
 //   pass 0: one invocation per pixel of the measured area: the counters, the Histogram, the
 //           Vectorscope and the Chromaticity table.
-//   pass 1: one invocation per Waveform column. It owns that column of the table and walks the
-//           pixels that fall in it, so no other invocation adds to its cells.
+//   pass 1: one invocation per Waveform column of the (reduced) table. It owns that column of
+//           the table and walks the pixels that fall in it, so no other invocation adds to its
+//           cells.
 // A pixel of the measured area outside the picture is transparent black.
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
@@ -58,6 +64,9 @@ layout(push_constant) uniform BloomScopePushConstants {
     uint vectorscopeOffset;
     uint chromaticityOffset;
     uint groupWidth;
+    uint fullColumns;        // the full Waveform's columns: min(512, areaWidth)
+    uint reduction;          // shifts: Waveform columns | levels << 8 | Vectorscope << 16 |
+                             // Chromaticity << 24
 } bloom_scope_push;
 
 const uint kScopeHistogram = 1u;
@@ -221,10 +230,13 @@ void bloom_scope_pixel_pass(uint linear)
         if (column == 640u || row == 640u) {
             bloom_scope_add(4u);
         } else {
-            uint cell = row * 640u + column;
+            uint shift = (bloom_scope_push.reduction >> 16u) & 255u;
+            uint cells = 640u >> shift;
+            uint cell = (row >> shift) * cells + (column >> shift);
             uint clipped = lumaCode == kCodeUnder ? 0u : (lumaCode == kCodeOver ? 1023u : lumaCode);
             bloom_scope_add(bloom_scope_push.vectorscopeOffset + cell);
-            atomicAdd(bloom_scope_tables.words[bloom_scope_push.vectorscopeOffset + 409600u + cell],
+            atomicAdd(bloom_scope_tables.words[bloom_scope_push.vectorscopeOffset + cells * cells +
+                                               cell],
                       clipped >> 4u);
         }
     }
@@ -247,20 +259,38 @@ void bloom_scope_pixel_pass(uint linear)
             if (column == 512u || row == 512u) {
                 bloom_scope_add(3u);
             } else {
-                bloom_scope_add(bloom_scope_push.chromaticityOffset + row * 512u + column);
+                uint shift = (bloom_scope_push.reduction >> 24u) & 255u;
+                bloom_scope_add(bloom_scope_push.chromaticityOffset +
+                                (row >> shift) * (512u >> shift) + (column >> shift));
             }
         }
     }
 }
 
+// The cell of a Waveform column for a code: the code shifted right, or the column's under / over.
+uint bloom_scope_level(uint code, uint levelShift)
+{
+    uint levels = 1024u >> levelShift;
+    if (code < 1024u) {
+        return code >> levelShift;
+    }
+    return code == kCodeUnder ? levels : levels + 1u;
+}
+
 void bloom_scope_column_pass(uint column)
 {
     uint columns = bloom_scope_push.columns;
+    uint fullColumns = bloom_scope_push.fullColumns;
     uint width = bloom_scope_push.areaWidth;
-    // The pixels x with floor(x * columns / width) == column.
-    uint first = (column * width + columns - 1u) / columns;
-    uint last = ((column + 1u) * width + columns - 1u) / columns;
-    uint columnWords = 1026u;
+    uint columnShift = bloom_scope_push.reduction & 255u;
+    uint levelShift = (bloom_scope_push.reduction >> 8u) & 255u;
+    // The full columns this column covers, and the pixels x whose full column
+    // floor(x * fullColumns / width) is one of them.
+    uint firstFull = column << columnShift;
+    uint endFull = min((column + 1u) << columnShift, fullColumns);
+    uint first = (firstFull * width + fullColumns - 1u) / fullColumns;
+    uint last = (endFull * width + fullColumns - 1u) / fullColumns;
+    uint columnWords = (1024u >> levelShift) + 2u;
     uint base = bloom_scope_push.waveformOffset + column * columnWords;
     uint channel = columns * columnWords;
     for (uint y = 0u; y < bloom_scope_push.areaHeight; ++y) {
@@ -272,10 +302,13 @@ void bloom_scope_column_pass(uint column)
                 continue;
             }
             float luma = bloom_scope_luma(signal);
-            bloom_scope_add(base + bloom_scope_code(signal.r));
-            bloom_scope_add(base + channel + bloom_scope_code(signal.g));
-            bloom_scope_add(base + 2u * channel + bloom_scope_code(signal.b));
-            bloom_scope_add(base + 3u * channel + bloom_scope_code(luma));
+            bloom_scope_add(base + bloom_scope_level(bloom_scope_code(signal.r), levelShift));
+            bloom_scope_add(base + channel +
+                            bloom_scope_level(bloom_scope_code(signal.g), levelShift));
+            bloom_scope_add(base + 2u * channel +
+                            bloom_scope_level(bloom_scope_code(signal.b), levelShift));
+            bloom_scope_add(base + 3u * channel +
+                            bloom_scope_level(bloom_scope_code(luma), levelShift));
         }
     }
 }

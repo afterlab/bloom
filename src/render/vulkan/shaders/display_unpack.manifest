@@ -1,0 +1,35 @@
+{
+  "schema": "bloom.gpu.shader.manifest.v1",
+  "generator": "tools/gpu-shaders compile/validate/embed recipe (reused, not reimplemented)",
+  "generatorRevision": 1,
+  "operation": "DisplayUnpackV1",
+  "entrypoint": "main",
+  "shader": {
+    "language": "GLSL_460",
+    "stage": "compute",
+    "sha256": "7e2396e24a3c57188574734e8912ff801490a5472249eeecb34eeded06ed8c39",
+    "spirvSha256": "7208b6a56c093e5ab1c9deb9035c0ba37ceea3c528a1fe0c36c96da6d59f6da1",
+    "localSizeX": 256,
+    "localSizeY": 1,
+    "localSizeZ": 1
+  },
+  "bindings": [
+    {"set": 0, "binding": 0, "kind": "storage-buffer", "access": "readonly", "element": "uint",
+     "role": "stored-display-frame-cells (4 bytes a pixel, row-major; display_pixel_packing.hpp)"},
+    {"set": 0, "binding": 4, "kind": "storage-image", "access": "writeonly", "format": "rgba32f",
+     "role": "display-signal-picture (red, green, blue = the Display code over black / 1023; alpha = the stored alpha)"}
+  ],
+  "pushConstant": {
+    "byteCount": 12,
+    "fields": [
+      {"name": "width", "type": "uint32"},
+      {"name": "height", "type": "uint32"},
+      {"name": "pixelLayout", "type": "uint32", "values": "0 = straight 8:8:8:8, 1 = 10:10:10:2"}
+    ]
+  },
+  "contracts": {
+    "numeric": "exact against bloom::runtime::unpackDisplaySignal: the Display codes are whole-number arithmetic, and code / 1023 and alpha / 255 are built by integer long division with round to nearest even, so every float equals the IEEE binary32 quotient of the CPU reference on every device",
+    "dispatch": "one invocation per pixel, flattened row-major into 256-wide workgroups (gl_NumWorkGroups.x * 256 is the row stride); bindings 1 to 3 of the set are not read",
+    "use": "the float signal picture of a shown frame for the scope measure (docs/architecture/scopes.md); it is never presented or exported"
+  }
+}

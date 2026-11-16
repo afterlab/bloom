@@ -259,6 +259,9 @@ std::uint64_t GpuImageUpload::halfStagedUploads() const noexcept {
 std::uint64_t GpuImageUpload::sampleConvertedUploads() const noexcept {
     return impl_ != nullptr ? impl_->sampleConvertedUploads : 0;
 }
+std::uint64_t GpuImageUpload::displayUnpackedUploads() const noexcept {
+    return impl_ != nullptr ? impl_->displayUnpackedUploads : 0;
+}
 
 bool GpuImageUpload::Impl::createResources() {
     const VkDevice rawDevice = static_cast<VkDevice>(*control->device);
@@ -395,14 +398,18 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
     impl.control->bufferStorageRefusal.reset();
     if (static_cast<int>(parameters.source != nullptr) +
             static_cast<int>(parameters.samples != nullptr) +
-            static_cast<int>(parameters.channels != nullptr) >
+            static_cast<int>(parameters.channels != nullptr) +
+            static_cast<int>(parameters.displayCells.has_value()) >
         1) {
         return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,
-                                "an upload carries one of a float image, native samples or data "
-                                "channels");
+                                "an upload carries one of a float image, native samples, data "
+                                "channels or a display frame");
     }
     if (parameters.samples != nullptr) {
         return impl.beginSamples(parameters, byteBudget);
+    }
+    if (parameters.displayCells) {
+        return impl.beginDisplayCells(parameters, byteBudget);
     }
     if (parameters.source == nullptr && parameters.channels == nullptr) {
         return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,

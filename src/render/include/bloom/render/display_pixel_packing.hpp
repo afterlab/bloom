@@ -159,6 +159,16 @@ displaySignalCodes(const DisplayPixelLayout layout, const Rgba8 cell) noexcept {
     return static_cast<float>(cell.alpha) / 255.0F;
 }
 
+// The float pixel of the signal picture a scope measure counts for a stored pixel: red, green and
+// blue are the Display codes above as the correctly rounded code / 1023, alpha the stored alpha.
+// The device computes the same floats (DisplayUnpackV1).
+[[nodiscard]] inline std::array<float, 4> displaySignalPixel(const DisplayPixelLayout layout,
+                                                             const Rgba8 cell) noexcept {
+    const auto codes = displaySignalCodes(layout, cell);
+    return {displayCode10Value(codes[0]), displayCode10Value(codes[1]),
+            displayCode10Value(codes[2]), displaySignalAlpha(layout, cell)};
+}
+
 // Presentation on an 8-bit output: the 8-bit code shown for a stored 10-bit code, round to
 // nearest, round(code * 255 / 1023) in whole numbers. A 10-bit output shows the code unchanged.
 [[nodiscard]] constexpr std::uint8_t presentedCode8(const std::uint32_t code10) noexcept {

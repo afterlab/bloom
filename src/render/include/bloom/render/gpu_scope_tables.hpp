@@ -48,6 +48,9 @@ struct GpuScopeTablesRequest final {
     float cbDenominator = 1.0F; // 2 (1 - Kb) in binary32
     float crDenominator = 1.0F; // 2 (1 - Kr) in binary32
     bool ignoreTransparent = false;
+    // #733: the size of the tables (scope_table_layout.hpp); the full tables by default. Must be
+    // valid (validScopeTableReduction).
+    ScopeTableReduction reduction{};
 };
 
 enum class GpuScopeTablesState : std::uint8_t { Idle, Pending, Ready, Failure };

@@ -59,8 +59,10 @@ struct ScopeTablesPush final {
     std::uint32_t vectorscopeOffset;
     std::uint32_t chromaticityOffset;
     std::uint32_t groupWidth;
+    std::uint32_t fullColumns;
+    std::uint32_t reduction; // the four shifts, one byte each (scope_tables.comp)
 };
-static_assert(sizeof(ScopeTablesPush) == 76);
+static_assert(sizeof(ScopeTablesPush) == 84);
 
 std::atomic<std::uint64_t>& scopeDispatchCounter() noexcept {
     static std::atomic<std::uint64_t> counter{0};
@@ -522,7 +524,8 @@ bool GpuScopeTables::begin(const GpuScopeTablesRequest& request,
         }
         const std::uint64_t pixels =
             static_cast<std::uint64_t>(request.areaWidth) * request.areaHeight;
-        if (scopes != request.scopes || request.areaWidth == 0 || request.areaHeight == 0 ||
+        if (scopes != request.scopes || !validScopeTableReduction(request.reduction) ||
+            request.areaWidth == 0 || request.areaHeight == 0 ||
             request.areaWidth > kScopeMaxAreaWidth ||
             pixels > std::numeric_limits<std::uint32_t>::max()) {
             impl.setFailure(GpuScopeTablesCode::InvalidArgument,
@@ -531,7 +534,8 @@ bool GpuScopeTables::begin(const GpuScopeTablesRequest& request,
         }
 
         auto state = signal->state;
-        const ScopeTableLayout layout = scopeTableLayout(scopes, request.areaWidth);
+        const ScopeTableLayout layout =
+            scopeTableLayout(scopes, request.areaWidth, request.reduction);
         const std::uint64_t bytes = static_cast<std::uint64_t>(layout.wordCount) * 4U;
         if (bytes > byteBudget || bytes > state->maxStorageBufferRange) {
             impl.setFailure(GpuScopeTablesCode::OverBudget,
@@ -728,6 +732,12 @@ bool GpuScopeTables::begin(const GpuScopeTablesRequest& request,
         push.vectorscopeOffset = layout.vectorscopeOffset;
         push.chromaticityOffset = layout.chromaticityOffset;
         push.groupWidth = pixelDispatch.groupsX * kScopeWorkgroupSize;
+        push.fullColumns = layout.fullColumns;
+        push.reduction =
+            static_cast<std::uint32_t>(layout.reduction.waveformColumnShift) |
+            (static_cast<std::uint32_t>(layout.reduction.waveformLevelShift) << 8U) |
+            (static_cast<std::uint32_t>(layout.reduction.vectorscopeShift) << 16U) |
+            (static_cast<std::uint32_t>(layout.reduction.chromaticityShift) << 24U);
         dispatcher->vkCmdPushConstants(commands, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                        sizeof(ScopeTablesPush), &push);
         dispatcher->vkCmdDispatch(commands, pixelDispatch.groupsX, pixelDispatch.groupsY, 1);

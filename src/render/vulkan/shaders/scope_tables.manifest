@@ -7,8 +7,8 @@
   "shader": {
     "language": "GLSL_460",
     "stage": "compute",
-    "sha256": "c32016e3e9d7d80a215b6f76d5d92748e8c6af6a588ade4af2f3f92a8aa54a45",
-    "spirvSha256": "73082464f039e88cb796a315e36ad824b50b744ab56a5c245ec12b5f35e48be4",
+    "sha256": "c63191779413296cc1fd907b342114d09f3141af703b0fcc2d087c8a4d837f2a",
+    "spirvSha256": "68f2290971b413de00d0aba1903a3497d1f40f6d6c76952f9649bf633e5fb859",
     "localSizeX": 256,
     "localSizeY": 1,
     "localSizeZ": 1
@@ -19,12 +19,12 @@
     {"set": 0, "binding": 1, "kind": "storage-image", "access": "readonly", "format": "rgba32f",
      "role": "signal-picture-in-cie-xyz-d65; read only with the Chromaticity table"},
     {"set": 0, "binding": 2, "kind": "storage-buffer", "access": "readwrite", "element": "uint",
-     "role": "scope-count-tables", "layout": "8 counters, then the Histogram, Waveform (1024 codes a column), Vectorscope (640 x 640 counts, then 640 x 640 luma sums) and Chromaticity (512 x 512) tables that were asked for (scope_table_layout.hpp)"}
+     "role": "scope-count-tables", "layout": "8 counters, then the Histogram, Waveform (1024 codes a column), Vectorscope (640 x 640 counts, then 640 x 640 luma sums) and Chromaticity (512 x 512) tables that were asked for, each axis halved as `reduction` says (scope_table_layout.hpp)"}
   ],
   "pushConstant": {
-    "byteCount": 76,
+    "byteCount": 84,
     "fields": [
-      {"name": "pass", "type": "uint32", "values": "0 = one invocation per pixel, 1 = one invocation per Waveform column"},
+      {"name": "pass", "type": "uint32", "values": "0 = one invocation per pixel, 1 = one invocation per Waveform column of the table"},
       {"name": "scopes", "type": "uint32", "values": "1 Histogram, 2 Waveform, 4 Vectorscope, 8 Chromaticity"},
       {"name": "flags", "type": "uint32", "values": "1 = ignore transparent pixels"},
       {"name": "columns", "type": "uint32"},
@@ -42,7 +42,9 @@
       {"name": "waveformOffset", "type": "uint32"},
       {"name": "vectorscopeOffset", "type": "uint32"},
       {"name": "chromaticityOffset", "type": "uint32"},
-      {"name": "groupWidth", "type": "uint32"}
+      {"name": "groupWidth", "type": "uint32"},
+      {"name": "fullColumns", "type": "uint32", "values": "the full Waveform's columns: min(512, areaWidth)"},
+      {"name": "reduction", "type": "uint32", "values": "how many times a table axis is halved, one byte each: Waveform columns, Waveform levels << 8, Vectorscope << 16, Chromaticity << 24 (0 = the full table)"}
     ]
   },
   "contracts": {

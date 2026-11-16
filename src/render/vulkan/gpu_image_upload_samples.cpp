@@ -2,8 +2,13 @@
 // buffer as they are and one SampleConvertV1 dispatch reads them there and writes the resident
 // RGBA32F image, so the host never widens a frame to float. The job lifecycle (resident slot,
 // fence, cancellation, retirement and quarantine) is the float path's, unchanged.
+//
+// #733: a stored display frame takes the same path with its own kernel: its 4-byte cells are the
+// one plane, and one DisplayUnpackV1 dispatch writes the float signal picture a scope measure
+// counts (render/display_pixel_packing.hpp gives the rule).
 
 #include "gpu_image_upload_private.hpp"
+#include "shaders/display_unpack_spirv.inc"
 #include "shaders/sample_convert_spirv.inc"
 
 #include <bloom/core/telemetry_counters.hpp>
@@ -46,14 +51,22 @@ struct SamplePushConstants final {
 };
 static_assert(sizeof(SamplePushConstants) == 64, "SampleConvertV1 push constants are 64 bytes");
 
+struct DisplayUnpackPushConstants final {
+    std::uint32_t width;
+    std::uint32_t height;
+    std::uint32_t pixelLayout; // 0 straight 8:8:8:8, 1 10:10:10:2
+};
+static_assert(sizeof(DisplayUnpackPushConstants) == 12,
+              "DisplayUnpackV1 push constants are 12 bytes");
+
 [[nodiscard]] constexpr std::uint64_t alignUp(const std::uint64_t value,
                                               const std::uint64_t alignment) noexcept {
     return (value + alignment - 1U) / alignment * alignment;
 }
 
 // Bytes a plane occupies in staging and in its binding: whole 32-bit words.
-[[nodiscard]] std::uint64_t planeRange(const NativeSamplePlane& plane) noexcept {
-    return alignUp(static_cast<std::uint64_t>(plane.bytes.size()), 4U);
+[[nodiscard]] std::uint64_t planeRange(const std::span<const std::byte> plane) noexcept {
+    return alignUp(static_cast<std::uint64_t>(plane.size()), 4U);
 }
 
 [[nodiscard]] SamplePushConstants pushConstants(const NativeSampleImage& samples) noexcept {
@@ -81,17 +94,17 @@ static_assert(sizeof(SamplePushConstants) == 64, "SampleConvertV1 push constants
     return push;
 }
 
-void copyPlane(std::byte* const destination, const NativeSamplePlane& plane,
+void copyPlane(std::byte* const destination, const std::span<const std::byte> plane,
                const std::function<void(std::size_t, const std::function<void(std::size_t)>&)>&
                    parallelFor) {
-    const std::size_t bytes = plane.bytes.size();
+    const std::size_t bytes = plane.size();
     const std::size_t chunks = (bytes + kCopyChunkBytes - 1) / kCopyChunkBytes;
     if (!parallelFor || chunks < 2) {
-        std::memcpy(destination, plane.bytes.data(), bytes);
+        std::memcpy(destination, plane.data(), bytes);
     } else {
         parallelFor(chunks, [&](const std::size_t chunk) {
             const std::size_t offset = chunk * kCopyChunkBytes;
-            std::memcpy(destination + offset, plane.bytes.data() + offset,
+            std::memcpy(destination + offset, plane.data() + offset,
                         std::min(kCopyChunkBytes, bytes - offset));
         });
     }
@@ -103,15 +116,27 @@ void copyPlane(std::byte* const destination, const NativeSamplePlane& plane,
 
 } // namespace
 
-bool GpuImageUpload::Impl::createSamplePipeline() {
+bool GpuImageUpload::Impl::createConvertPipeline(ConvertPipeline& convert,
+                                                 const bool displayUnpack) {
+    // Both kernels read up to four staging planes and write the resident image: one set layout.
     constexpr bool kBindings[kSampleBindingCount] = {false, false, false, false, true};
     std::string reason;
-    if (!createCompositePipeline(*control, vulkan_detail::kSampleConvertSpirvCode,
-                                 vulkan_detail::kSampleConvertSpirvByteCount, kBindings,
-                                 kSampleBindingCount, sizeof(SamplePushConstants), reason,
-                                 samplePipeline)) {
+    CompositePipeline& samplePipeline = convert.pipeline;
+    vk::raii::DescriptorPool& sampleDescriptorPool = convert.descriptorPool;
+    vk::raii::DescriptorSet& sampleDescriptorSet = convert.descriptorSet;
+    if (!createCompositePipeline(
+            *control,
+            displayUnpack ? vulkan_detail::kDisplayUnpackSpirvCode
+                          : vulkan_detail::kSampleConvertSpirvCode,
+            displayUnpack ? vulkan_detail::kDisplayUnpackSpirvByteCount
+                          : vulkan_detail::kSampleConvertSpirvByteCount,
+            kBindings, kSampleBindingCount,
+            displayUnpack ? sizeof(DisplayUnpackPushConstants) : sizeof(SamplePushConstants),
+            reason, samplePipeline)) {
         createDiagnostic = uploadDiagnostic(GpuImageUploadDiagnosticCode::Unsupported,
-                                            "SampleConvertV1 was rejected: " + reason);
+                                            std::string(displayUnpack ? "DisplayUnpackV1"
+                                                                      : "SampleConvertV1") +
+                                                " was rejected: " + reason);
         return false;
     }
     const std::array poolSizes{vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 4},
@@ -149,14 +174,19 @@ bool GpuImageUpload::Impl::createSamplePipeline() {
     return true;
 }
 
+void GpuImageUpload::Impl::resetConvertPipeline(ConvertPipeline& convert) noexcept {
+    convert.descriptorSet = vk::raii::DescriptorSet{nullptr};
+    convert.descriptorPool = vk::raii::DescriptorPool{nullptr};
+    convert.pipeline.pipeline = vk::raii::Pipeline{nullptr};
+    convert.pipeline.pipelineLayout = vk::raii::PipelineLayout{nullptr};
+    convert.pipeline.descriptorSetLayout = vk::raii::DescriptorSetLayout{nullptr};
+    convert.pipeline.shaderModule = vk::raii::ShaderModule{nullptr};
+    convert.ready = false;
+}
+
 void GpuImageUpload::Impl::resetSamplePipeline() noexcept {
-    sampleDescriptorSet = vk::raii::DescriptorSet{nullptr};
-    sampleDescriptorPool = vk::raii::DescriptorPool{nullptr};
-    samplePipeline.pipeline = vk::raii::Pipeline{nullptr};
-    samplePipeline.pipelineLayout = vk::raii::PipelineLayout{nullptr};
-    samplePipeline.descriptorSetLayout = vk::raii::DescriptorSetLayout{nullptr};
-    samplePipeline.shaderModule = vk::raii::ShaderModule{nullptr};
-    samplePipelineReady = false;
+    resetConvertPipeline(sampleConvert);
+    resetConvertPipeline(displayUnpackConvert);
 }
 
 GpuImageUploadDiagnostic GpuImageUpload::Impl::beginSamples(const GpuImageUploadParameters& parameters,
@@ -169,9 +199,51 @@ GpuImageUploadDiagnostic GpuImageUpload::Impl::beginSamples(const GpuImageUpload
         return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,
                                 "the upload descriptor layout does not match its samples");
     }
+    std::array<std::span<const std::byte>, kMaxNativeSamplePlanes> planeBytes{};
+    const auto samplePlanes = samples.planes();
+    for (std::size_t index = 0; index < samplePlanes.size(); ++index)
+        planeBytes[index] = samplePlanes[index].bytes;
+    const SamplePushConstants push = pushConstants(samples);
+    return beginConverted(parameters, byteBudget, *descriptor,
+                          std::span(planeBytes).first(samplePlanes.size()), sampleConvert,
+                          /*displayUnpack=*/false, &push, sizeof(push));
+}
+
+GpuImageUploadDiagnostic
+GpuImageUpload::Impl::beginDisplayCells(const GpuImageUploadParameters& parameters,
+                                        const std::uint64_t byteBudget) {
+    const GpuUploadDisplayCells& cells = *parameters.displayCells;
+    if (!parameters.descriptorOverride) {
+        return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,
+                                "a display frame upload names its picture's descriptor");
+    }
+    const Rgba32fImageDescriptor& descriptor = *parameters.descriptorOverride;
+    const std::uint64_t pixels =
+        static_cast<std::uint64_t>(descriptor.dataWindow().extent().width()) *
+        descriptor.dataWindow().extent().height();
+    if (pixels == 0 || cells.cells.size() != pixels) {
+        return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,
+                                "the display frame's cells do not match its descriptor");
+    }
+    const std::array<std::span<const std::byte>, 1> planeBytes{std::as_bytes(cells.cells)};
+    DisplayUnpackPushConstants push{};
+    push.width = descriptor.dataWindow().extent().width();
+    push.height = descriptor.dataWindow().extent().height();
+    push.pixelLayout = cells.layout == DisplayPixelLayout::Rgb10A2 ? 1U : 0U;
+    return beginConverted(parameters, byteBudget, descriptor, planeBytes, displayUnpackConvert,
+                          /*displayUnpack=*/true, &push, sizeof(push));
+}
+
+GpuImageUploadDiagnostic GpuImageUpload::Impl::beginConverted(
+    const GpuImageUploadParameters& parameters, const std::uint64_t byteBudget,
+    const Rgba32fImageDescriptor& descriptorValue,
+    const std::span<const std::span<const std::byte>> planes, ConvertPipeline& convert,
+    const bool unpackDisplay, const void* const pushData, const std::uint32_t pushBytes) {
+    const Rgba32fImageDescriptor* const descriptor = &descriptorValue;
+    CompositePipeline& samplePipeline = convert.pipeline;
+    vk::raii::DescriptorSet& sampleDescriptorSet = convert.descriptorSet;
     const std::uint32_t width = descriptor->dataWindow().extent().width();
     const std::uint32_t height = descriptor->dataWindow().extent().height();
-    const auto planes = samples.planes();
     if (width == 0 || height == 0 || planes.empty()) {
         return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,
                                 "the upload samples are empty");
@@ -235,12 +307,12 @@ GpuImageUploadDiagnostic GpuImageUpload::Impl::beginSamples(const GpuImageUpload
         }
         resourcesReady = true;
     }
-    if (!samplePipelineReady) {
-        if (!createSamplePipeline()) {
-            resetSamplePipeline();
+    if (!convert.ready) {
+        if (!createConvertPipeline(convert, unpackDisplay)) {
+            resetConvertPipeline(convert);
             return createDiagnostic;
         }
-        samplePipelineReady = true;
+        convert.ready = true;
     }
 
     clearJob();
@@ -395,10 +467,9 @@ GpuImageUploadDiagnostic GpuImageUpload::Impl::beginSamples(const GpuImageUpload
             rawCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
             static_cast<VkPipelineLayout>(*samplePipeline.pipelineLayout), 0, 1, &rawSet, 0,
             nullptr);
-        const SamplePushConstants push = pushConstants(samples);
         dispatcher->vkCmdPushConstants(
             rawCommandBuffer, static_cast<VkPipelineLayout>(*samplePipeline.pipelineLayout),
-            VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+            VK_SHADER_STAGE_COMPUTE_BIT, 0, pushBytes, pushData);
         dispatcher->vkCmdDispatch(rawCommandBuffer, static_cast<std::uint32_t>(groupsX),
                                   static_cast<std::uint32_t>(groupsY), 1);
         VkImageMemoryBarrier written = toGeneral;
@@ -438,7 +509,7 @@ GpuImageUploadDiagnostic GpuImageUpload::Impl::beginSamples(const GpuImageUpload
             return jobDiagnostic;
         }
         queueSubmitted = true;
-        ++sampleConvertedUploads;
+        ++(unpackDisplay ? displayUnpackedUploads : sampleConvertedUploads);
         jobState = GpuImageUploadJobState::Pending;
         jobDiagnostic = GpuImageUploadDiagnostic{};
         return {};

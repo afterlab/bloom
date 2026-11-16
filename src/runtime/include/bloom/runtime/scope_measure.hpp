@@ -32,6 +32,13 @@
 //                   finite, or s <= 0: 1 to `noChromaticity`. Otherwise x = X / s, y = Y / s;
 //                   cell (floor(x / 0.8 * 512), floor(y / 0.9 * 512)) with 0.8 and 0.9 the
 //                   nearest binary32; a cell outside 0..511 adds 1 to `chromaticityOutside`.
+//
+// #733: a measure for drawing is counted at the size its panes draw (ScopeMeasureInput::reduction,
+// render/scope_table_layout.hpp). The cell of a pixel in a reduced table is its cell above with
+// the index shifted right (the Waveform column, the Waveform level, the Vectorscope and
+// Chromaticity cells of an axis), so a reduced cell is the exact sum of the full cells it covers
+// and the rules above are unchanged. The signal may also be a stored display frame
+// (ScopeMeasureInput::packed): its pixels are then read as unpackDisplaySignal() gives them.
 
 #include <bloom/render/image_types.hpp>
 #include <bloom/render/scope_table_layout.hpp>
@@ -116,7 +123,23 @@ struct ScopeMeasureInput final {
     std::uint32_t axisMaximum = 1;
     ScopeLuma luma;
     bool ignoreTransparent = false;
+    // #733: the size of the tables (render/scope_table_layout.hpp); the full tables by default.
+    render::ScopeTableReduction reduction{};
+    // #733: a stored display frame as the signal, when not empty (`signal` is then not read):
+    // row-major `width` x `height` cells of `packedLayout`. A pixel's signal is the picture
+    // unpackDisplaySignal() gives for it, so the measure of a stored frame and the measure of its
+    // unpacked picture are the same tables.
+    std::span<const render::Rgba8> packed;
+    render::DisplayPixelLayout packedLayout = render::DisplayPixelLayout::Straight8888;
 };
+
+// #733: the Display signal of a stored display frame as the float picture a measure counts, pixel
+// for pixel (render::displaySignalPixel): red, green and blue are the pixel's 10-bit Display code
+// over black (the stored code of a 10:10:10:2 frame, the 8-bit color times the 8-bit alpha of a
+// straight 8:8:8:8 frame) as the correctly rounded code / 1023, which the code rule turns back
+// into that code; alpha is the stored alpha.
+[[nodiscard]] std::vector<render::Rgba32f>
+unpackDisplaySignal(std::span<const render::Rgba8> cells, render::DisplayPixelLayout layout);
 
 // The count tables of one measure, as unsigned 32-bit words in the layout of
 // render/scope_table_layout.hpp. The accessors return 0 for a table that was not measured.
@@ -131,7 +154,9 @@ struct ScopeCounts final {
     [[nodiscard]] std::uint32_t vectorscopeOutside() const noexcept;
     // `index` is a code 0..1023, render::kScopeCodeUnder or render::kScopeCodeOver.
     [[nodiscard]] std::uint32_t histogram(std::uint32_t channel, std::uint32_t index) const noexcept;
-    // `level` is a code 0..1023, render::kScopeWaveformLevelUnder or kScopeWaveformLevelOver.
+    // `level` is a cell of the column: a level 0..layout.waveformLevels() - 1 (the 10-bit code
+    // in the full table), layout.waveformLevelUnder() or layout.waveformLevelOver(). The cells of
+    // every table are those of `layout`, which a reduction makes fewer.
     [[nodiscard]] std::uint32_t waveform(std::uint32_t channel, std::uint32_t column,
                                          std::uint32_t level) const noexcept;
     [[nodiscard]] std::uint32_t vectorscope(std::uint32_t cbCell,

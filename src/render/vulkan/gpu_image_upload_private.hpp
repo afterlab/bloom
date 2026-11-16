@@ -153,10 +153,30 @@ struct GpuImageUpload::Impl final {
     [[nodiscard]] bool createResources();
     // #422: the SampleConvertV1 pipeline, descriptor pool and set, created on the first native-
     // sample job under the resident slot and kept with the command resources.
-    [[nodiscard]] bool createSamplePipeline();
+    // #733: DisplayUnpackV1 is a second kernel of the same shape (the planes in staging, one
+    // dispatch into the resident image), so both share the set layout and the job body.
+    struct ConvertPipeline final {
+        CompositePipeline pipeline;
+        // The set is declared after its pool so it is freed first.
+        vk::raii::DescriptorPool descriptorPool{nullptr};
+        vk::raii::DescriptorSet descriptorSet{nullptr};
+        bool ready = false;
+    };
+    [[nodiscard]] bool createConvertPipeline(ConvertPipeline& convert, bool displayUnpack);
+    void resetConvertPipeline(ConvertPipeline& convert) noexcept;
+    // Releases both kernels' pipelines.
     void resetSamplePipeline() noexcept;
     [[nodiscard]] GpuImageUploadDiagnostic beginSamples(const GpuImageUploadParameters& parameters,
                                                         std::uint64_t byteBudget);
+    [[nodiscard]] GpuImageUploadDiagnostic
+    beginDisplayCells(const GpuImageUploadParameters& parameters, std::uint64_t byteBudget);
+    // The job both kernels run: `planes` copied into staging as they are, the resident image
+    // created for `descriptor`, one dispatch of `convert` with `pushData`, submitted.
+    [[nodiscard]] GpuImageUploadDiagnostic
+    beginConverted(const GpuImageUploadParameters& parameters, std::uint64_t byteBudget,
+                   const Rgba32fImageDescriptor& descriptor,
+                   std::span<const std::span<const std::byte>> planes, ConvertPipeline& convert,
+                   bool unpackDisplay, const void* pushData, std::uint32_t pushBytes);
     // Bounded owner-thread drain. Returns true when the submission is proved retired.
     [[nodiscard]] bool drainAndRetire() noexcept;
 
@@ -190,12 +210,11 @@ struct GpuImageUpload::Impl final {
     // least the upload's; copy and blit address only the upload's region).
     UploadHalfImage spareHalf;
     const void* spareHalfPhase = nullptr;
-    // #422 SampleConvertV1. The set is declared after its pool so it is freed first.
-    CompositePipeline samplePipeline;
-    vk::raii::DescriptorPool sampleDescriptorPool{nullptr};
-    vk::raii::DescriptorSet sampleDescriptorSet{nullptr};
-    bool samplePipelineReady = false;
+    // #422 SampleConvertV1 and #733 DisplayUnpackV1.
+    ConvertPipeline sampleConvert;
+    ConvertPipeline displayUnpackConvert;
     std::uint64_t sampleConvertedUploads = 0;
+    std::uint64_t displayUnpackedUploads = 0;
 
     GpuImageUploadJobState jobState = GpuImageUploadJobState::Idle;
     bool queueSubmitted = false;
