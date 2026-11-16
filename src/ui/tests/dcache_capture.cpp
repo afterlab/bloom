@@ -26,6 +26,8 @@
 #include <QVBoxLayout>
 
 #include <chrono>
+#include <functional>
+#include <optional>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -114,6 +116,17 @@ int main(int argc, char** argv) {
         {
             QWidget owner;
             ui::PreferencesWindow window(owner, ui::ApplicationPreferences{});
+            // After #732 the window takes the cache's live figures; before it, it has no such
+            // interface and the same tool captures the page as it was.
+            if constexpr (requires {
+                              window.setDiskCacheFigures(
+                                  std::function<std::optional<cache::SourceMirrorStatistics>()>{});
+                          }) {
+                window.setDiskCacheFigures(
+                    [&mirror]() -> std::optional<cache::SourceMirrorStatistics> {
+                        return mirror.statistics();
+                    });
+            }
             window.resize(width, 900);
             window.show();
             settle();

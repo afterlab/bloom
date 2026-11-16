@@ -258,7 +258,7 @@ void WindowStatusBar::buildSegments() {
     diskSegment_->addLabel(tr("Disk cache"));
     mediaDiskCacheCell_ =
         new ValueLabel(QStringLiteral("windowStatusBarMediaDiskCache"),
-                       QStringLiteral("0000.0 MB cached"), kit::Color::Foreground, diskSegment_);
+                       QStringLiteral("0000.0 MB / 0000.0 GB"), kit::Color::Foreground, diskSegment_);
     diskSegment_->add(mediaDiskCacheCell_);
     layout->addWidget(diskSegment_);
 
@@ -823,16 +823,20 @@ void WindowStatusBar::refreshMediaDiskCacheCell() {
         value = tr("off");
         detail = tr("The disk cache is switched off in Preferences.");
     } else if (stats.indexLoaded) {
-        value = stats.entryCount == 0 ? tr("empty")
-                                      : tr("%1 cached").arg(formatBytes(stats.storedBytes));
+        value = stats.entryCount == 0 ? tr("empty") : mediaDiskCacheUsedText(stats);
         detail = tr("%1\n%2 sources · %3 stored")
                      .arg(mediaDiskCacheTierText(stats, platform::sourceTierWork().memoryHits))
                      .arg(stats.entryCount)
                      .arg(formatBytes(stats.storedBytes));
         if (stats.pendingWrites != 0)
             detail += tr(" · %1 being copied").arg(stats.pendingWrites);
-        if (stats.diskPressure)
-            detail += tr("\nThe cache drive is short of free space; new copies are skipped.");
+        if (stats.driveMeasured) {
+            detail += tr("\nKeeping %1 free · %2 free on the cache drive")
+                          .arg(formatBytes(stats.headroomBytes), formatBytes(stats.freeBytes));
+        } else if (stats.availableBytes != 0) {
+            detail += tr("\nThe cache drive cannot be read · The disk cache is limited to %1")
+                          .arg(formatBytes(media::cache::kSourceMirrorUnmeasuredByteLimit));
+        }
     }
     // #718: each source's storage class and cached state, the first few by name.
     if (const auto* assets = session_.assetController())

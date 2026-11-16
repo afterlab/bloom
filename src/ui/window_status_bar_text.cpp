@@ -221,7 +221,16 @@ QString mediaDiskCacheStatusText(const media::cache::SourceMirrorStatistics& sta
         return WindowStatusBar::tr("Disk cache starting");
     if (stats.entryCount == 0)
         return WindowStatusBar::tr("Disk empty");
-    return WindowStatusBar::tr("Disk %1 cached").arg(formatBytes(stats.storedBytes));
+    return WindowStatusBar::tr("Disk %1").arg(mediaDiskCacheUsedText(stats));
+}
+
+QString mediaDiskCacheUsedText(const media::cache::SourceMirrorStatistics& stats) {
+    // Until the first measurement, and while the drive cannot be read and nothing says how much
+    // room there is, the used figure stands alone.
+    if (!stats.driveMeasured && stats.availableBytes == 0)
+        return formatBytes(stats.storedBytes);
+    return WindowStatusBar::tr("%1 / %2")
+        .arg(formatBytes(stats.storedBytes), formatBytes(stats.availableBytes));
 }
 
 QString mediaDiskCacheTierText(const media::cache::SourceMirrorStatistics& stats,
@@ -232,6 +241,10 @@ QString mediaDiskCacheTierText(const media::cache::SourceMirrorStatistics& stats
                     .arg(stats.networkReads);
     if (stats.otherSourceReads != 0)
         text += WindowStatusBar::tr(" · Other slow reads %1").arg(stats.otherSourceReads);
+    text += WindowStatusBar::tr("\nEvictions %1 · Refused writes %2 · Dropped writes %3")
+                .arg(stats.evictions)
+                .arg(stats.refusedWrites)
+                .arg(stats.droppedWrites);
     return text;
 }
 

@@ -110,12 +110,19 @@ struct BackgroundWorkReadout final {
 // The disk cache's own cell (#718, docs/architecture/media-io.md "Disk cache"), separate from
 // `previewCacheText()`'s in-memory RAM preview account above. It states what is true now, with or
 // without a lookup: "Disk cache off" when disabled, "Disk cache starting" until the index has
-// been read (off the UI thread), "Disk empty", or "Disk 4.2 GB cached".
+// been read (off the UI thread), "Disk empty", or "Disk 12.4 GB / 268 GB": used and available (what
+// it holds plus the room it may still grow into, #732). Before the cache drive has been measured
+// the used figure stands alone.
 [[nodiscard]] QString mediaDiskCacheStatusText(const media::cache::SourceMirrorStatistics& stats,
                                                bool enabled);
-// The tooltip's tier line: "RAM hits 12 · Disk hits 340 · Network reads 8". RAM hits are source
-// revisions reused from memory, disk hits are sources served by their local copy, and network
-// reads are whole reads of a source on a network volume.
+// The cell's figure without its label: "12.4 GB / 268 GB", or "12.4 GB" before the first
+// measurement.
+[[nodiscard]] QString mediaDiskCacheUsedText(const media::cache::SourceMirrorStatistics& stats);
+// The tooltip's counters, two lines: "RAM hits 12 · Disk hits 340 · Network reads 8" and
+// "Evictions 0 · Refused writes 0 · Dropped writes 0". RAM hits are source revisions reused from
+// memory, disk hits are sources served by their local copy, and network reads are whole reads of a
+// source on a network volume. Refused writes found no room that was not in use; dropped writes
+// found the write queue full.
 [[nodiscard]] QString mediaDiskCacheTierText(const media::cache::SourceMirrorStatistics& stats,
                                              std::uint64_t memoryHits);
 

@@ -174,15 +174,31 @@ void testMediaDiskCacheStatusText(Expectations& check) {
     warm.storedBytes = 2ULL * 1024 * 1024;
     warm.entryCount = 4;
     const auto text = ui::mediaDiskCacheStatusText(warm, /*enabled=*/true);
-    check.expect(text.contains(QStringLiteral("MB")) && text.contains(QStringLiteral("cached")),
-                 "resident bytes are reported with a readable unit, before any lookup too");
+    check.expect(text == QStringLiteral("Disk 2.0 MB") &&
+                     ui::mediaDiskCacheUsedText(warm) == QStringLiteral("2.0 MB"),
+                 "before the first measurement the used figure stands alone, with a readable unit");
+    warm.driveMeasured = true;
+    warm.availableBytes = 268ULL * 1024 * 1024 * 1024;
+    check.expect(ui::mediaDiskCacheStatusText(warm, /*enabled=*/true) ==
+                         QStringLiteral("Disk 2.0 MB / 268.0 GB") &&
+                     ui::mediaDiskCacheUsedText(warm) == QStringLiteral("2.0 MB / 268.0 GB"),
+                 "a measured drive shows used and available");
+    warm.driveMeasured = false;
+    warm.availableBytes = 32ULL * 1024 * 1024 * 1024;
+    check.expect(ui::mediaDiskCacheUsedText(warm) == QStringLiteral("2.0 MB / 32.0 GB"),
+                 "an unreadable drive shows the fixed limit as the available figure");
     const auto tiers = ui::mediaDiskCacheTierText(warm, 7);
-    check.expect(tiers == QStringLiteral("RAM hits 7 · Disk hits 3 · Network reads 1"),
-                 "the tooltip reports RAM hits, disk hits and network reads");
+    check.expect(tiers == QStringLiteral("RAM hits 7 · Disk hits 3 · Network reads 1\n"
+                                         "Evictions 0 · Refused writes 0 · Dropped writes 0"),
+                 "the tooltip reports RAM hits, disk hits, network reads and zero write counters");
     warm.otherSourceReads = 2;
-    check.expect(ui::mediaDiskCacheTierText(warm, 7).endsWith(
-                     QStringLiteral("Other slow reads 2")),
-                 "reads of other slow storage are reported when there are any");
+    warm.evictions = 5;
+    warm.refusedWrites = 11;
+    warm.droppedWrites = 3;
+    check.expect(ui::mediaDiskCacheTierText(warm, 7) ==
+                     QStringLiteral("RAM hits 7 · Disk hits 3 · Network reads 1 · Other slow "
+                                    "reads 2\nEvictions 5 · Refused writes 11 · Dropped writes 3"),
+                 "other slow reads, evictions, refused writes and dropped writes are counted");
 }
 
 // One mirrored source: enough for the disk store to hold one real entry.

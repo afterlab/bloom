@@ -7,6 +7,7 @@
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/media/cache/source_mirror.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
@@ -39,6 +40,11 @@
 #include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
+#include <filesystem>
+#include <optional>
+#include <memory>
+#include <span>
+#include <vector>
 #include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
@@ -833,6 +839,54 @@ void testWindowStatusBarIsAKitStripWithEveryCell(Expectations& expectations) {
                         "status bar: a window built without a media disk cache reports it as off");
 }
 
+// #732: the Disk cell shows used and available, and its tooltip the counters, the headroom and the
+// free space on the cache drive. A mirror on an injected drive makes the figures exact.
+void testWindowStatusBarShowsDiskCacheSpaceAndCounters(Expectations& expectations) {
+    bool ok = false;
+    Fixture fixture(&ok);
+    expectations.expect(ok, "disk cell: stand-in editors register");
+    constexpr auto gib = std::uint64_t{1024} * 1024 * 1024;
+    QTemporaryDir directory;
+    bloom::media::cache::SourceMirrorConfig config;
+    config.rootDirectory = std::filesystem::path(directory.filePath("media").toStdString());
+    config.headroomBytes = 20 * gib;
+    config.driveSpace = [] {
+        return std::optional(bloom::media::cache::SourceMirrorDriveSpace{500 * 1024 * 1024 * 1024ULL,
+                                                                         120 * 1024 * 1024 * 1024ULL});
+    };
+    bloom::media::cache::SourceMirror mirror(config);
+    auto bytes = std::make_shared<std::vector<std::byte>>(4 * 1024 * 1024, std::byte{7});
+    bloom::platform::FileIdentity identity;
+    identity.size = bytes->size();
+    identity.modifiedNanoseconds = 1;
+    identity.fileIdLow = 9;
+    const std::span<const std::byte> view(*bytes);
+    mirror.keep(std::filesystem::temp_directory_path() / "bloom-disk-cell" / "a.exr", identity,
+                bytes, view);
+    mirror.flush();
+    for (int attempt = 0; attempt < 250; ++attempt) {
+        const auto stats = mirror.statistics();
+        if (stats.indexLoaded && stats.entryCount == 1 && stats.availableBytes != 0)
+            break;
+        QTest::qWait(20);
+    }
+    WindowStatusBar strip(fixture.compositionSession, nullptr, &mirror);
+    expectations.expect(strip.diskTextForTest() == QStringLiteral("4.0 MB / 100.0 GB"),
+                        "disk cell: the cell shows used and available");
+    const auto tip = strip.diskToolTipForTest();
+    expectations.expect(tip.contains(QStringLiteral("Disk hits 0 · Network reads 0")) &&
+                            tip.contains(QStringLiteral(
+                                "Evictions 0 · Refused writes 0 · Dropped writes 0")) &&
+                            tip.contains(QStringLiteral("1 sources · 4.0 MB stored")) &&
+                            tip.contains(QStringLiteral(
+                                "Keeping 20.0 GB free · 120.0 GB free on the cache drive")),
+                        "disk cell: the tooltip shows the counters, the headroom and the free space");
+    expectations.expect(!tip.contains(QStringLiteral("short of free space")) &&
+                            strip.mediaDiskCacheTextForTest() ==
+                                QStringLiteral("Disk 4.0 MB / 100.0 GB"),
+                        "disk cell: no drive-short sentence, and the status text follows the cell");
+}
+
 void testWindowStatusBarReportsSelectedMemoryBudgets(Expectations& expectations) {
     bool ok = false;
     Fixture fixture(&ok);
@@ -1529,6 +1583,7 @@ int main(int argc, char** argv) {
     testProjectColorDialogPreservesCurrentIntent(expectations);
     testWindowStatusBarIsAKitStripWithEveryCell(expectations);
     testWindowStatusBarReportsSelectedMemoryBudgets(expectations);
+    testWindowStatusBarShowsDiskCacheSpaceAndCounters(expectations);
     testWindowStatusBarKeepsMemoryReasonDuringRamPreview(expectations);
     testWindowStatusBarMessagesClearThemselves(expectations);
     try {
