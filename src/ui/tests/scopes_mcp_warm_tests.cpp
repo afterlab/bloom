@@ -4,14 +4,16 @@
 // of a 64 x 64 composition (an SVG imported as shapes: a red half and, inside a group, a blue half)
 // answer the scripting read's warm port, with the CPU reference as the only measure route.
 // Asserted:
-//   * #730: a cached frame carries the tables its own preparation counted, with the settings they
-//     were counted under. A frame the preview shows whose tables were counted under exactly the
-//     settings a read would measure with is answered from the cache with exactly those tables and
-//     with no measure run (the CPU route is counted);
+//   * #730, #733: a cached frame carries the Working-signal tables its own preparation counted,
+//     with the settings they were counted under. A frame the preview shows whose tables were
+//     counted under exactly the settings a read would measure with is answered from the cache
+//     with exactly those tables and with no measure run (the CPU route is counted);
 //   * the same read is measured when the scope settings differ (signal, region, Ignore
 //     Transparent Pixels, the scopes asked for, the axis maximum), when the resolution differs,
-//     when the display and view differ, when the composition read is not the one the Viewer shows,
-//     and when the Viewer has a region of interest, an isolation, a channel view or looks off;
+//     when the composition read is not the one the Viewer shows, and when the Viewer has a region
+//     of interest, an isolation, a channel view or looks off; the Viewer's display and view never
+//     matter to the Working signal;
+//   * #733: no frame stores Display-signal tables, so a Display read is measured;
 //   * a binding with no preview or cache measures everything;
 //   * the warm answer equals a cold measure of the same frame, cell for cell.
 // The port is called from the read's worker and marshaled to the interface thread, as the MCP
@@ -304,9 +306,19 @@ class Warm final {
     std::atomic<int> measures_ = 0;
 };
 
-[[nodiscard]] scripting::ScopeReadRequest defaultRead() { return {}; }
+// #733: only Working-signal tables are cached with a frame, so the cached-table cases read the
+// Working signal.
+[[nodiscard]] scripting::ScopeReadRequest defaultRead() {
+    scripting::ScopeReadRequest request;
+    request.signal = runtime::ScopeSignal::Working;
+    return request;
+}
 
-[[nodiscard]] runtime::ScopeMeasureSettings defaultSettings() { return {}; }
+[[nodiscard]] runtime::ScopeMeasureSettings defaultSettings() {
+    runtime::ScopeMeasureSettings settings;
+    settings.signal = runtime::ScopeSignal::Working;
+    return settings;
+}
 
 // A read that must be measured, not answered from the cache, with the genuine tables.
 void expectMeasured(Warm& warm, scripting::ScopeReadRequest request,
@@ -409,8 +421,8 @@ int main(int argc, char** argv) {
         // The scope settings: each one differs from the cached tables' settings.
         {
             auto request = defaultRead();
-            request.signal = runtime::ScopeSignal::Working;
-            expectMeasured(warm, request, genuine, "a Working signal read", false);
+            request.signal = runtime::ScopeSignal::Display;
+            expectMeasured(warm, request, genuine, "a Display signal read", false);
             request = defaultRead();
             request.region = runtime::ScopeRegion{0, 0, 32, 64};
             expectMeasured(warm, request, leftHalf, "a read with a region");
@@ -420,25 +432,39 @@ int main(int argc, char** argv) {
             request = defaultRead();
             request.scopes = render::kScopeTableHistogram;
             expectMeasured(warm, request, genuine, "a read of the Histogram alone", false);
-            // The axis maximum of the Working signal: tables of the Working signal at 1 does
-            // not answer a read at 4.
-            auto working = defaultSettings();
-            working.signal = runtime::ScopeSignal::Working;
-            auto workingRead = defaultRead();
-            workingRead.signal = runtime::ScopeSignal::Working;
-            const auto workingFrame = warm.cold(workingRead);
-            expect(warm.attach(*key, workingFrame, working), "the frame carries Working tables");
-            workingRead.axisMaximum = 4;
-            expectMeasured(warm, workingRead, workingFrame, "a Working read at another maximum",
-                           false);
-            workingRead.axisMaximum = 1;
-            const auto answered = warm.read(workingRead);
+            // The axis maximum of the Working signal: tables counted at 4 do not answer a read
+            // at 1, and answer a read at 4.
+            auto wide = defaultSettings();
+            wide.axisMaximum = 4;
+            auto wideRead = defaultRead();
+            wideRead.axisMaximum = 4;
+            const auto wideFrame = warm.cold(wideRead);
+            expect(warm.attach(*key, wideFrame, wide),
+                   "the frame carries tables of another axis maximum");
+            expectMeasured(warm, defaultRead(), genuine, "a read at another axis maximum");
+            const auto answered = warm.read(wideRead);
             expect(answered.ok() && answered.frames.size() == 1 &&
                        answered.frames.front().fromCache &&
-                       answered.frames.front().counts == workingFrame.counts,
-                   "a Working read with the cached tables' own settings is answered from it");
-            // Caching other tables replaces them: the Display tables go back.
-            expect(warm.attach(*key, genuine, defaultSettings()), "the Display tables are back");
+                       answered.frames.front().counts == wideFrame.counts,
+                   "a read with the cached tables' own axis maximum is answered from them");
+            // Caching other tables replaces them: the first tables go back.
+            expect(warm.attach(*key, genuine, defaultSettings()), "the first tables are back");
+        }
+
+        // #733: no frame stores Display-signal tables. Caching a frame that carries them keeps
+        // the tables the entry has, and a Display read is measured.
+        {
+            scripting::ScopeReadRequest displayRead;
+            displayRead.signal = runtime::ScopeSignal::Display;
+            const auto displayFrame = warm.cold(displayRead);
+            runtime::ScopeMeasureSettings displaySettings;
+            displaySettings.signal = runtime::ScopeSignal::Display;
+            const auto before = warm.cache().scopesOf(*key);
+            expect(!warm.attach(*key, displayFrame, displaySettings) &&
+                       warm.cache().scopesOf(*key) == before && before != nullptr &&
+                       before->settings.signal == runtime::ScopeSignal::Working,
+                   "the cache stores no Display tables and keeps the Working ones");
+            expectMeasured(warm, displayRead, displayFrame, "a Display read");
         }
 
         // The resolution: a Half read does not take a Full frame's tables.
@@ -448,48 +474,20 @@ int main(int argc, char** argv) {
             expectMeasured(warm, request, genuine, "a half resolution read", false);
         }
 
-        // The display and view. A read that names the pair measures; a Viewer that chose another
-        // pair is another frame; a Viewer that chose the very pair the read names is the same.
+        // The display and view: the Working signal never goes through the display, so a Viewer
+        // that chose another pair still answers.
         {
-            const auto defaultRead_ = warm.read(defaultRead());
-            const std::string display = defaultRead_.ok() ? defaultRead_.color.display : "";
-            const std::string view = defaultRead_.ok() ? defaultRead_.color.view : "";
-            expect(!display.empty() && !view.empty(), "the read reports the pair it measured");
-            auto named = defaultRead();
-            named.display = display;
-            named.view = view;
-            expectMeasured(warm, named, genuine,
-                           "a read that names a pair the Viewer has not chosen", true);
             warm.controller().setViewerDisplayView("Review Display", "Review View");
             auto other = warm.shown();
             expect(other.has_value(), "the preview shows the frame under another display and view");
             if (other) {
                 expect(warm.attach(*other, genuine, defaultSettings()),
                        "its tables are cached with it");
-                expectMeasured(warm, defaultRead(), genuine,
-                               "a Viewer on another display and view");
-                // The Working signal never goes through the display: that tables answers.
-                auto working = defaultSettings();
-                working.signal = runtime::ScopeSignal::Working;
-                auto workingRead = defaultRead();
-                workingRead.signal = runtime::ScopeSignal::Working;
-                const auto workingFrame = warm.cold(workingRead);
-                expect(warm.attach(*other, workingFrame, working),
-                       "the frame carries Working tables");
-                const auto answered = warm.read(workingRead);
+                const auto answered = warm.read(defaultRead());
                 expect(answered.ok() && answered.frames.size() == 1 &&
-                           answered.frames.front().fromCache,
+                           answered.frames.front().fromCache &&
+                           answered.frames.front().counts == genuine.counts,
                        "the Working signal does not depend on the Viewer's display and view");
-            }
-            warm.controller().setViewerDisplayView(display, view);
-            auto chosen = warm.shown();
-            expect(chosen.has_value(), "the preview shows the frame under the read's own pair");
-            if (chosen) {
-                expect(warm.attach(*chosen, genuine, defaultSettings()),
-                       "its tables are cached with it");
-                const auto result = warm.read(named);
-                expect(result.ok() && result.frames.size() == 1 && result.frames.front().fromCache,
-                       "a read that names the pair the Viewer chose is answered from the cache");
             }
             warm.controller().setViewerDisplayView({}, {});
             key = warm.shown();

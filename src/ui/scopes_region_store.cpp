@@ -83,13 +83,26 @@ runtime::ScopeMeasureSettings ScopesRegionStore::settings(const Key& key) const 
 
 std::shared_ptr<const runtime::PreviewScopeRequest>
 ScopesRegionStore::request(const Key& key) const {
-    if (!active())
+    // #733: the Display signal is counted from the shown frame, never with a frame's preparation.
+    if (!active() || signal_ != runtime::ScopeSignal::Working)
         return nullptr;
     auto& slot = requests_[key];
     if (slot == nullptr)
-        slot = std::make_shared<const runtime::PreviewScopeRequest>(runtime::PreviewScopeRequest{
-            .settings = settings(key), .colors = colors_, .ocio = ocio_});
+        slot = std::make_shared<const runtime::PreviewScopeRequest>(
+            runtime::PreviewScopeRequest{.settings = settings(key),
+                                         .reduction = tableReduction_,
+                                         .colors = colors_,
+                                         .ocio = ocio_});
     return slot;
+}
+
+void ScopesRegionStore::setTableReduction(const render::ScopeTableReduction reduction) {
+    if (!render::validScopeTableReduction(reduction) || tableReduction_ == reduction)
+        return;
+    tableReduction_ = reduction;
+    requests_.clear();
+    if (active())
+        emit measureChanged();
 }
 
 void ScopesRegionStore::setOcio(

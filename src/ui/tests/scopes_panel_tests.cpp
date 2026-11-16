@@ -1,4 +1,5 @@
-// #724, #730 Scopes: the Scopes panel over genuine CPU reference frames; no device and no Viewer.
+// #724, #730, #733 Scopes: the Scopes panel over genuine CPU reference frames; no device and no
+// Viewer.
 //
 // Asserted:
 //   * `bloom.scopes`, "Scopes", is registered like every editor; the area hosts its header menus
@@ -7,9 +8,16 @@
 //   * the header menus write the session's settings: Signal (Display, Working, the Working axis
 //     maximum, Ignore Transparent Pixels), Region (Draw and Clear Scope Region, disabled with no
 //     Viewer) and each scope's modes, which draw again from the same tables;
-//   * the panel draws the tables the frame the Viewer shows carries, when they were counted under
-//     the session's settings; a shown panel makes requests ask for every table, a hidden one for
-//     none;
+//   * #733, the Display signal: the panel hands the frame the Viewer shows to the runtime's
+//     shown-frame measure, which counts it on a worker, never the interface thread; no request
+//     asks a frame's preparation for Display tables, and the same frame under the same settings
+//     is asked once;
+//   * #733, testSettingsChangeRendersNothing: Ignore Transparent Pixels, a region and the signal
+//     each recount the frame on show with one measure and ask no frame's preparation for
+//     anything; the Working axis maximum is not a Display setting and counts nothing;
+//   * the Working signal: the panel draws the tables the frame carries, when they were counted
+//     under the session's settings; a shown panel then makes requests ask for every table, a
+//     hidden one for none;
 //   * #730, never dim: a frame's new tables leave the trace on show untouched, at full strength,
 //     until the new image replaces it in one swap; a frame without tables of the current settings
 //     changes nothing; every picture painted between two valid traces is one of the two;
@@ -320,6 +328,111 @@ void testHeaderMenus(Expectations& e, ScopesEditor& panel, ui::ScopesRegionStore
              "the modes are back to their defaults");
 }
 
+// What the runtime's CPU count of a shown frame ran on.
+struct MeasureThreads final {
+    std::thread::id interfaceThread = std::this_thread::get_id();
+    std::atomic<int> counted = 0;
+    std::atomic<int> onInterfaceThread = 0;
+};
+
+// Shows `frame` and waits for the tables the panel is handed for it.
+[[nodiscard]] std::shared_ptr<const runtime::PreviewFrameScopes>
+countShown(Expectations& e, ScopesEditor& panel, const ui::PreparedPreviewFrameHandle& frame,
+           const std::string& what) {
+    const auto previous = panel.scopes();
+    panel.showViewerFrame(frame);
+    e.expect(awaitQtCondition(what,
+                              [&] {
+                                  return !panel.measuring() && panel.scopes() != nullptr &&
+                                         panel.scopes() != previous;
+                              }),
+             what);
+    return panel.scopes();
+}
+
+// #733 (R8): a settings change on the Display signal counts the frame on show again, with one
+// measure, off the interface thread, and asks no frame's preparation for anything.
+void testSettingsChangeRendersNothing(Expectations& e, ScopesEditor& panel,
+                                      ui::ScopesRegionStore& store,
+                                      const ui::ScopesRegionStore::Key& key,
+                                      const ui::PreparedPreviewFrameHandle& frame,
+                                      const MeasureThreads& threads) {
+    const auto pixels = static_cast<std::uint64_t>(format().width()) * format().height();
+    const auto changed = [&](const std::string& what, const auto& change, const auto& holds) {
+        const auto before = panel.measureCounters();
+        const int countedBefore = threads.counted.load();
+        change();
+        e.expect(store.request(key) == nullptr,
+                 what + ": no request asks a frame's preparation for tables");
+        const auto scopes = countShown(e, panel, frame, what + ": the frame on show is counted");
+        const auto after = panel.measureCounters();
+        e.expect(after.requested == before.requested + 1 &&
+                     after.cpuMeasures + after.unmeasured ==
+                         before.cpuMeasures + before.unmeasured + 1 &&
+                     threads.counted.load() == countedBefore + 1,
+                 what + ": exactly one measure ran");
+        e.expect(scopes != nullptr && scopes->settings == store.settings(key) &&
+                     scopes->settings.signal == runtime::ScopeSignal::Display && holds(*scopes),
+                 what + ": the panel is handed tables of the new settings");
+    };
+    const auto measured = [](const runtime::PreviewFrameScopes& scopes) {
+        return scopes.status == runtime::PreviewFrameScopesStatus::Measured;
+    };
+    changed(
+        "Ignore Transparent Pixels", [&] { store.setIgnoreTransparent(true); },
+        [&](const runtime::PreviewFrameScopes& scopes) {
+            // The solid sits two pixels right and one down: the uncovered edge is transparent.
+            return measured(scopes) && scopes.settings.ignoreTransparent &&
+                   scopes.tables.counted() > 0U && scopes.tables.counted() < pixels;
+        });
+    changed(
+        "Ignore Transparent Pixels off", [&] { store.setIgnoreTransparent(false); },
+        [&](const runtime::PreviewFrameScopes& scopes) {
+            return measured(scopes) && scopes.tables.counted() == pixels;
+        });
+    changed(
+        "a region",
+        [&] {
+            store.setRegion(key, runtime::ScopeRegion{.x = 0, .y = 0, .width = 32, .height = 36});
+        },
+        [&](const runtime::PreviewFrameScopes& scopes) {
+            return measured(scopes) && scopes.tables.counted() == 32U * 36U &&
+                   scopes.area.width == 32U && scopes.area.height == 36U;
+        });
+    changed(
+        "the region cleared", [&] { store.clearRegion(key); },
+        [&](const runtime::PreviewFrameScopes& scopes) {
+            return measured(scopes) && scopes.tables.counted() == pixels;
+        });
+    changed(
+        "the signal back to Display",
+        [&] {
+            store.setSignal(runtime::ScopeSignal::Working);
+            // On the Working signal the panel asks the measure for nothing.
+            const auto asked = panel.measureCounters().requested;
+            panel.showViewerFrame(frame);
+            e.expect(panel.measureCounters().requested == asked,
+                     "the Working signal asks the shown-frame measure for nothing");
+            store.setSignal(runtime::ScopeSignal::Display);
+        },
+        [&](const runtime::PreviewFrameScopes& scopes) {
+            return measured(scopes) && scopes.tables.counted() == pixels;
+        });
+    // The Working axis maximum is not a setting of the Display signal.
+    {
+        const auto before = panel.measureCounters();
+        const auto shown = panel.scopes();
+        store.setWorkingAxisMaximum(2);
+        panel.showViewerFrame(frame);
+        e.expect(panel.measureCounters().requested == before.requested && panel.scopes() == shown &&
+                     store.request(key) == nullptr,
+                 "the Working axis maximum counts nothing on the Display signal");
+        store.setWorkingAxisMaximum(1);
+    }
+    e.expect(threads.onInterfaceThread.load() == 0 && threads.counted.load() > 0,
+             "no frame was counted on the interface thread");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -346,6 +459,12 @@ int main(int argc, char** argv) {
         services.scheduler = &scheduler;
         services.bridge = &bridge;
         services.store = &store;
+        MeasureThreads measureThreads;
+        services.measureObserver = [&measureThreads] {
+            ++measureThreads.counted;
+            if (std::this_thread::get_id() == measureThreads.interfaceThread)
+                ++measureThreads.onInterfaceThread;
+        };
 
         testRegistrationAndChrome(e, services);
 
@@ -361,11 +480,19 @@ int main(int argc, char** argv) {
         host.show();
         e.expect(awaitQtCondition("the panel is shown", [&] { return panel->panelShown(); }),
                  "the panel is shown");
-        const auto request = store.request(key);
-        e.expect(store.active() && request != nullptr &&
-                     request->settings.scopes == render::kScopeTableAll &&
-                     request->settings.signal == runtime::ScopeSignal::Display,
-                 "a shown panel makes requests ask for every table of the session's settings");
+        e.expect(store.active() && store.signal() == runtime::ScopeSignal::Display &&
+                     store.request(key) == nullptr,
+                 "a shown panel on the Display signal asks no frame's preparation for tables");
+        store.setSignal(runtime::ScopeSignal::Working);
+        {
+            const auto request = store.request(key);
+            e.expect(request != nullptr && request->settings.scopes == render::kScopeTableAll &&
+                         request->settings.signal == runtime::ScopeSignal::Working &&
+                         request->reduction == store.tableReduction(),
+                     "on the Working signal requests ask for every table of the session's "
+                     "settings, at the size the panels draw");
+        }
+        store.setSignal(runtime::ScopeSignal::Display);
 
         testHeaderMenus(e, *panel, store);
 
@@ -388,30 +515,47 @@ int main(int argc, char** argv) {
         e.expect(titlesOk, "five panes in order, open by default");
 
         // ---- Frames and their tables ---------------------------------------------------------
-        const auto displayRequest = store.request(key);
-        const auto red = cpuFrame(oneSolidPlan(Color4d{1.0, 0.0, 0.0, 1.0}), 1, 0, displayRequest);
-        const auto green =
-            cpuFrame(oneSolidPlan(Color4d{0.0, 0.6, 0.2, 1.0}), 2, 1, displayRequest);
-        const auto bare = cpuFrame(oneSolidPlan(Color4d{0.0, 0.0, 1.0, 1.0}), 3, 2, nullptr);
-        e.expect(red && green && bare && red->scopes() != nullptr &&
-                     red->scopes()->status == runtime::PreviewFrameScopesStatus::Measured &&
-                     bare->scopes() == nullptr,
-                 "the frames are built, two carrying their tables");
-        if (!red || !green || !bare)
+        // #733: on the Display signal the panel hands the frame on show to the runtime's
+        // shown-frame measure, which counts its stored cells off this thread.
+        const auto red = cpuFrame(oneSolidPlan(Color4d{1.0, 0.0, 0.0, 1.0}), 1, 0);
+        const auto green = cpuFrame(oneSolidPlan(Color4d{0.0, 0.6, 0.2, 1.0}), 2, 1);
+        e.expect(red && green && red->scopes() == nullptr && green->scopes() == nullptr,
+                 "the frames are built; they carry no tables");
+        if (!red || !green)
             return 1;
+        const auto pixels = static_cast<std::uint64_t>(format().width()) * format().height();
 
         std::vector<int> emptyHeights;
         for (const auto kind : kKinds)
             emptyHeights.push_back(panel->view(kind)->heightForWidth(400));
+        const auto countersBefore = panel->measureCounters();
         panel->showViewerFrame(red);
-        e.expect(panel->scopes() == red->scopes(), "the panel takes the frame's tables");
+        e.expect(panel->scopes() == nullptr && panel->measureCounters().requested ==
+                                                   countersBefore.requested + 1,
+                 "the shown frame is handed to the measure and nothing is counted on this thread");
+        e.expect(awaitQtCondition("the red frame is counted",
+                                  [&] { return panel->scopes() != nullptr; }),
+                 "the red frame is counted");
+        const auto redScopes = panel->scopes();
+        e.expect(redScopes != nullptr &&
+                     redScopes->status == runtime::PreviewFrameScopesStatus::Measured &&
+                     redScopes->settings == store.settings(key) &&
+                     redScopes->tables.counted() == pixels &&
+                     redScopes->tables.route() == runtime::ScopeRoute::Cpu &&
+                     redScopes->color != nullptr,
+                 "the panel takes Display tables of every pixel of the shown frame");
+        e.expect(measureThreads.counted.load() == 1 && measureThreads.onInterfaceThread.load() == 0,
+                 "the frame was counted on a worker, not the interface thread");
+        panel->showViewerFrame(red);
+        e.expect(panel->measureCounters().requested == countersBefore.requested + 1,
+                 "the same frame under the same settings is not asked for twice");
         e.expect(
             awaitQtCondition("the red traces are mapped", [&] { return tracesSettled(*panel); }),
             "the red traces are mapped");
         bool allTraces = true;
         for (const auto kind : kKinds)
             allTraces = allTraces && !panel->view(kind)->traceImage().isNull() &&
-                        panel->view(kind)->shownScopes() == red->scopes();
+                        panel->view(kind)->shownScopes() == redScopes;
         e.expect(allTraces, "every scope paints a trace of the red frame's tables");
         const auto mainThread = std::this_thread::get_id();
         bool offThread = true;
@@ -436,38 +580,35 @@ int main(int argc, char** argv) {
 
         // ---- #730: never dim, never blank -------------------------------------------------------
         panel->showViewerFrame(green);
-        e.expect(panel->scopes() == green->scopes(), "the green frame's tables are asked for");
-        bool untouched = true;
+        bool untouched = panel->scopes() == redScopes;
         for (std::size_t index = 0; index < kKinds.size(); ++index) {
             const auto* view = panel->view(kKinds[index]);
             untouched = untouched && view->traceImage() == redTraces[index] &&
-                        view->shownScopes() == red->scopes();
+                        view->shownScopes() == redScopes;
         }
         e.expect(untouched && grabAll(*panel) == redPictures,
-                 "until the new traces are mapped every scope paints the red traces as they were: "
-                 "nothing dims, fades or blanks");
-        // A frame without tables of the current settings changes nothing.
-        panel->showViewerFrame(bare);
-        e.expect(panel->scopes() == green->scopes() && grabAll(*panel) == redPictures,
-                 "a frame without tables leaves the scopes on show untouched");
+                 "until the new frame is counted and its traces are mapped every scope paints the "
+                 "red traces as they were: nothing dims, fades or blanks");
         // Every picture painted until the swaps are done is the red one or the final green one.
         std::vector<std::vector<QImage>> painted;
         e.expect(awaitQtCondition("the green traces are mapped",
                                   [&] {
                                       painted.push_back(grabAll(*panel));
-                                      return tracesSettled(*panel);
+                                      return panel->scopes() != redScopes && !panel->measuring() &&
+                                             tracesSettled(*panel);
                                   }),
                  "the green traces are mapped");
+        const auto greenScopes = panel->scopes();
         const auto greenPictures = grabAll(*panel);
         bool oneSwap = true;
         for (const auto& pictures : painted)
             for (std::size_t index = 0; index < kKinds.size(); ++index)
                 oneSwap = oneSwap && (pictures[index] == redPictures[index] ||
                                       pictures[index] == greenPictures[index]);
-        bool swapped = true;
+        bool swapped = greenScopes != nullptr && greenScopes != redScopes;
         for (std::size_t index = 0; index < kKinds.size(); ++index) {
             const auto* view = panel->view(kKinds[index]);
-            swapped = swapped && view->shownScopes() == green->scopes() &&
+            swapped = swapped && view->shownScopes() == greenScopes &&
                       !view->traceImage().isNull() && view->traceImage() != redTraces[index];
         }
         e.expect(oneSwap, "no dimmed or empty trace was painted between the red and the green one");
@@ -482,11 +623,17 @@ int main(int argc, char** argv) {
                      "the layout did not change while frames changed: " + sizes);
         }
 
-        // A change of what is counted keeps the traces until a frame of the new settings arrives.
+        // ---- The Working signal: the tables the frame carries ----------------------------------
+        // A change of what is counted keeps the traces until tables of the new settings arrive.
         store.setSignal(runtime::ScopeSignal::Working);
-        panel->showViewerFrame(green);
-        e.expect(panel->scopes() == green->scopes() && grabAll(*panel) == greenPictures,
-                 "a frame of the old signal's tables leaves the traces on show");
+        {
+            const auto asked = panel->measureCounters().requested;
+            panel->showViewerFrame(green);
+            e.expect(panel->scopes() == greenScopes && grabAll(*panel) == greenPictures &&
+                         panel->measureCounters().requested == asked,
+                     "a frame without Working tables leaves the traces on show and asks the "
+                     "shown-frame measure for nothing");
+        }
         const auto working =
             cpuFrame(oneSolidPlan(Color4d{0.0, 0.6, 0.2, 1.0}), 4, 1, store.request(key));
         e.expect(working && working->scopes() != nullptr &&
@@ -494,22 +641,31 @@ int main(int argc, char** argv) {
                  "a frame counted under the Working signal");
         if (working) {
             panel->showViewerFrame(working);
+            e.expect(panel->scopes() == working->scopes(),
+                     "the panel takes the Working tables the frame carries");
             e.expect(awaitQtCondition("the Working traces are mapped",
                                       [&] { return tracesSettled(*panel); }) &&
                          panel->view(scopes::Kind::Waveform)->shownScopes() == working->scopes(),
                      "the Working frame's tables replace them");
+            // Tables of other Working settings change nothing on show.
+            store.setWorkingAxisMaximum(4);
+            panel->showViewerFrame(working);
+            e.expect(panel->scopes() == working->scopes(),
+                     "a frame whose tables are of other settings leaves the traces on show");
+            store.setWorkingAxisMaximum(1);
         }
         store.setSignal(runtime::ScopeSignal::Display);
 
         // ---- Nothing to count: the empty graticule, silently ---------------------------------
         store.setRegion(key, runtime::ScopeRegion{.x = 500, .y = 0, .width = 10, .height = 10});
-        const auto outside =
-            cpuFrame(oneSolidPlan(Color4d{1.0, 1.0, 1.0, 1.0}), 5, 3, store.request(key));
-        e.expect(outside && outside->scopes() != nullptr &&
-                     outside->scopes()->status == runtime::PreviewFrameScopesStatus::EmptyArea,
-                 "a region outside the picture has nothing to count");
+        const auto outside = cpuFrame(oneSolidPlan(Color4d{1.0, 1.0, 1.0, 1.0}), 5, 3);
+        e.expect(outside != nullptr, "a frame for a region outside the picture");
         if (outside) {
-            panel->showViewerFrame(outside);
+            const auto scopes =
+                countShown(e, *panel, outside, "a region outside the picture is answered");
+            e.expect(scopes != nullptr &&
+                         scopes->status == runtime::PreviewFrameScopesStatus::EmptyArea,
+                     "a region outside the picture has nothing to count");
             bool empty = true;
             for (const auto kind : kKinds)
                 empty = empty && panel->view(kind)->traceImage().isNull();
@@ -517,10 +673,21 @@ int main(int argc, char** argv) {
             e.expect(heights(*panel) == layoutBefore, "and the layout does not change");
         }
         store.clearRegion(key);
-        panel->showViewerFrame(red);
+        {
+            const auto scopes = countShown(e, *panel, red, "the red frame is counted again");
+            e.expect(scopes != nullptr &&
+                         scopes->status == runtime::PreviewFrameScopesStatus::Measured,
+                     "the red frame's tables are back");
+        }
         e.expect(awaitQtCondition("the red traces are mapped again",
                                   [&] { return tracesSettled(*panel); }),
                  "the red traces are mapped again");
+
+        // ---- #733: a settings change renders nothing ------------------------------------------
+        testSettingsChangeRendersNothing(e, *panel, store, key, red, measureThreads);
+        e.expect(awaitQtCondition("the traces settle after the settings changes",
+                                  [&] { return tracesSettled(*panel); }),
+                 "the traces settle after the settings changes");
 
         // ---- The hover readout -----------------------------------------------------------------
         {
@@ -536,6 +703,7 @@ int main(int argc, char** argv) {
 
         // ---- Sections persist per panel area; a hidden panel asks for nothing ----------------
         panel->section(scopes::Kind::Parade)->setCollapsed(true);
+        store.setSignal(runtime::ScopeSignal::Working);
         e.expect(store.request(key) != nullptr &&
                      store.request(key)->settings.scopes == render::kScopeTableAll,
                  "a collapsed pane still leaves every table asked for");
@@ -551,6 +719,14 @@ int main(int argc, char** argv) {
         e.expect(awaitQtCondition("the panel is hidden", [&] { return !panel->panelShown(); }) &&
                      !store.active() && store.request(key) == nullptr,
                  "a hidden panel makes requests ask for no tables");
+        store.setSignal(runtime::ScopeSignal::Display);
+        {
+            // A hidden panel asks the shown-frame measure for nothing either.
+            const auto asked = panel->measureCounters().requested;
+            panel->showViewerFrame(green);
+            e.expect(panel->measureCounters().requested == asked && !panel->measuring(),
+                     "a hidden panel counts nothing");
+        }
 
         delete panel;
         e.expect(awaitFailureCount() == 0, "every wait finished");

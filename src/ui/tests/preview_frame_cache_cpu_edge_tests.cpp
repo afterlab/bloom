@@ -155,6 +155,147 @@ cpuFrame(const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan,
     return std::make_shared<const PreparedPreviewFrame>(*prepared);
 }
 
+// #730, #733 Scopes: a cached frame stores the Working-signal tables its preparation counted,
+// charged to the host byte budget, and never Display-signal tables (those are counted from the
+// frame a Viewer shows, at display time). Tables never decide a hit: a request that asks for
+// tables the cached frame lacks is handed the frame as it is.
+void testNoDisplayTablesStored(Expectations& expectations,
+                               const std::shared_ptr<const PreparedPreviewFrame>& frameA1,
+                               const PreviewFrameCacheKey& keyA, const std::size_t budget) {
+    runtime::ScopeMeasureSettings display;
+    runtime::ScopeMeasureSettings working;
+    working.signal = runtime::ScopeSignal::Working;
+    runtime::ScopeMeasureSettings workingWide = working;
+    workingWide.axisMaximum = 4;
+    const auto tablesFor = [](const runtime::ScopeMeasureSettings& settings,
+                              const render::ScopeTableReduction reduction = {}) {
+        const auto pixel = render::Rgba32f::fromPremultiplied(0.5F, 0.5F, 0.5F, 1.0F);
+        const std::vector<render::Rgba32f> gray(2, *pixel.value());
+        runtime::ScopeMeasureInput input;
+        input.signal = gray;
+        input.width = 2;
+        input.height = 1;
+        input.areaWidth = 2;
+        input.areaHeight = 1;
+        input.scopes = render::kScopeTableHistogram | render::kScopeTableWaveform;
+        input.axisMaximum = settings.axisMaximum;
+        input.luma = runtime::scopeLuma(0.2126F, 0.7152F, 0.0722F);
+        input.reduction = reduction;
+        auto scopes = std::make_shared<runtime::PreviewFrameScopes>();
+        scopes->settings = settings;
+        scopes->reduction = reduction;
+        scopes->status = runtime::PreviewFrameScopesStatus::Measured;
+        if (const auto counts = runtime::measureScopesCpu(input))
+            scopes->tables = runtime::ScopeTables::pack(*counts, runtime::ScopeRoute::Cpu);
+        scopes->area = {0, 0, 2, 1};
+        return std::shared_ptr<const runtime::PreviewFrameScopes>(std::move(scopes));
+    };
+    const auto requestFor = [](const runtime::ScopeMeasureSettings& settings,
+                               const render::ScopeTableReduction reduction = {}) {
+        return runtime::PreviewScopeRequest{
+            .settings = settings, .reduction = reduction, .colors = {}, .ocio = {}};
+    };
+    const auto asking = [&](const runtime::ScopeMeasureSettings& settings) {
+        auto identity = frameA1->desiredIdentity();
+        identity.scopes =
+            std::make_shared<const runtime::PreviewScopeRequest>(requestFor(settings));
+        return identity;
+    };
+    const auto carrying = [&](std::shared_ptr<const runtime::PreviewFrameScopes> tables) {
+        return std::make_shared<const PreparedPreviewFrame>(frameA1->withScopes(std::move(tables)));
+    };
+    PreviewFrameCache scopeCache(budget);
+    expectations.expect(scopeCache.insert(frameA1).retained() && scopeCache.scopeTableBytes() == 0,
+                        "scopes: the frame is cached without tables");
+    expectations.expect(scopeCache.take(frameA1->desiredIdentity()) != nullptr,
+                        "scopes: a request that asks for no tables hits");
+    {
+        const auto misses = scopeCache.statistics().misses;
+        const auto hit = scopeCache.take(asking(working));
+        expectations.expect(hit != nullptr && hit->scopes() == nullptr &&
+                                scopeCache.statistics().misses == misses &&
+                                !scopeCache.containsWithScopes(keyA, requestFor(working)),
+                            "scopes: a request that asks for tables hits a frame without them");
+    }
+
+    // Display-signal tables are never stored: the frame is kept as it is.
+    const auto displayTables = tablesFor(display);
+    const auto hostWithout = scopeCache.hostBytes();
+    expectations.expect(scopeCache.insert(carrying(displayTables)).outcome ==
+                                PreviewFrameCache::InsertOutcome::AlreadyPresent &&
+                            scopeCache.size() == 1 && scopeCache.scopesOf(keyA) == nullptr &&
+                            scopeCache.scopeTableBytes() == 0 &&
+                            scopeCache.hostBytes() == hostWithout,
+                        "scopes: Display tables are not stored and not charged");
+    {
+        PreviewFrameCache fresh(budget);
+        expectations.expect(fresh.insert(carrying(displayTables)).retained() &&
+                                fresh.scopesOf(keyA) == nullptr && fresh.scopeTableBytes() == 0,
+                            "scopes: a new entry of a frame with Display tables stores none");
+        const auto taken = fresh.take(frameA1->desiredIdentity());
+        expectations.expect(taken != nullptr && taken->scopes() == nullptr,
+                            "scopes: the frame handed back carries no Display tables");
+    }
+
+    // Working-signal tables are stored with the frame and charged.
+    const auto workingTables = tablesFor(working);
+    expectations.expect(scopeCache.insert(carrying(workingTables)).outcome ==
+                                PreviewFrameCache::InsertOutcome::Retained &&
+                            scopeCache.size() == 1,
+                        "scopes: the frame with its tables replaces the frame without");
+    expectations.expect(scopeCache.scopeTableBytes() == workingTables->byteSize() &&
+                            scopeCache.hostBytes() == hostWithout + workingTables->byteSize(),
+                        "scopes: the tables are charged to the host byte budget");
+    const auto hit = scopeCache.take(asking(working));
+    expectations.expect(hit != nullptr && hit->scopes() == workingTables &&
+                            scopeCache.containsWithScopes(keyA, requestFor(working)),
+                        "scopes: a request for the same settings hits with the tables");
+    {
+        // Other settings, and the same settings at another table size, still hit: the frame is
+        // handed with the tables it has, and the caller counts the others in the background.
+        const auto misses = scopeCache.statistics().misses;
+        const auto other = scopeCache.take(asking(workingWide));
+        expectations.expect(
+            other != nullptr && other->scopes() == workingTables &&
+                scopeCache.statistics().misses == misses &&
+                !scopeCache.containsWithScopes(keyA, requestFor(workingWide)) &&
+                !scopeCache.containsWithScopes(
+                    keyA, requestFor(working, render::ScopeTableReduction{1, 1, 1, 1})),
+            "scopes: tables of other settings or another size never make a miss");
+    }
+    // The frame cached again without tables, or with Display tables, keeps the ones it carries.
+    const auto statistics = scopeCache.statistics();
+    expectations.expect(scopeCache.insert(frameA1).outcome ==
+                                PreviewFrameCache::InsertOutcome::AlreadyPresent &&
+                            scopeCache.insert(carrying(displayTables)).outcome ==
+                                PreviewFrameCache::InsertOutcome::AlreadyPresent &&
+                            scopeCache.scopesOf(keyA) == workingTables,
+                        "scopes: a frame without stored tables does not drop the cached ones");
+    expectations.expect(scopeCache.statistics().hits == statistics.hits &&
+                            scopeCache.statistics().misses == statistics.misses,
+                        "scopes: reading the tables counts no hit or miss");
+    // Tables of other settings, and of another size, replace the cached ones.
+    const auto wideTables = tablesFor(workingWide);
+    (void)scopeCache.insert(carrying(wideTables));
+    expectations.expect(scopeCache.scopesOf(keyA) == wideTables &&
+                            scopeCache.containsWithScopes(keyA, requestFor(workingWide)) &&
+                            !scopeCache.containsWithScopes(keyA, requestFor(working)) &&
+                            scopeCache.scopeTableBytes() == wideTables->byteSize(),
+                        "scopes: tables of other settings replace the cached ones");
+    const render::ScopeTableReduction smaller{0, 2, 0, 0};
+    const auto smallTables = tablesFor(workingWide, smaller);
+    (void)scopeCache.insert(carrying(smallTables));
+    expectations.expect(scopeCache.scopesOf(keyA) == smallTables &&
+                            scopeCache.containsWithScopes(keyA, requestFor(workingWide, smaller)) &&
+                            !scopeCache.containsWithScopes(keyA, requestFor(workingWide)) &&
+                            scopeCache.scopeTableBytes() == smallTables->byteSize() &&
+                            smallTables->byteSize() < wideTables->byteSize(),
+                        "scopes: tables of another size replace the cached ones");
+    scopeCache.clear();
+    expectations.expect(scopeCache.scopeTableBytes() == 0,
+                        "scopes: a cleared cache holds no tables");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -399,88 +540,7 @@ int main(int argc, char** argv) {
                                 "finished frames are untouched by the source working set");
         }
 
-        // #730 Scopes: a frame carries the tables its preparation counted, charged to the host
-        // byte budget; a request that asks for tables under settings the cached frame lacks is a
-        // miss, so the frame is prepared again and its tables with it.
-        {
-            runtime::ScopeMeasureSettings display;
-            runtime::ScopeMeasureSettings working;
-            working.signal = runtime::ScopeSignal::Working;
-            const auto tablesFor = [](const runtime::ScopeMeasureSettings& settings) {
-                const auto pixel = render::Rgba32f::fromPremultiplied(0.5F, 0.5F, 0.5F, 1.0F);
-                const std::vector<render::Rgba32f> gray(2, *pixel.value());
-                runtime::ScopeMeasureInput input;
-                input.signal = gray;
-                input.width = 2;
-                input.height = 1;
-                input.areaWidth = 2;
-                input.areaHeight = 1;
-                input.scopes = render::kScopeTableHistogram;
-                input.luma = runtime::scopeLuma(0.2126F, 0.7152F, 0.0722F);
-                auto scopes = std::make_shared<runtime::PreviewFrameScopes>();
-                scopes->settings = settings;
-                scopes->status = runtime::PreviewFrameScopesStatus::Measured;
-                if (const auto counts = runtime::measureScopesCpu(input))
-                    scopes->tables = runtime::ScopeTables::pack(*counts, runtime::ScopeRoute::Cpu);
-                scopes->area = {0, 0, 2, 1};
-                return std::shared_ptr<const runtime::PreviewFrameScopes>(std::move(scopes));
-            };
-            const auto asking = [&](const runtime::ScopeMeasureSettings& settings) {
-                auto identity = frameA1->desiredIdentity();
-                identity.scopes = std::make_shared<const runtime::PreviewScopeRequest>(
-                    runtime::PreviewScopeRequest{.settings = settings, .colors = {}, .ocio = {}});
-                return identity;
-            };
-            PreviewFrameCache scopeCache(kBudget);
-            expectations.expect(scopeCache.insert(frameA1).retained() &&
-                                    scopeCache.scopeTableBytes() == 0,
-                                "scopes: the frame is cached without tables");
-            expectations.expect(scopeCache.take(frameA1->desiredIdentity()) != nullptr,
-                                "scopes: a request that asks for no tables hits");
-            expectations.expect(scopeCache.take(asking(display)) == nullptr &&
-                                    !scopeCache.containsWithScopes(keyA, display),
-                                "scopes: a request that asks for tables misses without them");
-            const auto displayTables = tablesFor(display);
-            const auto hostBefore = scopeCache.hostBytes();
-            expectations.expect(scopeCache.insert(std::make_shared<const PreparedPreviewFrame>(
-                                                      frameA1->withScopes(displayTables)))
-                                            .outcome ==
-                                        PreviewFrameCache::InsertOutcome::Retained &&
-                                    scopeCache.size() == 1,
-                                "scopes: the frame with its tables replaces the frame without");
-            expectations.expect(scopeCache.scopeTableBytes() == displayTables->byteSize() &&
-                                    scopeCache.hostBytes() ==
-                                        hostBefore + displayTables->byteSize(),
-                                "scopes: the tables are charged to the host byte budget");
-            const auto hit = scopeCache.take(asking(display));
-            expectations.expect(hit != nullptr && hit->scopes() == displayTables &&
-                                    scopeCache.containsWithScopes(keyA, display),
-                                "scopes: a request for the same settings hits with the tables");
-            expectations.expect(scopeCache.take(asking(working)) == nullptr &&
-                                    !scopeCache.containsWithScopes(keyA, working),
-                                "scopes: other settings miss");
-            // The frame cached again without tables keeps the ones it carries.
-            const auto statistics = scopeCache.statistics();
-            expectations.expect(scopeCache.insert(frameA1).outcome ==
-                                        PreviewFrameCache::InsertOutcome::AlreadyPresent &&
-                                    scopeCache.scopesOf(keyA) == displayTables,
-                                "scopes: a frame without tables does not drop the cached ones");
-            expectations.expect(scopeCache.statistics().hits == statistics.hits &&
-                                    scopeCache.statistics().misses == statistics.misses,
-                                "scopes: reading the tables counts no hit or miss");
-            // The Working signal's tables replace the Display ones.
-            const auto workingTables = tablesFor(working);
-            (void)scopeCache.insert(
-                std::make_shared<const PreparedPreviewFrame>(frameA1->withScopes(workingTables)));
-            expectations.expect(scopeCache.scopesOf(keyA) == workingTables &&
-                                    scopeCache.containsWithScopes(keyA, working) &&
-                                    !scopeCache.containsWithScopes(keyA, display) &&
-                                    scopeCache.scopeTableBytes() == workingTables->byteSize(),
-                                "scopes: tables of other settings replace the cached ones");
-            scopeCache.clear();
-            expectations.expect(scopeCache.scopeTableBytes() == 0,
-                                "scopes: a cleared cache holds no tables");
-        }
+        testNoDisplayTablesStored(expectations, frameA1, keyA, kBudget);
 
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " cache CPU edge expectation(s) failed\n";

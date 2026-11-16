@@ -1,6 +1,6 @@
 #pragma once
 
-// #724, #730 Scopes: the session's scope state, shared by every Scopes panel and every Viewer of a
+// #724, #730, #733 Scopes: the session's scope state, shared by every Scopes panel and every Viewer of a
 // session (docs/ux/ui-grammar.md, "Scopes panel"; docs/architecture/scopes.md). It is session state
 // of the application window: never serialized, never part of the document, a command or undo, and
 // it changes nothing that renders or exports.
@@ -11,12 +11,15 @@
 //   - the settings every Scopes panel draws with (the header menu's Signal, Working axis maximum,
 //     Ignore Transparent Pixels, and each scope's mode). One set per session: a frame carries one
 //     set of tables, so two panels never ask for different ones;
-//   - how many Scopes panels are visible. While one is, every Viewer, read-ahead and RAM Preview
-//     request asks its frame's preparation to count the scope tables too (request()); with none,
-//     nothing is counted;
+//   - the size of the tables the panels draw (the largest any visible panel draws);
+//   - how many Scopes panels are visible. While one is and the signal is Working, every Viewer,
+//     read-ahead and RAM Preview request asks its frame's preparation to count the scope tables
+//     too (request()). The Display signal is counted from the frame a Viewer shows, at display
+//     time, by each panel's shown-frame measure (runtime/shown_frame_scopes.hpp): no request asks
+//     a frame's preparation for it. With no panel visible nothing is counted;
 //   - the color objects of the signals measured and the shared OCIO context the device's scope
 //     color steps are prepared from.
-// A Viewer's region gesture and a panel's header menu only write here; the frame pipeline counts.
+// A Viewer's region gesture and a panel's header menu only write here; the runtime counts.
 
 #include <bloom/document/ids.hpp>
 #include <bloom/runtime/preview_frame_scopes.hpp>
@@ -82,13 +85,25 @@ class ScopesRegionStore final : public QObject {
     // The settings a frame of `key`'s composition is counted under: every table, the signal, the
     // axis maximum, the composition's region and Ignore Transparent Pixels.
     [[nodiscard]] runtime::ScopeMeasureSettings settings(const Key& key) const;
-    // What a request for a frame of `key`'s composition asks its preparation to count; null while
-    // no Scopes panel is visible. The same object is returned until the settings change.
+    // What a request for a frame of `key`'s composition asks its preparation to count: the Working
+    // signal's tables at the size the panels draw. Null while no Scopes panel is visible, and for
+    // the Display signal, which is counted from the shown frame. The same object is returned
+    // until the settings change.
     [[nodiscard]] std::shared_ptr<const runtime::PreviewScopeRequest> request(const Key& key) const;
+    // The size of the tables the panels draw (render/scope_table_layout.hpp); the full tables
+    // until a panel says otherwise. An invalid reduction is ignored.
+    [[nodiscard]] render::ScopeTableReduction tableReduction() const noexcept {
+        return tableReduction_;
+    }
+    void setTableReduction(render::ScopeTableReduction reduction);
 
     // The shared OCIO context the device's scope color steps are prepared from (resolved on a
     // worker). Without one the frames of the device route count their tables on the CPU.
     void setOcio(std::function<std::shared_ptr<const runtime::GpuSceneOcioContext>()> ocio);
+    [[nodiscard]] const std::function<std::shared_ptr<const runtime::GpuSceneOcioContext>()>&
+    ocio() const noexcept {
+        return ocio_;
+    }
     [[nodiscard]] const std::shared_ptr<runtime::ScopeSignalColorCache>& colors() const noexcept {
         return colors_;
     }
@@ -109,8 +124,10 @@ class ScopesRegionStore final : public QObject {
     void regionChanged(const bloom::ui::ScopesRegionStore::Key& key);
     void armedChanged(bool armed);
     void activeChanged(bool active);
-    // What a frame counts changed: the signal, the axis maximum, Ignore Transparent Pixels, a
-    // region, or the first panel became visible. Viewers request their frame again.
+    // What is counted changed: the signal, the axis maximum, Ignore Transparent Pixels, a region,
+    // the table size, or the first panel became visible. Under the Display signal the panels count
+    // the shown frame again and nothing is rendered; under the Working signal the Viewers' frame
+    // is counted again in the background.
     void measureChanged();
     // The header menu changed how the scopes are drawn, or what a panel shows of the settings.
     void drawingChanged();
@@ -124,6 +141,7 @@ class ScopesRegionStore final : public QObject {
     runtime::ScopeSignal signal_ = runtime::ScopeSignal::Display;
     std::uint32_t axisMaximum_ = 1;
     bool ignoreTransparent_ = false;
+    render::ScopeTableReduction tableReduction_{};
     Drawing drawing_;
     std::shared_ptr<runtime::ScopeSignalColorCache> colors_;
     std::function<std::shared_ptr<const runtime::GpuSceneOcioContext>()> ocio_;

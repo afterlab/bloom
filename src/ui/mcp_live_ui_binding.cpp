@@ -531,19 +531,16 @@ McpLiveUiBinding::warmScopes(const scripting::ScopeWarmQuery& query) const {
     // cached under a region of interest, an isolation or a channel view is another picture.
     if (key->roi || !key->isolation.empty() || key->channelInspection || !key->showLook)
         return std::nullopt;
-    if (query.settings.signal == runtime::ScopeSignal::Display) {
-        const bool named = key->displayName == query.display && key->viewName == query.view;
-        // A Viewer that has not chosen a display shows the neutral configuration's one pair.
-        const bool defaulted = query.defaultDisplayView && key->displayName.empty() &&
-                               key->viewName.empty() && detail::isNeutralIntent(key->colorIntent);
-        if (!named && !defaulted)
-            return std::nullopt;
-    }
-    // #730: the tables the cached frame's own preparation counted, under exactly the read's
-    // settings; a frame without them is measured by the read.
+    // #733: no frame stores Display-signal tables (they are counted from the shown frame at
+    // display time), so a Display read is measured by the read itself.
+    if (query.settings.signal == runtime::ScopeSignal::Display)
+        return std::nullopt;
+    // #730: the Working tables the cached frame's own preparation counted, under exactly the
+    // read's settings and at full size (a panel may have asked for smaller tables); a frame
+    // without them is measured by the read.
     const auto scopes = scopeCache_->scopesOf(*key);
     if (scopes == nullptr || scopes->status != runtime::PreviewFrameScopesStatus::Measured ||
-        scopes->settings != query.settings)
+        scopes->settings != query.settings || scopes->reduction != render::ScopeTableReduction{})
         return std::nullopt;
     return scripting::ScopeWarmHit{scopes->tables, scopes->area, {}};
 }

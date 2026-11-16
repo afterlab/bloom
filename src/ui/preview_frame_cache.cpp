@@ -54,11 +54,13 @@ restamp(const std::shared_ptr<const runtime::PreviewDisplayOnlyFrame>& frame,
     return std::make_shared<const runtime::PreparedPreviewFrame>(std::move(*rebuilt));
 }
 
-// Whether a cached frame's scope tables answer a request: always when it asks for none, else when
-// they were counted under the same settings.
-[[nodiscard]] bool scopesAnswer(const std::shared_ptr<const runtime::PreviewFrameScopes>& scopes,
-                                const runtime::PreviewScopeRequest* asked) noexcept {
-    return asked == nullptr || (scopes != nullptr && scopes->settings == asked->settings);
+// #733: the tables an entry stores for a frame: its Working-signal tables. No Display-signal
+// tables are stored: they are counted from the frame a Viewer shows, at display time.
+[[nodiscard]] std::shared_ptr<const runtime::PreviewFrameScopes>
+storedScopes(const runtime::PreparedPreviewFrame& frame) noexcept {
+    const auto& scopes = frame.scopes();
+    return scopes != nullptr && scopes->settings.signal == runtime::ScopeSignal::Working ? scopes
+                                                                                        : nullptr;
 }
 
 } // namespace
@@ -249,15 +251,8 @@ PreviewFrameCache::take(const runtime::PreviewRequestIdentity& identity) {
         return nullptr;
     }
     const auto position = found->second;
-    if (!scopesAnswer(position->scopes, identity.scopes.get())) {
-        // #730: the request asks for scope tables this frame does not carry. It is prepared again,
-        // tables and all, and the new frame replaces this entry.
-        ++statistics_.misses;
-        counters_.miss();
-        if (trace_)
-            trace_->record(identity, PreviewTraceStage::CacheLookup, PreviewTraceOutcome::Miss);
-        return nullptr;
-    }
+    // #733: the entry is a hit whatever tables the request asks for. The frame is handed with the
+    // tables the entry stores; the caller counts missing ones in the background.
     PreparedPreviewFrameHandle frame;
     if (position->resident != nullptr) {
         // Resident re-stamp: share the same opaque lease, copy no pixels and no native allocation.
@@ -328,12 +323,13 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
             displayQualified_.has_value() && *displayQualified_ != frame->isOcioQualified();
         ++metadataWork_.exactProbes;
         const auto existing = exactIndex_.find(key);
-        const auto& incomingScopes = frame->scopes();
+        const auto incomingScopes = storedScopes(*frame);
         if (!qualificationChanged && existing != exactIndex_.end() &&
             entryIsLive(*existing->second) &&
             (incomingScopes == nullptr || existing->second->scopes == incomingScopes ||
              (existing->second->scopes != nullptr &&
-              existing->second->scopes->settings == incomingScopes->settings))) {
+              existing->second->scopes->settings == incomingScopes->settings &&
+              existing->second->scopes->reduction == incomingScopes->reduction))) {
             entries_.splice(entries_.begin(), entries_, existing->second);
             if (existing->second->residentPosition)
                 residentOrder_.splice(residentOrder_.begin(), residentOrder_,
@@ -532,13 +528,12 @@ PreviewFrameCache::scopesOf(const PreviewFrameCacheKey& key) const {
 }
 
 bool PreviewFrameCache::containsWithScopes(const PreviewFrameCacheKey& key,
-                                           const runtime::ScopeMeasureSettings& settings) const {
+                                           const runtime::PreviewScopeRequest& request) const {
     ++metadataWork_.exactProbes;
     const auto found = exactIndex_.find(key);
     if (found == exactIndex_.end() || !entryIsLive(*found->second))
         return false;
-    const auto& scopes = found->second->scopes;
-    return scopes != nullptr && scopes->settings == settings;
+    return runtime::previewFrameScopesAnswer(found->second->scopes.get(), request);
 }
 
 std::vector<core::RationalTime>

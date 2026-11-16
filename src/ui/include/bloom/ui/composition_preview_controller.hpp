@@ -198,18 +198,24 @@ class CompositionPreviewController final : public QObject {
     [[nodiscard]] std::optional<PreviewFrameCacheKey>
     cacheKeyForTime(core::RationalTime time) const;
 
-    // #730 Scopes: the session's scope state (borrowed; null: no request counts scope tables).
-    // While a Scopes panel is visible every request of this controller, its read-ahead and the
-    // RAM Preview fill asks its frame's preparation to count the scope tables as well, and a
-    // change of what is counted requests the shown frame again.
+    // #730, #733 Scopes: the session's scope state (borrowed; null: no request counts scope
+    // tables). While a Scopes panel is visible and shows the Working signal, every request of this
+    // controller, its read-ahead and the RAM Preview fill asks its frame's preparation to count
+    // the scope tables as well. Tables never decide whether a frame is prepared in the
+    // foreground: a cached frame without the tables asked for is shown at once and counted in
+    // the background at the lowest priority (scopeRecountCount()). The Display signal asks
+    // nothing of this controller: the panels count the shown frame themselves.
     void setScopesStore(ScopesRegionStore* store);
     // What a request for a frame of the composition asks to count; null while no Scopes panel is
-    // visible.
+    // visible and for the Display signal.
     [[nodiscard]] std::shared_ptr<const runtime::PreviewScopeRequest>
     scopeRequest(document::ProjectId project, document::CompositionId composition) const;
-    // Whether the cache holds `key`'s frame as a request of this controller would take it: with
-    // the scope tables of the current settings while a Scopes panel is visible.
+    // Whether the cache holds `key`'s frame. Scope tables never decide it.
     [[nodiscard]] bool frameCacheAnswers(const PreviewFrameCacheKey& key) const;
+    // Background counts of the shown frame's Working tables submitted so far, and whether one is
+    // in flight.
+    [[nodiscard]] std::uint64_t scopeRecountCount() const noexcept { return scopeRecounts_; }
+    [[nodiscard]] bool scopeRecountActive() const noexcept { return scopeRecount_.has_value(); }
 
     // Playback counts skipped frame indices, rejected misses, and requests discarded or late.
     // Scrubbing outside playback never contributes. The last total survives pause().
@@ -433,6 +439,17 @@ class CompositionPreviewController final : public QObject {
     void handleTransformInteractionChanged();
     void handleLiveValueChanged();
     void consumeReadyResult();
+    // #733: the shown frame's Working tables, counted in the background after the cache handed
+    // the frame without them: the frame's own preparation again, at the lowest priority, never a
+    // gate for a request. Any newer request, playback, a purge and shutdown cancel it.
+    struct ScopeRecount final {
+        runtime::TaskHandle<PreviewPreparationResultHandle> handle;
+        runtime::PreviewRequestIdentity desiredIdentity;
+    };
+    void submitScopeRecount(const document::Snapshot& snapshot,
+                            const runtime::PreviewRequestIdentity& desiredIdentity);
+    void consumeScopeRecount();
+    void cancelScopeRecount() noexcept;
     [[nodiscard]] static FrameFreshness
     freshnessFor(const PreparedPreviewFrameHandle& frame,
                  const std::optional<runtime::PreviewRequestIdentity>& desiredIdentity);
@@ -477,6 +494,8 @@ class CompositionPreviewController final : public QObject {
     std::optional<runtime::TaskDefaultBudgetRetry> deferredDefaultBudget_;
     std::optional<ActiveRequest> active_;
     std::optional<PendingRequest> pending_;
+    std::optional<ScopeRecount> scopeRecount_;
+    std::uint64_t scopeRecounts_ = 0;
     QTimer interactiveCadenceTimer_;
     QElapsedTimer interactiveSubmissionClock_;
     bool interactiveTimeChangeArmed_ = false;

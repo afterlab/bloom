@@ -840,18 +840,22 @@ int main(int argc, char* argv[]) try {
     mcpAdapter.startWaiter();
     QObject::connect(&projectHost, &bloom::ui::ProjectHost::exportQueueReplaced, &mcpAdapter,
                      [&mcpService] { mcpService.exportQueueReplaced(); });
-    // #730 Scopes: the frame pipeline counts the scope tables. While a Scopes panel is visible,
-    // every Viewer, read-ahead and RAM Preview request asks its frame's preparation to count them
-    // too (on the preview display service's device as part of the frame's job, else on the CPU
-    // route's worker), and the tables travel with the frame into the preview cache. The shared
-    // OCIO context the device color steps need is resolved on the worker the way the preview
-    // resolves it. The final-render device and the CPU evaluator below are the routes of MCP and
-    // Python reads of a frame no Viewer prepared.
+    // #730, #733 Scopes: the runtime counts the scope tables. The Display signal is counted from
+    // the frame a Viewer shows, at display time, by each panel's shown-frame measure: on the
+    // preview display service's device (the port below), else on a worker; nothing is rendered
+    // and no frame stores those tables. For the Working signal, while a Scopes panel is visible,
+    // every Viewer, read-ahead and RAM Preview request asks its frame's preparation to count the
+    // tables too (on the service's device as part of the frame's job, else on the CPU route's
+    // worker), and they travel with the frame into the preview cache. The shared OCIO context
+    // the device color steps need is resolved on the worker the way the preview resolves it. The
+    // final-render device and the CPU evaluator below are the routes of MCP and Python reads of
+    // a frame no Viewer prepared.
     // The session's scope state (regions, the header menus' settings, the visible-panel count),
     // shared by every Scopes panel and Viewer: never saved and never part of undo.
     bloom::ui::ScopesRegionStore scopesRegions;
     bloom::ui::ScopesServices scopesServices;
     scopesServices.store = &scopesRegions;
+    scopesServices.device = gpuPreviewDisplayService.shownFrameScopePort();
     previewController.setScopesStore(&scopesRegions);
     {
         bloom::runtime::ScopeFrameRoutes routes;
@@ -882,7 +886,7 @@ int main(int argc, char* argv[]) try {
                 return cpuEvaluator.evaluate(std::move(plan), request, cancellation);
             };
         // query kind scopes (#724, #730): the same device, OCIO context and CPU evaluator routes,
-        // and the tables the frames the Viewer's controller cached carry.
+        // and the Working tables the frames the Viewer's controller cached carry.
         scopesRegions.setOcio(routes.ocio);
         mcpLiveUi.setScopes(routes, &previewController, previewFrameCache);
         scopesServices.scheduler = &taskScheduler;

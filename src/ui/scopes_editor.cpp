@@ -9,10 +9,14 @@
 #include <bloom/ui/scopes_view.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
+#include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/runtime/prepared_preview_frame.hpp>
+
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
 #include <QMenu>
+#include <QMetaObject>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSignalBlocker>
@@ -36,6 +40,9 @@ constexpr std::array<SectionSpec, scopes::kKindCount> kSections{{
 }};
 
 constexpr std::array<std::uint32_t, 5> kAxisMaxima{1, 2, 4, 8, 16};
+
+// The task owner of the panel's shown-frame measures (the trace images use 1 to 5).
+constexpr std::uint64_t kMeasureOwner = 16;
 
 [[nodiscard]] QString sectionTitle(const scopes::Kind kind) {
     switch (kind) {
@@ -73,8 +80,28 @@ ScopesEditor::ScopesEditor(const ScopesServices& services, QWidget* const parent
         tr("Waveform, parade, vectorscope, histogram and CIE chromaticity of the picture the "
            "active Viewer shows"));
     store_ = services_.store != nullptr ? services_.store : new ScopesRegionStore(this);
-    if (services_.usable())
+    if (services_.usable()) {
         renderer_ = new ScopesTraceRenderer(*services_.scheduler, *services_.bridge, this);
+        // #733: the Display signal of the frame the Viewer shows is counted by the runtime, on the
+        // preview device or a worker. The measurer's destructor waits out a callback in flight,
+        // and it is destroyed first in ~ScopesEditor, so `this` is alive in every call.
+        runtime::ShownFrameScopeMeasurer::Options options;
+        options.scheduler = services_.scheduler;
+        options.owner = {.kind = runtime::TaskOwnerKind::PanelRequest,
+                         .id = runtime::TaskOwnerId::fromRaw(kMeasureOwner)};
+        options.colors = store_->colors();
+        options.ocio = [store = QPointer<ScopesRegionStore>(store_)] {
+            // Asked on a worker: only the stored callable is read, which the application sets
+            // once before any panel exists.
+            return store != nullptr && store->ocio() ? store->ocio()() : nullptr;
+        };
+        options.device = services_.device;
+        options.resultReady = [this] {
+            QMetaObject::invokeMethod(this, [this] { onMeasureReady(); }, Qt::QueuedConnection);
+        };
+        options.beforeCpuCount = services_.measureObserver;
+        measurer_ = std::make_unique<runtime::ShownFrameScopeMeasurer>(std::move(options));
+    }
 
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
@@ -106,8 +133,9 @@ ScopesEditor::ScopesEditor(const ScopesServices& services, QWidget* const parent
         for (auto* scopeView : views_)
             scopeView->setDrawing(store_->drawing());
     });
-    // A change of what frames count leaves the traces on show until a frame of the new settings
-    // arrives (the followed Viewer asks for one).
+    // A change of what is counted leaves the traces on show until tables of the new settings
+    // arrive: the shown frame counted again (Display), or its Working tables counted in the
+    // background by the followed Viewer's preview.
     connect(store_, &ScopesRegionStore::measureChanged, this, [this] { onViewerState(); });
     for (auto* scopeView : views_)
         scopeView->setDrawing(store_->drawing());
@@ -116,6 +144,8 @@ ScopesEditor::ScopesEditor(const ScopesServices& services, QWidget* const parent
 }
 
 ScopesEditor::~ScopesEditor() {
+    // No result callback runs once this returned.
+    measurer_.reset();
     if (countedVisible_)
         store_->panelHidden();
     QObject::disconnect(viewerConnection_);
@@ -327,17 +357,74 @@ void ScopesEditor::handOut(std::shared_ptr<const runtime::PreviewFrameScopes> sc
         scopeView->setScopes(scopes_);
 }
 
+void ScopesEditor::forgetMeasure() {
+    askedMeasure_.reset();
+    if (measurer_ != nullptr)
+        measurer_->clear();
+}
+
+void ScopesEditor::measureShown(const PreparedPreviewFrameHandle& frame,
+                                const runtime::ScopeMeasureSettings& settings) {
+    // A hidden panel counts nothing; it asks when it is shown again.
+    if (measurer_ == nullptr || !shown_)
+        return;
+    const auto reduction = store_->tableReduction();
+    if (askedMeasure_ && askedMeasure_->frame.lock() == frame &&
+        askedMeasure_->settings == settings && askedMeasure_->reduction == reduction)
+        return;
+    const auto& plan = frame->processIdentity().plan;
+    if (plan == nullptr)
+        return;
+    askedMeasure_ = AskedMeasure{.frame = frame, .settings = settings, .reduction = reduction};
+    runtime::ShownFrameScopeRequest request;
+    request.frame = frame;
+    request.compositionWidth = static_cast<std::uint32_t>(plan->format().width());
+    request.compositionHeight = static_cast<std::uint32_t>(plan->format().height());
+    request.settings = settings;
+    request.reduction = reduction;
+    request.tag = ++measureTag_;
+    measurer_->show(std::move(request));
+}
+
+void ScopesEditor::onMeasureReady() {
+    if (measurer_ == nullptr)
+        return;
+    const auto result = measurer_->take();
+    // Tables of settings since changed, or counted before the signal changed, are not drawn: the
+    // measure asked after the change follows.
+    if (!result || result->scopes == nullptr || !askedMeasure_ ||
+        store_->signal() != runtime::ScopeSignal::Display ||
+        result->scopes->settings != askedMeasure_->settings ||
+        result->reduction != askedMeasure_->reduction)
+        return;
+    handOut(result->scopes);
+}
+
+runtime::ShownFrameScopeCounters ScopesEditor::measureCounters() const {
+    return measurer_ != nullptr ? measurer_->counters() : runtime::ShownFrameScopeCounters{};
+}
+
+bool ScopesEditor::measuring() const { return measurer_ != nullptr && measurer_->busy(); }
+
 void ScopesEditor::showViewerFrame(const PreparedPreviewFrameHandle& frame) {
     if (frame == nullptr) {
         // No picture at all: the empty graticule.
+        forgetMeasure();
         handOut(nullptr);
         return;
     }
     const auto& identity = frame->desiredIdentity();
+    const auto settings = store_->settings({identity.projectId, identity.compositionId});
+    if (settings.signal == runtime::ScopeSignal::Display) {
+        // #733: counted from the frame on show, at display time; nothing is rendered for it.
+        measureShown(frame, settings);
+        return;
+    }
+    forgetMeasure();
     const auto& carried = frame->scopes();
     // A frame that does not carry tables of the current settings (yet) changes nothing on show.
-    if (carried == nullptr ||
-        carried->settings != store_->settings({identity.projectId, identity.compositionId}))
+    if (carried == nullptr || carried->settings != settings ||
+        carried->reduction != store_->tableReduction())
         return;
     handOut(carried);
 }
@@ -403,6 +490,8 @@ void ScopesEditor::showEvent(QShowEvent* const event) {
     if (followed_.isNull())
         pickViewer();
     refreshViewsActive();
+    // #733: the frame on show is counted now; a hidden panel asked for nothing.
+    onViewerState();
 }
 
 void ScopesEditor::hideEvent(QHideEvent* const event) {
@@ -412,6 +501,7 @@ void ScopesEditor::hideEvent(QHideEvent* const event) {
         countedVisible_ = false;
         store_->panelHidden();
     }
+    forgetMeasure();
     refreshViewsActive();
 }
 

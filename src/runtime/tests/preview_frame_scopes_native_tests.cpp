@@ -1,22 +1,24 @@
-// #730 Scopes: the scope tables of a preview frame, counted by the frame's own job on the preview
-// display service's device.
+// #730, #733 Scopes: the Working-signal scope tables of a preview frame, counted by the frame's
+// own job on the preview display service's device.
 //
 // The real GpuPreviewDisplayService runs with the GPU-prepared packed product, presentation
 // Disabled and a declared card (no window system). A request whose identity asks for scope tables
-// has its frame's job count them on the scene picture it computed (the display and XYZ color steps
-// and the count kernel, one table readback) before the frame's final transfer, and the frame is
-// published carrying them.
+// has its frame's job count them on the scene picture it computed (the XYZ color step and the
+// count kernel, one table readback) before the frame's final transfer, and the frame is published
+// carrying them.
 //
-// What is asserted, for both signals:
+// What is asserted, at the full table size and at a reduced one (the size a pane draws):
 //   (1) the frame is a GPU-prepared packed frame carrying Measured tables of the device route,
-//       counted under the request's settings;
-//   (2) parity: Working tables equal the CPU reference's cell for cell; with the Display signal and
-//       the CIE table every count is within one cell along every axis (OCIO's CPU and GPU
-//       processors may round a pixel into the neighbouring cell) and every pixel is counted;
+//       counted under the request's settings at the asked size;
+//   (2) parity: the tables equal the CPU reference's cell for cell; with the CIE table every count
+//       is within one cell along every axis (OCIO's CPU and GPU processors may round a pixel into
+//       the neighbouring cell) and every pixel is counted;
 //   (3) one table readback per frame moving the layout's bytes, and one frame measured;
 //   (4) a region equals the CPU reference's region; a region outside the picture settles EmptyArea
 //       with no readback;
-//   (5) a request that asks for no tables gets a frame without them, and nothing is counted.
+//   (5) a request that asks for no tables gets a frame without them, and nothing is counted;
+//   (6) #733: a request for the Display signal gets a frame with a Failed record and nothing is
+//       counted: that signal is counted from the shown frame, at display time.
 //
 // Requires the Vulkan backend and the pinned shader tools; skips (77) without a device and fails
 // under --require-device.
@@ -141,14 +143,18 @@ struct Reference final {
     std::shared_ptr<const bloom::runtime::ProcessFrame> cpuFrame;
 
     [[nodiscard]] bloom::runtime::ScopeFrameMeasure
-    measure(const ScopeMeasureSettings& settings) const {
+    measure(const ScopeMeasureSettings& settings,
+            const bloom::render::ScopeTableReduction reduction = {}) const {
         return bloom::runtime::measureScopeFrameCpu(
-            *cpuFrame, settings, settings.signal == ScopeSignal::Working ? *working : *display);
+            *cpuFrame, settings, settings.signal == ScopeSignal::Working ? *working : *display, {},
+            reduction);
     }
     [[nodiscard]] std::shared_ptr<const PreviewScopeRequest>
-    request(const ScopeMeasureSettings& settings) const {
+    request(const ScopeMeasureSettings& settings,
+            const bloom::render::ScopeTableReduction reduction = {}) const {
         return std::make_shared<const PreviewScopeRequest>(
             PreviewScopeRequest{.settings = settings,
+                                .reduction = reduction,
                                 .colors = std::make_shared<bloom::runtime::ScopeSignalColorCache>(),
                                 .ocio = [context = ocio] { return context; }});
     }
@@ -176,13 +182,15 @@ bool run(Expectations& checks, const TestOptions& options,
     const auto counters = [&] { return rig.service->status().counters; };
     std::uint64_t generation = 1;
 
-    // (1) - (3), both signals.
-    for (const auto signal : {ScopeSignal::Working, ScopeSignal::Display}) {
-        const auto name = std::string(signal == ScopeSignal::Working ? "Working" : "Display");
+    // (1) - (3), at the full size and at a reduced one.
+    for (const auto reduction :
+         {bloom::render::ScopeTableReduction{}, bloom::render::ScopeTableReduction{1, 2, 2, 2}}) {
+        const auto name =
+            std::string(reduction == bloom::render::ScopeTableReduction{} ? "full" : "reduced");
         for (const auto scopes : {kNoChromaticity, kScopeTableAll}) {
-            const auto settings = settingsOf(signal, scopes);
+            const auto settings = settingsOf(ScopeSignal::Working, scopes);
             const auto before = counters();
-            const auto frame = rig.frame(generation++, reference.request(settings));
+            const auto frame = rig.frame(generation++, reference.request(settings, reduction));
             checks.expect(frame != nullptr && isPacked(*frame),
                           name + ": the frame is a GPU-prepared packed frame");
             if (frame == nullptr)
@@ -190,17 +198,18 @@ bool run(Expectations& checks, const TestOptions& options,
             const auto& carried = frame->scopes();
             checks.expect(carried != nullptr &&
                               carried->status == PreviewFrameScopesStatus::Measured &&
-                              carried->settings == settings &&
+                              carried->settings == settings && carried->reduction == reduction &&
+                              carried->tables.layout().reduction == reduction &&
                               carried->tables.route() == bloom::runtime::ScopeRoute::Gpu,
                           name + ": the frame carries tables its device job counted" +
                               (carried != nullptr ? ": " + carried->message : std::string()));
             if (carried == nullptr || carried->status != PreviewFrameScopesStatus::Measured)
                 continue;
             const auto counts = carried->tables.unpack();
-            const auto expected = reference.measure(settings);
+            const auto expected = reference.measure(settings, reduction);
             checks.expect(expected.status == ScopeFrameStatus::Measured,
                           name + ": the CPU reference measures");
-            if (signal == ScopeSignal::Working && scopes == kNoChromaticity)
+            if (scopes == kNoChromaticity)
                 checks.expect(counts == expected.counts && carried->area == expected.area,
                               name + ": the tables equal the CPU reference's cell for cell");
             else
@@ -208,7 +217,10 @@ bool run(Expectations& checks, const TestOptions& options,
                               name + ": every count is within one cell of the CPU reference's");
             checks.expect(counts.counted() == kSize * kSize, name + ": every pixel is counted");
             const auto after = counters();
-            const auto bytes = bloom::render::scopeTableLayout(scopes, kSize).byteCount();
+            const auto bytes =
+                bloom::render::scopeTableLayout(scopes, kSize, reduction).byteCount();
+            std::cout << name << (scopes == kNoChromaticity ? ", no CIE table" : ", all tables")
+                      << ": table readback " << bytes << " bytes\n";
             checks.expect(after.scopeFramesMeasured == before.scopeFramesMeasured + 1 &&
                               after.scopeTableReadbacks == before.scopeTableReadbacks + 1 &&
                               after.scopeTableReadbackBytes == bytes &&
@@ -249,6 +261,24 @@ bool run(Expectations& checks, const TestOptions& options,
                           after.scopeTableReadbacks == before.scopeTableReadbacks &&
                           after.scopeColorDispatches == before.scopeColorDispatches,
                       "and nothing is counted");
+    }
+
+    // (6) the Display signal is not counted with a frame.
+    {
+        const auto before = counters();
+        const auto settings = settingsOf(ScopeSignal::Display, kScopeTableAll);
+        const auto frame = rig.frame(generation++, reference.request(settings));
+        const auto carried = frame != nullptr ? frame->scopes() : nullptr;
+        checks.expect(frame != nullptr && isPacked(*frame) && carried != nullptr &&
+                          carried->status == PreviewFrameScopesStatus::Failed &&
+                          carried->settings == settings && !carried->message.empty() &&
+                          carried->tables.empty(),
+                      "a request for the Display signal gets a frame with a Failed record");
+        const auto after = counters();
+        checks.expect(after.scopeFramesMeasured == before.scopeFramesMeasured &&
+                          after.scopeTableReadbacks == before.scopeTableReadbacks &&
+                          after.scopeColorDispatches == before.scopeColorDispatches,
+                      "and the frame's job counts nothing for it");
     }
     return true;
 }

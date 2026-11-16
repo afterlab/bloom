@@ -334,7 +334,8 @@ void BackgroundPreviewController::fillNextFrame() {
             .showLook = key->showLook,
             .channelInspection = key->channelInspection,
             .isolation = key->isolation,
-            // #730: read-ahead frames carry the scope tables while a Scopes panel is shown.
+            // #730, #733: read-ahead frames carry the Working scope tables while a Scopes panel
+            // shows that signal.
             .scopes = previewController_.scopeRequest(key->projectId, key->compositionId),
         };
         if (previewController_.frameCacheAnswers(*key)) {

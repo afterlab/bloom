@@ -160,6 +160,8 @@ CompositionPreviewController::CompositionPreviewController(
     connect(&taskUiBridge_, &TaskUiBridge::resultsAvailable, this,
             &CompositionPreviewController::consumeReadyResult);
     connect(&taskUiBridge_, &TaskUiBridge::resultsAvailable, this,
+            &CompositionPreviewController::consumeScopeRecount);
+    connect(&taskUiBridge_, &TaskUiBridge::resultsAvailable, this,
             &CompositionPreviewController::viewerResultsAvailable);
     connect(&taskUiBridge_, &TaskUiBridge::resultsAvailable, this,
             &CompositionPreviewController::notifyProcessingCapacityChanged);
@@ -566,9 +568,12 @@ void CompositionPreviewController::setScopesStore(ScopesRegionStore* const store
     scopesStore_ = store;
     if (store != nullptr)
         connect(store, &ScopesRegionStore::measureChanged, this, [this] {
-            // Playback asks for its next frame with the new settings itself. Otherwise the shown
-            // frame is asked for again; the cache answers it only with matching tables.
-            if (shuttingDown_ || playbackActive_)
+            // #733: the Display signal asks nothing of the frame pipeline: the panels count the
+            // shown frame again and nothing is rendered. Under the Working signal playback asks
+            // for its next frame with the new settings itself; otherwise the shown frame is asked
+            // for again: the cache answers at once and its tables are counted in the background.
+            if (shuttingDown_ || playbackActive_ || scopesStore_ == nullptr ||
+                scopesStore_->signal() != runtime::ScopeSignal::Working)
                 return;
             requestPreview(false, PreviewRequestKind::Visible, true);
         });
@@ -583,9 +588,98 @@ CompositionPreviewController::scopeRequest(const document::ProjectId project,
 }
 
 bool CompositionPreviewController::frameCacheAnswers(const PreviewFrameCacheKey& key) const {
-    const auto request = scopeRequest(key.projectId, key.compositionId);
-    return request == nullptr ? frameCache_->contains(key)
-                              : frameCache_->containsWithScopes(key, request->settings);
+    // #733: a cached frame answers whatever scope tables it carries.
+    return frameCache_->contains(key);
+}
+
+void CompositionPreviewController::submitScopeRecount(
+    const document::Snapshot& snapshot, const runtime::PreviewRequestIdentity& desiredIdentity) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    cancelScopeRecount();
+    const auto pixelStorageByteLimit = effectivePixelStorageByteLimit();
+    // A gesture's frame is not the cached one, and a RAM Preview fill counts its own frames.
+    if (!preparation_ || pixelStorageByteLimit == 0 || session_.valueEditActive() ||
+        !session_.transformInteractionOverrides().empty() || ramPreviewProgress_.has_value())
+        return;
+    runtime::TaskRequest request(
+        "Count scopes of the shown frame",
+        {.kind = runtime::TaskOwnerKind::Composition,
+         .id = runtime::TaskOwnerId::fromRaw(desiredIdentity.compositionId.value())},
+        runtime::TaskPriority::Background);
+    // No coalescing key: the count never replaces, and is never replaced by, a frame request.
+    request.usesPurgeableCaches = true;
+    request.sourceVersion = {
+        .documentRevision = desiredIdentity.sourceRevision.value(),
+        .requestGeneration = desiredIdentity.requestGeneration,
+    };
+    runtime::TaskSubmission<PreviewPreparationResultHandle> submission;
+    if (submitter_) {
+        submission =
+            submitter_(std::move(request), snapshot, desiredIdentity, pixelStorageByteLimit, {});
+    } else {
+        submission = scheduler_.submit<PreviewPreparationResultHandle>(
+            std::move(request), [snapshot, desiredIdentity, pixelStorageByteLimit,
+                                 preparation = preparation_](runtime::TaskContext& context) mutable {
+                if (context.isCancellationRequested()) {
+                    return runtime::TaskResult<PreviewPreparationResultHandle>::cancelled();
+                }
+                return preparation(snapshot, desiredIdentity, pixelStorageByteLimit, {}, context);
+            });
+    }
+    // Refused: the frame stays on show without the tables until it is asked for again.
+    if (!submission.accepted())
+        return;
+    ++scopeRecounts_;
+    scopeRecount_.emplace(
+        ScopeRecount{.handle = std::move(submission.handle), .desiredIdentity = desiredIdentity});
+    taskUiBridge_.wake();
+}
+
+void CompositionPreviewController::cancelScopeRecount() noexcept {
+    if (!scopeRecount_.has_value())
+        return;
+    scopeRecount_->handle.cancel();
+    scopeRecount_.reset();
+}
+
+void CompositionPreviewController::consumeScopeRecount() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!scopeRecount_.has_value())
+        return;
+    auto result = scopeRecount_->handle.tryTakeResult();
+    if (!result.has_value())
+        return;
+    const ScopeRecount completed = std::move(*scopeRecount_);
+    scopeRecount_.reset();
+    if (shuttingDown_ || cachePurgeGate_ || playbackActive_)
+        return;
+    const auto& prepared = result->value();
+    if (result->state() != runtime::TaskState::Succeeded || !result->diagnostics().empty() ||
+        !prepared.has_value() || *prepared == nullptr ||
+        (*prepared)->status() != runtime::PreviewPreparationStatus::Prepared)
+        return;
+    const auto& frame = (*prepared)->frame();
+    if (frame == nullptr || frame->scopes() == nullptr ||
+        frame->desiredIdentity() != completed.desiredIdentity)
+        return;
+    const bool resident =
+        frame->provenance().provider == runtime::PreviewDisplayProvider::GpuResident;
+    if (resident ? !frame->isDisplayValid() : !frame->displayBufferView().has_value())
+        return;
+    // Only the frame still on show takes the tables; any newer request cancelled this count.
+    if (completed.desiredIdentity.requestGeneration != generation_ ||
+        state_.activity != PreviewActivity::Ready || !state_.desiredIdentity.has_value() ||
+        *state_.desiredIdentity != completed.desiredIdentity ||
+        !liveSessionMatches(completed.desiredIdentity))
+        return;
+    const auto deliveryGeneration = generation_;
+    if ((*prepared)->cacheFrame())
+        frameCache_->insert((*prepared)->cacheFrame());
+    if (generation_ != deliveryGeneration || shuttingDown_ || cachePurgeGate_)
+        return;
+    CompositionPreviewState counted = state_;
+    counted.frame = frame;
+    publish(std::move(counted));
 }
 
 void CompositionPreviewController::requestRefresh() {
@@ -982,6 +1076,8 @@ void CompositionPreviewController::requestPreview(
     if (shuttingDown_ || cachePurgeGate_) {
         return;
     }
+    // #733: a background count of the shown frame's scope tables is for the previous request.
+    cancelScopeRecount();
     deferredAdmission_.reset();
     deferredDefaultBudget_.reset();
     if (!colorIntentCaptured_) {
@@ -1124,7 +1220,16 @@ void CompositionPreviewController::requestPreview(
             if (active_.has_value()) {
                 active_->handle.cancel();
             }
+            // #733: a cached frame is shown at once whatever scope tables it carries. When it
+            // lacks the Working tables a visible Scopes panel asks for, they are counted in the
+            // background at the lowest priority; playback never asks for that.
+            const bool recount =
+                desiredIdentity.scopes != nullptr && !playbackActive_ &&
+                kind != PreviewRequestKind::Playback &&
+                !runtime::previewFrameScopesAnswer(cached->scopes().get(), *desiredIdentity.scopes);
             publishCachedFrame(desiredIdentity, std::move(cached));
+            if (recount && generation_ == generation && !shuttingDown_ && !cachePurgeGate_)
+                submitScopeRecount(snapshot, desiredIdentity);
             return;
         }
     }
@@ -1339,6 +1444,7 @@ void CompositionPreviewController::publishRendering(runtime::PreviewRequestIdent
 }
 
 void CompositionPreviewController::cancelAndDetachActive() noexcept {
+    cancelScopeRecount();
     if (!active_.has_value()) {
         return;
     }

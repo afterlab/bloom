@@ -1,10 +1,13 @@
 #pragma once
 
-// #724, #730 Scopes: the Scopes panel, editor `bloom.scopes`, "Scopes" (docs/ux/ui-grammar.md,
-// "Scopes panel"; docs/architecture/scopes.md). It follows the active Viewer and draws the scope
-// tables the frame it shows carries (PreparedPreviewFrame::scopes) in five collapsible panes:
-// Waveform, Parade, Vectorscope, Histogram and CIE Chromaticity. The frame pipeline counts the
-// tables; the panel counts nothing. The count-to-image mapping runs on task workers behind the
+// #724, #730, #733 Scopes: the Scopes panel, editor `bloom.scopes`, "Scopes"
+// (docs/ux/ui-grammar.md, "Scopes panel"; docs/architecture/scopes.md). It follows the active
+// Viewer and draws the scope tables of the frame it shows in five collapsible panes: Waveform,
+// Parade, Vectorscope, Histogram and CIE Chromaticity. The runtime counts the tables; the panel
+// counts nothing. For the Display signal it hands the shown frame to the runtime's shown-frame
+// measure (runtime/shown_frame_scopes.hpp), which counts it at display time on the preview device
+// or a worker and renders nothing; for the Working signal it draws the tables the frame carries
+// (PreparedPreviewFrame::scopes). The count-to-image mapping runs on task workers behind the
 // trace renderer; this widget only lays out and paints.
 //
 // The panel is the panes and nothing else: no status, warning or other text, no slider. Its
@@ -18,6 +21,7 @@
 // them, each pane in one swap.
 
 #include <bloom/runtime/preview_frame_scopes.hpp>
+#include <bloom/runtime/shown_frame_scopes.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/scopes_drawing.hpp>
@@ -27,6 +31,7 @@
 #include <QWidget>
 
 #include <array>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -58,6 +63,11 @@ struct ScopesServices final {
     // The session's scope state, shared by every panel and Viewer. Null: the panel keeps a store
     // of its own (no Viewer then counts tables for it).
     ScopesRegionStore* store = nullptr;
+    // #733: the preview display service's device, which counts the Display signal of the frame a
+    // Viewer shows. Empty: the runtime counts every shown frame on a worker.
+    runtime::GpuShownFrameScopePort device;
+    // Test seam: called on the runtime's worker before its CPU reference counts a shown frame.
+    std::function<void()> measureObserver;
 
     [[nodiscard]] bool usable() const noexcept { return scheduler != nullptr && bridge != nullptr; }
 };
@@ -76,14 +86,19 @@ class ScopesEditor final : public QWidget, public EditorChromeProvider {
     void followViewer(ViewerEditor* viewer);
     [[nodiscard]] ViewerEditor* followedViewer() const noexcept;
     // The frame the Viewer shows now (its neutral frame; null: none). What a followed Viewer's
-    // displayedStateChanged() hands to the panel; also the seam tests drive.
+    // displayedStateChanged() hands to the panel; also the seam tests drive. #733: under the
+    // Display signal the runtime's shown-frame measure counts it (never this thread, and nothing
+    // is rendered); under the Working signal the panel draws the tables the frame carries.
     void showViewerFrame(const PreparedPreviewFrameHandle& frame);
-    // The tables the panes were last handed: the newest frame's that carried tables of the
-    // current settings.
+    // The tables the panes were last handed: the newest counted under the current settings.
     [[nodiscard]] const std::shared_ptr<const runtime::PreviewFrameScopes>&
     scopes() const noexcept {
         return scopes_;
     }
+    // The shown-frame measure of this panel: what it was asked and what it counted, and whether
+    // a measure waits or is in flight.
+    [[nodiscard]] runtime::ShownFrameScopeCounters measureCounters() const;
+    [[nodiscard]] bool measuring() const;
 
     // ---- Parts ----------------------------------------------------------------------------
     [[nodiscard]] ScopesTraceRenderer* renderer() const noexcept { return renderer_; }
@@ -117,6 +132,10 @@ class ScopesEditor final : public QWidget, public EditorChromeProvider {
     void adoptPersistence();
     void pickViewer();
     void onViewerState();
+    void measureShown(const PreparedPreviewFrameHandle& frame,
+                      const runtime::ScopeMeasureSettings& settings);
+    void forgetMeasure();
+    void onMeasureReady();
     void handOut(std::shared_ptr<const runtime::PreviewFrameScopes> scopes);
     [[nodiscard]] QString persistencePrefix() const;
 
@@ -128,6 +147,16 @@ class ScopesEditor final : public QWidget, public EditorChromeProvider {
     QMetaObject::Connection viewerConnection_;
     QMetaObject::Connection viewerDestroyedConnection_;
     std::shared_ptr<const runtime::PreviewFrameScopes> scopes_;
+    // #733: the Display signal of the shown frame is counted by the runtime, off this thread.
+    // What it was last asked: the same frame under the same settings is not asked twice.
+    struct AskedMeasure final {
+        std::weak_ptr<const runtime::PreparedPreviewFrame> frame;
+        runtime::ScopeMeasureSettings settings;
+        render::ScopeTableReduction reduction{};
+    };
+    std::unique_ptr<runtime::ShownFrameScopeMeasurer> measurer_;
+    std::optional<AskedMeasure> askedMeasure_;
+    std::uint64_t measureTag_ = 0;
     // The followed Viewer's composition, whose region the Region menu draws and clears.
     std::optional<ScopesRegionStore::Key> regionKey_;
     bool shown_ = false;

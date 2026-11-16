@@ -197,9 +197,9 @@ class PreviewFrameCache final : public QObject {
     // The cached frame for `identity`, re-stamped with that identity's own request generation so
     // the caller can publish it as the answer to THIS request (a frame's generation says which ask
     // it answered; its pixels are what the key matched on). Null on a miss. Counts a hit or a miss,
-    // and moves a hit to the front of the eviction order. #730: when `identity` asks for scope
-    // tables, a frame without tables counted under the same settings is a miss (the frame is
-    // prepared again and its tables with it); a hit carries the tables.
+    // and moves a hit to the front of the eviction order. #733: scope tables never decide a hit.
+    // The frame is handed with the tables its entry stores (Working-signal tables only; null:
+    // none), whatever `identity.scopes` asks for.
     [[nodiscard]] PreparedPreviewFrameHandle take(const runtime::PreviewRequestIdentity& identity);
 
     // Retains display-only CPU pixels or a live opaque resident lease. All allocating work
@@ -218,10 +218,10 @@ class PreviewFrameCache final : public QObject {
 
     [[nodiscard]] bool contains(const PreviewFrameCacheKey& key) const;
 
-    // #730 Scopes: whether `key`'s live entry carries scope tables counted under `settings`
-    // (Measured, EmptyArea or Failed alike). A request that asks for tables is a miss without them.
+    // #730, #733 Scopes: whether `key`'s live entry carries the tables `request` asks for: the
+    // same settings at the same table size (Measured, EmptyArea or Failed alike).
     [[nodiscard]] bool containsWithScopes(const PreviewFrameCacheKey& key,
-                                          const runtime::ScopeMeasureSettings& settings) const;
+                                          const runtime::PreviewScopeRequest& request) const;
     // The scope tables `key`'s live entry carries (null: none), without counting a hit or a miss
     // and without moving it in the eviction order.
     [[nodiscard]] std::shared_ptr<const runtime::PreviewFrameScopes>
@@ -359,8 +359,8 @@ class PreviewFrameCache final : public QObject {
         // live only while its lease is; an invalidated lease is never a hit and never listed.
         std::shared_ptr<const runtime::PreviewResidentDisplayFrame> resident;
         std::size_t bytes = 0;
-        // #730: the frame's scope tables (PreparedPreviewFrame::scopes), host memory whatever the
-        // frame's own storage is.
+        // #730, #733: the frame's Working-signal scope tables (PreparedPreviewFrame::scopes), host
+        // memory whatever the frame's own storage is. Display-signal tables are never stored.
         std::shared_ptr<const runtime::PreviewFrameScopes> scopes;
         std::size_t scopeBytes = 0;
         EntryIterator self{};

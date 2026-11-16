@@ -250,7 +250,8 @@ ScopeSignalColorResult ScopeSignalColor::prepare(const ScopeSignalColorRequest& 
 ScopeFrameMeasure measureScopeFrameCpu(const ProcessFrame& frame,
                                        const ScopeMeasureSettings& settings,
                                        const ScopeSignalColor& color,
-                                       const CancellationToken& cancellation) {
+                                       const CancellationToken& cancellation,
+                                       const render::ScopeTableReduction reduction) {
     try {
         const auto& image = frame.processImage();
         const auto* const descriptor = image.descriptor();
@@ -300,6 +301,7 @@ ScopeFrameMeasure measureScopeFrameCpu(const ProcessFrame& frame,
         input.axisMaximum = settings.axisMaximum;
         input.luma = color.luma();
         input.ignoreTransparent = settings.ignoreTransparent;
+        input.reduction = reduction;
         auto counts = measureScopesCpu(
             input, [&cancellation] { return cancellation.isCancellationRequested(); });
         if (!counts)

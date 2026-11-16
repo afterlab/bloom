@@ -148,11 +148,13 @@ struct ScopeFrameMeasure final {
 };
 
 // The CPU reference: counts `frame`, an evaluated process frame of `plan`'s composition.
-// `settings.signal` must be `color`'s signal.
+// `settings.signal` must be `color`'s signal. `reduction` is the table size (#733); the full
+// tables by default.
 [[nodiscard]] ScopeFrameMeasure measureScopeFrameCpu(const ProcessFrame& frame,
                                                      const ScopeMeasureSettings& settings,
                                                      const ScopeSignalColor& color,
-                                                     const CancellationToken& cancellation = {});
+                                                     const CancellationToken& cancellation = {},
+                                                     render::ScopeTableReduction reduction = {});
 
 // #733: a stored display frame, whose 4-byte cells are the Display signal of its picture
 // (render/display_pixel_packing.hpp): the frame the Viewer shows, or the packed result of a

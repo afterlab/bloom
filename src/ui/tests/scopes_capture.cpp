@@ -305,16 +305,20 @@ class Workspace final {
         settle();
     }
 
-    // True when the Viewer's frame carries tables of the session's settings, the panel shows them
+    // True when the panel shows tables of the session's settings for the Viewer's frame (counted
+    // from the frame on show for the Display signal, carried by the frame for the Working signal)
     // and every trace on show was mapped from them, with nothing still running.
     [[nodiscard]] bool settled() const {
         const auto& state = controller_->state();
         if (state.activity != ui::PreviewActivity::Ready || state.frame == nullptr ||
-            !viewer_->mappingForTest().has_value())
+            !viewer_->mappingForTest().has_value() || controller_->scopeRecountActive())
             return false;
-        const auto& scopes = state.frame->scopes();
-        if (scopes == nullptr || scopes->settings != store_.settings(key()) ||
-            panel_->scopes() != scopes || panel_->renderer()->busy())
+        const auto settings = store_.settings(key());
+        const auto& scopes = panel_->scopes();
+        if (scopes == nullptr || scopes->settings != settings || panel_->measuring() ||
+            panel_->renderer()->busy())
+            return false;
+        if (settings.signal == runtime::ScopeSignal::Working && state.frame->scopes() != scopes)
             return false;
         for (std::size_t kind = 0; kind < ui::scopes::kKindCount; ++kind) {
             const auto finished = panel_->renderer()->finished(static_cast<ui::scopes::Kind>(kind));
@@ -527,11 +531,9 @@ int main(int argc, char** argv) {
                 work.show(900, width, 900);
                 work.store().setRegion(work.key(), runtime::ScopeRegion{700, 10, 20, 20});
                 const bool empty = awaitQtCondition("the frame counts nothing in the region", [&] {
-                    const auto& frame = work.controller().state().frame;
-                    return frame != nullptr && frame->scopes() != nullptr &&
-                           frame->scopes()->status ==
-                               runtime::PreviewFrameScopesStatus::EmptyArea &&
-                           work.panel().scopes() == frame->scopes();
+                    const auto& scopes = work.panel().scopes();
+                    return !work.panel().measuring() && scopes != nullptr &&
+                           scopes->status == runtime::PreviewFrameScopesStatus::EmptyArea;
                 });
                 if (!empty)
                     throw std::runtime_error("the empty region never reached the panel");

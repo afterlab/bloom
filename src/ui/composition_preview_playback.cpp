@@ -21,6 +21,9 @@ void CompositionPreviewController::setPlaybackActive(const bool playing,
         return;
     }
     playbackActive_ = playing;
+    // #733: playback never shares the device or a worker with a background scope count.
+    if (playing)
+        cancelScopeRecount();
     emit playbackActiveChanged(playing);
     if (!playing && keepCurrentFrame && !shuttingDown_ && !cachePurgeGate_ && active_.has_value() &&
         active_->playbackOutstanding && !active_->carriedInteractionOverride &&
@@ -43,7 +46,16 @@ void CompositionPreviewController::setPlaybackActive(const bool playing,
                              state_.frame->desiredIdentity().time == session_.currentTime() &&
                              state_.frame->isDisplayValid() &&
                              liveSessionMatches(state_.frame->desiredIdentity());
-        if (!current)
+        // #733: the frame playback stopped on is always counted. Played from the cache it may
+        // lack the Working tables a Scopes panel asks for: asking for it again shows the cached
+        // frame at once and counts them in the background.
+        const auto asked =
+            current ? scopeRequest(state_.frame->desiredIdentity().projectId,
+                                   state_.frame->desiredIdentity().compositionId)
+                    : nullptr;
+        const bool counted = asked == nullptr || runtime::previewFrameScopesAnswer(
+                                                     state_.frame->scopes().get(), *asked);
+        if (!current || !counted)
             requestPreview(false, PreviewRequestKind::Visible);
     }
 }

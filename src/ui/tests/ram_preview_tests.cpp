@@ -38,7 +38,9 @@
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
+#include <bloom/ui/scopes_editor.hpp>
 #include <bloom/ui/scopes_region_store.hpp>
+#include <bloom/ui/scopes_trace_renderer.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/window_status_bar.hpp>
@@ -664,112 +666,272 @@ void testRamPreviewWorkArea(Expectations& expectations) {
 //   * a change of signal makes the next fill prepare the range again with Working tables;
 //   * a cached range plays with no measure: stepping through it prepares nothing and every shown
 //     frame carries its tables.
-void testRamFillCarriesScopeTables(Expectations& expectations) {
-    const auto format = document::CompositionFormat::create(
-        64, 64, core::PixelAspectRatio::square(), *document::FrameRate::create(25, 1));
-    SessionFixture fixture(document::makeNewProject("RAM scopes", "Main", time(7, 25), *format));
-    commands::Transaction range("Work area", fixture.session.snapshot().revision());
-    range.emplace<commands::SetWorkArea>(fixture.session.compositionId(), time(2, 25), time(5, 25));
-    expectations.expect(fixture.session.executeTransaction(std::move(range)).changed(),
-                        "work area accepted");
-    expectations.expect(
-        awaitQtCondition("foreground settled", [&] { return isReady(fixture.controller); }),
-        "foreground settled");
-    fixture.frameCache->clear();
+// The fixture of the two scope cases below: a 64 x 64 composition whose work area is frames 2 to
+// 4, with a RAM Preview filled while no Scopes panel is visible.
+struct ScopeFill final {
+    explicit ScopeFill(Expectations& expectations)
+        : expectations_(expectations),
+          fixture(document::makeNewProject(
+              "RAM scopes", "Main", time(7, 25),
+              *document::CompositionFormat::create(64, 64, core::PixelAspectRatio::square(),
+                                                   *document::FrameRate::create(25, 1)))) {
+        commands::Transaction range("Work area", fixture.session.snapshot().revision());
+        range.emplace<commands::SetWorkArea>(fixture.session.compositionId(), time(2, 25),
+                                             time(5, 25));
+        expectations_.expect(fixture.session.executeTransaction(std::move(range)).changed(),
+                             "work area accepted");
+        expectations_.expect(
+            awaitQtCondition("foreground settled", [&] { return isReady(fixture.controller); }),
+            "foreground settled");
+        fixture.frameCache->clear();
+        fixture.controller.setScopesStore(&store);
+        ram.emplace(fixture.session, fixture.controller, fixture.scheduler, fixture.bridge,
+                    fixture.countingPipeline());
+    }
 
-    ui::ScopesRegionStore store;
-    fixture.controller.setScopesStore(&store);
-    ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
-                                 fixture.bridge, fixture.countingPipeline());
-    const auto keyAt = [&](const std::int64_t frame) {
+    [[nodiscard]] std::optional<ui::PreviewFrameCacheKey> keyAt(const std::int64_t frame) const {
         return fixture.controller.cacheKeyForTime(time(frame, 25));
-    };
-    const auto fill = [&](const char* what) {
-        ram.start();
-        expectations.expect(awaitQtCondition(what,
-                                             [&] {
-                                                 return !ram.isCaching() &&
-                                                        ram.cachedFrameCount() == 3 &&
-                                                        isReady(fixture.controller);
-                                             }),
-                            what);
-    };
-
-    // No panel visible: nothing is counted.
-    fill("the fill with no panel ends with its three frames");
-    for (std::int64_t frame = 2; frame < 5; ++frame) {
-        const auto key = keyAt(frame);
-        expectations.expect(key && fixture.frameCache->contains(*key) &&
-                                fixture.frameCache->scopesOf(*key) == nullptr,
-                            "a frame filled with no panel visible carries no tables");
     }
-    expectations.expect(fixture.frameCache->scopeTableBytes() == 0,
-                        "no table bytes are held without a panel");
+    void fill(const char* what) {
+        ram->start();
+        expectations_.expect(awaitQtCondition(what,
+                                              [&] {
+                                                  return !ram->isCaching() &&
+                                                         ram->cachedFrameCount() == 3 &&
+                                                         isReady(fixture.controller);
+                                              }),
+                             what);
+    }
+    // Steps to `frame`, which the cache holds: it is on show when this returns, with no wait.
+    void stepTo(const std::int64_t frame, const char* what) {
+        expectations_.expect(fixture.session.setCurrentTime(time(frame, 25)), "the time steps");
+        const auto& shown = fixture.controller.state().frame;
+        expectations_.expect(isReady(fixture.controller) && shown != nullptr &&
+                                 shown->desiredIdentity().time == time(frame, 25),
+                             what);
+    }
+    void fillWithNoPanel() {
+        fill("the fill with no panel ends with its three frames");
+        for (std::int64_t frame = 2; frame < 5; ++frame) {
+            const auto key = keyAt(frame);
+            expectations_.expect(key && fixture.frameCache->contains(*key) &&
+                                     fixture.frameCache->scopesOf(*key) == nullptr,
+                                 "a frame filled with no panel visible carries no tables");
+        }
+        expectations_.expect(fixture.frameCache->scopeTableBytes() == 0,
+                             "no table bytes are held without a panel");
+    }
 
-    // A panel is visible: the range is prepared again, with Display tables.
-    store.panelShown();
-    const auto key2 = keyAt(2);
-    expectations.expect(key2 && !fixture.controller.frameCacheAnswers(*key2),
-                        "a frame without tables does not answer a request that asks for them");
-    const auto beforeDisplay = fixture.preparationCount.load();
-    fill("the fill with a panel visible ends with its three frames");
-    expectations.expect(fixture.preparationCount.load() - beforeDisplay >= 3,
-                        "the frames without tables were prepared again");
-    for (std::int64_t frame = 2; frame < 5; ++frame) {
-        const auto key = keyAt(frame);
-        const auto scopes = key ? fixture.frameCache->scopesOf(*key) : nullptr;
+    Expectations& expectations_;
+    SessionFixture fixture;
+    ui::ScopesRegionStore store;
+    std::optional<ui::RamPreviewController> ram;
+};
+
+// #733 (R1, R10): a RAM Preview cached with no Scopes panel visible, then a panel opened on the
+// Display signal, prepares no frame again: the panel's tables are counted from the frame on show.
+void testPanelOpenedAfterFillRendersNothing(Expectations& expectations) {
+    ScopeFill run(expectations);
+    auto& fixture = run.fixture;
+    run.fillWithNoPanel();
+    run.stepTo(3, "a cached frame of the range is on show");
+    const auto prepared = fixture.preparationCount.load();
+    const auto hits = fixture.frameCache->statistics().hits;
+    {
+        ui::ScopesServices services;
+        services.scheduler = &fixture.scheduler;
+        services.bridge = &fixture.bridge;
+        services.store = &run.store;
+        ui::ScopesEditor panel(services);
+        panel.resize(420, 900);
+        panel.show();
+        expectations.expect(run.store.active() &&
+                                run.store.signal() == runtime::ScopeSignal::Display,
+                            "the panel is visible on the Display signal");
+        expectations.expect(fixture.controller.scopeRequest(fixture.session.snapshot().project().id(),
+                                                            fixture.session.compositionId()) ==
+                                nullptr,
+                            "no frame request asks for Display tables");
+        expectations.expect(isReady(fixture.controller) && fixture.controller.scopeRecountCount() == 0,
+                            "opening the panel asked the frame pipeline for nothing");
+        for (std::int64_t frame = 2; frame < 5; ++frame) {
+            const auto key = run.keyAt(frame);
+            expectations.expect(key && fixture.controller.frameCacheAnswers(*key),
+                                "a cached frame still covers its time with a panel visible");
+        }
+        // The frame on show is counted for the panel.
+        const auto countShown = [&](const std::int64_t frame) {
+            const auto shown = fixture.controller.state().frame;
+            const auto previous = panel.scopes();
+            panel.showViewerFrame(shown);
+            expectations.expect(
+                awaitQtCondition("the shown frame's traces arrive",
+                                 [&] {
+                                     const auto& scopes = panel.scopes();
+                                     return !panel.measuring() && scopes != nullptr &&
+                                            scopes != previous &&
+                                            panel.measureCounters().cpuMeasures ==
+                                                static_cast<std::uint64_t>(frame - 1);
+                                 }),
+                "the shown frame's traces arrive");
+            const auto& scopes = panel.scopes();
+            expectations.expect(
+                scopes != nullptr &&
+                    scopes->status == runtime::PreviewFrameScopesStatus::Measured &&
+                    scopes->settings.signal == runtime::ScopeSignal::Display &&
+                    scopes->tables.counted() == 64U * 64U &&
+                    scopes->tables.route() == runtime::ScopeRoute::Cpu,
+                "the panel draws Display tables of every pixel of the shown frame");
+        };
+        run.stepTo(2, "the first cached frame is on show");
+        countShown(2);
+        // The fill finds its range cached and the cached range plays: nothing is prepared.
+        run.fill("the fill with a panel visible finds its three frames");
+        for (std::int64_t frame = 3; frame < 5; ++frame) {
+            run.stepTo(frame, "the cached frame is shown at once");
+            countShown(frame);
+        }
+        expectations.expect(fixture.preparationCount.load() == prepared,
+                            "opening the panel, the fill and the cached range prepared no frame");
+        expectations.expect(fixture.frameCache->statistics().hits > hits,
+                            "the frames came from the cache");
+        expectations.expect(fixture.frameCache->scopeTableBytes() == 0,
+                            "no cached frame holds Display tables");
+        for (std::int64_t frame = 2; frame < 5; ++frame) {
+            const auto key = run.keyAt(frame);
+            expectations.expect(key && fixture.frameCache->scopesOf(*key) == nullptr,
+                                "a cached frame holds no Display tables");
+        }
         expectations.expect(
-            scopes != nullptr && scopes->status == runtime::PreviewFrameScopesStatus::Measured &&
-                scopes->settings.signal == runtime::ScopeSignal::Display &&
-                scopes->settings == store.settings({key->projectId, key->compositionId}) &&
-                scopes->tables.counted() == 64U * 64U &&
-                scopes->tables.route() == runtime::ScopeRoute::Cpu,
-            "a RAM-previewed frame carries Display tables of all its pixels");
+            awaitQtCondition("the traces settle",
+                             [&] { return panel.renderer() != nullptr && !panel.renderer()->busy(); }),
+            "the traces settle");
     }
+    run.ram->beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
+// #733 (R7): on the Working signal a cached frame without tables is shown at once and counted in
+// the background; a RAM Preview's coverage never depends on tables.
+void testWorkingTablesNeverGateAFrame(Expectations& expectations) {
+    ScopeFill run(expectations);
+    auto& fixture = run.fixture;
+    run.fillWithNoPanel();
+    run.stepTo(3, "a cached frame of the range is on show");
+    const auto tablesOn = [&](const std::int64_t frame) {
+        const auto key = run.keyAt(frame);
+        return key ? fixture.frameCache->scopesOf(*key) : nullptr;
+    };
+    const auto workingMeasured = [&](const std::shared_ptr<const runtime::PreviewFrameScopes>& scopes) {
+        return scopes != nullptr && scopes->status == runtime::PreviewFrameScopesStatus::Measured &&
+               scopes->settings.signal == runtime::ScopeSignal::Working &&
+               scopes->tables.counted() == 64U * 64U;
+    };
+    // The frame on show gets its tables in the background.
+    const auto awaitCounted = [&](const std::int64_t frame, const char* what) {
+        expectations.expect(
+            awaitQtCondition(what,
+                             [&] {
+                                 const auto& shown = fixture.controller.state().frame;
+                                 return !fixture.controller.scopeRecountActive() &&
+                                        isReady(fixture.controller) && shown != nullptr &&
+                                        shown->desiredIdentity().time == time(frame, 25) &&
+                                        workingMeasured(shown->scopes());
+                             }),
+            what);
+        expectations.expect(workingMeasured(tablesOn(frame)),
+                            "the tables are cached with the frame");
+    };
+
+    run.store.setSignal(runtime::ScopeSignal::Working);
+    auto prepared = fixture.preparationCount.load();
+    // A panel becomes visible: the frame stays on show and one background count is submitted.
+    run.store.panelShown();
+    {
+        const auto& shown = fixture.controller.state().frame;
+        expectations.expect(isReady(fixture.controller) && shown != nullptr &&
+                                shown->desiredIdentity().time == time(3, 25) &&
+                                shown->scopes() == nullptr,
+                            "the cached frame without tables stays on show");
+        expectations.expect(fixture.controller.scopeRecountCount() == 1 &&
+                                fixture.controller.scopeRecountActive(),
+                            "its tables are asked for in the background");
+    }
+    for (std::int64_t frame = 2; frame < 5; ++frame) {
+        const auto key = run.keyAt(frame);
+        expectations.expect(key && fixture.controller.frameCacheAnswers(*key),
+                            "a frame without tables still covers its time");
+    }
+    awaitCounted(3, "the shown frame is counted in the background");
+    expectations.expect(fixture.preparationCount.load() == prepared + 1,
+                        "the count was one background preparation");
+    expectations.expect(tablesOn(2) == nullptr && tablesOn(4) == nullptr,
+                        "only the frame on show was counted");
+
+    // The fill finds its range cached: frames without tables are not prepared again.
+    prepared = fixture.preparationCount.load();
+    run.fill("the fill on the Working signal finds its three frames");
+    expectations.expect(fixture.preparationCount.load() == prepared,
+                        "a fill never prepares a cached frame again for its tables");
+
+    // Stepping to a cached frame without tables shows it at once, then counts it.
+    run.stepTo(4, "the cached frame without tables is shown at once");
+    expectations.expect(fixture.controller.state().frame != nullptr &&
+                            fixture.controller.state().frame->scopes() == nullptr &&
+                            fixture.controller.scopeRecountCount() == 2,
+                        "its tables are asked for in the background");
+    awaitCounted(4, "the next shown frame is counted in the background");
+    // A frame that carries the tables asks for nothing.
+    run.stepTo(3, "the counted frame is shown at once");
+    expectations.expect(fixture.controller.state().frame != nullptr &&
+                            workingMeasured(fixture.controller.state().frame->scopes()) &&
+                            fixture.controller.scopeRecountCount() == 2 &&
+                            !fixture.controller.scopeRecountActive(),
+                        "a cached frame with its tables is not counted again");
+
+    // Other settings: the frame stays on show and is counted again in the background.
+    run.store.setWorkingAxisMaximum(4);
+    expectations.expect(isReady(fixture.controller) &&
+                            fixture.controller.scopeRecountCount() == 3,
+                        "a settings change keeps the frame on show and counts it again");
+    awaitCounted(3, "the frame is counted under the new settings");
+    {
+        const auto tables = tablesOn(3);
+        expectations.expect(tables != nullptr && tables->settings.axisMaximum == 4U,
+                            "the cached tables are those of the new settings");
+    }
+
+    // The Display signal asks the frame pipeline for nothing.
+    prepared = fixture.preparationCount.load();
+    run.store.setSignal(runtime::ScopeSignal::Display);
+    run.stepTo(2, "a cached frame is shown at once on the Display signal");
+    expectations.expect(fixture.controller.scopeRecountCount() == 3 &&
+                            !fixture.controller.scopeRecountActive() &&
+                            fixture.preparationCount.load() == prepared,
+                        "the Display signal counts nothing with a frame");
+
+    // A fill while the panel shows the Working signal counts the tables with each frame.
+    run.store.setSignal(runtime::ScopeSignal::Working);
+    expectations.expect(
+        awaitQtCondition("the shown frame settles", [&] {
+            return !fixture.controller.scopeRecountActive() && isReady(fixture.controller);
+        }),
+        "the shown frame settles");
+    fixture.frameCache->clear();
+    run.fill("the fill on the Working signal ends with its three frames");
+    for (std::int64_t frame = 2; frame < 5; ++frame)
+        expectations.expect(workingMeasured(tablesOn(frame)) &&
+                                tablesOn(frame)->tables.route() == runtime::ScopeRoute::Cpu,
+                            "a frame filled on the Working signal carries its tables");
     expectations.expect(fixture.frameCache->scopeTableBytes() > 0 &&
                             fixture.frameCache->hostBytes() >=
                                 fixture.frameCache->scopeTableBytes(),
                         "the tables are charged to the cache's byte budget");
-
-    // A cached range plays with no measure.
-    const auto beforePlay = fixture.preparationCount.load();
-    for (std::int64_t frame = 2; frame < 5; ++frame) {
-        expectations.expect(fixture.session.setCurrentTime(time(frame, 25)), "the time steps");
-        expectations.expect(
-            awaitQtCondition("the cached frame is shown",
-                             [&] {
-                                 const auto& shown = fixture.controller.state().frame;
-                                 return isReady(fixture.controller) && shown != nullptr &&
-                                        shown->desiredIdentity().time == time(frame, 25);
-                             }),
-            "the cached frame is shown");
-        const auto& shown = fixture.controller.state().frame;
-        expectations.expect(shown != nullptr && shown->scopes() != nullptr &&
-                                shown->scopes()->settings.signal == runtime::ScopeSignal::Display,
-                            "the shown cached frame carries its tables");
-    }
-    expectations.expect(fixture.preparationCount.load() == beforePlay,
-                        "stepping through the cached range prepared nothing");
-
-    // The Working signal: the next fill prepares the range again, with Working tables.
-    store.setSignal(runtime::ScopeSignal::Working);
-    fill("the fill on the Working signal ends with its three frames");
-    for (std::int64_t frame = 2; frame < 5; ++frame) {
-        const auto key = keyAt(frame);
-        const auto scopes = key ? fixture.frameCache->scopesOf(*key) : nullptr;
-        expectations.expect(scopes != nullptr &&
-                                scopes->status == runtime::PreviewFrameScopesStatus::Measured &&
-                                scopes->settings.signal == runtime::ScopeSignal::Working &&
-                                scopes->tables.counted() == 64U * 64U,
-                            "a RAM-previewed frame carries Working tables after the change");
-    }
-    store.panelHidden();
-    ram.beginShutdown();
+    run.store.panelHidden();
+    run.ram->beginShutdown();
     finishFixture(fixture, expectations);
 }
 
-// The Viewer footer's RAM Preview button: it toggles the controller, reads Cancel with progress
-// while it fills, and returns to "RAM Preview" when cancelled.
 void testRamPreviewButtonReflectsFillingAndCancels(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM button", time(24, 25)));
     expectations.expect(animateSolidLayer(fixture.session), "animated composition");
@@ -2063,7 +2225,8 @@ int main(int argc, char** argv) {
         testCachingReleasesTheProcessImage(expectations);
         testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(expectations);
         testRamPreviewWorkArea(expectations);
-        testRamFillCarriesScopeTables(expectations);
+        testPanelOpenedAfterFillRendersNothing(expectations);
+        testWorkingTablesNeverGateAFrame(expectations);
         testRamPreviewButtonReflectsFillingAndCancels(expectations);
         testRamPreviewCachesTheRangeThenPlaysEveryFrame(expectations);
         testLargeIndexedCoverageMetadata(expectations);

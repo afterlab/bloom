@@ -11,12 +11,13 @@
 namespace bloom::runtime::detail {
 namespace {
 
-[[nodiscard]] std::shared_ptr<const PreviewFrameScopes> failed(const ScopeMeasureSettings& settings,
-                                                               std::string message) {
+[[nodiscard]] std::shared_ptr<const PreviewFrameScopes>
+failed(const PreparedFrameScopeMeasure& prepared, std::string message) {
     ScopeFrameMeasure measure;
     measure.status = ScopeFrameStatus::Failed;
     measure.message = std::move(message);
-    return makePreviewFrameScopes(settings, std::move(measure), nullptr);
+    return makePreviewFrameScopes(prepared.settings, std::move(measure), nullptr,
+                                  prepared.work.job.reduction);
 }
 
 void finishMeasure(PreviewDisplayServiceCore& core, PreviewDisplayStageRecord& stage) noexcept {
@@ -46,7 +47,7 @@ void finishMeasure(PreviewDisplayServiceCore& core, PreviewDisplayStageRecord& s
                                                        std::memory_order_relaxed);
         } else {
             stage.scopes =
-                failed(prepared->settings,
+                failed(*prepared,
                        fault.message.empty() ? std::string("The device could not count the scopes.")
                                              : fault.message);
             counters.framesFailed.fetch_add(1, std::memory_order_relaxed);
@@ -76,8 +77,8 @@ bool beginFrameScopeMeasure(const std::shared_ptr<PreviewDisplayServiceCore>& co
         return false;
     try {
         if (stage.scopePicture == nullptr || !core->device) {
-            stage.scopes = failed(prepared->settings, "The frame's scene picture is not available "
-                                                      "to count its scopes.");
+            stage.scopes = failed(*prepared, "The frame's scene picture is not available to "
+                                             "count its scopes.");
             core->scope.framesFailed.fetch_add(1, std::memory_order_relaxed);
             stage.scopePicture.reset();
             return false;
@@ -86,7 +87,7 @@ bool beginFrameScopeMeasure(const std::shared_ptr<PreviewDisplayServiceCore>& co
             std::string message;
             core->scope.stage = ScopeMeasureStage::create(*core->device, message);
             if (core->scope.stage == nullptr) {
-                stage.scopes = failed(prepared->settings,
+                stage.scopes = failed(*prepared,
                                       message.empty() ? std::string("The device cannot count the "
                                                                     "scopes.")
                                                       : message);
@@ -105,7 +106,7 @@ bool beginFrameScopeMeasure(const std::shared_ptr<PreviewDisplayServiceCore>& co
         stage.scopeStepper.reset();
         stage.scopeWork.reset();
         stage.scopePicture.reset();
-        stage.scopes = failed(prepared->settings, "The scope measure could not be started.");
+        stage.scopes = failed(*prepared, "The scope measure could not be started.");
         return false;
     }
 }

@@ -655,17 +655,14 @@ void testNotProjectState(Expectations& e) {
     e.expect(f.session.snapshot().revision() == revision, "the project's revision is unchanged");
     e.expect(f.commands.size() == history && f.session.canUndo() == canUndo,
              "no undo step is added");
-    // The frame is prepared again only to count its tables in the new region (#730: the scopes
-    // are computed in the Viewer's frame pipeline); the picture is the project's as it was.
-    e.expect(awaitQtCondition("the shown frame counts the new region",
-                              [&] {
-                                  const auto& shown = f.controller.state().frame;
-                                  return shown != nullptr && shown->scopes() != nullptr &&
-                                         shown->scopes()->settings.region == Region{1, 1, 5, 5};
-                              }) &&
-                 frame != nullptr &&
-                 f.controller.state().frame->processIdentity() == frame->processIdentity(),
-             "the frame counts the new region and its picture is unchanged");
+    // #733: a region is a setting of the Display signal's measure, which counts the frame on
+    // show. No frame is prepared for it: the Viewer keeps the very frame it had.
+    for (int turn = 0; turn < 10; ++turn)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    e.expect(frame != nullptr && f.controller.state().frame == frame &&
+                 f.controller.state().activity == ui::PreviewActivity::Ready &&
+                 f.controller.scopeRecountCount() == 0 && !f.controller.scopeRecountActive(),
+             "the region prepares no frame: the Viewer keeps the frame it had");
     // Undo does not touch the region either.
     (void)f.session.undo();
     e.expect(f.store.region(f.key()) == Region{1, 1, 5, 5}, "undo leaves the region as it was");

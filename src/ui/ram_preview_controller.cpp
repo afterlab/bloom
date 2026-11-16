@@ -392,8 +392,7 @@ void RamPreviewController::requestFrames() {
                 ++nextFrameIndex_;
                 continue;
             }
-            // #730: with a Scopes panel shown, a cached frame without tables of the current scope
-            // settings is filled again; its tables are counted as it is prepared.
+            // #733: a cached frame is never filled again for its scope tables.
             if (previewController_.frameCacheAnswers(*key)) {
                 ++nextFrameIndex_;
                 continue;
@@ -622,8 +621,8 @@ RamPreviewController::identityFor(const core::RationalTime time,
         .viewName = settings.viewName,
         .showLook = settings.showLook,
         .isolation = previewController_.isolation(),
-        // #730: the frame's scope tables are counted as it is prepared while a Scopes panel is
-        // shown.
+        // #730, #733: the frame's Working scope tables are counted as it is prepared while a
+        // Scopes panel shows that signal.
         .scopes = previewController_.scopeRequest(snapshot.project().id(), compositionId_),
     };
 }
@@ -780,7 +779,7 @@ void RamPreviewController::onEntryRetained(const PreviewFrameCacheKey& key) {
         if (!index)
             return;
         pendingRetentionLoss_.erase(*index);
-        // #730: a frame without the scope tables a shown Scopes panel asks for covers nothing.
+        // #733: coverage never depends on scope tables: a retained frame covers its time.
         if (!previewController_.frameCacheAnswers(key))
             return;
         if (coverageIndex_.contains(*index))
@@ -907,8 +906,7 @@ void RamPreviewController::refreshCoverage(const bool notify, const bool force) 
                 if (!key)
                     continue;
                 const auto index = acceptedFrameIndex(*key);
-                // #730: with a Scopes panel shown, a frame without tables of the current settings
-                // is not covered: the run prepares it again.
+                // #733: a cached frame is covered whatever scope tables it carries.
                 if (index && previewController_.frameCacheAnswers(*key))
                     addRetainedIndex(*index);
             }
