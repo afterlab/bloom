@@ -424,7 +424,7 @@ int run(int argc, char** argv) {
                             "a Display Histogram-only measure reads its small tables");
     }
 
-    // Bytes per measure (docs/architecture/scopes.md, "Cost"): a frame's tables are one fixed
+    // Bytes per measure (docs/architecture/scopes.md, "The table readback"): a frame's tables are one fixed
     // layout. The picture is 256 wide, so the Waveform has 256 columns: every table is 8,544,320
     // bytes (12,746,816 for a picture 512 or more wide, the bound of the readback contract).
     {

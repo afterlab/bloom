@@ -261,8 +261,9 @@ frame records.
 - The qualified display boundary consumes the evaluation intent's working-space id and OCIO config
   revision. The historical reference mapper remains the byte-compatible path for
   `lin_rec709_scene`; generalized projects use the selected working-space-to-display transform and
-  produce straight packed RGBA8. Its prepared display product and identity are distinct from process
-  evaluation.
+  produce a packed display frame: 4 bytes a pixel, straight RGBA8 or 10:10:10:2 words
+  (see [Scopes](scopes.md#the-cached-display-frame)). Its prepared display product and identity
+  are distinct from process evaluation.
 - Text coverage is rasterized from glyph outlines into 8-bit area coverage, then composited by a row
   kernel that scales an already-premultiplied process pixel by `coverage / 255`. **A coverage byte is
   a linear area fraction, not a gamma-encoded intensity**, so it is used directly as linear alpha and
@@ -807,7 +808,7 @@ result after clearing ROI, and show that a further ROI retains no new bytes.
 
 `ViewAdjust{exposure, gamma}` belongs to display preparation and preview display identity. Exposure
 multiplies linear display light by `2^exposure` after the view transform and before sRGB encoding.
-Gamma applies `pow(encoded, 1/gamma)` to the encoded RGB before RGBA8 quantization. Alpha is
+Gamma applies `pow(encoded, 1/gamma)` to the encoded RGB before the pack's quantization. Alpha is
 unchanged. The qualified path uses the processor's floating display output before quantization,
 undoing only the sRGB encoding for the exposure step; it never adjusts already quantized bytes.
 Finite EV values in `[-32, 32]` and gamma in `[0.01, 10]` are accepted. EV zero and gamma one bypass
@@ -819,7 +820,7 @@ neutral preview, thumbnails, process identities, authored colors, and export req
 inherit this adjustment. Adjusted and ROI-padded qualified buffers retain qualified provenance;
 `PreparedPreviewFrame::displayBufferView()` selects the final viewport buffer.
 
-The pixel probe reads straight RGBA8 and its normalized values from that viewport buffer. Reference
+The pixel probe reads the straight presented RGBA8 (the top 8 bits of a 10-bit code) and its normalized values from that viewport buffer. Reference
 RGBA is the exact premultiplied `lin_rec709_scene` Float32 process value, widened to Float64 without
 a color transform. A retained process image supports a constant-time pixel read. Display-only
 cache hits, or positions outside the preview ROI, request a one-pixel ROI through the evaluator on

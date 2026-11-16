@@ -9,7 +9,8 @@ Ordinary GPU preview renders the scene and its display on the GPU, then hands th
 to the window once. Its status says **GPU render**. RAM preview retains
 that immutable host display storage, including metadata, without a second native copy of every
 finished frame. A tight Full 1920×1080 display has 8,294,400 pixel bytes; Half has 2,073,600 before
-metadata. The GPU native route remains separately supported. Channel display changes use a bounded
+metadata. A frame is 4 bytes a pixel, as 10:10:10:2 words when every pixel is opaque or fully
+transparent and as 8-bit RGBA otherwise; the two cost the same, plus 36 bytes of counters a frame. The GPU native route remains separately supported. Channel display changes use a bounded
 CPU worker and disclose CPU presentation; they do not change the scene's GPU provenance.
 
 Finished packed preview retention is admitted by bytes, not a fixed frame count. The count depends

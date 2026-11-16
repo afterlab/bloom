@@ -1836,8 +1836,9 @@ marker of their own; Select moves their selection to the subject.
 
 Editor `bloom.scopes`, "Scopes" ([what is measured and how it is drawn](../architecture/scopes.md)).
 It follows the active Viewer (the most recently focused one) and is handed the frame that Viewer
-shows; the frame carries its scope tables, counted by the frame pipeline while any Scopes panel is
-visible. The panel only lays out and paints: the count-to-image mapping runs on task workers behind
+shows. On the Display signal the shown frame is counted at display time, at the size the panes draw;
+on the Working signal the frame carries its tables, counted by the frame pipeline while a Scopes
+panel is visible. The panel only lays out and paints: the count-to-image mapping runs on task workers behind
 the trace renderer. The panel is five collapsible panes and nothing else: no status line, warning,
 note, slider, dropdown, check box or button in its body.
 
@@ -1848,7 +1849,7 @@ Scopes panel (`ScopesRegionStore`).
 
 | Menu | Items | Effect |
 | --- | --- | --- |
-| Signal | Display (default), Working Space (exclusive); Working Axis Maximum submenu 1, 2, 4, 8, 16 (enabled for Working Space); Ignore Transparent Pixels (check, off by default) | Frames count again under the new settings |
+| Signal | Display (default), Working Space (exclusive); Working Axis Maximum submenu 1, 2, 4, 8, 16 (enabled for Working Space); Ignore Transparent Pixels (check, off by default) | The shown frame is counted again under the new settings |
 | Region | Draw Scope Region (check; disabled with no followed Viewer); Clear Scope Region (disabled while there is no region) | Arms the region drag in the Viewer, or removes the region |
 | Scopes | Waveform submenu RGB, Luma; Histogram submenu RGB, Luma, RGB and Luma, then Linear, Logarithmic | Maps the same tables again; nothing is counted |
 

@@ -656,7 +656,9 @@ at most once, and when it does every earlier entry is stale. A frame whose quali
 from the tag clears the cache and adopts the new one.
 
 **What is retained.** Display-only buffers and their exact identities, never the Float32 process
-image solely for replay. Host-packed products retain RGBA8 pixels; the native resident route instead
+image solely for replay. Host-packed products retain 4 bytes a pixel, either straight RGBA8 or 10:10:10:2 words for a
+frame whose pixels are all opaque or exactly transparent, plus 36 bytes of frame counters (see
+[Scopes](scopes.md#the-cached-display-frame)); the native resident route instead
 retains an owner-bound lease charged by actual native allocation and metadata. A tight 1920×1080
 host buffer has 8,294,400 pixel bytes before metadata; native alignment may charge more.
 The new `GpuPreparedPacked` service product retains only sealed GPU-prepared host pixels and proof,

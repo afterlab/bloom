@@ -16,7 +16,7 @@
 //   3. The palette: the color roles a scope uses. The panel fills it from the interface tokens; the
 //      headless image uses defaultScopePalette(), whose values a UI test ties to those tokens.
 //
-// See docs/architecture/scopes.md ("The scope picture").
+// See docs/architecture/scopes.md ("Drawing the counts").
 
 #include <bloom/color/scope_colorimetry.hpp>
 #include <bloom/runtime/cancellation.hpp>
@@ -53,7 +53,7 @@ inline constexpr double kVectorscopeExtent = 0.625;
 inline constexpr int kHistogramRowHeight = 56;
 inline constexpr int kParadeGap = 4;
 
-// The trace intensity (#730, docs/architecture/scopes.md "Trace intensity"): light adds linearly
+// The trace intensity (#730, docs/architecture/scopes.md "The trace"): light adds linearly
 // and saturates. A screen pixel's density is the share of the pixels it stands for that land in
 // it, relative to an even spread (1 when the pixels spread evenly over the whole axis or plane):
 //   Waveform and Parade: the share of the screen column's source pixels (the pixels of the table

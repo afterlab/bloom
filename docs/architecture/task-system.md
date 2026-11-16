@@ -65,7 +65,7 @@ The implemented Qt/application layer adds:
   work
 - separate preview activity and frame-freshness state, with the last good same-composition frame
   retained during rendering, cancellation, unsupported outcomes, and failures
-- an extracted Viewer that borrows immutable packed RGBA8 only during paint, fits pixel aspect in
+- an extracted Viewer that borrows immutable packed display pixels (4 bytes a pixel, RGBA8 or 10:10:10:2) only during paint, fits pixel aspect in
   logical widget coordinates, and labels the temporary path `Reference display`
 - staged shutdown for window and application quit paths, with one stable terminal task publication
   before runtime quiescence permits process exit

@@ -9,15 +9,24 @@ anywhere, or open several. It follows the Viewer you used last.
 
 The scopes only read. They never change the picture, the project, the export or the undo history.
 Every number in a scope is a whole count of pixels of the frame, and the graphics processor and the
-processor fallback give the same counts.
+processor fallback give the same counts for the same frame.
 
 ## How the scopes keep up
 
-The scopes are part of each frame, like its picture. While a Scopes panel is visible, every frame
-the Viewer, read-ahead or a RAM Preview makes is measured as it is made, and its scopes are kept
-with it in the frame cache. Playing or scrubbing through frames that are already cached reads
-their scopes and measures nothing again, so the scopes play along with the picture without
-interrupting it. With no Scopes panel visible, nothing is measured and nothing extra is kept.
+The Display scopes are measured from the frame you see. When a frame is shown, its scopes appear at
+once, with no new render: also after a RAM Preview was cached, when you open a Scopes panel on a
+cached frame, and after you change a setting such as the region, the visible scopes or Ignore
+Transparent Pixels. Nothing is stored with the frame for them.
+
+While you play, the scopes follow as fast as they can count and the picture is never held back. The
+frame that is shown when playback stops is always counted.
+
+The Working scopes are measured as each frame is made, while a Scopes panel is visible, and kept
+with the frame. A cached frame without them is still shown at once, and its scopes are counted in
+the background. With no Scopes panel visible, nothing is measured and nothing extra is kept.
+
+A scope is counted at the size of its pane, so a small pane counts a small table. A collapsed
+scope is not counted.
 
 The panel never dims, fades or blanks: each scope keeps its last picture at full strength until the
 next one is ready and then replaces it at once. The panel has no status line or warnings; a scope
@@ -25,13 +34,27 @@ with nothing to show (no frame yet, or a region outside the picture) is an empty
 
 Collapse the scopes you do not need with the arrow on their title; that changes only what is shown.
 
+### Display scopes are 10-bit
+
+The Viewer keeps each frame it shows at 10 bits a color channel when every pixel is opaque or fully
+transparent, so the Display scopes show the 10-bit values your display transform produced. A frame
+with a partly transparent pixel is kept at 8 bits a channel, and its scopes show those values. Both
+cost the same memory. On an 8-bit screen the Viewer shows the top 8 bits of each 10-bit value.
+
+### Under and over
+
+The display encoding can leave values below 0 or above 1. A Display scope draws them on its bottom
+and top lines. The number of such pixels in the whole frame is shown as **Under** and **Over** when
+you point at the first or last code of the Histogram. These counts cover the whole frame, whatever
+the scope region and Ignore Transparent Pixels.
+
 ## The header menus
 
 The panel's settings are in its header menus. They are shared by every Scopes panel in the window.
 
 - **Signal** chooses what is measured.
   - **Display** (default) is the picture through the composition's display, view and look: the
-    values your screen is sent, before they are rounded to 8 bits. The Viewer's exposure and gamma
+    values your screen is sent, at 10 bits for an opaque frame. The Viewer's exposure and gamma
     are viewing aids and are not part of it. Its axis is 10-bit code values, 0 to 1023.
   - **Working Space** is the scene-linear picture before the display transform. Its axis runs from 0 to
     the **Working Axis Maximum** you choose (1, 2, 4, 8 or 16), and its labels are linear values.
@@ -43,7 +66,8 @@ The panel's settings are in its header menus. They are shared by every Scopes pa
   and Luma** and its **Linear** or **Logarithmic** height scale. These change only the drawing.
 
 Changing the signal, the axis maximum, the region or Ignore Transparent Pixels measures the frame
-again; frames cached under other settings are made again as they are reached.
+you see again. The Display scopes render nothing for it. The Working scopes of other cached frames
+are counted again as the frames are reached.
 
 ## The scopes
 
@@ -105,10 +129,11 @@ measure only that part of the frame, and the Waveform's width becomes the region
 
 ## RAM Preview
 
-While a RAM Preview fills and a Scopes panel is visible, each frame is measured as it is made and
-its scopes are kept with the cached frame; a frame already cached without scopes is made again.
-The scopes then play along with the cached range without measuring again. A fill with no Scopes
-panel visible costs nothing extra.
+A RAM Preview does not measure the Display scopes: they are counted from the frame you see. Open a
+Scopes panel after a RAM Preview is cached and the scopes of the frame on show appear at once, and
+they play along with the cached range as it plays. A fill with no Scopes panel visible costs nothing
+extra. With the Working signal and a Scopes panel visible, the fill also counts each frame's Working
+scopes.
 
 ## Reading scopes from MCP and Python
 
@@ -120,6 +145,19 @@ The same measure is available to agents and scripts, with no panel open and in h
 - Python: `bloom.scopes.read` and `bloom.scopes.image`. See [Scripting Bloom with Python](python.md).
 
 A read names its own composition, frame, signal, display and view. It uses the composition's own
-defaults, not the exposure, gamma, channel view or isolation of an open Viewer. A read is answered
-from scopes the application already holds for a cached frame only when they were measured under
-exactly the read's settings; otherwise it measures the frame.
+defaults, not the exposure, gamma, channel view or isolation of an open Viewer. A read counts the
+full tables.
+
+A Display read counts the frame as the Viewer would keep it: at 10 bits for an opaque frame, at 8
+bits for a frame with a partly transparent pixel. The result carries the frame's under and over
+counts and the layout it was counted in. MCP names them `frameCounters` (`under` and `over`, each a
+list for red, green, blue and luma, and `notFinite`) and `storedLayout` (`"10:10:10:2"` or
+`"8:8:8:8"`); Python names them `frame_counters` (`under`, `over` and `not_finite`) and
+`stored_layout`. The luma entry is null (None in Python) when the display's luma could not be
+resolved. The Summary's
+clipped counts of a Display frame are these counts, for the whole frame. A frame with a pixel that is
+not finite has no Display scopes, and the read says so; its Working scopes are still counted.
+
+In the desktop application, a Display read of a frame the RAM Preview already holds is counted from
+that frame and renders nothing. A read that differs from the cached frame in picture, display, view,
+Viewer adjustment, region of interest, isolation or channel view is measured as usual.

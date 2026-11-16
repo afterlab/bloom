@@ -128,7 +128,15 @@ a 10:10:10:2 pack of a frame that does not allow it fails with the typed `Layout
 nothing, and the caller packs that frame again as straight RGBA8. The general OCIO display program
 has the same two preview packs (`runtime::GpuOcioDisplayPacking`) in one program: the host writes
 the dispatch's layout into word 11 of the status block, so a refused frame is packed again by the
-same program without a second shader. `GpuPathCoverage` is the vector coverage producer: the CPU builds the immutable
+same program without a second shader. The scope display step (`GpuOcioTransformKind::ScopeDisplay`)
+takes the same preview packing: its program finds each pixel's stored cell with the display pack's
+statements and writes, instead of the cell, the float signal a scope counts for it, so a headless
+Display scope read packs and unpacks a frame in one dispatch and the picture is, bit for bit, the
+display program's packed cells unpacked. `DisplayUnpackV1` is the fixed kernel that turns a stored
+display frame (4-byte cells of either layout, uploaded as they are through `GpuImageUpload`'s
+`displayCells` source) into that same RGBA32F signal picture on the device; its quotients are built
+from integers by long division so the result is the correctly rounded binary32 value the CPU rule
+(`render::displaySignalPixel`) computes. `GpuPathCoverage` is the vector coverage producer: the CPU builds the immutable
 `PathRasterCoverageGeometry` (bounded integer scanline sample spans, O(edges x rows), with no
 per-pixel mask and the exact `coverageRow` boundary comparison preserved through a bounded binary
 search over the real quarter-sample positions), and one pure-integer compute dispatch turns those
@@ -376,19 +384,28 @@ CPU. [Image Statistics](image-statistics.md#routes) owns the details;
 `bloom.ui.gpu_ram_preview_image_statistics` proves the viewer and RAM preview frames GPU-resident
 against the CPU oracle with each frame measured once on the device.
 
-Scope measure. A frame's scope tables are part of the frame. While a Scopes panel is visible, a
-preview request asks the preview display service's frame job to count them: the worker that
-prepares the frame's GPU scene also prepares the measure's OCIO color programs, and when the
-frame's display step is ready the job converts the scene picture it computed to the measured signal
-and to CIE XYZ, counts it with the fixed kernel `ScopeTablesV1` and reads back only the tables
-(`prep.scopes.result_readback`), never the picture, before the frame's final transfer. The frame is
-published carrying its tables and they are cached with it. No scene runs for the measure. A frame
-the device cannot count takes the CPU route, which counts its process picture on the worker that
-evaluated it. Headless MCP and Python reads with no cached tables measure through a job of the
-final-render evaluator (`GpuProcessFrameEvaluator::measureScopes`) that runs the frame's scene on
-that device. [Scopes](scopes.md) owns the details; `bloom.runtime.preview_frame_scopes_native`
-proves the frame pipeline's tables against the CPU reference with one table readback and no
-picture readback, and `bloom.runtime.scope_frame_measure_native` proves the headless route.
+Scope measure. The Working signal's tables are part of the frame. While a Scopes panel is visible
+on the Working signal, a preview request asks the preview display service's frame job to count
+them: the worker that prepares the frame's GPU scene also prepares the measure's OCIO color
+program, and when the frame's display step is ready the job converts the scene picture it computed
+to CIE XYZ when that table is asked for, counts it with the fixed kernel `ScopeTablesV1` and reads
+back only the tables (`prep.scopes.result_readback`), never the picture, before the frame's final
+transfer. The frame is published carrying its tables and they are cached with it. No scene runs for
+the measure. The Display signal is counted from the frame the Viewer shows, at display time, by a
+job of the same service that is not a frame job: one transient upload of the stored cells, unpacked
+by `DisplayUnpackV1`, the XYZ step only with the Chromaticity table, `ScopeTablesV1` and one table
+readback. It is taken up only while no frame has native work on the device, a frame stage that needs
+the device parks it, and a measure the device does not take is counted by the CPU reference on a
+worker. Tables are counted at the size the panes draw, and the readback is the bytes of that layout.
+A frame the device cannot count takes the CPU route, which counts its stored cells or process
+picture on a worker. Headless MCP and Python reads measure through a job of the final-render
+evaluator (`GpuProcessFrameEvaluator::measureScopes`) that runs the frame's scene on that device; a
+Display read packs and unpacks the frame there with the scope display step and counts it at the full
+size. [Scopes](scopes.md) owns the details; `bloom.runtime.preview_frame_scopes_native` proves the
+frame pipeline's Working tables against the CPU reference with one table readback and no picture
+readback, `bloom.runtime.shown_frame_scopes_native` proves the shown-frame measure,
+`bloom.render.gpu_display_unpack_native` proves `DisplayUnpackV1` and
+`bloom.runtime.scope_frame_measure_native` proves the headless route.
 
 Resident preview product and service. The closed `PreparedPreviewFrame` display variant has a fourth,
 GPU-resident arm, `PreviewResidentDisplayFrame`, built only by the validating owner-thread factory in
@@ -407,7 +424,8 @@ routes on that same owner thread and scheduler lease:
 
 - The packed-readback route (default constructor) composes the accepted CPU stage with the display
   fallback and, when the report's measured eligible interval and the overhead-adjusted comparison
-  admit it, runs one bounded native `OcioDisplayV1` dispatch producing packed RGBA8 with
+  admit it, runs one bounded native `OcioDisplayV1` dispatch producing packed display pixels (4 bytes a pixel,
+RGBA8 or 10:10:10:2) with
   `PreviewDisplayProvider::GpuNeutral` provenance; otherwise the same evaluated stage is mapped by
   the CPU display fallback and is never compiled or evaluated twice. `GpuNeutral` names the display
   transform only: the scene came from the CPU stage, so the frame's process identity keeps
@@ -463,7 +481,7 @@ ownership before releasing the lease.
 
 GPU-prepared packed service foundation (2026-10-09). The explicit `GpuPreparedPacked` product
 mode runs the genuine GPU scene and selected Neutral or general OCIO display processing, then
-copies only the final RGBA8 data window into host storage. It works without a WSI target. This is
+copies only the final packed display data window (4 bytes a pixel) into host storage. It works without a WSI target. This is
 separate from the older CPU-stage/`GpuNeutral` display route above. The process identity remains
 `EvaluationProvider::GpuResident`; the display provider explicitly records transferred host pixels.
 Ordinary application preview now selects this packed product for QWidget painting. Its
@@ -659,7 +677,7 @@ Resident metadata admission is independent of pixel extent. The lease registry r
 tombstoned leases. Entries allocate lazily. A positive byte pool no longer derives a cache count by
 dividing by an assumed 8 MiB frame, and a zero pool remains disabled. Actual native allocation bytes,
 retained metadata and the owner-resolved device clamp remain authoritative. Full and Half retain
-separate resolution/policy keys: 1920×1080 and 960×540 resident RGBA8 display products respectively.
+separate resolution/policy keys: 1920×1080 and 960×540 resident 4-byte display products respectively.
 Working images remain RGBA32F; this count-policy correction changes neither processing precision
 nor the explicit resident lease/scene/request byte split. One hundred packed Half display images occupy
 about 198 MiB before native alignment and metadata; the actual device charges must still fit the
@@ -1254,8 +1272,9 @@ The first reference-parity profile uses `RGBA32F`. Its numeric gates are:
 - no successful finite CPU result may become NaN or infinity; negative and HDR RGB are preserved;
 - subnormal and signed-zero cases follow the primitive fixture expectation. A device that flushes or
   rewrites a required case does not earn `ReferenceParity` for that operation;
-- qualified packed display RGB differs from the CPU result by at most one 8-bit code value per
-  channel, while alpha is exact; and
+- qualified packed display RGB differs from the CPU result by at most one stored code per channel
+  (one code of 255 in a straight frame, one code of 1023 in a 10:10:10:2 frame), with the same layout
+  and alpha exact; and
 - any fixture outside these limits is a capability failure. A tolerance is not widened after seeing
   a device result without a reviewed primitive/qualification version change.
 
@@ -2079,7 +2098,7 @@ slots. Each is now counted as what it is; no budget was raised.
 The viewer route is proved by `bloom.ui.viewer_export_svg_artwork`: an imported compound shape with
 a gradient fill, a clip matte, two nested opacity groups and a keyed corner and counter point is
 shown in the interactive Viewer from `GpuPreparedPacked` with no CPU fallback, and the GPU route's
-Viewer frames equal the CPU route's (RGB within one 8-bit code, exact alpha) at the first, a middle
+Viewer frames equal the CPU route's (RGB within one stored code, exact alpha) at the first, a middle
 and the last frame, as do RAM preview (cold and warm) and still, range and movie export.
 
 Native batching still keeps up to eight kernels' outputs until their fence, bounded by
@@ -2090,7 +2109,7 @@ file and size are in [Vector Artwork](vector-artwork.md#rendering-and-memory).
 ### Rooted native image suballocation ownership (bounded two-family slice)
 
 The implemented native follow-on covers explicitly rooted backing created by `createResidentImage`
-and `createDisplayImage`: native RGBA32F process images and RGBA8 display images. Each opaque backing
+and `createDisplayImage`: native RGBA32F process images and 4-byte display images. Each opaque backing
 implementation contains one move-only `NativeImageStorageToken`; aliases share that token. Legacy
 unrooted creation remains unowned by this ledger. No new image/frame cap or reclamation queue is
 introduced; existing owner-slot and native resource bounds remain in force.
@@ -2730,7 +2749,7 @@ contracts.
 
 ### Image owner reclamation (G2C)
 
-Each native RGBA32F process image and RGBA8 display image reserves one owner-reclamation slot
+Each native RGBA32F process image and 4-byte display image reserves one owner-reclamation slot
 before its first Vulkan allocation. Each image family has a process-wide ceiling of 4096 slots,
 chosen from the existing cache/lease entry ceilings; it does not guarantee that every maximum-size
 scene fits and does not increase any byte budget. Exhausted admission refuses image creation
