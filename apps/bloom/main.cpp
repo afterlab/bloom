@@ -660,6 +660,14 @@ int main(int argc, char* argv[]) try {
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
                      &cryptomatteController, &bloom::ui::CryptomatteController::cancel);
+    // #732: a read waiting for the disk cache's write queue returns at once, so no worker
+    // outlasts the shutdown on it; pending copies are abandoned.
+    QObject::connect(&shutdownCoordinator,
+                     &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
+                     &shutdownCoordinator, [mirror = mediaDiskCache] {
+                         if (mirror)
+                             mirror->beginShutdown();
+                     });
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
                      &compositionThumbnails, &bloom::ui::CompositionThumbnailController::cancel);

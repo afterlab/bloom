@@ -547,16 +547,25 @@ SourceMirror::~SourceMirror() {
         openChunks_.clear();
     }
     ledger_.unregisterCache(this);
+    beginShutdown();
+    {
+        // A read still waiting for room in keep() leaves before the queue it waits on is gone.
+        std::unique_lock lock(queueMutex_);
+        roomCv_.wait(lock, [this] { return waitingKeepers_ == 0; });
+    }
+    if (writer_.joinable())
+        writer_.join();
+    if (!root_.empty() && platform::verifiedSourceDigests().persistedFile() == verifiedSourcesPath())
+        platform::verifiedSourceDigests().persistTo({});
+}
+
+void SourceMirror::beginShutdown() noexcept {
     stopping_.store(true);
     {
         const std::lock_guard lock(queueMutex_);
     }
     queueCv_.notify_all();
     roomCv_.notify_all();
-    if (writer_.joinable())
-        writer_.join();
-    if (!root_.empty() && platform::verifiedSourceDigests().persistedFile() == verifiedSourcesPath())
-        platform::verifiedSourceDigests().persistTo({});
 }
 
 std::filesystem::path SourceMirror::entryPath(const std::string& key) const {
@@ -845,8 +854,15 @@ void SourceMirror::keep(const std::filesystem::path& source, const platform::Fil
             }
             --waitingKeepers_;
             // Shutdown and "Purge media cache" abandon the write like any pending one; another
-            // read may have queued the same source meanwhile.
-            if (stopping_.load() || queuePurges_ != purges || queued())
+            // read may have queued the same source meanwhile. A write abandoned at shutdown is
+            // counted as dropped; a purge resets the counts with everything else.
+            if (stopping_.load()) {
+                ++droppedWrites_;
+                counters_.refused();
+                roomCv_.notify_all(); // the destructor waits for the last waiting read
+                return;
+            }
+            if (queuePurges_ != purges || queued())
                 return;
         }
         // Outside a fill a full queue drops its oldest pending write (never the frame's own
@@ -927,6 +943,7 @@ void SourceMirror::clear() {
             queuedBytes_ -= pending.bytes.size();
         queue_.clear();
         ++queuePurges_;
+        droppedWrites_ = 0; // the counts start again with a purge, this one with the others
     }
     roomCv_.notify_all();
     {
@@ -958,9 +975,11 @@ void SourceMirror::flush() {
     std::unique_lock lock(queueMutex_);
     indexRequested_ = true;
     queueCv_.notify_all();
+    // After a shutdown began there is nothing left to apply: the call returns when the writer
+    // has left the index current and stopped.
     idleCv_.wait(lock, [this] {
-        return stopping_.load() ||
-               (loaded_ && queue_.empty() && inFlight_ == 0 && !indexRequested_);
+        return stopping_.load() ? writerStopped_
+                                : loaded_ && queue_.empty() && inFlight_ == 0 && !indexRequested_;
     });
 }
 
@@ -1619,14 +1638,20 @@ void SourceMirror::writerLoop() {
     }
     // Shutdown: pending writes are abandoned (their sources are read again another day), the
     // index is left current, and anyone in flush() is released.
-    for (const auto& pending : queue_)
+    for (const auto& pending : queue_) {
         queuedBytes_ -= std::min<std::uint64_t>(queuedBytes_, pending.bytes.size());
+        ++droppedWrites_;
+        counters_.refused();
+    }
     queue_.clear();
     lock.unlock();
     roomCv_.notify_all();
     writeIndex();
     if (persistsIdentities)
         platform::verifiedSourceDigests().save();
+    lock.lock();
+    writerStopped_ = true;
+    lock.unlock();
     idleCv_.notify_all();
 }
 

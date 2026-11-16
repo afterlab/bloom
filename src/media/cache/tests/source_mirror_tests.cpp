@@ -558,6 +558,8 @@ void testWriteQueueIsLiveWork() {
         // A purge releases a waiting read and abandons its write, like the pending ones.
         auto fill = ledger.beginPreviewFill();
         mirror.clear();
+        expect(mirror.statistics().droppedWrites == 0,
+               "a purge starts the dropped-write count again with the other counts");
         mirror.setWriterPausedForTest(true);
         keep(mirror, frames[0]);
         keep(mirror, frames[1]);
@@ -570,7 +572,90 @@ void testWriteQueueIsLiveWork() {
         mirror.flush();
         expect(mirror.statistics().entryCount == 0 && mirror.statistics().waitingWrites == 0,
                "a purge releases a waiting read and keeps nothing of it");
+        // Nothing of the abandoned write lingers: the same source is taken and kept afterwards.
+        keep(mirror, frames[2]);
+        mirror.flush();
+        expect(mirror.find(frames[2].path, frames[2].identity, {}).has_value() &&
+                   mirror.statistics().writes == 1 && mirror.statistics().droppedWrites == 0,
+               "the source whose write a purge abandoned is kept by its next read");
     }
+}
+
+// A read waiting for room in a RAM Preview fill never outlasts the mirror: a shutdown, and the
+// destructor on its own, end the wait while the fill is still running, and every write given up
+// is counted or provably absent. Observed through the mirror's own counts, with no timer.
+void testShutdownReleasesAWaitingRead() {
+    namespace runtime = bloom::runtime;
+    const Scratch scratch("fill-shutdown");
+    runtime::MemoryBudgetLedger ledger(64 * kGiB, 32 * kGiB);
+    auto small = config(scratch);
+    small.writeQueueByteCapacity = 2 * kLoopFrameBytes + kLoopFrameBytes / 2;
+    const auto frames = loopFrames(scratch, "held", 4);
+    const auto fill = ledger.beginPreviewFill();
+    const auto waitForOneWaitingRead = [](const cache::SourceMirror& mirror) {
+        while (mirror.statistics().waitingWrites == 0)
+            std::this_thread::yield();
+    };
+    {
+        // beginShutdown(): the application's shutdown starts while a worker waits in keep().
+        cache::SourceMirror mirror(small, ledger);
+        mirror.flush();
+        mirror.setWriterPausedForTest(true);
+        keep(mirror, frames[0]);
+        keep(mirror, frames[1]);
+        std::thread reader([&] { keep(mirror, frames[2]); });
+        waitForOneWaitingRead(mirror);
+        expect(ledger.previewFillActive(), "the fill is still running when the shutdown begins");
+        mirror.beginShutdown();
+        reader.join();
+        mirror.flush(); // returns when the writer has stopped
+        const auto stopped = mirror.statistics();
+        expect(stopped.waitingWrites == 0 && stopped.pendingWrites == 0 &&
+                   stopped.pendingWriteBytes == 0,
+               "a shutdown releases the waiting read and empties the queue");
+        expect(stopped.writes == 0 && stopped.droppedWrites == 3 && stopped.entryCount == 0,
+               "the two pending writes and the waiting one are abandoned and counted, not lost "
+               "silently");
+        keep(mirror, frames[3]);
+        expect(mirror.statistics().pendingWrites == 0 && mirror.statistics().waitingWrites == 0,
+               "after the shutdown began a read hands over nothing and does not wait");
+        mirror.beginShutdown(); // a second call changes nothing
+    }
+    {
+        // The destructor alone, with a read still waiting inside keep(): it releases the read and
+        // returns only after the read has left.
+        auto mirror = std::make_unique<cache::SourceMirror>(small, ledger);
+        mirror->flush();
+        mirror->setWriterPausedForTest(true);
+        keep(*mirror, frames[0]);
+        keep(*mirror, frames[1]);
+        std::atomic<bool> readReturned{false};
+        std::thread reader([&, held = mirror.get()] {
+            keep(*held, frames[2]);
+            readReturned.store(true);
+        });
+        waitForOneWaitingRead(*mirror);
+        mirror.reset();
+        reader.join();
+        expect(readReturned.load() && ledger.previewFillActive(),
+               "destroying the mirror releases a read waiting in a fill that is still running");
+    }
+    bool leftovers = false;
+    std::error_code error;
+    for (std::filesystem::recursive_directory_iterator files(scratch.cacheRoot(), error), end;
+         !error && files != end; files.increment(error))
+        if (files->is_regular_file() && files->path().filename() != "index.v2")
+            leftovers = true;
+    expect(!leftovers, "a shutdown under a waiting read leaves no entry and no temporary file");
+    cache::SourceMirror reopened(small, ledger);
+    reopened.flush();
+    expect(reopened.statistics().entryCount == 0 &&
+               !reopened.find(frames[2].path, frames[2].identity, {}).has_value(),
+           "the abandoned writes are simply absent in the next session");
+    keep(reopened, frames[2]);
+    reopened.flush();
+    expect(reopened.find(frames[2].path, frames[2].identity, {}).has_value(),
+           "and their sources are kept when they are read again");
 }
 
 void testIdentity() {
@@ -1175,6 +1260,7 @@ int main() {
     testPublishedSettings();
     testWriteQueue();
     testWriteQueueIsLiveWork();
+    testShutdownReleasesAWaitingRead();
     testShutdownAndCancellation();
     testLegacyEntriesRemoved();
     testConcurrency();

@@ -1320,6 +1320,13 @@ does depends on the work:
   then follows the playback rule). A fill has no frame deadline, and an idle-priority writer is
   slower than the reads of a fill; that is why the reads wait here and nowhere else.
 
+Shutdown never waits for the queue. `SourceMirror::beginShutdown()`, called when the application
+starts to quit, takes no further write, returns a read waiting in `keep()` at once whether or not
+its fill has ended, and has the writer abandon the pending writes, leave the index current and
+stop; lookups keep working. Each write abandoned this way is counted as dropped, and its source
+is read again in another session. The destructor does the same and returns only after the writer
+and any read still inside `keep()` have left (`testShutdownReleasesAWaitingRead`).
+
 The index (`index.v2`) is rewritten in batches and on idle; the index is read, and anything left
 by the retired store removed, on the writer thread, so startup never waits on the cache directory.
 
@@ -1365,7 +1372,9 @@ hits (a decoded frame served from memory), disk hits (a source served from its l
 network reads (a source read from a network volume), reads of other slow storage when there are
 any, evictions, refused writes and dropped writes, and gives the headroom in effect and the free
 space on the cache volume. The counts start at launch and again after a media purge. Preferences
-shows the same live figures under the Disk headroom field. Both read
+shows the same live figures under the Disk headroom field. Every disk figure is a binary value
+under its own name (MiB below one gibibyte, GiB from there on), the unit the headroom is entered
+in. Both read
 `SourceMirror::statistics()`, which only copies counters: nothing is measured on the UI thread.
 
 **Gestures.** A source's bytes do not depend on a parameter override, so a plan compiled for an

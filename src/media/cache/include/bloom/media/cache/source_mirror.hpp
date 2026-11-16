@@ -233,8 +233,15 @@ class SourceMirror final : public platform::SourceStore {
     // Removes every entry and resets statistics ("Purge media cache").
     void clear();
     // Blocks until the index is loaded and every write requested so far has been applied or
-    // dropped, and the index file is current. Tests and shutdown paths only.
+    // dropped, and the index file is current; after beginShutdown(), until the writer has
+    // stopped. Tests and shutdown paths only.
     void flush();
+    // Starts the shutdown without waiting for it: no further write is taken, a read waiting for
+    // room in keep() returns at once, and the writer abandons the pending writes (each counted
+    // as dropped; their sources are read again in another session), leaves the index current
+    // and stops. Lookups keep working. The destructor does the same and then waits for the
+    // writer and for any read still inside keep(). Any thread; safe to call more than once.
+    void beginShutdown() noexcept;
     // True while the write queue is more than half full: background fills (the read-ahead) hold
     // off until the writer catches up. A mirror with no room is not a backlog: writes are then
     // refused (SourceMirrorStatistics::diskPressure) and reads go on from the source.
@@ -421,6 +428,7 @@ class SourceMirror final : public platform::SourceStore {
     std::size_t inFlight_ = 0;
     bool indexRequested_ = false; // flush() asked for the index to be written now
     bool loaded_ = false;         // the startup load finished (queueMutex_ side of indexLoaded_)
+    bool writerStopped_ = false;  // after a shutdown: the writer left the index current
     std::atomic<bool> stopping_{false};
     std::atomic<bool> writerPaused_{false};
     bloom::core::WorkerThread writer_;
