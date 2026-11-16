@@ -20,6 +20,7 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFileDialog>
@@ -1037,6 +1038,86 @@ void testFileOpenEventOpensTheProject(Expectations& expectations) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// `Bloom <file>` (Linux and Windows file managers) names the project to open at launch.
+// ---------------------------------------------------------------------------------------------
+
+void testCommandLineNamesTheProject(Expectations& expectations) {
+    TempDirectory directory;
+    if (!directory.isValid()) {
+        expectations.expect(false, "command line: temp directory is available");
+        return;
+    }
+    const auto projectPath = directory.path() / "from the file manager.bloom";
+    {
+        bloom::runtime::TaskScheduler seedScheduler;
+        ProjectHost seedHost(seedScheduler);
+        expectations.expect(executeRename(seedHost, "Opened From The Command Line"),
+                            "command line: the seed rename transaction commits");
+        seedHost.beginSaveAs(projectPath);
+        expectations.expect(waitUntilIdle(seedHost),
+                            "command line: the seed save reaches a terminal state");
+    }
+    const QString projectFile = QString::fromStdU16String(projectPath.u16string());
+
+    expectations.expect(bloom::ui::projectPathFromArguments({QStringLiteral("Bloom"), projectFile}) ==
+                            QDir::cleanPath(projectFile),
+                        "command line: an absolute path names the project");
+    expectations.expect(!bloom::ui::projectPathFromArguments({QStringLiteral("Bloom")}).has_value(),
+                        "command line: no argument names no project");
+    expectations.expect(!bloom::ui::projectPathFromArguments(
+                             {QStringLiteral("Bloom"), QStringLiteral("--some-switch")})
+                             .has_value(),
+                        "command line: a switch is not a project");
+    expectations.expect(bloom::ui::projectPathFromArguments(
+                            {QStringLiteral("Bloom"), QStringLiteral("--some-switch"), projectFile}) ==
+                            QDir::cleanPath(projectFile),
+                        "command line: a switch before the path is skipped");
+    expectations.expect(!bloom::ui::projectPathFromArguments(
+                             {QStringLiteral("Bloom"), QStringLiteral("file:///tmp/x.bloom")})
+                             .has_value(),
+                        "command line: an address is not a path");
+
+    // A relative path is resolved against the working directory.
+    const QString previous = QDir::currentPath();
+    expectations.expect(
+        QDir::setCurrent(QString::fromStdU16String(directory.path().u16string())),
+        "command line: the working directory can be changed");
+    expectations.expect(bloom::ui::projectPathFromArguments(
+                            {QStringLiteral("Bloom"), QStringLiteral("from the file manager.bloom")}) ==
+                            QDir::cleanPath(projectFile),
+                        "command line: a relative path is resolved against the working directory");
+    QDir::setCurrent(previous);
+
+    // The path opens through requestOpenPath once the event loop runs.
+    bloom::runtime::TaskScheduler scheduler;
+    ProjectHost host(scheduler);
+    int sessionReplacedCount = 0;
+    QObject::connect(&host, &ProjectHost::sessionReplaced, [&] { ++sessionReplacedCount; });
+    bloom::ui::openProjectFromArguments(host, {QStringLiteral("Bloom"), projectFile});
+    expectations.expect(sessionReplacedCount == 0,
+                        "command line: nothing opens before the event loop runs");
+    expectations.expect(awaitQtCondition(
+                            "command line: the named project opens",
+                            [&] { return sessionReplacedCount == 1; }, kWait),
+                        "command line: the named project opens");
+    expectations.expect(host.displayPath() == projectPath && !host.isDirty(),
+                        "command line: the session is the file's and clean");
+
+    // A file that is not there is reported like any failed open.
+    OutcomeCapture opened;
+    connectOpenCapture(host, opened);
+    bloom::ui::openProjectFromArguments(
+        host, {QStringLiteral("Bloom"),
+               QString::fromStdU16String((directory.path() / "absent.bloom").u16string())});
+    expectations.expect(awaitQtCondition(
+                            "command line: a missing file is a failed open",
+                            [&] { return opened.count == 1; }, kWait) &&
+                            opened.outcome == ProjectHostOperationOutcome::Failed &&
+                            sessionReplacedCount == 1,
+                        "command line: a missing file is a failed open");
+}
+
+// ---------------------------------------------------------------------------------------------
 // Pathless Save routes to the Save As decision (the seam observes it).
 // ---------------------------------------------------------------------------------------------
 
@@ -1197,6 +1278,7 @@ int main(int argc, char** argv) {
     testUnsavedChangeDecisionSeamForNew(expectations);
     testUnsavedChangeDecisionSeamForOpen(expectations);
     testFileOpenEventOpensTheProject(expectations);
+    testCommandLineNamesTheProject(expectations);
     testPathlessSaveRoutesToSaveAsDecision(expectations);
     testSaveCopyUnavailableOnEditableContent(expectations);
     testDefaultSaveAsAddsBloomSuffix(expectations);

@@ -15,6 +15,8 @@
 #               library, numpy and Bloom's Python package, the locked Qt with the platform
 #               plugins, the dependency lock, and for every component the lock builds for this
 #               system exactly the license files the lock names, byte for byte.
+#               A Linux package also holds the menu entry (MimeType line, Exec line ending in %f)
+#               and the file type description.
 #               Without COMPLETE the package is a developer's (the host's Qt or Python) and only
 #               the next rule applies.
 #
@@ -424,6 +426,25 @@ if(COMPLETE AND "contents" IN_LIST ONLY)
                 list(APPEND failures "the dependency lock names no license file for ${name}")
             endif()
         endforeach()
+    endif()
+endif()
+
+# The Linux menu entry opens a project file, and the file type is described.
+if(COMPLETE AND "contents" IN_LIST ONLY AND system STREQUAL "linux")
+    set(entry "${package}/share/applications/id.afterlab.bloom.desktop")
+    if(NOT EXISTS "${entry}")
+        list(APPEND failures "the package has no menu entry share/applications/id.afterlab.bloom.desktop")
+    else()
+        file(READ "${entry}" entry_text)
+        if(NOT entry_text MATCHES "\nMimeType=[^\n]*application/x-bloom-project;")
+            list(APPEND failures "the menu entry has no MimeType line naming application/x-bloom-project")
+        endif()
+        if(NOT entry_text MATCHES "\nExec=[^\n]* %f\n")
+            list(APPEND failures "the menu entry's Exec line does not end in %f")
+        endif()
+    endif()
+    if(NOT EXISTS "${package}/share/mime/packages/id.afterlab.bloom.xml")
+        list(APPEND failures "the package has no file type description share/mime/packages/id.afterlab.bloom.xml")
     endif()
 endif()
 

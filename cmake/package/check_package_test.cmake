@@ -23,6 +23,8 @@
 #                                    (Linux and macOS; a Windows program has none)
 #   a carried distribution library   (Linux) one of the libraries carried beside Qt removed
 #   removed                          ("no libxcb-cursor.so.0 ... beside Qt")
+#   the file type description        (Linux) share/mime/packages/id.afterlab.bloom.xml removed
+#   removed                          ("no file type description")
 #   the update helper removed        "no update helper"
 #   the update helper made to load   the helper replaced by a program that loads the package's
 #   the package's libraries          libraries ("the update helper loads ..." or "has a library
@@ -231,6 +233,17 @@ bloom_expect_refusal("the update helper made to load the package's libraries"
                      "the update helper (loads|has a library search path)")
 file(REMOVE "${helper}")
 file(RENAME "${WORK}/helper-set-aside" "${helper}")
+
+# 5a2. Linux: the file type description removed.
+if(NOT CMAKE_HOST_APPLE AND NOT CMAKE_HOST_WIN32)
+    set(mime_file "${package}/share/mime/packages/id.afterlab.bloom.xml")
+    if(NOT EXISTS "${mime_file}")
+        message(FATAL_ERROR "the package has no ${mime_file}")
+    endif()
+    file(RENAME "${mime_file}" "${WORK}/mime-set-aside")
+    bloom_expect_refusal("the file type description removed" "no file type description")
+    file(RENAME "${WORK}/mime-set-aside" "${mime_file}")
+endif()
 
 # 5b. Another version: the programs report the label they were built under, so a package checked
 # against any other label is refused, once for each program. The right label passes the rule.

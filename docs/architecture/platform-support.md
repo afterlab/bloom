@@ -620,6 +620,19 @@ project opens exactly as through File, Open: unsaved changes are asked about fir
 that arrives during another project operation waits for it, and a file that cannot be opened
 is reported the same way. The package check fails on a bundle that does not declare the type.
 
+On Linux, `apps/bloom/linux/id.afterlab.bloom.xml` describes the type for shared-mime-info
+(`application/x-bloom-project`, the glob `*.bloom`, a kind of zip file, with the application
+icon), and a package installs it to `share/mime/packages`. The desktop entry names the type in
+`MimeType=` and runs `Bloom %f`, so a file manager starts Bloom with the project's path; Windows
+does the same for the registered extension. `Bloom <file>` opens a project on every platform:
+`projectPathFromArguments()` takes the first argument that is not a switch or an address (a
+relative path is resolved against the working directory), and `openProjectFromArguments()` hands
+it to the project host once the event loop runs, so it opens exactly as the file-open event does.
+Bloom has no single-instance hand-over, so a second start opens a second window. The package
+check fails on a Linux package without the `MimeType=` line, the `%f` argument or the
+description, and `bloom.quality.linux_file_type` checks that the description, the desktop entry
+and `Info.plist.in` name the same type and extension.
+
 ### Application Icon
 
 The layered icon `apps/bloom/icon/Bloom.icon` (a background gradient fill and the foreground

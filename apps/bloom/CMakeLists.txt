@@ -53,11 +53,12 @@ bloom_package_search_path(bloom "${BLOOM_PACKAGE_PROGRAM_DIR}")
 # tools/quality/generate_app_icons makes the platform files from two sources checked in beside it:
 # the tile (Bloom.ico and the Linux icons) and the older-macOS icon (Bloom.icns).
 #
-# Linux: the desktop entry and the icons, where a desktop looks for them under an installation
+# Linux: the desktop entry, the file type (shared-mime-info) and the icons, where a desktop looks for them under an installation
 # prefix. An AppImage shows the entry and one icon at its top as well
 # (cmake/package/make_archives.cmake).
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     install(FILES linux/id.afterlab.bloom.desktop DESTINATION share/applications)
+    install(FILES linux/id.afterlab.bloom.xml DESTINATION share/mime/packages)
     foreach(bloom_icon_size IN ITEMS 16 24 32 48 64 128 256 512)
         install(FILES linux/icons/${bloom_icon_size}x${bloom_icon_size}/id.afterlab.bloom.png
                 DESTINATION share/icons/hicolor/${bloom_icon_size}x${bloom_icon_size}/apps)

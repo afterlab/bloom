@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <!-- A Bloom project file is a zip container, so it is also a zip file. It has no signature of
+       its own at the start, so it is recognized by its name. -->
+  <mime-type type="application/x-bloom-project">
+    <comment>Bloom project</comment>
+    <sub-class-of type="application/zip"/>
+    <icon name="id.afterlab.bloom"/>
+    <glob pattern="*.bloom"/>
+  </mime-type>
+</mime-info>

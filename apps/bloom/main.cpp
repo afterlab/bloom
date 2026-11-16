@@ -1029,6 +1029,8 @@ int main(int argc, char* argv[]) try {
     // A project the operating system asks Bloom to open (macOS: double-clicked, dropped on the
     // Dock icon, Open With), at launch and while running, opens as it does through File, Open.
     const bloom::ui::ProjectFileOpenEvents projectFileOpenEvents(projectHost);
+    // `Bloom <file>` (Linux and Windows file managers) opens that project once the window is up.
+    bloom::ui::openProjectFromArguments(projectHost, QCoreApplication::arguments());
     // Every default dialog of the project host and the export controller opens over the window.
     window.setMcpServer(&mcpAdapter);
     mcpLiveUi.setWindow(&window);

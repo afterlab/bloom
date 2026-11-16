@@ -1,6 +1,10 @@
 #pragma once
 
 #include <QObject>
+#include <QString>
+#include <QStringList>
+
+#include <optional>
 
 namespace bloom::ui {
 
@@ -29,5 +33,17 @@ class ProjectFileOpenEvents final : public QObject {
   private:
     ProjectHost& host_;
 };
+
+// The project named on the command line: `Bloom <file>`, which is what the Linux and Windows
+// file managers run for a double-clicked project. `arguments` is the full list, program name
+// first. The project is the first later argument that does not start with `-` and is not an
+// address (such as file://); a relative path is made absolute against the working directory.
+// The file need not exist: opening it reports a missing file. Returns nothing when there is none.
+std::optional<QString> projectPathFromArguments(const QStringList& arguments);
+
+// Opens the project named on the command line, if any, once the event loop runs (so the main
+// window is up), through ProjectHost::requestOpenPath() like the file-open event. `host` must
+// outlive the event loop.
+void openProjectFromArguments(ProjectHost& host, const QStringList& arguments);
 
 } // namespace bloom::ui
