@@ -289,8 +289,7 @@ FeedReadResult readSignedFeed(const std::span<const std::byte> bytes,
     // the other). A signature that names a carried key and does not match is a refusal.
     if (!cryptoLibraryReady()) {
         return refused(UpdateRefusal::VerificationUnavailable,
-                       "this copy of Bloom cannot check signatures: a file of its package is "
-                       "missing");
+                       "this copy of Bloom cannot check signatures: " + cryptoLibraryProblem());
     }
     const auto signedBytes = feedSignedBytes(*payloadType, *payload);
     bool verified = false;

@@ -27,6 +27,7 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <random>
 #include <string>
 #include <thread>
@@ -43,6 +44,15 @@ inline void expect(const bool condition, const std::string& message) {
         std::cerr << "FAIL: " << message << '\n';
         ++failures;
     }
+}
+
+// What a check answered, for the line of an expectation that failed.
+[[nodiscard]] inline std::string answered(const std::optional<update::CheckResult>& check) {
+    if (!check.has_value()) {
+        return " (no answer)";
+    }
+    return " (" + std::string(update::refusalName(check->diagnostic.refusal)) + ": " +
+           check->diagnostic.detail + ")";
 }
 
 [[nodiscard]] inline QByteArray fixture(const std::string& name) {

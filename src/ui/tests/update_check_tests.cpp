@@ -122,7 +122,7 @@ void testCheck() {
         const auto& check = service.lastCheck();
         expect(check.has_value() && check->status == update::CheckStatus::Decided &&
                    check->feed.has_value() && check->feed->version.text() == "0.2.0-alpha.3",
-               "check: the feed is verified and names the newer version");
+               "check: the feed is verified and names the newer version" + answered(check));
         expect(check.has_value() && check->decision.action == update::UpdateAction::ReplaceFolder &&
                    check->decision.file.has_value() && check->decision.file->kind == "tar",
                "check: a folder install is offered the package tar");

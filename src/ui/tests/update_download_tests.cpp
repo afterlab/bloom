@@ -54,7 +54,7 @@ void serve(Loopback& server, const QByteArray& file) {
     const bool finished = started && awaitQtCondition("the check finishes",
                                                       [&] { return seen.checks == 1; });
     expect(finished && service.lastCheck()->decision.file.has_value(),
-           name + ": the check offers a file");
+           name + ": the check offers a file" + answered(service.lastCheck()));
     return finished && service.lastCheck()->decision.file.has_value();
 }
 

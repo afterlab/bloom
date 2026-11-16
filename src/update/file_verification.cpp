@@ -20,7 +20,7 @@ UpdateDiagnostic verifyUpdateFile(const std::filesystem::path& path, const FeedF
     }
     if (!cryptoLibraryReady()) {
         return {UpdateRefusal::VerificationUnavailable,
-                "this copy of Bloom cannot check signatures: a file of its package is missing"};
+                "this copy of Bloom cannot check signatures: " + cryptoLibraryProblem()};
     }
     std::uint64_t size = 0;
     Sha256 sha256;

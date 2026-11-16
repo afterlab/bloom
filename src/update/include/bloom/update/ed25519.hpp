@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 
 namespace bloom::update {
 
@@ -31,5 +32,9 @@ using Ed25519Signature = std::array<std::uint8_t, kEd25519SignatureBytes>;
 // loaded on first use from the package (or, for a program run from a build folder, from the
 // dependency prefix); false when that file is missing.
 [[nodiscard]] bool cryptoLibraryReady() noexcept;
+
+// Why it cannot be used, for a diagnostic: which file was looked for or what the system said when
+// loading it. Empty when it can be used.
+[[nodiscard]] std::string cryptoLibraryProblem();
 
 } // namespace bloom::update

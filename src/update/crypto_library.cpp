@@ -2,6 +2,8 @@
 
 #include <bloom/update/ed25519.hpp>
 
+#include <string>
+
 #if defined(_WIN32)
 #include <bloom/update/install_kind.hpp>
 
@@ -27,11 +29,12 @@ std::filesystem::path cryptoLibraryFile(const std::filesystem::path& programDire
     constexpr const wchar_t* kName = L"libcrypto-3-x64.dll";
     std::error_code error;
     if (!programDirectory.empty()) {
-        // A package carries the interpreter beside its programs, and nothing outside the
-        // package is ever looked at for a program that has one.
-        const auto home = programDirectory / L"python";
-        if (std::filesystem::is_directory(home, error)) {
-            const auto packaged = home / L"DLLs" / kName;
+        // A package carries the interpreter's modules beside its programs, and nothing outside
+        // the package is ever looked at for a program that has them. (A folder named `python`
+        // alone is not that: a build folder may hold one beside its test programs.)
+        const auto modules = programDirectory / L"python" / L"DLLs";
+        if (std::filesystem::is_directory(modules, error)) {
+            const auto packaged = modules / kName;
             return std::filesystem::is_regular_file(packaged, error) ? packaged
                                                                       : std::filesystem::path{};
         }
@@ -51,31 +54,61 @@ std::filesystem::path cryptoLibraryFile(const std::filesystem::path& programDire
 // checks an update needs no library file, and so that the file is taken from one known place and
 // never from the search path. It is loaded here by its full name before anything of it is
 // called; the late import then finds it already loaded.
-bool cryptoLibraryReady() noexcept {
+namespace {
+
+struct LibraryState final {
+    bool ready = false;
+    std::string problem;
+};
+
+const LibraryState& libraryState() noexcept {
     static std::once_flag once;
-    static bool ready = false;
+    static LibraryState state;
     std::call_once(once, [] {
         try {
             std::filesystem::path build;
 #if defined(BLOOM_UPDATE_CRYPTO_BUILD_DIRECTORY)
             build = std::filesystem::path(BLOOM_UPDATE_CRYPTO_BUILD_DIRECTORY);
 #endif
-            const auto file =
-                detail::cryptoLibraryFile(currentExecutablePath().parent_path(), build);
+            const auto program = currentExecutablePath().parent_path();
+            auto file = detail::cryptoLibraryFile(program, build);
             if (file.empty()) {
+                state.problem = "libcrypto-3-x64.dll is not in python\\DLLs beside the program (" +
+                                program.string() + ")";
                 return;
             }
-            ready = LoadLibraryExW(file.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH) !=
-                    nullptr;
+            // The loader wants an absolute name with its own separators.
+            file.make_preferred();
+            if (LoadLibraryExW(file.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH) != nullptr) {
+                state.ready = true;
+                return;
+            }
+            state.problem = file.string() + " cannot be loaded (system error " +
+                            std::to_string(GetLastError()) + ")";
         } catch (...) {
-            ready = false;
+            state.ready = false;
+            state.problem = "the library file's name cannot be worked out";
         }
     });
-    return ready;
+    return state;
+}
+
+} // namespace
+
+bool cryptoLibraryReady() noexcept {
+    return libraryState().ready;
+}
+
+std::string cryptoLibraryProblem() {
+    return libraryState().problem;
 }
 #else
 bool cryptoLibraryReady() noexcept {
     return true;
+}
+
+std::string cryptoLibraryProblem() {
+    return {};
 }
 #endif
 
