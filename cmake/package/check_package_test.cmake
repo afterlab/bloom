@@ -29,6 +29,10 @@
 #   the update helper made to load   the helper replaced by a program that loads the package's
 #   the package's libraries          libraries ("the update helper loads ..." or "has a library
 #                                    search path"): it runs from a copy outside the package
+#   one icon size removed            (Linux) the 64 pixel icon removed, or replaced by a 16 pixel
+#   or of the wrong size             one ("no 64 pixel icon", "is 16 x 16 pixels, not 64 x 64")
+#   Bloom.icns without sizes         (macOS) Bloom.icns cut short ("has no 1024 pixel image")
+#   the asset catalog removed        (macOS) Assets.car removed ("no asset catalog")
 #   another version                  the package checked against a label other than the one its
 #                                    programs report (each program: "reports 'name label'")
 #
@@ -282,6 +286,47 @@ if(NOT CMAKE_HOST_APPLE AND NOT CMAKE_HOST_WIN32)
     bloom_expect_refusal("a carried distribution library removed"
                          "no libxcb-cursor.so.0 \\(libxcb-cursor0\\) beside Qt")
     file(RENAME "${WORK}/library-set-aside" "${carried}")
+endif()
+
+# 7. The icon rule: the check with only that rule must fail with `expected` in what it says.
+function(bloom_expect_icon_refusal what expected)
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" "-DPACKAGE=${package}" -DCOMPLETE=ON -DONLY=icons -P "${check}"
+        OUTPUT_VARIABLE output ERROR_VARIABLE error RESULT_VARIABLE result)
+    if(result EQUAL 0)
+        list(APPEND problems "${what}: the check passed")
+    elseif(NOT "${output}${error}" MATCHES "${expected}")
+        list(APPEND problems "${what}: the check failed without saying '${expected}':\n"
+                             "${output}${error}")
+    else()
+        message(STATUS "refused, ${what}")
+    endif()
+    set(problems "${problems}" PARENT_SCOPE)
+endfunction()
+if(CMAKE_HOST_APPLE)
+    set(icns_file "${package}/Contents/Resources/Bloom.icns")
+    file(RENAME "${icns_file}" "${WORK}/icns-set-aside")
+    # Bloom.icns cut after its first image: sizes missing.
+    execute_process(COMMAND head -c 4096 "${WORK}/icns-set-aside" OUTPUT_FILE "${icns_file}"
+                    COMMAND_ERROR_IS_FATAL ANY)
+    bloom_expect_icon_refusal("Bloom.icns without sizes" "Bloom.icns has no 1024 pixel image")
+    file(REMOVE "${icns_file}")
+    file(RENAME "${WORK}/icns-set-aside" "${icns_file}")
+    set(catalog_file "${package}/Contents/Resources/Assets.car")
+    if(EXISTS "${catalog_file}")
+        file(RENAME "${catalog_file}" "${WORK}/catalog-set-aside")
+        bloom_expect_icon_refusal("the asset catalog removed" "no asset catalog \\(Assets.car\\)")
+        file(RENAME "${WORK}/catalog-set-aside" "${catalog_file}")
+    endif()
+elseif(NOT CMAKE_HOST_WIN32)
+    set(icon_file "${package}/share/icons/hicolor/64x64/apps/id.afterlab.bloom.png")
+    file(RENAME "${icon_file}" "${WORK}/icon-set-aside")
+    bloom_expect_icon_refusal("one icon size removed" "no 64 pixel icon")
+    # A 16 pixel icon in the 64 pixel place: the size is read from the file.
+    file(COPY_FILE "${package}/share/icons/hicolor/16x16/apps/id.afterlab.bloom.png" "${icon_file}")
+    bloom_expect_icon_refusal("an icon of the wrong size" "is 16 x 16 pixels, not 64 x 64")
+    file(REMOVE "${icon_file}")
+    file(RENAME "${WORK}/icon-set-aside" "${icon_file}")
 endif()
 
 # The mended package passes again: nothing above was left behind.

@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""Checks that a Windows program file carries an icon resource.
+
+    python3 tools/quality/check_program_icon <program.exe>
+
+Reads the PE file's resource directory and exits 0 when it holds a group icon (resource type
+14, what the shell shows as the program's icon) and at least one icon image (type 3). Otherwise
+it prints what is missing and exits 1. Only the Python standard library is used; only the
+headers and the resource directory are read, not the whole file.
+"""
+
+from __future__ import annotations
+
+import struct
+import sys
+
+RT_ICON = 3
+RT_GROUP_ICON = 14
+
+
+def resource_types(path: str) -> set[int]:
+    """The numeric ids at the top of the resource directory."""
+    with open(path, "rb") as stream:
+        dos = stream.read(64)
+        if dos[:2] != b"MZ" or len(dos) < 64:
+            raise ValueError("not a program file (no MZ header)")
+        pe_offset = struct.unpack("<I", dos[60:64])[0]
+        stream.seek(pe_offset)
+        coff = stream.read(24)
+        if coff[:4] != b"PE\0\0" or len(coff) < 24:
+            raise ValueError("not a program file (no PE header)")
+        sections, optional_size = struct.unpack("<H12xH2x", coff[6:24])
+        optional = stream.read(optional_size)
+        magic = struct.unpack("<H", optional[:2])[0]
+        directory = {0x10B: 96, 0x20B: 112}.get(magic)
+        if directory is None or optional_size < directory + 24:
+            raise ValueError("not a program file (unknown optional header)")
+        resource_rva, resource_size = struct.unpack("<II", optional[directory + 16:directory + 24])
+        if resource_rva == 0 or resource_size == 0:
+            return set()
+        table = stream.read(40 * sections)
+        offset = None
+        for index in range(sections):
+            name, virtual_size, rva, raw_size, raw = struct.unpack(
+                "<8sIIII", table[40 * index:40 * index + 24])
+            if rva <= resource_rva < rva + max(virtual_size, raw_size):
+                offset = raw + (resource_rva - rva)
+                break
+        if offset is None:
+            raise ValueError("the resource directory is outside every section")
+        stream.seek(offset)
+        header = stream.read(16)
+        named, ids = struct.unpack("<HH", header[12:16])
+        entries = stream.read(8 * (named + ids))
+        found = set()
+        for index in range(named, named + ids):
+            found.add(struct.unpack("<I", entries[8 * index:8 * index + 4])[0])
+        return found
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print("usage: check_program_icon <program.exe>", file=sys.stderr)
+        return 2
+    try:
+        types = resource_types(sys.argv[1])
+    except (OSError, ValueError, struct.error) as error:
+        print(f"{sys.argv[1]}: {error}", file=sys.stderr)
+        return 1
+    missing = [name for name, number in (("group icon", RT_GROUP_ICON), ("icon image", RT_ICON))
+               if number not in types]
+    if missing:
+        print(f"{sys.argv[1]} has no {' and no '.join(missing)} resource", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

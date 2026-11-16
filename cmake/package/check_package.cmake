@@ -70,6 +70,20 @@
 #               computer with a GPU, and unlike `run` it leaves the machine's driver visible. The
 #               run has its own settings, data and cache directories under WORK, like `run`.
 #
+#   icons       The application icon files are in the package, on every package, complete or not.
+#                 Linux    share/icons/hicolor/<size>x<size>/apps/id.afterlab.bloom.png for 16, 24,
+#                          32, 48, 64, 128, 256 and 512, each a PNG of exactly that size, and the
+#                          menu entry with Icon=id.afterlab.bloom.
+#                 macOS    Contents/Resources/Bloom.icns holds an image for every size from 16 to
+#                          1024 pixels (the macOS 13.3 to 15 icon; no such machine is at hand, so
+#                          the file is what is checked). Info.plist names the icon (CFBundleIconFile
+#                          and CFBundleIconName are Bloom) and the project document type and its
+#                          type declaration name it too. With COMPLETE, Contents/Resources/
+#                          Assets.car, the compiled layered icon macOS 26 draws, must exist.
+#                 Windows  Bloom.exe carries an icon resource (a group icon and its images),
+#                          read by tools/quality/check_program_icon with the carried interpreter or
+#                          a Python found on the computer.
+#
 # ONLY limits the check to the named rules (the check's own test uses it).
 #
 # A package that passes starts on a computer that has none of the build machine's software.
@@ -85,7 +99,7 @@ endif()
 file(REAL_PATH "${PACKAGE}" package)
 get_filename_component(package_name "${package}" NAME)
 if(NOT ONLY)
-    set(ONLY contents resolution version run)
+    set(ONLY contents resolution version icons run)
 endif()
 set(failures "")
 
@@ -824,6 +838,135 @@ elseif(system STREQUAL "macos" AND "resolution" IN_LIST ONLY)
             endforeach()
         endif()
     endforeach()
+endif()
+
+# --- icons -------------------------------------------------------------------------------------
+if("icons" IN_LIST ONLY)
+    if(system STREQUAL "linux")
+        foreach(size IN ITEMS 16 24 32 48 64 128 256 512)
+            set(icon "${package}/share/icons/hicolor/${size}x${size}/apps/id.afterlab.bloom.png")
+            bloom_shown("${icon}" icon_shown)
+            if(NOT EXISTS "${icon}")
+                bloom_fail("the package has no ${size} pixel icon (${icon_shown})")
+                continue()
+            endif()
+            file(READ "${icon}" icon_signature OFFSET 0 LIMIT 8 HEX)
+            file(READ "${icon}" icon_header OFFSET 16 LIMIT 8 HEX)
+            if(NOT icon_signature STREQUAL "89504e470d0a1a0a")
+                bloom_fail("${icon_shown} is not a PNG image")
+                continue()
+            endif()
+            string(SUBSTRING "${icon_header}" 0 8 icon_width_hex)
+            string(SUBSTRING "${icon_header}" 8 8 icon_height_hex)
+            math(EXPR icon_width "0x${icon_width_hex}")
+            math(EXPR icon_height "0x${icon_height_hex}")
+            if(NOT icon_width EQUAL size OR NOT icon_height EQUAL size)
+                bloom_fail("${icon_shown} is ${icon_width} x ${icon_height} pixels, not ${size} x ${size}")
+            endif()
+        endforeach()
+        set(entry "${package}/share/applications/id.afterlab.bloom.desktop")
+        if(NOT EXISTS "${entry}")
+            bloom_fail("the package has no menu entry (share/applications/id.afterlab.bloom.desktop)")
+        else()
+            file(STRINGS "${entry}" entry_icon REGEX "^Icon=")
+            if(NOT entry_icon STREQUAL "Icon=id.afterlab.bloom")
+                bloom_fail("the menu entry's icon is '${entry_icon}', not Icon=id.afterlab.bloom")
+            endif()
+        endif()
+    elseif(system STREQUAL "macos")
+        set(icns "${package}/Contents/Resources/Bloom.icns")
+        if(NOT EXISTS "${icns}")
+            bloom_fail("the package has no Bloom.icns (Contents/Resources/Bloom.icns)")
+        else()
+            # The image types of macos/Bloom.icns, as tools/quality/generate_app_icons writes them,
+            # by the hex of their four letters: icp4 icp5 icp6 ic07 to ic14.
+            set(icns_types
+                "69637034=16" "69637035=32" "69637036=64" "69633037=128" "69633038=256"
+                "69633039=512" "69633130=1024" "69633131=32@2x" "69633132=64@2x"
+                "69633133=256@2x" "69633134=512@2x")
+            file(SIZE "${icns}" icns_size)
+            file(READ "${icns}" icns_header OFFSET 0 LIMIT 8 HEX)
+            string(SUBSTRING "${icns_header}" 0 8 icns_magic)
+            string(SUBSTRING "${icns_header}" 8 8 icns_length)
+            if(NOT icns_magic STREQUAL "69636e73" OR NOT icns_size GREATER 8)
+                bloom_fail("Bloom.icns is not an icns file")
+            else()
+                math(EXPR icns_length "0x${icns_length}")
+                set(icns_found "")
+                set(icns_offset 8)
+                while(icns_offset LESS icns_size)
+                    file(READ "${icns}" icns_entry OFFSET ${icns_offset} LIMIT 8 HEX)
+                    string(SUBSTRING "${icns_entry}" 0 8 icns_type)
+                    string(SUBSTRING "${icns_entry}" 8 8 icns_entry_length)
+                    math(EXPR icns_entry_length "0x${icns_entry_length}")
+                    if(icns_entry_length LESS 8)
+                        break()
+                    endif()
+                    list(APPEND icns_found "${icns_type}")
+                    math(EXPR icns_offset "${icns_offset} + ${icns_entry_length}")
+                endwhile()
+                if(NOT icns_length EQUAL icns_size OR NOT icns_offset EQUAL icns_size)
+                    bloom_fail("Bloom.icns is damaged: its entries do not fill the file")
+                endif()
+                foreach(pair IN LISTS icns_types)
+                    string(REPLACE "=" ";" pair "${pair}")
+                    list(GET pair 0 type_hex)
+                    list(GET pair 1 type_size)
+                    if(NOT type_hex IN_LIST icns_found)
+                        bloom_fail("Bloom.icns has no ${type_size} pixel image: it must hold every "
+                                   "size from 16 to 1024 pixels")
+                    endif()
+                endforeach()
+            endif()
+        endif()
+        function(bloom_icon_plist key variable)
+            execute_process(COMMAND /usr/libexec/PlistBuddy -c "Print ${key}"
+                                    "${package}/Contents/Info.plist"
+                            OUTPUT_VARIABLE value OUTPUT_STRIP_TRAILING_WHITESPACE
+                            RESULT_VARIABLE result ERROR_QUIET)
+            if(NOT result EQUAL 0)
+                set(value "")
+            endif()
+            set(${variable} "${value}" PARENT_SCOPE)
+        endfunction()
+        foreach(key IN ITEMS CFBundleIconFile CFBundleIconName
+                ":CFBundleDocumentTypes:0:CFBundleTypeIconFile"
+                ":UTExportedTypeDeclarations:0:UTTypeIconFile")
+            bloom_icon_plist("${key}" value)
+            if(NOT value STREQUAL "Bloom")
+                bloom_fail("Info.plist ${key} is '${value}', not Bloom")
+            endif()
+        endforeach()
+        if(COMPLETE AND NOT EXISTS "${package}/Contents/Resources/Assets.car")
+            bloom_fail("the bundle has no asset catalog (Assets.car): the layered icon was not "
+                       "compiled, a release needs Xcode 26's actool")
+        endif()
+    else()
+        set(program "${programs}/Bloom${suffix}")
+        set(icon_python "")
+        if(EXISTS "${python}/python.exe")
+            set(icon_python "${python}/python.exe")
+        else()
+            find_program(BLOOM_ICON_PYTHON NAMES python3 python py)
+            if(BLOOM_ICON_PYTHON)
+                set(icon_python "${BLOOM_ICON_PYTHON}")
+            endif()
+        endif()
+        if(NOT EXISTS "${program}")
+            bloom_fail("the package has no Bloom.exe")
+        elseif(NOT icon_python)
+            bloom_fail("the icon of Bloom.exe could not be read: no Python was found on this computer")
+        else()
+            execute_process(COMMAND "${icon_python}" -I
+                                    "${CMAKE_CURRENT_LIST_DIR}/../../tools/quality/check_program_icon"
+                                    "${program}"
+                            RESULT_VARIABLE icon_result ERROR_VARIABLE icon_error)
+            if(NOT icon_result EQUAL 0)
+                string(STRIP "${icon_error}" icon_error)
+                bloom_fail("Bloom.exe carries no icon: ${icon_error}")
+            endif()
+        endif()
+    endif()
 endif()
 
 # The update helper replaces the package from a copy of itself outside it (ADR 0041), so it may

@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Checks the installer pictures in apps/bloom/installer.
+
+    python3 tools/quality/check_installer_pictures
+
+The disk image backgrounds are 8-bit RGB or RGBA PNG files at 660 x 400 and 1320 x 800. The
+Windows wizard pictures are 24-bit uncompressed BMP files, seven sizes of each kind, one for
+each display scale from 100 to 250 percent. Nothing else is in the two folders except the
+master drawings (SVG) and the README. Every failure names its file. Only the Python standard
+library is used.
+"""
+
+from __future__ import annotations
+
+import struct
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+FOLDER = ROOT / "apps/bloom/installer"
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+BACKGROUNDS = {
+    "macos/dmg-background.png": (660, 400),
+    "macos/dmg-background@2x.png": (1320, 800),
+}
+# The wizard pictures at 100, 125, 150, 175, 200, 225 and 250 percent.
+LARGE = ((164, 314), (192, 386), (246, 459), (273, 556), (328, 604), (355, 700), (410, 797))
+SMALL = ((55, 55), (64, 68), (83, 80), (92, 97), (110, 106), (119, 123), (138, 140))
+MASTERS = {"macos/dmg-background.svg", "windows/wizard-large-master.svg"}
+
+
+def check_png(path: Path, size: tuple[int, int]) -> list[str]:
+    name = path.relative_to(ROOT).as_posix()
+    data = path.read_bytes()
+    if data[:8] != PNG_SIGNATURE or data[12:16] != b"IHDR" or len(data) < 29:
+        return [f"{name} is not a PNG image"]
+    width, height, depth, color = struct.unpack(">IIBB", data[16:26])
+    problems = []
+    if (width, height) != size:
+        problems.append(f"{name} is {width} x {height} pixels, not {size[0]} x {size[1]}")
+    if depth != 8 or color not in (2, 6):
+        problems.append(f"{name} must be 8-bit RGB or RGBA (bit depth {depth}, color type {color})")
+    return problems
+
+
+def check_bmp(path: Path, size: tuple[int, int]) -> list[str]:
+    name = path.relative_to(ROOT).as_posix()
+    data = path.read_bytes()
+    if len(data) < 54 or data[:2] != b"BM":
+        return [f"{name} is not a BMP image"]
+    file_size, offset = struct.unpack("<I4xI", data[2:14])
+    header, width, height, planes, bits, compression = struct.unpack("<IiiHHI", data[14:34])
+    problems = []
+    if header < 40:
+        return [f"{name} has a BMP header the installer does not read ({header} bytes)"]
+    if (width, abs(height)) != size:
+        problems.append(f"{name} is {width} x {abs(height)} pixels, not {size[0]} x {size[1]}")
+    if bits != 24:
+        problems.append(f"{name} must be 24-bit, not {bits}-bit")
+    if compression != 0:
+        problems.append(f"{name} must be uncompressed (compression {compression})")
+    row = (width * 3 + 3) // 4 * 4
+    if bits == 24 and compression == 0 and file_size != len(data):
+        problems.append(f"{name} says it is {file_size} bytes and is {len(data)}")
+    if bits == 24 and compression == 0 and len(data) < offset + row * abs(height):
+        problems.append(f"{name} is shorter than its pixels")
+    return problems
+
+
+def main() -> int:
+    problems: list[str] = []
+    expected: dict[str, tuple[str, tuple[int, int]]] = {}
+    for name, size in BACKGROUNDS.items():
+        expected[name] = ("png", size)
+    for kind, sizes in (("large", LARGE), ("small", SMALL)):
+        for width, height in sizes:
+            expected[f"windows/wizard-{kind}-{width}x{height}.bmp"] = ("bmp", (width, height))
+    for name, (kind, size) in sorted(expected.items()):
+        path = FOLDER / name
+        if not path.is_file():
+            problems.append(f"apps/bloom/installer/{name} is missing")
+        elif kind == "png":
+            problems += check_png(path, size)
+        else:
+            problems += check_bmp(path, size)
+    for name in sorted(MASTERS):
+        if not (FOLDER / name).is_file():
+            problems.append(f"apps/bloom/installer/{name} is missing")
+    allowed = set(expected) | MASTERS
+    for folder in ("macos", "windows"):
+        for path in sorted((FOLDER / folder).iterdir()) if (FOLDER / folder).is_dir() else []:
+            name = f"{folder}/{path.name}"
+            if name not in allowed:
+                problems.append(f"apps/bloom/installer/{name} is not an installer picture")
+    if not (FOLDER / "README.md").is_file():
+        problems.append("apps/bloom/installer/README.md is missing")
+    for problem in problems:
+        print(problem, file=sys.stderr)
+    if not problems:
+        print(f"{len(expected)} installer pictures are what the installers read")
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

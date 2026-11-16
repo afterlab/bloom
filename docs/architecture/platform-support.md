@@ -648,6 +648,34 @@ The older-macOS icon (`bloom-macos-legacy-1024.png`, an 824-pixel body and its s
 The `bloom.quality.app_icons` test checks every generated file against its source and names the
 stale file and its source when one differs.
 
+On macOS 26 and later the layered icon itself is compiled into the bundle's asset catalog,
+`Contents/Resources/Assets.car`, so the system draws its default, dark, clear and tinted looks.
+The build step `bloom-bundle-assets` (`apps/bloom/CMakeLists.txt`) runs `actool` from Xcode 26
+on `Bloom.icon`, and runs again when a file of the icon changes. It finishes before
+`bloom-deploy-macos` signs the bundle. `actool` also writes a `Bloom.icns` that stops at 256
+pixels; it is not used. The bundle keeps `apps/bloom/macos/Bloom.icns`. Configure finds the tool
+and the macOS 26 SDK. Where either is missing, configure prints one status line and the build
+still succeeds without the catalog. That bundle is for a developer's machine; the package check
+refuses it as a release. `Info.plist` carries `CFBundleIconFile` and `CFBundleIconName`, both
+`Bloom`. The Bloom project document type (`.bloom`) and its type declaration name the same icon
+(`CFBundleTypeIconFile`, `UTTypeIconFile`), so a project file shows the app icon.
+
+The installer pictures are in `apps/bloom/installer`: the macOS disk image background at 660 x 400
+and 1320 x 800 (the logotype, an arrow from the app to the Applications folder, and a line that
+says how to install), and the Windows installer's welcome and finish picture and header picture
+at the seven display scales from 100 to 250 percent. Its README says which file belongs to which
+scale and how the files were made. The `bloom.quality.installer_pictures` test
+(`tools/quality/check_installer_pictures`) checks the names, sizes and formats, and that nothing
+else is in the folders.
+
+The package check's `icons` rule runs on every package, complete or not. On Linux it needs the
+eight icon sizes, each a PNG of exactly its size, and a menu entry with
+`Icon=id.afterlab.bloom`. On macOS it needs `Bloom.icns` with an image at every size from 16 to
+1024 pixels, the icon keys above, and, for a complete package, `Assets.car`. On macOS 13.3 to 15
+the check is the `Bloom.icns` file, not a run on that system. On Windows it needs an icon
+resource in `Bloom.exe` (`tools/quality/check_program_icon`). The installer pictures inside
+the installers are checked with the installers.
+
 Media on macOS is read and encoded by the Apple frameworks first, with the bundled FFmpeg worker
 behind them ([Media I/O](media-io.md)). Continuous integration builds macOS in qualified mode on
 hosted Apple silicon runners; a hosted runner may have no usable GPU device, and its GPU tests

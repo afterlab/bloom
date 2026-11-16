@@ -22,6 +22,8 @@
 	<string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
 	<key>CFBundleIconFile</key>
 	<string>${MACOSX_BUNDLE_ICON_FILE}</string>
+	<key>CFBundleIconName</key>
+	<string>Bloom</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>${BLOOM_MACOS_MINIMUM_SYSTEM_VERSION}</string>
 	<key>LSApplicationCategoryType</key>

@@ -218,6 +218,51 @@ if(APPLE)
         add_dependencies(bloom-bundle-workers bloom)
     endif()
 
+    # The layered icon (apps/bloom/icon/Bloom.icon) compiled into the bundle's asset catalog,
+    # Resources/Assets.car (Info.plist: CFBundleIconName), so macOS 26 and later draw its
+    # default, dark, clear and tinted looks. The layered format needs actool from Xcode 26 (the
+    # macOS 26 SDK). Without it the build still succeeds and the bundle has no catalog: the
+    # package check (cmake/package/check_package.cmake, rule icons) refuses a release like that.
+    # actool also writes its own Bloom.icns, which stops at 256 pixels: that file is not copied,
+    # the bundle keeps macos/Bloom.icns with every size to 1024. The catalog is in the bundle
+    # before bloom-deploy-macos signs it.
+    execute_process(COMMAND xcrun --find actool OUTPUT_VARIABLE bloom_actool
+                    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET RESULT_VARIABLE bloom_actool_status)
+    execute_process(COMMAND xcrun --sdk macosx --show-sdk-version
+                    OUTPUT_VARIABLE bloom_macos_sdk OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(bloom_actool_status EQUAL 0 AND bloom_actool AND bloom_macos_sdk VERSION_GREATER_EQUAL 26)
+        file(GLOB_RECURSE bloom_icon_files CONFIGURE_DEPENDS
+             "${CMAKE_CURRENT_SOURCE_DIR}/icon/Bloom.icon/*")
+        set(bloom_catalog_dir "${CMAKE_CURRENT_BINARY_DIR}/asset-catalog")
+        add_custom_command(
+            OUTPUT "${bloom_catalog_dir}/Assets.car"
+            COMMAND ${CMAKE_COMMAND} -E rm -rf "${bloom_catalog_dir}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${bloom_catalog_dir}"
+            COMMAND xcrun actool --compile "${bloom_catalog_dir}" --platform macosx
+                --minimum-deployment-target 13.3 --app-icon Bloom
+                --output-partial-info-plist "${bloom_catalog_dir}/partial.plist"
+                --output-format human-readable-text --notices --warnings --errors
+                "${CMAKE_CURRENT_SOURCE_DIR}/icon/Bloom.icon"
+            DEPENDS ${bloom_icon_files}
+            COMMENT "Compiling the layered icon into the asset catalog"
+            VERBATIM
+        )
+        add_custom_target(
+            bloom-bundle-assets ALL
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:bloom>/Resources"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${bloom_catalog_dir}/Assets.car"
+                "$<TARGET_BUNDLE_CONTENT_DIR:bloom>/Resources/Assets.car"
+            DEPENDS "${bloom_catalog_dir}/Assets.car"
+            COMMENT "Putting the asset catalog inside Bloom.app"
+            VERBATIM
+        )
+        add_dependencies(bloom-bundle-assets bloom)
+    else()
+        message(STATUS "Bloom.app has no asset catalog: the layered icon needs actool from "
+            "Xcode 26 or later, so the bundle shows the Bloom.icns icon on every macOS version "
+            "(a release package needs the catalog)")
+    endif()
+
     # A qualified build fills the bundle with the same scripts that fill the Linux and Windows
     # packages (cmake/package, cmake/BloomPackageLayout.cmake), every time it builds, so the
     # bundle in the build tree is the package: the locked interpreter with its standard library
@@ -331,7 +376,8 @@ if(APPLE)
             VERBATIM
         )
         foreach(bloom_bundle_part IN ITEMS bloom-bundle-workers bloom-bundle-python
-                                           bloom-bundle-qt bloom-bundle-records)
+                                           bloom-bundle-qt bloom-bundle-records
+                                           bloom-bundle-assets)
             if(TARGET ${bloom_bundle_part})
                 add_dependencies(bloom-deploy-macos ${bloom_bundle_part})
             endif()
@@ -367,7 +413,25 @@ if(BUILD_TESTING)
                 "${PROJECT_SOURCE_DIR}/tools/quality/generate_app_icons" --check
             LABELS quality
             TIMEOUT 120)
+        # The installer pictures (apps/bloom/installer): the disk image backgrounds and the
+        # Windows wizard pictures, their names, sizes and formats. Runs on all three platforms.
+        bloom_add_test(
+            NAME bloom.quality.installer_pictures
+            COMMAND "${Python3_EXECUTABLE}" -I
+                "${PROJECT_SOURCE_DIR}/tools/quality/check_installer_pictures"
+            LABELS quality
+            TIMEOUT 60)
     endif()
+    # Checked-in text only, so it runs on all three platforms: the Linux file type files and the
+    # macOS document type must name the same extension.
+    include(BloomTesting)
+    bloom_add_test(
+        NAME bloom.quality.linux_file_type
+        COMMAND "${CMAKE_COMMAND}" "-DLINUX_DIR=${CMAKE_CURRENT_SOURCE_DIR}/linux"
+            "-DINFO_PLIST=${CMAKE_CURRENT_SOURCE_DIR}/macos/Info.plist.in"
+            -P "${PROJECT_SOURCE_DIR}/cmake/tests/check_linux_file_type.cmake"
+        LABELS quality
+        TIMEOUT 60)
 endif()
 
 # The changelog (CHANGELOG.md) keeps the Keep a Changelog format and has a section for the
