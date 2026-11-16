@@ -3,6 +3,7 @@
 
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
+#include <bloom/render/display_pixel_packing.hpp>
 #include <bloom/render/image.hpp>
 
 #include <cstdint>
@@ -290,6 +291,25 @@ class LayerTransform final {
                                                         ImageWindow displayWindow,
                                                         std::int64_t outputY,
                                                         std::span<Rgba8> output) noexcept;
+
+// #733, display_pixel_packing.hpp. True when every stored pixel of `source` fits the 10:10:10:2
+// display layout: exactly transparent, or an alpha that packs to the 8-bit alpha 255.
+[[nodiscard]] bool rgba32fAllowsRgb10A2(Rgba32fImageView source) noexcept;
+
+// The same mapping as mapLinearRec709SceneToSrgbRow into 10:10:10:2 words: each color is the
+// 10-bit sRGB code, chosen by comparison with the exact half-code transitions like the 8-bit
+// codes. A pixel that does not fit the layout is InvalidPixel; ask rgba32fAllowsRgb10A2 first.
+[[nodiscard]] ImageStatus mapLinearRec709SceneToSrgbRgb10A2Row(Rgba32fImageView source,
+                                                               ImageWindow displayWindow,
+                                                               std::int64_t outputY,
+                                                               std::span<Rgba8> output) noexcept;
+
+// Adds one row of the reference display's under, over and not-finite counts (the sRGB encoding of
+// each straight color, times alpha, against the 0..1 axis; luma with the Rec. 709 coefficients).
+// A row outside the display window, or an invalid source, adds nothing.
+void countLinearRec709SceneDisplayRow(Rgba32fImageView source, ImageWindow displayWindow,
+                                      std::int64_t outputY,
+                                      DisplayFrameCounters& counters) noexcept;
 
 } // namespace bloom::render
 

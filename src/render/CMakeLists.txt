@@ -1314,6 +1314,7 @@ target_sources(
             include/bloom/render/channel_set_image.hpp
             include/bloom/render/cpu_image_primitives.hpp
             include/bloom/render/display_buffer.hpp
+            include/bloom/render/display_pixel_packing.hpp
             include/bloom/render/embedded_fonts.hpp
             include/bloom/render/gpu_affine.hpp
             include/bloom/render/gpu_blend.hpp

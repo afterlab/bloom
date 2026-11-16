@@ -92,6 +92,16 @@ constexpr std::array<double, 255> kSrgbHalfCodeLinearThresholds{
 static_assert(std::is_sorted(kSrgbHalfCodeLinearThresholds.begin(),
                              kSrgbHalfCodeLinearThresholds.end()));
 
+// #733: the same for the 10-bit codes of the 10:10:10:2 display layout. Entry k is the
+// reference-linear value at the transition between the 10-bit sRGB codes k and k + 1, the
+// correctly rounded binary64 of the exact sRGB decoding of (k + 0.5) / 1023.
+constexpr std::array<double, 1023> kSrgbHalfCode10LinearThresholds{
+#include "cpu_srgb_half_code10_thresholds.ipp"
+};
+
+static_assert(std::is_sorted(kSrgbHalfCode10LinearThresholds.begin(),
+                             kSrgbHalfCode10LinearThresholds.end()));
+
 [[nodiscard]] ImageError codeError(const ImageErrorCode code) noexcept {
     return ImageError::codeOnly(code);
 }
@@ -175,6 +185,13 @@ static_assert(std::is_sorted(kSrgbHalfCodeLinearThresholds.begin(),
                                              kSrgbHalfCodeLinearThresholds.end(), linear);
     return static_cast<std::uint8_t>(
         std::distance(kSrgbHalfCodeLinearThresholds.begin(), transition));
+}
+
+[[nodiscard]] std::uint32_t referenceSrgbCode10(const double linear) noexcept {
+    const auto transition = std::upper_bound(kSrgbHalfCode10LinearThresholds.begin(),
+                                             kSrgbHalfCode10LinearThresholds.end(), linear);
+    return static_cast<std::uint32_t>(
+        std::distance(kSrgbHalfCode10LinearThresholds.begin(), transition));
 }
 
 [[nodiscard]] std::uint8_t alphaByte(const float alpha) noexcept {
@@ -371,6 +388,25 @@ struct ClampedSpan final {
         return 255;
     }
     return referenceSrgbByte(static_cast<double>(premultiplied) / static_cast<double>(alpha));
+}
+
+[[nodiscard]] std::uint32_t displayChannelCode10(const float premultiplied,
+                                                 const float alpha) noexcept {
+    if (premultiplied <= 0.0F) {
+        return 0;
+    }
+    if (premultiplied >= alpha) {
+        return bloom::render::kDisplayCode10Maximum;
+    }
+    return referenceSrgbCode10(static_cast<double>(premultiplied) / static_cast<double>(alpha));
+}
+
+// The sRGB encoding of a straight reference-linear value, unclamped, for the frame counters only
+// (the packed codes never use it: they are chosen by comparison).
+[[nodiscard]] float referenceSrgbEncoded(const double linear) noexcept {
+    const double encoded =
+        linear <= 0.0031308 ? 12.92 * linear : 1.055 * std::pow(linear, 1.0 / 2.4) - 0.055;
+    return static_cast<float>(encoded);
 }
 
 } // namespace
@@ -967,10 +1003,23 @@ ImageStatus coverageSolidRow(const std::span<const std::uint8_t> coverage, const
     return std::nullopt;
 }
 
-ImageStatus mapLinearRec709SceneToSrgbRow(const Rgba32fImageView source,
-                                          const ImageWindow displayWindow,
-                                          const std::int64_t outputY,
-                                          const std::span<Rgba8> output) noexcept {
+} // namespace bloom::render
+
+namespace {
+
+using bloom::render::ImageStatus;
+using bloom::render::ImageWindow;
+using bloom::render::Rgba32fImageView;
+using bloom::render::Rgba8;
+
+// The row walk both display layouts share: `pack` receives each pixel inside the data window that
+// is not exactly transparent, and returns nothing when the pixel does not fit its layout.
+template <typename Pack>
+[[nodiscard]] ImageStatus mapReferenceDisplayRow(const Rgba32fImageView source,
+                                                 const ImageWindow displayWindow,
+                                                 const std::int64_t outputY,
+                                                 const std::span<Rgba8> output,
+                                                 const Pack& pack) noexcept {
     const auto sourceDescriptorValue = source.descriptor();
     if (!sourceDescriptorValue.has_value() ||
         source.pixels().size() != sourceDescriptorValue->layout().pixelCount) {
@@ -1006,12 +1055,88 @@ ImageStatus mapLinearRec709SceneToSrgbRow(const Rgba32fImageView source,
             output[outputX] = Rgba8{0, 0, 0, 0};
             continue;
         }
-        output[outputX] =
-            Rgba8{displayChannelByte(pixel.red(), pixel.alpha()),
-                  displayChannelByte(pixel.green(), pixel.alpha()),
-                  displayChannelByte(pixel.blue(), pixel.alpha()), alphaByte(pixel.alpha())};
+        const std::optional<Rgba8> packed = pack(pixel);
+        if (!packed.has_value()) {
+            return codeError(ImageErrorCode::InvalidPixel);
+        }
+        output[outputX] = *packed;
     }
     return std::nullopt;
+}
+
+} // namespace
+
+namespace bloom::render {
+
+ImageStatus mapLinearRec709SceneToSrgbRow(const Rgba32fImageView source,
+                                          const ImageWindow displayWindow,
+                                          const std::int64_t outputY,
+                                          const std::span<Rgba8> output) noexcept {
+    return mapReferenceDisplayRow(
+        source, displayWindow, outputY, output, [](const Rgba32f pixel) -> std::optional<Rgba8> {
+            return Rgba8{displayChannelByte(pixel.red(), pixel.alpha()),
+                         displayChannelByte(pixel.green(), pixel.alpha()),
+                         displayChannelByte(pixel.blue(), pixel.alpha()),
+                         alphaByte(pixel.alpha())};
+        });
+}
+
+bool rgba32fAllowsRgb10A2(const Rgba32fImageView source) noexcept {
+    for (const auto& pixel : source.pixels()) {
+        if (!displayAlphaAllowsRgb10A2(pixel.alpha())) {
+            return false;
+        }
+    }
+    return true;
+}
+
+ImageStatus mapLinearRec709SceneToSrgbRgb10A2Row(const Rgba32fImageView source,
+                                                 const ImageWindow displayWindow,
+                                                 const std::int64_t outputY,
+                                                 const std::span<Rgba8> output) noexcept {
+    return mapReferenceDisplayRow(
+        source, displayWindow, outputY, output, [](const Rgba32f pixel) -> std::optional<Rgba8> {
+            if (!displayAlphaAllowsRgb10A2(pixel.alpha())) {
+                return std::nullopt;
+            }
+            return rgb10A2Cell(Rgb10A2Codes{displayChannelCode10(pixel.red(), pixel.alpha()),
+                                            displayChannelCode10(pixel.green(), pixel.alpha()),
+                                            displayChannelCode10(pixel.blue(), pixel.alpha()),
+                                            kDisplayAlpha2Opaque});
+        });
+}
+
+void countLinearRec709SceneDisplayRow(const Rgba32fImageView source,
+                                      const ImageWindow displayWindow, const std::int64_t outputY,
+                                      DisplayFrameCounters& counters) noexcept {
+    const auto sourceDescriptor = source.descriptor();
+    if (!sourceDescriptor.has_value() ||
+        source.pixels().size() != sourceDescriptor->layout().pixelCount ||
+        sourceDescriptor->displayWindow() != displayWindow) {
+        return;
+    }
+    const auto dataWindow = sourceDescriptor->dataWindow();
+    if (outputY < displayWindow.originY() || outputY >= displayWindow.maxYExclusive() ||
+        outputY < dataWindow.originY() || outputY >= dataWindow.maxYExclusive()) {
+        return;
+    }
+    static constexpr std::optional<DisplayLumaCoefficients> kRec709Luma{
+        DisplayLumaCoefficients{0.2126F, 0.7152F, 0.0722F}};
+    const auto left = std::max(dataWindow.originX(), displayWindow.originX());
+    const auto right = std::min(dataWindow.maxXExclusive(), displayWindow.maxXExclusive());
+    const auto localY = static_cast<std::size_t>(outputY - dataWindow.originY());
+    for (auto x = left; x < right; ++x) {
+        const auto localX = static_cast<std::size_t>(x - dataWindow.originX());
+        const auto pixel = source.pixels()[localY * dataWindow.extent().width() + localX];
+        const auto alpha = static_cast<double>(pixel.alpha());
+        if (pixel.alpha() == 0.0F) {
+            continue; // the signal over black is 0: inside the axis
+        }
+        countDisplayPixel(counters, referenceSrgbEncoded(static_cast<double>(pixel.red()) / alpha),
+                          referenceSrgbEncoded(static_cast<double>(pixel.green()) / alpha),
+                          referenceSrgbEncoded(static_cast<double>(pixel.blue()) / alpha),
+                          pixel.alpha(), kRec709Luma);
+    }
 }
 
 } // namespace bloom::render

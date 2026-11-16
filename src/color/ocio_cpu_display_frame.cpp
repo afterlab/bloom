@@ -1,6 +1,7 @@
 #include <bloom/color/ocio_cpu_display_frame.hpp>
 
 #include "ocio_internal.hpp"
+#include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/core/floating_point.hpp>
 
 #include <algorithm>
@@ -59,6 +60,15 @@ ImageStatus applyBloomNeutralDisplayChunk(const PreparedCpuDisplayProcessorHandl
                                           const std::span<const Rgba32f> sourcePixels,
                                           const std::span<float> scratchRgba,
                                           const std::span<Rgba8> destinationPixels) noexcept {
+    return applyBloomNeutralDisplayChunk(handle, sourcePixels, scratchRgba, destinationPixels,
+                                         DisplayChunkPacking{});
+}
+
+ImageStatus applyBloomNeutralDisplayChunk(const PreparedCpuDisplayProcessorHandle& handle,
+                                          const std::span<const Rgba32f> sourcePixels,
+                                          const std::span<float> scratchRgba,
+                                          const std::span<Rgba8> destinationPixels,
+                                          const DisplayChunkPacking& packing) noexcept {
     const std::size_t n = sourcePixels.size();
     if (destinationPixels.size() != n || scratchRgba.size() != n * 4) {
         return codeError(ImageErrorCode::InvalidParameter);
@@ -131,6 +141,14 @@ ImageStatus applyBloomNeutralDisplayChunk(const PreparedCpuDisplayProcessorHandl
 
     // Steps 5-6: reject non-finite processor RGB output; pack the declared straight-rgba8 sRGB
     // bytes. Alpha (unchanged since step 2) is packed with the identical clamp/quantize rule.
+    // #733: the 10:10:10:2 layout packs each color to its 10-bit code instead, and the frame
+    // counters take the float result before either packing clamps it. The counts of a failed
+    // chunk are not kept: they are added to the caller's only when the whole chunk packed.
+    const bool wide = packing.layout == render::DisplayPixelLayout::Rgb10A2;
+    render::DisplayFrameCounters counted;
+    if (!packing.luma.has_value()) {
+        counted.markLumaAbsent();
+    }
     for (std::size_t i = 0; i < n; ++i) {
         const float red = scratchRgba[(i * 4) + 0];
         const float green = scratchRgba[(i * 4) + 1];
@@ -139,8 +157,21 @@ ImageStatus applyBloomNeutralDisplayChunk(const PreparedCpuDisplayProcessorHandl
         if (!std::isfinite(red) || !std::isfinite(green) || !std::isfinite(blue)) {
             return codeError(ImageErrorCode::NonFiniteResult);
         }
-        destinationPixels[i] = Rgba8{clampQuantizeToByte(red), clampQuantizeToByte(green),
-                                     clampQuantizeToByte(blue), clampQuantizeToByte(alpha)};
+        if (packing.counters != nullptr) {
+            render::countDisplayPixel(counted, red, green, blue, alpha, packing.luma);
+        }
+        if (wide) {
+            if (!render::displayAlphaAllowsRgb10A2(alpha)) {
+                return codeError(ImageErrorCode::InvalidPixel);
+            }
+            destinationPixels[i] = render::packRgb10A2(red, green, blue, alpha);
+        } else {
+            destinationPixels[i] = Rgba8{clampQuantizeToByte(red), clampQuantizeToByte(green),
+                                         clampQuantizeToByte(blue), clampQuantizeToByte(alpha)};
+        }
+    }
+    if (packing.counters != nullptr) {
+        packing.counters->add(counted);
     }
 
     return std::nullopt; // step 7: nothing is published from here -- the caller owns the frame.
@@ -183,9 +214,12 @@ PreparedDisplayFrame::PreparedDisplayFrame(const render::ImageWindow displayWind
                                            const core::PixelAspectRatio pixelAspect,
                                            const render::PackedImageLayout layout,
                                            std::vector<Rgba8> pixels,
+                                           const render::DisplayPixelLayout pixelLayout,
+                                           const render::DisplayFrameCounters counters,
                                            DisplayProcessorIdentityV1 identity) noexcept
     : displayWindow_(displayWindow), pixelAspect_(pixelAspect), layout_(layout),
-      pixels_(std::move(pixels)), identity_(std::move(identity)) {}
+      pixels_(std::move(pixels)), pixelLayout_(pixelLayout), counters_(counters),
+      identity_(std::move(identity)) {}
 
 PreparedDisplayFrame::PreparedDisplayFrame(PreparedDisplayFrame&&) noexcept = default;
 
@@ -195,6 +229,14 @@ ImageResult<PreparedDisplayFrame> produceBloomNeutralDisplayFrame(
     const PreparedCpuDisplayProcessorHandle& handle, const render::Rgba32fImageView source,
     const std::size_t chunkPixelCount, const std::size_t pixelStorageByteLimit,
     const CancellationPredicateRef isCancelled) noexcept {
+    return produceBloomNeutralDisplayFrame(handle, source, chunkPixelCount, pixelStorageByteLimit,
+                                           isCancelled, DisplayFramePacking{});
+}
+
+ImageResult<PreparedDisplayFrame> produceBloomNeutralDisplayFrame(
+    const PreparedCpuDisplayProcessorHandle& handle, const render::Rgba32fImageView source,
+    const std::size_t chunkPixelCount, const std::size_t pixelStorageByteLimit,
+    const CancellationPredicateRef isCancelled, const DisplayFramePacking& packing) noexcept {
     const auto sourceDescriptorValue = source.descriptor();
     if (!sourceDescriptorValue.has_value() ||
         source.pixels().size() != sourceDescriptorValue->layout().pixelCount) {
@@ -232,6 +274,19 @@ ImageResult<PreparedDisplayFrame> produceBloomNeutralDisplayFrame(
             ImageError::allocationFailure(layout.pixelStorageBytes));
     }
 
+    // One layout for the whole frame, decided before any pixel is packed.
+    render::DisplayFrameCounters counters;
+    if (!packing.luma.has_value()) {
+        counters.markLumaAbsent();
+    }
+    const DisplayChunkPacking chunkPacking{
+        .layout = packing.allowRgb10A2 && render::rgba32fAllowsRgb10A2(source)
+                      ? render::DisplayPixelLayout::Rgb10A2
+                      : render::DisplayPixelLayout::Straight8888,
+        .counters = &counters,
+        .luma = packing.luma,
+    };
+
     std::size_t processed = 0;
     while (processed < layout.pixelCount) {
         if (isCancelled()) {
@@ -243,7 +298,8 @@ ImageResult<PreparedDisplayFrame> produceBloomNeutralDisplayFrame(
         const auto chunkStatus =
             applyBloomNeutralDisplayChunk(handle, source.pixels().subspan(processed, thisChunk),
                                           std::span<float>(scratch).first(thisChunk * 4),
-                                          std::span<Rgba8>(pixels).subspan(processed, thisChunk));
+                                          std::span<Rgba8>(pixels).subspan(processed, thisChunk),
+                                          chunkPacking);
         if (chunkStatus.has_value()) {
             return ImageResult<PreparedDisplayFrame>::failure(*chunkStatus);
         }
@@ -257,7 +313,8 @@ ImageResult<PreparedDisplayFrame> produceBloomNeutralDisplayFrame(
     }
 
     PreparedDisplayFrame frame(displayWindow, sourceDescriptor.pixelAspect(), layout,
-                               std::move(pixels), std::move(*clonedIdentity));
+                               std::move(pixels), chunkPacking.layout, counters,
+                               std::move(*clonedIdentity));
     return ImageResult<PreparedDisplayFrame>::success(std::move(frame));
 }
 

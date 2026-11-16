@@ -6,13 +6,16 @@
 #include <bloom/render/image.hpp>
 #include <bloom/render/image_types.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -62,12 +65,12 @@ constexpr std::array<FixturePixel, 5> kFixture{{
     {4.0F, 2.0F, 1.0F, 1.0F},      // HDR
 }};
 
-[[nodiscard]] std::optional<Rgba32fImage> buildFixtureImage() {
-    const auto extentResult = ImageExtent::create(kFixture.size(), 1);
+[[nodiscard]] std::optional<Rgba32fImage> buildImage(const std::span<const FixturePixel> fixtures) {
+    const auto extentResult = ImageExtent::create(fixtures.size(), 1);
     if (!extentResult) {
         return std::nullopt;
     }
-    const auto windowResult = ImageWindow::create(0, 0, kFixture.size(), 1);
+    const auto windowResult = ImageWindow::create(0, 0, fixtures.size(), 1);
     if (!windowResult) {
         return std::nullopt;
     }
@@ -82,8 +85,8 @@ constexpr std::array<FixturePixel, 5> kFixture{{
         return std::nullopt;
     }
     auto builder = std::move(*builderResult.value());
-    for (std::size_t i = 0; i < kFixture.size(); ++i) {
-        const auto& fixture = kFixture[i];
+    for (std::size_t i = 0; i < fixtures.size(); ++i) {
+        const auto& fixture = fixtures[i];
         const auto pixelResult =
             Rgba32f::fromPremultiplied(fixture.red, fixture.green, fixture.blue, fixture.alpha);
         if (!pixelResult) {
@@ -101,6 +104,8 @@ constexpr std::array<FixturePixel, 5> kFixture{{
     }
     return std::move(*frozen.value());
 }
+
+[[nodiscard]] std::optional<Rgba32fImage> buildFixtureImage() { return buildImage(kFixture); }
 
 [[nodiscard]] std::optional<bloom::color::PreparedCpuDisplayProcessorHandle> buildNeutralHandle() {
     auto resolution = bloom::color::resolveBloomNeutralV1BuiltIn(
@@ -402,6 +407,121 @@ void testNonFiniteDivisionRejectedNoPartialFrame(Expectations& expectations) {
 // C++ code with no OCIO-specific branch), but this suite does not claim a crafted fixture reaches
 // it, per the task package's explicit "if achievable, else document why not" allowance.
 
+// #733: the preview packing. A picture with a partly transparent pixel stays straight RGBA8, byte
+// for byte the frame of the plain call; an opaque and transparent picture becomes 10:10:10:2
+// words; the frame counters are the same either way.
+void testPreviewPacking(Expectations& expectations) {
+    namespace render = bloom::render;
+    auto handle = buildNeutralHandle();
+    auto soft = buildFixtureImage();
+    // The fixture without its translucent pixel: opaque, zero-alpha, negative, HDR.
+    constexpr std::array<FixturePixel, 4> kHard{kFixture[0], kFixture[2], kFixture[3], kFixture[4]};
+    auto hard = buildImage(kHard);
+    expectations.expect(handle.has_value() && soft.has_value() && hard.has_value(),
+                        "fixtures and handle build for the preview packing test");
+    if (!handle.has_value() || !soft.has_value() || !hard.has_value()) {
+        return;
+    }
+    const auto softView = soft->view();
+    const auto hardView = hard->view();
+    if (!softView || !hardView) {
+        expectations.expect(false, "fixture views are valid");
+        return;
+    }
+    const bloom::color::DisplayFramePacking preview{
+        .allowRgb10A2 = true,
+        .luma = render::DisplayLumaCoefficients{0.2126F, 0.7152F, 0.0722F},
+    };
+    const render::DisplayFrameCounters expectedCounters{
+        .under = {1U, 1U, 1U, 1U}, // the negative pixel
+        .over = {1U, 1U, 0U, 1U},  // the HDR pixel: 4 and 2 encode above 1, 1 encodes to 1
+        .notFinite = 0U,
+    };
+
+    const auto plain = bloom::color::produceBloomNeutralDisplayFrame(*handle, *softView.value(),
+                                                                     kFixture.size(), 1U << 20U);
+    const auto softFrame = bloom::color::produceBloomNeutralDisplayFrame(
+        *handle, *softView.value(), 2, 1U << 20U, {}, preview);
+    expectations.expect(static_cast<bool>(plain) && static_cast<bool>(softFrame),
+                        "the soft picture packs with and without the preview packing");
+    if (plain && softFrame) {
+        const auto plainPixels = plain.value()->pixels();
+        const auto softPixels = softFrame.value()->pixels();
+        expectations.expect(
+            softFrame.value()->pixelLayout() == render::DisplayPixelLayout::Straight8888 &&
+                std::equal(plainPixels.begin(), plainPixels.end(), softPixels.begin(),
+                           softPixels.end()),
+            "a picture with a partly transparent pixel keeps straight RGBA8, byte for byte");
+        expectations.expect(softFrame.value()->counters() == expectedCounters,
+                            "the frame counters count the negative and the HDR pixel per channel");
+        expectations.expect(
+            plain.value()->pixelLayout() == render::DisplayPixelLayout::Straight8888 &&
+                !plain.value()->counters().lumaCounted() &&
+                plain.value()->counters().over[0] == 1U,
+            "the plain call stays straight RGBA8 and marks the luma counts absent");
+    }
+
+    std::optional<std::vector<Rgba8>> reference;
+    for (const std::size_t chunkSize : {std::size_t{1}, std::size_t{3}, std::size_t{4}}) {
+        const auto frame = bloom::color::produceBloomNeutralDisplayFrame(
+            *handle, *hardView.value(), chunkSize, 1U << 20U, {}, preview);
+        expectations.expect(static_cast<bool>(frame), "the opaque picture packs at 10 bits");
+        if (!frame) {
+            continue;
+        }
+        const auto pixels = frame.value()->pixels();
+        expectations.expect(frame.value()->pixelLayout() == render::DisplayPixelLayout::Rgb10A2 &&
+                                frame.value()->counters() == expectedCounters &&
+                                frame.value()->layout().pixelStorageBytes == 4U * kHard.size(),
+                            "an opaque and transparent picture is 10:10:10:2 words at four bytes "
+                            "a pixel, with the same counters");
+        std::vector<Rgba8> observed(pixels.begin(), pixels.end());
+        if (reference.has_value()) {
+            expectations.expect(observed == *reference,
+                                "different chunk sizes produce the same 10-bit words");
+            continue;
+        }
+        reference = observed;
+        constexpr std::array<std::array<double, 3>, 4> straight{{
+            {0.5, 0.25, 0.1}, {0.0, 0.0, 0.0}, {-0.1, -0.05, -0.02}, {4.0, 2.0, 1.0}}};
+        const auto code = [](const double value) {
+            const double clamped = value < 0.0 ? 0.0 : (value > 1.0 ? 1.0 : value);
+            return static_cast<long>(std::floor(clamped * 1023.0 + 0.5));
+        };
+        for (std::size_t i = 0; i < observed.size(); ++i) {
+            const auto codes = render::rgb10A2Codes(observed[i]);
+            if (kHard[i].alpha == 0.0F) {
+                expectations.expect(observed[i] == Rgba8{0, 0, 0, 0},
+                                    "a transparent pixel is the word 0");
+                continue;
+            }
+            // The same bound as the 8-bit cross-check (2 steps of 8 bits), on the 10-bit axis.
+            const auto near = [&](const std::uint32_t stored, const double value) {
+                return std::labs(static_cast<long>(stored) - code(srgbOetf(value))) <= 8;
+            };
+            expectations.expect(codes.alpha == 3U && near(codes.red, straight[i][0]) &&
+                                    near(codes.green, straight[i][1]) &&
+                                    near(codes.blue, straight[i][2]),
+                                "each 10-bit code is the closed-form sRGB code");
+        }
+        expectations.expect(render::rgb10A2Codes(observed[2]) ==
+                                    render::Rgb10A2Codes{0U, 0U, 0U, 3U} &&
+                                render::rgb10A2Codes(observed[3]) ==
+                                    render::Rgb10A2Codes{1023U, 1023U, 1023U, 3U},
+                            "values outside 0..1 clamp to the ends of the 10-bit axis");
+    }
+
+    // The chunk call alone refuses a pixel that does not fit the layout it was asked for.
+    std::array<float, 8> scratch{};
+    std::array<Rgba8, 2> destination{};
+    const auto refused = bloom::color::applyBloomNeutralDisplayChunk(
+        *handle, softView.value()->pixels().first(2), scratch, destination,
+        bloom::color::DisplayChunkPacking{.layout = render::DisplayPixelLayout::Rgb10A2});
+    expectations.expect(refused.has_value() &&
+                            refused->code == bloom::render::ImageErrorCode::InvalidPixel,
+                        "a partly transparent pixel is refused by the 10-bit chunk packing");
+}
+
 } // namespace
 
 int main() {
@@ -413,5 +533,6 @@ int main() {
     testCancellationPublishesNothing(expectations);
     testBudgetExhaustionTyped(expectations);
     testNonFiniteDivisionRejectedNoPartialFrame(expectations);
+    testPreviewPacking(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

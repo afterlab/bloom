@@ -3,10 +3,12 @@
 #include <bloom/color/display_processor_identity.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
+#include <bloom/render/display_pixel_packing.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/render/image_types.hpp>
 
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <type_traits>
 #include <vector>
@@ -76,6 +78,22 @@ class PreparedDisplayFrame;
     const PreparedCpuDisplayProcessorHandle& handle, std::span<const render::Rgba32f> sourcePixels,
     std::span<float> scratchRgba, std::span<render::Rgba8> destinationPixels) noexcept;
 
+// #733: the same flow with the frame's pixel layout chosen by the caller and the frame counters.
+// Step 6 packs `layout` (render/display_pixel_packing.hpp): the straight-rgba8 bytes above, or
+// 10:10:10:2 words, for which every pixel of the chunk must fit (InvalidPixel otherwise; the frame
+// producer below asks render::rgba32fAllowsRgb10A2 of the whole picture first). Between steps 5
+// and 6 every pixel's float result is counted into `counters` when it is given: under, over and
+// not finite, of the straight display color times alpha, with luma when `luma` is given.
+struct DisplayChunkPacking final {
+    render::DisplayPixelLayout layout = render::DisplayPixelLayout::Straight8888;
+    render::DisplayFrameCounters* counters = nullptr;
+    std::optional<render::DisplayLumaCoefficients> luma = std::nullopt;
+};
+[[nodiscard]] render::ImageStatus applyBloomNeutralDisplayChunk(
+    const PreparedCpuDisplayProcessorHandle& handle, std::span<const render::Rgba32f> sourcePixels,
+    std::span<float> scratchRgba, std::span<render::Rgba8> destinationPixels,
+    const DisplayChunkPacking& packing) noexcept;
+
 // #724 Scopes: step 3 alone, kept in float. `rgba` holds whole pixels of four floats: the straight
 // red, green and blue of each pixel in, the display's red, green and blue out, with no clamp and no
 // packing; the fourth lane is never read or written. The caller hands in finite values and checks
@@ -99,6 +117,22 @@ produceBloomNeutralDisplayFrame(const PreparedCpuDisplayProcessorHandle& handle,
                                 std::size_t pixelStorageByteLimit,
                                 CancellationPredicateRef isCancelled = {}) noexcept;
 
+// #733: how a preview display frame is packed. With `allowRgb10A2` a picture whose every pixel is
+// opaque or exactly transparent is packed as 10:10:10:2 words, any other picture as straight
+// RGBA8; without it the frame is always straight RGBA8, the packing of the call above. The frame
+// counters are counted either way; `luma` is the display's luma coefficients, absent when they
+// could not be resolved (the frame's luma counts are then marked absent).
+struct DisplayFramePacking final {
+    bool allowRgb10A2 = false;
+    std::optional<render::DisplayLumaCoefficients> luma = std::nullopt;
+};
+[[nodiscard]] render::ImageResult<PreparedDisplayFrame>
+produceBloomNeutralDisplayFrame(const PreparedCpuDisplayProcessorHandle& handle,
+                                render::Rgba32fImageView source, std::size_t chunkPixelCount,
+                                std::size_t pixelStorageByteLimit,
+                                CancellationPredicateRef isCancelled,
+                                const DisplayFramePacking& packing) noexcept;
+
 class PreparedDisplayFrame final {
   public:
     PreparedDisplayFrame(PreparedDisplayFrame&&) noexcept;
@@ -115,6 +149,11 @@ class PreparedDisplayFrame final {
     [[nodiscard]] const render::PackedImageLayout& layout() const noexcept { return layout_; }
     [[nodiscard]] std::span<const render::Rgba8> pixels() const& noexcept { return pixels_; }
     [[nodiscard]] std::span<const render::Rgba8> pixels() const&& = delete;
+    // How pixels() is read (#733), and what the packed pixels cannot carry.
+    [[nodiscard]] render::DisplayPixelLayout pixelLayout() const noexcept { return pixelLayout_; }
+    [[nodiscard]] const render::DisplayFrameCounters& counters() const noexcept {
+        return counters_;
+    }
     [[nodiscard]] const DisplayProcessorIdentityV1& identity() const& noexcept { return identity_; }
     [[nodiscard]] const DisplayProcessorIdentityV1& identity() const&& = delete;
 
@@ -122,16 +161,20 @@ class PreparedDisplayFrame final {
     friend render::ImageResult<PreparedDisplayFrame>
     produceBloomNeutralDisplayFrame(const PreparedCpuDisplayProcessorHandle&,
                                     render::Rgba32fImageView, std::size_t, std::size_t,
-                                    CancellationPredicateRef) noexcept;
+                                    CancellationPredicateRef, const DisplayFramePacking&) noexcept;
 
     PreparedDisplayFrame(render::ImageWindow displayWindow, core::PixelAspectRatio pixelAspect,
                          render::PackedImageLayout layout, std::vector<render::Rgba8> pixels,
+                         render::DisplayPixelLayout pixelLayout,
+                         render::DisplayFrameCounters counters,
                          DisplayProcessorIdentityV1 identity) noexcept;
 
     render::ImageWindow displayWindow_;
     core::PixelAspectRatio pixelAspect_;
     render::PackedImageLayout layout_;
     std::vector<render::Rgba8> pixels_;
+    render::DisplayPixelLayout pixelLayout_;
+    render::DisplayFrameCounters counters_;
     DisplayProcessorIdentityV1 identity_;
 };
 

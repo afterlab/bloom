@@ -30,13 +30,15 @@ namespace bloom::render {
 
 ImageResult<ReferenceDisplayBufferDescriptor>
 ReferenceDisplayBufferDescriptor::create(const ImageWindow displayWindow,
-                                         const core::PixelAspectRatio pixelAspect) noexcept {
+                                         const core::PixelAspectRatio pixelAspect,
+                                         const DisplayPixelLayout pixelLayout) noexcept {
     const auto layoutResult = checkedRgba8Layout(displayWindow.extent());
     if (!layoutResult) {
         return ImageResult<ReferenceDisplayBufferDescriptor>::failure(*layoutResult.error());
     }
     return ImageResult<ReferenceDisplayBufferDescriptor>::success(
-        ReferenceDisplayBufferDescriptor(displayWindow, pixelAspect, *layoutResult.value()));
+        ReferenceDisplayBufferDescriptor(displayWindow, pixelAspect, *layoutResult.value(),
+                                         pixelLayout));
 }
 
 PreparedReferenceDisplayBuffer::PreparedReferenceDisplayBuffer(

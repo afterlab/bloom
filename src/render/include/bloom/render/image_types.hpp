@@ -168,6 +168,13 @@ enum class PixelPacking : std::uint8_t {
     PackedRgba8,
 };
 
+// The two 4-byte layouts of a packed display pixel (#733, display_pixel_packing.hpp): straight
+// 8-bit red, green, blue and alpha, or one 10:10:10:2 word. The storage is Rgba8 cells either way.
+enum class DisplayPixelLayout : std::uint8_t {
+    Straight8888,
+    Rgb10A2,
+};
+
 enum class ColorEncoding : std::uint8_t {
     LinearRec709Scene,
 };

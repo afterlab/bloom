@@ -383,6 +383,7 @@ target_sources(
             include/bloom/runtime/gpu_scope_measure.hpp
             include/bloom/runtime/scope_frame_measure.hpp
             include/bloom/runtime/preview_frame_scopes.hpp
+            include/bloom/runtime/display_frame_packing.hpp
             include/bloom/runtime/scope_picture.hpp
             include/bloom/runtime/gpu_processing_phase_policy.hpp
             include/bloom/runtime/packed_host_retirement.hpp

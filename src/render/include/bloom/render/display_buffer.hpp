@@ -17,14 +17,20 @@ namespace bloom::render {
 // not an OCIO-qualified production display result.
 class ReferenceDisplayBufferDescriptor final {
   public:
+    // `pixelLayout` names how the Rgba8 cells are read (#733): straight 8-bit components, or
+    // 10:10:10:2 words. Both cost the same bytes.
     [[nodiscard]] static ImageResult<ReferenceDisplayBufferDescriptor>
-    create(ImageWindow displayWindow, core::PixelAspectRatio pixelAspect) noexcept;
+    create(ImageWindow displayWindow, core::PixelAspectRatio pixelAspect,
+           DisplayPixelLayout pixelLayout = DisplayPixelLayout::Straight8888) noexcept;
 
     [[nodiscard]] constexpr ImageWindow displayWindow() const noexcept { return displayWindow_; }
     [[nodiscard]] constexpr core::PixelAspectRatio pixelAspect() const noexcept {
         return pixelAspect_;
     }
     [[nodiscard]] constexpr const PackedImageLayout& layout() const noexcept { return layout_; }
+    [[nodiscard]] constexpr DisplayPixelLayout pixelLayout() const noexcept {
+        return pixelLayout_;
+    }
     [[nodiscard]] static constexpr PixelPacking pixelPacking() noexcept {
         return PixelPacking::PackedRgba8;
     }
@@ -42,12 +48,15 @@ class ReferenceDisplayBufferDescriptor final {
   private:
     constexpr ReferenceDisplayBufferDescriptor(const ImageWindow displayWindow,
                                                const core::PixelAspectRatio pixelAspect,
-                                               const PackedImageLayout layout) noexcept
-        : displayWindow_(displayWindow), pixelAspect_(pixelAspect), layout_(layout) {}
+                                               const PackedImageLayout layout,
+                                               const DisplayPixelLayout pixelLayout) noexcept
+        : displayWindow_(displayWindow), pixelAspect_(pixelAspect), layout_(layout),
+          pixelLayout_(pixelLayout) {}
 
     ImageWindow displayWindow_;
     core::PixelAspectRatio pixelAspect_;
     PackedImageLayout layout_;
+    DisplayPixelLayout pixelLayout_;
 };
 
 // Views borrow pixel storage. Destroying, moving, or assigning the owner invalidates them.

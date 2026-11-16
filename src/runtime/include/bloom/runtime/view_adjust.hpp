@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/render/display_pixel_packing.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -40,6 +42,11 @@ struct ViewAdjust final {
     }
     [[nodiscard]] static std::uint8_t quantize(double value) noexcept {
         return static_cast<std::uint8_t>(std::floor(std::clamp(value, 0.0, 1.0) * 255.0 + 0.5));
+    }
+    // #733: the 10-bit code of the 10:10:10:2 display layout, by the pack rule of
+    // render/display_pixel_packing.hpp (binary32, as every 10-bit packer).
+    [[nodiscard]] static std::uint32_t quantize10(double value) noexcept {
+        return render::displayCode10(static_cast<float>(value));
     }
     friend bool operator==(const ViewAdjust&, const ViewAdjust&) = default;
 };

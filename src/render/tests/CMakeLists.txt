@@ -84,6 +84,14 @@ bloom_add_test(
     LABELS unit primitives
 )
 
+# #733: the bit-exact rules of the packed display pixel (10:10:10:2 and straight 8:8:8:8).
+add_executable(bloom_render_display_packing_test display_packing_tests.cpp)
+target_link_libraries(bloom_render_display_packing_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_display_packing_test)
+bloom_enable_strict_floating_point(bloom_render_display_packing_test)
+bloom_add_test(NAME bloom.render.display_packing COMMAND bloom_render_display_packing_test
+               LABELS unit primitives)
+
 add_executable(bloom_render_text_raster_test text_raster_test.cpp)
 target_link_libraries(bloom_render_text_raster_test PRIVATE bloom_render)
 bloom_enable_warnings(bloom_render_text_raster_test)
