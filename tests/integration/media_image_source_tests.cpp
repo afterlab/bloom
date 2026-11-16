@@ -470,6 +470,7 @@ int main(int argc, char* argv[]) {
     cache::SourceMirrorConfig mirrorConfig;
     mirrorConfig.rootDirectory = folder / "source-mirror";
     mirrorConfig.policy.preference = cache::LocalCopyPreference::Always;
+    mirrorConfig.driveSpace = cache::roomyDriveSpaceForTest();
     const auto mirror = std::make_shared<cache::SourceMirror>(mirrorConfig);
     runtime::CpuCompositionEvaluator mirrorWriter;
     mirrorWriter.setAssetBaseDirectory(folder);

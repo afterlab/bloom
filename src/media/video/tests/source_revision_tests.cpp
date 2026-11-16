@@ -860,6 +860,7 @@ void mirroredSource(const std::filesystem::path& fixtures, const std::filesystem
     std::filesystem::copy_file(source, copy, std::filesystem::copy_options::overwrite_existing);
     cache::SourceMirrorConfig config;
     config.rootDirectory = scratch / "mirror";
+    config.driveSpace = cache::roomyDriveSpaceForTest();
     // The scratch folder is fast local storage: the preference stands in for a network share.
     config.policy.preference = cache::LocalCopyPreference::Always;
     bloom::platform::FileSnapshotStatistics work;

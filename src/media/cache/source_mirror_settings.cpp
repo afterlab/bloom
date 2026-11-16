@@ -40,7 +40,7 @@ bool writeSourceMirrorSettings(const std::filesystem::path& file,
     std::ostringstream text;
     text << kHeader << '\n';
     text << "enabled " << (settings.enabled ? 1 : 0) << '\n';
-    text << "budget " << settings.byteBudget << '\n';
+    text << "headroom " << settings.headroomBytes << '\n';
     if (const auto directory = utf8(settings.directory);
         settings.directory.is_absolute() && writable(directory))
         text << "directory " << directory << '\n';
@@ -96,7 +96,8 @@ SourceMirrorUserSettings readSourceMirrorSettings(const std::filesystem::path& f
         const std::string_view value(line.data() + space + 1, line.size() - space - 1);
         if (key == "enabled") {
             settings.enabled = value != "0";
-        } else if (key == "budget") {
+        } else if (key == "headroom") {
+            // A "budget" line of an earlier build (#718) is not read: the byte budget is gone.
             std::uint64_t bytes = 0;
             bool digits = !value.empty();
             for (const auto character : value) {
@@ -107,7 +108,7 @@ SourceMirrorUserSettings readSourceMirrorSettings(const std::filesystem::path& f
                 bytes = bytes * 10 + static_cast<std::uint64_t>(character - '0');
             }
             if (digits)
-                settings.byteBudget = bytes;
+                settings.headroomBytes = bytes;
         } else if (key == "directory") {
             if (auto directory = fromUtf8(value); directory.is_absolute())
                 settings.directory = std::move(directory);
@@ -146,8 +147,7 @@ std::shared_ptr<SourceMirror> makeSourceMirror(const SourceMirrorUserSettings& s
     }
     SourceMirrorConfig config;
     config.rootDirectory = directory;
-    config.byteBudget =
-        settings.byteBudget != 0 ? settings.byteBudget : defaultSourceMirrorByteBudget(directory);
+    config.headroomBytes = settings.headroomBytes;
     config.policy = settings.policy;
     return std::make_shared<SourceMirror>(std::move(config));
 }

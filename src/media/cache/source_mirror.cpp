@@ -274,6 +274,23 @@ void syncFile(const std::filesystem::path& path) {
         return std::nullopt;
     return SourceMirrorDriveSpace{space.capacity, space.available};
 }
+// The id a departed key is remembered by: the first 64 bits of its hash, complemented for a
+// chunk file's key so the two kinds of entry of one source stay apart.
+[[nodiscard]] std::uint64_t departedId(const std::string_view key) {
+    std::uint64_t value = 0;
+    for (std::size_t i = 0; i < 16 && i < key.size(); ++i) {
+        const auto digit = key[i];
+        value = (value << 4U) | static_cast<std::uint64_t>(digit <= '9' ? digit - '0'
+                                                                        : digit - 'a' + 10);
+    }
+    return key.size() == 65 ? ~value : value;
+}
+[[nodiscard]] std::uint64_t saturatingSubtract(const std::uint64_t from,
+                                               const std::uint64_t amount) noexcept {
+    return from > amount ? from - amount : 0;
+}
+// How many of the oldest entries one pass over the index lists in order.
+constexpr std::size_t kOldestBatch = 1024;
 void removeQuietly(const std::filesystem::path& path) {
     std::error_code ignored;
     std::filesystem::remove(path, ignored);
@@ -382,23 +399,29 @@ class SourceMirror::ChunkFile final : public platform::SourceChunkStore {
             done += length;
             if (slots_[index].load(std::memory_order_acquire) != 0)
                 continue;
-            bool room = true;
-            withMirror([&](SourceMirror& mirror) {
-                room = mirror.diskHasRoomFor(length);
-                if (!room)
-                    mirror.chunksRefusedForDiskSpace();
-            });
+            // The room is reserved before the chunk is written: a refused chunk is not written
+            // at all, and the read it belongs to simply goes on from the source.
+            std::optional<Reservation> room;
+            withMirror([&](SourceMirror& mirror) { room = mirror.admit(indexKey_, length); });
             if (!room)
                 return;
+            const auto unused = [&] {
+                withMirror([&](SourceMirror& mirror) { mirror.release(*room); });
+            };
             const auto slot = chunkHash(chunk);
             std::array<std::byte, 8> stored{};
             putU64(stored, 0, slot);
-            if (slot == 0 || !file_->writeAt(layout_.dataOffset + index * kChunkBytes, chunk) ||
-                !file_->writeAt(kChunkHeaderBytes + index * 8, stored))
+            if (retired() || slot == 0 ||
+                !file_->writeAt(layout_.dataOffset + index * kChunkBytes, chunk) ||
+                !file_->writeAt(kChunkHeaderBytes + index * 8, stored)) {
+                unused();
                 return;
+            }
             std::uint64_t missing = 0;
-            if (!slots_[index].compare_exchange_strong(missing, slot, std::memory_order_acq_rel))
+            if (!slots_[index].compare_exchange_strong(missing, slot, std::memory_order_acq_rel)) {
+                unused();
                 continue; // another thread kept the same chunk
+            }
             withMirror([&](SourceMirror& mirror) {
                 mirror.chunksGrew(indexKey_, layout_.wholeBytes(), length, true, network_);
             });
@@ -410,7 +433,7 @@ class SourceMirror::ChunkFile final : public platform::SourceChunkStore {
     [[nodiscard]] bool underPressure() const override {
         bool pressure = false;
         withMirror([&](SourceMirror& mirror) {
-            pressure = mirror.underPressure() || !mirror.diskHasRoomFor(kChunkBytes);
+            pressure = mirror.underPressure() || !mirror.wouldAdmit(indexKey_, kChunkBytes);
         });
         return pressure;
     }
@@ -462,7 +485,7 @@ SourceMirror::SourceMirror(SourceMirrorConfig config, runtime::MemoryBudgetLedge
       enabled_(config.enabled), writeQueueByteCapacity_(config.writeQueueByteCapacity != 0
                                                             ? config.writeQueueByteCapacity
                                                             : kSourceMirrorWriteQueueByteCapacity),
-      byteBudget_(config.byteBudget != 0 ? config.byteBudget : kDefaultSourceMirrorCapBytes),
+      headroom_(config.headroomBytes),
       policy_(std::move(config.policy)) {
     hub_->mirror = this;
     // The verified source identities persist beside the mirror, read and written on its thread.
@@ -565,10 +588,13 @@ SourceMirror::chunks(const std::filesystem::path& source, const platform::FileId
         return nullptr;
     const auto indexKey = key + kChunkKeyMark;
     const ChunkLayout layout(identity.size);
+    measureDrive(false);
     {
         const std::lock_guard lock(mutex_);
-        // A source that could never fit is not copied piece by piece only to be evicted.
-        if (layout.wholeBytes() > byteBudget_) {
+        // A source larger than everything the mirror may hold now is not copied piece by piece
+        // only to be refused or evicted.
+        if (layout.wholeBytes() > storedBytes_ + roomLocked()) {
+            ++statistics_.refusedWrites;
             counters_.refused();
             return nullptr;
         }
@@ -602,17 +628,19 @@ SourceMirror::chunks(const std::filesystem::path& source, const platform::FileId
             ++(stored && !current ? statistics_.staleDropped : statistics_.corruptDropped);
         }
     }
+    // A new chunk file starts with its header and slot table: that room is reserved first.
+    std::optional<Reservation> started;
     if (!file) {
-        if (!diskHasRoomFor(layout.dataOffset + kChunkBytes)) {
-            chunksRefusedForDiskSpace();
+        started = admit(indexKey, layout.dataOffset);
+        if (!started)
             return nullptr;
-        }
         file = platform::PositionalFile::open(path, true);
         const auto head = serializeChunkHeader(identity);
         const std::vector<std::byte> table(static_cast<std::size_t>(layout.count * 8));
         if (!file || !file->writeAt(0, head) || !file->writeAt(kChunkHeaderBytes, table)) {
             file.reset();
             removeQuietly(path);
+            release(*started);
             return nullptr;
         }
         slots.emplace(static_cast<std::size_t>(layout.count), 0);
@@ -622,9 +650,12 @@ SourceMirror::chunks(const std::filesystem::path& source, const platform::FileId
     auto result = std::make_shared<ChunkFile>(hub_, indexKey, header, std::move(file), *slots,
                                               network);
     const auto bytes = layout.dataOffset + localChunkBytes(*slots, layout);
-    std::vector<std::string> victims;
     {
         const std::lock_guard lock(mutex_);
+        if (started) {
+            reservedBytes_ = saturatingSubtract(reservedBytes_, started->bytes);
+            reservedEntries_ = saturatingSubtract(reservedEntries_, started->entry ? 1 : 0);
+        }
         if (const auto open = openChunks_.find(indexKey); open != openChunks_.end())
             if (auto live = open->second.lock(); live && live->serves(identity))
                 return live; // another worker opened it meanwhile: one object per source
@@ -633,10 +664,13 @@ SourceMirror::chunks(const std::filesystem::path& source, const platform::FileId
         storedBytes_ -= std::min(storedBytes_, entry.bytes);
         entry = IndexEntry{bytes, now(), layout.wholeBytes()};
         storedBytes_ += bytes;
+        // Only a file this call started took new room on the volume; one that was already there
+        // (another process's, or one this mirror had lost track of) is in the measurement.
+        if (started)
+            correctFreeLocked(started->bytes, 0);
+        departed_.erase(departedId(indexKey));
         ++indexChanges_;
-        evict(victims);
     }
-    removeFiles(victims);
     return result;
 }
 
@@ -649,28 +683,26 @@ void SourceMirror::retireOpenChunks(const std::string& indexKey) {
 }
 void SourceMirror::chunksGrew(const std::string& indexKey, const std::uint64_t wholeBytes,
                               const std::uint64_t bytes, const bool kept, const bool network) {
-    std::vector<std::string> victims;
-    {
-        const std::lock_guard lock(mutex_);
-        if (kept) {
-            // One range read from the source counts as one read of it, like a whole file's.
-            ++(network ? statistics_.networkReads : statistics_.otherSourceReads);
-            (network ? statistics_.networkReadBytes : statistics_.otherSourceReadBytes) += bytes;
-            ++statistics_.rangeWrites;
-            counters_.store();
-        }
-        // An entry the index no longer has was evicted or purged: its file is gone and the
-        // chunk file object is retired, so there is nothing to count.
-        const auto found = index_.find(indexKey);
-        if (found == index_.end())
-            return;
-        found->second.bytes = std::min(found->second.bytes + bytes, wholeBytes);
-        found->second.lastUseNanos = now();
-        storedBytes_ += bytes;
-        ++indexChanges_;
-        evict(victims);
+    const std::lock_guard lock(mutex_);
+    if (kept) {
+        // One range read from the source counts as one read of it, like a whole file's.
+        ++(network ? statistics_.networkReads : statistics_.otherSourceReads);
+        (network ? statistics_.networkReadBytes : statistics_.otherSourceReadBytes) += bytes;
+        ++statistics_.rangeWrites;
+        counters_.store();
+        // The chunk was written under a reservation: it is on the volume now.
+        reservedBytes_ = saturatingSubtract(reservedBytes_, bytes);
+        correctFreeLocked(bytes, 0);
     }
-    removeFiles(victims);
+    // An entry the index no longer has was evicted or purged: its file is gone and the
+    // chunk file object is retired, so there is nothing to count.
+    const auto found = index_.find(indexKey);
+    if (found == index_.end())
+        return;
+    found->second.bytes = std::min(found->second.bytes + bytes, wholeBytes);
+    found->second.lastUseNanos = now();
+    storedBytes_ += bytes;
+    ++indexChanges_;
 }
 void SourceMirror::chunksCorrupt(const std::string& indexKey, const std::uint64_t bytes) {
     const std::lock_guard lock(mutex_);
@@ -691,11 +723,6 @@ void SourceMirror::chunksServed(const std::string& indexKey, const std::uint64_t
     counters_.hit();
     if (const auto found = index_.find(indexKey); found != index_.end())
         found->second.lastUseNanos = now();
-}
-void SourceMirror::chunksRefusedForDiskSpace() {
-    const std::lock_guard lock(mutex_);
-    ++statistics_.refusedForDiskSpace;
-    counters_.refused();
 }
 std::filesystem::path SourceMirror::indexPath() const { return root_ / "sources" / "index.v2"; }
 std::filesystem::path SourceMirror::verifiedSourcesPath() const {
@@ -887,8 +914,13 @@ void SourceMirror::clear() {
                 live->retire();
         openChunks_.clear();
         index_.clear();
+        // The files go below: their room is free again.
+        correctFreeLocked(0, storedBytes_);
         storedBytes_ = 0;
         indexChanges_ = 0;
+        departed_.clear();
+        oldest_.clear();
+        oldestNext_ = 0;
         const bool loaded = statistics_.indexLoaded;
         statistics_ = {};
         statistics_.indexLoaded = loaded;
@@ -929,6 +961,13 @@ SourceMirrorStatistics SourceMirror::statistics() const {
         result = statistics_;
         result.entryCount = index_.size();
         result.storedBytes = storedBytes_;
+        if (drive_.taken) {
+            result.driveMeasured = drive_.measured;
+            result.capacityBytes = drive_.measured ? drive_.capacityBytes : 0;
+            result.freeBytes = drive_.measured ? drive_.freeBytes : 0;
+            result.headroomBytes = drive_.measured ? keepFreeLocked() : 0;
+            result.availableBytes = storedBytes_ + roomLocked();
+        }
         result.indexLoaded = indexLoaded_;
         result.diskPressure = diskPressure_.load(std::memory_order_relaxed);
     }
@@ -940,18 +979,23 @@ SourceMirrorStatistics SourceMirror::statistics() const {
     return result;
 }
 
-void SourceMirror::setByteBudget(const std::uint64_t bytes) {
-    std::vector<std::string> victims;
+void SourceMirror::setHeadroom(const std::uint64_t bytes) {
     {
         const std::lock_guard lock(mutex_);
-        byteBudget_ = bytes != 0 ? bytes : kDefaultSourceMirrorCapBytes;
-        evict(victims);
+        if (headroom_ == bytes)
+            return;
+        headroom_ = bytes;
     }
-    removeFiles(victims);
+    // The writer measures the volume and gives space back; nothing is removed on this thread.
+    {
+        const std::lock_guard lock(queueMutex_);
+        indexRequested_ = true;
+    }
+    queueCv_.notify_all();
 }
-std::uint64_t SourceMirror::byteBudget() const {
+std::uint64_t SourceMirror::headroom() const {
     const std::lock_guard lock(mutex_);
-    return byteBudget_;
+    return headroom_;
 }
 
 void SourceMirror::noteUse(const std::string& key, const std::uint64_t bytes) {
@@ -968,39 +1012,272 @@ void SourceMirror::dropEntry(const std::string& key) {
     retireOpenChunks(key);
     if (const auto found = index_.find(key); found != index_.end()) {
         storedBytes_ -= std::min(storedBytes_, found->second.bytes);
+        // The caller removes the file: its room is free again.
+        correctFreeLocked(0, found->second.bytes);
         index_.erase(found);
         ++indexChanges_;
     }
 }
 
-// Caller holds mutex_. Chooses the least recently used entries until the mirror is back under
-// its budgets (with a little slack, so a full mirror does not sort its index on every write) and
-// removes them from the index; the caller deletes the files outside the lock.
-void SourceMirror::evict(std::vector<std::string>& victims) {
-    if (storedBytes_ <= byteBudget_ && index_.size() <= maxEntryCount_)
-        return;
-    const auto byteGoal = byteBudget_ - byteBudget_ / 20;
-    const auto countGoal = maxEntryCount_ - maxEntryCount_ / 20;
-    std::vector<std::pair<std::int64_t, const std::string*>> order;
-    order.reserve(index_.size());
-    for (const auto& [key, entry] : index_)
-        order.emplace_back(entry.lastUseNanos, &key);
-    std::ranges::sort(order);
-    for (const auto& [used, key] : order) {
-        if (storedBytes_ <= byteGoal && index_.size() - victims.size() <= countGoal)
-            break;
-        const auto& entry = index_.at(*key);
-        storedBytes_ -= std::min(storedBytes_, entry.bytes);
-        counters_.released(entry.bytes);
-        ++statistics_.evictions;
-        victims.push_back(*key);
-    }
-    for (const auto& key : victims) {
-        index_.erase(key);
-        retireOpenChunks(key);
-    }
-    indexChanges_ += victims.size();
+std::uint64_t SourceMirror::keepFreeLocked() const {
+    const auto headroom =
+        headroom_ != 0 ? headroom_ : defaultSourceMirrorHeadroom(drive_.capacityBytes);
+    return std::max(headroom, freeSpaceReserve_);
 }
+std::uint64_t SourceMirror::roomLocked() const {
+    // Not measured yet counts as no room: every path that writes measures first.
+    if (!drive_.taken)
+        return 0;
+    if (!drive_.measured)
+        return saturatingSubtract(kSourceMirrorUnmeasuredByteLimit, storedBytes_ + reservedBytes_);
+    return saturatingSubtract(drive_.freeBytes, keepFreeLocked() + reservedBytes_);
+}
+std::uint64_t SourceMirror::deficitLocked() const {
+    if (!drive_.taken)
+        return 0;
+    if (!drive_.measured)
+        return saturatingSubtract(storedBytes_, kSourceMirrorUnmeasuredByteLimit);
+    return std::min(storedBytes_, saturatingSubtract(keepFreeLocked(), drive_.freeBytes));
+}
+void SourceMirror::correctFreeLocked(const std::uint64_t added, const std::uint64_t removed) {
+    ++spaceChanges_;
+    if (!drive_.taken || !drive_.measured)
+        return;
+    drive_.freeBytes = std::min(saturatingSubtract(drive_.freeBytes, added) + removed,
+                                drive_.capacityBytes);
+}
+
+void SourceMirror::measureDrive(const bool fresh) {
+    const auto time = now();
+    std::uint64_t changes = 0, storedBefore = 0;
+    {
+        const std::lock_guard lock(mutex_);
+        if (!fresh && drive_.taken &&
+            time - drive_.atNanos < std::chrono::nanoseconds(kSourceMirrorDriveSampleLife).count())
+            return;
+        changes = spaceChanges_;
+        storedBefore = storedBytes_;
+    }
+    // The volume is asked with no lock held, so this mirror may store or remove something
+    // meanwhile, and the answer cannot say whether it saw that. Such an answer is asked for
+    // again; when the mirror keeps changing, what it stored meanwhile is taken as not seen,
+    // which can only understate the free space until the next measurement.
+    for (int attempt = 0;; ++attempt) {
+        const auto space = driveSpace();
+        const std::lock_guard lock(mutex_);
+        if (space && (spaceChanges_ != changes || storedBytes_ != storedBefore) && attempt < 3) {
+            changes = spaceChanges_;
+            storedBefore = storedBytes_;
+            continue;
+        }
+        drive_.taken = true;
+        drive_.measured = space.has_value();
+        drive_.atNanos = time;
+        if (space) {
+            drive_.capacityBytes = space->capacityBytes;
+            drive_.freeBytes = saturatingSubtract(space->freeBytes,
+                                                  saturatingSubtract(storedBytes_, storedBefore));
+        }
+        return;
+    }
+}
+
+template <typename Visit>
+void SourceMirror::forEachOldestLocked(const std::string& except, const Visit& visit) {
+    const auto current = [this](const Aged& aged) -> const IndexEntry* {
+        const auto found = index_.find(aged.key);
+        return found != index_.end() && found->second.lastUseNanos == aged.usedNanos
+                   ? &found->second
+                   : nullptr;
+    };
+    while (oldestNext_ < oldest_.size() && current(oldest_[oldestNext_]) == nullptr)
+        ++oldestNext_;
+    if (oldestNext_ >= oldest_.size()) {
+        // One pass over the index lists its oldest entries in order. Everything else is newer
+        // and stays newer, because a use only ever moves an entry to now.
+        oldest_.clear();
+        oldestNext_ = 0;
+        std::vector<std::pair<std::int64_t, const std::string*>> order;
+        order.reserve(index_.size());
+        for (const auto& [key, entry] : index_)
+            order.emplace_back(entry.lastUseNanos, &key);
+        const auto byAge = [](const auto& left, const auto& right) {
+            return left.first != right.first ? left.first < right.first
+                                             : *left.second < *right.second;
+        };
+        const auto listed = std::min(order.size(), kOldestBatch);
+        std::partial_sort(order.begin(), order.begin() + static_cast<std::ptrdiff_t>(listed),
+                          order.end(), byAge);
+        oldest_.reserve(listed);
+        for (std::size_t i = 0; i < listed; ++i)
+            oldest_.push_back({order[i].first, *order[i].second});
+    }
+    for (auto at = oldestNext_; at < oldest_.size(); ++at) {
+        const auto* const entry = current(oldest_[at]);
+        if (entry == nullptr || oldest_[at].key == except)
+            continue;
+        if (!visit(oldest_[at].key, *entry))
+            return;
+    }
+    if (oldest_.empty())
+        return;
+    // More is wanted than the list still holds (rare: a write or a give-back that needs the room
+    // of many entries at once): the rest of the index, in order, after the last one listed.
+    const Aged last = oldest_.back();
+    std::vector<std::pair<std::int64_t, const std::string*>> rest;
+    for (const auto& [key, entry] : index_)
+        if (entry.lastUseNanos > last.usedNanos ||
+            (entry.lastUseNanos == last.usedNanos && key > last.key))
+            rest.emplace_back(entry.lastUseNanos, &key);
+    std::ranges::sort(rest, [](const auto& left, const auto& right) {
+        return left.first != right.first ? left.first < right.first : *left.second < *right.second;
+    });
+    for (const auto& [used, key] : rest)
+        if (*key != except && !visit(*key, index_.at(*key)))
+            return;
+}
+
+void SourceMirror::rememberDepartedLocked(const std::string& key,
+                                          const std::int64_t lastAskedNanos) {
+    if (departed_.size() >= maxEntryCount_ && !departed_.contains(departedId(key))) {
+        // Full: the older half goes. A source forgotten this way is treated as new work.
+        std::vector<std::int64_t> times;
+        times.reserve(departed_.size());
+        for (const auto& [id, time] : departed_)
+            times.push_back(time);
+        const auto middle = times.begin() + static_cast<std::ptrdiff_t>(times.size() / 2);
+        std::nth_element(times.begin(), middle, times.end());
+        std::erase_if(departed_, [&](const auto& record) { return record.second <= *middle; });
+    }
+    departed_[departedId(key)] = lastAskedNanos;
+}
+
+void SourceMirror::evictLocked(const std::string& key) {
+    const auto found = index_.find(key);
+    if (found == index_.end())
+        return;
+    storedBytes_ -= std::min(storedBytes_, found->second.bytes);
+    // The caller removes the file once the lock is released: its room is free again.
+    correctFreeLocked(0, found->second.bytes);
+    counters_.released(found->second.bytes);
+    ++statistics_.evictions;
+    rememberDepartedLocked(key, found->second.lastUseNanos);
+    index_.erase(found);
+    retireOpenChunks(key);
+    ++indexChanges_;
+}
+
+bool SourceMirror::planRoomLocked(const std::string& key, const std::uint64_t bytes,
+                                  const bool entry, std::vector<std::string>& victims) {
+    const auto room = roomLocked();
+    const auto needBytes = saturatingSubtract(bytes, room);
+    const std::uint64_t needEntries =
+        entry && index_.size() + reservedEntries_ >= maxEntryCount_ ? 1 : 0;
+    if (needBytes == 0 && needEntries == 0)
+        return true;
+    const auto time = now();
+    const auto asked = departed_.find(departedId(key));
+    const auto hold = std::chrono::nanoseconds(kSourceMirrorHoldWindow).count();
+    std::vector<std::string> chosen;
+    std::uint64_t freedBytes = 0;
+    bool held = false;
+    forEachOldestLocked(key, [&](const std::string& victim, const IndexEntry& aged) {
+        if (freedBytes >= needBytes && chosen.size() >= needEntries)
+            return false;
+        // In use: used within the hold window, or used since this same source last found no
+        // place. A loop larger than the space uses every entry between two requests for a
+        // source that does not fit, so its entries stay however long a pass takes.
+        if (time - aged.lastUseNanos < hold ||
+            (asked != departed_.end() && aged.lastUseNanos > asked->second)) {
+            held = true;
+            return false;
+        }
+        chosen.push_back(victim);
+        freedBytes += aged.bytes;
+        return true;
+    });
+    if (held || freedBytes < needBytes || chosen.size() < needEntries)
+        return false;
+    victims.insert(victims.end(), chosen.begin(), chosen.end());
+    return true;
+}
+
+void SourceMirror::giveBackLocked(std::vector<std::string>& victims) {
+    const auto deficit = deficitLocked();
+    const auto excess = saturatingSubtract(index_.size(), maxEntryCount_);
+    if (deficit == 0 && excess == 0)
+        return;
+    std::vector<std::string> chosen;
+    std::uint64_t freedBytes = 0;
+    forEachOldestLocked({}, [&](const std::string& victim, const IndexEntry& aged) {
+        if (freedBytes >= deficit && chosen.size() >= excess)
+            return false;
+        chosen.push_back(victim);
+        freedBytes += aged.bytes;
+        return true;
+    });
+    for (const auto& key : chosen)
+        evictLocked(key);
+    victims.insert(victims.end(), chosen.begin(), chosen.end());
+}
+
+std::optional<SourceMirror::Reservation> SourceMirror::admit(const std::string& key,
+                                                             const std::uint64_t bytes) {
+    measureDrive(false);
+    std::vector<std::string> victims;
+    std::optional<Reservation> reservation;
+    {
+        const std::lock_guard lock(mutex_);
+        // Space other programs took from the headroom comes back first, in use or not.
+        giveBackLocked(victims);
+        const bool entry = !index_.contains(key);
+        std::vector<std::string> chosen;
+        if (planRoomLocked(key, bytes, entry, chosen)) {
+            for (const auto& victim : chosen)
+                evictLocked(victim);
+            victims.insert(victims.end(), chosen.begin(), chosen.end());
+            reservedBytes_ += bytes;
+            reservedEntries_ += entry ? 1 : 0;
+            reservation = Reservation{bytes, entry};
+        } else {
+            ++statistics_.refusedWrites;
+            counters_.refused();
+            rememberDepartedLocked(key, now());
+        }
+        diskPressure_.store(!reservation, std::memory_order_relaxed);
+    }
+    removeFiles(victims);
+    return reservation;
+}
+
+bool SourceMirror::wouldAdmit(const std::string& key, const std::uint64_t bytes) {
+    measureDrive(false);
+    const std::lock_guard lock(mutex_);
+    std::vector<std::string> chosen;
+    if (planRoomLocked(key, bytes, !index_.contains(key), chosen))
+        return true;
+    // Asked, and found no place: remembered like a refused write, so that the entries in the way
+    // count as idle from now on. Not counted as refused: nothing was to be written yet.
+    rememberDepartedLocked(key, now());
+    return false;
+}
+
+void SourceMirror::release(const Reservation& reservation) {
+    const std::lock_guard lock(mutex_);
+    reservedBytes_ = saturatingSubtract(reservedBytes_, reservation.bytes);
+    reservedEntries_ = saturatingSubtract(reservedEntries_, reservation.entry ? 1 : 0);
+}
+
+void SourceMirror::maintain() {
+    measureDrive(true);
+    std::vector<std::string> victims;
+    {
+        const std::lock_guard lock(mutex_);
+        giveBackLocked(victims);
+    }
+    removeFiles(victims);
+}
+
 void SourceMirror::removeFiles(const std::vector<std::string>& keys) const {
     for (const auto& key : keys)
         removeQuietly(entryPath(key));
@@ -1025,14 +1302,6 @@ std::optional<SourceMirrorDriveSpace> SourceMirror::driveSpace() const {
     return volumeSpace(root_);
 }
 
-bool SourceMirror::diskHasRoomFor(const std::uint64_t bytes) {
-    const auto space = driveSpace();
-    // Unknown free space does not stop the mirror: the byte budget still bounds it.
-    const bool room = !space || space->freeBytes >= bytes + freeSpaceReserve_;
-    diskPressure_.store(!room, std::memory_order_relaxed);
-    return room;
-}
-
 void SourceMirror::writeEntry(const PendingWrite& write) {
     const auto abandoned = [&] {
         if (stopping_.load(std::memory_order_relaxed))
@@ -1043,12 +1312,21 @@ void SourceMirror::writeEntry(const PendingWrite& write) {
     if (abandoned())
         return;
     const auto total = kHeaderBytes + write.bytes.size();
-    if (!diskHasRoomFor(total)) {
-        const std::lock_guard lock(mutex_);
-        ++statistics_.refusedForDiskSpace;
-        counters_.refused();
+    // The room is reserved before anything is written; a refused write is counted there.
+    const auto reservation = admit(write.key, total);
+    if (!reservation)
         return;
-    }
+    // Every way out below that does not reach the index gives the room back.
+    bool stored = false;
+    struct Unused final {
+        SourceMirror& mirror;
+        const Reservation& reservation;
+        const bool& stored;
+        ~Unused() {
+            if (!stored)
+                mirror.release(reservation);
+        }
+    } const unused{*this, *reservation, stored};
     // The digest of exactly the bytes the frame decoded. It is the content digest the asset
     // records, so a later hit is a verified revision and corruption on disk is always caught.
     core::Sha256Hasher hasher;
@@ -1103,26 +1381,29 @@ void SourceMirror::writeEntry(const PendingWrite& write) {
         removeQuietly(temporary);
         return;
     }
-    std::vector<std::string> victims;
     bool stale = false;
     {
         const std::lock_guard lock(mutex_);
         if (generation_ != write.generation) {
             stale = true;
         } else {
+            stored = true;
+            reservedBytes_ = saturatingSubtract(reservedBytes_, reservation->bytes);
+            reservedEntries_ = saturatingSubtract(reservedEntries_, reservation->entry ? 1 : 0);
             auto& entry = index_[write.key];
             storedBytes_ -= std::min(storedBytes_, entry.bytes);
+            // The new file replaced the old one (if any) on the volume.
+            correctFreeLocked(total, entry.bytes);
             entry = IndexEntry{total, now()};
             storedBytes_ += total;
+            departed_.erase(departedId(write.key));
             ++indexChanges_;
             ++statistics_.writes;
             counters_.store();
-            evict(victims);
         }
     }
     if (stale)
         removeQuietly(path);
-    removeFiles(victims);
 }
 
 // Runs on the writer thread at startup, off the UI thread: reads the index for last-use times,
@@ -1209,16 +1490,18 @@ void SourceMirror::loadIndex() {
             }
         }
     }
-    std::vector<std::string> victims;
     {
         const std::lock_guard lock(mutex_);
         for (auto& [key, entry] : found)
             if (index_.try_emplace(key, entry).second)
                 storedBytes_ += entry.bytes;
         indexLoaded_ = true;
-        evict(victims);
+        // Entries came in with the times of earlier runs: the order is taken again.
+        oldest_.clear();
+        oldestNext_ = 0;
     }
-    removeFiles(victims);
+    // The first measurement of the volume, and what the headroom is short of given back.
+    maintain();
 }
 
 void SourceMirror::writeIndex() {
@@ -1295,8 +1578,10 @@ void SourceMirror::writerLoop() {
             inFlight_ = 0;
         }
         if (queue_.empty() && (indexRequested_ || !woken)) {
-            // Idle with changes pending, or a flush asked for it: bring the index file up to date.
+            // Idle, or a flush or a new headroom asked for it: measure the volume, give back what
+            // the headroom is short of, and bring the index file up to date.
             lock.unlock();
+            maintain();
             writeIndex();
             if (persistsIdentities)
                 platform::verifiedSourceDigests().save();
@@ -1317,14 +1602,6 @@ void SourceMirror::writerLoop() {
     if (persistsIdentities)
         platform::verifiedSourceDigests().save();
     idleCv_.notify_all();
-}
-
-std::uint64_t defaultSourceMirrorByteBudget(const std::filesystem::path& root,
-                                            const std::uint64_t capBytes) {
-    const auto space = volumeSpace(root);
-    if (!space)
-        return capBytes;
-    return std::min<std::uint64_t>(space->freeBytes / 10, capBytes);
 }
 
 } // namespace bloom::media::cache

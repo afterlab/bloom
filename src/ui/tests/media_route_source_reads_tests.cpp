@@ -281,6 +281,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     config.rootDirectory = workDir / "mirror";
     // The scratch folder is fast local storage: the preference stands in for a network share.
     config.policy.preference = media::cache::LocalCopyPreference::Always;
+    config.driveSpace = media::cache::roomyDriveSpaceForTest();
     const auto mirror = std::make_shared<media::cache::SourceMirror>(config);
     mirror->flush();
     platform::setProcessSourceStore(mirror);

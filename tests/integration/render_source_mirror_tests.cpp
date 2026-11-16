@@ -105,6 +105,7 @@ void testRendersReadSlowSourcesOnce() {
     mirrorConfig.rootDirectory = root / "mirror";
     // The scratch folder is fast local storage: the preference stands in for a network share.
     mirrorConfig.policy.preference = cache::LocalCopyPreference::Always;
+    mirrorConfig.driveSpace = cache::roomyDriveSpaceForTest();
     const auto mirror = std::make_shared<cache::SourceMirror>(mirrorConfig);
     mirror->flush();
     platform::setProcessSourceStore(mirror);

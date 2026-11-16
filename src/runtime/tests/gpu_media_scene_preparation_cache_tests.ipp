@@ -183,6 +183,7 @@ void testSourceMirrorServesScenePreparation(Expectations& expectations,
     config.rootDirectory = fixture.directory / "source_mirror";
     // The fixture sits on local storage, which Automatic never copies.
     config.policy.preference = bloom::media::cache::LocalCopyPreference::Always;
+    config.driveSpace = bloom::media::cache::roomyDriveSpaceForTest();
     const auto mirror = std::make_shared<SourceMirror>(config);
     const auto plan = mediaPlan(format(8, 8), fixture.asset,
                                 LayerValues{.position = {4.3, 3.1}, .opacity = 0.9}, 3100);

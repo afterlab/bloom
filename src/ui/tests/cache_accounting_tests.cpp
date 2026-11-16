@@ -35,6 +35,7 @@
 #include <QTemporaryDir>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -220,11 +221,23 @@ void testTwoHundredUhdImportsStayInsideEveryBudget(Expectations& check) {
     constexpr std::size_t kAsyncQueueCapacity = 8 * kMebibyte;
     constexpr std::size_t kSlack = 256 * kMebibyte;
 
+    // A cache volume with room for 64 MiB of sources beyond its headroom (an injected size, not
+    // the machine's): what is free falls as the mirror stores.
+    constexpr std::uint64_t kDiskRoom = 64 * kMebibyte;
+    constexpr std::uint64_t kDiskCapacity = 100ULL * 1024 * kMebibyte;
+    std::atomic<const cache::SourceMirror*> stored{nullptr};
     cache::SourceMirrorConfig config;
     config.rootDirectory = scratch.path();
-    config.byteBudget = 64 * kMebibyte;
+    config.driveSpace = [&stored]() -> std::optional<cache::SourceMirrorDriveSpace> {
+        const auto* const mirror = stored.load();
+        const auto used = mirror != nullptr ? mirror->statistics().storedBytes : 0;
+        const auto headroom = cache::defaultSourceMirrorHeadroom(kDiskCapacity);
+        return cache::SourceMirrorDriveSpace{kDiskCapacity,
+                                             headroom + kDiskRoom - std::min(used, kDiskRoom)};
+    };
     config.writeQueueByteCapacity = kAsyncQueueCapacity;
     cache::SourceMirror diskCache(config);
+    stored = &diskCache;
     runtime::OperationCache operationCache(kOperationBudget);
     ProxyCache proxies;
 
@@ -269,12 +282,12 @@ void testTwoHundredUhdImportsStayInsideEveryBudget(Expectations& check) {
                  "the disk cache's pending-write queue never passed its byte capacity");
     diskCache.flush();
     const auto settled = diskCache.statistics();
-    check.expect(settled.writes + settled.droppedWrites ==
+    check.expect(settled.writes + settled.droppedWrites + settled.refusedWrites ==
                      static_cast<std::uint64_t>(kImportedImages) &&
                      settled.writes > 0,
-                 "every source offered was either written or dropped by a full queue");
-    check.expect(settled.storedBytes <= config.byteBudget,
-                 "the disk cache stayed inside its byte budget");
+                 "every source offered was written, dropped by a full queue or refused for room");
+    check.expect(settled.storedBytes <= kDiskRoom && settled.evictions == 0,
+                 "the disk cache left the headroom free and evicted nothing that was just used");
     check.expect(proxies.bytes <= ProxyCache::kByteCapacity &&
                      proxies.entries.size() <= ProxyCache::kEntryLimit,
                  "the proxy cache honors both its entry limit and its byte capacity");
@@ -311,6 +324,7 @@ void testContentionDuringTwoHundredImports(Expectations& check) {
     ScratchDirectory scratch("cachefix2-contention");
     cache::SourceMirrorConfig config;
     config.rootDirectory = scratch.path();
+    config.driveSpace = cache::roomyDriveSpaceForTest();
     config.writeQueueByteCapacity = queueBudget;
     cache::SourceMirror disk(config, ledger);
     const auto baseline = residentBytes();
@@ -451,7 +465,7 @@ void testUnboundedAsyncQueueWouldHaveHeldGigabytes(Expectations& check) {
     ScratchDirectory scratch("cachefix1-queue-bound");
     cache::SourceMirrorConfig config;
     config.rootDirectory = scratch.path();
-    config.byteBudget = 16 * kMebibyte;
+    config.driveSpace = cache::roomyDriveSpaceForTest();
     cache::SourceMirror diskCache(config);
     check.expect(diskCache.writeQueueByteCapacity() == cache::kSourceMirrorWriteQueueByteCapacity,
                  "the default pending-write queue capacity is the shipped 256 MiB");

@@ -116,8 +116,8 @@ void testMakeMediaDiskCacheFromSettings(Expectations& check) {
     if (built != nullptr) {
         check.expect(built->rootDirectory().string() == root.toStdString(),
                      "the built cache's root is exactly the configured directory");
-        check.expect(built->byteBudget() == 4194304,
-                     "the built cache's budget is what settings said");
+        check.expect(built->headroom() == 0,
+                     "a byte budget in the settings does not reach the cache (#732)");
         check.expect(built->enabled(), "a cache built from default-enabled settings is enabled");
     }
 
@@ -204,7 +204,7 @@ void testPurgeMediaCachesClearsDiskAndDecodedMemory(Expectations& check) {
 
     cache::SourceMirrorConfig config;
     config.rootDirectory = std::filesystem::path(directory.filePath("media-cache").toStdString());
-    config.byteBudget = 4ULL * 1024ULL * 1024ULL;
+    config.driveSpace = cache::roomyDriveSpaceForTest();
     cache::SourceMirror diskCache(config);
 
     const auto image = makeTestImage();
@@ -267,7 +267,7 @@ void testCachePurgeControllerClearsApplicableStores(Expectations& check) {
 
     cache::SourceMirrorConfig config;
     config.rootDirectory = std::filesystem::path(directory.filePath("media").toStdString());
-    config.byteBudget = 4ULL * 1024ULL * 1024ULL;
+    config.driveSpace = cache::roomyDriveSpaceForTest();
     cache::SourceMirror disk(config);
     runtime::OperationCache operationCache(std::size_t{1} << 20U);
     runtime::GpuSceneCoverageCache coverage;
@@ -442,7 +442,7 @@ void testCachePurgeProceedsWhileSaveIsHeld(Expectations& check) {
     runtime::OperationCache operationCache(std::size_t{1} << 20U);
     cache::SourceMirror disk({.rootDirectory =
                                    std::filesystem::path(directory.filePath("media").toStdString()),
-                               .byteBudget = 4ULL * 1024ULL * 1024ULL});
+                               .driveSpace = cache::roomyDriveSpaceForTest()});
     mirrorOneSource(disk, 'c');
     operationCache.store("old", bloom::document::Revision::fromRaw(1),
                          {.image = {}, .values = {}, .bounds = {}});

@@ -96,7 +96,8 @@ media::cache::SourceMirrorUserSettings sourceMirrorSettingsFromSettings(const QS
     media::cache::SourceMirrorUserSettings result;
     result.enabled = mediaDiskCacheEnabledFromSettings(settings);
     result.directory = mediaDiskCacheDirectoryFromSettings(settings);
-    result.byteBudget = mediaDiskCacheByteBudgetFromSettings(settings, 0);
+    // #732: the mirror has no byte budget any more. It keeps a headroom free on the cache
+    // volume instead, and an earlier build's budget value is not carried over.
     result.policy = localCopyPolicyFromSettings(settings);
     return result;
 }

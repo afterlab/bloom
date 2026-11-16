@@ -1,10 +1,13 @@
-// bloom.media.source-mirror (#718): the local mirror of source media on slow storage. Covers the
-// metadata identity check, the local-copy policy, write-through and its queue, eviction,
-// corruption, restart, cancellation and shutdown, and the byte ranges of large sources (chunk
-// files). No test here reads a source through the mirror:
-// the mirror never opens a source, which the tests prove by deleting it.
+// bloom.media.source-mirror (#718, #732): the local mirror of source media on slow storage. Covers
+// the metadata identity check, the local-copy policy, write-through and its queue, the disk
+// headroom (growing into free space, giving it back, refusing instead of evicting what is in
+// use), corruption, restart, cancellation and shutdown, and the byte ranges of large sources
+// (chunk files). No test here reads a source through the mirror: the mirror never opens a
+// source, which the tests prove by deleting it. No test reads the machine's real free space or
+// waits for time to pass: the cache volume and the clock are injected.
 #include <bloom/core/sha256.hpp>
 #include <bloom/media/cache/source_mirror.hpp>
+#include <bloom/media/cache/source_mirror_settings.hpp>
 #include <bloom/platform/source_identity.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 
@@ -82,9 +85,14 @@ void keep(cache::SourceMirror& mirror, const Source& source) {
     mirror.keep(source.path, source.identity, source.bytes,
                 std::span<const std::byte>(*source.bytes));
 }
+constexpr std::uint64_t kMiB = std::uint64_t{1} << 20U;
+constexpr std::uint64_t kGiB = std::uint64_t{1} << 30U;
+// A mirror on a large, mostly empty cache volume: the cases that are not about space never meet
+// the headroom, whatever the machine running them has free.
 [[nodiscard]] cache::SourceMirrorConfig config(const Scratch& scratch) {
     cache::SourceMirrorConfig value;
     value.rootDirectory = scratch.cacheRoot();
+    value.driveSpace = cache::roomyDriveSpaceForTest();
     return value;
 }
 
@@ -103,6 +111,12 @@ struct FakeDrive final {
     std::atomic<std::uint64_t> other{0};
     std::atomic<bool> unreadable{false};
     std::atomic<cache::SourceMirror*> mirror{nullptr};
+    // Leaves room for `bytes` more than the attached mirror stores now, beyond `headroom`.
+    void leaveRoomFor(const std::uint64_t bytes, const std::uint64_t headroom) {
+        const auto* const attached = mirror.load();
+        const auto stored = attached != nullptr ? attached->statistics().storedBytes : 0;
+        other = capacity.load() - headroom - bytes - stored;
+    }
     [[nodiscard]] std::function<std::optional<cache::SourceMirrorDriveSpace>()> probe() {
         return [this]() -> std::optional<cache::SourceMirrorDriveSpace> {
             if (unreadable.load())
@@ -115,6 +129,22 @@ struct FakeDrive final {
         };
     }
 };
+
+// A mirror on a fake 1 GiB cache volume with a 64 MiB headroom, a fake clock, and room for
+// exactly `roomBytes` more than it stores when it is made.
+constexpr std::uint64_t kTestHeadroom = 64 * kMiB;
+[[nodiscard]] cache::SourceMirrorConfig spaceConfig(const Scratch& scratch, FakeClock& clock,
+                                                    FakeDrive& drive,
+                                                    const std::uint64_t roomBytes) {
+    auto value = config(scratch);
+    value.clock = clock.source();
+    value.driveSpace = drive.probe();
+    value.headroomBytes = kTestHeadroom;
+    value.freeSpaceReserveBytes = 1; // the 1 GiB floor would hide the test's small headroom
+    drive.capacity = kGiB;
+    drive.leaveRoomFor(roomBytes, kTestHeadroom);
+    return value;
+}
 
 // What a frame does per sequence member: ask the mirror, else read the source and keep it. The
 // writer is flushed after each keep so the counts are about the space, never about the queue.
@@ -138,46 +168,305 @@ struct PassCounts final {
 constexpr std::size_t kLoopFrameBytes = 64 * 1024;
 constexpr std::size_t kLoopEntryBytes = kLoopFrameBytes + 80; // the frame and its entry header
 
-// #732, required behavior: a loop larger than the space keeps a stable set of disk hits. The
-// writes that do not fit are refused and counted; nothing the loop still needs is evicted.
-void testLoopLargerThanTheSpace(const bool report) {
-    const Scratch scratch("loop");
+[[nodiscard]] std::vector<Source> loopFrames(const Scratch& scratch, const std::string& stem,
+                                             const unsigned count, const unsigned seed = 0) {
     std::vector<Source> frames;
-    for (unsigned i = 0; i < 16; ++i)
-        frames.push_back(writeSource(scratch, "plate." + std::to_string(1000 + i) + ".exr",
-                                     kLoopFrameBytes, i));
-    FakeClock clock;
+    for (unsigned i = 0; i < count; ++i)
+        frames.push_back(writeSource(scratch, stem + "." + std::to_string(1000 + i) + ".exr",
+                                     kLoopFrameBytes, seed + i));
+    return frames;
+}
+[[nodiscard]] std::size_t countCached(cache::SourceMirror& mirror, const std::vector<Source>& frames) {
+    std::size_t cached = 0;
+    for (const auto& frame : frames)
+        cached += mirror.localCopyState(frame.path) == cache::LocalCopyState::Cached ? 1 : 0;
+    return cached;
+}
+
+// #732 (R1): the default headroom is the smaller of a tenth of the cache volume and 32 GiB, never
+// under the 1 GiB floor, and a setting replaces it live.
+void testDefaultHeadroom() {
+    const auto headroomOn = [](const std::uint64_t capacity, const std::uint64_t setting) {
+        const Scratch scratch("headroom");
+        FakeDrive drive;
+        drive.capacity = capacity;
+        auto settings = config(scratch);
+        settings.driveSpace = drive.probe();
+        settings.headroomBytes = setting;
+        cache::SourceMirror mirror(settings);
+        drive.mirror = &mirror;
+        mirror.flush();
+        return mirror.statistics();
+    };
+    expect(cache::defaultSourceMirrorHeadroom(100 * kGiB) == 10 * kGiB &&
+               cache::defaultSourceMirrorHeadroom(4096 * kGiB) == 32 * kGiB,
+           "the default headroom is the smaller of a tenth of the volume and 32 GiB");
+    const auto small = headroomOn(100 * kGiB, 0);
+    expect(small.driveMeasured && small.capacityBytes == 100 * kGiB &&
+               small.headroomBytes == 10 * kGiB && small.freeBytes == 100 * kGiB,
+           "a 100 GiB cache volume keeps 10 GiB free by default");
+    expect(small.availableBytes == 90 * kGiB,
+           "an empty mirror may grow into all the free space beyond the headroom");
+    expect(headroomOn(2048 * kGiB, 0).headroomBytes == 32 * kGiB,
+           "a large cache volume keeps 32 GiB free by default");
+    expect(headroomOn(5 * kGiB, 0).headroomBytes == 1 * kGiB,
+           "the headroom is never under the 1 GiB floor");
+    expect(headroomOn(100 * kGiB, 1).headroomBytes == 1 * kGiB,
+           "a headroom setting under the floor is raised to it");
+    expect(headroomOn(100 * kGiB, 25 * kGiB).headroomBytes == 25 * kGiB,
+           "a headroom setting replaces the default");
+
+    // A new setting applies live, on the mirror's own thread.
+    const Scratch scratch("headroom-live");
     FakeDrive drive;
-    drive.capacity = std::uint64_t{64} << 30U;
+    drive.capacity = 100 * kGiB;
     auto settings = config(scratch);
-    settings.clock = clock.source();
     settings.driveSpace = drive.probe();
-    settings.byteBudget = 10 * kLoopEntryBytes + kLoopEntryBytes / 2; // room for 10 of the 16
     cache::SourceMirror mirror(settings);
     drive.mirror = &mirror;
     mirror.flush();
-    const auto first = playPass(mirror, frames);
+    mirror.setHeadroom(40 * kGiB);
+    mirror.flush();
+    expect(mirror.headroom() == 40 * kGiB && mirror.statistics().headroomBytes == 40 * kGiB &&
+               mirror.statistics().availableBytes == 60 * kGiB,
+           "a new headroom applies without a restart");
+    mirror.setHeadroom(0);
+    mirror.flush();
+    expect(mirror.statistics().headroomBytes == 10 * kGiB, "headroom 0 is the default again");
+
+    // A cache volume that cannot be read: nothing to measure, so a fixed limit applies.
+    drive.unreadable = true;
+    mirror.flush();
+    const auto blind = mirror.statistics();
+    expect(!blind.driveMeasured && blind.availableBytes == cache::kSourceMirrorUnmeasuredByteLimit,
+           "an unreadable cache volume caps the mirror at a fixed size");
+    const auto source = writeSource(scratch, "blind.exr", 2'000, 9);
+    keep(mirror, source);
+    mirror.flush();
+    expect(mirror.find(source.path, source.identity, {}).has_value(),
+           "an unreadable cache volume does not stop the mirror");
+
+    // Without an injected probe the file system is asked: the answer is whatever the machine
+    // has, so only its presence is checked.
+    const Scratch real("headroom-real");
+    cache::SourceMirrorConfig plain;
+    plain.rootDirectory = real.cacheRoot();
+    cache::SourceMirror measured(plain);
+    measured.flush();
+    expect(measured.statistics().driveMeasured && measured.statistics().capacityBytes != 0,
+           "the cache volume's real capacity is measured on the mirror's own thread");
+}
+
+// #732 (R2): free space is measured live. The mirror grows into what is free beyond the headroom
+// with its own bytes counting as usable, gives space back least recently used first when other
+// programs take it, and grows again when they let go.
+void testLiveHeadroom() {
+    const Scratch scratch("live");
+    FakeClock clock;
+    FakeDrive drive;
+    const auto frames = loopFrames(scratch, "plate", 9);
+    const auto settings = spaceConfig(scratch, clock, drive, 6 * kLoopEntryBytes);
+    {
+        cache::SourceMirror mirror(settings);
+        drive.mirror = &mirror;
+        mirror.flush();
+        expect(mirror.statistics().availableBytes == 6 * kLoopEntryBytes,
+               "the mirror may hold the free space beyond the headroom");
+        for (unsigned i = 0; i < 6; ++i)
+            keep(mirror, frames[i]);
+        mirror.flush();
+        auto statistics = mirror.statistics();
+        expect(statistics.writes == 6 && statistics.refusedWrites == 0 &&
+                   statistics.storedBytes == 6 * kLoopEntryBytes,
+               "the mirror grows into the free space beyond the headroom");
+        expect(statistics.freeBytes == kTestHeadroom,
+               "a full mirror leaves exactly the headroom free");
+        expect(statistics.availableBytes == 6 * kLoopEntryBytes && statistics.evictions == 0,
+               "the mirror's own bytes count as usable: filling it does not shrink it");
+        drive.mirror = nullptr;
+    }
+    clock.advance(std::chrono::hours(1)); // the next run starts later
+    {
+        // A restart measures the same volume: what the mirror stores is still usable, so
+        // nothing is evicted (a budget taken from free space at startup shrank on every start).
+        cache::SourceMirror mirror(settings);
+        drive.mirror = &mirror;
+        mirror.flush();
+        auto statistics = mirror.statistics();
+        expect(statistics.entryCount == 6 && statistics.evictions == 0 &&
+                   statistics.availableBytes == 6 * kLoopEntryBytes,
+               "a restart keeps a full mirror whole");
+        // Use order: 2, 0, then 5 (the rest keep their times from the first run).
+        for (const unsigned index : {2U, 0U, 5U})
+            expect(mirror.find(frames[index].path, frames[index].identity, {}).has_value(),
+                   "an entry is served after a restart");
+        // Another program takes two and a half entries' worth of the volume. Nothing is being
+        // written: the mirror's idle pass gives the space back, least recently used first, and
+        // does not spare entries used a moment ago.
+        drive.other += 2 * kLoopEntryBytes + kLoopEntryBytes / 2;
+        mirror.flush();
+        statistics = mirror.statistics();
+        expect(statistics.evictions == 3 && statistics.entryCount == 3,
+               "space other programs take from the headroom is given back");
+        expect(countCached(mirror, {frames[1], frames[3], frames[4]}) == 0 &&
+                   countCached(mirror, {frames[2], frames[0], frames[5]}) == 3,
+               "space is given back least recently used first");
+        expect(!std::filesystem::exists(mirror.entryPathForTest(frames[1].path)),
+               "an entry given back is removed from the volume");
+        expect(statistics.freeBytes >= kTestHeadroom, "the headroom is free again");
+        // The half entry of room that is left is not enough for a write, and the entries that
+        // could make room were just used: the write is refused.
+        keep(mirror, frames[6]);
+        mirror.flush();
+        expect(mirror.statistics().refusedWrites == 1 && mirror.statistics().evictions == 3,
+               "a write that would evict an entry in use is refused");
+        // The other program lets go: the mirror grows again.
+        drive.other -= 2 * kLoopEntryBytes + kLoopEntryBytes / 2;
+        clock.advance(std::chrono::seconds(2)); // the next write measures the volume again
+        for (unsigned i = 6; i < 9; ++i)
+            keep(mirror, frames[i]);
+        mirror.flush();
+        statistics = mirror.statistics();
+        expect(statistics.entryCount == 6 && statistics.evictions == 3 &&
+                   countCached(mirror, {frames[6], frames[7], frames[8]}) == 3,
+               "the mirror grows again when free space comes back");
+        // A larger headroom gives space back too, and applies live.
+        mirror.setHeadroom(kTestHeadroom + 4 * kLoopEntryBytes);
+        mirror.flush();
+        expect(mirror.statistics().entryCount == 2 &&
+                   mirror.statistics().headroomBytes == kTestHeadroom + 4 * kLoopEntryBytes,
+               "a larger headroom is given its space at once");
+        drive.mirror = nullptr;
+    }
+}
+
+// #732 (R3): a loop larger than the space keeps a stable set of disk hits. The writes that do not
+// fit are refused and counted; nothing the loop still needs is evicted. `frameInterval` is the
+// time between two frames: a pass shorter or longer than the hold window.
+void testLoopLargerThanTheSpace(const std::chrono::seconds frameInterval, const bool report) {
+    const Scratch scratch("loop");
+    const auto frames = loopFrames(scratch, "plate", 16);
+    FakeClock clock;
+    FakeDrive drive;
+    // Room for 10 of the 16, and a half.
+    cache::SourceMirror mirror(
+        spaceConfig(scratch, clock, drive, 10 * kLoopEntryBytes + kLoopEntryBytes / 2));
+    drive.mirror = &mirror;
+    mirror.flush();
+    const auto pass = [&] {
+        PassCounts counts;
+        for (const auto& frame : frames) {
+            clock.advance(frameInterval);
+            const auto one = playPass(mirror, {frame});
+            counts.hits += one.hits;
+            counts.sourceReads += one.sourceReads;
+        }
+        return counts;
+    };
+    const auto first = pass();
     expect(first.hits == 0 && first.sourceReads == 16, "the first pass reads every frame");
-    for (int pass = 2; pass <= 3; ++pass) {
+    expect(mirror.statistics().entryCount == 10, "the first pass fills the room there is");
+    for (int number = 2; number <= 3; ++number) {
         const auto before = mirror.statistics();
-        const auto counts = playPass(mirror, frames);
+        const auto counts = pass();
         const auto after = mirror.statistics();
         if (report)
-            std::cout << "loop of 16 with room for 10, pass " << pass << ": hits=" << counts.hits
+            std::cout << "loop of 16 with room for 10, " << frameInterval.count()
+                      << " s a frame, pass " << number << ": hits=" << counts.hits
                       << " sourceReads=" << counts.sourceReads
-                      << " evictions=" << after.evictions - before.evictions << '\n';
-        const auto label = "pass " + std::to_string(pass) + " of a loop larger than the space ";
+                      << " evictions=" << after.evictions - before.evictions
+                      << " refused=" << after.refusedWrites - before.refusedWrites << '\n';
+        const auto label = "pass " + std::to_string(number) + " of a loop larger than the space (" +
+                           std::to_string(frameInterval.count()) + " s a frame) ";
         expect(counts.hits == 10, label + "gets the 10 frames that fit from disk");
         expect(counts.sourceReads == 6, label + "reads only the 6 that do not fit");
         expect(after.evictions == before.evictions, label + "evicts nothing");
+        expect(after.refusedWrites == before.refusedWrites + 6,
+               label + "counts the 6 writes it refuses");
     }
+    expect(mirror.statistics().diskPressure, "a refused write is reported as no room");
+    if (frameInterval * frames.size() >= cache::kSourceMirrorHoldWindow)
+        return;
+
+    // The work stops (after passes shorter than the hold window, so that every entry was used a
+    // moment ago). New work that arrives now is refused; once nothing has used the loop's
+    // entries for the hold window it replaces them, oldest first.
+    const auto next = loopFrames(scratch, "other", 4, 100);
+    clock.advance(std::chrono::minutes(1));
+    keep(mirror, next[0]);
+    mirror.flush();
+    expect(countCached(mirror, next) == 0, "new work does not evict entries used a minute ago");
+    clock.advance(cache::kSourceMirrorHoldWindow + std::chrono::minutes(1));
+    const auto before = mirror.statistics();
+    const auto rotated = playPass(mirror, next);
+    const auto after = mirror.statistics();
+    expect(rotated.sourceReads == 4 && countCached(mirror, next) == 4,
+           "new work replaces entries nothing has used for the hold window");
+    expect(after.evictions == before.evictions + 4 && after.refusedWrites == before.refusedWrites,
+           "rotation evicts one idle entry for each new one and refuses nothing");
+    expect(playPass(mirror, next).hits == 4, "the new work is served from disk");
+}
+
+// #732 (R1): the published settings carry the headroom, and the byte budget of an earlier build is
+// dropped: its line is not read.
+void testPublishedSettings() {
+    const Scratch scratch("settings");
+    const auto file = scratch.root / "settings.v1";
+    cache::SourceMirrorUserSettings settings;
+    settings.headroomBytes = 48 * kGiB;
+    settings.policy.preference = cache::LocalCopyPreference::Always;
+    expect(cache::writeSourceMirrorSettings(file, settings), "the settings file is written");
+    expect(cache::readSourceMirrorSettings(file) == settings,
+           "the headroom reads back from the published settings");
+    std::string text;
+    {
+        std::ifstream in(file, std::ios::binary);
+        text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    expect(text.find("headroom 51539607552\n") != std::string::npos &&
+               text.find("budget") == std::string::npos,
+           "the published settings name the headroom and no budget");
+    {
+        std::ofstream out(file, std::ios::binary | std::ios::trunc);
+        out << "bloom-source-mirror-settings 1\nenabled 1\nbudget 64424509440\ncopies never\n";
+    }
+    const auto old = cache::readSourceMirrorSettings(file);
+    expect(old.headroomBytes == 0 && old.policy.preference == cache::LocalCopyPreference::Never,
+           "a byte budget published by an earlier build is dropped; the rest is read");
+}
+
+// #732 (D6): the entry limit follows the same rule as the bytes.
+void testEntryLimit() {
+    const Scratch scratch("entry-limit");
+    FakeClock clock;
+    FakeDrive drive;
+    auto settings = spaceConfig(scratch, clock, drive, 64 * kMiB);
+    settings.maxEntryCount = 4;
+    cache::SourceMirror mirror(settings);
+    drive.mirror = &mirror;
+    std::vector<Source> sources;
+    for (unsigned i = 0; i < 6; ++i) {
+        sources.push_back(writeSource(scratch, "g" + std::to_string(i) + ".png", 50, i));
+        keep(mirror, sources.back());
+        mirror.flush();
+    }
+    auto statistics = mirror.statistics();
+    expect(statistics.entryCount == 4 && statistics.refusedWrites == 2 && statistics.evictions == 0,
+           "a full index refuses new entries while the ones it holds are in use");
+    clock.advance(cache::kSourceMirrorHoldWindow + std::chrono::minutes(1));
+    keep(mirror, sources[5]);
+    mirror.flush();
+    statistics = mirror.statistics();
+    expect(statistics.entryCount == 4 && statistics.evictions == 1 &&
+               mirror.localCopyState(sources[5].path) == cache::LocalCopyState::Cached &&
+               mirror.localCopyState(sources[0].path) == cache::LocalCopyState::NotCached,
+           "an idle entry makes way for a new one at the entry limit");
 }
 
 // #732, required behavior: the write queue is live work with a fixed ceiling. A RAM Preview fill
 // does not shrink it and its writes are not dropped.
 void testWriteQueueDuringFill(const bool report) {
     namespace runtime = bloom::runtime;
-    constexpr std::size_t kGiB = std::size_t{1} << 30U;
     const Scratch scratch("fill");
     runtime::MemoryBudgetLedger ledger(64 * kGiB, 32 * kGiB);
     ledger.setRamHeadroom(2 * kGiB);
@@ -430,40 +719,6 @@ void testPolicy() {
     expect(mirror.policy().folders.size() == 1, "the policy reads back");
 }
 
-void testEviction() {
-    const Scratch scratch("eviction");
-    auto settings = config(scratch);
-    settings.byteBudget = 6'000; // room for about five 1,000-byte sources and their headers
-    cache::SourceMirror mirror(settings);
-    std::vector<Source> sources;
-    for (unsigned i = 0; i < 12; ++i) {
-        sources.push_back(writeSource(scratch, "f" + std::to_string(i) + ".exr", 1'000, i));
-        keep(mirror, sources.back());
-        mirror.flush();
-    }
-    const auto statistics = mirror.statistics();
-    expect(statistics.storedBytes <= 6'000, "the mirror stays inside its byte budget");
-    expect(statistics.evictions >= 6, "older entries were evicted");
-    expect(!mirror.find(sources.front().path, sources.front().identity, {}).has_value() &&
-               !std::filesystem::exists(mirror.entryPathForTest(sources.front().path)),
-           "the least recently used entry is gone, file included");
-    expect(mirror.find(sources.back().path, sources.back().identity, {}).has_value(),
-           "the newest entry is kept");
-    mirror.setByteBudget(1'500);
-    expect(mirror.statistics().storedBytes <= 1'500, "a smaller budget evicts at once");
-
-    // The entry count is bounded independently of the bytes.
-    const Scratch counted("eviction-count");
-    auto few = config(counted);
-    few.maxEntryCount = 4;
-    cache::SourceMirror small(few);
-    for (unsigned i = 0; i < 9; ++i) {
-        keep(small, writeSource(counted, "g" + std::to_string(i) + ".png", 50, i));
-        small.flush();
-    }
-    expect(small.statistics().entryCount <= 4, "the entry count stays inside its bound");
-}
-
 void testWriteQueue() {
     const Scratch scratch("queue");
     auto settings = config(scratch);
@@ -564,18 +819,21 @@ void testShutdownAndCancellation() {
         expect(mirror.find(second.path, second.identity, {}).has_value(),
                "a cancelled lookup leaves the entry in place");
     }
-    // A cache volume short of space skips the write and asks background fills to wait.
+    // A cache volume with nothing free beyond the headroom refuses the write, and that is not a
+    // write backlog.
     auto tight = config(scratch);
-    tight.freeSpaceReserveBytes = std::uint64_t{1} << 62;
+    tight.driveSpace = [] {
+        return std::optional(cache::SourceMirrorDriveSpace{100 * kGiB, 2 * kGiB});
+    };
     cache::SourceMirror mirror(tight);
     mirror.clear();
     keep(mirror, first);
     mirror.flush();
-    expect(mirror.statistics().refusedForDiskSpace == 1 &&
+    expect(mirror.statistics().refusedWrites == 1 &&
                !mirror.find(first.path, first.identity, {}).has_value(),
-           "a write is skipped while the cache volume is short of free space");
+           "a write is refused while the cache volume has nothing free beyond the headroom");
     expect(mirror.statistics().diskPressure && !mirror.underPressure(),
-           "a cache volume short of space is reported, and is not a write backlog");
+           "a mirror with no room is reported, and is not a write backlog");
 }
 
 void testLegacyEntriesRemoved() {
@@ -728,16 +986,20 @@ void testChunks() {
         expect(!std::filesystem::exists(chunkPath), "a purged chunk store writes nothing more");
     }
     {
-        // Budget: the least recently used chunk file goes whole; a source that could never fit
-        // is refused; a store that outlives the mirror holds nothing.
-        auto small = config(scratch);
-        small.byteBudget = kChunk * 3;
+        // Space: chunks follow the same rule as whole entries. A chunk that needs the room of a
+        // chunk file in use is refused; an idle chunk file goes whole; a source larger than the
+        // space gets no store; a store that outlives the mirror holds nothing.
+        FakeClock clock;
+        FakeDrive drive;
         std::shared_ptr<platform::SourceChunkStore> outliving;
         const auto first = writeSource(scratch, "first.mov", kChunk * 2, 22);
         const auto second = writeSource(scratch, "second.mov", kChunk * 2, 23);
         Bytes scratchBytes(kChunk);
         {
-            cache::SourceMirror mirror(small);
+            const Scratch space("chunk-space");
+            // Room for three chunks and the two files' tables.
+            cache::SourceMirror mirror(spaceConfig(space, clock, drive, kChunk * 3 + 16 * 4096));
+            drive.mirror = &mirror;
             mirror.flush();
             const auto a = mirror.chunks(first.path, first.identity);
             const auto b = mirror.chunks(second.path, second.identity);
@@ -750,35 +1012,53 @@ void testChunks() {
             a->keep(0, piece(first, 0));
             a->keep(kChunk, piece(first, 1));
             b->keep(0, piece(second, 0));
+            b->keep(kChunk, piece(second, 1)); // no room, and the other file was just used
+            auto statistics = mirror.statistics();
+            expect(statistics.refusedWrites == 1 && statistics.evictions == 0 &&
+                       statistics.rangeWrites == 3,
+                   "a chunk that would evict a chunk file in use is refused and counted");
+            expect(a->read(0, scratchBytes) && b->read(0, scratchBytes) &&
+                       !b->read(kChunk, scratchBytes),
+                   "a refused chunk leaves every kept chunk in place");
+            expect(b->underPressure(), "a chunk store with no room asks its background fill to wait");
+            // The first file is used no more; the second goes on after the hold window.
+            clock.advance(cache::kSourceMirrorHoldWindow + std::chrono::minutes(1));
+            expect(b->read(0, scratchBytes), "the chunk file in use is served");
+            expect(!b->underPressure(), "an idle chunk file can make room");
             b->keep(kChunk, piece(second, 1));
-            expect(!a->read(0, scratchBytes), "the least recently used chunk file is evicted");
-            expect(b->read(0, scratchBytes), "the chunk file in use stays");
+            statistics = mirror.statistics();
+            expect(!a->read(0, scratchBytes) && b->read(kChunk, scratchBytes),
+                   "an idle chunk file is evicted for a chunk of the one in use");
             expect(mirror.localCopyState(first.path) == cache::LocalCopyState::NotCached &&
                        !std::filesystem::exists(mirror.chunkPathForTest(first.path)),
                    "an evicted chunk file is removed");
-            expect(mirror.statistics().evictions >= 1 &&
-                       mirror.statistics().storedBytes <= small.byteBudget,
-                   "chunk files stay within the byte budget");
+            expect(statistics.evictions == 1 && statistics.freeBytes >= kTestHeadroom,
+                   "chunk files leave the headroom free");
             auto huge = first.identity;
             huge.size = kChunk * 8;
-            expect(mirror.chunks(first.path, huge) == nullptr,
-                   "a source larger than the whole budget gets no chunk store");
+            const auto refusedBefore = mirror.statistics().refusedWrites;
+            expect(mirror.chunks(first.path, huge) == nullptr &&
+                       mirror.statistics().refusedWrites == refusedBefore + 1,
+                   "a source larger than the space gets no chunk store");
             outliving = b;
+            drive.mirror = nullptr;
         }
         expect(!outliving->read(0, scratchBytes), "a store that outlives the mirror serves nothing");
         outliving->keep(0, std::span<const std::byte>(second.bytes->data(), kChunk));
         expect(!outliving->underPressure(), "a store that outlives the mirror reports no pressure");
     }
     {
-        // A cache volume short of space keeps nothing and says so.
+        // A cache volume with nothing free beyond the headroom starts no chunk file.
         auto full = config(scratch);
-        full.freeSpaceReserveBytes = ~std::uint64_t{0} / 4;
+        full.driveSpace = [] {
+            return std::optional(cache::SourceMirrorDriveSpace{100 * kGiB, 2 * kGiB});
+        };
         cache::SourceMirror mirror(full);
         mirror.flush();
         const auto other = writeSource(scratch, "full.mov", kChunk, 24);
         expect(mirror.chunks(other.path, other.identity) == nullptr &&
-                   mirror.statistics().refusedForDiskSpace == 1,
-               "a cache volume short of space starts no chunk file");
+                   mirror.statistics().refusedWrites == 1,
+               "a cache volume with no room starts no chunk file");
     }
     {
         // Several workers fill and read one source at once.
@@ -818,7 +1098,6 @@ int main(const int argc, char** argv) {
     // The #732 cases that describe required behavior the mirror does not have yet. They run only
     // when asked for, and print the counters they found.
     if (argc > 1 && std::string_view(argv[1]) == "--pending-732") {
-        testLoopLargerThanTheSpace(true);
         testWriteQueueDuringFill(true);
         std::cout << (failures == 0 ? "PASS" : "FAILED") << ": source mirror, pending #732\n";
         return failures == 0 ? 0 : 1;
@@ -828,7 +1107,12 @@ int main(const int argc, char** argv) {
     testRestartAndIndex();
     testCorruption();
     testPolicy();
-    testEviction();
+    testDefaultHeadroom();
+    testLiveHeadroom();
+    testLoopLargerThanTheSpace(std::chrono::seconds(1), false);
+    testLoopLargerThanTheSpace(std::chrono::minutes(2), false);
+    testEntryLimit();
+    testPublishedSettings();
     testWriteQueue();
     testShutdownAndCancellation();
     testLegacyEntriesRemoved();

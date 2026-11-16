@@ -19,8 +19,9 @@ struct SourceMirrorUserSettings final {
     // An absolute override of the cache folder; empty uses the platform cache directory plus a
     // "media" leaf.
     std::filesystem::path directory;
-    // 0: derived from the cache volume's free space.
-    std::uint64_t byteBudget = 0;
+    // The disk headroom (#732): the space to keep free on the cache volume. 0 is the default,
+    // defaultSourceMirrorHeadroom() of the volume's capacity.
+    std::uint64_t headroomBytes = 0;
     LocalCopyPolicy policy{};
     friend bool operator==(const SourceMirrorUserSettings&,
                            const SourceMirrorUserSettings&) = default;

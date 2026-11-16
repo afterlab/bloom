@@ -27,9 +27,8 @@ namespace bloom::ui {
 // "use the platform default" (bloom::platform::userCacheDirectory() plus a "media" leaf).
 [[nodiscard]] std::filesystem::path mediaDiskCacheDirectoryFromSettings(const QSettings& settings);
 
-// "media/disk-cache-budget-bytes": missing, zero, unparseable, or negative reads as `fallback`
-// (the caller resolves that from physical disk free space via
-// media::cache::defaultSourceMirrorByteBudget()).
+// "media/disk-cache-budget-bytes": missing, zero, unparseable, or negative reads as `fallback`.
+// The disk cache no longer has a byte budget (#732), so the value does not reach it.
 [[nodiscard]] std::uint64_t mediaDiskCacheByteBudgetFromSettings(const QSettings& settings,
                                                                  std::uint64_t fallback);
 

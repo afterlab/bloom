@@ -690,6 +690,7 @@ void playbackStartsNoMediaJobs() {
     mirrorConfig.rootDirectory =
         std::filesystem::path(directory.filePath("disk-cache").toStdString());
     mirrorConfig.policy.preference = media::cache::LocalCopyPreference::Always;
+    mirrorConfig.driveSpace = media::cache::roomyDriveSpaceForTest();
     media::cache::SourceMirror mirror(mirrorConfig);
     ui::AssetController controller(session, host, scheduler, bridge, &mirror);
     controller.importFiles(firsts, std::nullopt);
