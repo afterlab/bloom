@@ -18,10 +18,11 @@ Applications folder, and one line: "Drag Bloom to the Applications folder to ins
 
 Both PNG files are 8-bit RGBA. Only the dark background is used.
 
-`macos/dmg-DS_Store`, when it is there, is the window's layout (its size, the icon positions and
-the background picture). It is made once on a Mac and copied into every disk image; how is in
+The window's layout (its size, the icon positions and the background picture) is not a file here.
+`tools/release/dmg_layout.py` writes it into every disk image when the image is made, so there is
+no Finder step; how is in
 [`docs/architecture/platform-support.md`](../../../docs/architecture/platform-support.md),
-"Installers". Without it the image opens with the system's default window.
+"Installers".
 
 ## Windows installer
 

@@ -441,6 +441,7 @@ if(APPLE)
                     "-DOUTPUT=${CMAKE_BINARY_DIR}/package"
                     "-DWORK=${CMAKE_BINARY_DIR}/package/installer-work"
                     "-DNAME=${bloom_macos_package_name}"
+                    "-DPYTHON=${Python3_EXECUTABLE}"
                     -P "${bloom_package_scripts}/make_macos_installers.cmake"
                 COMMENT "Making the zip, the disk image and the installer package of the deployed Bloom.app"
                 VERBATIM
@@ -518,6 +519,15 @@ if(BUILD_TESTING)
             TIMEOUT 120)
         # Linux only: the install script is the Linux installer and a POSIX shell script
         # (tools/install/install.sh.in); macOS and Windows have installers of their own, with
+        # The macOS disk image's window layout writer and reader (tools/release/dmg_layout.py),
+        # on fixed stand-in values and a stand-in folder. It needs only Python, so it runs on
+        # all three platforms.
+        bloom_add_test(
+            NAME bloom.release.dmg_layout_tests
+            COMMAND "${Python3_EXECUTABLE}" -I
+                "${PROJECT_SOURCE_DIR}/tools/release/test_dmg_layout.py"
+            LABELS quality
+            TIMEOUT 60)
         # their own tests. It installs a stand-in package of a few small files into folders
         # under the build tree and reports a skip without `openssl` or `xz`.
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

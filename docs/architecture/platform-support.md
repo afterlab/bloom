@@ -784,10 +784,14 @@ links and signatures survive, and signs nothing again.
 - `Bloom-<version>-macos-<processor>.dmg` is the disk image. Its volume is named `Bloom`. It
   holds `Bloom.app`, a link named `Applications` to `/Applications`, and the background picture
   in the hidden folder `.background` as one TIFF with both sizes (660 x 400 and 1320 x 800; the
-  pictures are in `apps/bloom/installer/macos`). When the file
-  `apps/bloom/installer/macos/dmg-DS_Store` is checked in, it is copied into the image as
-  `.DS_Store`: that is the window's size, icon view, background and icon places. Without it the
-  image opens with the system's default window.
+  pictures are in `apps/bloom/installer/macos`). It also holds a `.DS_Store`, the file Finder
+  reads for the window: a 660 x 400 icon view with icon size 128, the background picture, and
+  the places of the icons (`Bloom.app` at 180, 180 and `Applications` at 480, 180, on either side
+  of the picture's arrow). Nobody arranges the window by hand. The maker makes the image
+  read-write, attaches it, runs `tools/release/dmg_layout.py write` to write the `.DS_Store`
+  (with the system's own bookmark of the background file), detaches it, and only then compresses
+  it. The tool is deterministic, uses only the Python standard library, and has its own test on
+  all three platforms (`bloom.release.dmg_layout_tests`).
 - `Bloom-<version>-macos-<processor>.pkg` installs `Bloom.app` into `/Applications` with no
   window (`installer -pkg`). The app always goes to `/Applications`, never over another copy found
   elsewhere, and an older package may be installed over a newer version. Its `postinstall` script
@@ -802,23 +806,16 @@ a link is never deleted. When this user cannot write `/usr/local/bin`, the syste
 prompt makes the link; the program's path is passed to the prompt's script as an argument. The
 function behind it (`src/ui/command_line_tool_link.cpp`) uses only `std::filesystem`.
 
-Making the window layout file, once, on a Mac: make the image, open it read-write
-(`hdiutil convert <image>.dmg -format UDRW -o rw.dmg`, then open `rw.dmg`), and choose
-View > Show View Options. Set icon view, icon size 100, and the background picture
-`.background/dmg-background.tiff`. Set the window to 660 x 400 and hide the toolbar and status
-bar. Put the `Bloom` icon on the left mark of the picture (center 165, 180) and `Applications`
-on the right mark (center 495, 180). Eject the image, mount it again, and copy its `.DS_Store`
-to `apps/bloom/installer/macos/dmg-DS_Store`. The volume is always named `Bloom`, so the layout
-keeps finding its picture.
-
 The `bloom.package.installers` test (macOS here; Windows has a test of the same name) copies the
-built bundle, signs the copy, makes both installers from it and looks inside them. It attaches
-the image read-only and without showing it, and checks the application, the `Applications` link
-and its target, the background file and its two pictures, the layout file when there is one, and
-that the signature still verifies. It expands the package and checks the payload, the install
-location, that the app is not relocatable or version checked, and that the postinstall script is
-executable and is the checked-in one. It runs the script with a target volume inside its work
-folder and checks the link. It never runs `installer -pkg` and never writes outside its work
+built bundle, signs the copy, makes both installers from it and looks inside them. It attaches the
+image read-only and without showing it, and checks the application, the `Applications` link and its
+target, the background file and its two pictures, and the window layout: it reads the image's
+`.DS_Store` with `dmg_layout.py read` and requires the window size, the icon size, the two icon
+places, the background's volume and path (and that the image holds that file), and the bookmark. It
+also checks that the signature still verifies. It expands the package and checks the payload, the
+install location, that the app is not relocatable or version checked, and that the postinstall
+script is executable and is the checked-in one. It runs the script with a target volume inside its
+work folder and checks the link. It never runs `installer -pkg` and never writes outside its work
 folder. A linked `bloom-cli` renders a frame headless through the installed package in
 `bloom.package.check`.
 

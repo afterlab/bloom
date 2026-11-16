@@ -4,7 +4,7 @@
 #   cmake -DBUNDLE=<signed Bloom.app> -DSOURCE=<source tree> -DVERSION=<version label>
 #         -DBUILD_VERSION=<compact form> -DOUTPUT=<folder for the installers>
 #         -DWORK=<work folder> [-DNAME=<file name without extension>]
-#         [-DPLISTBUDDY=<PlistBuddy>] -P make_macos_installers.cmake
+#         [-DPLISTBUDDY=<PlistBuddy>] [-DPYTHON=<python program>] -P make_macos_installers.cmake
 #
 # NAME defaults to Bloom-<VERSION>-macos-<processor>, the name of the zip the updater downloads.
 # BUILD_VERSION is the bundle's build version (cmake/BloomVersion.cmake), which the package
@@ -12,10 +12,15 @@
 # (pkg-components.plist); this script removes the parts it makes before it makes them again, and
 # touches nothing else in it.
 #
+# PYTHON is the program that runs tools/release/dmg_layout.py; without it the first python3 on
+# the path is used.
+#
 # <NAME>.dmg: the window a person sees after opening it. The volume is named Bloom, so that the
-# window layout checked in as apps/bloom/installer/macos/dmg-DS_Store (when there is one) finds
-# its picture. It holds Bloom.app, a link named Applications, and the background picture in
-# the hidden folder .background as one TIFF with both sizes.
+# window layout finds its picture. It holds Bloom.app, a link named Applications, and the
+# background picture in the hidden folder .background as one TIFF with both sizes. The window
+# layout (the .DS_Store Finder reads) is generated, with no Finder step: the image is made
+# read-write, attached, given its .DS_Store by tools/release/dmg_layout.py, detached, and
+# converted to the compressed image. The image is detached whatever the tool said.
 #
 # <NAME>.pkg: installs Bloom.app into /Applications with no window (`installer -pkg`). Its
 # postinstall script (packaging/macos/postinstall) links /usr/local/bin/bloom-cli to the program
@@ -42,15 +47,18 @@ if(NOT bundle_name STREQUAL "Bloom.app")
 endif()
 set(picture "${SOURCE}/apps/bloom/installer/macos/dmg-background.png")
 set(picture_2x "${SOURCE}/apps/bloom/installer/macos/dmg-background@2x.png")
-set(layout "${SOURCE}/apps/bloom/installer/macos/dmg-DS_Store")
+set(layout_tool "${SOURCE}/tools/release/dmg_layout.py")
 set(postinstall "${SOURCE}/packaging/macos/postinstall")
-foreach(needed IN ITEMS "${picture}" "${picture_2x}" "${postinstall}")
+foreach(needed IN ITEMS "${picture}" "${picture_2x}" "${postinstall}" "${layout_tool}")
     if(NOT EXISTS "${needed}")
         message(FATAL_ERROR "make_macos_installers.cmake: '${needed}' does not exist")
     endif()
 endforeach()
 if(NOT DEFINED PLISTBUDDY OR "${PLISTBUDDY}" STREQUAL "")
     set(PLISTBUDDY "/usr/libexec/PlistBuddy")
+endif()
+if(NOT DEFINED PYTHON OR "${PYTHON}" STREQUAL "")
+    find_program(PYTHON NAMES python3 REQUIRED)
 endif()
 
 if(NOT NAME)
@@ -85,6 +93,30 @@ function(bloom_run what)
     endif()
 endfunction()
 
+# One value of a property list file, empty when it is not there.
+function(plist_entry plist entry result_variable)
+    execute_process(COMMAND "${PLISTBUDDY}" -c "Print ${entry}" "${plist}"
+        RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_QUIET)
+    string(STRIP "${output}" output)
+    if(NOT result EQUAL 0)
+        set(output "")
+    endif()
+    set(${result_variable} "${output}" PARENT_SCOPE)
+endfunction()
+
+# Writes the property list a hdiutil command printed, without anything printed around it.
+function(write_plist text path)
+    string(FIND "${text}" "<?xml" first)
+    string(FIND "${text}" "</plist>" last REVERSE)
+    if(first EQUAL -1 OR last EQUAL -1)
+        file(WRITE "${path}" "")
+        return()
+    endif()
+    math(EXPR length "${last} + 8 - ${first}")
+    string(SUBSTRING "${text}" ${first} ${length} text)
+    file(WRITE "${path}" "${text}\n")
+endfunction()
+
 # --- The disk image ------------------------------------------------------------------------------
 set(staging "${WORK}/dmg-staging")
 file(REMOVE_RECURSE "${staging}")
@@ -109,11 +141,73 @@ bloom_run("combining the two background pictures" tiffutil -cathidpicheck
     "${pictures}/dmg-background.png" "${pictures}/dmg-background@2x.png"
     -out "${staging}/.background/dmg-background.tiff")
 file(REMOVE_RECURSE "${pictures}")
-if(EXISTS "${layout}")
-    file(COPY_FILE "${layout}" "${staging}/.DS_Store")
+# A zero-filled .DS_Store reserves room in the image; the tool replaces it below.
+bloom_run("reserving room for the window layout" dd "if=/dev/zero" "of=${staging}/.DS_Store"
+    bs=1024 count=16)
+
+# The layout is written into a read-write image and the image is then compressed. The image is
+# attached without a mount point of our own, which a remote session refuses.
+set(layout_image "${WORK}/dmg-layout.dmg")
+file(REMOVE "${layout_image}")
+bloom_run("making the read-write disk image" hdiutil create -volname Bloom -srcfolder "${staging}"
+    -fs HFS+ -format UDRW -ov "${layout_image}")
+execute_process(COMMAND hdiutil attach -readwrite -nobrowse -noautoopen -plist "${layout_image}"
+    RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+if(NOT result EQUAL 0)
+    message(FATAL_ERROR "make_macos_installers.cmake: attaching the read-write disk image failed "
+                        "(${result}):\n${output}${error}")
 endif()
-bloom_run("making the disk image" hdiutil create -volname Bloom -srcfolder "${staging}"
-    -fs HFS+ -format UDZO -ov "${dmg}")
+set(attach_plist "${WORK}/dmg-attached.plist")
+write_plist("${output}" "${attach_plist}")
+plist_entry("${attach_plist}" ":system-entities:0:dev-entry" device)
+set(volume "")
+foreach(entity RANGE 0 31)
+    plist_entry("${attach_plist}" ":system-entities:${entity}:dev-entry" entity_device)
+    if(entity_device STREQUAL "")
+        break()
+    endif()
+    plist_entry("${attach_plist}" ":system-entities:${entity}:mount-point" point)
+    if(NOT point STREQUAL "")
+        set(volume "${point}")
+    endif()
+endforeach()
+file(REMOVE "${attach_plist}")
+
+# Whatever happens next, the image is detached before the script stops.
+set(layout_problem "")
+if(device STREQUAL "")
+    set(layout_problem
+        "hdiutil did not say which device the image is attached as:\n${output}${error}")
+elseif(volume STREQUAL "" OR NOT IS_DIRECTORY "${volume}")
+    set(layout_problem "the read-write image was attached without a volume:\n${output}${error}")
+else()
+    execute_process(COMMAND "${PYTHON}" -I "${layout_tool}" write --volume "${volume}" --bookmark
+        RESULT_VARIABLE result OUTPUT_VARIABLE tool_output ERROR_VARIABLE tool_error)
+    if(NOT result EQUAL 0)
+        string(CONCAT layout_problem "writing the window layout failed (${result}):\n"
+            "${PYTHON} -I ${layout_tool} write --volume ${volume} --bookmark\n"
+            "${tool_output}${tool_error}")
+    endif()
+endif()
+if(NOT device STREQUAL "")
+    execute_process(COMMAND hdiutil detach "${device}"
+        RESULT_VARIABLE detached OUTPUT_VARIABLE detach_output ERROR_VARIABLE detach_error)
+    if(NOT detached EQUAL 0)
+        execute_process(COMMAND hdiutil detach -force "${device}"
+            RESULT_VARIABLE detached OUTPUT_VARIABLE detach_output ERROR_VARIABLE detach_error)
+    endif()
+    if(NOT detached EQUAL 0)
+        string(APPEND layout_problem
+            "\nthe read-write image could not be detached (${detached}):\n"
+            "hdiutil detach ${device}\n${detach_output}${detach_error}")
+    endif()
+endif()
+if(NOT layout_problem STREQUAL "")
+    message(FATAL_ERROR "make_macos_installers.cmake: ${layout_problem}")
+endif()
+bloom_run("compressing the disk image" hdiutil convert "${layout_image}" -format UDZO -ov
+    -o "${dmg}")
+file(REMOVE "${layout_image}")
 if(NOT EXISTS "${dmg}")
     message(FATAL_ERROR "make_macos_installers.cmake: hdiutil did not make ${dmg}")
 endif()

@@ -309,6 +309,7 @@ function(bloom_add_package_rules)
                 COMMAND ${CMAKE_COMMAND} "-DBUNDLE=$<TARGET_BUNDLE_DIR:bloom>"
                     "-DSOURCE=${PROJECT_SOURCE_DIR}"
                     "-DWORK=${CMAKE_BINARY_DIR}/package-installer-test"
+                    "-DPYTHON=${Python3_EXECUTABLE}"
                     -P "${scripts}/check_macos_installers.cmake"
                 LABELS package integration
                 RUN_SERIAL

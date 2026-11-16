@@ -2,7 +2,7 @@
 # by making them from a copy of the built bundle and looking inside them.
 #
 #   cmake -DBUNDLE=<built Bloom.app> -DSOURCE=<source tree> -DWORK=<work directory>
-#         [-DPLISTBUDDY=<PlistBuddy>] -P check_macos_installers.cmake
+#         [-DPLISTBUDDY=<PlistBuddy>] [-DPYTHON=<python program>] -P check_macos_installers.cmake
 #
 # The image is attached read-only where the system puts it, and not shown: a mount point of the
 # caller's own is refused in a session that is not the logged-in desktop, a remote one for
@@ -14,7 +14,10 @@
 #      made from the copy
 #   2  the disk image holds Bloom.app (the same program, a signature that still verifies), the
 #      Applications link to /Applications, the background picture with its two sizes (660 x 400
-#      and 1320 x 800) and, when the source tree has one, the window layout
+#      and 1320 x 800) and the window layout: its .DS_Store, read back by
+#      tools/release/dmg_layout.py, has the 660 x 400 window, icon size 128, Bloom.app at
+#      180, 180, Applications at 480, 180, and the background picture (volume Bloom, path
+#      /.background/dmg-background.tiff, with its bookmark), which the image holds
 #   3  the package installs Bloom.app and bloom-cli into /Applications, is not relocatable, is
 #      not version checked, and carries the checked-in postinstall script, executable
 #   4  the postinstall script links bloom-cli inside the target volume it is given, links again
@@ -42,6 +45,9 @@ endif()
 if(NOT DEFINED PLISTBUDDY OR "${PLISTBUDDY}" STREQUAL "")
     set(PLISTBUDDY "/usr/libexec/PlistBuddy")
 endif()
+if(NOT DEFINED PYTHON OR "${PYTHON}" STREQUAL "")
+    find_program(PYTHON NAMES python3 REQUIRED)
+endif()
 
 get_filename_component(WORK "${WORK}" ABSOLUTE)
 set(scripts "${CMAKE_CURRENT_LIST_DIR}")
@@ -54,7 +60,7 @@ set(expanded "${WORK}/expanded")
 set(name "Bloom-installer-check")
 set(dmg "${output}/${name}.dmg")
 set(pkg "${output}/${name}.pkg")
-set(layout "${SOURCE}/apps/bloom/installer/macos/dmg-DS_Store")
+set(layout_tool "${SOURCE}/tools/release/dmg_layout.py")
 set(postinstall "${SOURCE}/packaging/macos/postinstall")
 
 # --- Helpers -------------------------------------------------------------------------------------
@@ -130,7 +136,8 @@ function(step_make)
     run("making the installers" status text "${CMAKE_COMMAND}" "-DBUNDLE=${copy}"
         "-DSOURCE=${SOURCE}" "-DVERSION=${short_version}" "-DBUILD_VERSION=${build_version}"
         "-DOUTPUT=${output}" "-DWORK=${make_work}" "-DNAME=${name}"
-        "-DPLISTBUDDY=${PLISTBUDDY}" -P "${scripts}/make_macos_installers.cmake")
+        "-DPLISTBUDDY=${PLISTBUDDY}" "-DPYTHON=${PYTHON}"
+        -P "${scripts}/make_macos_installers.cmake")
     expect_file("the disk image was made" "${dmg}")
     expect_file("the installer package was made" "${pkg}")
     passed("both installers were made from the signed copy")
@@ -192,6 +199,50 @@ function(detach_earlier_image)
         endif()
     endforeach()
     file(REMOVE "${plist}")
+endfunction()
+
+# The window layout in the attached image, read back by the tool that wrote it (parsing is the
+# tool's; the values are compared here).
+function(check_window_layout volume)
+    if(NOT EXISTS "${volume}/.DS_Store")
+        fail("the image holds no .DS_Store, so Finder has no window layout to show")
+        return()
+    endif()
+    execute_process(COMMAND "${PYTHON}" -I "${layout_tool}" read "${volume}/.DS_Store"
+        RESULT_VARIABLE result OUTPUT_VARIABLE json ERROR_VARIABLE error)
+    if(NOT result EQUAL 0)
+        fail("the image's .DS_Store cannot be read (${result}): ${error}")
+        return()
+    endif()
+    check_layout_json("${volume}" "${json}")
+endfunction()
+
+# One value of the JSON `dmg_layout.py read` printed, compared with what the picture needs.
+function(expect_layout json expected)
+    string(JSON found ERROR_VARIABLE problem GET "${json}" ${ARGN})
+    list(JOIN ARGN "." name)
+    if(problem)
+        fail("the image's window layout has no ${name}: ${problem}")
+    elseif(NOT found STREQUAL expected)
+        fail("the image's window layout has ${name} '${found}', not '${expected}'")
+    endif()
+endfunction()
+
+function(check_layout_json volume json)
+    expect_layout("${json}" 660 window width)
+    expect_layout("${json}" 400 window height)
+    expect_layout("${json}" 128 iconSize)
+    expect_layout("${json}" 180 items Bloom.app 0)
+    expect_layout("${json}" 180 items Bloom.app 1)
+    expect_layout("${json}" 480 items Applications 0)
+    expect_layout("${json}" 180 items Applications 1)
+    expect_layout("${json}" Bloom background volume)
+    expect_layout("${json}" /.background/dmg-background.tiff background path)
+    expect_layout("${json}" ON background bookmark)
+    string(JSON path ERROR_VARIABLE problem GET "${json}" background path)
+    if(NOT problem AND NOT EXISTS "${volume}${path}")
+        fail("the image's window layout names the background ${path}, which the image lacks")
+    endif()
 endfunction()
 
 function(step_image)
@@ -270,11 +321,9 @@ function(step_image)
             fail("the background holds pictures of '${sizes}', not 660 x 400 and 1320 x 800")
         endif()
     endif()
-    if(EXISTS "${layout}")
-        expect_file("the image holds the window layout" "${mount}/.DS_Store")
-    endif()
+    check_window_layout("${mount}")
     passed("the disk image holds the application, the Applications link, the two background "
-           "pictures and a signature that verifies")
+           "pictures, the window layout that names them, and a signature that verifies")
 endfunction()
 
 # The value of a key of one entry of the component plist, empty when it is not there.
