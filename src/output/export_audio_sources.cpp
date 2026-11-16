@@ -10,6 +10,20 @@
 #include <string_view>
 
 namespace bloom::output {
+
+platform::LocalCopyOverride
+exportAudioLocalCopiesV1(const document::AssetInterpretation& interpretation) noexcept {
+    switch (interpretation.localCopies) {
+    case document::AssetLocalCopies::Always:
+        return platform::LocalCopyOverride::Always;
+    case document::AssetLocalCopies::Never:
+        return platform::LocalCopyOverride::Never;
+    case document::AssetLocalCopies::Automatic:
+        break;
+    }
+    return platform::LocalCopyOverride::Inherit;
+}
+
 namespace {
 using media::provider::Error;
 using media::provider::Unavailable;
@@ -76,6 +90,8 @@ std::variant<ExportAudioSourceFactsV1, Unavailable> preflightExportAudioSourcesV
         const auto path = media::resolveImagePath(asset->locator.path, asset->locator.relinkHint,
                                                   assetBaseDirectory);
         media::video::VideoDecodeSession session(path);
+        session.setSourceStore(platform::processSourceStore(),
+                               exportAudioLocalCopiesV1(asset->interpretation));
         const auto probed = session.probe(cancel);
         if (const auto* error = std::get_if<Unavailable>(&probed)) {
             if (error->reason == Error::Cancelled)

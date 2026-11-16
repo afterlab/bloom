@@ -2100,8 +2100,11 @@ void AssetController::startThumbnails() {
                         // audio miss. A known source identity verifies with one stat.
                         std::optional<media::video::VideoDecodeSession> decoder;
                         const auto video = [&]() -> media::video::VideoDecodeSession& {
-                            if (!decoder)
+                            if (!decoder) {
                                 decoder.emplace(path);
+                                decoder->setSourceStore(platform::processSourceStore(),
+                                                        localCopyOverride(asset.interpretation));
+                            }
                             return *decoder;
                         };
                         const auto probe = runtime::video::probeMetadata(asset);
@@ -2365,9 +2368,12 @@ void AssetController::startThumbnails() {
                             const auto cancelAudio = [&context] {
                                 return context.isCancellationRequested();
                             };
-                            auto decoded = media::video::openWindowedVideoAudio(
-                                std::make_shared<media::video::VideoDecodeSession>(path), probe,
-                                ordinal);
+                            const auto audioSession =
+                                std::make_shared<media::video::VideoDecodeSession>(path);
+                            audioSession->setSourceStore(platform::processSourceStore(),
+                                                         localCopyOverride(asset.interpretation));
+                            auto decoded =
+                                media::video::openWindowedVideoAudio(audioSession, probe, ordinal);
                             auto* audio = std::get_if<media::audio::AudioBuffer>(&decoded);
                             if (audio == nullptr) {
                                 preview.audioDiagnostic =

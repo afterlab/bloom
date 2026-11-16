@@ -6,12 +6,14 @@
 #include <bloom/media/video/audio.hpp>
 #include <bloom/media/video/session.hpp>
 #include <bloom/platform/source_identity.hpp>
+#include <bloom/platform/source_store.hpp>
 #include <bloom/runtime/composition_time.hpp>
 #include <bloom/runtime/audio_sound.hpp>
 #include <bloom/runtime/footage_time.hpp>
 
 #include "audio_analysis_cache.hpp"
 #include "audio_source_open.hpp"
+#include "image_source.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -54,6 +56,8 @@ OpenedAssetAudio openAssetAudio(const document::AssetRecord& asset, const std::u
         opened.buffer = std::make_shared<const media::audio::AudioBuffer>(std::move(*decoded.value()));
     } else if (asset.kind == document::AssetKind::Video) {
         auto session = std::make_shared<media::video::VideoDecodeSession>(path);
+        session->setSourceStore(platform::processSourceStore(),
+                                localCopyOverride(asset.interpretation));
         auto probed = session->probe(cancelled);
         auto* probe = std::get_if<media::provider::ProbeResult>(&probed);
         if (probe == nullptr)

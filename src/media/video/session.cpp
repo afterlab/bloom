@@ -685,9 +685,11 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
     // #718: a source the local mirror keeps (slow storage, or the asset's or a folder's choice)
     // is not copied before its first frame. It opens under its recorded digest and fills by
     // byte range; the capture below remains for fast local media, for a source with no recorded
-    // digest yet (import: the first read) and after a failed proof.
+    // digest yet (import: the first read) and after a failed proof. A probe names no digest, but
+    // a source whose identity is on record under a verified digest opens under that one (#732).
+    const auto claimed = expected ? expected : verified;
     const bool progressive =
-        expected && state_->sourceStore && !state_->progressiveRefused &&
+        claimed && state_->sourceStore && !state_->progressiveRefused &&
         state_->sourceStore->keeps(state_->path, *observed.identity, state_->localCopies);
     const auto capture = [&] {
         if (!progressive)
@@ -699,14 +701,14 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
         request.spoolDirectory = state_->spoolDirectory;
         request.quota = state_->quota;
         request.sourceLimit = Limits::sourceBytes;
-        request.claimed = *expected;
+        request.claimed = *claimed;
         request.chunks = state_->sourceStore->chunks(state_->path, *observed.identity);
         state_->localRangesPurged = false;
         return platform::ReadOnlyFileSnapshot::captureProgressive(request);
     };
     // Every decoder lane of one source shares one range-filled snapshot: the file is read once.
     if (progressive)
-        if (auto shared = findShared(*expected, state_->retirement)) {
+        if (auto shared = findShared(*claimed, state_->retirement)) {
             if (access.policy == SourceRevisionPolicy::Revalidate && !verified)
                 if (const auto refused = proved(*shared))
                     return *refused;

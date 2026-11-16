@@ -7,6 +7,8 @@
 #include <bloom/media/provider/provider_chain.hpp>
 #include <bloom/media/video/audio.hpp>
 #include <bloom/output/composition_output_stream.hpp>
+#include <bloom/output/export_audio_sources.hpp>
+#include <bloom/platform/source_store.hpp>
 #include <bloom/render/processing_host_storage.hpp>
 #include <bloom/runtime/audio_mix_render.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -125,6 +127,8 @@ struct CompositionOutputStreamV1::State {
             std::shared_ptr<ExportResourceReservationV1> retainedClaim;
             std::shared_ptr<ExportResourceReservationV1> scratchClaim;
             const auto decoder = std::make_shared<media::video::VideoDecodeSession>(path);
+            decoder->setSourceStore(platform::processSourceStore(),
+                                    exportAudioLocalCopiesV1(asset->interpretation));
             audioDecoders.emplace_back(path.filename().string(), decoder);
             const auto probe = checked(decoder->probe(cancel));
             require(probe.sourceDigest == asset->contentDigest, "Audio source changed",

@@ -2,6 +2,7 @@
 
 #include <bloom/document/document.hpp>
 #include <bloom/media/provider/contract.hpp>
+#include <bloom/platform/source_store.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 
 #include <cstdint>
@@ -44,6 +45,11 @@ preflightExportAudioSourcesV1(const document::Snapshot& snapshot,
                               const runtime::CompiledCompositionPlan& plan,
                               const std::filesystem::path& assetBaseDirectory,
                               const std::function<bool()>& cancel);
+
+// The asset's "Keep local copies" choice as the source store's override: the export audio
+// sessions read a movie's sound through the process's source store with it (#732).
+[[nodiscard]] platform::LocalCopyOverride
+exportAudioLocalCopiesV1(const document::AssetInterpretation& interpretation) noexcept;
 
 // True when the export audio path decodes this probed codec spelling.
 [[nodiscard]] bool exportAudioPathDecodesV1(const std::string& codec);
