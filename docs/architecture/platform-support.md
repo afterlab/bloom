@@ -322,7 +322,9 @@ What counts as the operating system is declared per platform: on Linux the libra
 `cmake/package/linux-base-libraries.txt` (and what those load themselves), on macOS `/usr/lib`
 and `/System`, on Windows the system directory, without the Visual C++ runtime, which is not
 part of Windows. On macOS the check also fails on a file built for a newer system than the
-bundle declares.
+bundle declares. On Windows a program may load one library late and by its full name: the
+libcrypto of the update checks, which must be among the carried interpreter's modules
+(`python\DLLs`), so the package holds one copy of it. Any other late load fails the check.
 
 The run never reads or changes the settings of the person whose computer it is. The check
 gives the application a settings file, data and cache directories of its own, and the

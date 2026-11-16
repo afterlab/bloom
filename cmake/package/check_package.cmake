@@ -33,6 +33,9 @@
 #                 Windows  declared: the libraries of the Windows system directory, except the
 #                          Visual C++ runtime, which is not part of Windows and must be inside.
 #                          Looked for beside the file and, for a library, beside the programs.
+#                          The one library a program loads late and by its full name, the
+#                          libcrypto of the update checks, must be among the carried
+#                          interpreter's modules (python\DLLs); any other late load fails.
 #               The update helper is held to more: it loads the operating system's own libraries
 #               only and has no search path, because it runs from a copy outside the package.
 #
@@ -697,12 +700,34 @@ elseif(system STREQUAL "windows" AND ("resolution" IN_LIST ONLY OR "run" IN_LIST
             get_filename_component(directory "${file}" DIRECTORY)
             string(TOLOWER "${file}" lower)
             bloom_tool(lines "${BLOOM_DUMPBIN}" /nologo /dependents "${file}")
+            set(late FALSE)
             foreach(line IN LISTS lines)
+                # The tool lists what Windows loads with the file, and then what the file
+                # loads late, by itself.
+                if(line MATCHES "delay load dependencies")
+                    set(late TRUE)
+                elseif(line MATCHES "following dependencies")
+                    set(late FALSE)
+                endif()
                 if(NOT line MATCHES "^ +([^ ]+\\.[Dd][Ll][Ll])$")
                     continue()
                 endif()
                 set(name "${CMAKE_MATCH_1}")
                 string(TOLOWER "${name}" lower_name)
+                # Bloom's programs load one library late, by its full name, from the carried
+                # interpreter's modules: the libcrypto behind the update checks (ADR 0041).
+                # Windows never searches for it, so it must be in that folder and nowhere else
+                # is right.
+                if(late)
+                    if(NOT lower_name STREQUAL "libcrypto-3-x64.dll")
+                        bloom_fail("${shown}: loads ${name} late, which no rule of the package "
+                                   "allows")
+                    elseif(NOT EXISTS "${python}/DLLs/${name}")
+                        bloom_fail("${shown}: loads ${name} late from the interpreter's "
+                                   "modules, where it is missing")
+                    endif()
+                    continue()
+                endif()
                 # An API set is a name of Windows itself, not a file.
                 if(lower_name MATCHES "^(api-ms-win-|ext-ms-)")
                     continue()
