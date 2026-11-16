@@ -237,11 +237,14 @@ StartupResult settleAtStartup(const UpdateFolders& folders, const std::string_vi
         std::filesystem::remove(folders.plan(), error);
         return result;
     }
-    // A journal that ends in `done` belongs to a finished plan.
-    std::ifstream journal(folders.journal());
+    // A journal that ends in `done` belongs to a finished plan. The journal is closed before
+    // anything is removed: an open file cannot be removed on Windows.
     bool done = false;
-    for (std::string line; std::getline(journal, line);) {
-        done = done || line == "done" || line.starts_with("done ");
+    {
+        std::ifstream journal(folders.journal());
+        for (std::string line; std::getline(journal, line);) {
+            done = done || line == "done" || line.starts_with("done ");
+        }
     }
     if (!done && plan->mode == ApplyMode::Swap) {
         if (plan->version == runningVersion) {
