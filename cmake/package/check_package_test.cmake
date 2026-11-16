@@ -103,6 +103,25 @@ endif()
 string(STRIP "${output}${error}" passed)
 message(STATUS "${passed}")
 
+# 1a. A link to bloom-cli in another folder, as the Linux install script and the macOS
+# installers make one: started through it, the program finds its package and renders a frame
+# headless. (Windows has no such link: its PATH entry is the launcher in the cli folder, which
+# the installer's test starts the same way.)
+if(NOT CMAKE_HOST_WIN32)
+    file(MAKE_DIRECTORY "${WORK}/link")
+    file(CREATE_LINK "${programs}/bloom-cli" "${WORK}/link/bloom-cli" SYMBOLIC)
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" "-DPACKAGE=${package}" -DRUN=ON -DONLY=run
+            "-DVERSION=${VERSION}" "-DWORK=${WORK}/link-run"
+            "-DCLI_PROGRAM=${WORK}/link/bloom-cli" -P "${check}"
+        OUTPUT_VARIABLE output ERROR_VARIABLE error RESULT_VARIABLE result)
+    if(NOT result EQUAL 0)
+        message(FATAL_ERROR "bloom-cli started through a link outside the package does not "
+                            "run or render:\n${output}${error}")
+    endif()
+    message(STATUS "a linked bloom-cli runs and renders a frame through the package")
+endif()
+
 # 1b. With GPU (a build with the Vulkan backend): the packaged application shows a Viewer frame
 # that was evaluated on the GPU. A package whose application finds no device, or whose Viewer
 # falls back to the CPU reference path, fails here (#717).

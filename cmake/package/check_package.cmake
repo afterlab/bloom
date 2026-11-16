@@ -45,7 +45,9 @@
 #   run         (with RUN) The package's own bloom-cli runs
 #               tests/fixtures/scripting/package_loaded_images.py in the carried interpreter,
 #               which uses every carried module and then starts the packaged
-#               application without a window. Both report every image they loaded. The check
+#               application without a window. Both report every image they loaded. The same
+#               bloom-cli then renders the first frame of a new project headless, as a PNG
+#               (`bloom-cli render`), and the check fails when it does not. The check
 #               fails when an image came from outside the package and is not a declared part of
 #               the operating system (on Linux: a named base library, or a library the loader
 #               records one of those as having asked for), or when a library the package carries
@@ -1163,6 +1165,22 @@ if(RUN AND "run" IN_LIST ONLY AND NOT failures)
         COMMAND "${cli_program}" run "${script}"
         WORKING_DIRECTORY "${WORK}/run"
         RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 600)
+    # The same program then renders a frame headless: the first frame of a new, empty project
+    # as a PNG. Started through CLI_PROGRAM, this is what shows that a link or a launcher
+    # outside the package finds the package it belongs to. (Its libraries were judged by the
+    # run above, so the loader's record is not asked for again.)
+    unset(ENV{LD_DEBUG})
+    unset(ENV{LD_DEBUG_OUTPUT})
+    set(frame "${WORK}/run/frame/frame.png")
+    execute_process(
+        COMMAND "${cli_program}" render --frame 0 --preset PngRgba8SrgbV1 --out "${WORK}/run/frame"
+        WORKING_DIRECTORY "${WORK}/run"
+        RESULT_VARIABLE render_result OUTPUT_VARIABLE render_output ERROR_VARIABLE render_error
+        TIMEOUT 600)
+    set(frame_start "")
+    if(EXISTS "${frame}")
+        file(READ "${frame}" frame_start LIMIT 8 HEX)
+    endif()
     foreach(leftover IN LISTS leftovers)
         if(leftover MATCHES "/BloomPackageCheck$" AND IS_DIRECTORY "${leftover}")
             file(REMOVE_RECURSE "${leftover}")
@@ -1170,6 +1188,10 @@ if(RUN AND "run" IN_LIST ONLY AND NOT failures)
     endforeach()
     if(NOT result EQUAL 0)
         bloom_fail("bloom-cli could not run the check's script (${result}): ${output}${error}")
+    endif()
+    if(NOT render_result EQUAL 0 OR NOT frame_start STREQUAL "89504e470d0a1a0a")
+        bloom_fail("bloom-cli could not render a frame as a PNG (${render_result}): "
+                   "${render_output}${render_error}")
     endif()
     set(records_read "")
     if(EXISTS "${report}")
