@@ -32,6 +32,8 @@ std::string_view refusalName(const UpdateRefusal refusal) noexcept {
         return "file-checksum-mismatch";
     case UpdateRefusal::FileSignatureInvalid:
         return "file-signature-invalid";
+    case UpdateRefusal::VerificationUnavailable:
+        return "verification-unavailable";
     case UpdateRefusal::Cancelled:
         return "cancelled";
     }

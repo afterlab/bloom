@@ -4,13 +4,13 @@
     python3 tools/release/make_update_fixtures.py [FOLDER]     default: src/update/tests/fixtures
 
 Every file is made with the release tools themselves (feed.py and sign_release beside this file,
-which sign with the `openssl` program), so the C++ reader is tested against what a release really
-publishes. Ed25519 signatures are deterministic: the same keys and content give the same bytes on
+which sign with the `openssl` program where the machine has it), so the C++ reader is tested
+against what a release really publishes. Ed25519 signatures are deterministic: the same keys and content give the same bytes on
 every machine, and the release tools' test makes them again and compares.
 
 The keys are not secrets. Their private halves are the test keys printed in RFC 8032, section
 7.1; a build made with BLOOM_UPDATE_TEST_BUILD uses the first one and is refused by the package
-check for a release. They are written for `openssl` as DER files in a temporary folder.
+check for a release. They are written for the signing program as DER files in a temporary folder.
 """
 
 from __future__ import annotations
@@ -110,7 +110,7 @@ def main() -> int:
             # `openssl pkeyutl` signs no empty file, so the first case is the RFC's text alone;
             # the others are also made here and must be the RFC's.
             if body and sign(keys[index], work, body) != signature:
-                raise SystemExit(f"openssl does not give RFC 8032's signature for test {index + 1}")
+                raise SystemExit(f"the signing program does not give RFC 8032's signature for test {index + 1}")
             cases.append((f"rfc8032-{index + 1}", public[index], body, signature, True))
         long_message = hashlib.sha512(b"bloom update fixture").digest() * 4
         long_signature = sign(keys[0], work, long_message)
@@ -141,10 +141,6 @@ def main() -> int:
                                    "yes" if accepted else "no"]))
         # (Bytes, not text: the line ends are the same on every system.)
         (out / "ed25519-cases.txt").write_bytes(("\n".join(lines) + "\n").encode("ascii"))
-        (out / "sha512-cases.txt").write_bytes("".join(
-            f"{data.hex() or '-'} {hashlib.sha512(data).hexdigest()}\n"
-            for data in (b"", b"abc", b"a" * 111, b"a" * 112, b"a" * 128, long_message))
-            .encode("ascii"))
 
         # A stand-in for a release file, signed by each key.
         update = b"".join(hashlib.sha256(b"bloom update file %d" % block).digest()

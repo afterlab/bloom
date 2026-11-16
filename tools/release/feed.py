@@ -14,7 +14,7 @@ for each platform the release files with their size, SHA-256 and Ed25519 signatu
     feed.py signed-bytes --payload FILE --out FILE
         writes the bytes a feed signature covers.
     feed.py verify --feed FILE --public-key BASE64
-        checks a published feed with a public key, using the `openssl` program.
+        checks a published feed with a public key (the program of ed25519_route.py).
 
 This file never reads a private key. Only the Python standard library is used.
 """
@@ -24,11 +24,10 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import importlib.util
 import json
 import re
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 PAYLOAD_TYPE = "application/vnd.bloom.update-feed+json"
@@ -36,8 +35,6 @@ SCHEMA = "bloom.update-feed/1"
 PLATFORMS = ("linux-x86_64", "macos-arm64", "windows-x86_64")
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
                      r"(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$")
-# The DER form of an Ed25519 public key is this prefix and the key's 32 bytes.
-PUBLIC_KEY_DER_PREFIX = bytes.fromhex("302a300506032b6570032100")
 
 
 def channel_of(version: str) -> str:
@@ -128,21 +125,17 @@ def envelope_bytes(payload: bytes, signatures: list[tuple[str, str]]) -> bytes:
     return json.dumps(envelope, indent=2).encode("ascii") + b"\n"
 
 
-def verify_with_openssl(public_key: bytes, message: bytes, signature: bytes) -> bool:
-    """Whether `openssl` accepts the signature. The message goes through a file, never a pipe."""
-    with tempfile.TemporaryDirectory() as work:
-        folder = Path(work)
-        pem = ("-----BEGIN PUBLIC KEY-----\n"
-               + base64.b64encode(PUBLIC_KEY_DER_PREFIX + public_key).decode("ascii")
-               + "\n-----END PUBLIC KEY-----\n")
-        (folder / "key.pem").write_text(pem, encoding="ascii")
-        (folder / "message").write_bytes(message)
-        (folder / "signature").write_bytes(signature)
-        result = subprocess.run(
-            ["openssl", "pkeyutl", "-verify", "-pubin", "-inkey", str(folder / "key.pem"),
-             "-rawin", "-in", str(folder / "message"), "-sigfile", str(folder / "signature")],
-            capture_output=True, check=False)
-        return result.returncode == 0
+def load_route_module():
+    spec = importlib.util.spec_from_file_location(
+        "bloom_release_ed25519_route", Path(__file__).resolve().parent / "ed25519_route.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def verify_signature(public_key: bytes, message: bytes, signature: bytes) -> bool:
+    """Whether the signature is the public key's over the message (ed25519_route.py)."""
+    return load_route_module().verify(public_key, message, signature)
 
 
 def read_feed(data: bytes, public_keys: list[bytes]) -> dict:
@@ -155,7 +148,7 @@ def read_feed(data: bytes, public_keys: list[bytes]) -> dict:
     names = {key_id(key): key for key in public_keys}
     for entry in envelope.get("signatures", []):
         key = names.get(entry.get("keyid"))
-        if key is not None and verify_with_openssl(
+        if key is not None and verify_signature(
                 key, message, base64.b64decode(entry["sig"], validate=True)):
             return json.loads(payload.decode("utf-8"))
     raise ValueError("the feed is not signed by the given key")

@@ -1,12 +1,15 @@
 # OpenSSL 3.5.9 (Apache-2.0; see dependencies/licenses/openssl/) - the TLS and hash library behind
-# the carried Python's `ssl` and `hashlib` modules. Bloom itself does not link it.
+# the carried Python's `ssl` and `hashlib` modules. Bloom's update check uses its libcrypto too
+# (src/update/CMakeLists.txt, ADR 0041): the static library on Linux and macOS, and on Windows
+# the library file the interpreter carries.
 #
 # Bloom carries its own interpreter on every platform (python.cmake, issue #677), so this is built
 # for every profile from the same archive.
 #
 # Linux and macOS: static libraries and headers only, into the prefix's private `python-support`
-# directory, which no other recipe and no Bloom target searches: the libraries are linked into the
-# interpreter's extension modules and nothing of OpenSSL is installed as a file of its own. The
+# directory, which no other recipe searches and of which only src/update names libcrypto by its
+# path: the libraries are linked into the interpreter's extension modules and into Bloom's
+# programs, and nothing of OpenSSL is installed as a file of its own. The
 # configuration directory is a path that does not exist, so no configuration file on the machine
 # is read; the interpreter is pointed at the system's certificates when it starts
 # (src/scripting/python/runtime.cpp).

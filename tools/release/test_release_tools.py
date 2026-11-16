@@ -4,8 +4,10 @@ work with feed.py and sign_release.
 
     python3 -I tools/release/test_release_tools.py
 
-The signing runs `openssl`; where that program is missing the test reports a skip (exit status 77,
-the SKIP_RETURN_CODE of its registration) and says why. The keys are RFC 8032's public test keys.
+The signing runs the `openssl` program (OpenSSL 3) where the machine has it, and otherwise
+Bloom's own build tool, which the test's registration names in BLOOM_ED25519_TOOL
+(ed25519_route.py). With neither the test reports a skip (exit status 77, the SKIP_RETURN_CODE of
+its registration) and says why. The keys are RFC 8032's public test keys.
 """
 
 from __future__ import annotations
@@ -42,6 +44,7 @@ changelog = load("bloom_release_changelog", TOOLS / "changelog.py")
 sums = load("bloom_release_sums", TOOLS / "sums.py")
 appcast = load("bloom_release_appcast", TOOLS / "appcast.py")
 fixtures = load("bloom_release_fixtures", TOOLS / "make_update_fixtures.py")
+route = load("bloom_release_route", TOOLS / "ed25519_route.py")
 
 VERSION = "0.1.0-alpha.1"
 DATE = "2026-11-17"
@@ -281,15 +284,26 @@ class NoKeyTests(unittest.TestCase):
             self.assertNotIn("--key", source, name)
             self.assertNotIn("key-file", source, name)
             self.assertNotIn("os.environ", source, name)
-        # `-inkey` is the way `openssl` is given a key. sign_release gives it the private key.
-        # feed.py's one use is the check of a signature with a public key (with -pubin).
+        # `-inkey` is the way `openssl` is given a key. One file hands keys to a signing program
+        # (ed25519_route.py): a private key file's name to sign with, which only sign_release
+        # gives it, and a public key to check a signature with (with -pubin).
         mentions = {path.name for path in TOOLS.iterdir()
                     if path.is_file() and path.name != Path(__file__).name
                     and "-inkey" in path.read_text(encoding="utf-8", errors="ignore")}
-        self.assertEqual(mentions, {"sign_release", "feed.py"})
+        self.assertEqual(mentions, {"ed25519_route.py"})
+        route_source = (TOOLS / "ed25519_route.py").read_text(encoding="utf-8")
+        self.assertEqual(route_source.count("-inkey"), 2)
+        self.assertIn('"-verify", "-pubin", "-inkey"', route_source)
+        self.assertNotIn("PRIVATE KEY", route_source)
+        # Two tools use that file: sign_release, for everything a private key does, and
+        # feed.py, which only checks a signature with a public key.
+        users = {path.name for path in TOOLS.iterdir()
+                 if path.is_file() and not path.name.startswith("test_")
+                 and path.name != "ed25519_route.py"
+                 and "ed25519_route.py" in path.read_text(encoding="utf-8", errors="ignore")}
+        self.assertEqual(users, {"sign_release", "feed.py"})
         feed_source = (TOOLS / "feed.py").read_text(encoding="utf-8")
-        self.assertEqual(feed_source.count("-inkey"), 1)
-        self.assertIn('"-verify", "-pubin", "-inkey"', feed_source)
+        self.assertEqual(re.findall(r"load_route_module\(\)\.(\w+)", feed_source), ["verify"])
 
 
 class FixtureTests(unittest.TestCase):
@@ -376,8 +390,8 @@ class ChainTests(unittest.TestCase):
         sums_bytes = (self.release / "SHA256SUMS").read_bytes()
         signature = (self.release / "SHA256SUMS.sig").read_bytes()
         self.assertEqual(len(signature), 64)
-        self.assertTrue(feed.verify_with_openssl(self.public, sums_bytes, signature))
-        self.assertFalse(feed.verify_with_openssl(self.public, sums_bytes + b" ", signature))
+        self.assertTrue(feed.verify_signature(self.public, sums_bytes, signature))
+        self.assertFalse(feed.verify_signature(self.public, sums_bytes + b" ", signature))
         tool(str(TOOLS / "sums.py"), "check", "--sums", str(self.release / "SHA256SUMS"),
              "--folder", str(self.release))
 
@@ -414,6 +428,34 @@ class ChainTests(unittest.TestCase):
                                  "/SILENT /NORESTART")
                 self.assertIsNone(item.find(SPARKLE + "minimumSystemVersion"))
 
+    def test_both_signing_programs_agree(self) -> None:
+        """The `openssl` program and Bloom's own tool give the same key and the same signature,
+        and each accepts the other's. Skipped where the machine has only one of them."""
+        programs = {"openssl": route.openssl_program(), "tool": route.built_tool()}
+        if None in programs.values():
+            self.skipTest("this machine has one signing program, not two: "
+                          + ", ".join(sorted(kind for kind, program in programs.items()
+                                             if program is not None)))
+        message = self.work / "message"
+        message.write_bytes(b"one message, two programs\n")
+        routes = [(kind, program) for kind, program in programs.items()]
+        keys = [route.public_key(self.key, chosen) for chosen in routes]
+        signatures = [route.sign(self.key, message, chosen) for chosen in routes]
+        self.assertEqual(keys[0], keys[1])
+        self.assertEqual(keys[0], self.public)
+        self.assertEqual(signatures[0], signatures[1])
+        for chosen in routes:
+            self.assertTrue(route.verify(self.public, message.read_bytes(), signatures[0], chosen))
+            self.assertFalse(route.verify(self.public, b"another message\n", signatures[0],
+                                          chosen))
+            self.assertFalse(route.verify(self.public, message.read_bytes(),
+                                          signatures[0][:-1], chosen))
+        # An empty file is a message too.
+        empty = self.work / "empty"
+        empty.write_bytes(b"")
+        self.assertEqual(route.sign(self.key, empty, routes[1]),
+                         bytes.fromhex(fixtures.RFC_SIGNATURES[0]))
+
     def test_appcast_refuses_plain_http_and_a_missing_signature(self) -> None:
         name = self.files["macos-arm64"][1]
         notes = self.work / "notes.md"
@@ -448,11 +490,9 @@ class ChainTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    # Another program of that name (the one macOS has) cannot sign with Ed25519.
-    version = subprocess.run(["openssl", "version"], capture_output=True, text=True,
-                             check=False) if shutil.which("openssl") else None
-    if version is None or not version.stdout.startswith("OpenSSL 3"):
-        print("NotRun: the release tools' test needs the `openssl` program (OpenSSL 3) for "
-              "Ed25519 signing, and it is not on PATH.", file=sys.stderr)
+    try:
+        route.route()
+    except ValueError as error:
+        print(f"NotRun: the release tools' test has {error}.", file=sys.stderr)
         sys.exit(77)
     unittest.main()

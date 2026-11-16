@@ -23,6 +23,7 @@ enum class UpdateRefusal : std::uint8_t {
     FileSizeMismatch,    // the file is not the size the list gives
     FileChecksumMismatch, // the file's SHA-256 is not the one the list gives
     FileSignatureInvalid, // the list's signature for the file does not match it
+    VerificationUnavailable, // this copy cannot check signatures (a file of its package is missing)
     Cancelled,
 };
 

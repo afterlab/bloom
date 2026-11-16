@@ -287,6 +287,11 @@ FeedReadResult readSignedFeed(const std::span<const std::byte> bytes,
     // One signature by a key this build carries is enough; a signature by another key says
     // nothing either way (a release may be signed by a new and an old key while one replaces
     // the other). A signature that names a carried key and does not match is a refusal.
+    if (!cryptoLibraryReady()) {
+        return refused(UpdateRefusal::VerificationUnavailable,
+                       "this copy of Bloom cannot check signatures: a file of its package is "
+                       "missing");
+    }
     const auto signedBytes = feedSignedBytes(*payloadType, *payload);
     bool verified = false;
     bool mismatch = false;

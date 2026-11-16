@@ -1,45 +1,62 @@
-// Ed25519 verification and SHA-512 against cases made by OpenSSL (tools/release/make_update_fixtures.py):
-// the three test signatures RFC 8032 prints, a longer message, and every way a signature must
-// fail.
+// Ed25519 verification against cases made by the `openssl` program
+// (tools/release/make_update_fixtures.py): the three test signatures RFC 8032 prints, a longer
+// message, and every way a signature must fail. SHA-256 against FIPS 180-4's printed digests.
 #include "update_test_support.hpp"
 
 #include <bloom/update/base64.hpp>
 #include <bloom/update/ed25519.hpp>
 #include <bloom/update/keys.hpp>
-#include <bloom/update/sha512.hpp>
+#include <bloom/core/sha256.hpp>
+#include <bloom/update/sha256.hpp>
 
 #include <algorithm>
+#include <array>
+#include <optional>
 #include <span>
 #include <sstream>
+#include <string>
+#include <utility>
 
 int main() {
     using namespace bloom::update;
     using namespace bloom::update::testing;
     Expectations checks;
 
-    int digests = 0;
-    std::istringstream sha512(readFixture("sha512-cases.txt"));
-    for (std::string data, expected; sha512 >> data >> expected;) {
-        const auto bytes = fromHex(data);
-        const auto digest = fromHex(expected);
-        checks.expect(bytes.has_value() && digest.has_value(), "sha512: a case is readable");
-        if (!bytes.has_value() || !digest.has_value()) {
-            continue;
+    // SHA-256 as the feed and the file check use it: FIPS 180-4's printed digests, whole and in
+    // uneven pieces, and against Bloom's own implementation of the same function.
+    const auto digestText = [](const std::optional<bloom::core::Sha256Digest>& digest) {
+        if (!digest.has_value()) {
+            return std::string("none");
         }
-        ++digests;
-        const auto whole = Sha512::hash(std::as_bytes(std::span(*bytes)));
-        checks.expect(std::ranges::equal(whole, *digest),
-                      "sha512: the digest of " + std::to_string(bytes->size()) + " bytes");
-        // The same bytes in uneven pieces.
-        Sha512 pieces;
-        for (std::size_t offset = 0, step = 1; offset < bytes->size(); offset += step, step += 7) {
-            const auto count = std::min(step, bytes->size() - offset);
-            pieces.update(std::as_bytes(std::span(*bytes).subspan(offset, count)));
-        }
-        checks.expect(std::ranges::equal(pieces.finalize(), *digest),
-                      "sha512: the digest of the same bytes given in pieces");
+        const auto hex = digest->toLowercaseHex();
+        return std::string(hex.data(), hex.size());
+    };
+    const std::string longer(1000, 'a');
+    const std::array<std::pair<std::string, std::string>, 3> digests{{
+        {"", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+        {"abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+        {"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+         "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"},
+    }};
+    for (const auto& [text, expected] : digests) {
+        const auto bytes = std::as_bytes(std::span(text));
+        checks.expect(digestText(Sha256::hash(bytes)) == expected,
+                      "sha256: the digest of " + std::to_string(text.size()) + " bytes");
     }
-    checks.expect(digests == 6, "sha512: six cases were read");
+    {
+        const auto bytes = std::as_bytes(std::span(longer));
+        Sha256 pieces;
+        for (std::size_t offset = 0, step = 1; offset < bytes.size(); offset += step, step += 7) {
+            pieces.update(bytes.subspan(offset, std::min(step, bytes.size() - offset)));
+        }
+        const auto whole = Sha256::hash(bytes);
+        checks.expect(whole.has_value() && pieces.finalize() == whole,
+                      "sha256: the digest of the same bytes given in pieces");
+        checks.expect(whole == bloom::core::Sha256Hasher::hash(bytes),
+                      "sha256: the same digest as Bloom's own SHA-256");
+        // Taking the digest leaves the hasher as it was.
+        checks.expect(pieces.finalize() == whole, "sha256: the digest may be taken twice");
+    }
 
     int accepted = 0;
     int refused = 0;
@@ -71,15 +88,6 @@ int main() {
                           (expected == "yes" ? "the signature is accepted"
                                              : "the signature is refused"));
         (expected == "yes" ? accepted : refused) += 1;
-
-        // In pieces, as a download is checked.
-        Ed25519Verifier pieces(key, signature);
-        for (std::size_t offset = 0; offset < message->size(); offset += 100) {
-            const auto count = std::min<std::size_t>(100, message->size() - offset);
-            pieces.update(std::as_bytes(std::span(*message).subspan(offset, count)));
-        }
-        checks.expect(pieces.finish() == valid,
-                      "ed25519 " + name + ": the answer is the same for the message in pieces");
     }
     checks.expect(accepted == 4 && refused == 9, "ed25519: four accepted and nine refused cases");
 

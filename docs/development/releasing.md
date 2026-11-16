@@ -148,6 +148,7 @@ environment cannot read that environment's variables.
 | `tools/release/changelog.py` | Checks the changelog and writes a version's release notes |
 | `tools/release/sums.py` | Writes and checks `SHA256SUMS` |
 | `tools/release/sign_release` | Signs files, the checksum list and the feed; the only program that reads the key |
+| `tools/release/ed25519_route.py` | Picks the signing program: `openssl` (OpenSSL 3), or Bloom's own `bloom-ed25519-tool` on a machine without it |
 | `tools/release/feed.py`, `appcast.py` | Write the feed and the appcasts |
 | `tools/release/update_e2e.py` | The end-to-end update test |
 | `cmake/package/make_install_script.cmake`, `make_pkgbuild.cmake` | Write a release's `install.sh` and `PKGBUILD` |

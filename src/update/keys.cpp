@@ -1,7 +1,7 @@
 #include <bloom/update/keys.hpp>
 
-#include <bloom/core/sha256.hpp>
 #include <bloom/update/base64.hpp>
+#include <bloom/update/sha256.hpp>
 
 #include <algorithm>
 
@@ -33,7 +33,7 @@ std::optional<std::vector<Ed25519PublicKey>> parsePublicKeys(std::string_view te
 }
 
 std::string publicKeyId(const Ed25519PublicKey& key) {
-    const auto digest = core::Sha256Hasher::hash(std::as_bytes(std::span(key)));
+    const auto digest = Sha256::hash(std::as_bytes(std::span(key)));
     if (!digest.has_value()) {
         return {};
     }

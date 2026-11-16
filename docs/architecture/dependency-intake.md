@@ -242,6 +242,12 @@ LAPACK library and without numpy's kernels for particular instruction sets, into
 interpreter's own `site-packages`. [Platform support](platform-support.md) records the module
 set, the package set, how the set grows and what "the same result" covers.
 
+The update check is the one user of that directory outside the interpreter: `src/update` verifies
+Ed25519 signatures and SHA-256 checksums with the same OpenSSL `libcrypto`
+([ADR 0041](../decisions/0041-self-update.md)). Linux and macOS link the static library into
+Bloom's programs; Windows programs load the library file that the package carries beside the
+interpreter's modules. No lock component, recipe or package file was added for it.
+
 OpenSSL on Linux and macOS is built with a configuration directory that does not exist, so it
 trusts no certificate by accident. When Bloom starts the carried interpreter it sets
 `SSL_CERT_FILE` to the operating system's certificate file (macOS: `/etc/ssl/cert.pem`; Linux:

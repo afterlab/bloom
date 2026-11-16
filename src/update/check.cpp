@@ -67,7 +67,6 @@ DownloadResult downloadUpdateFile(UpdateTransport& transport, const FeedFile& en
         std::filesystem::remove(partial, ignored);
     };
     std::filesystem::remove(destination, error);
-    UpdateFileVerifier verifier(entry, trustedKeys);
     bool written = true;
     {
         std::ofstream file(partial, std::ios::binary | std::ios::trunc);
@@ -84,7 +83,6 @@ DownloadResult downloadUpdateFile(UpdateTransport& transport, const FeedFile& en
             [&](const std::span<const std::byte> bytes) {
                 file.write(reinterpret_cast<const char*>(bytes.data()),
                            static_cast<std::streamsize>(bytes.size()));
-                verifier.update(bytes);
                 written = static_cast<bool>(file);
                 return written;
             },
@@ -114,7 +112,7 @@ DownloadResult downloadUpdateFile(UpdateTransport& transport, const FeedFile& en
         discard();
         return result;
     }
-    result.diagnostic = verifier.finish();
+    result.diagnostic = verifyUpdateFile(partial, entry, trustedKeys, cancelled);
     if (!result.diagnostic.accepted()) {
         discard();
         return result;

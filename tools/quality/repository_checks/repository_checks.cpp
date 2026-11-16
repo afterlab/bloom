@@ -79,7 +79,8 @@ constexpr auto kPythonQualificationTools = std::to_array<std::string_view>(
      // The release tools (docs/decisions/0041-self-update.md), named file by file: they write
      // and check what a release publishes, from outside the application build.
      "tools/release/appcast.py", "tools/release/changelog.py", "tools/release/dmg_layout.py",
-     "tools/release/feed.py", "tools/release/make_update_fixtures.py", "tools/release/release.py",
+     "tools/release/ed25519_route.py", "tools/release/feed.py",
+     "tools/release/make_update_fixtures.py", "tools/release/release.py",
      "tools/release/sums.py", "tools/release/test_dmg_layout.py", "tools/release/test_release.py",
      "tools/release/test_release_tools.py", "tools/release/update_e2e.py"});
 

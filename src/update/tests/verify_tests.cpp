@@ -119,12 +119,13 @@ int main() {
                       UpdateRefusal::Cancelled,
                   "a cancelled check accepts nothing");
 
-    // The same check while the bytes arrive.
-    UpdateFileVerifier pieces(*entry, *trusted);
-    for (std::size_t offset = 0; offset < released.size(); offset += 777) {
-        pieces.update(asBytes(std::string_view(released).substr(offset, 777)));
-    }
-    checks.expect(pieces.finish().accepted(), "a file given in pieces is accepted");
+    // An empty file is a file like any other: accepted with its own signature, refused with
+    // another file's.
+    FeedFile empty = *entry;
+    empty.size = 0;
+    empty.sha256 = *bloom::core::Sha256Hasher::hash({});
+    checks.expect(verdict("", empty, *trusted) == UpdateRefusal::FileSignatureInvalid,
+                  "an empty file is refused with another file's signature");
 
     std::filesystem::remove_all(folder, error);
     return checks.result();

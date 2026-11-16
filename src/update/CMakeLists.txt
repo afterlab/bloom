@@ -35,6 +35,52 @@ foreach(bloom_update_setting IN ITEMS BLOOM_UPDATE_FEED_URL BLOOM_UPDATE_PUBLIC_
     endif()
 endforeach()
 
+# Signatures and checksums are OpenSSL's (ADR 0041): Ed25519 through EVP_DigestVerify and SHA-256
+# through EVP_sha256, from the locked libcrypto that the dependency prefix builds for the carried
+# Python interpreter (dependencies/superbuild/projects/openssl.cmake). Linux and macOS have it as
+# a static library, which is linked into the programs. Windows has it as a library file beside
+# the interpreter's modules; the programs import it late and load it by its full name from there
+# (crypto_library.cpp), so no second copy is carried and nothing is taken from the search path.
+# A developer build without the prefix uses the machine's OpenSSL 3.
+add_library(bloom_update_crypto INTERFACE)
+set(bloom_update_crypto_support "${BLOOM_DEPENDENCY_PREFIX}/python-support")
+set(bloom_update_crypto_build_directory "")
+if(WIN32 AND BLOOM_DEPENDENCY_PREFIX
+   AND EXISTS "${bloom_update_crypto_support}/openssl/lib/libcrypto.lib")
+    target_include_directories(bloom_update_crypto SYSTEM INTERFACE
+        "${bloom_update_crypto_support}/openssl/include")
+    target_link_libraries(bloom_update_crypto INTERFACE
+        "${bloom_update_crypto_support}/openssl/lib/libcrypto.lib" delayimp)
+    target_link_options(bloom_update_crypto INTERFACE "/DELAYLOAD:libcrypto-3-x64.dll")
+    # Where a program run from the build folder finds the library file: the interpreter's
+    # library folder of the prefix, the same file a package carries.
+    set(bloom_update_crypto_build_directory "${BLOOM_DEPENDENCY_PREFIX}/python/DLLs")
+    if(NOT EXISTS "${bloom_update_crypto_build_directory}/libcrypto-3-x64.dll")
+        message(FATAL_ERROR
+            "Bloom update: ${bloom_update_crypto_build_directory}/libcrypto-3-x64.dll is "
+            "missing; the dependency prefix's interpreter carries it.")
+    endif()
+    message(STATUS "Bloom update: the locked libcrypto of the carried interpreter, loaded late")
+elseif(NOT WIN32 AND BLOOM_DEPENDENCY_PREFIX
+       AND EXISTS "${bloom_update_crypto_support}/lib/libcrypto.a")
+    find_package(Threads REQUIRED)
+    target_include_directories(bloom_update_crypto SYSTEM INTERFACE
+        "${bloom_update_crypto_support}/include")
+    target_link_libraries(bloom_update_crypto INTERFACE
+        "${bloom_update_crypto_support}/lib/libcrypto.a" Threads::Threads ${CMAKE_DL_LIBS})
+    if(NOT APPLE)
+        # The interpreter's modules hold the same library; a program must not offer its copy's
+        # names to them.
+        target_link_options(bloom_update_crypto INTERFACE "LINKER:--exclude-libs,libcrypto.a")
+    endif()
+    message(STATUS "Bloom update: the locked libcrypto, linked statically")
+else()
+    find_package(OpenSSL 3.0 REQUIRED COMPONENTS Crypto)
+    target_link_libraries(bloom_update_crypto INTERFACE OpenSSL::Crypto)
+    message(STATUS "Bloom update: the machine's OpenSSL ${OPENSSL_VERSION} (no locked libcrypto "
+                   "in a dependency prefix)")
+endif()
+
 # Applying a prepared update: standard library and operating system calls only. The update
 # helper (apps/bloom-update-helper) compiles these files itself, so that it links nothing of
 # Bloom's and can be built against the static C++ runtime on Windows.
@@ -53,14 +99,18 @@ add_library(bloom_update STATIC
     check.cpp
     check_policy.cpp
     configuration.cpp
+    crypto_library.cpp
+    crypto_library.hpp
     ed25519.cpp
     feed.cpp
     file_verification.cpp
     install_kind.cpp
     keys.cpp
+    mapped_file.cpp
+    mapped_file.hpp
     refusal.cpp
     release_version.cpp
-    sha512.cpp
+    sha256.cpp
     staging.cpp
     zsync.cpp
 )
@@ -77,13 +127,18 @@ target_sources(bloom_update PUBLIC FILE_SET HEADERS BASE_DIRS include
           include/bloom/update/keys.hpp
           include/bloom/update/refusal.hpp
           include/bloom/update/release_version.hpp
-          include/bloom/update/sha512.hpp
+          include/bloom/update/sha256.hpp
           include/bloom/update/staging.hpp
           include/bloom/update/transport.hpp
           include/bloom/update/zsync.hpp)
 target_compile_features(bloom_update PUBLIC cxx_std_20)
-target_link_libraries(bloom_update PUBLIC bloom_core PRIVATE bloom_platform yyjson::yyjson)
+target_link_libraries(bloom_update PUBLIC bloom_core
+    PRIVATE bloom_platform bloom_update_crypto yyjson::yyjson)
 bloom_enable_warnings(bloom_update)
+if(bloom_update_crypto_build_directory)
+    set_source_files_properties(crypto_library.cpp PROPERTIES COMPILE_DEFINITIONS
+        "BLOOM_UPDATE_CRYPTO_BUILD_DIRECTORY=\"${bloom_update_crypto_build_directory}\"")
+endif()
 # The settings reach one file, so a build under other settings recompiles that file alone.
 if(BLOOM_UPDATE_TEST_BUILD)
     set(bloom_update_test_build 1)
@@ -98,6 +153,13 @@ set_source_files_properties(built_in_configuration.cpp PROPERTIES COMPILE_DEFINI
 add_executable(bloom-zsync-make zsync_make_main.cpp)
 target_link_libraries(bloom-zsync-make PRIVATE bloom_update)
 bloom_enable_warnings(bloom-zsync-make)
+
+# Ed25519 with the same libcrypto, for the release tools where the machine's `openssl` program is
+# not OpenSSL 3 (macOS): their tests and the end-to-end update test sign stand-in releases with
+# it. A build tool; no package carries it and no release is signed with it.
+add_executable(bloom-ed25519-tool ed25519_tool_main.cpp)
+target_link_libraries(bloom-ed25519-tool PRIVATE bloom_update bloom_update_crypto)
+bloom_enable_warnings(bloom-ed25519-tool)
 
 if(BUILD_TESTING)
     include(BloomTesting)

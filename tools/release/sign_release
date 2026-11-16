@@ -4,6 +4,8 @@
 This is the only program of the release tools that reads the private key. It uses the `openssl`
 program (OpenSSL 3) and the Python standard library, and makes plain Ed25519 signatures over the
 bytes of each file, which is the form Bloom, the install script and the platform updaters check.
+On a machine without that program it uses Bloom's own build tool instead, which only the tests
+and the end-to-end update test need (tools/release/ed25519_route.py).
 
     sign_release files --key-file KEY FILE ...
         writes FILE.sig (the signature in Base64) beside each file.
@@ -17,7 +19,7 @@ bytes of each file, which is the form Bloom, the install script and the platform
 
 KEY is a PKCS#8 file without a passphrase, as PEM or as DER. In place of --key-file,
 --key-variable NAME reads the PEM text from that environment variable; it is written to a private
-temporary file for `openssl` and removed afterwards.
+temporary file for the signing program and removed afterwards.
 """
 
 from __future__ import annotations
@@ -26,7 +28,6 @@ import argparse
 import base64
 import importlib.util
 import os
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -41,40 +42,12 @@ def load_feed_module():
     return module
 
 
-def run(command: list[str]) -> bytes:
-    result = subprocess.run(command, capture_output=True, check=False)
-    if result.returncode != 0:
-        raise ValueError(f"{command[0]} {command[1]} failed: "
-                         f"{result.stderr.decode('utf-8', 'replace').strip()}")
-    return result.stdout
-
-
-def key_form(key: Path) -> str:
-    """How the key file is written, as `openssl` names it."""
-    with key.open("rb") as file:
-        return "PEM" if file.read(5) == b"-----" else "DER"
-
-
-def public_key(key: Path) -> bytes:
-    """The 32 bytes of the key's public half."""
-    der = run(["openssl", "pkey", "-in", str(key), "-inform", key_form(key), "-pubout",
-               "-outform", "DER"])
-    prefix = bytes.fromhex("302a300506032b6570032100")
-    if len(der) != len(prefix) + 32 or not der.startswith(prefix):
-        raise ValueError("the key is not an Ed25519 key")
-    return der[len(prefix):]
-
-
-def sign(key: Path, path: Path) -> bytes:
-    """The Ed25519 signature of the file's bytes."""
-    with tempfile.TemporaryDirectory() as work:
-        out = Path(work) / "signature"
-        run(["openssl", "pkeyutl", "-sign", "-inkey", str(key), "-keyform", key_form(key),
-             "-rawin", "-in", str(path), "-out", str(out)])
-        signature = out.read_bytes()
-    if len(signature) != 64:
-        raise ValueError(f"the signature of {path} is not 64 bytes")
-    return signature
+def load_route_module():
+    spec = importlib.util.spec_from_file_location("bloom_release_ed25519_route",
+                                                  HERE / "ed25519_route.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def main(arguments: list[str]) -> int:
@@ -100,6 +73,8 @@ def main(arguments: list[str]) -> int:
     options = parser.parse_args(arguments)
 
     try:
+        route = load_route_module()
+        public_key, sign = route.public_key, route.sign
         with tempfile.TemporaryDirectory() as private:
             key = options.key_file
             if key is None:

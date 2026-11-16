@@ -486,8 +486,9 @@ endif()
 
 # The changelog (CHANGELOG.md) keeps the Keep a Changelog format and has a section for the
 # configured version; its release data tools (tools/release) are tested with the signing tool and
-# RFC 8032's public test keys. The tools test needs the `openssl` program and reports a skip (exit
-# status 77) where it is missing. Both tests run on all three platforms.
+# RFC 8032's public test keys. The signing runs the `openssl` program (OpenSSL 3) where the
+# machine has it and Bloom's own bloom-ed25519-tool where it has not (macOS), so the tests run on
+# all three platforms; the skip (exit status 77) is for a machine with neither.
 if(BUILD_TESTING)
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
@@ -504,21 +505,20 @@ if(BUILD_TESTING)
             COMMAND "${Python3_EXECUTABLE}" -I
                 "${PROJECT_SOURCE_DIR}/tools/release/test_release_tools.py"
             LABELS quality
+            ENVIRONMENT "BLOOM_ED25519_TOOL=$<TARGET_FILE:bloom-ed25519-tool>"
             SKIP_RETURN_CODE 77
             TIMEOUT 120)
         # The steps the release workflow calls (tools/release/release.py), on a stand-in
         # release of a few small files: the tag and validation gates, the candidate's files, and
-        # the signed release with its feed, appcasts and channel files. It reports a skip
-        # without `openssl` (OpenSSL 3).
+        # the signed release with its feed, appcasts and channel files.
         bloom_add_test(
             NAME bloom.release.script_tests
             COMMAND "${Python3_EXECUTABLE}" -I
                 "${PROJECT_SOURCE_DIR}/tools/release/test_release.py" "${CMAKE_COMMAND}"
             LABELS quality
+            ENVIRONMENT "BLOOM_ED25519_TOOL=$<TARGET_FILE:bloom-ed25519-tool>"
             SKIP_RETURN_CODE 77
             TIMEOUT 120)
-        # Linux only: the install script is the Linux installer and a POSIX shell script
-        # (tools/install/install.sh.in); macOS and Windows have installers of their own, with
         # The macOS disk image's window layout writer and reader (tools/release/dmg_layout.py),
         # on fixed stand-in values and a stand-in folder. It needs only Python, so it runs on
         # all three platforms.
@@ -528,6 +528,8 @@ if(BUILD_TESTING)
                 "${PROJECT_SOURCE_DIR}/tools/release/test_dmg_layout.py"
             LABELS quality
             TIMEOUT 60)
+        # Linux only: the install script is the Linux installer and a POSIX shell script
+        # (tools/install/install.sh.in); macOS and Windows have installers of their own, with
         # their own tests. It installs a stand-in package of a few small files into folders
         # under the build tree and reports a skip without `openssl` or `xz`.
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

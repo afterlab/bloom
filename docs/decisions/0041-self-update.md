@@ -62,26 +62,53 @@ A feed cannot prove that it is the newest one: someone who controls the network 
 an old signed feed, which leaves a user on an old version and never installs anything. The feed is
 fetched over HTTPS, which is the protection against that.
 
-### Ed25519 verification is Bloom's own code
+### Signatures and checksums are OpenSSL's
 
-Bloom verifies and never signs, so it needs Ed25519 verification and SHA-512 only. They are
-implemented in `src/update` (`ed25519.cpp`, after the public-domain TweetNaCl reference;
-`sha512.cpp`), as `src/core` implements SHA-256.
+Bloom verifies and never signs. The Ed25519 check and the SHA-256 of an update are made by the
+locked OpenSSL (`libcrypto` 3.5.9): `EVP_DigestVerify` with a raw Ed25519 public key
+(`src/update/ed25519.cpp`) and `EVP_sha256` (`src/update/sha256.cpp`). `src/update` holds no
+cryptography of its own. A check of the update path is security code, and an established
+library that the release tools also sign with is preferred over a second implementation.
 
-The locked OpenSSL was the alternative. It is built for the carried Python interpreter only:
-static libraries in a directory no Bloom target searches on Linux and macOS, and two libraries
-inside the interpreter's folder on Windows. Linking it into the application, the command-line
-program and the update helper would change the package layout on every platform and put a second
-copy of a large library into each program, for one function that reads public values only.
-Verification has no secret, so the usual risk of a cryptographic implementation (leaking a key
-through timing) does not exist here; what remains is correctness, which the tests pin against
-OpenSSL: the three signatures RFC 8032 prints, signatures made by the `openssl` program over the
-fixtures, and every way a signature must fail (changed message, changed signature, another key, a
-key that is no curve point, and a second half that is not below the group order).
+The library is the one the dependency prefix already builds for the carried Python interpreter,
+so the lock and the packages gain no component:
 
-Signing is done by the release tools with the `openssl` program
-(`tools/release/sign_release`), in the plain form (the signature covers the file's bytes), which
-is also what the platform updaters and the install script verify.
+- Linux and macOS: the static `libcrypto` of the prefix is linked into every program that
+  checks an update. Its names are kept out of the program's exported names, because the
+  interpreter's own modules hold the same library.
+- Windows: `libcrypto-3-x64.dll` is the file the package already carries beside the
+  interpreter's modules. A program imports it late and loads it by its full name from there
+  before the first check (`src/update/crypto_library.cpp`), so no second copy is carried, a
+  program that never checks an update needs no library file, and nothing is ever taken from the
+  search path. A program that belongs to a package looks nowhere else; a program run from a
+  build folder takes the same file from the dependency prefix. When the file is missing every
+  check is refused with the reason "verification unavailable", and nothing is installed.
+
+Ed25519 in its plain form is defined over the whole message at once, and OpenSSL verifies it in
+one call. A downloaded file is therefore first read in pieces for its size and SHA-256, and only
+a file that passes both is given to the signature check, as a read-only mapping of the file
+(`src/update/file_verification.cpp`), never as a second copy in memory.
+
+The tests pin the behavior: the three signatures RFC 8032 prints, signatures made by the
+`openssl` program over the fixtures, and every way a signature must fail (changed message,
+changed signature, another key, a key that is no curve point, and a second half that is not
+below the group order); a tampered file, a wrong signature and a wrong checksum are each
+refused, and so are a tampered feed and a feed signed by an unknown key.
+
+Signing is done by the release tools with the `openssl` program (OpenSSL 3;
+`tools/release/sign_release`), in the plain form (the signature covers the file's bytes), which
+is also what the platform updaters and the install script verify. The release workflow signs
+that way. A machine whose `openssl` is another program (macOS) has no route to it, so the
+release tools' tests and the end-to-end update test sign their stand-in releases there with
+`bloom-ed25519-tool`, a build tool made from the same `libcrypto`
+(`src/update/ed25519_tool_main.cpp`, chosen by `tools/release/ed25519_route.py`). No package
+carries it. Where a machine has both programs a test requires that they give the same public
+key and the same signature.
+
+The AppImage delta update reads the zsync control file format, whose block checksums are MD4
+and whose file checksum is SHA-1. Those are that format's own, are implemented in
+`src/update/zsync.cpp`, and decide nothing about trust: the assembled file passes the same
+size, SHA-256 and signature checks as any download before it is used.
 
 ### How each install is updated
 

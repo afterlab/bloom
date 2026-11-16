@@ -52,6 +52,9 @@ QString UpdateWindow::refusalSentence(const update::UpdateRefusal refusal) {
         return tr("The downloaded file does not match its checksum.");
     case R::FileSignatureInvalid:
         return tr("The signature on the downloaded file does not match the file.");
+    case R::VerificationUnavailable:
+        return tr("This copy of Bloom cannot check signatures because a file of its installation "
+                  "is missing. Install Bloom again.");
     case R::Cancelled:
         return tr("The check was cancelled.");
     }

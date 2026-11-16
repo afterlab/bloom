@@ -3,9 +3,11 @@
 
     python3 -I tools/release/test_release.py [CMAKE]
 
-The signing runs `openssl` (OpenSSL 3) and the two generated files need `cmake`; where either is
-missing the test reports a skip (exit status 77, the SKIP_RETURN_CODE of its registration) and
-says why. The key is RFC 8032's first public test key, as in the other release tools' tests.
+The signing runs the `openssl` program (OpenSSL 3) where the machine has it, and otherwise
+Bloom's own build tool, named in BLOOM_ED25519_TOOL by the test's registration
+(ed25519_route.py); the two generated files need `cmake`. Where the signing has no program or
+`cmake` is missing the test reports a skip (exit status 77, the SKIP_RETURN_CODE of its
+registration) and says why. The key is RFC 8032's first public test key, as in the other release tools' tests.
 """
 
 from __future__ import annotations
@@ -42,6 +44,7 @@ def load(name: str, path: Path):
 release = load("bloom_release_steps", TOOLS / "release.py")
 feed = load("bloom_release_feed_for_steps", TOOLS / "feed.py")
 fixtures = load("bloom_release_fixture_keys", TOOLS / "make_update_fixtures.py")
+route = load("bloom_release_route_for_steps", TOOLS / "ed25519_route.py")
 
 
 def step(*arguments: str) -> subprocess.CompletedProcess:
@@ -241,14 +244,14 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(item["url"], f"{BASE}/{name}")
             self.assertEqual(item["size"], len(data))
             self.assertEqual((platform, item["kind"]), release.release_files(self.VERSION)[name])
-            self.assertTrue(feed.verify_with_openssl(key, data,
+            self.assertTrue(feed.verify_signature(key, data,
                                                      base64.b64decode(item["signature"])), name)
         self.assertEqual(content["platforms"]["macos-arm64"]["appcast"],
                          f"{BASE}/appcast-macos.xml")
         self.assertEqual(content["platforms"]["windows-x86_64"]["appcast"],
                          f"{BASE}/appcast-windows.xml")
         # The checksum list's signature is the raw form the install script verifies.
-        self.assertTrue(feed.verify_with_openssl(key, (folder / "SHA256SUMS").read_bytes(),
+        self.assertTrue(feed.verify_signature(key, (folder / "SHA256SUMS").read_bytes(),
                                                  (folder / "SHA256SUMS.sig").read_bytes()))
         # Only the checksum list's signature is a file of the release.
         self.assertEqual([path.name for path in folder.iterdir() if path.suffix == ".sig"],
@@ -315,11 +318,10 @@ class ReleaseTests(unittest.TestCase):
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         CMAKE = sys.argv.pop(1)
-    version = subprocess.run(["openssl", "version"], capture_output=True, text=True,
-                             check=False) if shutil.which("openssl") else None
-    if version is None or not version.stdout.startswith("OpenSSL 3"):
-        print("NotRun: the release steps' test needs the `openssl` program (OpenSSL 3) for "
-              "Ed25519 signing, and this computer has none.", file=sys.stderr)
+    try:
+        route.route()
+    except ValueError as error:
+        print(f"NotRun: the release steps' test has {error}.", file=sys.stderr)
         sys.exit(77)
     if shutil.which(CMAKE) is None:
         print("NotRun: the release steps' test needs `cmake` for the generated install script "
