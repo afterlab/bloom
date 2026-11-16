@@ -1,0 +1,61 @@
+{
+  "format": "bloom.installer-tool",
+  "version": 1,
+  "name": "Inno Setup 6",
+  "release": "6.7.4",
+  "platform": "windows",
+  "architecture": "x86",
+  "url": "https://github.com/jrsoftware/issrc/releases/download/is-6_7_4/innosetup-6.7.4.exe",
+  "sha256": "a549929319f9120716677c685535ca4671e4b937b5fdc87e2585f32d8eb30e8c",
+  "sizeBytes": 10604576,
+  "signature": {
+    "kind": "issig-v2",
+    "url": "https://github.com/jrsoftware/issrc/releases/download/is-6_7_4/innosetup-6.7.4.exe.issig",
+    "sha256": "da04c2bd518c3c316f8783560ede99bd74973721c20d316f25370408673cc036",
+    "keyId": "def020edee3c4835fd54d85eff8b66d4d899b22a777353ca4a114b652e5e7a28",
+    "key": {
+      "path": "dependencies/installer-tools/signing-publickey.ispublickey",
+      "sha256": "32bea6bceb4ac7c4e6b3becdf3fb38de77378c5e76d494ab907d87cfab9e597b"
+    }
+  },
+  "source": {
+    "url": "https://github.com/jrsoftware/issrc/archive/c2913c993858a781fcb455bac8b8949c1c366cb8.tar.gz",
+    "commit": "c2913c993858a781fcb455bac8b8949c1c366cb8",
+    "sha256": "05069b6f7668c9b44cbf367b99c7f954c8189200ba79bb896c97ac7d51862586"
+  },
+  "license": {
+    "spdxExpression": "LicenseRef-InnoSetup",
+    "file": {
+      "path": "dependencies/installer-tools/licenses/innosetup/license.txt",
+      "sha256": "2e5346868c2a18434489824e11d65c3031620f792fefc415d05f19cd441abf5c"
+    }
+  },
+  "install": {
+    "program": "ISCC.exe",
+    "switches": [
+      "/VERYSILENT",
+      "/SUPPRESSMSGBOXES",
+      "/SP-",
+      "/NORESTART",
+      "/NOCANCEL",
+      "/CURRENTUSER",
+      "/NOICONS",
+      "/PORTABLE=1"
+    ]
+  },
+  "components": [
+    {
+      "name": "Inno Setup",
+      "version": "6.7.4",
+      "spdxExpression": "LicenseRef-InnoSetup",
+      "modified": false,
+      "source": null,
+      "files": [
+        {
+          "path": "dependencies/installer-tools/licenses/innosetup/license.txt",
+          "sha256": "2e5346868c2a18434489824e11d65c3031620f792fefc415d05f19cd441abf5c"
+        }
+      ]
+    }
+  ]
+}

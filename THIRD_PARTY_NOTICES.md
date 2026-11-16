@@ -115,6 +115,22 @@ terms in `dependencies/licenses/opus/LICENSE`.
 Copyright (c) 2010-2023 NVIDIA Corporation (and, for the dynamic loader, the FFmpeg contributors).
 Permission is granted under the MIT terms in `dependencies/licenses/nv-codec-headers/LICENSE`.
 
+## Prebuilt update and installer items
+
+These are taken as published, by checksum, outside the dependency lock. Each has one record with
+its release, address, SHA-256, size, source commit and license files as checked in; nothing is
+built here. See `dependencies/update-runtime/README.md` and `dependencies/installer-tools/README.md`.
+
+| Component | Version | License | Distribution boundary | Records |
+| --- | --- | --- | --- | --- |
+| Sparkle | 2.10.1 | MIT AND BSD-2-Clause AND Zlib | `Sparkle.framework` inside `Bloom.app/Contents/Frameworks` in the macOS package, with its own code signature files; the framework's license text lists bsdiff (BSD-2-Clause), sais-lite (MIT), a portable ed25519 (Zlib) and one further BSD-2-Clause file | `dependencies/update-runtime/sparkle.json`, `dependencies/update-runtime/licenses/sparkle/` |
+| WinSparkle | 0.9.4 | MIT | `WinSparkle.dll` beside the programs in the Windows package | `dependencies/update-runtime/winsparkle.json`, `dependencies/update-runtime/licenses/winsparkle/` |
+| wxWidgets | 3.2.10 | LGPL-2.0-or-later WITH WxWindows-exception-3.1 | Static library inside `WinSparkle.dll` | `dependencies/update-runtime/licenses/winsparkle/wxwidgets/` |
+| expat | 2.8.1 | MIT | Static library inside `WinSparkle.dll` | `dependencies/update-runtime/licenses/winsparkle/expat/` |
+| OpenSSL (libcrypto) | 1.0.2u | OpenSSL AND SSLeay | Static library inside `WinSparkle.dll`, for deprecated DSA signatures; Bloom's updates use EdDSA | `dependencies/update-runtime/licenses/winsparkle/openssl/` |
+| ed25519 (Orson Peters) | commit `7fa6712ef5d581a6981ec2b08ee623314cd1d1c4` | Zlib | Static library inside `WinSparkle.dll` | `dependencies/update-runtime/licenses/winsparkle/ed25519/` |
+| Inno Setup | 6.7.4 | Inno Setup license (permissive, with conditions on redistribution) | Build-host-only installer compiler, installed on Windows into the dependency prefix and never packaged; its setup stub is inside every Windows installer, with the copyright notices kept | `dependencies/installer-tools/innosetup.json`, `dependencies/installer-tools/licenses/innosetup/` |
+
 ## Vendored interface assets
 
 | Component | Version | License | Files | Records |

@@ -328,6 +328,39 @@ With downloads off, both must already be in the archive cache when the superbuil
 configured, like every other archive. Changing either is an intake: a new version, checksum
 and license review, in the same change as the inventory.
 
+### Update Runtimes And The Installer Tool
+
+Three more prebuilt items are taken as published, by checksum, outside the lock. Each has one
+record that is the only place it is written, with its release, address, SHA-256 and size, its
+signature situation, the source commit it was built from, every part linked into it with the
+license files checked in, and the paths the fetch keeps. Each is wired into the superbuild on
+its own platform only, and each lands in its own directory of the prefix.
+
+- `dependencies/update-runtime/sparkle.json` (`bloom.update-runtime`): Sparkle 2, the macOS
+  updater. `update-runtime-fetch.cmake` keeps only `Sparkle.framework` (its symbolic links stay
+  links) and the license file in the prefix's `sparkle` directory; the archive's signing and
+  appcast tools are not kept. The framework goes into `Bloom.app/Contents/Frameworks`.
+- `dependencies/update-runtime/winsparkle.json` (`bloom.update-runtime`): WinSparkle, the Windows
+  updater, x64. The same script keeps the headers, `x64/Release/WinSparkle.dll`,
+  `x64/Release/WinSparkle.lib` and the license files in the prefix's `winsparkle` directory. The
+  DLL carries wxWidgets, expat, OpenSSL (1.0.2u, for deprecated DSA signatures) and ed25519,
+  each listed in the record with its license files; the release does not record which parts of
+  each library the DLL holds. The DLL goes beside the programs.
+- `dependencies/installer-tools/innosetup.json` (`bloom.installer-tool`): the Inno Setup 6
+  compiler's own installer. `installer-tools-fetch.cmake` checks its checksum on every host and,
+  on Windows only, runs it silently and portable (for the current user, no Start menu entries, no
+  uninstall entry) into the prefix's `innosetup` directory. It is a build tool: only the setup
+  stub of each installer it makes is in a package.
+
+Each script compares the file's size and SHA-256 with the record before it unpacks or runs
+anything. The `bloom.quality.prebuilt_items_fetch` test proves, without the network, that a file
+with a wrong checksum, a wrong size or one missing from an offline cache is refused and nothing is
+installed, that the check-only mode installs nothing, and that only the kept paths are installed.
+
+With downloads off, all three must already be in the archive cache when the superbuild is
+configured. Changing one is an intake: a new version, checksum and license review, in the same
+change as its record.
+
 ### Closed Resource Limits
 
 Limits are checked on encoded bytes before allocation and during parsing with checked arithmetic.

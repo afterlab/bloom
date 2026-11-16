@@ -1,0 +1,121 @@
+{
+  "format": "bloom.update-runtime",
+  "version": 1,
+  "name": "WinSparkle",
+  "release": "0.9.4",
+  "platform": "windows",
+  "architecture": "x64",
+  "url": "https://github.com/vslavik/winsparkle/releases/download/v0.9.4/WinSparkle-0.9.4.zip",
+  "sha256": "6037df37fc263bd1650a1c4949681a9d40ffe991d01f35892a406cb5d103c976",
+  "sizeBytes": 27366440,
+  "archiveRoot": "WinSparkle-0.9.4",
+  "signature": null,
+  "source": {
+    "url": "https://github.com/vslavik/winsparkle/releases/download/v0.9.4/WinSparkle-0.9.4-src.zip",
+    "commit": "a8986caf620262f7d4581b241436ceaa0cc9370f",
+    "sha256": "cd77040f828dce0adcf8f0205f776238197deb24f5108bf01a3e5623b703a3b9"
+  },
+  "license": {
+    "spdxExpression": "MIT",
+    "file": {
+      "path": "dependencies/update-runtime/licenses/winsparkle/COPYING",
+      "sha256": "599d22b139b44f8f17140d09d16a4dd1fd6c864616135210b9308c7810d49caf"
+    }
+  },
+  "linkage": "dynamic",
+  "keeps": [
+    "include/winsparkle.h",
+    "include/winsparkle-version.h",
+    "x64/Release/WinSparkle.dll",
+    "x64/Release/WinSparkle.lib",
+    "COPYING",
+    "COPYING.expat"
+  ],
+  "components": [
+    {
+      "name": "WinSparkle",
+      "version": "0.9.4",
+      "spdxExpression": "MIT",
+      "modified": false,
+      "source": null,
+      "files": [
+        {
+          "path": "dependencies/update-runtime/licenses/winsparkle/COPYING",
+          "sha256": "599d22b139b44f8f17140d09d16a4dd1fd6c864616135210b9308c7810d49caf"
+        }
+      ]
+    },
+    {
+      "name": "wxWidgets",
+      "version": "3.2.10",
+      "spdxExpression": "LGPL-2.0-or-later WITH WxWindows-exception-3.1",
+      "modified": false,
+      "source": {
+        "url": "https://github.com/wxWidgets/wxWidgets",
+        "commit": "aa1a25e7b511c0a4e341a3c722e6eac2aa159ab6",
+        "pathInReleaseSource": "3rdparty/wxWidgets"
+      },
+      "files": [
+        {
+          "path": "dependencies/update-runtime/licenses/winsparkle/wxwidgets/licence.txt",
+          "sha256": "e8453be21aea2b7cc9a39d5b0475190bbfa0a60605b4178377590b94d9c43eae"
+        },
+        {
+          "path": "dependencies/update-runtime/licenses/winsparkle/wxwidgets/lgpl.txt",
+          "sha256": "b7993225104d90ddd8024fd838faf300bea5e83d91203eab98e29512acebd69c"
+        }
+      ]
+    },
+    {
+      "name": "expat",
+      "version": "2.8.1",
+      "spdxExpression": "MIT",
+      "modified": false,
+      "source": {
+        "url": "https://github.com/libexpat/libexpat",
+        "commit": "c7ffbf3879f6aef7a7b020ef84ddb4ee00222b19",
+        "pathInReleaseSource": "3rdparty/expat"
+      },
+      "files": [
+        {
+          "path": "dependencies/update-runtime/licenses/winsparkle/expat/COPYING",
+          "sha256": "31b15de82aa19a845156169a17a5488bf597e561b2c318d159ed583139b25e87"
+        }
+      ]
+    },
+    {
+      "name": "OpenSSL (libcrypto)",
+      "version": "1.0.2u",
+      "spdxExpression": "OpenSSL AND SSLeay",
+      "modified": false,
+      "source": {
+        "url": "https://github.com/openssl/openssl",
+        "commit": "e818b74be2170fbe957a07b0da4401c2b694b3b8",
+        "pathInReleaseSource": "3rdparty/openssl"
+      },
+      "files": [
+        {
+          "path": "dependencies/update-runtime/licenses/winsparkle/openssl/LICENSE",
+          "sha256": "c8f60f4842bbad0353f5d81620e72b168b5638ca3a0a999f5da113b22491612e"
+        }
+      ]
+    },
+    {
+      "name": "ed25519 (portable C implementation by Orson Peters)",
+      "version": null,
+      "spdxExpression": "Zlib",
+      "modified": false,
+      "source": {
+        "url": "https://github.com/orlp/ed25519",
+        "commit": "7fa6712ef5d581a6981ec2b08ee623314cd1d1c4",
+        "pathInReleaseSource": "3rdparty/ed25519"
+      },
+      "files": [
+        {
+          "path": "dependencies/update-runtime/licenses/winsparkle/ed25519/license.txt",
+          "sha256": "f68d76b9c1c2271422e55134ea94cf71f2ac3fc3ed6a7ec6b83a1a0538753214"
+        }
+      ]
+    }
+  ]
+}

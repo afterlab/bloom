@@ -61,6 +61,18 @@ if(BUILD_TESTING)
         LABELS quality dependencies
         TIMEOUT 60
     )
+    # The scripts that put the prebuilt update runtimes (Sparkle, WinSparkle) and the installer
+    # tool (Inno Setup) into the dependency prefix: they must refuse a file whose checksum or
+    # size is not the record's. Registered on Linux, macOS and Windows: it only runs cmake -P
+    # against synthetic files (the stand-in installer is never started).
+    bloom_add_test(
+        NAME bloom.quality.prebuilt_items_fetch
+        COMMAND
+            "${CMAKE_COMMAND}" "-DBLOOM_WORK=${CMAKE_CURRENT_BINARY_DIR}/prebuilt-items-fetch-test"
+            -P "${PROJECT_SOURCE_DIR}/dependencies/superbuild/projects/prebuilt-items-fetch-test.cmake"
+        LABELS quality dependencies
+        TIMEOUT 60
+    )
     # Bloom uses only the listed parts of Qt, each offered under LGPL-3.0-only by the locked
     # Qt's bill of materials (read when the build takes Qt from the dependency prefix).
     set(bloom_qt_module_check_arguments "-DBLOOM_SOURCE_ROOT=${PROJECT_SOURCE_DIR}")

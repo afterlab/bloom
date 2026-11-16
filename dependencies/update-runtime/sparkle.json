@@ -1,0 +1,96 @@
+{
+  "format": "bloom.update-runtime",
+  "version": 1,
+  "name": "Sparkle 2",
+  "release": "2.10.1",
+  "platform": "macos",
+  "architecture": "universal",
+  "url": "https://github.com/sparkle-project/Sparkle/releases/download/2.10.1/Sparkle-2.10.1.tar.xz",
+  "sha256": "1a856d2a9edb8e628de88121d7be04cf0e2167f8641650b78fca00b14244cf27",
+  "sizeBytes": 16346336,
+  "signature": null,
+  "source": {
+    "url": "https://github.com/sparkle-project/Sparkle/archive/ab7d71291238df6e0492143b120c9b696a35f603.tar.gz",
+    "commit": "ab7d71291238df6e0492143b120c9b696a35f603",
+    "sha256": "d7e5599d56ddb917cddbb4a719fb534ad5d2d7e80a653446d0eea6a38920b302"
+  },
+  "license": {
+    "spdxExpression": "MIT AND BSD-2-Clause AND Zlib",
+    "file": {
+      "path": "dependencies/update-runtime/licenses/sparkle/LICENSE",
+      "sha256": "389a4e4e9a32f059775b13a06e25a591445ba229d2838d26dd3e7c0c45127cfe"
+    }
+  },
+  "linkage": "dynamic",
+  "keeps": [
+    "Sparkle.framework",
+    "LICENSE"
+  ],
+  "components": [
+    {
+      "name": "Sparkle",
+      "version": "2.10.1",
+      "spdxExpression": "MIT",
+      "modified": false,
+      "source": null,
+      "files": [
+        {
+          "path": "dependencies/update-runtime/licenses/sparkle/LICENSE",
+          "sha256": "389a4e4e9a32f059775b13a06e25a591445ba229d2838d26dd3e7c0c45127cfe"
+        }
+      ]
+    },
+    {
+      "name": "bsdiff and bspatch",
+      "version": "4.3",
+      "spdxExpression": "BSD-2-Clause",
+      "modified": false,
+      "source": null,
+      "files": [
+        {
+          "path": "dependencies/update-runtime/licenses/sparkle/LICENSE",
+          "sha256": "389a4e4e9a32f059775b13a06e25a591445ba229d2838d26dd3e7c0c45127cfe"
+        }
+      ]
+    },
+    {
+      "name": "sais-lite",
+      "version": "2010/08/07",
+      "spdxExpression": "MIT",
+      "modified": false,
+      "source": null,
+      "files": [
+        {
+          "path": "dependencies/update-runtime/licenses/sparkle/LICENSE",
+          "sha256": "389a4e4e9a32f059775b13a06e25a591445ba229d2838d26dd3e7c0c45127cfe"
+        }
+      ]
+    },
+    {
+      "name": "ed25519 (portable C implementation by Orson Peters)",
+      "version": null,
+      "spdxExpression": "Zlib",
+      "modified": false,
+      "source": null,
+      "files": [
+        {
+          "path": "dependencies/update-runtime/licenses/sparkle/LICENSE",
+          "sha256": "389a4e4e9a32f059775b13a06e25a591445ba229d2838d26dd3e7c0c45127cfe"
+        }
+      ]
+    },
+    {
+      "name": "SUSignatureVerifier (Mark Hamlin)",
+      "version": null,
+      "spdxExpression": "BSD-2-Clause",
+      "modified": false,
+      "source": null,
+      "files": [
+        {
+          "path": "dependencies/update-runtime/licenses/sparkle/LICENSE",
+          "sha256": "389a4e4e9a32f059775b13a06e25a591445ba229d2838d26dd3e7c0c45127cfe"
+        }
+      ]
+    }
+  ]
+}
