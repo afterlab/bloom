@@ -65,6 +65,12 @@ struct LocalCopyPolicy final {
                                   const std::filesystem::path& source,
                                   platform::StorageClass storage, bool onCacheVolume);
 
+// What the cache volume reports: its size and the bytes free on it.
+struct SourceMirrorDriveSpace final {
+    std::uint64_t capacityBytes = 0;
+    std::uint64_t freeBytes = 0;
+};
+
 struct SourceMirrorConfig final {
     // The mirror's private root directory (typically bloom::platform::userCacheDirectory() plus a
     // "media" leaf). Created lazily on first write.
@@ -78,6 +84,13 @@ struct SourceMirrorConfig final {
     std::uint64_t freeSpaceReserveBytes = 0;
     bool enabled = true;
     LocalCopyPolicy policy{};
+    // Test seams; both unset in production. `clock` is the time, in nanoseconds, an entry is
+    // stamped with when it is used (unset: the wall clock). The mirror keeps the stamps strictly
+    // increasing itself. It may be called under the mirror's lock, so it must not call the mirror.
+    std::function<std::int64_t()> clock{};
+    // The cache volume's capacity and free space, or nothing when they cannot be read (unset: the
+    // file system is asked). Called with no lock held, never on the UI thread.
+    std::function<std::optional<SourceMirrorDriveSpace>()> driveSpace{};
 };
 
 struct SourceMirrorStatistics final {
@@ -237,12 +250,20 @@ class SourceMirror final : public platform::SourceStore {
     void noteUse(const std::string& key, std::uint64_t bytes);
     void dropEntry(const std::string& key);
     [[nodiscard]] bool diskHasRoomFor(std::uint64_t bytes);
+    // The time a use is stamped with: the configured clock, strictly increasing.
+    [[nodiscard]] std::int64_t now() const;
+    // The cache volume's capacity and free space as the configured probe (or the file system)
+    // reports them now. Never called with a lock held.
+    [[nodiscard]] std::optional<SourceMirrorDriveSpace> driveSpace() const;
 
     runtime::MemoryBudgetLedger& ledger_;
     const std::shared_ptr<Hub> hub_;
     const std::filesystem::path root_;
     const std::uint64_t maxEntryCount_;
     const std::uint64_t freeSpaceReserve_;
+    const std::function<std::int64_t()> clock_;
+    const std::function<std::optional<SourceMirrorDriveSpace>()> driveSpace_;
+    mutable std::atomic<std::int64_t> lastStamp_{0};
     std::atomic<bool> enabled_;
     std::atomic<std::uint64_t> writeQueueByteCapacity_;
     std::atomic<bool> diskPressure_{false};

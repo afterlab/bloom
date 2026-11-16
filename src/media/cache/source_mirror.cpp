@@ -258,6 +258,22 @@ void syncFile(const std::filesystem::path& path) {
     static_cast<void>(path);
 #endif
 }
+// The capacity and free space of the volume that holds `root` (or its nearest existing ancestor);
+// nothing when the file system does not report them.
+[[nodiscard]] std::optional<SourceMirrorDriveSpace> volumeSpace(const std::filesystem::path& root) {
+    std::error_code error;
+    auto probe = root;
+    while (!probe.empty() && !std::filesystem::exists(probe, error)) {
+        const auto parent = probe.parent_path();
+        if (parent == probe)
+            break;
+        probe = parent;
+    }
+    const auto space = std::filesystem::space(probe, error);
+    if (error || space.available == static_cast<std::uintmax_t>(-1))
+        return std::nullopt;
+    return SourceMirrorDriveSpace{space.capacity, space.available};
+}
 void removeQuietly(const std::filesystem::path& path) {
     std::error_code ignored;
     std::filesystem::remove(path, ignored);
@@ -442,6 +458,7 @@ SourceMirror::SourceMirror(SourceMirrorConfig config, runtime::MemoryBudgetLedge
     : ledger_(ledger), hub_(std::make_shared<Hub>()), root_(std::move(config.rootDirectory)), maxEntryCount_(config.maxEntryCount),
       freeSpaceReserve_(config.freeSpaceReserveBytes != 0 ? config.freeSpaceReserveBytes
                                                           : kSourceMirrorFreeSpaceReserveBytes),
+      clock_(std::move(config.clock)), driveSpace_(std::move(config.driveSpace)),
       enabled_(config.enabled), writeQueueByteCapacity_(config.writeQueueByteCapacity != 0
                                                             ? config.writeQueueByteCapacity
                                                             : kSourceMirrorWriteQueueByteCapacity),
@@ -614,7 +631,7 @@ SourceMirror::chunks(const std::filesystem::path& source, const platform::FileId
         openChunks_[indexKey] = result;
         auto& entry = index_[indexKey];
         storedBytes_ -= std::min(storedBytes_, entry.bytes);
-        entry = IndexEntry{bytes, nowNanos(), layout.wholeBytes()};
+        entry = IndexEntry{bytes, now(), layout.wholeBytes()};
         storedBytes_ += bytes;
         ++indexChanges_;
         evict(victims);
@@ -648,7 +665,7 @@ void SourceMirror::chunksGrew(const std::string& indexKey, const std::uint64_t w
         if (found == index_.end())
             return;
         found->second.bytes = std::min(found->second.bytes + bytes, wholeBytes);
-        found->second.lastUseNanos = nowNanos();
+        found->second.lastUseNanos = now();
         storedBytes_ += bytes;
         ++indexChanges_;
         evict(victims);
@@ -673,7 +690,7 @@ void SourceMirror::chunksServed(const std::string& indexKey, const std::uint64_t
     statistics_.diskHitBytes += bytes;
     counters_.hit();
     if (const auto found = index_.find(indexKey); found != index_.end())
-        found->second.lastUseNanos = nowNanos();
+        found->second.lastUseNanos = now();
 }
 void SourceMirror::chunksRefusedForDiskSpace() {
     const std::lock_guard lock(mutex_);
@@ -939,11 +956,11 @@ std::uint64_t SourceMirror::byteBudget() const {
 
 void SourceMirror::noteUse(const std::string& key, const std::uint64_t bytes) {
     const std::lock_guard lock(mutex_);
-    auto [entry, inserted] = index_.try_emplace(key, IndexEntry{bytes, nowNanos()});
+    auto [entry, inserted] = index_.try_emplace(key, IndexEntry{bytes, now()});
     if (inserted)
         storedBytes_ += bytes;
     else
-        entry->second.lastUseNanos = nowNanos();
+        entry->second.lastUseNanos = now();
     ++indexChanges_;
 }
 void SourceMirror::dropEntry(const std::string& key) {
@@ -989,19 +1006,29 @@ void SourceMirror::removeFiles(const std::vector<std::string>& keys) const {
         removeQuietly(entryPath(key));
 }
 
+std::int64_t SourceMirror::now() const {
+    if (!clock_)
+        return nowNanos();
+    // An injected clock is made strictly increasing the same way the wall clock is.
+    const auto time = clock_();
+    auto previous = lastStamp_.load(std::memory_order_relaxed);
+    std::int64_t next = 0;
+    do {
+        next = std::max(time, previous + 1);
+    } while (!lastStamp_.compare_exchange_weak(previous, next, std::memory_order_relaxed));
+    return next;
+}
+
+std::optional<SourceMirrorDriveSpace> SourceMirror::driveSpace() const {
+    if (driveSpace_)
+        return driveSpace_();
+    return volumeSpace(root_);
+}
+
 bool SourceMirror::diskHasRoomFor(const std::uint64_t bytes) {
-    std::error_code error;
-    auto probe = root_;
-    while (!probe.empty() && !std::filesystem::exists(probe, error)) {
-        const auto parent = probe.parent_path();
-        if (parent == probe)
-            break;
-        probe = parent;
-    }
-    const auto space = std::filesystem::space(probe, error);
+    const auto space = driveSpace();
     // Unknown free space does not stop the mirror: the byte budget still bounds it.
-    const bool room = error || space.available == static_cast<std::uintmax_t>(-1) ||
-                      space.available >= bytes + freeSpaceReserve_;
+    const bool room = !space || space->freeBytes >= bytes + freeSpaceReserve_;
     diskPressure_.store(!room, std::memory_order_relaxed);
     return room;
 }
@@ -1085,7 +1112,7 @@ void SourceMirror::writeEntry(const PendingWrite& write) {
         } else {
             auto& entry = index_[write.key];
             storedBytes_ -= std::min(storedBytes_, entry.bytes);
-            entry = IndexEntry{total, nowNanos()};
+            entry = IndexEntry{total, now()};
             storedBytes_ += total;
             ++indexChanges_;
             ++statistics_.writes;
@@ -1294,18 +1321,10 @@ void SourceMirror::writerLoop() {
 
 std::uint64_t defaultSourceMirrorByteBudget(const std::filesystem::path& root,
                                             const std::uint64_t capBytes) {
-    std::error_code error;
-    auto probe = root;
-    while (!probe.empty() && !std::filesystem::exists(probe, error)) {
-        const auto parent = probe.parent_path();
-        if (parent == probe)
-            break;
-        probe = parent;
-    }
-    const auto space = std::filesystem::space(probe, error);
-    if (error || space.available == static_cast<std::uintmax_t>(-1))
+    const auto space = volumeSpace(root);
+    if (!space)
         return capBytes;
-    return std::min<std::uint64_t>(space.available / 10, capBytes);
+    return std::min<std::uint64_t>(space->freeBytes / 10, capBytes);
 }
 
 } // namespace bloom::media::cache

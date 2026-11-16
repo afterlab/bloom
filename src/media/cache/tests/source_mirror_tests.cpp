@@ -6,15 +6,19 @@
 #include <bloom/core/sha256.hpp>
 #include <bloom/media/cache/source_mirror.hpp>
 #include <bloom/platform/source_identity.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 
 #include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -82,6 +86,135 @@ void keep(cache::SourceMirror& mirror, const Source& source) {
     cache::SourceMirrorConfig value;
     value.rootDirectory = scratch.cacheRoot();
     return value;
+}
+
+// A clock a test moves by hand.
+struct FakeClock final {
+    std::atomic<std::int64_t> nanos{1'000'000'000'000};
+    void advance(const std::chrono::nanoseconds by) { nanos += by.count(); }
+    [[nodiscard]] std::function<std::int64_t()> source() {
+        return [this] { return nanos.load(); };
+    }
+};
+// A cache volume of a chosen size shared with "other programs": what is free is the capacity
+// minus their bytes and minus what the attached mirror stores. No real disk size is read.
+struct FakeDrive final {
+    std::atomic<std::uint64_t> capacity{0};
+    std::atomic<std::uint64_t> other{0};
+    std::atomic<bool> unreadable{false};
+    std::atomic<cache::SourceMirror*> mirror{nullptr};
+    [[nodiscard]] std::function<std::optional<cache::SourceMirrorDriveSpace>()> probe() {
+        return [this]() -> std::optional<cache::SourceMirrorDriveSpace> {
+            if (unreadable.load())
+                return std::nullopt;
+            const auto* const attached = mirror.load();
+            const auto used =
+                other.load() + (attached != nullptr ? attached->statistics().storedBytes : 0);
+            const auto size = capacity.load();
+            return cache::SourceMirrorDriveSpace{size, size > used ? size - used : 0};
+        };
+    }
+};
+
+// What a frame does per sequence member: ask the mirror, else read the source and keep it. The
+// writer is flushed after each keep so the counts are about the space, never about the queue.
+struct PassCounts final {
+    std::size_t hits = 0, sourceReads = 0;
+};
+[[nodiscard]] PassCounts playPass(cache::SourceMirror& mirror, const std::vector<Source>& frames) {
+    PassCounts counts;
+    for (const auto& frame : frames) {
+        if (mirror.find(frame.path, frame.identity, {})) {
+            ++counts.hits;
+            continue;
+        }
+        ++counts.sourceReads;
+        keep(mirror, frame);
+        mirror.flush();
+    }
+    return counts;
+}
+
+constexpr std::size_t kLoopFrameBytes = 64 * 1024;
+constexpr std::size_t kLoopEntryBytes = kLoopFrameBytes + 80; // the frame and its entry header
+
+// #732, required behavior: a loop larger than the space keeps a stable set of disk hits. The
+// writes that do not fit are refused and counted; nothing the loop still needs is evicted.
+void testLoopLargerThanTheSpace(const bool report) {
+    const Scratch scratch("loop");
+    std::vector<Source> frames;
+    for (unsigned i = 0; i < 16; ++i)
+        frames.push_back(writeSource(scratch, "plate." + std::to_string(1000 + i) + ".exr",
+                                     kLoopFrameBytes, i));
+    FakeClock clock;
+    FakeDrive drive;
+    drive.capacity = std::uint64_t{64} << 30U;
+    auto settings = config(scratch);
+    settings.clock = clock.source();
+    settings.driveSpace = drive.probe();
+    settings.byteBudget = 10 * kLoopEntryBytes + kLoopEntryBytes / 2; // room for 10 of the 16
+    cache::SourceMirror mirror(settings);
+    drive.mirror = &mirror;
+    mirror.flush();
+    const auto first = playPass(mirror, frames);
+    expect(first.hits == 0 && first.sourceReads == 16, "the first pass reads every frame");
+    for (int pass = 2; pass <= 3; ++pass) {
+        const auto before = mirror.statistics();
+        const auto counts = playPass(mirror, frames);
+        const auto after = mirror.statistics();
+        if (report)
+            std::cout << "loop of 16 with room for 10, pass " << pass << ": hits=" << counts.hits
+                      << " sourceReads=" << counts.sourceReads
+                      << " evictions=" << after.evictions - before.evictions << '\n';
+        const auto label = "pass " + std::to_string(pass) + " of a loop larger than the space ";
+        expect(counts.hits == 10, label + "gets the 10 frames that fit from disk");
+        expect(counts.sourceReads == 6, label + "reads only the 6 that do not fit");
+        expect(after.evictions == before.evictions, label + "evicts nothing");
+    }
+}
+
+// #732, required behavior: the write queue is live work with a fixed ceiling. A RAM Preview fill
+// does not shrink it and its writes are not dropped.
+void testWriteQueueDuringFill(const bool report) {
+    namespace runtime = bloom::runtime;
+    constexpr std::size_t kGiB = std::size_t{1} << 30U;
+    const Scratch scratch("fill");
+    runtime::MemoryBudgetLedger ledger(64 * kGiB, 32 * kGiB);
+    ledger.setRamHeadroom(2 * kGiB);
+    runtime::MachineMemorySample sample;
+    sample.availableBytes = 32 * kGiB;
+    static_cast<void>(ledger.poll(sample));
+    cache::SourceMirror mirror(config(scratch), ledger);
+    mirror.flush();
+    static_cast<void>(ledger.poll(sample));
+    const auto idleCapacity = mirror.writeQueueByteCapacity();
+    auto fill = ledger.beginPreviewFill();
+    static_cast<void>(ledger.poll(sample));
+    const auto fillCapacity = mirror.writeQueueByteCapacity();
+    // Three layers' members arrive together (one composite frame) while the writer is busy.
+    mirror.setWriterPausedForTest(true);
+    std::vector<Source> frames;
+    for (unsigned i = 0; i < 3; ++i)
+        frames.push_back(
+            writeSource(scratch, "layer" + std::to_string(i) + ".exr", kLoopFrameBytes, i));
+    for (const auto& frame : frames)
+        keep(mirror, frame);
+    const auto during = mirror.statistics();
+    mirror.setWriterPausedForTest(false);
+    mirror.flush();
+    fill.end();
+    if (report)
+        std::cout << "write queue capacity: no fill " << idleCapacity << " | during a fill "
+                  << fillCapacity << " | 3 keeps in a fill: pending=" << during.pendingWrites
+                  << " dropped=" << during.droppedWrites << " written=" << mirror.statistics().writes
+                  << '\n';
+    expect(idleCapacity == cache::kSourceMirrorWriteQueueByteCapacity,
+           "outside a fill the write queue's capacity is its fixed ceiling");
+    expect(fillCapacity == cache::kSourceMirrorWriteQueueByteCapacity,
+           "a RAM Preview fill leaves the write queue's capacity at its ceiling");
+    expect(during.pendingWrites == 3 && during.droppedWrites == 0,
+           "three writes handed over during a fill are all pending and none is dropped");
+    expect(mirror.statistics().writes == 3, "every write handed over during a fill reaches the disk");
 }
 
 void testIdentity() {
@@ -681,7 +814,15 @@ void testChunks() {
     }
 }
 
-int main() {
+int main(const int argc, char** argv) {
+    // The #732 cases that describe required behavior the mirror does not have yet. They run only
+    // when asked for, and print the counters they found.
+    if (argc > 1 && std::string_view(argv[1]) == "--pending-732") {
+        testLoopLargerThanTheSpace(true);
+        testWriteQueueDuringFill(true);
+        std::cout << (failures == 0 ? "PASS" : "FAILED") << ": source mirror, pending #732\n";
+        return failures == 0 ? 0 : 1;
+    }
     testChunks();
     testIdentity();
     testRestartAndIndex();
