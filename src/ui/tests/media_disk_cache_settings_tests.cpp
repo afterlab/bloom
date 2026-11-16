@@ -589,6 +589,14 @@ void testServiceCachePurgeTimeoutWithdrawsAndSerializes(Expectations& check) {
 
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
+    // Building a cache from settings publishes them to the per-user cache folder: this run gets
+    // a folder of its own, so the real one is never written.
+    const QTemporaryDir cacheHome;
+#if defined(_WIN32)
+    qputenv("LOCALAPPDATA", QFile::encodeName(cacheHome.path()));
+#else
+    qputenv("XDG_CACHE_HOME", QFile::encodeName(cacheHome.path()));
+#endif
     QApplication application(argc, argv);
     Expectations check;
     testEnabledDefaultsTrue(check);

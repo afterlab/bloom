@@ -120,10 +120,20 @@ makeMediaDiskCacheFromSettings(const QSettings& settings) {
 
 void applyMediaDiskCacheSettings(media::cache::SourceMirror* const cache,
                                  const QSettings& settings) {
-    const auto mirrorSettings = sourceMirrorSettingsFromSettings(settings);
-    if (cache != nullptr)
-        cache->setHeadroom(mirrorSettings.headroomBytes);
-    static_cast<void>(media::cache::publishSourceMirrorSettings(mirrorSettings));
+    if (cache == nullptr)
+        return;
+    const auto headroom = mediaDiskHeadroomFromSettings(settings);
+    if (cache->headroom() == headroom)
+        return;
+    cache->setHeadroom(headroom);
+    // The headless tools follow the running cache: its folder, state and local-copy policy as
+    // they are this session (those three change at the next start), with the new headroom.
+    media::cache::SourceMirrorUserSettings published;
+    published.enabled = cache->enabled();
+    published.directory = cache->rootDirectory();
+    published.headroomBytes = headroom;
+    published.policy = cache->policy();
+    static_cast<void>(media::cache::publishSourceMirrorSettings(published));
 }
 
 bool purgeMediaCaches(media::cache::SourceMirror* const cache,

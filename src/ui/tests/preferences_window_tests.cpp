@@ -698,6 +698,10 @@ void testApplyReachesTheDiskCache(Expectations& check) {
         ->setValue(50.0);
     window.findChild<QAbstractButton*>(QStringLiteral("preferencesApplyButton"))->click();
     check.expect(mirror.headroom() == 50 * gib, "Apply sets the running cache's headroom");
+    const auto published = bloom::media::cache::publishedSourceMirrorSettings();
+    check.expect(published.headroomBytes == 50 * gib &&
+                     published.directory == mirror.rootDirectory() && published.enabled,
+                 "Apply publishes the new headroom with the running cache's own folder");
     window.findChild<ui::kit::KValueField*>(QStringLiteral("preferencesMediaDiskHeadroomField"))
         ->setValue(0.0);
     window.findChild<QAbstractButton*>(QStringLiteral("preferencesApplyButton"))->click();
@@ -1091,6 +1095,14 @@ void testCaptureGeneralPage(Expectations&) {
 
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
+    // Applying a Disk headroom publishes the disk cache settings to the per-user cache folder:
+    // this run gets a folder of its own, so the real one is never written.
+    const QTemporaryDir cacheHome;
+#if defined(_WIN32)
+    qputenv("LOCALAPPDATA", QFile::encodeName(cacheHome.path()));
+#else
+    qputenv("XDG_CACHE_HOME", QFile::encodeName(cacheHome.path()));
+#endif
     QApplication application(argc, argv);
     QWidget ownerWindow;
     gOwner = &ownerWindow;

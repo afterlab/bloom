@@ -56,10 +56,11 @@ sourceMirrorSettingsFromSettings(const QSettings& settings);
 [[nodiscard]] std::shared_ptr<media::cache::SourceMirror>
 makeMediaDiskCacheFromSettings(const QSettings& settings);
 
-// Applies the committed settings to the running disk cache (Preferences Apply or OK, #732): the
-// Disk headroom reaches the cache at once (the cache's own thread does the work) and the settings
-// the headless tools read are published again. Enable, folder and local copies are read at startup
-// only. `cache` may be null (the disk cache is off this session).
+// Applies the committed settings to the running disk cache (Preferences Apply or OK, #732): a
+// changed Disk headroom reaches the cache at once (the cache's own thread does the work), and the
+// settings the headless tools read are published again with it. Enable, folder and local copies
+// are read at startup only, so what is published for them is what the running cache uses, not
+// what was just saved. `cache` may be null (the disk cache is off this session): nothing happens.
 void applyMediaDiskCacheSettings(media::cache::SourceMirror* cache, const QSettings& settings);
 
 // The "Purge media cache" effect: clears every local copy of source media AND the evaluator's
