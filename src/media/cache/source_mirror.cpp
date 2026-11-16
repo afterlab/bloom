@@ -500,25 +500,17 @@ SourceMirror::SourceMirror(SourceMirrorConfig config, runtime::MemoryBudgetLedge
         }
     writer_ = bloom::core::WorkerThread([this] { writerLoop(); });
     try {
+        // The write queue is live work (#732): bytes on their way to the disk, not a cache that
+        // can be dropped and read again for free. Its ceiling is fixed, so the ledger neither
+        // divides it among the reusable pools nor asks it to give anything back; the budget it
+        // is told is always that ceiling and nothing happens here.
         ledger_.registerCache(
-            this, static_cast<std::size_t>(writeQueueByteCapacity_.load()),
+            this, static_cast<std::size_t>(writeQueueByteCapacity_),
             [this] {
                 const std::lock_guard lock(queueMutex_);
                 return static_cast<std::size_t>(queuedBytes_);
             },
-            [this](const std::size_t bytes) {
-                const std::lock_guard lock(queueMutex_);
-                writeQueueByteCapacity_.store(bytes, std::memory_order_relaxed);
-                // Memory pressure: the oldest pending writes go first. A write in flight keeps
-                // its charge until it finishes; no I/O or wait happens here.
-                while (!queue_.empty() && queuedBytes_ > bytes) {
-                    queuedBytes_ -= queue_.front().bytes.size();
-                    queue_.pop_front();
-                    ++droppedWrites_;
-                }
-                if (queue_.empty() && inFlight_ == 0)
-                    idleCv_.notify_all();
-            });
+            [](const std::size_t) {}, runtime::MemoryBudgetOwnerKind::LiveWork);
         // Host memory is the write queue (scratch); the counters are the mirror's lookups,
         // writes and evictions (bytes on disk) and the writes the queue refused.
         ledger_.setPoolProfile(this, {.name = "Source mirror write queue",
@@ -560,6 +552,7 @@ SourceMirror::~SourceMirror() {
         const std::lock_guard lock(queueMutex_);
     }
     queueCv_.notify_all();
+    roomCv_.notify_all();
     if (writer_.joinable())
         writer_.join();
     if (!root_.empty() && platform::verifiedSourceDigests().persistedFile() == verifiedSourcesPath())
@@ -818,19 +811,47 @@ void SourceMirror::keep(const std::filesystem::path& source, const platform::Fil
         (network ? statistics_.networkReadBytes : statistics_.otherSourceReadBytes) += bytes.size();
         generation = generation_;
     }
+    // Asked before any lock of the mirror is taken: the ledger's callbacks take the queue's lock.
+    bool filling = ledger_.previewFillActive();
     {
-        const std::lock_guard lock(queueMutex_);
-        if (stopping_.load())
+        std::unique_lock lock(queueMutex_);
+        const auto queued = [&] {
+            return std::ranges::any_of(
+                queue_, [&](const PendingWrite& pending) { return pending.key == key; });
+        };
+        if (stopping_.load() || queued())
             return;
-        if (std::ranges::any_of(queue_,
-                                [&](const PendingWrite& pending) { return pending.key == key; }))
-            return;
-        // A full queue drops its oldest pending write (never the frame's own read, which already
-        // returned): the source it belonged to is simply read once more later. A write in flight
-        // cannot be dropped, and a source larger than the whole capacity is taken only while the
-        // queue holds nothing at all, so the queue never keeps more than its capacity or one
-        // such source alive.
-        const auto capacity = writeQueueByteCapacity_.load(std::memory_order_relaxed);
+        const auto capacity = writeQueueByteCapacity_;
+        // A source larger than the whole capacity is taken only while the queue holds nothing
+        // at all, so the queue never keeps more than its capacity or one such source alive.
+        const auto fits = [&] {
+            return bytes.size() <= capacity ? queuedBytes_ + bytes.size() <= capacity
+                                            : queuedBytes_ == 0;
+        };
+        if (filling && !fits()) {
+            // A RAM Preview fill has no frame deadline and reads faster than an idle-priority
+            // writer writes: the read waits here for the writer instead of losing a write, so
+            // one pass leaves everything it read on disk. The fill's end is the ledger's to
+            // say, and it is asked with no lock of the mirror held.
+            const auto purges = queuePurges_;
+            ++waitingKeepers_;
+            while (filling && !fits() && !stopping_.load() && queuePurges_ == purges) {
+                roomCv_.wait_for(lock, std::chrono::milliseconds(50));
+                if (fits() || stopping_.load() || queuePurges_ != purges)
+                    break;
+                lock.unlock();
+                filling = ledger_.previewFillActive();
+                lock.lock();
+            }
+            --waitingKeepers_;
+            // Shutdown and "Purge media cache" abandon the write like any pending one; another
+            // read may have queued the same source meanwhile.
+            if (stopping_.load() || queuePurges_ != purges || queued())
+                return;
+        }
+        // Outside a fill a full queue drops its oldest pending write (never the frame's own
+        // read, which already returned): the source it belonged to is simply read once more
+        // later. A write in flight cannot be dropped.
         if (bytes.size() <= capacity)
             while (!queue_.empty() && queuedBytes_ + bytes.size() > capacity) {
                 queuedBytes_ -= queue_.front().bytes.size();
@@ -905,7 +926,9 @@ void SourceMirror::clear() {
         for (const auto& pending : queue_)
             queuedBytes_ -= pending.bytes.size();
         queue_.clear();
+        ++queuePurges_;
     }
+    roomCv_.notify_all();
     {
         const std::lock_guard lock(mutex_);
         ++generation_;
@@ -951,7 +974,7 @@ void SourceMirror::setWriterPausedForTest(const bool paused) {
 
 bool SourceMirror::underPressure() const {
     const std::lock_guard lock(queueMutex_);
-    return queuedBytes_ * 2 > writeQueueByteCapacity_.load(std::memory_order_relaxed);
+    return queuedBytes_ * 2 > writeQueueByteCapacity_;
 }
 
 SourceMirrorStatistics SourceMirror::statistics() const {
@@ -975,6 +998,7 @@ SourceMirrorStatistics SourceMirror::statistics() const {
     result.droppedWrites = droppedWrites_;
     result.pendingWrites = queue_.size() + inFlight_;
     result.pendingWriteBytes = queuedBytes_;
+    result.waitingWrites = waitingKeepers_;
     result.peakPendingWriteBytes = peakQueuedBytes_;
     return result;
 }
@@ -1576,6 +1600,7 @@ void SourceMirror::writerLoop() {
             lock.lock();
             queuedBytes_ -= std::min<std::uint64_t>(queuedBytes_, bytes);
             inFlight_ = 0;
+            roomCv_.notify_all();
         }
         if (queue_.empty() && (indexRequested_ || !woken)) {
             // Idle, or a flush or a new headroom asked for it: measure the volume, give back what
@@ -1598,6 +1623,7 @@ void SourceMirror::writerLoop() {
         queuedBytes_ -= std::min<std::uint64_t>(queuedBytes_, pending.bytes.size());
     queue_.clear();
     lock.unlock();
+    roomCv_.notify_all();
     writeIndex();
     if (persistsIdentities)
         platform::verifiedSourceDigests().save();

@@ -45,7 +45,9 @@ inline constexpr std::uint64_t kSourceMirrorUnmeasuredByteLimit = 32ULL * 1024 *
 // directory-entry count past this many entries.
 inline constexpr std::uint64_t kDefaultSourceMirrorMaxEntries = 200'000;
 // Encoded bytes waiting for the background writer. A pending write shares the bytes of the source
-// revision a frame is using, so the bound is on what the queue alone may keep alive.
+// revision a frame is using, so the bound is on what the queue alone may keep alive. The queue is
+// live work (#732): the ceiling is fixed, and memory pressure neither lowers it nor drops what
+// is waiting.
 inline constexpr std::uint64_t kSourceMirrorWriteQueueByteCapacity = 256ULL * 1024 * 1024;
 // The floor under every headroom: no write may leave the cache volume with less free space than
 // this, whatever the headroom setting says.
@@ -137,11 +139,14 @@ struct SourceMirrorStatistics final {
     std::uint64_t corruptDropped = 0, staleDropped = 0;
     std::uint64_t evictions = 0;
     std::uint64_t writes = 0;
-    // Pending writes dropped because the queue was full (the oldest goes first), and writes
+    // Pending writes dropped because the queue was full outside a RAM Preview fill (the oldest
+    // goes first; during a fill the read that brought the bytes waits for room instead), and writes
     // refused because there was no room for them: the space beyond the headroom was used up and
     // what could have made room is still in use (or the entry limit was reached the same way).
     std::uint64_t droppedWrites = 0, refusedWrites = 0;
     std::uint64_t pendingWrites = 0, pendingWriteBytes = 0, peakPendingWriteBytes = 0;
+    // Reads of a RAM Preview fill that are waiting for room in the write queue right now.
+    std::uint64_t waitingWrites = 0;
     std::uint64_t entryCount = 0, storedBytes = 0;
     // The cache volume as last measured (on the mirror's own thread or a worker, never here):
     // its capacity, its free space, the headroom in effect (the setting or the default, never
@@ -168,8 +173,12 @@ enum class LocalCopyState : std::uint8_t {
 // A bounded, corruption-checked local mirror of source files' encoded bytes, keyed by the
 // source's path and checked against its metadata identity (size, modification time, file id).
 // A hit is the exact bytes the source held under that identity, so decoding them is decoding the
-// source. Writes are write-through and never wait: the bytes a read brought from the source go to
-// their caller at once and reach the disk on the mirror's own low-priority thread.
+// source. Writes are write-through: the bytes a read brought from the source go to their caller
+// at once and reach the disk on the mirror's own low-priority thread. Outside a RAM Preview fill
+// a full write queue drops its oldest pending write, so a frame with a deadline never waits for
+// the disk. During a fill (runtime::MemoryBudgetLedger::previewFillActive()) nothing is dropped:
+// keep() waits for room in the queue instead, on the worker that read the source and never on
+// the UI thread. The wait ends when there is room, at shutdown, at a purge and when the fill ends.
 //
 // Space (#732). The mirror grows into the cache volume's free space beyond the headroom and
 // gives space back, least recently used first, when other programs bring the free space under
@@ -181,7 +190,7 @@ enum class LocalCopyState : std::uint8_t {
 //
 // Thread-safety: every public member function may be called concurrently from any thread. No
 // function holds the mirror's lock across file I/O or hashing, and none blocks on the writer
-// except flush() and the destructor. Two instances rooted at one directory (two processes) are
+// except flush(), the destructor and keep() during a RAM Preview fill. Two instances rooted at one directory (two processes) are
 // safe with each other: entries land by temp file and rename, and each entry file carries its own
 // identity and digest, so a reader never serves a torn or foreign file.
 class SourceMirror final : public platform::SourceStore {
@@ -232,9 +241,9 @@ class SourceMirror final : public platform::SourceStore {
     [[nodiscard]] bool underPressure() const override;
 
     [[nodiscard]] SourceMirrorStatistics statistics() const;
-    // The write queue's byte capacity as it stands (memory pressure lowers it).
+    // The write queue's byte capacity: its fixed ceiling, whatever the memory budgets say.
     [[nodiscard]] std::uint64_t writeQueueByteCapacity() const noexcept {
-        return writeQueueByteCapacity_.load(std::memory_order_relaxed);
+        return writeQueueByteCapacity_;
     }
     // The headroom setting (0: the default). A new value applies to the next write, and the
     // mirror's own thread gives space back at once when the volume is now short of it; nothing
@@ -361,7 +370,7 @@ class SourceMirror final : public platform::SourceStore {
     const std::function<std::optional<SourceMirrorDriveSpace>()> driveSpace_;
     mutable std::atomic<std::int64_t> lastStamp_{0};
     std::atomic<bool> enabled_;
-    std::atomic<std::uint64_t> writeQueueByteCapacity_;
+    const std::uint64_t writeQueueByteCapacity_;
     std::atomic<bool> diskPressure_{false};
     // The cache volume's id, resolved once on the writer thread (nullopt until then or when the
     // root cannot be observed).
@@ -401,6 +410,10 @@ class SourceMirror final : public platform::SourceStore {
     mutable std::mutex queueMutex_;
     std::condition_variable queueCv_;
     std::condition_variable idleCv_;
+    // Signalled when the queue gets room, is purged or stops: what a keep() of a fill waits on.
+    std::condition_variable roomCv_;
+    std::size_t waitingKeepers_ = 0;
+    std::uint64_t queuePurges_ = 0; // bumped by clear(): a waiting keep() gives up
     std::deque<PendingWrite> queue_;
     std::uint64_t queuedBytes_ = 0;
     std::uint64_t peakQueuedBytes_ = 0;

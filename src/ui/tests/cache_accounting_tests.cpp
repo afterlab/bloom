@@ -223,8 +223,8 @@ void testTwoHundredUhdImportsStayInsideEveryBudget(Expectations& check) {
 
     // A cache volume with room for 64 MiB of sources beyond its headroom (an injected size, not
     // the machine's): what is free falls as the mirror stores.
-    constexpr std::uint64_t kDiskRoom = 64 * kMebibyte;
-    constexpr std::uint64_t kDiskCapacity = 100ULL * 1024 * kMebibyte;
+    static constexpr std::uint64_t kDiskRoom = 64 * kMebibyte;
+    static constexpr std::uint64_t kDiskCapacity = 100ULL * 1024 * kMebibyte;
     std::atomic<const cache::SourceMirror*> stored{nullptr};
     cache::SourceMirrorConfig config;
     config.rootDirectory = scratch.path();
@@ -331,10 +331,11 @@ void testContentionDuringTwoHundredImports(Expectations& check) {
     auto peak = baseline;
     std::size_t before = 0, first = 0, second = 0;
     std::size_t operationBytesBeforeLimit = 0;
-    const auto tracked = [&] {
-        return operations.retainedBytes() + video.residentBytes() +
-               disk.statistics().pendingWriteBytes;
-    };
+    // The disk cache's write queue is live work (#732): bytes on their way to the disk under a
+    // fixed ceiling of its own. It is counted, but it is not one of the reusable pools that
+    // share an OS limit.
+    const auto reusable = [&] { return operations.retainedBytes() + video.residentBytes(); };
+    const auto tracked = [&] { return reusable() + disk.statistics().pendingWriteBytes; };
     for (int index = 0; index < kImportedImages; ++index) {
         auto image = makeUhdImage(static_cast<float>(index % 97) / 97.0F);
         operations.store("contention:" + keyFor(index), {},
@@ -377,20 +378,24 @@ void testContentionDuringTwoHundredImports(Expectations& check) {
             check.expect(
                 state.retentionPercent == 100 &&
                     state.processCacheCeilingBytes == trackedBudget / 10 &&
-                    second <= trackedBudget / 10 &&
-                    operations.byteBudget() + video.byteBudget() + disk.writeQueueByteCapacity() <=
-                        trackedBudget / 10,
+                    reusable() <= trackedBudget / 10 &&
+                    operations.byteBudget() + video.byteBudget() <= trackedBudget / 10,
                 "an actual finite OS limit reduces all shared owner budgets and retained bytes");
+            check.expect(disk.writeQueueByteCapacity() == queueBudget &&
+                             disk.statistics().pendingWriteBytes <= queueBudget,
+                         "the disk write queue keeps its own fixed ceiling under an OS limit");
             check.expect(
                 operationBytesBeforeLimit > 0 && operations.retainedBytes() == 0,
                 "real operation and decoded-media entries are released when the OS limit falls");
         }
         if (index >= 100)
-            check.expect(tracked() <= trackedBudget / 10,
+            check.expect(reusable() <= trackedBudget / 10 &&
+                             disk.statistics().pendingWriteBytes <= queueBudget,
                          "continuing imports cannot refill beyond the actual shared OS limit");
     }
-    check.expect(disk.writeQueueByteCapacity() <= queueBudget / 10,
-                 "disk queue admission follows the same ledger callback");
+    check.expect(disk.writeQueueByteCapacity() == queueBudget &&
+                     disk.statistics().peakPendingWriteBytes <= queueBudget,
+                 "the disk write queue is live work: its ceiling is fixed and it never grows past it");
     if (baseline != 0 && peak != 0)
         check.expect(peak - baseline <= trackedBudget + slack,
                      "contention RSS growth stays inside budgets plus transient-frame slack");

@@ -21,7 +21,6 @@
 #include <optional>
 #include <span>
 #include <string>
-#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -463,9 +462,10 @@ void testEntryLimit() {
            "an idle entry makes way for a new one at the entry limit");
 }
 
-// #732, required behavior: the write queue is live work with a fixed ceiling. A RAM Preview fill
-// does not shrink it and its writes are not dropped.
-void testWriteQueueDuringFill(const bool report) {
+// #732 (R4): the write queue is live work with a fixed ceiling. A RAM Preview fill does not shrink
+// it, memory pressure does not drop what is waiting, and during a fill a full queue makes the
+// read wait for the writer instead of dropping a write.
+void testWriteQueueIsLiveWork() {
     namespace runtime = bloom::runtime;
     const Scratch scratch("fill");
     runtime::MemoryBudgetLedger ledger(64 * kGiB, 32 * kGiB);
@@ -473,37 +473,104 @@ void testWriteQueueDuringFill(const bool report) {
     runtime::MachineMemorySample sample;
     sample.availableBytes = 32 * kGiB;
     static_cast<void>(ledger.poll(sample));
-    cache::SourceMirror mirror(config(scratch), ledger);
+    {
+        // The default ceiling, with plenty of memory: the queue is not offered the free memory.
+        cache::SourceMirror mirror(config(scratch), ledger);
+        mirror.flush();
+        static_cast<void>(ledger.poll(sample));
+        expect(mirror.writeQueueByteCapacity() == cache::kSourceMirrorWriteQueueByteCapacity,
+               "outside a fill the write queue's capacity is its fixed ceiling");
+        auto fill = ledger.beginPreviewFill();
+        static_cast<void>(ledger.poll(sample));
+        expect(mirror.writeQueueByteCapacity() == cache::kSourceMirrorWriteQueueByteCapacity,
+               "a RAM Preview fill leaves the write queue's capacity at its ceiling");
+        // Three layers' members arrive together (one composite frame) while the writer is busy.
+        mirror.setWriterPausedForTest(true);
+        const auto frames = loopFrames(scratch, "layer", 3);
+        for (const auto& frame : frames)
+            keep(mirror, frame);
+        auto during = mirror.statistics();
+        expect(during.pendingWrites == 3 && during.droppedWrites == 0,
+               "three writes handed over during a fill are all pending and none is dropped");
+        // Memory pressure and an admission reclaim are for reusable caches: pending writes stay.
+        runtime::MachineMemorySample tight;
+        tight.availableBytes = kGiB; // under the RAM headroom
+        static_cast<void>(ledger.poll(tight));
+        static_cast<void>(ledger.reclaim(64 * kMiB));
+        during = mirror.statistics();
+        expect(during.pendingWrites == 3 && during.droppedWrites == 0 &&
+                   mirror.writeQueueByteCapacity() == cache::kSourceMirrorWriteQueueByteCapacity,
+               "memory pressure and a reclaim leave the pending writes and the ceiling alone");
+        mirror.setWriterPausedForTest(false);
+        mirror.flush();
+        fill.end();
+        expect(mirror.statistics().writes == 3 && mirror.statistics().droppedWrites == 0,
+               "every write handed over during a fill reaches the disk");
+    }
+
+    // A queue with room for two frames, and a writer held before its next write.
+    auto small = config(scratch);
+    small.rootDirectory = scratch.root / "cache-small";
+    small.writeQueueByteCapacity = 2 * kLoopFrameBytes + kLoopFrameBytes / 2;
+    cache::SourceMirror mirror(small, ledger);
     mirror.flush();
-    static_cast<void>(ledger.poll(sample));
-    const auto idleCapacity = mirror.writeQueueByteCapacity();
-    auto fill = ledger.beginPreviewFill();
-    static_cast<void>(ledger.poll(sample));
-    const auto fillCapacity = mirror.writeQueueByteCapacity();
-    // Three layers' members arrive together (one composite frame) while the writer is busy.
+    const auto frames = loopFrames(scratch, "queued", 6);
     mirror.setWriterPausedForTest(true);
-    std::vector<Source> frames;
-    for (unsigned i = 0; i < 3; ++i)
-        frames.push_back(
-            writeSource(scratch, "layer" + std::to_string(i) + ".exr", kLoopFrameBytes, i));
-    for (const auto& frame : frames)
-        keep(mirror, frame);
-    const auto during = mirror.statistics();
-    mirror.setWriterPausedForTest(false);
-    mirror.flush();
-    fill.end();
-    if (report)
-        std::cout << "write queue capacity: no fill " << idleCapacity << " | during a fill "
-                  << fillCapacity << " | 3 keeps in a fill: pending=" << during.pendingWrites
-                  << " dropped=" << during.droppedWrites << " written=" << mirror.statistics().writes
-                  << '\n';
-    expect(idleCapacity == cache::kSourceMirrorWriteQueueByteCapacity,
-           "outside a fill the write queue's capacity is its fixed ceiling");
-    expect(fillCapacity == cache::kSourceMirrorWriteQueueByteCapacity,
-           "a RAM Preview fill leaves the write queue's capacity at its ceiling");
-    expect(during.pendingWrites == 3 && during.droppedWrites == 0,
-           "three writes handed over during a fill are all pending and none is dropped");
-    expect(mirror.statistics().writes == 3, "every write handed over during a fill reaches the disk");
+    {
+        // In a fill the third read waits for room: observed through the mirror's own count of
+        // waiting reads, not through a timer.
+        auto fill = ledger.beginPreviewFill();
+        keep(mirror, frames[0]);
+        keep(mirror, frames[1]);
+        std::thread reader([&] { keep(mirror, frames[2]); });
+        while (mirror.statistics().waitingWrites == 0)
+            std::this_thread::yield();
+        auto waiting = mirror.statistics();
+        expect(waiting.waitingWrites == 1 && waiting.pendingWrites == 2 &&
+                   waiting.droppedWrites == 0 &&
+                   waiting.pendingWriteBytes <= small.writeQueueByteCapacity,
+               "in a fill a full queue makes the read wait and drops nothing");
+        mirror.setWriterPausedForTest(false);
+        reader.join();
+        mirror.flush();
+        expect(mirror.statistics().writes == 3 && mirror.statistics().droppedWrites == 0 &&
+                   mirror.statistics().waitingWrites == 0,
+               "the waiting read resumes when the writer makes room, and every write lands");
+        expect(mirror.statistics().peakPendingWriteBytes <= small.writeQueueByteCapacity,
+               "the queue never grows past its ceiling");
+
+        // The end of the fill releases a waiting read; it then follows the rule outside a fill.
+        mirror.setWriterPausedForTest(true);
+        keep(mirror, frames[3]);
+        keep(mirror, frames[4]);
+        std::thread late([&] { keep(mirror, frames[5]); });
+        while (mirror.statistics().waitingWrites == 0)
+            std::this_thread::yield();
+        fill.end();
+        late.join();
+        const auto after = mirror.statistics();
+        expect(after.waitingWrites == 0 && after.droppedWrites == 1 && after.pendingWrites == 2,
+               "a read still waiting when the fill ends drops the oldest pending write instead");
+        mirror.setWriterPausedForTest(false);
+        mirror.flush();
+    }
+    {
+        // A purge releases a waiting read and abandons its write, like the pending ones.
+        auto fill = ledger.beginPreviewFill();
+        mirror.clear();
+        mirror.setWriterPausedForTest(true);
+        keep(mirror, frames[0]);
+        keep(mirror, frames[1]);
+        std::thread reader([&] { keep(mirror, frames[2]); });
+        while (mirror.statistics().waitingWrites == 0)
+            std::this_thread::yield();
+        mirror.clear();
+        reader.join();
+        mirror.setWriterPausedForTest(false);
+        mirror.flush();
+        expect(mirror.statistics().entryCount == 0 && mirror.statistics().waitingWrites == 0,
+               "a purge releases a waiting read and keeps nothing of it");
+    }
 }
 
 void testIdentity() {
@@ -1094,14 +1161,7 @@ void testChunks() {
     }
 }
 
-int main(const int argc, char** argv) {
-    // The #732 cases that describe required behavior the mirror does not have yet. They run only
-    // when asked for, and print the counters they found.
-    if (argc > 1 && std::string_view(argv[1]) == "--pending-732") {
-        testWriteQueueDuringFill(true);
-        std::cout << (failures == 0 ? "PASS" : "FAILED") << ": source mirror, pending #732\n";
-        return failures == 0 ? 0 : 1;
-    }
+int main() {
     testChunks();
     testIdentity();
     testRestartAndIndex();
@@ -1114,6 +1174,7 @@ int main(const int argc, char** argv) {
     testEntryLimit();
     testPublishedSettings();
     testWriteQueue();
+    testWriteQueueIsLiveWork();
     testShutdownAndCancellation();
     testLegacyEntriesRemoved();
     testConcurrency();
