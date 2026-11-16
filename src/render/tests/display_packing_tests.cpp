@@ -146,17 +146,17 @@ void testSignalAndPresentation() {
                render::displaySignalAlpha(Layout::Straight8888, Rgba8{9, 9, 9, 0}) == 0.0F,
            "the signal's alpha is 1 for an opaque and 0 for a transparent pixel in both layouts");
 
-    bool nearest = true;
-    bool monotonic = true;
+    bool topBits = true;
+    bool close = true;
     for (std::uint32_t code = 0; code <= 1023U; ++code) {
         const auto shown = render::presentedCode8(code);
         const double exact = static_cast<double>(code) * 255.0 / 1023.0;
-        nearest = nearest && std::abs(static_cast<double>(shown) - exact) <= 0.5;
-        monotonic = monotonic && (code == 0 || shown >= render::presentedCode8(code - 1U));
+        topBits = topBits && shown == code / 4U;
+        close = close && std::abs(static_cast<double>(shown) - exact) < 1.0;
     }
-    expect(nearest && monotonic && render::presentedCode8(0) == 0 &&
+    expect(topBits && close && render::presentedCode8(0) == 0 &&
                render::presentedCode8(1023U) == 255,
-           "an 8-bit output shows the nearest 8-bit code of every 10-bit code");
+           "an 8-bit output shows the top 8 bits of every 10-bit code, within one 8-bit code");
     bool everyByte = true;
     for (std::uint32_t byte = 0; byte <= 255U; ++byte) {
         // A value on an 8-bit step survives 10-bit storage and 8-bit presentation unchanged.
@@ -166,6 +166,8 @@ void testSignalAndPresentation() {
     expect(everyByte, "a picture whose values are 8-bit steps is shown as the same 8-bit codes");
     expect(render::presentedRgba8(Layout::Rgb10A2, render::rgb10A2Cell({1023U, 512U, 0U, 3U})) ==
                    Rgba8{255, 128, 0, 255} &&
+               render::presentedRgba8(Layout::Rgb10A2, render::rgb10A2Cell({1022U, 3U, 4U, 3U})) ==
+                   Rgba8{255, 0, 1, 255} &&
                render::presentedRgba8(Layout::Rgb10A2, Rgba8{0, 0, 0, 0}) == Rgba8{0, 0, 0, 0} &&
                render::presentedRgba8(Layout::Straight8888, Rgba8{1, 2, 3, 4}) == Rgba8{1, 2, 3, 4},
            "the shown 8-bit pixel of either layout");
@@ -271,7 +273,7 @@ void testReferenceRows() {
     for (std::size_t index = 0; index < wide.size(); ++index) {
         const auto shown = render::presentedRgba8(DisplayPixelLayout::Rgb10A2, wide[index]);
         const auto reference = narrow[index];
-        // Rounding to 10 bits and then to 8 can land one 8-bit code from rounding to 8 at once.
+        // The top 8 bits of the 10-bit code can be one 8-bit code from rounding to 8 at once.
         agrees = agrees && std::abs(shown.red - reference.red) <= 1 &&
                  std::abs(shown.green - reference.green) <= 1 &&
                  std::abs(shown.blue - reference.blue) <= 1 && shown.alpha == reference.alpha;

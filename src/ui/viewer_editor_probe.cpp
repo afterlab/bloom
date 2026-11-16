@@ -38,6 +38,7 @@ bool containsPixel(const render::ImageWindow window, QPoint pixel) {
 
 // The packed display sample from a frame that actually has CPU pixels; nullopt for the resident arm
 // (its sample arrives asynchronously from the 1x1 CPU analysis fallback, never a GPU readback).
+// The sample is the straight 8-bit pixel an 8-bit output shows, whatever the frame's layout (#733).
 std::optional<render::Rgba8> displayPixel(const runtime::PreparedPreviewFrame& frame,
                                           QPoint pixel) {
     const auto buffer = frame.displayBufferView();
@@ -54,7 +55,7 @@ std::optional<render::Rgba8> displayPixel(const runtime::PreparedPreviewFrame& f
     if (offset >= buffer->pixels.size()) {
         return std::nullopt;
     }
-    return buffer->pixels[offset];
+    return buffer->presentedPixel(offset);
 }
 } // namespace
 

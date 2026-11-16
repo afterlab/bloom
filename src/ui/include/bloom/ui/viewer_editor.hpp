@@ -616,6 +616,8 @@ class ViewerEditor final : public QWidget,
         PreparedPreviewFrameHandle frame;
         std::span<const render::Rgba8> pixels;
         ViewerChannel channel = ViewerChannel::Rgba;
+        // #733: the layout of `pixels` (the frame's own, or the derived channel picture's).
+        render::DisplayPixelLayout pixelLayout = render::DisplayPixelLayout::Straight8888;
     };
     PackedPaintDisplay choosePackedPaintDisplay(PreparedPreviewFrameHandle frame);
     void startChannelDisplay();

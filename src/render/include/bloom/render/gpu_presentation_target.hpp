@@ -31,12 +31,17 @@ struct GpuPresentOverlay;
 // Bloom-owned swapchain format choice. Bgra8Unorm with an SRGB_NONLINEAR color space is preferred
 // because the display shader already emits sRGB-encoded bytes; that pairing avoids a second gamma
 // encode. Bgra8Srgb is only a fallback when the UNORM format is not offered.
+// #733: a surface that offers no 8-bit UNORM format but a 10-bit one (A2Bgr10Unorm, A2Rgb10Unorm)
+// is accepted; a 10:10:10:2 display frame then keeps its codes. Bloom does not ask for a deeper
+// surface than the system gives: the 8-bit formats stay first.
 enum class GpuPresentationFormat : std::uint8_t {
     Unknown,
     Bgra8Unorm,
     Bgra8Srgb,
     Rgba8Unorm,
     Rgba8Srgb,
+    A2Bgr10Unorm,
+    A2Rgb10Unorm,
 };
 
 // How presentation completion is proven. None means no supported mechanism and therefore no target.

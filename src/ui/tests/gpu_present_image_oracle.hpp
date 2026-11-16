@@ -115,7 +115,8 @@ struct OracleImage final {
 renderOracle(const std::vector<Rgba8>& display, const std::uint32_t displayWidth,
              const std::uint32_t displayHeight, const GpuPresentImageParams& params,
              const std::vector<Rgba8>& overlay, const std::uint32_t overlayWidth,
-             const std::uint32_t overlayHeight, const bool smooth) {
+             const std::uint32_t overlayHeight, const bool smooth,
+             const QImage::Format displayFormat = QImage::Format_RGBA8888) {
     const int targetWidth = static_cast<int>(params.targetWidth);
     const int targetHeight = static_cast<int>(params.targetHeight);
     QImage target(targetWidth, targetHeight, QImage::Format_RGBA8888);
@@ -145,8 +146,9 @@ renderOracle(const std::vector<Rgba8>& display, const std::uint32_t displayWidth
     QPainter painter(&target);
     painter.setRenderHint(QPainter::SmoothPixmapTransform, smooth);
 
-    const QImage sourceStraight =
-        imageFrom(display, displayWidth, displayHeight, QImage::Format_RGBA8888);
+    // #733: `displayFormat` is the format the Viewer's painter borrows the frame's bytes as
+    // (ui/display_frame_image.hpp); a 10:10:10:2 frame is only painted here in the RGBA mode.
+    const QImage sourceStraight = imageFrom(display, displayWidth, displayHeight, displayFormat);
     const QImage source = remapChannel(sourceStraight, params.channel);
     if (params.destination.width > 0.0F && params.destination.height > 0.0F &&
         params.source.width > 0.0 && params.source.height > 0.0) {

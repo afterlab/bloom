@@ -523,7 +523,8 @@ bool PresentImagePipeline::ensureDisplayView(DeviceAllocatorState& /*deviceContr
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = display.image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    // #733: the view is in the image's own format, RGBA8 or A2B10G10R10 by the frame's layout.
+    viewInfo.format = displayImageFormat(display.pixelLayout);
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     VkImageView rawView = VK_NULL_HANDLE;
     if (control->device.getDispatcher()->vkCreateImageView(*control->device, &viewInfo, nullptr,

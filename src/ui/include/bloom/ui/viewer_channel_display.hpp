@@ -12,6 +12,9 @@ struct ViewerChannelDisplay final {
     std::shared_ptr<const runtime::PreparedPreviewFrame> frame;
     ViewerChannel channel = ViewerChannel::Rgba;
     std::vector<render::Rgba8> pixels;
+    // #733: the derived picture keeps its source frame's layout, so a channel of a 10-bit frame
+    // is shown at 10 bits too.
+    render::DisplayPixelLayout pixelLayout = render::DisplayPixelLayout::Straight8888;
     [[nodiscard]] std::size_t byteCost() const noexcept {
         return sizeof(ViewerChannelDisplay) + 2 * sizeof(std::shared_ptr<const void>) +
                pixels.capacity() * sizeof(render::Rgba8);

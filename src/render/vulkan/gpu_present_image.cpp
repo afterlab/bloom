@@ -14,8 +14,15 @@ namespace bloom::render {
 namespace present_image_detail {
 namespace {
 
+// #733: a 10-bit UNORM attachment stores the 10:10:10:2 display codes unchanged.
+[[nodiscard]] bool isDeepUnormFormatImpl(const VkFormat format) noexcept {
+    return format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ||
+           format == VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+}
+
 [[nodiscard]] bool isUnormSwapchainFormatImpl(const VkFormat format) noexcept {
-    return format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_R8G8B8A8_UNORM;
+    return format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_R8G8B8A8_UNORM ||
+           isDeepUnormFormatImpl(format);
 }
 
 [[nodiscard]] bool finitePositive(const float value) noexcept {
@@ -79,7 +86,8 @@ namespace {
 [[nodiscard]] PresentImageUniforms makeUniforms(const GpuPresentImageParams& params,
                                                 const std::uint32_t sourceWidth,
                                                 const std::uint32_t sourceHeight,
-                                                const bool hasOverlay) {
+                                                const bool hasOverlay,
+                                                const bool showTopEightBits) {
     PresentImageUniforms uniforms{};
     uniforms.targetExtent[0] = static_cast<float>(params.targetWidth);
     uniforms.targetExtent[1] = static_cast<float>(params.targetHeight);
@@ -116,7 +124,8 @@ namespace {
     uniforms.modes[0] = static_cast<std::uint32_t>(params.channel);
     uniforms.modes[1] = params.transparencyGrid ? 1U : 0U;
     uniforms.modes[2] = hasOverlay ? 1U : 0U;
-    uniforms.modes[3] = 0U;
+    // Bit 0 (kFlagShowTopEightBits of the shader): a 10:10:10:2 image on an 8-bit target.
+    uniforms.modes[3] = showTopEightBits ? 1U : 0U;
     return uniforms;
 }
 } // namespace
@@ -186,8 +195,10 @@ renderResidentIntoAcquired(presentation_detail::SwapchainResources& resources,
     }
 
     const bool hasOverlay = presenter->stagedOverlayPending || presenter->overlayToken != 0U;
+    const bool showTopEightBits = display->pixelLayout == DisplayPixelLayout::Rgb10A2 &&
+                                  !isDeepUnormFormatImpl(resources.format);
     PresentImageUniforms uniforms =
-        makeUniforms(params, display->width, display->height, hasOverlay);
+        makeUniforms(params, display->width, display->height, hasOverlay, showTopEightBits);
     std::memcpy(presenter->paramsMapped, &uniforms, sizeof(uniforms));
     if (vmaFlushAllocation(control->allocator, presenter->paramsAllocation, 0, sizeof(uniforms)) !=
         VK_SUCCESS) {

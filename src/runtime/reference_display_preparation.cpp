@@ -177,8 +177,12 @@ ReferenceDisplayPreparationResult CpuReferenceDisplayPreparer::prepare(
                                  "Process frame has no image descriptor")
                     : imageDiagnostic(*processView.error(), "Process frame image is invalid"));
         }
+        // One layout holds for the whole frame, decided from the picture before any row is packed.
+        const bool wide =
+            request.allowRgb10A2 && render::rgba32fAllowsRgb10A2(*processView.value());
         const auto displayDescriptorResult = render::ReferenceDisplayBufferDescriptor::create(
-            processDescriptor->displayWindow(), processDescriptor->pixelAspect());
+            processDescriptor->displayWindow(), processDescriptor->pixelAspect(),
+            wide ? render::DisplayPixelLayout::Rgb10A2 : render::DisplayPixelLayout::Straight8888);
         if (!displayDescriptorResult) {
             return ReferenceDisplayPreparationResult::failed(imageDiagnostic(
                 *displayDescriptorResult.error(), "Reference display descriptor is invalid"));
@@ -224,15 +228,18 @@ ReferenceDisplayPreparationResult CpuReferenceDisplayPreparer::prepare(
         const auto& source = *processView.value();
         const auto outcome = runRowBandPass(
             rowBands, cancellation, height, window.originY(),
-            [&buffer, &source, adjust = request.viewAdjust,
-             window](const std::int64_t y) -> std::optional<ReferenceDisplayDiagnostic> {
+            [&buffer, &source, adjust = request.viewAdjust, window,
+             wide](const std::int64_t y) -> std::optional<ReferenceDisplayDiagnostic> {
                 auto outputRow = buffer.row(y);
                 if (!outputRow) {
                     return imageDiagnostic(*outputRow.error(),
                                            "Reference display row could not be addressed");
                 }
-                if (const auto rowStatus = render::mapLinearRec709SceneToSrgbRow(
-                        source, window, y, *outputRow.value())) {
+                if (const auto rowStatus =
+                        wide ? render::mapLinearRec709SceneToSrgbRgb10A2Row(source, window, y,
+                                                                            *outputRow.value())
+                             : render::mapLinearRec709SceneToSrgbRow(source, window, y,
+                                                                     *outputRow.value())) {
                     return imageDiagnostic(*rowStatus,
                                            "Reference display mapping could not be evaluated");
                 }
@@ -245,6 +252,18 @@ ReferenceDisplayPreparationResult CpuReferenceDisplayPreparer::prepare(
                         const auto pixel = *value.value();
                         const auto alpha = static_cast<double>(pixel.alpha());
                         auto& output = (*outputRow.value())[x];
+                        if (wide) {
+                            // Every pixel of a 10:10:10:2 frame that is not transparent is opaque.
+                            output = render::rgb10A2Cell(
+                                {ViewAdjust::quantize10(
+                                     adjust.fromLinear(static_cast<double>(pixel.red()) / alpha)),
+                                 ViewAdjust::quantize10(
+                                     adjust.fromLinear(static_cast<double>(pixel.green()) / alpha)),
+                                 ViewAdjust::quantize10(
+                                     adjust.fromLinear(static_cast<double>(pixel.blue()) / alpha)),
+                                 render::kDisplayAlpha2Opaque});
+                            continue;
+                        }
                         output.red = ViewAdjust::quantize(
                             adjust.fromLinear(static_cast<double>(pixel.red()) / alpha));
                         output.green = ViewAdjust::quantize(

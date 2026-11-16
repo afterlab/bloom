@@ -33,6 +33,7 @@ bool sameViewerPackedSource(
     // envelope may reuse these exact bytes/geometry without a new channel derivation.
     return av && bv && av->pixels.data() == bv->pixels.data() &&
            av->pixels.size() == bv->pixels.size() && av->layout == bv->layout &&
+           av->pixelLayout == bv->pixelLayout &&
            av->dataWindow == bv->dataWindow && av->displayWindow == bv->displayWindow &&
            av->pixelAspect == bv->pixelAspect;
 }
@@ -58,6 +59,7 @@ prepareViewerChannelDisplay(std::shared_ptr<const runtime::PreparedPreviewFrame>
     auto output = std::make_shared<ViewerChannelDisplay>();
     output->frame = std::move(frame);
     output->channel = channel;
+    output->pixelLayout = view->pixelLayout;
     output->pixels.resize(view->pixels.size());
     if (output->byteCost() > byteLimit)
         return Result::failed({{.code = "bloom.ui.viewer-channel-allocation",
@@ -69,6 +71,30 @@ prepareViewerChannelDisplay(std::shared_ptr<const runtime::PreparedPreviewFrame>
         if (i % width == 0 && context.isCancellationRequested())
             return Result::cancelled();
         const auto pixel = view->pixels[i];
+        if (view->pixelLayout == render::DisplayPixelLayout::Rgb10A2) {
+            // A 10:10:10:2 cell is one word: read its codes, never its bytes. Alpha is 1 or 0.
+            const auto codes = render::rgb10A2Codes(pixel);
+            const bool opaque = codes.alpha == render::kDisplayAlpha2Opaque;
+            const auto level = [&]() -> std::uint32_t {
+                switch (channel) {
+                case ViewerChannel::Red:
+                    return codes.red;
+                case ViewerChannel::Green:
+                    return codes.green;
+                case ViewerChannel::Blue:
+                    return codes.blue;
+                default:
+                    return opaque ? render::kDisplayCode10Maximum : 0U;
+                }
+            };
+            output->pixels[i] =
+                channel == ViewerChannel::Rgb
+                    ? render::rgb10A2Cell(
+                          {codes.red, codes.green, codes.blue, render::kDisplayAlpha2Opaque})
+                    : render::rgb10A2Cell(
+                          {level(), level(), level(), render::kDisplayAlpha2Opaque});
+            continue;
+        }
         if (channel == ViewerChannel::Rgb) {
             output->pixels[i] = {pixel.red, pixel.green, pixel.blue, 255};
         } else {

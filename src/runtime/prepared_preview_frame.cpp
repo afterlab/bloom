@@ -107,13 +107,14 @@ PreviewDisplayOnlyFrame::create(const PreparedPreviewFrame& source,
         return std::nullopt;
     }
     const auto descriptor = render::ReferenceDisplayBufferDescriptor::create(
-        view->dataWindow.value_or(view->displayWindow), view->pixelAspect);
+        view->dataWindow.value_or(view->displayWindow), view->pixelAspect, view->pixelLayout);
     if (!descriptor) {
         return std::nullopt;
     }
-    // The CPU display products are both packed straight RGBA8 over the same window, so one storage
-    // type holds either -- but that is an invariant worth checking rather than assuming, because a
-    // mismatch here would mean copying pixels into a shape that does not describe them.
+    // The CPU display products are both packed in four bytes a pixel over the same window (the
+    // descriptor carries which of the two layouts), so one storage type holds either -- but that is
+    // an invariant worth checking rather than assuming, because a mismatch here would mean copying
+    // pixels into a shape that does not describe them.
     if (descriptor.value()->layout() != view->layout) {
         return std::nullopt;
     }
@@ -154,6 +155,7 @@ PreviewDisplayOnlyFrame::displayBufferView() const noexcept {
         .pixels = buffer_.pixels(),
         .isOcioQualified = isOcioQualified(),
         .dataWindow = packed ? std::optional(descriptor->displayWindow()) : std::nullopt,
+        .pixelLayout = descriptor->pixelLayout(),
     };
 }
 
@@ -367,6 +369,8 @@ std::optional<PreviewDisplayBufferView> PreparedPreviewFrame::displayBufferView(
             .layout = descriptorResult->layout(),
             .pixels = view.pixels(),
             .isOcioQualified = false,
+            .dataWindow = std::nullopt,
+            .pixelLayout = descriptorResult->pixelLayout(),
         };
     }
     const auto* qualified = std::get_if<QualifiedPtr>(&displayFrame_)->get();
@@ -378,7 +382,9 @@ std::optional<PreviewDisplayBufferView> PreparedPreviewFrame::displayBufferView(
                                         .pixelAspect = descriptor->pixelAspect(),
                                         .layout = descriptor->layout(),
                                         .pixels = adjusted->pixels(),
-                                        .isOcioQualified = true};
+                                        .isOcioQualified = true,
+                                        .dataWindow = std::nullopt,
+                                        .pixelLayout = descriptor->pixelLayout()};
     }
     const auto& buffer = qualified->buffer();
     if (!buffer.isValid()) {
@@ -390,6 +396,8 @@ std::optional<PreviewDisplayBufferView> PreparedPreviewFrame::displayBufferView(
         .layout = buffer.layout(),
         .pixels = buffer.pixels(),
         .isOcioQualified = true,
+        .dataWindow = std::nullopt,
+        .pixelLayout = buffer.pixelLayout(),
     };
 }
 

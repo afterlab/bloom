@@ -11,9 +11,13 @@
 #include "gpu_present_image_native_support.hpp"
 #include "gpu_present_image_oracle.hpp"
 #include "gpu_resident_display_oracle.hpp"
+
+#include <bloom/render/display_pixel_packing.hpp>
+#include <bloom/render/gpu_display_pack.hpp>
 #include <cstddef>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -671,6 +675,168 @@ void testResidentDisplayNonUniform(
 
 } // namespace
 
+// The scene-linear value whose Bloom Neutral display value is `display` (the inverse of the
+// display's piecewise sRGB curve), so a frame can be given every 10-bit code.
+[[nodiscard]] float sceneOfDisplay(const double display) {
+    constexpr double slope = 12.9232101;
+    constexpr double breakPoint = 0.00303993467 * slope;
+    if (display <= breakPoint) {
+        return static_cast<float>(display / slope);
+    }
+    return static_cast<float>(std::pow((display + 0.055) / 1.055, 2.4));
+}
+
+// One resident display pack in the asked layout: the image the presenter samples and the same
+// words read back.
+[[nodiscard]] std::optional<DisplayBundle>
+makePackedBundle(GpuResidentDisplay& display, const std::shared_ptr<const GpuImage>& input,
+                 const bloom::render::DisplayPixelLayout layout) {
+    const auto begin = display.begin(
+        input, kBudget, bloom::render::GpuDisplayPackRequest{.layout = layout, .luma = {}});
+    if (begin.code != GpuResidentDisplayDiagnosticCode::None) {
+        return std::nullopt;
+    }
+    GpuResidentDisplayPollResult poll = GpuResidentDisplayPollResult::Pending;
+    while (poll == GpuResidentDisplayPollResult::Pending) {
+        poll = display.poll();
+    }
+    if (poll != GpuResidentDisplayPollResult::Ready) {
+        return std::nullopt;
+    }
+    const auto readback = display.readback();
+    if (readback.code != GpuDisplayImageReadbackCode::None) {
+        return std::nullopt;
+    }
+    DisplayBundle bundle;
+    bundle.bytes = readback.pixels;
+    bundle.input = std::make_shared<const GpuDisplayImage>(display.takeImage());
+    return bundle;
+}
+
+// #733 presentation depth. A frame packed as 10:10:10:2 words is presented by the same production
+// draw: on an 8-bit target every pixel is the top 8 bits of its stored code
+// (render::presentedRgba8), the value the Viewer's painter shows for the same words on a window's
+// backing store (bloom.ui.viewer-presentation-depth holds Qt to it for every code), so both
+// presenters show one picture; on a 10-bit target every code is stored unchanged. The QPainter
+// oracle here paints onto a straight RGBA8888 image, which Qt reaches through its 16-bit path, so
+// it is compared within one code. The frame holds every 10-bit code and one transparent pixel.
+void testPresentationDepth(Expectations& expectations,
+                           const std::shared_ptr<DeviceAllocatorState>& control,
+                           GpuImageUpload& uploader, GpuResidentDisplay& display) {
+    using bloom::render::DisplayPixelLayout;
+    constexpr std::uint32_t kWidth = 64;
+    constexpr std::uint32_t kHeight = 17;
+    std::vector<Rgba32f> pixels;
+    pixels.reserve(std::size_t{kWidth} * kHeight);
+    for (std::uint32_t code = 0; code < 1024; ++code) {
+        const float scene = sceneOfDisplay(static_cast<double>(code) / 1023.0);
+        pixels.push_back(pixel(scene, scene, scene, 1.0F));
+    }
+    // A last row of colors and one exactly transparent pixel.
+    for (std::uint32_t x = 0; x < kWidth; ++x) {
+        const float level = static_cast<float>(x) / static_cast<float>(kWidth);
+        pixels.push_back(x == 5 ? Rgba32f::transparent()
+                                : pixel(level, 0.25F, 1.0F - level, 1.0F));
+    }
+    auto image = makeImage(window(0, 0, kWidth, kHeight), pixels);
+    if (!image) {
+        expectations.expect(false, "the presentation depth input builds");
+        return;
+    }
+    auto resident = upload(uploader, std::make_shared<const Rgba32fImage>(std::move(*image)));
+    expectations.expect(resident.has_value(), "the presentation depth input uploads");
+    if (!resident) {
+        return;
+    }
+    const auto shared = std::make_shared<const GpuImage>(std::move(*resident));
+    const auto wide = makePackedBundle(display, shared, DisplayPixelLayout::Rgb10A2);
+    expectations.expect(wide.has_value() && wide->input->isValid() &&
+                            wide->input->pixelLayout() == DisplayPixelLayout::Rgb10A2 &&
+                            wide->bytes.size() == pixels.size(),
+                        "the frame packs as a 10:10:10:2 resident display image");
+    if (!wide || wide->bytes.size() != pixels.size()) {
+        return;
+    }
+    const auto params = identityParams(kWidth, kHeight);
+
+    for (const VkFormat format : {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM}) {
+        const std::string label = format == VK_FORMAT_B8G8R8A8_UNORM ? "BGRA8" : "RGBA8";
+        const auto rendered =
+            renderOffscreen(control, format, kWidth, kHeight, wide->input, params, {});
+        expectations.expect(rendered.ok, label + " present of a 10-bit frame succeeds: " +
+                                             rendered.message);
+        if (!rendered.ok) {
+            continue;
+        }
+        bool rule = rendered.pixels.size() == wide->bytes.size();
+        for (std::size_t index = 0; rule && index < rendered.pixels.size(); ++index) {
+            const auto shown =
+                bloom::render::presentedRgba8(DisplayPixelLayout::Rgb10A2, wide->bytes[index]);
+            // A transparent pixel shows the opaque black frame color behind it.
+            const Rgba8 expected = shown.alpha == 0 ? Rgba8{0, 0, 0, 255} : shown;
+            rule = rendered.pixels[index] == expected;
+        }
+        expectations.expect(rule, label + " target shows the top 8 bits of every 10-bit code");
+        const auto oracle = renderOracle(wide->bytes, kWidth, kHeight, params, {}, 0, 0, true,
+                                         QImage::Format_A2BGR30_Premultiplied);
+        const auto delta = compareImages(rendered.pixels, oracle.pixels, 1);
+        expectations.expect(delta.ok,
+                            label + " target is within one code of the QPainter oracle's paint "
+                                    "of the same 30-bit image (delta " +
+                                std::to_string(delta.maxChannelDelta) + ")");
+    }
+
+    bool anyDeep = false;
+    for (const VkFormat format :
+         {VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_FORMAT_A2R10G10B10_UNORM_PACK32}) {
+        if (!targetFormatSupported(*control, format)) {
+            continue;
+        }
+        anyDeep = true;
+        const bool redLow = format == VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+        const std::string label = redLow ? "A2B10G10R10" : "A2R10G10B10";
+        const auto rendered =
+            renderOffscreen(control, format, kWidth, kHeight, wide->input, params, {});
+        expectations.expect(rendered.ok, label + " present of a 10-bit frame succeeds: " +
+                                             rendered.message);
+        if (!rendered.ok) {
+            continue;
+        }
+        bool kept = rendered.words.size() == wide->bytes.size();
+        for (std::size_t index = 0; kept && index < rendered.words.size(); ++index) {
+            const auto stored = bloom::render::rgb10A2Codes(wide->bytes[index]);
+            const std::uint32_t word = rendered.words[index];
+            const std::uint32_t low = word & 0x3FFU;
+            const std::uint32_t middle = (word >> 10U) & 0x3FFU;
+            const std::uint32_t high = (word >> 20U) & 0x3FFU;
+            const bool opaque = stored.alpha == bloom::render::kDisplayAlpha2Opaque;
+            kept = (word >> 30U) == 3U && (redLow ? low : high) == (opaque ? stored.red : 0U) &&
+                   middle == (opaque ? stored.green : 0U) &&
+                   (redLow ? high : low) == (opaque ? stored.blue : 0U);
+        }
+        expectations.expect(kept, label + " target stores every 10-bit code unchanged");
+    }
+    expectations.expect(anyDeep, "the device offers a 10-bit UNORM color attachment");
+
+    // The straight RGBA8 pack of the same frame still presents its bytes unchanged.
+    const auto narrow = makePackedBundle(display, shared, DisplayPixelLayout::Straight8888);
+    expectations.expect(narrow.has_value() &&
+                            narrow->input->pixelLayout() == DisplayPixelLayout::Straight8888,
+                        "the frame packs as a straight RGBA8 resident display image");
+    if (!narrow) {
+        return;
+    }
+    const auto rendered = renderOffscreen(control, VK_FORMAT_R8G8B8A8_UNORM, kWidth, kHeight,
+                                          narrow->input, params, {});
+    bool same = rendered.ok && rendered.pixels.size() == narrow->bytes.size();
+    for (std::size_t index = 0; same && index < rendered.pixels.size(); ++index) {
+        const Rgba8 expected =
+            narrow->bytes[index].alpha == 0 ? Rgba8{0, 0, 0, 255} : narrow->bytes[index];
+        same = rendered.pixels[index] == expected;
+    }
+    expectations.expect(same, "an RGBA8 frame on an RGBA8 target is presented as before");
+}
+
 int main(int argc, char** argv) {
     try {
         const Options options = parseOptions(argc, argv);
@@ -725,6 +891,7 @@ int main(int argc, char** argv) {
         testPartialDeviceResourcesFailClosed(expectations, control, sentinel->input);
         testParamValidation(expectations, control, sentinel->input);
         testLifetimePin(expectations, control, sentinel->input);
+        testPresentationDepth(expectations, control, *uploader.upload, *display.display);
         auto processor = buildCpuDisplayProcessor();
         expectations.expect(processor.has_value(), "the CPU OCIO display processor builds");
         if (processor) {

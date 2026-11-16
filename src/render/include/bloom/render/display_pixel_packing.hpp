@@ -169,10 +169,14 @@ displaySignalCodes(const DisplayPixelLayout layout, const Rgba8 cell) noexcept {
             displayCode10Value(codes[2]), displaySignalAlpha(layout, cell)};
 }
 
-// Presentation on an 8-bit output: the 8-bit code shown for a stored 10-bit code, round to
-// nearest, round(code * 255 / 1023) in whole numbers. A 10-bit output shows the code unchanged.
+// Presentation on an 8-bit output: the 8-bit code shown for a stored 10-bit code is its top 8
+// bits, code / 4 in whole numbers. A 10-bit output shows the code unchanged. The rule is the one
+// the Viewer's painter applies to a 30-bit image it draws without a copy, so both presenters and
+// every reader of a frame show the same code; rounding to nearest would need a converted copy of
+// each frame on the interface thread. A value on an 8-bit step is shown as that step, and any
+// other value is within one 8-bit code of its nearest.
 [[nodiscard]] constexpr std::uint8_t presentedCode8(const std::uint32_t code10) noexcept {
-    return static_cast<std::uint8_t>(((code10 & 0x3FFU) * 255U + 511U) / 1023U);
+    return static_cast<std::uint8_t>((code10 & 0x3FFU) >> 2U);
 }
 // The straight 8-bit pixel a Viewer shows on an 8-bit output for a stored pixel of either layout.
 [[nodiscard]] constexpr Rgba8 presentedRgba8(const DisplayPixelLayout layout,

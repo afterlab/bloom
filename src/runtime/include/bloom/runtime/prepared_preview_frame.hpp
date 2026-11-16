@@ -97,8 +97,16 @@ struct PreviewDisplayBufferView final {
     bool isOcioQualified = false;
     // Packed ROI products own only this pixel extent; absent means the whole display window.
     std::optional<render::ImageWindow> dataWindow = std::nullopt;
-    // #733: how the 4 bytes of a cell are laid out (render/display_pixel_packing.hpp).
+    // #733: how the 4 bytes of a cell are laid out (render/display_pixel_packing.hpp). A cell of
+    // a 10:10:10:2 frame is one word, so its red, green, blue and alpha members are byte slices
+    // of that word and never channels: a reader goes through presentedPixel() or the Display
+    // signal functions of that header.
     render::DisplayPixelLayout pixelLayout = render::DisplayPixelLayout::Straight8888;
+
+    // The straight 8-bit pixel an 8-bit output shows for the cell at `index`.
+    [[nodiscard]] render::Rgba8 presentedPixel(const std::size_t index) const noexcept {
+        return render::presentedRgba8(pixelLayout, pixels[index]);
+    }
 };
 
 class GpuNeutralDisplayQualificationReport;

@@ -102,7 +102,7 @@ ViewerEditor::choosePackedPaintDisplay(PreparedPreviewFrameHandle frame) {
         }
         if (changed)
             scheduleDisplayedStateRefresh();
-        return {std::move(frame), view->pixels, ViewerChannel::Rgba};
+        return {std::move(frame), view->pixels, ViewerChannel::Rgba, view->pixelLayout};
     }
     const bool changed =
         channelWantedChannel_ != channel_ || !sameViewerPackedSource(channelWantedFrame_, frame);
@@ -120,14 +120,15 @@ ViewerEditor::choosePackedPaintDisplay(PreparedPreviewFrameHandle frame) {
     }
     if (channelView_ && channelView_->channel == channel_ &&
         sameViewerPackedSource(channelView_->frame, frame))
-        return {std::move(frame), channelView_->pixels, channel_};
+        return {std::move(frame), channelView_->pixels, channel_, channelView_->pixelLayout};
     if (channelFailure_.isEmpty())
         startChannelDisplay();
     // A complete older image/channel remains describable as Stale; its own frame supplies the
     // matching bounds. If no derived channel exists, show real RGBA and report that actual channel.
     if (channelView_ && frameInCurrentDomain(channelView_->frame))
-        return {channelView_->frame, channelView_->pixels, channelView_->channel};
-    return {std::move(frame), view->pixels, ViewerChannel::Rgba};
+        return {channelView_->frame, channelView_->pixels, channelView_->channel,
+                channelView_->pixelLayout};
+    return {std::move(frame), view->pixels, ViewerChannel::Rgba, view->pixelLayout};
 }
 } // namespace bloom::ui
 

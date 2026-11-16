@@ -19,9 +19,16 @@
 // would produce coloured halos at transparent edges and is deliberately not done.
 //
 // The display texture holds already sRGB-encoded bytes. The pipeline targets a UNORM swapchain
-// (BGRA8/RGBA8 UNORM); an _SRGB attachment would encode again and is rejected by the caller. The
-// attachment format owns channel packing: the fragment output is always the RGBA semantic vec4 and
-// the driver maps it into the BGRA8_UNORM texel bytes; there is no manual swizzle.
+// (BGRA8/RGBA8 UNORM, or a 10-bit A2B10G10R10/A2R10G10B10 UNORM one); an _SRGB attachment would
+// encode again and is rejected by the caller. The attachment format owns channel packing: the
+// fragment output is always the RGBA semantic vec4 and the driver maps it into the attachment's
+// texel bytes; there is no manual swizzle.
+//
+// The display image is RGBA8, or A2B10G10R10 for a frame packed as 10:10:10:2 words (every pixel
+// opaque or exactly transparent, so its alpha taps are 1 or 0). On a 10-bit target such a frame
+// keeps its codes. On an 8-bit target each tap shows the top 8 bits of its 10-bit code, the
+// presentation rule the CPU painter applies to the same frame (render/display_pixel_packing.hpp,
+// presentedCode8); the caller sets kFlagShowTopEightBits for exactly that pairing.
 
 layout(location = 0) in vec2 vTargetUv01;
 layout(location = 0) out vec4 outColor;
@@ -49,6 +56,8 @@ const uint kChannelGreen = 3u;
 const uint kChannelBlue = 4u;
 const uint kChannelAlpha = 5u;
 
+const uint kFlagShowTopEightBits = 1u;
+
 vec4 remapChannel(vec4 source, uint channel)
 {
     switch (channel) {
@@ -73,7 +82,11 @@ vec4 remapChannel(vec4 source, uint channel)
 vec4 premultipliedTap(ivec2 coordinate, ivec2 extent, uint channel)
 {
     const ivec2 clamped = clamp(coordinate, ivec2(0), max(extent - 1, ivec2(0)));
-    const vec4 raw = texelFetch(uDisplayImage, clamped, 0);
+    vec4 raw = texelFetch(uDisplayImage, clamped, 0);
+    if ((present.modes.w & kFlagShowTopEightBits) != 0u) {
+        // The stored 10-bit code, its top 8 bits, as the 8-bit value the target stores unchanged.
+        raw.rgb = floor(floor(raw.rgb * 1023.0 + 0.5) * 0.25) / 255.0;
+    }
     const vec4 remapped = remapChannel(raw, channel);
     return vec4(remapped.rgb * remapped.a, remapped.a);
 }

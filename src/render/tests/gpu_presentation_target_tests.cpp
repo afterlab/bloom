@@ -51,6 +51,21 @@ void testFormatTable(Expectations& expectations) {
     };
     accepts(VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, VK_FORMAT_B8G8R8A8_UNORM);
     accepts(VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, VK_FORMAT_R8G8B8A8_UNORM);
+    // #733: a surface with no 8-bit UNORM format but a 10-bit one is accepted, and an 8-bit
+    // format stays first when both are offered.
+    accepts(VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+            VK_FORMAT_A2B10G10R10_UNORM_PACK32);
+    accepts(VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+            VK_FORMAT_A2R10G10B10_UNORM_PACK32);
+    {
+        std::vector<VkSurfaceFormatKHR> both{
+            {VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
+            {VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
+        error.clear();
+        expectations.expect(selectFormat(both, format, colorSpace, error) &&
+                                format == VK_FORMAT_B8G8R8A8_UNORM,
+                            "an 8-bit UNORM format is chosen before a 10-bit one");
+    }
 
     const auto rejects = [&](const VkFormat wanted, const VkColorSpaceKHR space) {
         std::vector<VkSurfaceFormatKHR> formats{{wanted, space}};
@@ -63,6 +78,7 @@ void testFormatTable(Expectations& expectations) {
     rejects(VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT);
     rejects(VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT);
     rejects(VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
+    rejects(VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT);
 
     // The IMPLICIT-UNDEFINED single-format surface is the one defined default.
     std::vector<VkSurfaceFormatKHR> implicit{

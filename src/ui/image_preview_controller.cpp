@@ -4,6 +4,7 @@
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/display_frame_image.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/viewer_channel_display.hpp>
 
@@ -79,6 +80,7 @@ displayImage(const runtime::PreparedPreviewFrame& frame,
         window.height() > static_cast<std::uint32_t>(std::numeric_limits<int>::max()))
         return std::nullopt;
     std::span<const render::Rgba8> pixels = view->pixels;
+    auto pixelLayout = view->pixelLayout;
     std::shared_ptr<const ViewerChannelDisplay> presented;
     if (channel != ViewerChannel::Rgba) {
         auto prepared = prepareViewerChannelDisplay(
@@ -88,13 +90,12 @@ displayImage(const runtime::PreparedPreviewFrame& frame,
             return std::nullopt;
         presented = *value;
         pixels = presented->pixels;
+        pixelLayout = presented->pixelLayout;
     }
-    const QImage borrowed(reinterpret_cast<const uchar*>(pixels.data()),
-                          static_cast<int>(window.width()), static_cast<int>(window.height()),
-                          static_cast<qsizetype>(view->layout.rowStrideBytes),
-                          QImage::Format_RGBA8888);
     // Copied out of the frame here, on the worker, so the interface thread only paints.
-    return borrowed.copy();
+    return copyDisplayFrameImage8(pixels, static_cast<int>(window.width()),
+                                  static_cast<int>(window.height()),
+                                  static_cast<qsizetype>(view->layout.rowStrideBytes), pixelLayout);
 }
 
 // #490 Normalized: the scene-linear RGB of the visible image stretched from its finite minimum to
@@ -177,7 +178,7 @@ displayHistogram(const runtime::PreparedPreviewFrame& frame, runtime::TaskContex
             const auto index = static_cast<std::size_t>(row) * stride + column;
             if (index >= view->pixels.size())
                 return std::nullopt;
-            const auto& pixel = view->pixels[index];
+            const auto pixel = view->presentedPixel(index);
             if (pixel.alpha == 0)
                 continue;
             const double luma =
@@ -214,7 +215,7 @@ displayChannelSpread(const runtime::PreparedPreviewFrame& frame, runtime::TaskCo
             const auto index = static_cast<std::size_t>(row) * stride + column;
             if (index >= view->pixels.size())
                 return std::nullopt;
-            const auto& pixel = view->pixels[index];
+            const auto pixel = view->presentedPixel(index);
             if (pixel.alpha == 0)
                 continue;
             ++covered;

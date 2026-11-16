@@ -17,9 +17,9 @@
       "stage": "fragment",
       "language": "GLSL_460",
       "source": "viewer_present.frag",
-      "sha256": "5eb92affecdc9bc0bb1e62fd7285c539a55a1d09cce30ed7ff135b95532f680a",
-      "spirvSha256": "1729348522641b57789955ca075a40cb79622027977dfbc8506f815136523f0a",
-      "wordCount": 2599
+      "sha256": "ae757eea78adc0679136a1d7b488e2d1b1f44e3a9a8efd4865fc076bfe051aa2",
+      "spirvSha256": "c6917612c29802caa31dcd7c54c68f1490701c7c0e8f98e3a35af5cb954904bd",
+      "wordCount": 2739
     }
   ],
   "specializationConstants": [],
@@ -28,8 +28,8 @@
       "set": 0,
       "binding": 0,
       "kind": "combined-image-sampler",
-      "format": "rgba8-unorm",
-      "role": "resident-straight-rgba8-srgb-display",
+      "format": "rgba8-unorm or a2b10g10r10-unorm",
+      "role": "resident-packed-srgb-display (straight rgba8, or 10:10:10:2 words)",
       "filter": "manual-bilinear-premultiplied-taps"
     },
     {
@@ -49,7 +49,8 @@
     }
   ],
   "contracts": {
-    "targetFormat": "BGRA8_UNORM or RGBA8_UNORM only; the attachment format owns channel packing and no manual swizzle is performed",
+    "targetFormat": "BGRA8_UNORM, RGBA8_UNORM, A2B10G10R10_UNORM or A2R10G10B10_UNORM; the attachment format owns channel packing and no manual swizzle is performed",
+    "presentationDepth": "a 10:10:10:2 display image keeps its codes on a 10-bit target; on an 8-bit target modes.w bit 0 is set and each tap shows the top 8 bits of its code",
     "sourceAlpha": "straight; channel remap applied per texel tap, then premultiplied before the bilinear weights",
     "overlayAlpha": "premultiplied; composited last",
     "channelEnum": "matches bloom::ui::ViewerChannel (Rgba,Rgb,Red,Green,Blue,Alpha)",

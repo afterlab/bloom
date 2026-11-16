@@ -41,6 +41,10 @@ using presentation_detail::SwapchainResources;
         return GpuPresentationFormat::Rgba8Unorm;
     case VK_FORMAT_R8G8B8A8_SRGB:
         return GpuPresentationFormat::Rgba8Srgb;
+    case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+        return GpuPresentationFormat::A2Bgr10Unorm;
+    case VK_FORMAT_A2R10G10B10_UNORM_PACK32:
+        return GpuPresentationFormat::A2Rgb10Unorm;
     default:
         return GpuPresentationFormat::Unknown;
     }

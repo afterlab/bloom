@@ -6,6 +6,7 @@
 #include <bloom/runtime/input_color_context.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/display_frame_image.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <algorithm>
@@ -140,11 +141,9 @@ void CompositionThumbnailController::request(const document::CompositionId compo
                 window.height() > static_cast<std::uint32_t>(std::numeric_limits<int>::max()))
                 return Result::cancelled();
             // Copied out of the frame here, on the worker, so the interface thread only paints.
-            const QImage borrowed(
-                reinterpret_cast<const uchar*>(view->pixels.data()),
-                static_cast<int>(window.width()), static_cast<int>(window.height()),
-                static_cast<qsizetype>(view->layout.rowStrideBytes), QImage::Format_RGBA8888);
-            auto image = borrowed.copy();
+            auto image = copyDisplayFrameImage8(
+                view->pixels, static_cast<int>(window.width()), static_cast<int>(window.height()),
+                static_cast<qsizetype>(view->layout.rowStrideBytes), view->pixelLayout);
             if (std::max(image.width(), image.height()) > kMaximumEdge)
                 image = image.scaled(kMaximumEdge, kMaximumEdge, Qt::KeepAspectRatio,
                                      Qt::SmoothTransformation);

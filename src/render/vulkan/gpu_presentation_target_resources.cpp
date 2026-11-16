@@ -270,9 +270,11 @@ bool selectFormat(const std::vector<VkSurfaceFormatKHR>& formats, VkFormat& form
         colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
         return true;
     }
-    // Encoded display output: only the packed 8-bit BGRA/RGBA forms with an SRGB_NONLINEAR color
-    // space are usable without a second gamma encode. Any other format/color-space pairing is
-    // refused (the caller keeps the CPU path) rather than substituted.
+    // Encoded display output: only the packed UNORM forms with an SRGB_NONLINEAR color space are
+    // usable without a second gamma encode: 8-bit BGRA/RGBA first, and, when the surface offers
+    // neither, a 10-bit A2B10G10R10/A2R10G10B10 form (#733), on which a 10:10:10:2 display frame
+    // keeps its codes. Any other format/color-space pairing is refused (the caller keeps the CPU
+    // path) rather than substituted.
     const auto match = [&](const VkFormat wanted) -> bool {
         for (const VkSurfaceFormatKHR& candidate : formats) {
             if (candidate.format == wanted &&
@@ -287,11 +289,14 @@ bool selectFormat(const std::vector<VkSurfaceFormatKHR>& formats, VkFormat& form
     if (match(VK_FORMAT_B8G8R8A8_UNORM) || match(VK_FORMAT_R8G8B8A8_UNORM)) {
         return true;
     }
+    if (match(VK_FORMAT_A2B10G10R10_UNORM_PACK32) || match(VK_FORMAT_A2R10G10B10_UNORM_PACK32)) {
+        return true;
+    }
     // The _SRGB formats are deliberately not accepted: the display product already emits
     // sRGB-encoded bytes, and an SRGB swapchain format would encode them a second time. An
     // unknown/unsupported pairing is refused so the caller keeps the CPU path.
-    error = "the surface offers no encoded BGRA8/RGBA8 UNORM format with an SRGB_NONLINEAR color "
-            "space";
+    error = "the surface offers no encoded 8-bit or 10-bit UNORM format with an SRGB_NONLINEAR "
+            "color space";
     return false;
 }
 

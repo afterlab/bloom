@@ -1,6 +1,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/cryptomatte_controller.hpp>
+#include <bloom/ui/display_frame_image.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/viewer_gpu_resident.hpp>
@@ -1007,9 +1008,10 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
                                     .cover = coverSnapshotInProgress_};
     if (cpuFrame != nullptr) {
         // displayBufferView() normalizes both display-product alternatives (reference and
-        // qualified) to the same packed-RGBA8 shape -- the viewer draws pixels identically either
-        // way; isOcioQualified is only ever read for the status bar's color-state chip, never to
-        // change how pixels are drawn.
+        // qualified) to the same packed four-byte shape -- the viewer draws pixels identically
+        // either way; isOcioQualified is only ever read for the status bar's color-state chip,
+        // never to change how pixels are drawn. The frame's layout (#733) only picks the QImage
+        // format its bytes are borrowed as.
         const auto bufferView = cpuFrame->displayBufferView();
         if (bufferView.has_value()) {
             const auto dataWindow = bufferView->dataWindow.value_or(bufferView->displayWindow);
@@ -1022,11 +1024,10 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
                 const auto pixels = packedDisplay.pixels;
                 // cpuFrame owns the immutable bytes for this entire paint. The const-data
                 // QImage constructor borrows them, so presentation does not copy or convert a
-                // full frame on the UI thread.
-                const QImage image(
-                    reinterpret_cast<const uchar*>(pixels.data()), static_cast<int>(extent.width()),
-                    static_cast<int>(extent.height()),
-                    static_cast<qsizetype>(layout.rowStrideBytes), QImage::Format_RGBA8888);
+                // full frame on the UI thread, in either layout.
+                const QImage image = borrowDisplayFrameImage(
+                    pixels, static_cast<int>(extent.width()), static_cast<int>(extent.height()),
+                    static_cast<qsizetype>(layout.rowStrideBytes), packedDisplay.pixelLayout);
                 if (!image.isNull()) {
                     const auto format = cpuFrame->processIdentity().plan->format();
                     const auto fullExtent =

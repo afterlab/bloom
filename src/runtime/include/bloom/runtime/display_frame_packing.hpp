@@ -10,8 +10,8 @@
 //                      pixel is exactly transparent or packs to the 8-bit alpha 255
 //                      (render::displayAlphaAllowsRgb10A2); any other frame is straight RGBA8.
 //                      Both layouts are four bytes a pixel.
-//   Presentation rule  An 8-bit output shows render::presentedCode8 of a 10-bit code (the nearest
-//                      8-bit code); a 10-bit output shows the code unchanged.
+//   Presentation rule  An 8-bit output shows render::presentedCode8 of a 10-bit code (its top 8
+//                      bits); a 10-bit output shows the code unchanged.
 //   Display signal     render::displaySignalCodes: the 10-bit code a scope counts for a stored
 //                      pixel of either layout, its color over black.
 //   Frame counters     render::DisplayFrameCounters: under, over and not finite of the display

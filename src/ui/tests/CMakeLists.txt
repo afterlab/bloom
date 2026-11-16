@@ -868,6 +868,20 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# #733: every reader of a cached display frame in both four-byte layouts, and the presentation
+# rule of a 10:10:10:2 frame held against Qt for all 1024 codes. Offscreen, no device, three
+# platforms.
+add_executable(bloom_viewer_presentation_depth_test viewer_presentation_depth_tests.cpp)
+target_link_libraries(bloom_viewer_presentation_depth_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_viewer_presentation_depth_test)
+bloom_add_test(
+    NAME bloom.ui.viewer-presentation-depth
+    COMMAND bloom_viewer_presentation_depth_test
+    LABELS ui unit color
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 add_executable(bloom_viewer_display_view_test viewer_display_view_tests.cpp)
 target_link_libraries(bloom_viewer_display_view_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_viewer_display_view_test)

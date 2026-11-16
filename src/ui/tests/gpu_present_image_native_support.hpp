@@ -233,7 +233,25 @@ struct OffscreenResult final {
     bool ok = false;
     std::string message;
     std::vector<Rgba8> pixels;
+    // #733: the attachment's texels as 32-bit words, for a 10-bit attachment whose channels are
+    // not bytes. `pixels` is only meaningful for the 8-bit formats.
+    std::vector<std::uint32_t> words;
 };
+
+// The target format can be a color attachment that is copied back (a 10-bit UNORM format other
+// than A2B10G10R10 is optional).
+[[nodiscard]] inline bool targetFormatSupported(DeviceAllocatorState& control,
+                                                const VkFormat format) {
+    if (control.physicalDevice == nullptr) {
+        return false;
+    }
+    VkFormatProperties properties{};
+    control.physicalDevice.getDispatcher()->vkGetPhysicalDeviceFormatProperties(
+        static_cast<VkPhysicalDevice>(*control.physicalDevice), format, &properties);
+    const VkFormatFeatureFlags required =
+        VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
+    return (properties.optimalTilingFeatures & required) == required;
+}
 
 // Renders through the production path with a caller-owned, reusable presenter and reads the
 // attachment back as semantic RGBA8 regardless of channel packing.
@@ -412,8 +430,13 @@ renderOffscreenWith(const std::shared_ptr<DeviceAllocatorState>& control,
     }
     const auto* bytes = static_cast<const std::uint8_t*>(readbackInfo.pMappedData);
     result.pixels.resize(static_cast<std::size_t>(width) * height);
+    result.words.resize(result.pixels.size());
     for (std::size_t index = 0; index < result.pixels.size(); ++index) {
         const std::uint8_t* texel = bytes + index * 4U;
+        result.words[index] = static_cast<std::uint32_t>(texel[0]) |
+                              (static_cast<std::uint32_t>(texel[1]) << 8U) |
+                              (static_cast<std::uint32_t>(texel[2]) << 16U) |
+                              (static_cast<std::uint32_t>(texel[3]) << 24U);
         if (format == VK_FORMAT_B8G8R8A8_UNORM) {
             result.pixels[index] = Rgba8{texel[2], texel[1], texel[0], texel[3]};
         } else {

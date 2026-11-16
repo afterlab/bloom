@@ -194,7 +194,7 @@ void shaderPins(Expectations& expectations) {
     expectations.expect(
         digestMatches(
             std::span<const std::uint32_t>(bloom::render::vulkan_detail::kViewerPresentFragSpirv),
-            "1729348522641b57789955ca075a40cb79622027977dfbc8506f815136523f0a"),
+            "c6917612c29802caa31dcd7c54c68f1490701c7c0e8f98e3a35af5cb954904bd"),
         "the embedded fragment SPIR-V matches the corrected pinned manifest digest");
     expectations.expect(bloom::render::vulkan_detail::kViewerPresentVertWordCount ==
                                 bloom::render::vulkan_detail::kViewerPresentVertByteCount / 4U &&
