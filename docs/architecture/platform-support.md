@@ -187,6 +187,13 @@ Platform-specific tests supplement the shared suite; they do not replace it. A p
 temporarily red during development, but a release cannot call a feature complete while its required
 workflow is absent or knowingly broken on another first-class target.
 
+A release is built by the release workflow from a version tag, on hosted runners for the three
+platforms, and published after the maintainer's approval
+([Releasing Bloom](../development/releasing.md)). The workflow refuses a tag whose commit does
+not carry the record of a passing full validation on the project's own Linux, macOS and Windows
+hardware, because a hosted runner has no GPU: there the package check's GPU rule is not run,
+and nothing the workflow runs counts as GPU validation.
+
 ## Qt
 
 Bloom uses one exact Qt version on Linux, macOS and Windows: the dependency lock's `qt`
@@ -339,6 +346,15 @@ The `bloom.package.check` test runs the check on the package of the build and th
 broken in each way that matters: the interpreter removed, a license file removed or changed, a
 program made to load a library from outside, a program given a search path outside the
 package, and on Linux one of the carried distribution libraries removed.
+
+A rule for releases, `release`, is never part of the default rules. It asks the packaged
+application what it was built with (`Bloom --update-settings`) and fails unless that is the
+release's feed address and exactly the release's public keys, and the build is not a test build
+(`BLOOM_UPDATE_TEST_BUILD`), which takes its feed and key from the environment. On macOS and
+Windows it also requires the platform's updater in the package, and on macOS the release's first
+key in the bundle's `Info.plist`. The release workflow runs it on each platform's package
+([Releasing Bloom](../development/releasing.md)); `bloom.package.check` requires that it refuses
+the package of an ordinary build.
 
 A separate rule, `gpu`, asks more of the package than being self-contained: that its
 application renders on the GPU. The package's own `bloom-cli` runs
@@ -500,6 +516,12 @@ The images were entered without a container runtime, so in them the AppImage was
 its own runtime and not mounted; the FUSE mount was exercised on the workstation. The run in
 the images has no display and no GPU. A window on each of those systems' own desktops was not
 part of this.
+
+The release workflow repeats the start for every release, on the same four images by digest:
+`tools/ci/linux-package/clean-system.sh` installs the declared system libraries by the package
+names of `tools/install/linux-library-packages.txt`, what the install script needs, and the
+standalone CMake checked by its SHA-256, and `start.sh` then starts the tar, the AppImage and
+the install script form.
 
 ### Windows Package
 

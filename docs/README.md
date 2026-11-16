@@ -222,6 +222,9 @@ ordered node, recovery, RAM preview, cache, audio, media and document work under
 [local milestone validation](development/local-validation.md). Performance and colour/format
 accuracy are measured with the [benchmark suite](development/benchmarks.md).
 
+[Releasing Bloom](development/releasing.md) is the maintainer's order of work for a release: the
+validation record, the tag, the release workflow, the end-to-end update test and the approval.
+
 The [production workflows release](plans/production-workflows-release.md) records what landed under
 #374 (timeline, footage, masking, EXR, composition settings and Assets).
 

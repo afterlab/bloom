@@ -51,7 +51,12 @@ fixed:
 
 There is no switch, variable or setting that weakens a check in a release build. A test build
 (`BLOOM_UPDATE_TEST_BUILD`) may be pointed at a feed on the same machine with a test key through
-two environment variables; the package check refuses to publish such a build.
+two environment variables, and a third (`BLOOM_UPDATE_TEST_INSTALL_NOW`) makes it install the
+update it is offered without a question, which is what the end-to-end update test
+(`tools/release/update_e2e.py`) needs. It checks every signature and checksum all the same. The
+package check refuses to publish such a build: its `release` rule asks the application what it
+was built with (`Bloom --update-settings`) and passes only a build that carries the release's
+feed address and public keys and is not a test build.
 
 A feed cannot prove that it is the newest one: someone who controls the network can keep serving
 an old signed feed, which leaves a user on an old version and never installs anything. The feed is

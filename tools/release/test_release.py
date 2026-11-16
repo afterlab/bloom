@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -107,6 +108,58 @@ class ValidationTests(unittest.TestCase):
                           ("not base64", "https://updates.example.org/alpha.json")):
             self.assertEqual(step("settings", "--public-keys", keys, "--feed-url", url)
                              .returncode, 1, (keys, url))
+
+
+class WorkflowTests(unittest.TestCase):
+    """The rules the release workflow's text must keep (.github/workflows/release.yml)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.text = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        cls.code = "\n".join(line for line in cls.text.splitlines()
+                             if not line.lstrip().startswith("#"))
+
+    def job(self, name: str) -> str:
+        found = re.search(rf"(?ms)^  {re.escape(name)}:\n(.*?)(?=^  [a-z-]+:\n|\Z)", self.code)
+        self.assertIsNotNone(found, name)
+        return found.group(1)
+
+    def test_it_starts_for_a_created_tag_or_by_hand_only(self) -> None:
+        triggers = re.search(r"(?ms)^on:\n(.*?)^\S", self.code).group(1)
+        self.assertEqual(re.findall(r"(?m)^  ([a-z_]+):", triggers),
+                         ["create", "workflow_dispatch"])
+        # Every other job needs the first, which ends the run for anything but a version tag.
+        gate = self.job("gate")
+        self.assertIn("github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')", gate)
+        for name in ("linux", "macos", "windows", "linux-start", "candidate", "publish"):
+            self.assertRegex(self.job(name), r"needs: (gate|\[gate, )", name)
+
+    def test_every_action_is_pinned_to_a_commit(self) -> None:
+        uses = re.findall(r"(?m)^\s+(?:- )?uses: (\S+)", self.code)
+        self.assertTrue(uses)
+        for action in uses:
+            self.assertRegex(action, r"^actions/[a-z-]+@[0-9a-f]{40}$")
+
+    def test_the_validation_record_comes_before_any_build(self) -> None:
+        gate = self.job("gate")
+        self.assertIn("release.py validation", gate)
+        self.assertIn("statuses: read", gate)
+
+    def test_only_the_last_job_waits_for_approval_and_reads_the_key(self) -> None:
+        self.assertEqual(self.code.count("environment: release"), 1)
+        self.assertEqual(self.code.count("secrets."), 1)
+        self.assertEqual(self.code.count("contents: write"), 1)
+        publish = self.job("publish")
+        for text in ("environment: release", "secrets.BLOOM_UPDATE_SIGNING_KEY",
+                     "contents: write", "gh release create"):
+            self.assertIn(text, publish)
+        self.assertEqual(self.code.count("gh release create"), 2)
+
+    def test_the_clean_start_covers_the_three_linux_forms(self) -> None:
+        start = self.job("linux-start")
+        for form in ("linux-x86_64.tar.xz", "linux-x86_64.AppImage", "start-release/install.sh"):
+            self.assertIn(form, start)
+        self.assertIn("linux-start", self.job("candidate"))
 
 
 class ReleaseTests(unittest.TestCase):

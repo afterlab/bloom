@@ -1,0 +1,611 @@
+name: Release
+
+# Builds every release file of a version tag on hosted runners and publishes the GitHub
+# pre-release once the maintainer approves it (docs/development/releasing.md).
+#
+# It starts when a tag is created and when a maintainer starts it by hand, never for a branch or
+# a pull request. A tag's creation is used and not its push: every commit message of this
+# repository carries a skip instruction, and that suppresses the workflows of a push, a tag's
+# push included. The first job ends the run for any tag that is not a version tag.
+#
+# What the repository must hold (Settings):
+#   * the variables BLOOM_UPDATE_PUBLIC_KEYS (Base64 of each 32-byte Ed25519 public key, separated
+#     by commas) and BLOOM_UPDATE_FEED_URL (the HTTPS address every build reads its update feed
+#     from), as repository variables: the build jobs read them, and a job outside an environment
+#     cannot read that environment's variables;
+#   * the environment `release`, with its required reviewer, holding the secret
+#     BLOOM_UPDATE_SIGNING_KEY (the Ed25519 private key as PKCS#8 PEM, without a passphrase). Only
+#     the last job names that environment, so only it waits for the approval and only it can
+#     read the key.
+#
+# The commit of the tag must carry the commit status `bloom/hardware-validation` with the state
+# `success` before the tag is created: the record that the full validation, GPU included, passed
+# on Linux, macOS and Windows hardware. Hosted runners have no GPU, so the package check's GPU
+# rule is not run here and nothing here counts as that validation.
+
+on:
+  create:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The version tag to build and release, for example v0.1.0-alpha.1
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  BLOOM_UPDATE_PUBLIC_KEYS: ${{ vars.BLOOM_UPDATE_PUBLIC_KEYS }}
+  BLOOM_UPDATE_FEED_URL: ${{ vars.BLOOM_UPDATE_FEED_URL }}
+  # Where the versioned release's files and the fixed channel release's files are downloaded.
+  BLOOM_RELEASE_DOWNLOADS: ${{ github.server_url }}/${{ github.repository }}/releases/download
+
+jobs:
+  # The tag is a version tag of this tree, the commit's hardware validation is recorded, and the
+  # build settings are there. Nothing is built for a tag that fails any of these.
+  gate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v'))
+    name: Tag, validation record and settings
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      statuses: read
+    env:
+      BLOOM_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.ref }}
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      date: ${{ steps.version.outputs.date }}
+      commit: ${{ steps.version.outputs.commit }}
+    steps:
+      - name: Refuse a name that is not a version tag
+        run: |
+          case "$BLOOM_RELEASE_TAG" in
+            v[0-9]*) ;;
+            *) echo "::error::'$BLOOM_RELEASE_TAG' is not a version tag"; exit 1 ;;
+          esac
+
+      - name: Check out the tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: refs/tags/${{ env.BLOOM_RELEASE_TAG }}
+
+      - name: Check the tag against the source tree and the changelog
+        id: version
+        run: |
+          python3 -I tools/release/release.py version --tag "$BLOOM_RELEASE_TAG" | tee -a "$GITHUB_OUTPUT"
+          echo "tag=$BLOOM_RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Require the recorded hardware validation of the commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          commit=$(git rev-parse HEAD)
+          gh api "repos/$GITHUB_REPOSITORY/commits/$commit/statuses?per_page=100" > "$RUNNER_TEMP/statuses.json"
+          python3 -I tools/release/release.py validation --statuses "$RUNNER_TEMP/statuses.json"
+
+      - name: Check the build settings
+        run: |
+          if [ -z "$BLOOM_UPDATE_PUBLIC_KEYS" ] || [ -z "$BLOOM_UPDATE_FEED_URL" ]; then
+            echo "::error::Set the repository variables BLOOM_UPDATE_PUBLIC_KEYS and BLOOM_UPDATE_FEED_URL"
+            exit 1
+          fi
+          python3 -I tools/release/release.py settings \
+            --public-keys "$BLOOM_UPDATE_PUBLIC_KEYS" --feed-url "$BLOOM_UPDATE_FEED_URL"
+
+  # The Linux files, built inside the official Ubuntu 22.04 image by digest, so they run on
+  # glibc 2.35 and newer (tools/ci/linux-package).
+  linux:
+    needs: gate
+    name: Linux package
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04@sha256:74b12b11ffa550fba1929ad4d8d16533c34f6612728469671afba1b03b66881c
+    timeout-minutes: 360
+    env:
+      BLOOM_PACKAGE_VERSION: ${{ needs.gate.outputs.version }}
+      BLOOM_RELEASE_TAG: ${{ needs.gate.outputs.tag }}
+      # An AppImage names where its next version is found: the control file among the files of
+      # the fixed channel release.
+      BLOOM_UPDATE_APPIMAGE_INFORMATION: gh-releases-zsync|${{ github.repository_owner }}|${{ github.event.repository.name }}|alpha-channel|Bloom-*x86_64.AppImage.zsync
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: refs/tags/${{ needs.gate.outputs.tag }}
+
+      - name: Provision the build environment
+        run: sh tools/ci/linux-package/provision.sh
+
+      - name: Cache dependency archives
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/linux-package/downloads
+          key: bloom-release-linux-archives-${{ hashFiles('dependencies/dependencies.lock.json') }}
+
+      - name: Cache dependency build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            build/linux-package/superbuild
+            build/linux-package/prefix
+          key: bloom-release-linux-prefix-${{ hashFiles('dependencies/dependencies.lock.json', 'dependencies/superbuild/**', 'tools/ci/linux-package/**') }}
+
+      # The package tree is installed and checked on the way (contents, resolution, version,
+      # icons and a run of the packaged programs), then made into the tar and the AppImage.
+      - name: Build the package, check it and make its files
+        run: sh tools/ci/linux-package/build.sh
+
+      - name: Check that the package is this release's
+        run: |
+          cmake "-DPACKAGE=build/linux-package/bloom/package/Bloom-$BLOOM_PACKAGE_VERSION-linux-x86_64" \
+            -DONLY=release "-DFEED_URL=$BLOOM_UPDATE_FEED_URL" \
+            "-DPUBLIC_KEYS=$BLOOM_UPDATE_PUBLIC_KEYS" -P cmake/package/check_package.cmake
+          echo "Linux package check: contents, resolution, version, icons, run and release passed. GPU rule: not run (a hosted runner has no GPU)." >> "$GITHUB_STEP_SUMMARY"
+
+      # The clean-system start of the install script needs a signed checksum list, and the
+      # release's key is not in this job. A key made for this run signs a list of the tar, and
+      # an install script that trusts that key goes with it; neither is published.
+      - name: Make the install script form for the clean-system start
+        run: |
+          folder=build/linux-package/start-release
+          package=build/linux-package/bloom/package
+          mkdir -p "$folder"
+          openssl genpkey -algorithm ed25519 -out "$RUNNER_TEMP/start-key.pem"
+          key=$(python3 -I tools/release/sign_release public-key --key-file "$RUNNER_TEMP/start-key.pem")
+          cmake "-DVERSION=$BLOOM_PACKAGE_VERSION" \
+            "-DBASE_URL=$BLOOM_RELEASE_DOWNLOADS/$BLOOM_RELEASE_TAG" "-DPUBLIC_KEYS=$key" \
+            "-DOUTPUT=$folder/install.sh" -P cmake/package/make_install_script.cmake
+          python3 -I tools/release/sums.py write --out "$folder/SHA256SUMS" \
+            "$package/Bloom-$BLOOM_PACKAGE_VERSION-linux-x86_64.tar.xz"
+          python3 -I tools/release/sign_release detached --key-file "$RUNNER_TEMP/start-key.pem" \
+            --out "$folder/SHA256SUMS.sig" "$folder/SHA256SUMS"
+          rm -f "$RUNNER_TEMP/start-key.pem"
+
+      - name: Upload the Linux files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: files-linux
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            build/linux-package/bloom/package/Bloom-${{ needs.gate.outputs.version }}-linux-x86_64.tar.xz
+            build/linux-package/bloom/package/Bloom-${{ needs.gate.outputs.version }}-linux-x86_64.AppImage
+            build/linux-package/bloom/package/Bloom-${{ needs.gate.outputs.version }}-linux-x86_64.AppImage.zsync
+
+      - name: Upload the install script form
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: start-release-linux
+          if-no-files-found: error
+          path: build/linux-package/start-release
+
+  # The clean-system start (tools/ci/linux-package/start.sh) of the tar, the AppImage and the
+  # install script, each on bare official images that have the declared system libraries and
+  # no Python, Qt or compiler.
+  linux-start:
+    needs: [gate, linux]
+    name: Clean start on ${{ matrix.system }}
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: Ubuntu 22.04
+            image: ubuntu:22.04@sha256:74b12b11ffa550fba1929ad4d8d16533c34f6612728469671afba1b03b66881c
+          - system: Ubuntu 24.04
+            image: ubuntu:24.04@sha256:73b999393d07f2bf65a40373778a44dc9a6d54ad7718d29247d8ff9413c4d6a8
+          - system: Debian 12
+            image: debian:12@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8
+          - system: Fedora 44
+            image: fedora:44@sha256:15da97ed9aa94dd3d92c3925eb89520f6c80e07ea7ee24cba848d1f8b6912b3e
+    env:
+      BLOOM_PACKAGE_VERSION: ${{ needs.gate.outputs.version }}
+    steps:
+      # The checkout unpacks an archive of the source; one image has no tar of its own.
+      - name: Make sure the image can unpack the source
+        run: |
+          if ! command -v tar > /dev/null 2>&1 || ! command -v gzip > /dev/null 2>&1; then
+            dnf install --assumeyes tar gzip
+          fi
+
+      - name: Check out the tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: refs/tags/${{ needs.gate.outputs.tag }}
+
+      - name: Prepare the clean system
+        run: sh tools/ci/linux-package/clean-system.sh
+
+      - name: Download the Linux files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: files-linux
+          path: release-files
+
+      - name: Download the install script form
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: start-release-linux
+          path: start-release
+
+      - name: Start the tar
+        run: |
+          sh tools/ci/linux-package/start.sh \
+            "$PWD/release-files/Bloom-$BLOOM_PACKAGE_VERSION-linux-x86_64.tar.xz" "$RUNNER_TEMP/start-tar"
+
+      - name: Start the AppImage
+        run: |
+          chmod +x "release-files/Bloom-$BLOOM_PACKAGE_VERSION-linux-x86_64.AppImage"
+          sh tools/ci/linux-package/start.sh \
+            "$PWD/release-files/Bloom-$BLOOM_PACKAGE_VERSION-linux-x86_64.AppImage" "$RUNNER_TEMP/start-appimage"
+
+      - name: Install with the install script, start and uninstall
+        run: |
+          cp "release-files/Bloom-$BLOOM_PACKAGE_VERSION-linux-x86_64.tar.xz" start-release/
+          sh tools/ci/linux-package/start.sh "$PWD/start-release/install.sh" "$RUNNER_TEMP/start-install"
+
+  # The macOS files: the zip the updater downloads, the disk image and the installer package.
+  macos:
+    needs: gate
+    name: macOS package
+    runs-on: macos-26
+    timeout-minutes: 360
+    env:
+      BLOOM_PACKAGE_VERSION: ${{ needs.gate.outputs.version }}
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: refs/tags/${{ needs.gate.outputs.tag }}
+
+      - name: Select newest Xcode
+        run: |
+          newest=$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print | sort -V | tail -1)
+          if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
+          xcodebuild -version
+
+      # Build tools only. Every library Bloom links comes from the locked prefix.
+      - name: Install build tools
+        run: brew install ninja meson
+
+      - name: Cache dependency archives
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/bloom-dependency-downloads
+          key: bloom-release-macos-archives-${{ hashFiles('dependencies/dependencies.lock.json') }}
+
+      - name: Cache dependency build
+        id: cache-dependency-prefix
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ${{ runner.temp }}/bloom-superbuild
+            build/dependency-prefix
+          key: bloom-release-macos-26-prefix-${{ runner.arch }}-${{ hashFiles('dependencies/dependencies.lock.json', 'dependencies/superbuild/**') }}
+
+      - name: Build dependency superbuild prefix
+        if: steps.cache-dependency-prefix.outputs.cache-hit != 'true'
+        run: |
+          cmake -S dependencies/superbuild -B "$RUNNER_TEMP/bloom-superbuild" -G Ninja \
+            -DBLOOM_DEPENDENCY_DOWNLOAD_DIR="$RUNNER_TEMP/bloom-dependency-downloads" \
+            -DBLOOM_DEPENDENCY_PREFIX="$GITHUB_WORKSPACE/build/dependency-prefix"
+          cmake --build "$RUNNER_TEMP/bloom-superbuild"
+
+      # The platform's updater, a prebuilt item checked by its recorded checksum
+      # (dependencies/update-runtime).
+      - name: Put the updater into the prefix
+        run: |
+          cmake -DBLOOM_RECORD="$GITHUB_WORKSPACE/dependencies/update-runtime/sparkle.json" \
+            -DBLOOM_DESTINATION="$GITHUB_WORKSPACE/build/dependency-prefix/sparkle" \
+            -DBLOOM_DOWNLOAD_DIR="$RUNNER_TEMP/bloom-dependency-downloads" \
+            -DBLOOM_ALLOW_DOWNLOADS=ON \
+            -P dependencies/superbuild/projects/update-runtime-fetch.cmake
+
+      - name: Configure
+        run: |
+          cmake -S . -B build/release -G Ninja \
+            -DBLOOM_DEPENDENCY_MODE=qualified \
+            -DBLOOM_DEPENDENCY_PREFIX="$GITHUB_WORKSPACE/build/dependency-prefix" \
+            -DBLOOM_BUILD_DESKTOP=ON \
+            -DBLOOM_BUILD_PYTHON=ON \
+            -DBLOOM_WARNINGS_AS_ERRORS=ON \
+            -DBUILD_TESTING=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            "-DBLOOM_PACKAGE_VERSION=$BLOOM_PACKAGE_VERSION" \
+            "-DBLOOM_UPDATE_FEED_URL=$BLOOM_UPDATE_FEED_URL" \
+            "-DBLOOM_UPDATE_PUBLIC_KEYS=$BLOOM_UPDATE_PUBLIC_KEYS"
+
+      # The bundle is filled, signed ad hoc and checked for what it loads, then made into the
+      # zip, the disk image and the installer package.
+      - name: Build the bundle and make its files
+        run: cmake --build build/release --target bloom-package-archives --parallel
+
+      - name: Check the package
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cmake "-DPACKAGE=$GITHUB_WORKSPACE/build/release/apps/bloom/Bloom.app" -DCOMPLETE=ON \
+            -DRUN=ON -DRELEASE=ON "-DVERSION=$BLOOM_PACKAGE_VERSION" \
+            "-DFEED_URL=$BLOOM_UPDATE_FEED_URL" "-DPUBLIC_KEYS=$BLOOM_UPDATE_PUBLIC_KEYS" \
+            "-DWORK=$RUNNER_TEMP/package-check" -P cmake/package/check_package.cmake
+          echo "macOS package check: contents, resolution, version, icons, run and release passed. GPU rule: not run (a hosted runner has no GPU)." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check the disk image and the installer package
+        run: ctest --test-dir build/release -R '^bloom\.package\.installers$' --output-on-failure --no-tests=error
+
+      - name: Upload the macOS files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: files-macos
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            build/release/package/Bloom-${{ needs.gate.outputs.version }}-macos-arm64.zip
+            build/release/package/Bloom-${{ needs.gate.outputs.version }}-macos-arm64.dmg
+            build/release/package/Bloom-${{ needs.gate.outputs.version }}-macos-arm64.pkg
+
+  # The Windows files: the installer and the zip.
+  windows:
+    needs: gate
+    name: Windows package
+    runs-on: windows-2025
+    timeout-minutes: 480
+    env:
+      BLOOM_PACKAGE_VERSION: ${{ needs.gate.outputs.version }}
+      MSYS2_ROOT: C:\msys64
+      MSYS2_PATH_TYPE: inherit
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: refs/tags/${{ needs.gate.outputs.tag }}
+
+      # Build tools only. Every library Bloom links comes from the locked prefix.
+      - name: Install build tools
+        shell: cmd
+        run: |
+          python -m venv "%RUNNER_TEMP%\tools-venv"
+          "%RUNNER_TEMP%\tools-venv\Scripts\pip" install --quiet meson==1.12.1 ninja==1.13.2
+          C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed make patch pkgconf perl
+
+      - name: Cache dependency archives
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/bloom-dependency-downloads
+          key: bloom-release-windows-archives-${{ hashFiles('dependencies/dependencies.lock.json') }}
+
+      - name: Cache dependency build
+        id: cache-dependency-prefix
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ${{ runner.temp }}/bloom-superbuild
+            build/dependency-prefix
+          key: bloom-release-windows-2025-prefix-${{ runner.arch }}-${{ hashFiles('dependencies/dependencies.lock.json', 'dependencies/superbuild/**') }}
+
+      # Each step that compiles starts from the Visual Studio developer environment of the newest
+      # installed toolset, found with vswhere, and adds the build tools and MSYS2 after it.
+      - name: Build dependency superbuild prefix
+        if: steps.cache-dependency-prefix.outputs.cache-hit != 'true'
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          set "PATH=%RUNNER_TEMP%\tools-venv\Scripts;%PATH%;C:\msys64\usr\bin"
+          cmake -S dependencies/superbuild -B "%RUNNER_TEMP%\bloom-superbuild" -G Ninja ^
+            -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl -DCMAKE_BUILD_TYPE=Release ^
+            -DBLOOM_DEPENDENCY_DOWNLOAD_DIR="%RUNNER_TEMP%\bloom-dependency-downloads" ^
+            -DBLOOM_DEPENDENCY_PREFIX="%GITHUB_WORKSPACE%\build\dependency-prefix" || exit /b 1
+          cmake --build "%RUNNER_TEMP%\bloom-superbuild"
+
+      # The platform's updater and the installer compiler, prebuilt items checked by their
+      # recorded checksums (dependencies/update-runtime, dependencies/installer-tools).
+      - name: Put the updater and the installer compiler into the prefix
+        shell: cmd
+        run: |
+          cmake -DBLOOM_RECORD="%GITHUB_WORKSPACE%\dependencies\update-runtime\winsparkle.json" ^
+            -DBLOOM_DESTINATION="%GITHUB_WORKSPACE%\build\dependency-prefix\winsparkle" ^
+            -DBLOOM_DOWNLOAD_DIR="%RUNNER_TEMP%\bloom-dependency-downloads" ^
+            -DBLOOM_ALLOW_DOWNLOADS=ON ^
+            -P dependencies/superbuild/projects/update-runtime-fetch.cmake || exit /b 1
+          cmake -DBLOOM_RECORD="%GITHUB_WORKSPACE%\dependencies\installer-tools\innosetup.json" ^
+            -DBLOOM_DESTINATION="%GITHUB_WORKSPACE%\build\dependency-prefix\innosetup" ^
+            -DBLOOM_DOWNLOAD_DIR="%RUNNER_TEMP%\bloom-dependency-downloads" ^
+            -DBLOOM_ALLOW_DOWNLOADS=ON ^
+            -P dependencies/superbuild/projects/installer-tools-fetch.cmake
+
+      - name: Configure
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          set "PATH=%RUNNER_TEMP%\tools-venv\Scripts;%PATH%"
+          cmake -S . -B build/release -G Ninja ^
+            -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl ^
+            -DBLOOM_DEPENDENCY_MODE=qualified ^
+            -DBLOOM_DEPENDENCY_PREFIX="%GITHUB_WORKSPACE%\build\dependency-prefix" ^
+            -DCMAKE_PREFIX_PATH="%GITHUB_WORKSPACE%\build\dependency-prefix" ^
+            -DBLOOM_BUILD_DESKTOP=ON ^
+            -DBLOOM_BUILD_PYTHON=ON ^
+            -DBLOOM_WARNINGS_AS_ERRORS=ON ^
+            -DBUILD_TESTING=ON ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            "-DBLOOM_PACKAGE_VERSION=%BLOOM_PACKAGE_VERSION%" ^
+            "-DBLOOM_UPDATE_FEED_URL=%BLOOM_UPDATE_FEED_URL%" ^
+            "-DBLOOM_UPDATE_PUBLIC_KEYS=%BLOOM_UPDATE_PUBLIC_KEYS%"
+
+      # The package folder is installed and checked on the way (contents, resolution, version,
+      # icons and a run of the packaged programs), then made into the zip and the installer.
+      - name: Build the package, check it and make its files
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          set "PATH=%RUNNER_TEMP%\tools-venv\Scripts;%PATH%"
+          cmake --build build/release --target bloom-package-archives --parallel
+
+      - name: Check that the package is this release's
+        shell: cmd
+        run: |
+          cmake "-DPACKAGE=%GITHUB_WORKSPACE%\build\release\package\Bloom-%BLOOM_PACKAGE_VERSION%-windows-x86_64" ^
+            -DONLY=release "-DFEED_URL=%BLOOM_UPDATE_FEED_URL%" ^
+            "-DPUBLIC_KEYS=%BLOOM_UPDATE_PUBLIC_KEYS%" -P cmake/package/check_package.cmake || exit /b 1
+          echo Windows package check: contents, resolution, version, icons, run and release passed. GPU rule: not run (a hosted runner has no GPU).>> "%GITHUB_STEP_SUMMARY%"
+
+      - name: Install, upgrade and uninstall with the installer
+        run: ctest --test-dir build/release -R '^bloom\.package\.installers$' --output-on-failure --no-tests=error
+
+      - name: Upload the Windows files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: files-windows
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            build/release/package/Bloom-${{ needs.gate.outputs.version }}-windows-x86_64.zip
+            build/release/package/Bloom-${{ needs.gate.outputs.version }}-windows-x86_64-setup.exe
+
+  # The release candidate: the three platforms' files with the release notes, the install
+  # script, the Arch Linux package description and the checksum list. Nothing is signed yet.
+  # The end-to-end update test runs against these files before the maintainer approves.
+  candidate:
+    needs: [gate, linux, linux-start, macos, windows]
+    name: Release candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      BLOOM_PACKAGE_VERSION: ${{ needs.gate.outputs.version }}
+      BLOOM_RELEASE_TAG: ${{ needs.gate.outputs.tag }}
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: refs/tags/${{ needs.gate.outputs.tag }}
+
+      - name: Download the platforms' files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: files-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/files
+
+      - name: Assemble the candidate
+        run: |
+          python3 -I tools/release/release.py candidate --version "$BLOOM_PACKAGE_VERSION" \
+            --files "$RUNNER_TEMP/files" --public-keys "$BLOOM_UPDATE_PUBLIC_KEYS" \
+            --base-url "$BLOOM_RELEASE_DOWNLOADS/$BLOOM_RELEASE_TAG" --out "$RUNNER_TEMP/candidate"
+          {
+            echo "### Release candidate $BLOOM_PACKAGE_VERSION"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/candidate/SHA256SUMS"
+            echo '```'
+            echo
+            echo "The package check's GPU rule was not run on the hosted runners. The commit's recorded hardware validation is what covers it."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-candidate
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 0
+          path: ${{ runner.temp }}/candidate
+
+  # Waits for the maintainer's approval of the `release` environment. Then the candidate is
+  # signed, the feed and the appcasts are written, and the pre-release and the channel's files
+  # are published.
+  publish:
+    needs: [gate, candidate]
+    name: Sign and publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: write
+    env:
+      BLOOM_PACKAGE_VERSION: ${{ needs.gate.outputs.version }}
+      BLOOM_RELEASE_TAG: ${{ needs.gate.outputs.tag }}
+      BLOOM_RELEASE_DATE: ${{ needs.gate.outputs.date }}
+      BLOOM_RELEASE_COMMIT: ${{ needs.gate.outputs.commit }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: refs/tags/${{ needs.gate.outputs.tag }}
+
+      - name: Download the candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-candidate
+          path: ${{ runner.temp }}/candidate
+
+      # The key is in this step's environment only. sign_release is the one program that reads
+      # it; the feed is verified with the public key before anything is published.
+      - name: Sign the candidate and write the feed
+        env:
+          BLOOM_UPDATE_SIGNING_KEY: ${{ secrets.BLOOM_UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$BLOOM_UPDATE_SIGNING_KEY" ]; then
+            echo "::error::The release environment has no BLOOM_UPDATE_SIGNING_KEY secret"
+            exit 1
+          fi
+          python3 -I tools/release/release.py publish --version "$BLOOM_PACKAGE_VERSION" \
+            --date "$BLOOM_RELEASE_DATE" --candidate "$RUNNER_TEMP/candidate" \
+            --public-keys "$BLOOM_UPDATE_PUBLIC_KEYS" \
+            --base-url "$BLOOM_RELEASE_DOWNLOADS/$BLOOM_RELEASE_TAG" \
+            --channel-url "$BLOOM_RELEASE_DOWNLOADS/alpha-channel" \
+            --key-variable BLOOM_UPDATE_SIGNING_KEY --out "$RUNNER_TEMP/published"
+
+      # The published install script against the published files: the real signature and the
+      # real checksum list, checked by the script itself.
+      - name: Install from the signed files with the install script
+        run: |
+          chmod +x "$RUNNER_TEMP/published/release/install.sh"
+          HOME="$RUNNER_TEMP/install-home" sh "$RUNNER_TEMP/published/release/install.sh" \
+            --from "$RUNNER_TEMP/published/release" --prefix "$RUNNER_TEMP/install-check"
+          test -x "$RUNNER_TEMP/install-check/bin/Bloom"
+          HOME="$RUNNER_TEMP/install-home" sh "$RUNNER_TEMP/published/release/install.sh" \
+            --uninstall --prefix "$RUNNER_TEMP/install-check"
+
+      - name: Publish the pre-release
+        run: |
+          release="$RUNNER_TEMP/published/release"
+          if gh release view "$BLOOM_RELEASE_TAG" > /dev/null 2>&1; then
+            echo "::error::A release for $BLOOM_RELEASE_TAG exists already; a published release is not replaced"
+            exit 1
+          fi
+          kind=--prerelease
+          case "$BLOOM_PACKAGE_VERSION" in *-*) ;; *) kind=--latest ;; esac
+          gh release create "$BLOOM_RELEASE_TAG" --verify-tag "$kind" \
+            --title "Bloom $BLOOM_PACKAGE_VERSION" --notes-file "$release/release-notes.md" \
+            "$release"/Bloom-"$BLOOM_PACKAGE_VERSION"-* "$release/install.sh" \
+            "$release/PKGBUILD" "$release/SHA256SUMS" "$release/SHA256SUMS.sig" \
+            "$release/alpha.json" "$release/appcast-macos.xml" "$release/appcast-windows.xml"
+
+      # The fixed release `alpha-channel` holds what every installed copy reads: the feed, the
+      # appcasts, the install script and the AppImage's control file. The feed's stable address
+      # redirects to its file here.
+      - name: Refresh the channel's files
+        run: |
+          channel="$RUNNER_TEMP/published/channel"
+          if ! gh release view alpha-channel > /dev/null 2>&1; then
+            gh release create alpha-channel --prerelease --target "$BLOOM_RELEASE_COMMIT" \
+              --title "Alpha channel" \
+              --notes "The update files of the newest alpha. Bloom and the install script read them. Download Bloom from the newest release."
+          fi
+          # One control file at a time: the AppImage finds it by a pattern over the names.
+          gh release view alpha-channel --json assets --jq '.assets[].name' |
+            { grep '\.AppImage\.zsync$' || true; } |
+            while read -r old; do gh release delete-asset alpha-channel "$old" --yes; done
+          gh release upload alpha-channel --clobber "$channel"/*
