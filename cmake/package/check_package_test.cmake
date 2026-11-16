@@ -2,7 +2,11 @@
 # packaged programs, and it refuses the package once it is broken in each way that matters.
 #
 #   cmake (-DBUILD=<build tree> | -DBUNDLE=<deployed Bloom.app>) -DWORK=<work directory>
-#         [-DPATCHELF=<patchelf>] [-DGPU=ON] -P check_package_test.cmake
+#         [-DPATCHELF=<patchelf>] [-DGPU=ON] [-DVERSION=<the package's version label>]
+#         -P check_package_test.cmake
+#
+# VERSION is the label the package's programs must report; with BUILD it is read from the build
+# tree's BLOOM_PACKAGE_VERSION when not given, and with BUNDLE it is required.
 #
 # With BUILD the package is installed from the build tree into the work directory; with BUNDLE
 # (macOS) the deployed bundle is copied there. The copy is this test's own: it is broken and
@@ -19,6 +23,12 @@
 #                                    (Linux and macOS; a Windows program has none)
 #   a carried distribution library   (Linux) one of the libraries carried beside Qt removed
 #   removed                          ("no libxcb-cursor.so.0 ... beside Qt")
+#   the update helper removed        "no update helper"
+#   the update helper made to load   the helper replaced by a program that loads the package's
+#   the package's libraries          libraries ("the update helper loads ..." or "has a library
+#                                    search path"): it runs from a copy outside the package
+#   another version                  the package checked against a label other than the one its
+#                                    programs report (each program: "reports 'name label'")
 #
 # With GPU, the packaged application must also show a Viewer frame evaluated on the GPU (rule
 # `gpu`), and on Linux the same run with no GPU driver offered must be refused ("was evaluated
@@ -27,6 +37,16 @@ cmake_minimum_required(VERSION 3.25)
 
 if(NOT WORK OR (NOT BUILD AND NOT BUNDLE))
     message(FATAL_ERROR "check_package_test.cmake needs WORK and BUILD or BUNDLE")
+endif()
+if(NOT VERSION AND BUILD AND EXISTS "${BUILD}/CMakeCache.txt")
+    file(STRINGS "${BUILD}/CMakeCache.txt" version_line
+         REGEX "^BLOOM_PACKAGE_VERSION:[A-Z]+=")
+    if(version_line MATCHES "=(.+)$")
+        set(VERSION "${CMAKE_MATCH_1}")
+    endif()
+endif()
+if(NOT VERSION)
+    message(FATAL_ERROR "check_package_test.cmake needs VERSION, the label the programs report")
 endif()
 set(check "${CMAKE_CURRENT_LIST_DIR}/check_package.cmake")
 file(REMOVE_RECURSE "${WORK}")
@@ -69,7 +89,7 @@ endif()
 # 1. The package as built passes, with a run.
 execute_process(
     COMMAND "${CMAKE_COMMAND}" "-DPACKAGE=${package}" -DCOMPLETE=ON -DRUN=ON
-        "-DWORK=${WORK}/run" -P "${check}"
+        "-DVERSION=${VERSION}" "-DWORK=${WORK}/run" -P "${check}"
     OUTPUT_VARIABLE output ERROR_VARIABLE error RESULT_VARIABLE result)
 if(NOT result EQUAL 0)
     message(FATAL_ERROR "the package does not pass its check:\n${output}${error}")
@@ -195,6 +215,48 @@ else()
     bloom_expect_refusal("an outside search path"
                          "bloom-check-probe: library search path outside the package: /opt/outside")
     file(REMOVE "${probe}")
+endif()
+
+# 5a. The update helper removed, then replaced by a program that needs the package's libraries.
+get_filename_component(worker_directory "${worker}" DIRECTORY)
+get_filename_component(worker_extension "${worker}" LAST_EXT)
+set(helper "${worker_directory}/bloom-update-helper${worker_extension}")
+if(NOT EXISTS "${helper}")
+    message(FATAL_ERROR "the package has no ${helper}")
+endif()
+file(RENAME "${helper}" "${WORK}/helper-set-aside")
+bloom_expect_refusal("the update helper removed" "the package has no update helper")
+file(COPY_FILE "${programs}/bloom-cli${worker_extension}" "${helper}")
+bloom_expect_refusal("the update helper made to load the package's libraries"
+                     "the update helper (loads|has a library search path)")
+file(REMOVE "${helper}")
+file(RENAME "${WORK}/helper-set-aside" "${helper}")
+
+# 5b. Another version: the programs report the label they were built under, so a package checked
+# against any other label is refused, once for each program. The right label passes the rule.
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" "-DPACKAGE=${package}" "-DVERSION=${VERSION}" -DONLY=version
+        -P "${check}"
+    OUTPUT_VARIABLE output ERROR_VARIABLE error RESULT_VARIABLE result)
+if(NOT result EQUAL 0)
+    list(APPEND problems "the version rule refused the package's own version:\n${output}${error}")
+endif()
+set(other_version "9.9.9-other.1")
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" "-DPACKAGE=${package}" "-DVERSION=${other_version}" -DONLY=version
+        -P "${check}"
+    OUTPUT_VARIABLE output ERROR_VARIABLE error RESULT_VARIABLE result)
+if(result EQUAL 0)
+    list(APPEND problems "another version: the check passed")
+else()
+    foreach(program_name IN ITEMS Bloom bloom-cli bloom-mcp)
+        if(NOT "${output}${error}" MATCHES
+           "${program_name} reports '${program_name} ${VERSION}', not '${program_name} 9.9.9-other.1'")
+            list(APPEND problems "another version: the check failed without saying what "
+                                 "${program_name} reports:\n${output}${error}")
+        endif()
+    endforeach()
+    message(STATUS "refused, another version")
 endif()
 
 # 6. Linux: one of the distribution libraries the package carries beside Qt removed.

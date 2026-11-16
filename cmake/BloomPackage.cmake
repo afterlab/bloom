@@ -130,7 +130,7 @@ function(bloom_add_package_rules)
             ")
         endif()
 
-        set(programs bloom bloom-cli bloom-mcp bloom-color-worker)
+        set(programs bloom bloom-cli bloom-mcp bloom-color-worker bloom-update-helper)
         if(TARGET bloom-media-worker)
             list(APPEND programs bloom-media-worker)
         endif()
@@ -184,7 +184,7 @@ function(bloom_add_package_rules)
         # in each way the check must refuse. The package is installed from the build tree; on
         # macOS it is the bundle the build filled.
         if(APPLE)
-            set(source "-DBUNDLE=$<TARGET_BUNDLE_DIR:bloom>")
+            set(source "-DBUNDLE=$<TARGET_BUNDLE_DIR:bloom>" "-DVERSION=${BLOOM_PACKAGE_VERSION}")
         else()
             find_program(BLOOM_PACKAGE_PATCHELF patchelf)
             set(source "-DBUILD=${CMAKE_BINARY_DIR}" "-DPATCHELF=${BLOOM_PACKAGE_PATCHELF}")

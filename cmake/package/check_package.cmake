@@ -4,7 +4,7 @@
 #         [-DCOMPLETE=ON] [-DRUN=ON -DWORK=<empty work directory>]
 #         [-DGPU=ON -DONLY=gpu -DWORK=<empty work directory>]
 #         [-DBASE_LIBRARIES=<linux-base-libraries.txt>] [-DONLY=<rule>...]
-#         [-DFLOOR=<family>=<version>...]
+#         [-DFLOOR=<family>=<version>...] [-DVERSION=<the package's version label>]
 #         -P check_package.cmake
 #
 # One script for the three operating systems; the rules are the same and each has one part per
@@ -29,6 +29,14 @@
 #                 Windows  declared: the libraries of the Windows system directory, except the
 #                          Visual C++ runtime, which is not part of Windows and must be inside.
 #                          Looked for beside the file and, for a library, beside the programs.
+#               The update helper is held to more: it loads the operating system's own libraries
+#               only and has no search path, because it runs from a copy outside the package.
+#
+#   version     The three programs, Bloom, bloom-cli and bloom-mcp, each run with --version and
+#               report "<name> <label>", the label the package is released under
+#               (bloom::core::version()). VERSION names the label; without it the label is read
+#               from the package's own name, Bloom-<label>-<system>-<processor>, and a package
+#               with neither is refused.
 #
 #   run         (with RUN) The package's own bloom-cli runs
 #               tests/fixtures/scripting/package_loaded_images.py in the carried interpreter,
@@ -75,7 +83,7 @@ endif()
 file(REAL_PATH "${PACKAGE}" package)
 get_filename_component(package_name "${package}" NAME)
 if(NOT ONLY)
-    set(ONLY contents resolution run)
+    set(ONLY contents resolution version run)
 endif()
 set(failures "")
 
@@ -287,6 +295,7 @@ if(COMPLETE AND "contents" IN_LIST ONLY)
     bloom_require("${programs}/bloom-cli${suffix}" "bloom-cli")
     bloom_require("${programs}/bloom-mcp${suffix}" "bloom-mcp")
     bloom_require("${color}/bloom-color-worker${suffix}" "color worker")
+    bloom_require("${color}/bloom-update-helper${suffix}" "update helper")
     bloom_require("${media}/ffmpeg-v1/bloom-media-worker${suffix}" "media worker")
     if(system STREQUAL "macos")
         bloom_require("${media}/videotoolbox-v1/bloom-media-videotoolbox-worker"
@@ -794,6 +803,113 @@ elseif(system STREQUAL "macos" AND "resolution" IN_LIST ONLY)
             endforeach()
         endif()
     endforeach()
+endif()
+
+# The update helper replaces the package from a copy of itself outside it (ADR 0041), so it may
+# load nothing that the package carries: the operating system's own libraries only, and no
+# search path.
+set(helper "${color}/bloom-update-helper${suffix}")
+if("resolution" IN_LIST ONLY AND EXISTS "${helper}")
+    set(helper_loads "")
+    set(helper_search "")
+    if(system STREQUAL "linux")
+        bloom_elf_needs("${helper}" helper_loads helper_search)
+    elseif(system STREQUAL "windows")
+        bloom_tool(lines "${BLOOM_DUMPBIN}" /nologo /dependents "${helper}")
+        foreach(line IN LISTS lines)
+            if(line MATCHES "^ +([^ ]+\\.[Dd][Ll][Ll])$")
+                list(APPEND helper_loads "${CMAKE_MATCH_1}")
+            endif()
+        endforeach()
+    else()
+        bloom_tool(lines otool -l "${helper}")
+        set(command "")
+        foreach(line IN LISTS lines)
+            string(STRIP "${line}" line)
+            if(line MATCHES "^cmd ([A-Z_0-9]+)")
+                set(command "${CMAKE_MATCH_1}")
+            elseif(command MATCHES "^LC_(LOAD|LOAD_WEAK|REEXPORT|LAZY_LOAD)_DYLIB$"
+                   AND line MATCHES "^name (.+) \\(offset [0-9]+\\)$")
+                list(APPEND helper_loads "${CMAKE_MATCH_1}")
+            elseif(command STREQUAL "LC_RPATH" AND line MATCHES "^path (.+) \\(offset [0-9]+\\)$")
+                list(APPEND helper_search "${CMAKE_MATCH_1}")
+            endif()
+        endforeach()
+    endif()
+    foreach(entry IN LISTS helper_search)
+        if(NOT entry STREQUAL "")
+            bloom_fail("the update helper has a library search path (${entry}); it runs from a "
+                       "copy outside the package")
+        endif()
+    endforeach()
+    foreach(name IN LISTS helper_loads)
+        set(own FALSE)
+        if(system STREQUAL "linux")
+            bloom_base_name("${name}" base)
+            if(NOT base OR name IN_LIST carried_names)
+                set(own TRUE)
+            endif()
+        elseif(system STREQUAL "windows")
+            string(TOLOWER "${name}" lower_name)
+            if(NOT lower_name MATCHES "^(api-ms-win-|ext-ms-)"
+               AND (EXISTS "${package}/${name}" OR NOT EXISTS "${system_directory}/${name}"))
+                set(own TRUE)
+            endif()
+        elseif(NOT name MATCHES "^(/usr/lib/|/System/)")
+            set(own TRUE)
+        endif()
+        if(own)
+            bloom_fail("the update helper loads ${name}, which is not part of the operating "
+                       "system; it runs from a copy outside the package")
+        endif()
+    endforeach()
+endif()
+
+# --- version -----------------------------------------------------------------------------------
+if("version" IN_LIST ONLY)
+    set(expected_label "${VERSION}")
+    if(NOT expected_label AND package_name MATCHES
+       "^Bloom-([0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.]+)?)-(linux|macos|windows)-[0-9A-Za-z_]+$")
+        set(expected_label "${CMAKE_MATCH_1}")
+    endif()
+    if(NOT expected_label)
+        bloom_fail("the version rule needs the package's version: pass -DVERSION=<label> or check "
+                   "a package named Bloom-<label>-<system>-<processor>")
+    else()
+        # Nothing of the build machine's setup reaches the programs. They return before
+        # anything starts, so they read no settings; the check's profile is set all the same.
+        foreach(variable IN ITEMS LD_LIBRARY_PATH LD_PRELOAD DYLD_LIBRARY_PATH
+                                  DYLD_FRAMEWORK_PATH DYLD_INSERT_LIBRARIES
+                                  DYLD_FALLBACK_LIBRARY_PATH QT_PLUGIN_PATH QT_QPA_PLATFORM
+                                  QT_QPA_PLATFORM_PLUGIN_PATH QTDIR DISPLAY WAYLAND_DISPLAY)
+            unset(ENV{${variable}})
+        endforeach()
+        if(WORK)
+            get_filename_component(version_profile "${WORK}/version-profile" ABSOLUTE)
+            file(MAKE_DIRECTORY "${version_profile}")
+            set(ENV{BLOOM_PACKAGE_CHECK_PROFILE} "${version_profile}")
+        endif()
+        foreach(entry IN ITEMS "Bloom|Bloom" "bloom-cli|bloom-cli" "bloom-mcp|bloom-mcp")
+            string(REPLACE "|" ";" entry "${entry}")
+            list(GET entry 0 file_name)
+            list(GET entry 1 program_name)
+            set(program "${programs}/${file_name}${suffix}")
+            if(NOT EXISTS "${program}")
+                bloom_fail("the package has no ${file_name}${suffix} to ask its version")
+                continue()
+            endif()
+            execute_process(
+                COMMAND "${program}" --version
+                RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 60)
+            string(STRIP "${output}" reported)
+            if(NOT result EQUAL 0)
+                bloom_fail("${program_name} --version failed (${result}): ${output}${error}")
+            elseif(NOT reported STREQUAL "${program_name} ${expected_label}")
+                bloom_fail("${program_name} reports '${reported}', not "
+                           "'${program_name} ${expected_label}'")
+            endif()
+        endforeach()
+    endif()
 endif()
 
 # --- run ---------------------------------------------------------------------------------------
