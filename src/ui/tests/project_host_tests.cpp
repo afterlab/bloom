@@ -21,6 +21,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDir>
+#include <QFileInfo>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFileDialog>
@@ -1082,9 +1083,13 @@ void testCommandLineNamesTheProject(Expectations& expectations) {
     expectations.expect(
         QDir::setCurrent(QString::fromStdU16String(directory.path().u16string())),
         "command line: the working directory can be changed");
-    expectations.expect(bloom::ui::projectPathFromArguments(
-                            {QStringLiteral("Bloom"), QStringLiteral("from the file manager.bloom")}) ==
-                            QDir::cleanPath(projectFile),
+    // Compared as files: the system may name the working directory by another spelling than the
+    // one it was set with (on macOS the temporary folder is reached through a link).
+    const auto relative = bloom::ui::projectPathFromArguments(
+        {QStringLiteral("Bloom"), QStringLiteral("from the file manager.bloom")});
+    expectations.expect(relative.has_value() && QDir::isAbsolutePath(*relative) &&
+                            QFileInfo(*relative).canonicalFilePath() ==
+                                QFileInfo(projectFile).canonicalFilePath(),
                         "command line: a relative path is resolved against the working directory");
     QDir::setCurrent(previous);
 
