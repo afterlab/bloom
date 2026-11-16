@@ -13,7 +13,11 @@
 //     when the composition read is not the one the Viewer shows, and when the Viewer has a region
 //     of interest, an isolation, a channel view or looks off; the Viewer's display and view never
 //     matter to the Working signal;
-//   * #733: no frame stores Display-signal tables, so a Display read is measured;
+//   * #733: no frame stores Display-signal tables, so a Display read is answered with the cached
+//     display frame itself: its stored cells are counted by the read (no render, the measure
+//     counter does not move), the tables are measureScopeStoredFrameCpu's of the shown frame's
+//     cells and the counters are the frame's; a cached frame under another display and view or
+//     with a region of interest is no hit and the read measures;
 //   * a binding with no preview or cache measures everything;
 //   * the warm answer equals a cold measure of the same frame, cell for cell.
 // The port is called from the read's worker and marshaled to the interface thread, as the MCP
@@ -28,10 +32,12 @@
 #include <bloom/document/drill_levels.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/input_color_context.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/qualified_display_preparation.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
+#include <bloom/runtime/scope_frame_measure.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/scripting/scope_read.hpp>
@@ -422,7 +428,16 @@ int main(int argc, char** argv) {
         {
             auto request = defaultRead();
             request.signal = runtime::ScopeSignal::Display;
-            expectMeasured(warm, request, genuine, "a Display signal read", false);
+            // #733: the Working tables the frame carries do not answer a Display read; the
+            // cached display frame itself does, and nothing is rendered.
+            {
+                const int before = warm.measures();
+                const auto display = warm.read(request);
+                expect(display.ok() && display.frames.size() == 1 &&
+                           display.frames.front().fromCache && warm.measures() == before,
+                       "a Display signal read is answered from the cached display frame, "
+                       "rendering nothing");
+            }
             request = defaultRead();
             request.region = runtime::ScopeRegion{0, 0, 32, 64};
             expectMeasured(warm, request, leftHalf, "a read with a region");
@@ -452,7 +467,8 @@ int main(int argc, char** argv) {
         }
 
         // #733: no frame stores Display-signal tables. Caching a frame that carries them keeps
-        // the tables the entry has, and a Display read is measured.
+        // the tables the entry has, and a Display read is answered with the cached display frame
+        // itself, counted by the read from its stored cells with nothing rendered.
         {
             scripting::ScopeReadRequest displayRead;
             displayRead.signal = runtime::ScopeSignal::Display;
@@ -464,7 +480,71 @@ int main(int argc, char** argv) {
                        warm.cache().scopesOf(*key) == before && before != nullptr &&
                        before->settings.signal == runtime::ScopeSignal::Working,
                    "the cache stores no Display tables and keeps the Working ones");
-            expectMeasured(warm, displayRead, displayFrame, "a Display read");
+
+            // What a panel counts for the shown frame: its stored cells on the CPU route.
+            const auto shown = warm.controller().state().frame;
+            expect(shown != nullptr, "the Viewer holds the shown frame");
+            auto config = runtime::detail::resolveInputColorConfig(warm.session().colorIntent());
+            expect(config.has_value(), "the project's color configuration resolves");
+            if (shown != nullptr && config.has_value()) {
+                const auto display = std::string(config->displayName());
+                const auto view = std::string(config->viewName());
+                const auto prepared = runtime::ScopeSignalColor::prepare(
+                    {.config = std::make_shared<const color::ResolvedBloomNeutralConfig>(
+                         std::move(*config)),
+                     .signal = runtime::ScopeSignal::Display,
+                     .display = display,
+                     .view = view});
+                const auto stored = runtime::scopeStoredFrameOf(*shown, 64, 64);
+                expect(static_cast<bool>(prepared) && stored.has_value() &&
+                           shown->displayCounters().has_value(),
+                       "the shown frame has stored cells and counters");
+                if (prepared && stored && shown->displayCounters()) {
+                    const auto expected = runtime::measureScopeStoredFrameCpu(
+                        *stored, displaySettings, render::ScopeTableReduction{}, *prepared.color);
+                    expect(expected.status == runtime::ScopeFrameStatus::Measured,
+                           "the shown frame's cells are counted");
+                    const int measuresBefore = warm.measures();
+                    const auto result = warm.read(displayRead);
+                    expect(result.ok() && result.frames.size() == 1,
+                           "a Display read of the cached frame answers");
+                    if (result.ok() && result.frames.size() == 1) {
+                        const auto& frame = result.frames.front();
+                        expect(frame.fromCache, "a Display read is answered from the cache");
+                        expect(warm.measures() == measuresBefore,
+                               "the Display read rendered nothing (0 renders)");
+                        expect(frame.route == runtime::ScopeRoute::Cpu &&
+                                   !frame.routeNote.empty(),
+                               "the Display answer is counted on the CPU and says what happened");
+                        expect(frame.counts == expected.counts && frame.counted == 4096U,
+                               "its tables are measureScopeStoredFrameCpu's of the shown cells");
+                        expect(frame.frameCounters == shown->displayCounters() &&
+                                   frame.frameLayout == stored->layout,
+                               "its counters and layout are the frame's");
+                    }
+                }
+            }
+
+            // A cached frame under another display and view is no hit for a Display read.
+            warm.controller().setViewerDisplayView("Review Display", "Review View");
+            const auto reviewed = warm.shown();
+            expect(reviewed.has_value(),
+                   "the preview shows the frame under another display and view");
+            if (reviewed)
+                expectMeasured(warm, displayRead, displayFrame,
+                               "a Display read against a frame under another display and view",
+                               false);
+            warm.controller().setViewerDisplayView({}, {});
+            key = warm.shown();
+            // With a region of interest the cached frame is another picture.
+            warm.controller().setRegionOfInterest(QRectF(8.0, 8.0, 32.0, 32.0));
+            const auto cropped = warm.shown();
+            expect(cropped.has_value(), "the preview shows the frame with a region of interest");
+            if (cropped)
+                expectMeasured(warm, displayRead, displayFrame,
+                               "a Display read against a frame with a region of interest", false);
+            warm.controller().setRegionOfInterest(std::nullopt);
+            key = warm.shown();
         }
 
         // The resolution: a Half read does not take a Full frame's tables.

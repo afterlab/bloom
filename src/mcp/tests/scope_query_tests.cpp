@@ -193,6 +193,106 @@ void tablesAreTheReadsOwn(Server& server) {
            "the sparse encoding lists index and count pairs: " + sparse.substr(0, 300));
 }
 
+std::vector<std::uint64_t> optionalNumbersOf(yyjson_val* array, bool& nullLuma) {
+    std::vector<std::uint64_t> values;
+    std::size_t index = 0;
+    std::size_t count = 0;
+    yyjson_val* item = nullptr;
+    nullLuma = false;
+    yyjson_arr_foreach(array, index, count, item) {
+        if (yyjson_is_null(item)) {
+            nullLuma = index == 3;
+            values.push_back(0);
+        } else {
+            values.push_back(yyjson_get_uint(item));
+        }
+    }
+    return values;
+}
+
+// #733: a Display frame carries the frame counters and the stored layout, for every output kind;
+// a Working frame carries neither. No fixture here has an absent luma, so the `null` luma entry
+// is not covered by this test.
+void displayFrameCounters(Server& server) {
+    scripting::ScopeReadRequest request;
+    request.composition = document::CompositionId::fromRaw(1);
+    request.signal = runtime::ScopeSignal::Display;
+    request.resolution = scripting::ScopeReadResolution::Quarter;
+    request.scopes = render::kScopeTableHistogram;
+    scripting::ScopeReadPorts ports;
+    ports.scheduler = &server.scheduler;
+    const auto read = scripting::readScopes(*server.session, request, ports);
+    expect(read.ok() && read.frames.size() == 1 && read.frames[0].frameCounters &&
+               read.frames[0].frameLayout,
+           "the library display read carries the frame counters: " + read.error.message);
+    if (!read.ok() || read.frames.empty() || !read.frames[0].frameCounters)
+        return;
+    const auto& counters = *read.frames[0].frameCounters;
+
+    for (const char* result : {"tables", "summary", "image"}) {
+        const std::string arguments =
+            std::string(R"({"kind":"scopes","composition":1,"frame":0,"resolution":"quarter",)"
+                        R"("scopes":["histogram"],"result":")") +
+            result + (std::string(result) == "image" ? R"(","image":"histogram"})" : R"("})");
+        const auto response = server.call("query", arguments);
+        const Parsed parsed(response);
+        auto* frames =
+            parsed.content() == nullptr ? nullptr : yyjson_obj_get(parsed.content(), "frames");
+        auto* frame = frames == nullptr ? nullptr : yyjson_arr_get_first(frames);
+        expect(frame != nullptr, std::string("a display ") + result +
+                                     " read answers: " + response.substr(0, 300));
+        if (frame == nullptr)
+            continue;
+        auto* counted = yyjson_obj_get(frame, "frameCounters");
+        bool nullUnder = false;
+        bool nullOver = false;
+        const auto under = optionalNumbersOf(yyjson_obj_get(counted, "under"), nullUnder);
+        const auto over = optionalNumbersOf(yyjson_obj_get(counted, "over"), nullOver);
+        expect(counted != nullptr && under.size() == 4 && over.size() == 4 && !nullUnder &&
+                   !nullOver,
+               std::string("a display ") + result +
+                   " frame has four under and four over numbers, luma counted");
+        bool same = under.size() == 4 && over.size() == 4;
+        for (std::size_t channel = 0; same && channel < 4; ++channel)
+            same = under[channel] == counters.under[channel] &&
+                   over[channel] == counters.over[channel];
+        expect(same && yyjson_get_uint(yyjson_obj_get(counted, "notFinite")) == counters.notFinite,
+               std::string("the ") + result + " frame counters equal the read's");
+        auto* layout = yyjson_obj_get(frame, "storedLayout");
+        expect(yyjson_is_str(layout) &&
+                   std::string(yyjson_get_str(layout)) ==
+                       (*read.frames[0].frameLayout == render::DisplayPixelLayout::Rgb10A2
+                            ? "10:10:10:2"
+                            : "8:8:8:8"),
+               std::string("the ") + result + " frame names its stored layout");
+        if (std::string(result) == "tables") {
+            // The tables' own under and over are 0 for the display signal.
+            auto* histogram = yyjson_obj_get(yyjson_obj_get(frame, "tables"), "histogram");
+            bool zero = true;
+            for (const auto value : numbersOf(yyjson_obj_get(histogram, "under")))
+                zero = zero && value == 0U;
+            for (const auto value : numbersOf(yyjson_obj_get(histogram, "over")))
+                zero = zero && value == 0U;
+            expect(zero, "the display tables' under and over are 0");
+        }
+    }
+
+    for (const char* result : {"tables", "summary"}) {
+        const auto response = server.call(
+            "query", std::string(R"({"kind":"scopes","composition":1,"frame":0,)"
+                                 R"("signal":"working","resolution":"quarter","scopes":)"
+                                 R"(["histogram"],"result":")") +
+                         result + R"("})");
+        const Parsed parsed(response);
+        auto* frames =
+            parsed.content() == nullptr ? nullptr : yyjson_obj_get(parsed.content(), "frames");
+        auto* frame = frames == nullptr ? nullptr : yyjson_arr_get_first(frames);
+        expect(frame != nullptr && yyjson_obj_get(frame, "frameCounters") == nullptr &&
+                   yyjson_obj_get(frame, "storedLayout") == nullptr,
+               std::string("a working ") + result + " frame has no frame counters or layout");
+    }
+}
+
 void summaryAndPicture(Server& server) {
     const auto summary =
         server.call("query", R"({"kind":"scopes","composition":1,"frame":0,"signal":"working",)"
@@ -252,6 +352,7 @@ int main() {
     try {
         Server server;
         tablesAreTheReadsOwn(server);
+        displayFrameCounters(server);
         summaryAndPicture(server);
         refusals(server);
     } catch (const std::exception& error) {

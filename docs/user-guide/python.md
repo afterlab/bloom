@@ -375,8 +375,13 @@ why the CPU reference counted it), `counted`, `measured_area` and its `tables` o
 (`"display"` or `"working"`, with `axis_maximum`), `region`, `ignore_transparent`, `resolution`,
 `display` and `view`, and `encoding="sparse"` to list only the non-zero cells of each table.
 `bloom.scopes.image` draws one scope or `image="all"` into a PNG at `out`; a range writes one
-numbered file per frame and an existing file is only replaced with `replace=True`. A read ignores
-the Viewer's exposure, gamma, channel and isolation. Inside `bloom.tasks.submit` it reports progress
+numbered file per frame and an existing file is only replaced with `replace=True`. The display
+signal is the frame as it is stored for display (10 bits a channel, or 8 bits for a frame with
+partly transparent pixels), so its tables' `under` and `over` are always 0; what the display
+encoding left outside 0 to 1 is in each display frame's `frame_counters` (`under` and `over`,
+each red, green, blue and luma, with `None` for luma when it was not counted, and `not_finite`),
+which count the whole frame, and `stored_layout` (`"10:10:10:2"` or `"8:8:8:8"`). A working frame
+has neither. A read ignores the Viewer's exposure, gamma, channel and isolation. Inside `bloom.tasks.submit` it reports progress
 per frame and stops with `bloom.CancelledError` when the task is cancelled. A bad argument raises
 `ValueError` saying what to use instead.
 

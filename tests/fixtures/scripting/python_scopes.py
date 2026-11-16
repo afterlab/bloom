@@ -85,6 +85,41 @@ class Scopes(unittest.TestCase):
             self.assertIn('replace', str(refused.exception))
             bloom.scopes.image(path, 0, image='waveform', resolution='quarter', replace=True)
 
+    def test_display_frames_carry_the_frame_counters(self):
+        # #733: a Display frame has the frame counters and the stored layout, for every result;
+        # the tables' own under and over are 0. A Working frame has neither key. (No fixture has
+        # an absent luma, so the None luma entry is not covered here.)
+        for result in ('tables', 'summary'):
+            frame = bloom.scopes.read(0, resolution='quarter', scopes=['histogram'],
+                                      result=result)['frames'][0]
+            counters = frame['frame_counters']
+            self.assertEqual(len(counters['under']), 4)
+            self.assertEqual(len(counters['over']), 4)
+            self.assertNotIn(None, list(counters['under']) + list(counters['over']))
+            self.assertEqual(counters['not_finite'], 0)
+            self.assertEqual(frame['stored_layout'], '10:10:10:2')
+            working = bloom.scopes.read(0, signal='working', resolution='quarter',
+                                        scopes=['histogram'], result=result)['frames'][0]
+            self.assertNotIn('frame_counters', working)
+            self.assertNotIn('stored_layout', working)
+        with tempfile.TemporaryDirectory() as folder:
+            picture = bloom.scopes.image(os.path.join(folder, 'scope.png'), 0, image='histogram',
+                                         resolution='quarter')['frames'][0]
+            self.assertIn('frame_counters', picture)
+            self.assertEqual(picture['stored_layout'], '10:10:10:2')
+        # A value above 1 after the display transform: it is in the frame counters and not in
+        # the tables' over cells.
+        bloom.ops.layer.add_solid(name='Bright', color=(16.0, 0.25, 0.0, 1))
+        frame = bloom.scopes.read(0, resolution='quarter', scopes=['histogram'])['frames'][0]
+        self.assertEqual(frame['frame_counters']['over'][0], frame['counted'])
+        histogram = frame['tables']['histogram']
+        self.assertEqual(sum(histogram['over']), 0)
+        self.assertEqual(sum(histogram['under']), 0)
+        summary = bloom.scopes.read(0, resolution='quarter', result='summary')['frames'][0]
+        red = summary['summary']['channels']['red']
+        self.assertEqual(red['clipped_over'], summary['frame_counters']['over'][0])
+        self.assertEqual(red['clipped_under'], summary['frame_counters']['under'][0])
+
     def test_bad_arguments_say_what_to_use(self):
         with self.assertRaises(ValueError) as both:
             bloom.scopes.read(0, time=0)

@@ -15,6 +15,7 @@
 #include <bloom/document/ids.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/runtime/evaluation.hpp>
+#include <bloom/runtime/prepared_preview_frame.hpp>
 #include <bloom/runtime/scope_frame_measure.hpp>
 #include <bloom/runtime/scope_measure.hpp>
 #include <bloom/runtime/scope_picture.hpp>
@@ -129,7 +130,12 @@ struct ScopeWarmQuery final {
 };
 
 struct ScopeWarmHit final {
+    // The Working signal: the cached tables. A Display read is answered with `frame` instead
+    // (the preview cache stores no Display tables); a hit holds one or the other.
     runtime::ScopeTables tables;
+    // #733, the Display signal: a cached display frame of exactly the picture the read would
+    // render. The read counts its stored cells itself and renders nothing.
+    std::shared_ptr<const runtime::PreparedPreviewFrame> frame;
     runtime::ScopeMeasuredArea area;
     // Why the CPU reference counted a frame of the device route; empty otherwise.
     std::string note;
@@ -204,7 +210,19 @@ struct ScopeReadFrame final {
     std::uint32_t counted = 0;
     // Tables output: the unpacked tables (the layout says which are present).
     runtime::ScopeCounts counts;
+    // The summary of the tables. For the Display signal the tables' own under and over cells are
+    // always 0 (a stored code is inside 0..1), so each channel's `clippedUnder` and `clippedOver`
+    // are the frame counters' values (red, green, blue, luma), which count the whole frame; with
+    // luma absent from the counters, the luma pair stays 0.
     std::optional<runtime::ScopeSummary> summary;
+    // #733, Display signal: what the display encoding left outside 0..1 (under and over for red,
+    // green, blue and luma, and pixels that were not finite) in the whole frame, whatever the
+    // region and Ignore Transparent Pixels. The luma pair may be absent (lumaCounted() false).
+    // Nothing for the Working signal and for an empty area.
+    std::optional<render::DisplayFrameCounters> frameCounters;
+    // #733, Display signal: the layout of the frame's stored cells (10 bits a channel, or 8 bits
+    // for a frame with a partly transparent pixel). Same presence as `frameCounters`.
+    std::optional<render::DisplayPixelLayout> frameLayout;
     // Image output: the PNG and its size.
     std::vector<std::uint8_t> png;
     int imageWidth = 0;

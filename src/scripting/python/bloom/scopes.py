@@ -14,6 +14,14 @@ CPU routes) and returns a dict with the members of the MCP `query` kind `scopes`
 configuration's default display and view unless `display` and `view` name another; an open
 Viewer's exposure, gamma, channel or isolation never reach a read.
 
+The Display signal is the frame as it is stored for display: 10 bits a channel, or 8 bits for a
+frame with partly transparent pixels (a Display frame's `stored_layout` is "10:10:10:2" or
+"8:8:8:8"). A stored code is never outside 0 to 1, so for the Display signal the tables' `under`
+and `over` are always 0. What the display encoding left outside 0 to 1 is in the frame's
+`frame_counters` (`under` and `over`, each red, green, blue and luma, with `None` for luma when it
+was not counted, and `not_finite`), which count the whole frame whatever the region and
+`ignore_transparent`; a summary's clipped counts are these. A Working frame has neither key.
+
 Inside `bloom.tasks.submit` a read reports its progress per frame and stops when the task is
 cancelled (CancelledError). A bad argument raises ValueError saying what to use instead.
 """
@@ -108,7 +116,8 @@ def read(frame=None, *, last_frame=None, composition=None, time=None, scopes=Non
     `result` is "tables" (the count tables of `scopes`, a list of "waveform", "parade",
     "vectorscope", "histogram", "chromaticity"; default all), or "summary" (per channel min, max,
     mean, p1, p50 and p99 code values and clipped counts, and the vectorscope's mean saturation and
-    hue). `signal` is "display" or "working" (with `axis_maximum` 1, 2, 4, 8 or 16). `region` is
+    hue; for the Display signal the clipped counts are the frame's `frame_counters`). `signal` is
+    "display" or "working" (with `axis_maximum` 1, 2, 4, 8 or 16). `region` is
     (x, y, width, height) in composition pixels. `encoding` "sparse" lists only the non-zero cells
     of a table as [index, count] pairs. A range is at most 1000 frames.
     """

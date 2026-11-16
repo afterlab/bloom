@@ -568,11 +568,48 @@ struct Job final {
                  .defaultDisplayView = job.request.display.empty() && job.request.view.empty(),
                  .settings = settings});
         // Tables that lack one the read asks for are never served.
-        if (hit && (hit->tables.empty() ||
-                    (hit->tables.layout().scopes & settings.scopes) != settings.scopes))
+        if (hit && !hit->frame &&
+            (hit->tables.empty() ||
+             (hit->tables.layout().scopes & settings.scopes) != settings.scopes))
             hit.reset();
         runtime::ScopeTables tables;
-        if (hit) {
+        bool answered = false;
+        if (hit && hit->frame) {
+            // #733: a cached display frame of this very picture. Its stored cells are counted
+            // here, on the read's own task: nothing is rendered. A frame that cannot be counted
+            // is measured as if there had been no hit.
+            const auto stored = runtime::scopeStoredFrameOf(*hit->frame, result.compositionWidth,
+                                                            result.compositionHeight);
+            const auto& counters = hit->frame->displayCounters();
+            if (stored && counters) {
+                auto counted = runtime::measureScopeStoredFrameCpu(
+                    *stored, settings, render::ScopeTableReduction{}, color, [&cancellation] {
+                        return cancellation.isCancellationRequested();
+                    });
+                if (counted.status == runtime::ScopeFrameStatus::Cancelled)
+                    return fail(ScopeReadStatus::Cancelled, {}, "The read was cancelled");
+                if (counted.status == runtime::ScopeFrameStatus::Measured ||
+                    counted.status == runtime::ScopeFrameStatus::EmptyArea) {
+                    answered = true;
+                    frame.fromCache = true;
+                    frame.route = runtime::ScopeRoute::Cpu;
+                    frame.area = counted.area;
+                    frame.empty = counted.status == runtime::ScopeFrameStatus::EmptyArea;
+                    if (!frame.empty) {
+                        frame.routeNote = "The cached display frame was counted from its stored "
+                                          "cells; nothing was rendered.";
+                        tables = runtime::ScopeTables::pack(counted.counts, frame.route);
+                        frame.counts = std::move(counted.counts);
+                        frame.frameCounters = *counters;
+                        frame.frameLayout = stored->layout;
+                    }
+                }
+            }
+            hit.reset();
+        }
+        if (answered) {
+            // Counted above.
+        } else if (hit) {
             frame.fromCache = true;
             frame.route = hit->tables.route();
             frame.routeNote = hit->note;
@@ -616,12 +653,27 @@ struct Job final {
                                       "reference counted the frame.";
                 tables = runtime::ScopeTables::pack(measured.counts, measured.route);
                 frame.counts = std::move(measured.counts);
+                frame.frameCounters = measured.frameCounters;
+                frame.frameLayout = measured.frameLayout;
             }
         }
         if (!frame.empty)
             frame.counted = frame.counts.counted();
-        if (request.output == ScopeReadOutput::Summary && !frame.empty)
+        if (request.output == ScopeReadOutput::Summary && !frame.empty) {
             frame.summary = runtime::summarizeScopes(frame.counts);
+            // #733: the Display tables hold no under or over cell (a stored code is inside
+            // 0..1); the frame's own are in the frame counters, of the whole frame.
+            if (frame.frameCounters) {
+                const auto& counters = *frame.frameCounters;
+                for (std::size_t channel = 0; channel < render::kDisplayCounterChannels;
+                     ++channel) {
+                    auto& entry = frame.summary->channels[channel];
+                    const bool counted = channel != 3 || counters.lumaCounted();
+                    entry.clippedUnder = counted ? counters.under[channel] : 0U;
+                    entry.clippedOver = counted ? counters.over[channel] : 0U;
+                }
+            }
+        }
         if (request.output == ScopeReadOutput::Image) {
             ScopeReadError error;
             if (!drawPicture(request, frame.empty ? nullptr : &tables, color, cancellation, frame,

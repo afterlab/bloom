@@ -13,6 +13,7 @@
 #include <bloom/document/project.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/input_color_context.hpp>
+#include <bloom/runtime/qualified_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/scripting/render.hpp>
@@ -26,6 +27,8 @@
 #include <atomic>
 #include <cmath>
 #include <iostream>
+#include <limits>
+#include <optional>
 #include <source_location>
 #include <string>
 #include <thread>
@@ -131,12 +134,19 @@ struct Reads final {
 // evaluator, counted by measureScopeFrameCpu, with the configuration's own display and view.
 struct Reference final {
     runtime::ScopeCounts counts;
+    // #733, Display signal: the measure's frame counters and layout, and the tables of the same
+    // frame packed by the CPU packer and counted from its stored cells (what a panel counts for
+    // that frame on the CPU route).
+    std::optional<render::DisplayFrameCounters> frameCounters;
+    std::optional<render::DisplayPixelLayout> frameLayout;
+    runtime::ScopeCounts storedCounts;
     runtime::ScopeLuma luma;
     color::ScopeColorimetry colorimetry;
 };
 
+template <typename Fixture>
 [[nodiscard]] Reference
-reference(const Bars& bars, const std::uint64_t frame,
+reference(const Fixture& bars, const std::uint64_t frame,
           const runtime::ScopeMeasureSettings& settings, const std::string& display = {},
           const std::string& view = {},
           const runtime::EvaluationResolution resolution = runtime::CompositionFormatResolution{}) {
@@ -174,6 +184,44 @@ reference(const Bars& bars, const std::uint64_t frame,
     expect(evaluated.frame() != nullptr, "the reference frame evaluates");
     auto measured = runtime::measureScopeFrameCpu(*evaluated.frame(), settings, *prepared.color);
     Reference result;
+    if (settings.signal == runtime::ScopeSignal::Display && prepared.color != nullptr &&
+        evaluated.frame() != nullptr) {
+        const auto& image = evaluated.frame()->processImage();
+        const auto* const descriptor = image.descriptor();
+        const auto* const processor = prepared.color->displayProcessor();
+        if (descriptor != nullptr && processor != nullptr) {
+            // The preparation the application's CPU route packs a preview frame with.
+            runtime::QualifiedDisplayPreparationRequest packing;
+            packing.aggregatePixelStorageByteLimit = std::numeric_limits<std::size_t>::max();
+            packing.displayName = prepared.color->display();
+            packing.viewName = prepared.color->view();
+            packing.allowRgb10A2 = true;
+            const auto packedFrame = runtime::CpuQualifiedDisplayPreparer(*processor).prepare(
+                evaluated.frame(), packing, {});
+            const bool packed =
+                packedFrame.status() == runtime::QualifiedDisplayPreparationStatus::Prepared &&
+                packedFrame.frame() != nullptr;
+            expect(packed, "the CPU packer packs the reference frame");
+            if (packed) {
+                const auto& buffer = packedFrame.frame()->buffer();
+                const runtime::ScopeStoredFrame stored{.cells = buffer.pixels(),
+                                                       .layout = buffer.pixelLayout(),
+                                                       .dataWindow = descriptor->dataWindow(),
+                                                       .displayWindow = descriptor->displayWindow(),
+                                                       .pixelAspect = descriptor->pixelAspect(),
+                                                       .roi = std::nullopt,
+                                                       .compositionWidth = 64,
+                                                       .compositionHeight = 64};
+                auto counted = runtime::measureScopeStoredFrameCpu(
+                    stored, settings, render::ScopeTableReduction{}, *prepared.color);
+                expect(counted.status == runtime::ScopeFrameStatus::Measured,
+                       "the packed reference frame is counted");
+                result.storedCounts = std::move(counted.counts);
+            }
+        }
+    }
+    result.frameCounters = measured.frameCounters;
+    result.frameLayout = measured.frameLayout;
     result.counts = std::move(measured.counts);
     result.luma = prepared.color->luma();
     result.colorimetry = prepared.color->colorimetry();
@@ -548,7 +596,8 @@ void warmSidecars(const Bars& bars, Reads& reads) {
             !(query.settings == settings) ||
             !std::holds_alternative<runtime::CompositionFormatResolution>(query.resolution))
             return std::nullopt;
-        return scripting::ScopeWarmHit{tables, {0, 0, 8, 64}, "warm"};
+        return scripting::ScopeWarmHit{
+            .tables = tables, .frame = nullptr, .area = {0, 0, 8, 64}, .note = "warm"};
     };
     const auto read = scripting::readScopes(*bars.session, request, ports);
     expect(read.ok() && read.frames.size() == 2,
@@ -594,7 +643,8 @@ void warmTablesMissingAScope(const Bars& bars, Reads& reads) {
     ports.warm =
         [&](const scripting::ScopeWarmQuery& query) -> std::optional<scripting::ScopeWarmHit> {
         asked.push_back(query);
-        return scripting::ScopeWarmHit{fewerTables, {0, 0, 64, 64}, "fewer"};
+        return scripting::ScopeWarmHit{
+            .tables = fewerTables, .frame = nullptr, .area = {0, 0, 64, 64}, .note = "fewer"};
     };
     const auto careless = scripting::readScopes(*bars.session, request, ports);
     expect(asked.size() == 1 && asked[0].settings == settings,
@@ -718,6 +768,172 @@ void displayAndView(const Bars& bars, Reads& reads) {
            "an unknown display lists the valid ones: " + refused.error.message);
 }
 
+// ---- The Display signal's frame counters (#733)
+// --------------------------------------------------
+
+// A 64 x 64 composition covered by one solid of the given linear color (opaque), whose display
+// transform leaves the red channel above 1.
+struct Single final {
+    std::unique_ptr<scripting::Session> session;
+    document::CompositionId composition;
+
+    explicit Single(const core::Color4d color) {
+        auto created = scripting::Session::createNew(
+            "Single", "Single", core::RationalTime::fromInteger(1),
+            *document::CompositionFormat::create(64, 64, core::PixelAspectRatio::square(),
+                                                 *document::FrameRate::create(24, 1)));
+        if (!created)
+            std::abort();
+        session = std::move(created).takeSession();
+        composition = session->snapshot().project().compositions().front().id();
+        commands::Transaction add("Single", session->snapshot().revision());
+        add.emplace<commands::AddSolidLayer>(composition, "Single", color,
+                                             document::Vec2d{32.0, 32.0});
+        auto added = session->execute(std::move(add));
+        expect(added.succeeded(), "the single solid is added");
+        const auto solid =
+            added.command->outputId<document::NodeId>(commands::kAddSolidLayerSolidNodeOutput)
+                .value();
+        for (const auto& [name, value] : {std::pair{document::kSolidWidthParameterRole, 64.0},
+                                          std::pair{document::kSolidHeightParameterRole, 64.0}}) {
+            const auto snapshot = session->snapshot();
+            const auto* node =
+                snapshot.project().findComposition(composition)->graph().findNode(solid);
+            document::ParameterId parameter;
+            for (const auto& binding : node->parameters)
+                if (binding.role == name)
+                    parameter = binding.parameterId;
+            commands::Transaction edit("Size", session->snapshot().revision());
+            edit.emplace<commands::SetParameterSource>(composition, parameter,
+                                                       document::ConstantValueSource{value});
+            expect(session->execute(std::move(edit)).succeeded(), "the solid is sized");
+        }
+    }
+};
+
+[[nodiscard]] Reference referenceOf(const Single& single) {
+    runtime::ScopeMeasureSettings settings;
+    settings.signal = runtime::ScopeSignal::Display;
+    return reference(single, 0, settings);
+}
+
+[[nodiscard]] bool allZero(const std::vector<std::uint32_t>& values) {
+    return std::ranges::all_of(values, [](const std::uint32_t value) { return value == 0U; });
+}
+
+void displayFrameCounters(const Bars& bars, Reads& reads) {
+    // The bars (75% and 0 in every channel) stay inside 0..1 on display: opaque, so the frame
+    // is stored 10:10:10:2, and its counters are all 0.
+    auto request = requestFor(bars, 0);
+    request.signal = runtime::ScopeSignal::Display;
+    const auto read = scripting::readScopes(*bars.session, request, reads.ports());
+    expect(read.ok() && read.frames.size() == 1, "a display read answers: " + read.error.message);
+    if (!read.ok() || read.frames.size() != 1)
+        return;
+    const auto& frame = read.frames.front();
+    runtime::ScopeMeasureSettings settings;
+    settings.signal = runtime::ScopeSignal::Display;
+    const auto expected = reference(bars, 0, settings);
+    expect(frame.counts == expected.counts, "the display tables equal measureScopeFrameCpu's");
+    expect(frame.counts == expected.storedCounts,
+           "the display tables equal measureScopeStoredFrameCpu's of the CPU-packed frame");
+    expect(frame.frameCounters.has_value() && frame.frameCounters == expected.frameCounters,
+           "the display frame's counters equal the measure's");
+    expect(frame.frameLayout.has_value() && frame.frameLayout == expected.frameLayout &&
+               *frame.frameLayout == render::DisplayPixelLayout::Rgb10A2,
+           "an opaque frame is stored 10:10:10:2");
+    expect(frame.frameCounters && frame.frameCounters->lumaCounted() &&
+               frame.frameCounters->notFinite == 0U &&
+               std::ranges::all_of(frame.frameCounters->under,
+                                   [](const std::uint32_t count) { return count == 0U; }) &&
+               std::ranges::all_of(frame.frameCounters->over,
+                                   [](const std::uint32_t count) { return count == 0U; }),
+           "a frame inside the display axis has no under, over or non-finite pixel");
+
+    // The Working signal has no frame counters, and its tables and summary are what they were.
+    auto working = requestFor(bars, 0);
+    working.signal = runtime::ScopeSignal::Working;
+    working.output = scripting::ScopeReadOutput::Summary;
+    const auto workingRead = scripting::readScopes(*bars.session, working, reads.ports());
+    expect(workingRead.ok() && workingRead.frames.size() == 1 &&
+               !workingRead.frames[0].frameCounters && !workingRead.frames[0].frameLayout &&
+               workingRead.frames[0].summary.has_value(),
+           "a working read has no frame counters and no stored layout");
+    runtime::ScopeMeasureSettings workingSettings;
+    workingSettings.signal = runtime::ScopeSignal::Working;
+    if (workingRead.ok() && !workingRead.frames.empty() && workingRead.frames[0].summary)
+        expect(*workingRead.frames[0].summary ==
+                   runtime::summarizeScopes(reference(bars, 0, workingSettings).counts),
+               "a working summary is the reference tables' summary");
+
+    // A frame with a value above 1 after the display transform: the tables' own over cells are 0
+    // and the frame counters hold the pixels.
+    const Single bright(core::Color4d{16.0, 0.25, 0.0, 1.0});
+    const auto brightExpected = referenceOf(bright);
+    expect(brightExpected.frameCounters.has_value() &&
+               brightExpected.frameCounters->over[0] == 4096U,
+           "the fixture's red is above 1 after the display transform in every pixel");
+    scripting::ScopeReadRequest brightRequest;
+    brightRequest.composition = bright.composition;
+    brightRequest.signal = runtime::ScopeSignal::Display;
+    const auto brightRead = scripting::readScopes(*bright.session, brightRequest, reads.ports());
+    expect(brightRead.ok() && brightRead.frames.size() == 1,
+           "a read of the bright frame answers: " + brightRead.error.message);
+    if (!brightRead.ok() || brightRead.frames.size() != 1)
+        return;
+    const auto& bri = brightRead.frames.front();
+    expect(bri.frameCounters == brightExpected.frameCounters &&
+               bri.counts == brightExpected.counts && bri.counts == brightExpected.storedCounts,
+           "the bright frame's tables and counters equal the reference's");
+    const auto data =
+        scripting::describeScopeTables(bri.counts, scripting::ScopeReadEncoding::Dense);
+    expect(data.histogram && data.waveform && allZero(data.histogram->over) &&
+               allZero(data.histogram->under) && allZero(data.waveform->over) &&
+               allZero(data.waveform->under),
+           "the display tables' own under and over cells are always 0");
+    expect(data.histogram && data.histogram->values[1023] == 4096U,
+           "the over-range red is stored at the top code");
+
+    // The summary's clipped counts are the frame counters.
+    auto summary = brightRequest;
+    summary.output = scripting::ScopeReadOutput::Summary;
+    const auto summaryRead = scripting::readScopes(*bright.session, summary, reads.ports());
+    expect(summaryRead.ok() && summaryRead.frames.size() == 1 &&
+               summaryRead.frames[0].summary.has_value() &&
+               summaryRead.frames[0].frameCounters == brightExpected.frameCounters,
+           "a display summary carries the frame counters");
+    if (summaryRead.ok() && !summaryRead.frames.empty() && summaryRead.frames[0].summary &&
+        brightExpected.frameCounters) {
+        const auto& counters = *brightExpected.frameCounters;
+        bool clipped = true;
+        for (std::size_t channel = 0; channel < render::kDisplayCounterChannels; ++channel) {
+            const auto& value = summaryRead.frames[0].summary->channels[channel];
+            const bool counted = channel != 3 || counters.lumaCounted();
+            clipped = clipped && value.clippedUnder == (counted ? counters.under[channel] : 0U) &&
+                      value.clippedOver == (counted ? counters.over[channel] : 0U);
+        }
+        expect(clipped && summaryRead.frames[0].summary->channels[0].clippedOver == 4096U,
+               "a display summary's clipped counts are the frame counters");
+    }
+
+    // The counters are the whole frame's, whatever the region and Ignore Transparent Pixels; an
+    // empty area has none.
+    auto region = brightRequest;
+    region.region = runtime::ScopeRegion{0, 0, 8, 8};
+    region.ignoreTransparent = true;
+    const auto regionRead = scripting::readScopes(*bright.session, region, reads.ports());
+    expect(regionRead.ok() && regionRead.frames.size() == 1 &&
+               regionRead.frames[0].counted == 64U &&
+               regionRead.frames[0].frameCounters == brightExpected.frameCounters,
+           "a region's frame counters are the whole frame's");
+    auto outside = brightRequest;
+    outside.region = runtime::ScopeRegion{500, 500, 8, 8};
+    const auto outsideRead = scripting::readScopes(*bright.session, outside, reads.ports());
+    expect(outsideRead.ok() && outsideRead.frames.size() == 1 && outsideRead.frames[0].empty &&
+               !outsideRead.frames[0].frameCounters && !outsideRead.frames[0].frameLayout,
+           "an empty area has no frame counters");
+}
+
 // ---- Refusals with their remedies ---------------------------------------------------------------
 
 void refusals(const Bars& bars, Reads& reads) {
@@ -828,6 +1044,7 @@ int main() {
     settingsChangeTheResult(bars, reads);
     transparentPixelsAreLeftOut(reads);
     displayAndView(bars, reads);
+    displayFrameCounters(bars, reads);
     refusals(bars, reads);
     const int totalFailures = failures + bloom::test_support::awaitFailureCount();
     if (totalFailures != 0) {

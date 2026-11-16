@@ -530,6 +530,16 @@ PreviewFrameCache::scopesOf(const PreviewFrameCacheKey& key) const {
     return found->second->scopes;
 }
 
+PreparedPreviewFrameHandle
+PreviewFrameCache::displayFrameOf(const PreviewFrameCacheKey& key) const {
+    const auto found = exactIndex_.find(key);
+    if (found == exactIndex_.end() || !entryIsLive(*found->second) ||
+        found->second->frame == nullptr)
+        return nullptr;
+    const auto& stored = found->second->frame;
+    return restamp(stored, stored->desiredIdentity().requestGeneration, found->second->scopes);
+}
+
 bool PreviewFrameCache::containsWithScopes(const PreviewFrameCacheKey& key,
                                            const runtime::PreviewScopeRequest& request) const {
     ++metadataWork_.exactProbes;

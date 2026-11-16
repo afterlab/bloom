@@ -106,6 +106,26 @@ yyjson_mut_val* channelSummary(Json& out, const runtime::ScopeChannelSummary& su
     return value;
 }
 
+// #733: the Display signal's frame counters: the pixels the display encoding left outside 0..1 in
+// the whole frame (the tables' own under and over are always 0), as four numbers in the order red,
+// green, blue, luma (the luma entry is null when luma was not counted).
+yyjson_mut_val* frameCountersJson(Json& out, const render::DisplayFrameCounters& counters) {
+    const auto list =
+        [&](const std::array<std::uint32_t, render::kDisplayCounterChannels>& values) {
+            auto* array = out.array();
+            for (std::size_t channel = 0; channel < values.size(); ++channel)
+                out.append(array, channel == 3 && !counters.lumaCounted()
+                                      ? out.null()
+                                      : out.number(values[channel]));
+            return array;
+        };
+    auto* value = out.object();
+    out.set(value, "under", list(counters.under));
+    out.set(value, "over", list(counters.over));
+    out.set(value, "notFinite", out.number(counters.notFinite));
+    return value;
+}
+
 yyjson_mut_val* settingsJson(Json& out, const scripting::ScopeReadRequest& request) {
     auto* settings = out.object();
     auto* names = out.array();
@@ -380,7 +400,11 @@ yyjson_mut_val* scopesQuery(McpServerCore::State& core, Json& out, McpCall& call
     out.set(result, "settings", settingsJson(out, settings));
     out.set(result, "axis",
             out.text(settings.signal == runtime::ScopeSignal::Display
-                         ? "Code values 0 to 1023 span the display signal 0 to 1."
+                         ? "Code values 0 to 1023 span the display signal 0 to 1: the frame as "
+                           "it is stored for display (10 bits a channel; 8 bits for a frame "
+                           "with partly transparent pixels). The tables' under and over are "
+                           "always 0; what the display encoding left outside 0 to 1 is in "
+                           "frameCounters, which count the whole frame."
                          : "Code values 0 to 1023 span the working-space value 0 to axisMaximum "
                            "(linear, scene-referred)."));
     auto* luma = out.object();
@@ -426,6 +450,13 @@ yyjson_mut_val* scopesQuery(McpServerCore::State& core, Json& out, McpCall& call
             out.set(row, "measuredArea", area);
             out.set(row, "counted", out.number(frame.counted));
         }
+        if (frame.frameCounters)
+            out.set(row, "frameCounters", frameCountersJson(out, *frame.frameCounters));
+        if (frame.frameLayout)
+            out.set(row, "storedLayout",
+                    out.text(*frame.frameLayout == render::DisplayPixelLayout::Rgb10A2
+                                 ? "10:10:10:2"
+                                 : "8:8:8:8"));
         if (settings.output == ScopeReadOutput::Tables && !frame.empty) {
             const auto& counts = frame.counts;
             const auto& layout = counts.layout;
@@ -482,8 +513,10 @@ yyjson_mut_val* scopesQuery(McpServerCore::State& core, Json& out, McpCall& call
             out.set(value, "codes",
                     out.text("min, max, p1, p50 and p99 are code values 0 to 1023; mean is the "
                              "count-weighted mean code. clippedUnder and clippedOver count pixels "
-                             "below code 0 and above code 1023. A channel is null when its "
-                             "table was not measured or counted nothing."));
+                             "below code 0 and above code 1023; for the display signal they "
+                             "are the frame's counters (frameCounters) and count the whole "
+                             "frame. A channel is null when its table was not measured or "
+                             "counted nothing."));
             out.set(value, "channels", channels);
             if (summary.vectorscopeAvailable) {
                 auto* vector = out.object();

@@ -87,6 +87,25 @@ constexpr std::array<const char*, 2> kEncodingNames{"dense", "sparse"};
     return std::move(row);
 }
 
+// #733: the Display signal's frame counters: the pixels the display encoding left outside 0..1 in
+// the whole frame (the tables' own under and over are always 0), in the order red, green, blue,
+// luma (None when luma was not counted).
+[[nodiscard]] nb::dict frameCountersDict(const render::DisplayFrameCounters& counters) {
+    const auto list =
+        [&](const std::array<std::uint32_t, render::kDisplayCounterChannels>& values) {
+            nb::list array;
+            for (std::size_t channel = 0; channel < values.size(); ++channel)
+                array.append(channel == 3 && !counters.lumaCounted() ? nb::none()
+                                                                     : nb::cast(values[channel]));
+            return array;
+        };
+    nb::dict value;
+    value["under"] = list(counters.under);
+    value["over"] = list(counters.over);
+    value["not_finite"] = counters.notFinite;
+    return value;
+}
+
 [[nodiscard]] nb::dict settingsDict(const ScopeReadRequest& request) {
     nb::dict settings;
     nb::list names;
@@ -294,7 +313,11 @@ nb::dict NativeHost::scopes(const nb::dict& options, const std::uint64_t cancell
     result["composition_size"] = size;
     result["settings"] = settingsDict(settings);
     result["axis"] = settings.signal == runtime::ScopeSignal::Display
-                         ? "Code values 0 to 1023 span the display signal 0 to 1."
+                         ? "Code values 0 to 1023 span the display signal 0 to 1: the frame as "
+                           "it is stored for display (10 bits a channel; 8 bits for a frame "
+                           "with partly transparent pixels). The tables' under and over are "
+                           "always 0; what the display encoding left outside 0 to 1 is in "
+                           "frame_counters, which count the whole frame."
                          : "Code values 0 to 1023 span the working-space value 0 to axis_maximum "
                            "(linear, scene-referred).";
     nb::dict luma;
@@ -335,6 +358,12 @@ nb::dict NativeHost::scopes(const nb::dict& options, const std::uint64_t cancell
             area["height"] = frame.area.height;
             row["measured_area"] = area;
         }
+        if (frame.frameCounters)
+            row["frame_counters"] = frameCountersDict(*frame.frameCounters);
+        if (frame.frameLayout)
+            row["stored_layout"] = *frame.frameLayout == render::DisplayPixelLayout::Rgb10A2
+                                       ? "10:10:10:2"
+                                       : "8:8:8:8";
         if (settings.output == ScopeReadOutput::Tables && !frame.empty) {
             const auto& counts = frame.counts;
             const auto& layout = counts.layout;
@@ -378,8 +407,10 @@ nb::dict NativeHost::scopes(const nb::dict& options, const std::uint64_t cancell
             nb::dict value;
             value["codes"] = "min, max, p1, p50 and p99 are code values 0 to 1023; mean is the "
                              "count-weighted mean code. clipped_under and clipped_over count "
-                             "pixels below code 0 and above code 1023. A channel is None when its "
-                             "table was not measured or counted nothing.";
+                             "pixels below code 0 and above code 1023; for the display signal "
+                             "they are the frame's counters (frame_counters) and count the whole "
+                             "frame. A channel is None when its table was not measured or "
+                             "counted nothing.";
             nb::dict channels;
             for (std::size_t channel = 0; channel < kChannelNames.size(); ++channel)
                 channels[kChannelNames[channel]] = channelSummary(summary.channels[channel]);

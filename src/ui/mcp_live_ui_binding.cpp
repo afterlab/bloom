@@ -532,9 +532,30 @@ McpLiveUiBinding::warmScopes(const scripting::ScopeWarmQuery& query) const {
     if (key->roi || !key->isolation.empty() || key->channelInspection || !key->showLook)
         return std::nullopt;
     // #733: no frame stores Display-signal tables (they are counted from the shown frame at
-    // display time), so a Display read is measured by the read itself.
-    if (query.settings.signal == runtime::ScopeSignal::Display)
-        return std::nullopt;
+    // display time). A Display read is answered with the cached display frame itself, which the
+    // read counts from its stored cells on its own task and which must be the picture the read
+    // would render: the query's display and view, and no Viewer exposure or gamma.
+    if (query.settings.signal == runtime::ScopeSignal::Display) {
+        const bool pairMatches =
+            (key->displayName == query.display && key->viewName == query.view) ||
+            (query.defaultDisplayView && key->displayName.empty() && key->viewName.empty());
+        if (!pairMatches || !key->viewAdjust.neutral())
+            return std::nullopt;
+        auto frame = scopeCache_->displayFrameOf(*key);
+        if (frame == nullptr)
+            return std::nullopt;
+        const auto& identity = frame->desiredIdentity();
+        const bool identityMatches =
+            ((identity.displayName == query.display && identity.viewName == query.view) ||
+             (query.defaultDisplayView && identity.displayName.empty() &&
+              identity.viewName.empty())) &&
+            identity.viewAdjust.neutral();
+        if (!identityMatches || !frame->displayBufferView().has_value() ||
+            !frame->displayCounters().has_value())
+            return std::nullopt;
+        return scripting::ScopeWarmHit{
+            .tables = {}, .frame = std::move(frame), .area = {}, .note = {}};
+    }
     // #730: the Working tables the cached frame's own preparation counted, under exactly the
     // read's settings and at full size (a panel may have asked for smaller tables); a frame
     // without them is measured by the read.
@@ -542,7 +563,8 @@ McpLiveUiBinding::warmScopes(const scripting::ScopeWarmQuery& query) const {
     if (scopes == nullptr || scopes->status != runtime::PreviewFrameScopesStatus::Measured ||
         scopes->settings != query.settings || scopes->reduction != render::ScopeTableReduction{})
         return std::nullopt;
-    return scripting::ScopeWarmHit{scopes->tables, scopes->area, {}};
+    return scripting::ScopeWarmHit{
+        .tables = scopes->tables, .frame = nullptr, .area = scopes->area, .note = {}};
 }
 
 mcp::McpViewerRoute McpLiveUiBinding::viewerRoute() {

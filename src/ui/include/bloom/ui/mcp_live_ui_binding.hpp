@@ -123,7 +123,9 @@ class McpLiveUiBinding final : public QObject {
     // The preview cache's sidecar of the frame at `query.time` when it was measured under exactly
     // what the read measures: the same frame identity (composition, resolution, quality, color,
     // display and view, no region of interest, isolation or channel inspection, looks on) and the
-    // same measure settings.
+    // same measure settings. For a Display read (#733) no tables are stored: the answer is the
+    // cached display frame of that same picture (the query's display and view, no Viewer exposure
+    // or gamma, with host cells), which the read counts itself.
     [[nodiscard]] std::optional<scripting::ScopeWarmHit>
     warmScopes(const scripting::ScopeWarmQuery& query) const;
 

@@ -226,6 +226,10 @@ class PreviewFrameCache final : public QObject {
     // and without moving it in the eviction order.
     [[nodiscard]] std::shared_ptr<const runtime::PreviewFrameScopes>
     scopesOf(const PreviewFrameCacheKey& key) const;
+    // #733: the frame `key`'s live entry holds, for a read of its stored display cells: a frame
+    // with host cells (null for a missing, dead or device-resident entry), without counting a hit
+    // or a miss and without moving it in the eviction order.
+    [[nodiscard]] PreparedPreviewFrameHandle displayFrameOf(const PreviewFrameCacheKey& key) const;
     // Host bytes the cached frames' scope tables hold now; part of hostBytes().
     [[nodiscard]] std::size_t scopeTableBytes() const noexcept { return scopeBytes_; }
     // Cached times for exactly this project/composition/revision/resolution/display policy.

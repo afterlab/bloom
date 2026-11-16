@@ -600,7 +600,8 @@ through the same route (`help` lists them with their arguments):
   is 0, and `resolution` is `full`, `half` or `quarter`. A read never uses the Viewer's exposure,
   gamma, channel, isolation or region of interest. `result` is `tables` (the default), `summary`
   (per channel min, max, mean, p1, p50 and p99 code values and clipped counts, with the
-  vectorscope's mean saturation and hue) or `image` (`image` is one scope or `all`, `width` and
+  vectorscope's mean saturation and hue; for the display signal the clipped counts are the
+  frame's `frameCounters`) or `image` (`image` is one scope or `all`, `width` and
   `height` 128 to 2048 pixels, plus `waveformChannels`, `histogramChannels` and
   `histogramScale`; the picture is returned like a `capture`, inline when small and as a resource link
   otherwise, and a range of images is limited to 16 frames). Tables are flat arrays: each has
@@ -609,10 +610,19 @@ through the same route (`help` lists them with their arguments):
   `settings` as measured, the `luma` coefficients, the colorimetric `primaries`, and per frame the
   `route` (`gpu` or `cpu`) with a `routeNote` saying why the CPU reference counted it,
   `fromCache` (the application's preview cache supplied the tables), `measuredArea`, `counted`
-  and the counters of pixels not finite, without chromaticity or outside a plot. An answer too
+  and the counters of pixels not finite, without chromaticity or outside a plot. The display
+  signal is the frame as it is stored for display: 10 bits a channel, or 8 bits for a frame with
+  partly transparent pixels. A stored code is never outside 0 to 1, so the tables' `under` and
+  `over` are always 0 for the display signal; what the display encoding left outside 0 to 1 is in
+  each display frame's `frameCounters` (`under` and `over`, four numbers each in the order red,
+  green, blue, luma, with `null` for luma when it was not counted, and `notFinite`), which count
+  the whole frame whatever the region and `ignoreTransparent`, and `storedLayout` (`"10:10:10:2"`
+  or `"8:8:8:8"`). A working frame has neither. An answer too
   large for one response is refused with the ways to make it smaller. In the desktop application a
   frame whose tables the preview cache already holds, counted by the frame's own preparation under
-  exactly the read's settings, is returned without measuring. The same read is `bloom.scopes.read` and `bloom.scopes.image` in Python.
+  exactly the read's settings, is returned without measuring; a display read of a frame the cache
+  holds as the same picture (the same display and view, no exposure or gamma) counts the cached
+  frame's stored cells and renders nothing. The same read is `bloom.scopes.read` and `bloom.scopes.image` in Python.
 - `kind:"render-route"` says which route produced the Viewer's displayed frame: `scene` and
   `display` are each `gpu` or `cpu` as the frame itself recorded, `provider` names the display
   arm, `why` is the reason the frame recorded for running part of it on the CPU, and
