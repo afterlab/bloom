@@ -41,8 +41,13 @@ const GpuNeutralDisplayDiagnostic& GpuNeutralDisplay::diagnostic() const noexcep
     return unavailable;
 }
 
-GpuNeutralDisplayDiagnostic GpuNeutralDisplay::begin(std::span<const Rgba32f>, std::uint64_t) {
+GpuNeutralDisplayDiagnostic GpuNeutralDisplay::begin(std::span<const Rgba32f>, std::uint64_t,
+                                                     const GpuDisplayPackRequest&) {
     return diagnostic();
+}
+
+std::optional<GpuDisplayPackReport> GpuNeutralDisplay::packReport() const noexcept {
+    return std::nullopt;
 }
 
 GpuNeutralDisplayPollResult GpuNeutralDisplay::poll() {

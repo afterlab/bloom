@@ -78,6 +78,12 @@ class GpuDisplayTransferResult final {
     [[nodiscard]] const ImageWindow& displayWindow() const noexcept { return displayWindow_; }
     [[nodiscard]] core::PixelAspectRatio pixelAspect() const noexcept { return pixelAspect_; }
     [[nodiscard]] std::uint32_t deviceGeneration() const noexcept { return generation_; }
+    // #733: the layout of the cells (the source image's) and what the pack that wrote the image
+    // reported: the frame counters. Empty report: the image was not a finished pack's.
+    [[nodiscard]] DisplayPixelLayout pixelLayout() const noexcept { return pixelLayout_; }
+    [[nodiscard]] const std::optional<GpuDisplayPackReport>& packReport() const noexcept {
+        return packReport_;
+    }
     [[nodiscard]] bool isBoundTo(GpuDevice& device) const noexcept;
     [[nodiscard]] std::span<const Rgba8> pixels() const noexcept { return pixels_.pixels(); }
     [[nodiscard]] PackedRgba8Ownership pixelOwnership() const noexcept {
@@ -93,10 +99,13 @@ class GpuDisplayTransferResult final {
     GpuDisplayTransferResult(ImageWindow dataWindow, ImageWindow displayWindow,
                              core::PixelAspectRatio pixelAspect, std::uint32_t generation,
                              PackedRgba8Storage pixels, GpuDisplayTransferAccounting accounting,
-                             std::weak_ptr<const void> deviceBinding) noexcept
+                             std::weak_ptr<const void> deviceBinding,
+                             DisplayPixelLayout pixelLayout,
+                             std::optional<GpuDisplayPackReport> packReport) noexcept
         : dataWindow_(dataWindow), displayWindow_(displayWindow), pixelAspect_(pixelAspect),
           generation_(generation), pixels_(std::move(pixels)), accounting_(accounting),
-          deviceBinding_(std::move(deviceBinding)) {}
+          deviceBinding_(std::move(deviceBinding)), pixelLayout_(pixelLayout),
+          packReport_(packReport) {}
 
     ImageWindow dataWindow_, displayWindow_;
     core::PixelAspectRatio pixelAspect_;
@@ -105,6 +114,8 @@ class GpuDisplayTransferResult final {
     GpuDisplayTransferAccounting accounting_;
     // Weak control-block identity only: host results never retain an allocator/device allocation.
     std::weak_ptr<const void> deviceBinding_;
+    DisplayPixelLayout pixelLayout_ = DisplayPixelLayout::Straight8888;
+    std::optional<GpuDisplayPackReport> packReport_;
 };
 
 class GpuDisplayTransfer final {

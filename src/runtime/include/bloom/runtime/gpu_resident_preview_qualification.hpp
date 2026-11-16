@@ -77,8 +77,8 @@ inline constexpr std::array<GpuResidentPreviewShaderPin, 5> kGpuResidentPreviewS
      "b92912217b61368c8b65cfda59620d9aad1a4fec5d6d9a31ce843982ee057650"},
     {"source_over.comp", "2aea19b4e3620e9e99f09f7f0e22f97822119ea798b44a1077179c4fc58194ee",
      "217423fab13d2fae83bc61f00ed37803cc23e7284df17bebee1a8cdf7e2e017f"},
-    {"neutral_display.comp", "fc0a97d36c42aafd3cfce56dcfdd7ff3c75d3ec7fd0e52a83c7f272c54feb3f9",
-     "63fa4699a9a6980312d34ad7c0c7f6ad5d20b7c249b0e050942a50baac367057"},
+    {"neutral_display.comp", "c8fd2155e25de742a8175322ab1727075304e7705013d17bc52ac7389c2544b0",
+     "c5a52b5b1446b37d19157faa8f1b0f187d8a6b82d139028b1a972377a9ffc6bf"},
 }};
 
 // The CPU primitive semantics version the resident operations reproduce, plus the covered-solid and

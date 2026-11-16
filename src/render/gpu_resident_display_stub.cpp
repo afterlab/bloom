@@ -26,6 +26,12 @@ core::PixelAspectRatio GpuDisplayImage::pixelAspect() const noexcept {
     return core::PixelAspectRatio::square();
 }
 std::uint32_t GpuDisplayImage::generation() const noexcept { return 0; }
+DisplayPixelLayout GpuDisplayImage::pixelLayout() const noexcept {
+    return DisplayPixelLayout::Straight8888;
+}
+std::optional<GpuDisplayPackReport> GpuDisplayImage::packReport() const noexcept {
+    return std::nullopt;
+}
 std::uint64_t GpuDisplayImage::allocationBytes() const noexcept { return 0; }
 bool GpuDisplayImage::isBoundTo(GpuDevice&) const noexcept { return false; }
 bool GpuDisplayImage::promoteStorageOwnership() const noexcept { return false; }
@@ -79,8 +85,12 @@ bool GpuResidentDisplay::isBoundTo(GpuDevice&) const noexcept { return false; }
 // Match the native owning-by-value public API even though this unavailable arm retains nothing.
 // NOLINTNEXTLINE(performance-unnecessary-value-param)
 GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const GpuImage>,
-                                                       std::uint64_t) {
+                                                       std::uint64_t,
+                                                       const GpuDisplayPackRequest&) {
     return diagnostic();
+}
+std::optional<GpuDisplayPackReport> GpuResidentDisplay::packReport() const noexcept {
+    return std::nullopt;
 }
 GpuResidentDisplayPollResult GpuResidentDisplay::poll() {
     return GpuResidentDisplayPollResult::Failure;

@@ -146,12 +146,12 @@ PreparedGpuOcioCommand::PreparedGpuOcioCommand(
     std::vector<std::uint32_t> spirvWords, core::Sha256Digest identity,
     core::Sha256Digest nativeProgramKey, std::string wrapperVersion,
     core::Sha256Digest wrapperSourceDigest, ViewAdjust viewAdjust,
-    const std::uint64_t retainedBytes) noexcept
+    const GpuOcioDisplayPacking displayPacking, const std::uint64_t retainedBytes) noexcept
     : program_(std::move(program)), artifact_(std::move(artifact)), encoding_(encoding),
       geometry_(geometry), spirvWords_(std::move(spirvWords)), identity_(identity),
       nativeProgramKey_(nativeProgramKey), wrapperVersion_(std::move(wrapperVersion)),
       wrapperSourceDigest_(wrapperSourceDigest), viewAdjust_(viewAdjust),
-      retainedBytes_(retainedBytes) {}
+      displayPacking_(displayPacking), retainedBytes_(retainedBytes) {}
 
 GpuOcioCommandResult PreparedGpuOcioCommand::prepare(render::OcioGpuProgramDesc program,
                                                      render::CompiledGpuShader artifact,
@@ -210,7 +210,8 @@ GpuOcioCommandResult PreparedGpuOcioCommand::prepare(render::OcioGpuProgramDesc 
     // viewAdjust). The preparer always compiles exactly this wrapper, so a stale artifact carrying
     // a different adjustment (or a tampered digest/version) is refused here, before any native
     // work.
-    const auto canonical = buildGpuOcioWrapperGlsl(program, binding.viewAdjust);
+    const auto canonical =
+        buildGpuOcioWrapperGlsl(program, binding.viewAdjust, binding.displayPacking);
     if (!canonical.succeeded()) {
         return failure(GpuOcioCommandError::WrapperSourceDigestMismatch);
     }
@@ -260,7 +261,7 @@ GpuOcioCommandResult PreparedGpuOcioCommand::prepare(render::OcioGpuProgramDesc 
     auto command = std::shared_ptr<const PreparedGpuOcioCommand>(new PreparedGpuOcioCommand(
         std::move(program), std::move(artifact), encoding, geometry, std::move(spirvWords),
         identity, nativeProgramKey, std::move(binding.wrapperVersion), binding.wrapperSourceDigest,
-        binding.viewAdjust, retainedBytes));
+        binding.viewAdjust, binding.displayPacking, retainedBytes));
     GpuOcioCommandResult result;
     result.command = std::move(command);
     return result;

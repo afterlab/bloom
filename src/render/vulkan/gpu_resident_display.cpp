@@ -2,6 +2,7 @@
 #include <bloom/render/gpu_resident_display.hpp>
 
 #include "gpu_image_private.hpp"
+#include "gpu_neutral_display_kernel.hpp"
 #include "gpu_pipeline_cache_private.hpp"
 #include "gpu_resident_display_private.hpp"
 #include "shaders/neutral_display_spirv.inc"
@@ -10,6 +11,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <new>
@@ -165,7 +167,7 @@ bool GpuResidentDisplay::Impl::createPipeline() {
     vk::PushConstantRange pushRange{};
     pushRange.stageFlags = vk::ShaderStageFlagBits::eCompute;
     pushRange.offset = 0;
-    pushRange.size = static_cast<std::uint32_t>(sizeof(std::uint32_t));
+    pushRange.size = static_cast<std::uint32_t>(sizeof(vulkan_detail::NeutralDisplayPush));
     const vk::DescriptorSetLayout setLayout = *descriptorSetLayout;
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.setLayoutCount = 1;
@@ -310,7 +312,8 @@ GpuResidentDisplay::create(GpuDevice& device, const GpuResidentDisplayBudgets& b
 }
 
 GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const GpuImage> input,
-                                                       const std::uint64_t byteBudget) {
+                                                       const std::uint64_t byteBudget,
+                                                       const GpuDisplayPackRequest& pack) {
     if (impl_ == nullptr) {
         return makeDiagnostic(GpuResidentDisplayDiagnosticCode::DeviceUnavailable,
                               "the resident display is not initialized");
@@ -346,7 +349,8 @@ GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const Gpu
     }
     const std::uint64_t inputBytes = static_cast<std::uint64_t>(width) * height * sizeof(Rgba32f);
     const std::uint64_t packedBytes = static_cast<std::uint64_t>(width) * height * sizeof(Rgba8);
-    const std::uint64_t required = inputBytes + packedBytes + sizeof(std::uint32_t) + packedBytes;
+    const std::uint64_t required =
+        inputBytes + packedBytes + kGpuDisplayPackStatusBytes + packedBytes;
     const std::uint64_t allowed =
         byteBudget < impl.budgets.maxOwnedBytes ? byteBudget : impl.budgets.maxOwnedBytes;
     if (required > allowed) {
@@ -360,7 +364,7 @@ GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const Gpu
                               "the device generation changed; this pipeline must not be reused");
     }
     const ResidentDisplaySupport support =
-        queryResidentDisplaySupport(*impl.control, width, height);
+        queryResidentDisplaySupport(*impl.control, width, height, pack.layout);
     if (!support.supported) {
         return makeDiagnostic(GpuResidentDisplayDiagnosticCode::Unsupported, support.reason);
     }
@@ -371,6 +375,7 @@ GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const Gpu
 
     impl.clearJob();
     impl.input = std::move(input);
+    impl.jobPack = pack;
     if (!createResidentDisplayBuffer(*impl.control, inputBytes,
                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -380,7 +385,7 @@ GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const Gpu
                                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                      0, false, impl.jobOutput) ||
         !createResidentDisplayBuffer(
-            *impl.control, sizeof(std::uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            *impl.control, kGpuDisplayPackStatusBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT, true,
             impl.jobStatus)) {
         impl.fail(GpuResidentDisplayDiagnosticCode::AllocationFailed,
@@ -393,6 +398,7 @@ GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const Gpu
     displayImpl->displayWindow = inputImpl->displayWindow;
     displayImpl->pixelAspect = inputImpl->pixelAspect;
     displayImpl->generation = impl.control->generation;
+    displayImpl->pixelLayout = pack.layout;
     if (!createDisplayImage(*impl.control, width, height, *displayImpl)) {
         impl.fail(GpuResidentDisplayDiagnosticCode::AllocationFailed,
                   "the resident display output image could not be allocated");
@@ -401,6 +407,7 @@ GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const Gpu
     GpuDisplayImageImpl* const displayRaw = displayImpl.get();
     impl.residentImage =
         std::make_unique<GpuDisplayImage>(makeGpuDisplayImage(std::move(displayImpl)));
+    impl.jobImage = displayRaw;
 
     const VkDevice rawDevice = static_cast<VkDevice>(*impl.control->device);
     const auto* dispatcher = impl.control->device.getDispatcher();
@@ -413,8 +420,8 @@ GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const Gpu
         return impl.jobDiagnostic;
     }
 
-    // The shader atomicOr-accumulates into the status word, so it MUST be zeroed by the host
-    // before the dispatch; otherwise recycled mapped memory is reported as a shader
+    // The shader accumulates into the status block with atomics, so it MUST be zeroed by the
+    // host before the dispatch; otherwise recycled mapped memory is reported as a shader
     // rejection. The hostToCompute barrier below already declares VK_ACCESS_HOST_WRITE_BIT
     // for exactly this write.
     if (impl.jobStatus.info.pMappedData == nullptr) {
@@ -422,9 +429,9 @@ GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const Gpu
                   "the resident display status buffer is not mapped");
         return impl.jobDiagnostic;
     }
-    *static_cast<std::uint32_t*>(impl.jobStatus.info.pMappedData) = 0U;
+    std::memset(impl.jobStatus.info.pMappedData, 0, kGpuDisplayPackStatusBytes);
     if (vmaFlushAllocation(impl.control->allocator, impl.jobStatus.allocation, 0,
-                           sizeof(std::uint32_t)) != VK_SUCCESS) {
+                           kGpuDisplayPackStatusBytes) != VK_SUCCESS) {
         impl.fail(GpuResidentDisplayDiagnosticCode::DeviceUnavailable,
                   "the resident display status buffer could not be flushed");
         return impl.jobDiagnostic;
@@ -497,7 +504,7 @@ GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const Gpu
     hostToCompute[1].buffer = impl.jobStatus.buffer;
     hostToCompute[1].srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
     hostToCompute[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    hostToCompute[1].size = sizeof(std::uint32_t);
+    hostToCompute[1].size = kGpuDisplayPackStatusBytes;
     dispatcher->vkCmdPipelineBarrier(
         rawCommandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_HOST_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
@@ -517,9 +524,9 @@ GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const Gpu
         return impl.jobDiagnostic;
     }
     const std::uint32_t pixelCount = static_cast<std::uint32_t>(pixelCount64);
+    const auto push = vulkan_detail::neutralDisplayPush(pixelCount, pack);
     impl.commandBuffer.pushConstants(*impl.pipelineLayout, vk::ShaderStageFlagBits::eCompute, 0,
-                                     static_cast<std::uint32_t>(sizeof(std::uint32_t)),
-                                     &pixelCount);
+                                     static_cast<std::uint32_t>(sizeof(push)), &push);
     const std::uint32_t groups = (pixelCount + kWorkgroupSizeX - 1U) / kWorkgroupSizeX;
     impl.commandBuffer.dispatch(groups, 1, 1);
 
@@ -641,22 +648,35 @@ GpuResidentDisplayPollResult GpuResidentDisplay::poll() {
         return GpuResidentDisplayPollResult::Failure;
     }
     if (vmaInvalidateAllocation(impl.control->allocator, impl.jobStatus.allocation, 0,
-                                sizeof(std::uint32_t)) != VK_SUCCESS) {
+                                kGpuDisplayPackStatusBytes) != VK_SUCCESS) {
         impl.fail(GpuResidentDisplayDiagnosticCode::DeviceUnavailable,
-                  "the status word could not be invalidated");
+                  "the status block could not be invalidated");
         return GpuResidentDisplayPollResult::Failure;
     }
-    const auto flags = *static_cast<const std::uint32_t*>(impl.jobStatus.info.pMappedData);
+    std::array<std::uint32_t, kGpuDisplayPackStatusWords> words{};
+    std::memcpy(words.data(), impl.jobStatus.info.pMappedData, kGpuDisplayPackStatusBytes);
+    const auto flags = words[kGpuDisplayPackStatusErrors];
     if (flags != 0U) {
         impl.fail(GpuResidentDisplayDiagnosticCode::ShaderRejected,
                   "the display shader rejected the frame (flags=" + std::to_string(flags) + ")");
         return GpuResidentDisplayPollResult::Failure;
     }
-    if (impl.residentImage == nullptr) {
+    if (impl.residentImage == nullptr || impl.jobImage == nullptr) {
         impl.fail(GpuResidentDisplayDiagnosticCode::DeviceUnavailable,
                   "the resident display output is missing");
         return GpuResidentDisplayPollResult::Failure;
     }
+    // #733: the status block also says whether the frame allows the layout it was packed in.
+    // Words packed as 10:10:10:2 from a frame that does not allow it are never handed on.
+    const auto report =
+        gpuDisplayPackReport(words, impl.jobPack.layout, impl.jobPack.luma.has_value());
+    impl.jobReport = report;
+    if (!report.wordsValid()) {
+        impl.fail(GpuResidentDisplayDiagnosticCode::LayoutRefused,
+                  "the frame holds a pixel that does not allow the 10:10:10:2 layout");
+        return GpuResidentDisplayPollResult::Failure;
+    }
+    impl.jobImage->packReport = report;
     impl.jobState = GpuResidentDisplayJobState::Ready;
     impl.jobDiagnostic = GpuResidentDisplayDiagnostic{};
     return GpuResidentDisplayPollResult::Ready;
@@ -674,6 +694,7 @@ bool GpuResidentDisplay::discardRetiredFailure(GpuDevice& device) noexcept {
         impl_->deviceLost || impl_->control->processingPhaseUnproven)
         return false;
     impl_->residentImage.reset();
+    impl_->jobImage = nullptr;
     static_cast<void>(retireFailedAttemptGpuImage(impl_->input, device));
     impl_->input.reset();
     destroyResidentBuffer(*impl_->control, impl_->jobInput);
@@ -695,6 +716,9 @@ GpuDisplayImage GpuResidentDisplay::takeImage() noexcept {
     impl_->residentImage.reset();
     impl_->clearJob();
     return taken;
+}
+std::optional<GpuDisplayPackReport> GpuResidentDisplay::packReport() const noexcept {
+    return impl_ != nullptr ? impl_->jobReport : std::nullopt;
 }
 GpuDisplayImageReadback GpuResidentDisplay::readback() noexcept {
     if (impl_ == nullptr || impl_->residentImage == nullptr) {

@@ -153,6 +153,17 @@ void appendF64(std::vector<std::byte>& bytes, const double value) {
     // limits do not change the artifact, so they are validated separately rather than keyed.
     appendU64(bytes, options.maxSourceBytes);
     appendU64(bytes, options.maxSpirvBytes);
+    // #733: appended only for a preview pack, so every earlier key keeps its exact bytes.
+    if (transform.displayPacking.preview()) {
+        appendText(bytes, "display-packing");
+        appendU64(bytes, static_cast<std::uint64_t>(transform.displayPacking.mode));
+        appendU64(bytes, transform.displayPacking.luma.has_value() ? 1U : 0U);
+        if (transform.displayPacking.luma.has_value()) {
+            appendF64(bytes, static_cast<double>(transform.displayPacking.luma->red));
+            appendF64(bytes, static_cast<double>(transform.displayPacking.luma->green));
+            appendF64(bytes, static_cast<double>(transform.displayPacking.luma->blue));
+        }
+    }
     const auto digest = core::Sha256Hasher::hash(bytes);
     return digest.has_value() ? *digest : core::Sha256Digest{};
 }
@@ -288,6 +299,11 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
         return failure(GpuOcioPreparationError::InvalidRequest,
                        "a non-neutral view adjustment is only valid for the display kinds");
     }
+    if (!transform.displayPacking.valid() ||
+        (transform.displayPacking.preview() && transform.kind != GpuOcioTransformKind::Display)) {
+        return failure(GpuOcioPreparationError::InvalidRequest,
+                       "a preview display packing is only valid for the Display kind");
+    }
     if (cancel && cancel()) {
         return failure(GpuOcioPreparationError::CompileCancelled, "cancelled before extraction");
     }
@@ -372,7 +388,8 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
     if (!program.has_value()) {
         return failure(GpuOcioPreparationError::ExtractionFailed, "the extracted program is empty");
     }
-    const auto wrapper = buildGpuOcioWrapperGlsl(*program, transform.viewAdjust);
+    const auto wrapper =
+        buildGpuOcioWrapperGlsl(*program, transform.viewAdjust, transform.displayPacking);
     if (!wrapper.succeeded()) {
         return failure(GpuOcioPreparationError::WrapperFailed,
                        std::string(gpuOcioWrapperErrorName(wrapper.error)));
@@ -430,7 +447,8 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
         std::move(*program), *compiled.artifact, geometry,
         GpuOcioCommandSourceBinding{.wrapperVersion = wrapper.samplingVersion,
                                     .wrapperSourceDigest = wrapper.sourceDigest,
-                                    .viewAdjust = transform.viewAdjust});
+                                    .viewAdjust = transform.viewAdjust,
+                                    .displayPacking = transform.displayPacking});
     if (!commandResult.hasValue()) {
         return failure(GpuOcioPreparationError::CommandInvalid,
                        std::string(gpuOcioCommandErrorName(commandResult.error)));

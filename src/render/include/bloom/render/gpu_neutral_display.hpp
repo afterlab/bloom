@@ -17,10 +17,12 @@
 // any thread. The destructor drains on the owner thread and never pretends a UI thread may run it.
 
 #include <bloom/render/gpu_device.hpp>
+#include <bloom/render/gpu_display_pack.hpp>
 #include <bloom/render/image_types.hpp>
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -52,6 +54,9 @@ enum class GpuNeutralDisplayDiagnosticCode : std::uint8_t {
     ShaderRejected,
     AllocationFailed,
     Cancelled,
+    // #733: the pack was asked for Rgb10A2 and the frame holds a pixel that does not allow it.
+    // Nothing is published; packReport() says so and the caller packs again as Straight8888.
+    LayoutRefused,
 };
 
 struct GpuNeutralDisplayDiagnostic final {
@@ -77,6 +82,9 @@ struct GpuNeutralDisplayBudgets final {
 struct GpuNeutralDisplayReadback final {
     std::vector<Rgba8> pixels;
     GpuNeutralDisplayDiagnostic diagnostic;
+    // #733: the layout of `pixels` and what the pack reported (the frame counters).
+    DisplayPixelLayout pixelLayout = DisplayPixelLayout::Straight8888;
+    std::optional<GpuDisplayPackReport> report = std::nullopt;
 
     [[nodiscard]] bool hasValue() const noexcept {
         return diagnostic.code == GpuNeutralDisplayDiagnosticCode::None;
@@ -119,8 +127,13 @@ class GpuNeutralDisplay final {
     // request and is clamped to the configured hard ceiling, so a generous allowance never rejects
     // an otherwise valid small job; the actual required and retained bytes still must fit the hard
     // ceiling.
+    // #733: `pack` names the layout to pack and the luma coefficients of the frame counters.
     [[nodiscard]] GpuNeutralDisplayDiagnostic begin(std::span<const Rgba32f> source,
-                                                    std::uint64_t byteBudget);
+                                                    std::uint64_t byteBudget,
+                                                    const GpuDisplayPackRequest& pack = {});
+    // What the last finished job reported: after Ready, and after a LayoutRefused failure. Empty
+    // otherwise, and once the frame was read back (the readback carries it then).
+    [[nodiscard]] std::optional<GpuDisplayPackReport> packReport() const noexcept;
 
     // Non-blocking VkGetFenceStatus. Only Pending/Ready/Failure; call again after Pending.
     [[nodiscard]] GpuNeutralDisplayPollResult poll();

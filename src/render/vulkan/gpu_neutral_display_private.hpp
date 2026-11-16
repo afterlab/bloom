@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -22,7 +23,7 @@ namespace bloom::render::neutral_display_detail {
 inline constexpr std::uint32_t kWorkgroupSizeX = 256;
 inline constexpr std::uint64_t kInputBytesPerPixel = 16;
 inline constexpr std::uint64_t kOutputBytesPerPixel = 4;
-inline constexpr std::uint64_t kStatusBytes = 4;
+inline constexpr std::uint64_t kStatusBytes = kGpuDisplayPackStatusBytes;
 inline constexpr std::uint64_t kDrainTimeoutNanoseconds = 2ULL * 1000ULL * 1000ULL * 1000ULL;
 // A budget larger than this is refused as InvalidArgument rather than trusted; no first-slice
 // device or frame needs it, and it keeps the retention arithmetic far from overflow.
@@ -86,6 +87,7 @@ struct GpuNeutralDisplay::Impl final {
         jobState = GpuNeutralDisplayJobState::Idle;
         jobPixelCount = 0;
         frameByteBudget = 0;
+        jobReport.reset();
         discardRequested.store(false);
         jobDiagnostic = GpuNeutralDisplayDiagnostic{};
         frame.clear();
@@ -139,6 +141,9 @@ struct GpuNeutralDisplay::Impl final {
     bool deviceLost = false;
     std::uint32_t jobPixelCount = 0;
     std::uint64_t frameByteBudget = 0;
+    // #733: what the job in flight was asked, and what the last finished one reported.
+    GpuDisplayPackRequest jobPack;
+    std::optional<GpuDisplayPackReport> jobReport;
     std::atomic<bool> discardRequested{false};
     GpuNeutralDisplayDiagnostic jobDiagnostic;
     std::vector<Rgba8> frame;

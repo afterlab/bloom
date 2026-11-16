@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -24,7 +25,10 @@
 namespace bloom::render::ocio_program_detail {
 
 inline constexpr std::uint32_t kWorkgroupSizeX = 64;
-inline constexpr std::uint64_t kStatusBytes = 4;
+// The status block is the display pack's (gpu_display_pack.hpp) for every program: word 0 is the
+// error word every stage writes, and a preview pack also writes the layout flag and the frame
+// counters after it.
+inline constexpr std::uint64_t kStatusBytes = kGpuDisplayPackStatusBytes;
 inline constexpr std::uint64_t kDrainTimeoutNanoseconds = 2ULL * 1000ULL * 1000ULL * 1000ULL;
 inline constexpr std::uint32_t kMaxQuarantines = 4;
 
@@ -153,7 +157,8 @@ struct GpuOcioProgram::Impl final {
     void fail(GpuOcioProgramDiagnosticCode code, std::string message);
     [[nodiscard]] GpuOcioProgramDiagnostic authorityDiagnostic() const;
     void beginImpl(bool display, std::shared_ptr<const GpuImage> input,
-                   std::span<const std::byte> uniformBytes, std::uint64_t byteBudget);
+                   std::span<const std::byte> uniformBytes, std::uint64_t byteBudget,
+                   const std::optional<GpuDisplayPackRequest>& pack = {});
     void releaseTransient();
     void clearJob();
     [[nodiscard]] bool createPipeline();
@@ -207,6 +212,11 @@ struct GpuOcioProgram::Impl final {
     ResidentBuffer packed;
     std::unique_ptr<GpuImage> effectOutput;
     std::unique_ptr<GpuDisplayImage> displayOutput;
+    // The impl of displayOutput while this job owns it (the pack report is written into it).
+    GpuDisplayImageImpl* jobDisplayImage = nullptr;
+    // #733: what the display job in flight was asked, and what the last finished one reported.
+    std::optional<GpuDisplayPackRequest> jobPack;
+    std::optional<GpuDisplayPackReport> jobReport;
     std::uint64_t retainedResourceBytes = 0;
 
     GpuOcioProgramJobState jobState = GpuOcioProgramJobState::Idle;

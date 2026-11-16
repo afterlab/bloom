@@ -49,10 +49,14 @@ GpuOcioProgramDiagnostic GpuOcioProgram::beginEffect(std::shared_ptr<const GpuIm
     image.reset();
     return unavailable();
 }
-GpuOcioProgramDiagnostic GpuOcioProgram::beginDisplay(std::shared_ptr<const GpuImage> image,
-                                                      std::span<const std::byte>, std::uint64_t) {
+GpuOcioProgramDiagnostic
+GpuOcioProgram::beginDisplay(std::shared_ptr<const GpuImage> image, std::span<const std::byte>,
+                             std::uint64_t, const std::optional<GpuDisplayPackRequest>&) {
     image.reset();
     return unavailable();
+}
+std::optional<GpuDisplayPackReport> GpuOcioProgram::displayPackReport() const noexcept {
+    return std::nullopt;
 }
 GpuOcioProgramPollResult GpuOcioProgram::poll() { return GpuOcioProgramPollResult::Failure; }
 std::shared_ptr<GpuImage> GpuOcioProgram::takeEffectOutput() noexcept { return {}; }

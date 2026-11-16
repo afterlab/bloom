@@ -225,13 +225,26 @@ struct GpuShaderProducts {
         "    uint words[];\n"
         "} bloom_output;\n"
         "\n"
-        "layout(std430, set = 0, binding = 2) buffer BloomNeutralV1Error {\n"
-        "    uint flags[];\n"
-        "} bloom_error;\n"
+        "// The status block, zeroed by the host: word 0 error bits (nonzero rejects the frame),\n"
+        "// word 1 nonzero when a pixel does not allow the 10:10:10:2 layout, words 2..5 pixels\n"
+        "// under 0 (red, green, blue, luma), words 6..9 pixels over 1, word 10 pixels whose\n"
+        "// signal is not finite, word 11 reserved.\n"
+        "layout(std430, set = 0, binding = 2) buffer BloomNeutralV1Status {\n"
+        "    uint words[];\n"
+        "} bloom_status;\n"
         "\n"
         "layout(push_constant) uniform BloomNeutralV1PushConstants {\n"
         "    uint pixelCount;\n"
+        "    uint pixelLayout; // 0: straight 8:8:8:8, 1: 10:10:10:2\n"
+        "    float lumaRed;\n"
+        "    float lumaGreen;\n"
+        "    float lumaBlue;\n"
+        "    uint lumaCounted;\n"
         "} bloom_push;\n"
+        "\n"
+        "// What each invocation of a workgroup found, summed by the group's first invocation so\n"
+        "// the status block takes one atomic per group and word, not one per pixel.\n"
+        "shared uint bloom_events[256];\n"
         "\n"
         "// Exact replica of the CPU straight-RGBA8 rule\n"
         "//   floor(clamp(value, 0, 1) * 255.0 + 0.5)\n"
@@ -257,14 +270,47 @@ struct GpuShaderProducts {
         "    uint roundBit = 1u << uint(shift - 1);\n"
         "    return quotient + ((remainder >= roundBit) ? 1u : 0u);\n"
         "}\n"
+        "\n"
+        "// The 10-bit pack rule, the scope code rule: floor(clamp(value, 0, 1) * 1023 + 0.5) in\n"
+        "// binary32, in the order written, with no contraction. A value that is not a number\n"
+        "// packs to 0.\n"
+        "uint bloom_neutral_v1_code10(float value)\n"
+        "{\n"
+        "    if (!(value > 0.0)) { return 0u; }\n"
+        "    if (!(value < 1.0)) { return 1023u; }\n"
+        "    precise float coded = value * 1023.0;\n"
+        "    precise float rounded = coded + 0.5;\n"
+        "    return uint(floor(rounded));\n"
+        "}\n"
+        "\n"
+        "// Where a signal value falls by that rule: 0 inside the axis, 1 under, 2 over.\n"
+        "uint bloom_neutral_v1_range(float value)\n"
+        "{\n"
+        "    precise float coded = value * 1023.0;\n"
+        "    precise float rounded = coded + 0.5;\n"
+        "    float whole = floor(rounded);\n"
+        "    if (!(whole >= 0.0)) { return 1u; }\n"
+        "    if (!(whole <= 1023.0)) { return 2u; }\n"
+        "    return 0u;\n"
+        "}\n"
+        "\n"
+        "bool bloom_neutral_v1_finite(float value)\n"
+        "{\n"
+        "    return (floatBitsToUint(value) & 0x7F800000u) != 0x7F800000u;\n"
+        "}\n"
         "\n";
 
+    const std::string errorReturn =
+        "    if (errors != 0u) {\n"
+        "        bloom_output.words[index] = 0u;\n"
+        "        return errors << 16u;\n"
+        "    }\n";
     const std::string body =
-        "\nvoid main()\n"
+        "\n// Packs one pixel and returns what it found: bit 0 the pixel does not allow the\n"
+        "// 10:10:10:2 layout, bits 1..4 under (red, green, blue, luma), bits 5..8 over, bit 9\n"
+        "// not finite, bits 16..19 the error bits.\n"
+        "uint bloom_neutral_v1_pixel(uint index)\n"
         "{\n"
-        "    uint index = gl_GlobalInvocationID.x;\n"
-        "    if (index >= bloom_push.pixelCount) { return; }\n"
-        "\n"
         "    vec4 premultiplied = bloom_input.pixels[index];\n"
         "    uint errors = 0u;\n"
         "    if (any(isnan(premultiplied)) || any(isinf(premultiplied))) {\n"
@@ -285,12 +331,8 @@ struct GpuShaderProducts {
         "        errors |= " +
         std::to_string(kErrorInputSubnormal) +
         "u;\n"
-        "    }\n"
-        "    if (errors != 0u) {\n"
-        "        atomicOr(bloom_error.flags[0], errors);\n"
-        "        bloom_output.words[index] = 0u;\n"
-        "        return;\n"
-        "    }\n"
+        "    }\n" +
+        errorReturn +
         "\n"
         "    float alpha = premultiplied.a;\n"
         "    vec3 straight = vec3(0.0);\n"
@@ -301,12 +343,8 @@ struct GpuShaderProducts {
         std::to_string(kErrorUnpremultiplyNonFinite) +
         "u;\n"
         "        }\n"
-        "    }\n"
-        "    if (errors != 0u) {\n"
-        "        atomicOr(bloom_error.flags[0], errors);\n"
-        "        bloom_output.words[index] = 0u;\n"
-        "        return;\n"
-        "    }\n"
+        "    }\n" +
+        errorReturn +
         "\n"
         "    // OCIO affects RGB only. The alpha lane fed to the transform is 1.0 and the "
         "transform's\n"
@@ -318,18 +356,91 @@ struct GpuShaderProducts {
         "        errors |= " +
         std::to_string(kErrorOutputNonFinite) +
         "u;\n"
-        "    }\n"
-        "    if (errors != 0u) {\n"
-        "        atomicOr(bloom_error.flags[0], errors);\n"
-        "        bloom_output.words[index] = 0u;\n"
-        "        return;\n"
+        "    }\n" +
+        errorReturn +
+        "\n"
+        "    // The frame counters: the display color over black, before any clamp.\n"
+        "    uint events = 0u;\n"
+        "    precise float signalRed = displayRgb.r * alpha;\n"
+        "    precise float signalGreen = displayRgb.g * alpha;\n"
+        "    precise float signalBlue = displayRgb.b * alpha;\n"
+        "    if (!bloom_neutral_v1_finite(signalRed) || !bloom_neutral_v1_finite(signalGreen) ||\n"
+        "        !bloom_neutral_v1_finite(signalBlue) || !bloom_neutral_v1_finite(alpha)) {\n"
+        "        events |= 1u << 9u;\n"
+        "    } else {\n"
+        "        uint rangeRed = bloom_neutral_v1_range(signalRed);\n"
+        "        uint rangeGreen = bloom_neutral_v1_range(signalGreen);\n"
+        "        uint rangeBlue = bloom_neutral_v1_range(signalBlue);\n"
+        "        if (rangeRed == 1u) { events |= 1u << 1u; }\n"
+        "        if (rangeGreen == 1u) { events |= 1u << 2u; }\n"
+        "        if (rangeBlue == 1u) { events |= 1u << 3u; }\n"
+        "        if (rangeRed == 2u) { events |= 1u << 5u; }\n"
+        "        if (rangeGreen == 2u) { events |= 1u << 6u; }\n"
+        "        if (rangeBlue == 2u) { events |= 1u << 7u; }\n"
+        "        if (bloom_push.lumaCounted != 0u) {\n"
+        "            precise float redPart = bloom_push.lumaRed * signalRed;\n"
+        "            precise float greenPart = bloom_push.lumaGreen * signalGreen;\n"
+        "            precise float redGreen = redPart + greenPart;\n"
+        "            precise float bluePart = bloom_push.lumaBlue * signalBlue;\n"
+        "            precise float luma = redGreen + bluePart;\n"
+        "            uint rangeLuma = bloom_neutral_v1_range(luma);\n"
+        "            if (rangeLuma == 1u) { events |= 1u << 4u; }\n"
+        "            if (rangeLuma == 2u) { events |= 1u << 8u; }\n"
+        "        }\n"
         "    }\n"
         "\n"
+        "    // A pixel allows the 10:10:10:2 layout when its alpha is exactly 0 or packs to the\n"
+        "    // 8-bit alpha 255.\n"
+        "    uint alphaByte = bloom_neutral_v1_quantize_byte(alpha);\n"
+        "    bool allowed = alpha == 0.0 || alphaByte == 255u;\n"
+        "    if (!allowed) { events |= 1u; }\n"
+        "    if (bloom_push.pixelLayout == 1u) {\n"
+        "        // A transparent pixel is the word 0. So is a pixel that is not allowed: the\n"
+        "        // frame is then refused and packed again as 8:8:8:8.\n"
+        "        uint word = 0u;\n"
+        "        if (allowed && alpha != 0.0) {\n"
+        "            word = bloom_neutral_v1_code10(displayRgb.r) |\n"
+        "                   (bloom_neutral_v1_code10(displayRgb.g) << 10u) |\n"
+        "                   (bloom_neutral_v1_code10(displayRgb.b) << 20u) | (3u << 30u);\n"
+        "        }\n"
+        "        bloom_output.words[index] = word;\n"
+        "        return events;\n"
+        "    }\n"
         "    uint red = bloom_neutral_v1_quantize_byte(displayRgb.r);\n"
         "    uint green = bloom_neutral_v1_quantize_byte(displayRgb.g);\n"
         "    uint blue = bloom_neutral_v1_quantize_byte(displayRgb.b);\n"
-        "    uint alphaByte = bloom_neutral_v1_quantize_byte(alpha);\n"
         "    bloom_output.words[index] = red | (green << 8) | (blue << 16) | (alphaByte << 24);\n"
+        "    return events;\n"
+        "}\n"
+        "\n"
+        "void main()\n"
+        "{\n"
+        "    uint index = gl_GlobalInvocationID.x;\n"
+        "    uint events = 0u;\n"
+        "    if (index < bloom_push.pixelCount) {\n"
+        "        events = bloom_neutral_v1_pixel(index);\n"
+        "    }\n"
+        "    bloom_events[gl_LocalInvocationIndex] = events;\n"
+        "    memoryBarrierShared();\n"
+        "    barrier();\n"
+        "    if (gl_LocalInvocationIndex != 0u) { return; }\n"
+        "\n"
+        "    uint errors = 0u;\n"
+        "    uint misfit = 0u;\n"
+        "    uint counts[9] = uint[9](0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u);\n"
+        "    for (uint member = 0u; member < 256u; ++member) {\n"
+        "        uint found = bloom_events[member];\n"
+        "        errors |= found >> 16u;\n"
+        "        misfit |= found & 1u;\n"
+        "        for (uint slot = 0u; slot < 9u; ++slot) {\n"
+        "            counts[slot] += (found >> (slot + 1u)) & 1u;\n"
+        "        }\n"
+        "    }\n"
+        "    if (errors != 0u) { atomicOr(bloom_status.words[0], errors); }\n"
+        "    if (misfit != 0u) { atomicOr(bloom_status.words[1], 1u); }\n"
+        "    for (uint slot = 0u; slot < 9u; ++slot) {\n"
+        "        if (counts[slot] != 0u) { atomicAdd(bloom_status.words[2u + slot], counts[slot]); }\n"
+        "    }\n"
         "}\n";
 
     return header + products.shaderText + "\n" + body;
@@ -344,7 +455,7 @@ struct GpuShaderProducts {
     out << "{\n";
     out << "  \"schema\": \"bloom.gpu.display-shader.manifest.v1\",\n";
     out << "  \"generator\": \"tools/gpu-shaders/neutral_display_generator\",\n";
-    out << "  \"generatorRevision\": 1,\n";
+    out << "  \"generatorRevision\": 2,\n";
     out << "  \"operation\": \"BloomNeutralV1Display\",\n";
     out << "  \"entrypoint\": \"" << kEntrypoint << "\",\n";
     out << "  \"ocioFunction\": \"" << kOcioFunctionName << "\",\n";
@@ -375,20 +486,28 @@ struct GpuShaderProducts {
            "\"element\": \"vec4\", \"role\": \"premultiplied-rgba32f-input\"},\n";
     out << "    {\"set\": 0, \"binding\": 1, \"kind\": \"storage-buffer\", \"access\": "
            "\"writeonly\", "
-           "\"element\": \"uint\", \"packing\": \"R|(G<<8)|(B<<16)|(A<<24)\", "
-           "\"role\": \"packed-rgba8-output\"},\n";
+           "\"element\": \"uint\", \"packing\": {\"straight-rgba8\": "
+           "\"R|(G<<8)|(B<<16)|(A<<24)\", \"preview-rgb10-a2\": "
+           "\"R|(G<<10)|(B<<20)|(3<<30), or 0 for a transparent pixel\"}, "
+           "\"role\": \"packed-display-output\"},\n";
     out << "    {\"set\": 0, \"binding\": 2, \"kind\": \"storage-buffer\", \"access\": "
            "\"readwrite\", "
-           "\"element\": \"uint\", \"role\": \"error-flag\", \"bits\": {\"inputNonFinite\": "
+           "\"element\": \"uint\", \"role\": \"status-block\", \"words\": 12, "
+           "\"layout\": {\"errors\": 0, \"refusesRgb10A2\": 1, \"under\": [2, 3, 4, 5], "
+           "\"over\": [6, 7, 8, 9], \"notFinite\": 10, \"reserved\": 11}, "
+           "\"bits\": {\"inputNonFinite\": "
         << kErrorInputNonFinite << ", \"inputSubnormal\": " << kErrorInputSubnormal
         << ", \"unpremultiplyNonFinite\": " << kErrorUnpremultiplyNonFinite
         << ", \"outputNonFinite\": " << kErrorOutputNonFinite << "}}\n";
     out << "  ],\n";
-    out << "  \"pushConstant\": {\"name\": \"pixelCount\", \"type\": \"uint32\"},\n";
+    out << "  \"pushConstant\": {\"byteCount\": 24, \"fields\": [\"uint32 pixelCount\", "
+           "\"uint32 pixelLayout\", \"float lumaRed\", \"float lumaGreen\", \"float "
+           "lumaBlue\", \"uint32 lumaCounted\"]},\n";
     out << "  \"contracts\": {\n";
     out << "    \"rgbToleranceCodes\": 1,\n";
     out << "    \"rgbToleranceNote\": \"OCIO GPU vs CPU float rounding may differ by at most one "
-           "8-bit code per channel; alpha is exact\",\n";
+           "code per channel in either layout (one 8-bit code, one 10-bit code); alpha is "
+           "exact\",\n";
     out << "    \"alphaToleranceCodes\": 0,\n";
     out << "    \"alphaRule\": "
            "\"floor(clamp(alpha,0,1)*255+0.5) with the exact binary64 value of the binary32 "
@@ -397,7 +516,15 @@ struct GpuShaderProducts {
     out << "    \"alphaPreserved\": true,\n";
     out << "    \"ocioChannels\": \"rgb\",\n";
     out << "    \"nonFinitePolicy\": \"atomicOr an error bit and write a zero placeholder; the "
-           "consumer must not publish a frame while flags[0] is nonzero\",\n";
+           "consumer must not publish a frame while status word 0 is nonzero\",\n";
+    out << "    \"layoutRule\": \"a frame is 10:10:10:2 only when every pixel has alpha exactly 0 "
+           "or the 8-bit alpha 255; status word 1 is nonzero otherwise and a 10:10:10:2 pack of "
+           "such a frame must not be published\",\n";
+    out << "    \"code10Rule\": \"floor(clamp(value,0,1)*1023+0.5) in binary32, in the order "
+           "written, no contraction\",\n";
+    out << "    \"counters\": \"display color times alpha, before any clamp: under and over by "
+           "the 10-bit code rule per channel and for luma (when coefficients are pushed), and "
+           "pixels whose signal is not finite; gathered per workgroup, one atomic per word\",\n";
     out << "    \"subnormalPolicy\": \"any nonzero subnormal input lane sets the whole frame's "
            "error flag; the GPU path rejects the frame and a CPU fallback is the intended route "
            "until denormal preservation is qualified\"\n";

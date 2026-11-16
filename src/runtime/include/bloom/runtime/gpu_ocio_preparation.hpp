@@ -17,6 +17,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/runtime/gpu_ocio_command.hpp>
+#include <bloom/runtime/gpu_ocio_display_packing.hpp>
 
 #include <array>
 #include <chrono>
@@ -134,6 +135,11 @@ struct GpuOcioTransformSpec final {
     // Neutral for every other kind; a non-neutral adjustment on a non-display kind is refused. Both
     // fields are folded into the preparer warm key.
     ViewAdjust viewAdjust{};
+    // #733, Display only: how the display program packs. The default is the long-standing RGBA8
+    // pack; a preview pack names the layout and the display's luma coefficients for the frame
+    // counters. Folded into the preparer warm key when it is not the default, so every earlier
+    // key keeps its bytes.
+    GpuOcioDisplayPacking displayPacking{};
 };
 
 // Explicitly injected compiler configuration. `glslangValidatorPath` and `spirvValPath` must be

@@ -14,6 +14,7 @@
 #include <bloom/core/sha256.hpp>
 #include <bloom/render/gpu_shader_artifact.hpp>
 #include <bloom/render/ocio_gpu_program.hpp>
+#include <bloom/runtime/gpu_ocio_display_packing.hpp>
 #include <bloom/runtime/view_adjust.hpp>
 
 #include <cstddef>
@@ -109,6 +110,9 @@ struct GpuOcioCommandSourceBinding final {
     std::string wrapperVersion;
     core::Sha256Digest wrapperSourceDigest{};
     ViewAdjust viewAdjust{};
+    // #733: how a DisplayPacking program packs. It changes the wrapper's text, so the wrapper
+    // source digest (and with it the command identity) already tells the packings apart.
+    GpuOcioDisplayPacking displayPacking{};
 };
 
 class PreparedGpuOcioCommand;
@@ -154,6 +158,13 @@ class PreparedGpuOcioCommand final {
     // The exact display post-process adjustment bound into this command; neutral for ProcessEffect.
     [[nodiscard]] const ViewAdjust& viewAdjust() const& noexcept { return viewAdjust_; }
     [[nodiscard]] const ViewAdjust& viewAdjust() const&& = delete;
+    // #733: how this DisplayRgba8 command packs; the default (the long-standing RGBA8 pack) for
+    // every other command. The DisplayRgba8 encoding names the four-byte packed display output
+    // of either layout.
+    [[nodiscard]] const GpuOcioDisplayPacking& displayPacking() const& noexcept {
+        return displayPacking_;
+    }
+    [[nodiscard]] const GpuOcioDisplayPacking& displayPacking() const&& = delete;
     [[nodiscard]] std::span<const std::uint32_t> spirvWords() const& noexcept {
         return spirvWords_;
     }
@@ -170,6 +181,7 @@ class PreparedGpuOcioCommand final {
                            std::vector<std::uint32_t> spirvWords, core::Sha256Digest identity,
                            core::Sha256Digest nativeProgramKey, std::string wrapperVersion,
                            core::Sha256Digest wrapperSourceDigest, ViewAdjust viewAdjust,
+                           GpuOcioDisplayPacking displayPacking,
                            std::uint64_t retainedBytes) noexcept;
 
     render::OcioGpuProgramDesc program_;
@@ -182,6 +194,7 @@ class PreparedGpuOcioCommand final {
     std::string wrapperVersion_;
     core::Sha256Digest wrapperSourceDigest_{};
     ViewAdjust viewAdjust_{};
+    GpuOcioDisplayPacking displayPacking_{};
     std::uint64_t retainedBytes_ = 0;
 };
 

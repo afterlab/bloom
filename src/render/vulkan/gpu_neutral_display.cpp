@@ -1,4 +1,6 @@
 #include "gpu_neutral_display_private.hpp"
+
+#include "gpu_neutral_display_kernel.hpp"
 #include <bloom/core/telemetry_counters.hpp>
 
 #include <array>
@@ -143,7 +145,8 @@ const GpuNeutralDisplayDiagnostic& GpuNeutralDisplay::diagnostic() const noexcep
 }
 
 GpuNeutralDisplayDiagnostic GpuNeutralDisplay::begin(const std::span<const Rgba32f> source,
-                                                     const std::uint64_t byteBudget) {
+                                                     const std::uint64_t byteBudget,
+                                                     const GpuDisplayPackRequest& pack) {
     if (impl_ == nullptr) {
         return makeDiagnostic(GpuNeutralDisplayDiagnosticCode::DeviceUnavailable,
                               "the neutral display pipeline is not initialized");
@@ -214,6 +217,7 @@ GpuNeutralDisplayDiagnostic GpuNeutralDisplay::begin(const std::span<const Rgba3
         return impl.jobDiagnostic;
     }
     impl.jobPixelCount = pixelCount;
+    impl.jobPack = pack;
     impl.frameByteBudget = effectiveBudget;
 
     const VkDevice rawDevice = static_cast<VkDevice>(*impl.state->device);
@@ -283,10 +287,9 @@ GpuNeutralDisplayDiagnostic GpuNeutralDisplay::begin(const std::span<const Rgba3
                                        hostToCompute, {});
     impl.commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *impl.pipelineLayout, 0,
                                           {*impl.descriptorSet}, {});
-    const std::uint32_t pushPixelCount = pixelCount;
+    const auto push = vulkan_detail::neutralDisplayPush(pixelCount, pack);
     impl.commandBuffer.pushConstants(*impl.pipelineLayout, vk::ShaderStageFlagBits::eCompute, 0,
-                                     static_cast<std::uint32_t>(sizeof(std::uint32_t)),
-                                     &pushPixelCount);
+                                     static_cast<std::uint32_t>(sizeof(push)), &push);
     impl.commandBuffer.dispatch(groupCount, 1, 1);
 
     std::array<vk::BufferMemoryBarrier, 2> computeToHost{};
@@ -406,10 +409,22 @@ GpuNeutralDisplayPollResult GpuNeutralDisplay::poll() {
                   "the readback buffers could not be invalidated; no frame is published");
         return GpuNeutralDisplayPollResult::Failure;
     }
-    const auto flags = *static_cast<const std::uint32_t*>(impl.status.info.pMappedData);
+    std::array<std::uint32_t, kGpuDisplayPackStatusWords> words{};
+    std::memcpy(words.data(), impl.status.info.pMappedData, kGpuDisplayPackStatusBytes);
+    const auto flags = words[kGpuDisplayPackStatusErrors];
     if (flags != 0U) {
         impl.fail(GpuNeutralDisplayDiagnosticCode::ShaderRejected,
                   neutral_display_detail::errorFlagMessage(flags));
+        return GpuNeutralDisplayPollResult::Failure;
+    }
+    // #733: the status block also says whether the frame allows the layout it was packed in.
+    // Words packed as 10:10:10:2 from a frame that does not allow it are never handed on.
+    const auto report =
+        gpuDisplayPackReport(words, impl.jobPack.layout, impl.jobPack.luma.has_value());
+    impl.jobReport = report;
+    if (!report.wordsValid()) {
+        impl.fail(GpuNeutralDisplayDiagnosticCode::LayoutRefused,
+                  "the frame holds a pixel that does not allow the 10:10:10:2 layout");
         return GpuNeutralDisplayPollResult::Failure;
     }
     impl.jobState = GpuNeutralDisplayJobState::Ready;
@@ -443,18 +458,21 @@ GpuNeutralDisplayReadback GpuNeutralDisplay::readback() {
                   "the host readback buffer could not be allocated");
         return {std::vector<Rgba8>{}, impl.jobDiagnostic};
     }
+    // The cells are the words' bytes in either layout.
     for (std::uint32_t index = 0; index < impl.jobPixelCount; ++index) {
-        const std::uint32_t word = words[index];
-        impl.frame[index] = Rgba8{static_cast<std::uint8_t>(word & 0xFFU),
-                                  static_cast<std::uint8_t>((word >> 8U) & 0xFFU),
-                                  static_cast<std::uint8_t>((word >> 16U) & 0xFFU),
-                                  static_cast<std::uint8_t>((word >> 24U) & 0xFFU)};
+        impl.frame[index] = displayCell(words[index]);
     }
     GpuNeutralDisplayReadback result;
     result.pixels = std::move(impl.frame);
     result.diagnostic = GpuNeutralDisplayDiagnostic{};
+    result.pixelLayout = impl.jobPack.layout;
+    result.report = impl.jobReport;
     impl.clearJob();
     return result;
+}
+
+std::optional<GpuDisplayPackReport> GpuNeutralDisplay::packReport() const noexcept {
+    return impl_ != nullptr ? impl_->jobReport : std::nullopt;
 }
 
 void GpuNeutralDisplay::cancel() noexcept {

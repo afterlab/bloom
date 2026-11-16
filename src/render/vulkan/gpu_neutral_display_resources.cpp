@@ -2,6 +2,7 @@
 // v1 display compute operation. Kept separate from the dispatch/poll translation unit so each stays
 // within the repository's source-size budget; both share Impl through the private header.
 
+#include "gpu_neutral_display_kernel.hpp"
 #include "gpu_neutral_display_private.hpp"
 #include "gpu_pipeline_cache_private.hpp"
 #include "shaders/neutral_display_spirv.inc"
@@ -164,7 +165,7 @@ bool GpuNeutralDisplay::Impl::createPipeline() noexcept {
     vk::PushConstantRange pushRange{};
     pushRange.stageFlags = vk::ShaderStageFlagBits::eCompute;
     pushRange.offset = 0;
-    pushRange.size = static_cast<std::uint32_t>(sizeof(std::uint32_t));
+    pushRange.size = static_cast<std::uint32_t>(sizeof(vulkan_detail::NeutralDisplayPush));
     const vk::DescriptorSetLayout setLayout = *descriptorSetLayout;
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.setLayoutCount = 1;

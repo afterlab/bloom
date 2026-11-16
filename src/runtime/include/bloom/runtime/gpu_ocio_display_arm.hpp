@@ -94,6 +94,10 @@ enum class GpuOcioDisplayArmDiagnosticCode : std::uint8_t {
     Cancelled,
     NativeTimeout,
     InternalInvariant,
+    // #733: the command packs 10:10:10:2 and the frame holds a pixel that does not allow it.
+    // Nothing is published; packReport() says so and the caller displays the frame with the
+    // Straight8888 command.
+    LayoutRefused,
 };
 
 struct GpuOcioDisplayArmDiagnostic final {
@@ -145,6 +149,9 @@ class GpuOcioDisplayArm final {
 
     // Valid only after a Ready job; moves the resident RGBA8 display image out. Nullopt otherwise.
     [[nodiscard]] std::optional<render::GpuDisplayImage> takeDisplayImage() noexcept;
+    // #733: what the last finished job of a preview display command reported: after Ready, and
+    // after a failure whose executor diagnostic is LayoutRefused. Empty for every other job.
+    [[nodiscard]] std::optional<render::GpuDisplayPackReport> packReport() const noexcept;
 
     void cancel() noexcept;
 
@@ -206,6 +213,9 @@ class GpuOcioDisplayQualificationReport;
 // native RGBA8 output to the independent CPU OCIO display oracle `cpuOracle` (the qualified CPU
 // display processor built for the SAME display/view the command was extracted for). Owner thread
 // only. The readback here exists ONLY to prove parity; the production route never calls it.
+// #733: a preview command (GpuOcioDisplayPacking) is qualified in its own layout against the CPU
+// packer of that layout, one code of the layout's scale with alpha exact, and must report the
+// layout flag its frame has; a 10:10:10:2 command is given a frame that layout can hold.
 [[nodiscard]] GpuOcioDisplayQualificationReport
 qualifyGpuOcioDisplay(std::shared_ptr<const PreparedGpuOcioCommand> command,
                       const color::PreparedCpuDisplayProcessorHandle& cpuOracle,

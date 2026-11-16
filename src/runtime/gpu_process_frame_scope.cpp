@@ -55,6 +55,7 @@ using namespace std::chrono_literals;
     case Code::None:
     case Code::DispatchRefused:
     case Code::InternalInvariant:
+    case Code::LayoutRefused: // #733: preview display commands only; the scope steps run none
         break;
     }
     return fault(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::InternalInvariant,

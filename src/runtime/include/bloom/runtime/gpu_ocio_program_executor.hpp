@@ -52,6 +52,10 @@ enum class GpuOcioExecutorDiagnosticCode : std::uint8_t {
     Cancelled,
     NativeTimeout,
     InternalInvariant,
+    // #733: a preview display command asked for 10:10:10:2 and the frame holds a pixel that does
+    // not allow it. Nothing is published; displayPackReport() says so and the caller runs the
+    // frame through the Straight8888 command.
+    LayoutRefused,
 };
 
 struct GpuOcioExecutorDiagnostic final {
@@ -145,6 +149,10 @@ class GpuOcioProgramExecutor final {
     // Valid only after a Ready DisplayRgba8 job; moves the resident RGBA8 output out. Nullopt for
     // any other state. (GpuDisplayImage is not default-constructible outside src/render.)
     [[nodiscard]] std::optional<render::GpuDisplayImage> takeDisplayOutput() noexcept;
+    // #733: what the last finished preview display job reported (the layout flag and the frame
+    // counters): after Ready, and after a LayoutRefused failure. Empty for every other job. The
+    // taken image carries the same report.
+    [[nodiscard]] std::optional<render::GpuDisplayPackReport> displayPackReport() const noexcept;
 
     // Requests cancellation. Resources are retained until the native submission retires; no output
     // is published after this call.

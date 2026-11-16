@@ -6,6 +6,8 @@
 
 #include <bloom/color/display_processor_identity.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
+#include <bloom/render/display_pack_parity.hpp>
+#include <bloom/render/gpu_display_pack.hpp>
 
 #include <algorithm>
 #include <array>
@@ -105,13 +107,16 @@ enum class NativeOutcome { Ok, Failed, Cancelled, Timeout };
 [[nodiscard]] NativeOutcome
 runNative(GpuNeutralDisplay& pipeline, const std::span<const Rgba32f> source,
           const CancellationPredicateRef isCancelled, std::vector<Rgba8>& outPixels,
-          GpuNeutralDisplayDiagnosticCode& outCode, std::string& reason) {
+          GpuNeutralDisplayDiagnosticCode& outCode, std::string& reason,
+          const render::GpuDisplayPackRequest* const pack = nullptr,
+          std::optional<render::GpuDisplayPackReport>* const outReport = nullptr) {
     if (isCancelled()) {
         reason = "the native dispatch was cancelled before begin";
         outCode = GpuNeutralDisplayDiagnosticCode::Cancelled;
         return NativeOutcome::Cancelled;
     }
-    const auto begin = pipeline.begin(source, kGpuByteBudget);
+    const auto begin = pack != nullptr ? pipeline.begin(source, kGpuByteBudget, *pack)
+                                       : pipeline.begin(source, kGpuByteBudget);
     if (begin.code != GpuNeutralDisplayDiagnosticCode::None) {
         outCode = begin.code;
         reason = "native begin failed: " + begin.message;
@@ -160,6 +165,9 @@ runNative(GpuNeutralDisplay& pipeline, const std::span<const Rgba32f> source,
             reason = "the native dispatch was cancelled before publication";
             return NativeOutcome::Cancelled;
         }
+        if (outReport != nullptr) {
+            *outReport = readback.report;
+        }
         outPixels = std::move(readback.pixels);
         return NativeOutcome::Ok;
     }
@@ -188,6 +196,84 @@ runNative(GpuNeutralDisplay& pipeline, const std::span<const Rgba32f> source,
         }
     }
     return true;
+}
+
+// #733: the kernel's preview packs against the CPU packer, on the shared pack frame
+// (render/display_pack_parity.hpp). A frame the layout rule allows packs as 10:10:10:2 within one
+// code of 1023 with alpha exact. A frame with a soft pixel refuses that pack, so nothing is
+// published. The 8:8:8:8 preview pack of either frame is within one code of 255 and says whether
+// the frame would have fit. Every published pack's counters equal the CPU's.
+[[nodiscard]] GpuNeutralDisplayQualificationDiagnosticCode
+verifyPreviewPack(GpuNeutralDisplay& pipeline, const PreparedCpuDisplayProcessorHandle& processor,
+                  const CancellationPredicateRef isCancelled, const bool soft,
+                  std::string& reason) {
+    using Code = GpuNeutralDisplayQualificationDiagnosticCode;
+    const auto pixels = render::makeDisplayPackParityPixels(
+        std::size_t{render::kDisplayPackParityWidth} * render::kDisplayPackParityHeight, soft);
+    const auto image =
+        makeImage(pixels, render::kDisplayPackParityWidth, render::kDisplayPackParityHeight);
+    if (!image.has_value()) {
+        return Code::CpuOracleFailure;
+    }
+    const auto view = image->view();
+    if (!view) {
+        return Code::CpuOracleFailure;
+    }
+    const auto nativeFailure = [](const NativeOutcome outcome) {
+        if (outcome == NativeOutcome::Cancelled) {
+            return Code::Cancelled;
+        }
+        return outcome == NativeOutcome::Timeout ? Code::NativeTimeout : Code::NativeFailure;
+    };
+    for (const auto layout :
+         {render::DisplayPixelLayout::Rgb10A2, render::DisplayPixelLayout::Straight8888}) {
+        const bool tenBit = layout == render::DisplayPixelLayout::Rgb10A2;
+        const auto cpu = color::produceBloomNeutralDisplayFrame(
+            processor, *view.value(), kGpuNeutralDisplayCpuChunkPixelCount,
+            std::numeric_limits<std::size_t>::max(), isCancelled,
+            color::DisplayFramePacking{.allowRgb10A2 = tenBit,
+                                       .luma = render::kDisplayPackParityLuma});
+        if (!cpu) {
+            return isCancelled() ? Code::Cancelled : Code::CpuOracleFailure;
+        }
+        const render::GpuDisplayPackRequest pack{.layout = layout,
+                                                 .luma = render::kDisplayPackParityLuma};
+        std::vector<Rgba8> nativePixels;
+        std::optional<render::GpuDisplayPackReport> packReport;
+        GpuNeutralDisplayDiagnosticCode code = GpuNeutralDisplayDiagnosticCode::None;
+        const auto outcome = runNative(pipeline, pixels, isCancelled, nativePixels, code, reason,
+                                       &pack, &packReport);
+        if (tenBit && soft) {
+            // The frame holds a pixel 10:10:10:2 cannot hold: the refusal is the only right answer.
+            if (outcome == NativeOutcome::Ok) {
+                reason = "a 10:10:10:2 pack of a frame with a soft pixel was published";
+                return Code::ParityFailure;
+            }
+            if (outcome != NativeOutcome::Failed ||
+                code != GpuNeutralDisplayDiagnosticCode::LayoutRefused) {
+                return nativeFailure(outcome);
+            }
+            if (cpu.value()->pixelLayout() != render::DisplayPixelLayout::Straight8888) {
+                return Code::CpuOracleFailure;
+            }
+            continue;
+        }
+        if (outcome != NativeOutcome::Ok) {
+            return nativeFailure(outcome);
+        }
+        if (cpu.value()->pixelLayout() != layout) {
+            return Code::CpuOracleFailure;
+        }
+        if (!packReport.has_value() || packReport->layout != layout ||
+            packReport->allowsRgb10A2 == soft ||
+            !(packReport->counters == cpu.value()->counters()) ||
+            !render::displayCellsWithin(layout, nativePixels, cpu.value()->pixels(),
+                                        kGpuNeutralDisplayRgbToleranceCodes)) {
+            reason = "a preview pack differs from the CPU packer";
+            return Code::ParityFailure;
+        }
+    }
+    return Code::None;
 }
 
 // Timing outcome of one pair, so the caller preserves Cancel/Timeout as their own report codes.
@@ -496,6 +582,14 @@ qualifyGpuNeutralDisplay(const PreparedCpuDisplayProcessorHandle& processor, Gpu
             }
             if (!parityHolds(nativePixels, cpuResult.value()->pixels(), reason)) {
                 return fail(GpuNeutralDisplayQualificationDiagnosticCode::ParityFailure);
+            }
+        }
+
+        // #733: the preview packs, on a frame the layout rule allows and on one it does not.
+        for (const bool soft : {false, true}) {
+            const auto packCode = verifyPreviewPack(pipeline, processor, isCancelled, soft, reason);
+            if (packCode != GpuNeutralDisplayQualificationDiagnosticCode::None) {
+                return fail(packCode);
             }
         }
 

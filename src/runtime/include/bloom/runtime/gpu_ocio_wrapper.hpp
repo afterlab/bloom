@@ -19,6 +19,7 @@
 
 #include <bloom/core/sha256.hpp>
 #include <bloom/render/ocio_gpu_program.hpp>
+#include <bloom/runtime/gpu_ocio_display_packing.hpp>
 #include <bloom/runtime/view_adjust.hpp>
 
 #include <cstdint>
@@ -51,6 +52,9 @@ enum class GpuOcioWrapperError : std::uint8_t {
     InvalidViewAdjust,
     // A non-neutral ViewAdjust was supplied for the ProcessEffect arm, which has no display stage.
     UnsupportedViewAdjust,
+    // #733: a preview pack was asked of a stage that packs nothing, luma coefficients were given
+    // to the long-standing pack, or a coefficient is not finite.
+    InvalidDisplayPacking,
 };
 
 [[nodiscard]] std::string_view gpuOcioWrapperErrorName(GpuOcioWrapperError error) noexcept;
@@ -96,9 +100,15 @@ struct GpuOcioWrapperResult final {
 //    `ceil(pixelCount / workGroupSizeX)` from exceeding maxComputeWorkGroupCount[0] for images
 //    above ~4.19M pixels;
 //  * non-finite straight input, OCIO output, or premultiplied process output raises the status word
-//    and writes no pixel, so the native consumer fails the frame before publication.
+//    and writes no pixel, so the native consumer fails the frame before publication;
+//  * #733: with a preview `packing`, DisplayPacking packs the layout the mode names (10-bit codes
+//    by floor(clamp(v, 0, 1) * 1023 + 0.5) in binary32, a transparent pixel the word 0) and
+//    writes the display pack's status block: the error word, whether a pixel refuses 10:10:10:2,
+//    and the frame counters, counted from the display result before the Viewer's adjustment and
+//    before any clamp. A workgroup gathers its pixels' findings and takes one atomic per word.
+//    The default packing emits the long-standing text, byte for byte.
 [[nodiscard]] GpuOcioWrapperResult
-buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& program,
-                        ViewAdjust viewAdjust = {}) noexcept;
+buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& program, ViewAdjust viewAdjust = {},
+                        const GpuOcioDisplayPacking& packing = {}) noexcept;
 
 } // namespace bloom::runtime

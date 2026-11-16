@@ -3,9 +3,11 @@
 #include <bloom/color/ocio_gpu_program.hpp>
 
 #include <charconv>
+#include <cmath>
 #include <span>
 #include <sstream>
 #include <string>
+#include <utility>
 
 namespace bloom::runtime {
 namespace {
@@ -57,6 +59,23 @@ uint bloom_ocio_quantize(float value)
     return result;
 }
 
+// The finished wrapper of a source text. May throw on allocation; the caller is noexcept.
+[[nodiscard]] GpuOcioWrapperResult finish(std::string source) {
+    GpuOcioWrapperResult result;
+    result.source = std::move(source);
+    result.entryPoint = std::string(kGpuOcioWrapperEntryPoint);
+    result.samplingVersion = std::string(color::kOcioGpuPreciseSamplingVersion);
+    result.wrapperVersion = std::string(kGpuOcioWrapperVersion);
+    const auto digest = core::Sha256Hasher::hash(
+        std::as_bytes(std::span<const char>(result.source.data(), result.source.size())));
+    if (!digest.has_value()) {
+        return failure(GpuOcioWrapperError::AllocationFailure);
+    }
+    result.sourceDigest = *digest;
+    result.error = GpuOcioWrapperError::None;
+    return result;
+}
+
 } // namespace
 
 std::string_view gpuOcioWrapperErrorName(const GpuOcioWrapperError error) noexcept {
@@ -77,6 +96,8 @@ std::string_view gpuOcioWrapperErrorName(const GpuOcioWrapperError error) noexce
         return "invalid-view-adjust";
     case GpuOcioWrapperError::UnsupportedViewAdjust:
         return "unsupported-view-adjust";
+    case GpuOcioWrapperError::InvalidDisplayPacking:
+        return "invalid-display-packing";
     }
     return "unknown";
 }
@@ -85,6 +106,7 @@ std::string_view gpuOcioWrapperErrorName(const GpuOcioWrapperError error) noexce
 // exposure/gamma from view_adjust.cpp): exposure acts on the decoded linear display light, gamma
 // acts on the re-encoded value, and the result is clamped before the byte quantizer. The CPU
 // reference is unchanged; the shader evaluates it in binary32 against the OCIO display output.
+namespace {
 [[nodiscard]] std::string viewAdjustGlsl(const ViewAdjust& adjust) {
     const auto literal = [](const double value) {
         char buffer[40];
@@ -115,8 +137,155 @@ std::string_view gpuOcioWrapperErrorName(const GpuOcioWrapperError error) noexce
     return glsl;
 }
 
+// #733: the preview packs. The shortest decimal that gives the binary32 value back, so the shader
+// constant is the coefficient itself.
+[[nodiscard]] std::string floatLiteral(const float value) {
+    char buffer[40];
+    const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value,
+                                      std::chars_format::scientific);
+    return std::string(buffer, static_cast<std::size_t>(result.ptr - buffer));
+}
+
+// The 10-bit code rule and the counter helpers: binary32, in the order written, `precise` (no
+// contraction), the same statements as the Bloom Neutral v1 display kernel.
+constexpr std::string_view kPreviewPackGlsl = R"(
+shared uint bloom_ocio_events[64];
+uint bloom_ocio_code10(float value)
+{
+    if (!(value > 0.0)) { return 0u; }
+    if (!(value < 1.0)) { return 1023u; }
+    precise float coded = value * 1023.0;
+    precise float rounded = coded + 0.5;
+    return uint(floor(rounded));
+}
+uint bloom_ocio_range(float value)
+{
+    precise float coded = value * 1023.0;
+    precise float rounded = coded + 0.5;
+    float whole = floor(rounded);
+    if (!(whole >= 0.0)) { return 1u; }
+    if (!(whole <= 1023.0)) { return 2u; }
+    return 0u;
+}
+bool bloom_ocio_finite(float value)
+{
+    return (floatBitsToUint(value) & 0x7F800000u) != 0x7F800000u;
+}
+)";
+
+// One pixel of a preview pack and the workgroup's gathering main(). The pixel function returns
+// what it found: bit 0 the pixel refuses 10:10:10:2, bits 1..4 under (red, green, blue, luma),
+// bits 5..8 over, bit 9 not finite, bit 16 the error.
+void emitPreviewPack(std::ostringstream& out, const std::string& functionName,
+                     const bool adjusted, const GpuOcioDisplayPacking& packing) {
+    out << "uint bloom_ocio_pack_pixel(uint index) {\n";
+    out << "  ivec2 c = ivec2(int(index % bloom_ocio_push.width), int(index / "
+           "bloom_ocio_push.width));\n";
+    out << "  vec4 p = imageLoad(bloom_ocio_input, c);\n";
+    out << "  float a = p.a;\n";
+    out << "  vec3 s = (a != 0.0) ? vec3(bloom_ocio_cpu_div(p.r, a), "
+           "bloom_ocio_cpu_div(p.g, a), bloom_ocio_cpu_div(p.b, a)) : vec3(0.0);\n";
+    out << "  if (any(isnan(s)) || any(isinf(s))) { bloom_ocio_output.words[index] = 0u; return "
+           "1u << 16u; }\n";
+    out << "  vec4 t = " << functionName << "(vec4(s, 1.0));\n";
+    out << "  if (any(isnan(t.rgb)) || any(isinf(t.rgb))) { bloom_ocio_output.words[index] = 0u; "
+           "return 1u << 16u; }\n";
+    // The frame counters: the display color over black, before the Viewer's adjustment and
+    // before any clamp.
+    out << "  uint events = 0u;\n";
+    out << "  precise float signalRed = t.r * a;\n";
+    out << "  precise float signalGreen = t.g * a;\n";
+    out << "  precise float signalBlue = t.b * a;\n";
+    out << "  if (!bloom_ocio_finite(signalRed) || !bloom_ocio_finite(signalGreen) || "
+           "!bloom_ocio_finite(signalBlue) || !bloom_ocio_finite(a)) {\n";
+    out << "    events |= 1u << 9u;\n";
+    out << "  } else {\n";
+    out << "    uint rangeRed = bloom_ocio_range(signalRed);\n";
+    out << "    uint rangeGreen = bloom_ocio_range(signalGreen);\n";
+    out << "    uint rangeBlue = bloom_ocio_range(signalBlue);\n";
+    out << "    if (rangeRed == 1u) { events |= 1u << 1u; }\n";
+    out << "    if (rangeGreen == 1u) { events |= 1u << 2u; }\n";
+    out << "    if (rangeBlue == 1u) { events |= 1u << 3u; }\n";
+    out << "    if (rangeRed == 2u) { events |= 1u << 5u; }\n";
+    out << "    if (rangeGreen == 2u) { events |= 1u << 6u; }\n";
+    out << "    if (rangeBlue == 2u) { events |= 1u << 7u; }\n";
+    if (packing.luma.has_value()) {
+        out << "    precise float redPart = " << floatLiteral(packing.luma->red)
+            << " * signalRed;\n";
+        out << "    precise float greenPart = " << floatLiteral(packing.luma->green)
+            << " * signalGreen;\n";
+        out << "    precise float redGreen = redPart + greenPart;\n";
+        out << "    precise float bluePart = " << floatLiteral(packing.luma->blue)
+            << " * signalBlue;\n";
+        out << "    precise float luma = redGreen + bluePart;\n";
+        out << "    uint rangeLuma = bloom_ocio_range(luma);\n";
+        out << "    if (rangeLuma == 1u) { events |= 1u << 4u; }\n";
+        out << "    if (rangeLuma == 2u) { events |= 1u << 8u; }\n";
+    }
+    out << "  }\n";
+    if (adjusted) {
+        out << "  vec3 shown = vec3(bloom_ocio_view_adjust(t.r), bloom_ocio_view_adjust(t.g), "
+               "bloom_ocio_view_adjust(t.b));\n";
+    } else {
+        out << "  vec3 shown = t.rgb;\n";
+    }
+    // A pixel allows 10:10:10:2 when its alpha is exactly 0 or packs to the 8-bit alpha 255.
+    out << "  uint qa = bloom_ocio_quantize(a);\n";
+    out << "  bool allowed = a == 0.0 || qa == 255u;\n";
+    out << "  if (!allowed) { events |= 1u; }\n";
+    if (packing.mode == GpuOcioDisplayPackingMode::PreviewRgb10A2) {
+        // A transparent pixel is the word 0. So is a pixel that is not allowed: the frame is
+        // then refused and packed again as 8:8:8:8.
+        out << "  uint word = 0u;\n";
+        out << "  if (allowed && a != 0.0) {\n";
+        out << "    word = bloom_ocio_code10(shown.r) | (bloom_ocio_code10(shown.g) << 10u) | "
+               "(bloom_ocio_code10(shown.b) << 20u) | (3u << 30u);\n";
+        out << "  }\n";
+        out << "  bloom_ocio_output.words[index] = word;\n";
+    } else {
+        out << "  uint r = bloom_ocio_quantize(shown.r);\n";
+        out << "  uint g = bloom_ocio_quantize(shown.g);\n";
+        out << "  uint b = bloom_ocio_quantize(shown.b);\n";
+        out << "  bloom_ocio_output.words[index] = r | (g << 8) | (b << 16) | (qa << 24);\n";
+    }
+    out << "  return events;\n";
+    out << "}\n";
+    out << "void main() {\n";
+    out << "  const uint bloom_ocio_stride_x = gl_NumWorkGroups.x * gl_WorkGroupSize.x;\n";
+    out << "  uint index = gl_GlobalInvocationID.y * bloom_ocio_stride_x + "
+           "gl_GlobalInvocationID.x;\n";
+    out << "  uint events = 0u;\n";
+    out << "  if (index < bloom_ocio_push.pixelCount) { events = bloom_ocio_pack_pixel(index); "
+           "}\n";
+    out << "  bloom_ocio_events[gl_LocalInvocationIndex] = events;\n";
+    out << "  memoryBarrierShared();\n";
+    out << "  barrier();\n";
+    out << "  if (gl_LocalInvocationIndex != 0u) { return; }\n";
+    out << "  uint errors = 0u;\n";
+    out << "  uint misfit = 0u;\n";
+    out << "  uint counts[9] = uint[9](0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u);\n";
+    out << "  for (uint member = 0u; member < " << kGpuOcioWrapperWorkgroupSize
+        << "u; ++member) {\n";
+    out << "    uint found = bloom_ocio_events[member];\n";
+    out << "    errors |= found >> 16u;\n";
+    out << "    misfit |= found & 1u;\n";
+    out << "    for (uint slot = 0u; slot < 9u; ++slot) { counts[slot] += (found >> (slot + 1u)) "
+           "& 1u; }\n";
+    out << "  }\n";
+    out << "  if (errors != 0u) { atomicOr(bloom_ocio_status.flags[0], 1u); }\n";
+    out << "  if (misfit != 0u) { atomicOr(bloom_ocio_status.flags[1], 1u); }\n";
+    out << "  for (uint slot = 0u; slot < 9u; ++slot) {\n";
+    out << "    if (counts[slot] != 0u) { atomicAdd(bloom_ocio_status.flags[2u + slot], "
+           "counts[slot]); }\n";
+    out << "  }\n";
+    out << "}\n";
+}
+
+} // namespace
+
 GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& program,
-                                             const ViewAdjust viewAdjust) noexcept {
+                                             const ViewAdjust viewAdjust,
+                                             const GpuOcioDisplayPacking& packing) noexcept {
     try {
         if (program.shaderText.empty()) {
             return failure(GpuOcioWrapperError::InvalidProgram);
@@ -146,6 +315,16 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
             return failure(GpuOcioWrapperError::UnsupportedViewAdjust);
         }
         const bool adjusted = (display || scopeDisplay) && !viewAdjust.neutral();
+        // #733: only a display pack can be a preview pack, and its coefficients are finite.
+        if (!packing.valid() || (packing.preview() && !display)) {
+            return failure(GpuOcioWrapperError::InvalidDisplayPacking);
+        }
+        if (packing.luma.has_value() &&
+            !(std::isfinite(packing.luma->red) && std::isfinite(packing.luma->green) &&
+              std::isfinite(packing.luma->blue))) {
+            return failure(GpuOcioWrapperError::InvalidDisplayPacking);
+        }
+        const bool preview = display && packing.preview();
 
         // Shared versioned per-sampler precise-sampling adapter. OCIO's generated body samples LUT
         // resources with the built-in texture(), whose hardware filtering is not full precision;
@@ -186,6 +365,12 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
         }
         if (adjusted) {
             out << viewAdjustGlsl(viewAdjust);
+        }
+        if (preview) {
+            // The preview packs have their own pixel function and gathering main().
+            out << kPreviewPackGlsl;
+            emitPreviewPack(out, program.functionName, adjusted, packing);
+            return finish(out.str());
         }
         out << "void main() {\n";
         // Capacity-safe 2D flattening: strideX is the exact X invocation extent of the dispatch
@@ -272,20 +457,7 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
             }
         }
         out << "}\n";
-
-        GpuOcioWrapperResult result;
-        result.source = out.str();
-        result.entryPoint = std::string(kGpuOcioWrapperEntryPoint);
-        result.samplingVersion = std::string(color::kOcioGpuPreciseSamplingVersion);
-        result.wrapperVersion = std::string(kGpuOcioWrapperVersion);
-        const auto digest = core::Sha256Hasher::hash(
-            std::as_bytes(std::span<const char>(result.source.data(), result.source.size())));
-        if (!digest.has_value()) {
-            return failure(GpuOcioWrapperError::AllocationFailure);
-        }
-        result.sourceDigest = *digest;
-        result.error = GpuOcioWrapperError::None;
-        return result;
+        return finish(out.str());
     } catch (...) {
         // This function is noexcept by contract; an allocation failure (or any other exception from
         // the sampling adapter / string building) is reported as a typed error, never a terminate.

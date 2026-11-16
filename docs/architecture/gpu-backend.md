@@ -116,9 +116,17 @@ which is exact, so the resident bytes and every cache identity are unchanged; an
 upload queue without graphics capability, missing blit format support or a half image that does not
 fit the request keeps the RGBA32F copy); `GpuComposite` runs `TranslationOpacityBilinearV1` and
 `SourceOverV1`, each writing a new resident image; `GpuResidentDisplay` copies a resident RGBA32F
-image device-to-device through the embedded Bloom Neutral V1 shader into a resident packed RGBA8
-image, reading back only the 4-byte status word; `GpuNeutralDisplay` runs the fixed `OcioDisplayV1`
-compute operation. `GpuPathCoverage` is the vector coverage producer: the CPU builds the immutable
+image device-to-device through the embedded Bloom Neutral V1 shader into a resident packed display
+image, reading back only the 48-byte status block; `GpuNeutralDisplay` runs the fixed `OcioDisplayV1`
+compute operation. A display pack takes a `GpuDisplayPackRequest` (`render/gpu_display_pack.hpp`):
+the long-standing straight RGBA8 words, or 10:10:10:2 words in an `A2B10G10R10` image for a frame
+whose every pixel is opaque or exactly transparent. The status block carries the kernel's error
+word, a flag that says whether the frame allows 10:10:10:2, and the frame counters (under, over
+and not finite, counted from the float display result before the pack clamps it), so neither needs
+a pixel read back. One layout holds for a whole frame and the device learns which only by packing:
+a 10:10:10:2 pack of a frame that does not allow it fails with the typed `LayoutRefused`, publishes
+nothing, and the caller packs that frame again as straight RGBA8. The general OCIO display program
+has the same two preview packs (`runtime::GpuOcioDisplayPacking`), each a program of its own. `GpuPathCoverage` is the vector coverage producer: the CPU builds the immutable
 `PathRasterCoverageGeometry` (bounded integer scanline sample spans, O(edges x rows), with no
 per-pixel mask and the exact `coverageRow` boundary comparison preserved through a bounded binary
 search over the real quarter-sample positions), and one pure-integer compute dispatch turns those
@@ -212,7 +220,9 @@ on the owner thread, refuses any processor other than the exact default Bloom Ne
 provenance), and executes real `begin`/`poll`/`readback` at the production 65536-pixel chunk. Parity
 holds to the frozen contract (RGB within one straight-RGBA8 code, alpha exact) over 1 px, an odd
 257-pixel tail, alpha endpoints, quantization-adjacent samples, and signed/HDR and tiny-normal
-values; a nonzero subnormal frame is measured as whole-frame shader rejection and remains a per-frame
+values. The preview packs are held to the CPU packer on the shared pack frame
+(`render/display_pack_parity.hpp`): 10:10:10:2 within one code of 1023 with alpha exact and equal
+counters, a refusal for a frame with a soft pixel, and the straight pack with its layout flag; a nonzero subnormal frame is measured as whole-frame shader rejection and remains a per-frame
 CPU fallback, never a parity failure or a claimed supported domain. Timing measures a warmup plus
 alternating pairs, and the eligible interval is the contiguous faster suffix ending at 4K, so an
 unmeasured or slower 4K leaves the operation CPU-only, and no measured speedup is claimed. The
@@ -423,7 +433,7 @@ Healthy registry budget pressure is a temporary
 refusal that falls back to the CPU without invalidating live leases or pins; only an actual unproven
 retention or allocation failure latches the process-wide fuse. The bounded counter snapshot exposes
 `fullFrameReadbacks` (zero on the native resident route; scene readbacks plus final packed
-transfers on the packed route), `displayStatusReads` (the 4-byte status word),
+transfers on the packed route), `displayStatusReads` (the 48-byte status block),
 cache hits/misses, fallbacks, and refusals, so a test can prove no full-frame readback occurred.
 Every request that takes the CPU path on either route increments `cpuFallbacks` and exactly one
 `cpuFallbacksByReason` entry (`GpuPreviewCpuFallbackReason`: GPU unavailable, non-Neutral request,

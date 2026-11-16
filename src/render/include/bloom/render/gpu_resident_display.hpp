@@ -15,6 +15,7 @@
 // bounded wait that cannot prove retirement, the entire job and its input are retained.
 
 #include <bloom/render/gpu_device.hpp>
+#include <bloom/render/gpu_display_pack.hpp>
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/image_types.hpp>
 
@@ -34,8 +35,9 @@ struct GpuDisplayImageReadback;
 struct ImagePixelCoordinate;
 struct GpuDisplayImageSparseReadback;
 
-// Opaque, move-only ownership of one GPU-resident RGBA8 display image. Owner-thread destruction;
-// co-owns the device allocator generation.
+// Opaque, move-only ownership of one GPU-resident packed display image: four bytes per pixel in
+// one of the two display layouts (display_pixel_packing.hpp), RGBA8 for Straight8888 and
+// 10:10:10:2 for Rgb10A2. Owner-thread destruction; co-owns the device allocator generation.
 class GpuDisplayImage final {
   public:
     GpuDisplayImage() noexcept = default;
@@ -52,6 +54,10 @@ class GpuDisplayImage final {
     [[nodiscard]] std::optional<ImageWindow> displayWindow() const noexcept;
     [[nodiscard]] core::PixelAspectRatio pixelAspect() const noexcept;
     [[nodiscard]] std::uint32_t generation() const noexcept;
+    // #733: the layout of the image's pixels, and what the pack that wrote them reported (the
+    // frame counters). Empty report: the image is not a finished pack's.
+    [[nodiscard]] DisplayPixelLayout pixelLayout() const noexcept;
+    [[nodiscard]] std::optional<GpuDisplayPackReport> packReport() const noexcept;
     // Actual VMA allocation size in bytes for this resident display image (>= width*height*4 due to
     // driver allocation granularity). Zero for a moved-from/invalid image. This is the byte figure
     // a resident-frame lease budget must charge.
@@ -138,7 +144,7 @@ readbackResidentDisplayImageSparse(const GpuDisplayImage& image,
 
 struct GpuResidentDisplayBudgets final {
     // Hard ceiling on bytes this job owns: temporary RGBA32F input buffer + packed output buffer +
-    // 4-byte status + the actual RGBA8 output image allocation. The input GpuImage is caller-owned
+    // the status block + the actual packed output image allocation. The input GpuImage is caller-owned
     // and external to this budget.
     std::uint64_t maxOwnedBytes = 320ULL * 1024ULL * 1024ULL;
 };
@@ -159,6 +165,9 @@ enum class GpuResidentDisplayDiagnosticCode : std::uint8_t {
     AllocationFailed,
     Cancelled,
     NativeTimeout,
+    // #733: the pack was asked for Rgb10A2 and the frame holds a pixel that does not allow it.
+    // Nothing is published; packReport() says so and the caller packs again as Straight8888.
+    LayoutRefused,
 };
 
 struct GpuResidentDisplayDiagnostic final {
@@ -187,15 +196,20 @@ class GpuResidentDisplay final {
     [[nodiscard]] bool isBoundTo(GpuDevice& device) const noexcept;
 
     // Begins one job. The input is retained for the whole job; it must be bound to the same device.
+    // #733: `pack` names the layout to pack and the luma coefficients of the frame counters.
     [[nodiscard]] GpuResidentDisplayDiagnostic begin(std::shared_ptr<const GpuImage> input,
-                                                     std::uint64_t byteBudget);
+                                                     std::uint64_t byteBudget,
+                                                     const GpuDisplayPackRequest& pack = {});
 
     [[nodiscard]] GpuResidentDisplayPollResult poll();
+    // What the last finished job reported: after Ready, and after a LayoutRefused failure. Empty
+    // otherwise, and once the image was taken (the image carries it then).
+    [[nodiscard]] std::optional<GpuDisplayPackReport> packReport() const noexcept;
 
     [[nodiscard]] const GpuDisplayImage* image() const noexcept;
     [[nodiscard]] GpuDisplayImage takeImage() noexcept;
 
-    // Debug/parity-only readback of the resident RGBA8 output.
+    // Debug/parity-only readback of the resident packed output.
     [[nodiscard]] GpuDisplayImageReadback readback() noexcept;
 
     void cancel() noexcept;

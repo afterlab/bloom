@@ -8,6 +8,7 @@
 #include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/color/ocio_cpu_display_frame.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
+#include <bloom/render/display_pack_parity.hpp>
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/gpu_image_upload.hpp>
 #include <bloom/render/image.hpp>
@@ -68,6 +69,8 @@ mapExecutorCode(const GpuOcioExecutorDiagnosticCode code) noexcept {
         return GpuOcioDisplayArmDiagnosticCode::Cancelled;
     case GpuOcioExecutorDiagnosticCode::NativeTimeout:
         return GpuOcioDisplayArmDiagnosticCode::NativeTimeout;
+    case GpuOcioExecutorDiagnosticCode::LayoutRefused:
+        return GpuOcioDisplayArmDiagnosticCode::LayoutRefused;
     }
     return GpuOcioDisplayArmDiagnosticCode::InternalInvariant;
 }
@@ -182,6 +185,10 @@ std::optional<render::GpuDisplayImage> GpuOcioDisplayArm::takeDisplayImage() noe
     return executor_->takeDisplayOutput();
 }
 
+std::optional<render::GpuDisplayPackReport> GpuOcioDisplayArm::packReport() const noexcept {
+    return executor_ == nullptr ? std::nullopt : executor_->displayPackReport();
+}
+
 void GpuOcioDisplayArm::cancel() noexcept {
     if (executor_ != nullptr) {
         executor_->cancel();
@@ -222,16 +229,19 @@ constexpr std::string_view kGpuOcioDisplayNumericContract =
     "gpu-ocio-display rgb<=1-code alpha-exact neutral-viewadjust preview-only";
 
 // Deterministic premultiplied fixture covering transparent, translucent, HDR and negative values
-// that the display transform must map. Non-finite values are never generated.
+// that the display transform must map. Non-finite values are never generated. `opaque` gives every
+// pixel that is not exactly transparent the alpha 1: the only frame a 10:10:10:2 pack can hold.
 [[nodiscard]] std::vector<render::Rgba32f> makeDisplayFixturePixels(const std::uint32_t width,
-                                                                    const std::uint32_t height) {
+                                                                    const std::uint32_t height,
+                                                                    const bool opaque) {
     std::vector<render::Rgba32f> pixels(static_cast<std::size_t>(width) * height,
                                         render::Rgba32f::transparent());
     for (std::uint32_t y = 0; y < height; ++y) {
         for (std::uint32_t x = 0; x < width; ++x) {
             const float fx = static_cast<float>(x) / static_cast<float>(width);
             const float fy = static_cast<float>(y) / static_cast<float>(height);
-            const float alpha = ((x + y) % 3U == 0U) ? 0.0F : 0.25F + 0.5F * fx;
+            const float soft = opaque ? 1.0F : 0.25F + 0.5F * fx;
+            const float alpha = ((x + y) % 3U == 0U) ? 0.0F : soft;
             const auto pixel = render::Rgba32f::fromPremultiplied(
                 (1.6F + fx) * alpha, (-0.2F + fy) * alpha, (0.125F + 2.0F * fx) * alpha, alpha);
             if (pixel.hasValue()) {
@@ -267,30 +277,6 @@ constexpr std::string_view kGpuOcioDisplayNumericContract =
             return false;
         }
     }
-}
-
-[[nodiscard]] bool displayMatchesOracle(const std::vector<render::Rgba8>& native,
-                                        std::span<const render::Rgba8> expected) {
-    if (native.size() != expected.size()) {
-        return false;
-    }
-    for (std::size_t index = 0; index < native.size(); ++index) {
-        const auto codeDistance = [](const std::uint8_t a, const std::uint8_t b) {
-            return static_cast<std::uint32_t>(a > b ? a - b : b - a);
-        };
-        if (codeDistance(native[index].red, expected[index].red) >
-                kGpuOcioDisplayRgbToleranceCodes ||
-            codeDistance(native[index].green, expected[index].green) >
-                kGpuOcioDisplayRgbToleranceCodes ||
-            codeDistance(native[index].blue, expected[index].blue) >
-                kGpuOcioDisplayRgbToleranceCodes) {
-            return false;
-        }
-        if (native[index].alpha != expected[index].alpha) {
-            return false;
-        }
-    }
-    return true;
 }
 
 } // namespace
@@ -330,7 +316,11 @@ qualifyGpuOcioDisplay(std::shared_ptr<const PreparedGpuOcioCommand> command,
         if (!descriptor.hasValue()) {
             return fail(GpuOcioDisplayDiagnosticCode::InternalInvariant);
         }
-        const auto fixture = makeDisplayFixturePixels(geometry.width, geometry.height);
+        // #733: a preview command is qualified in its own layout. A 10:10:10:2 command can only
+        // pack a frame of opaque and exactly transparent pixels, so it is given one.
+        const GpuOcioDisplayPacking packing = command->displayPacking();
+        const bool tenBit = packing.mode == GpuOcioDisplayPackingMode::PreviewRgb10A2;
+        const auto fixture = makeDisplayFixturePixels(geometry.width, geometry.height, tenBit);
         if (fixture.size() != descriptor.value()->layout().pixelCount) {
             return fail(GpuOcioDisplayDiagnosticCode::FixtureMismatch);
         }
@@ -408,17 +398,40 @@ qualifyGpuOcioDisplay(std::shared_ptr<const PreparedGpuOcioCommand> command,
 
         // Independent CPU OCIO display oracle for the SAME display/view: the unchanged CPU display
         // frame path applied to the exact fixture. The native output must match it within one code
-        // (alpha exact), the documented resident display numeric contract.
+        // (alpha exact), the documented resident display numeric contract. A preview command is
+        // compared with the CPU packer of its layout, one code of that layout's scale, and must
+        // report the layout flag the frame has. Its counters are proven equal by the native pack
+        // acceptance test on a frame whose signal keeps away from the ends of the axis; this
+        // arbitrary display's frame does not, so only the count no float difference can move is
+        // compared here.
         const auto sourceView = source->view();
         if (!sourceView.hasValue()) {
             return fail(GpuOcioDisplayDiagnosticCode::CpuOracleFailure);
         }
-        auto cpuFrame = color::produceBloomNeutralDisplayFrame(cpuOracle, *sourceView.value(),
-                                                               65536, budgets.maxImageBytes);
+        auto cpuFrame =
+            packing.preview()
+                ? color::produceBloomNeutralDisplayFrame(
+                      cpuOracle, *sourceView.value(), 65536, budgets.maxImageBytes, {},
+                      color::DisplayFramePacking{.allowRgb10A2 = tenBit, .luma = packing.luma})
+                : color::produceBloomNeutralDisplayFrame(cpuOracle, *sourceView.value(), 65536,
+                                                         budgets.maxImageBytes);
         if (!cpuFrame.hasValue()) {
             return fail(GpuOcioDisplayDiagnosticCode::CpuOracleFailure);
         }
-        if (!displayMatchesOracle(readback.pixels, cpuFrame.value()->pixels())) {
+        const auto layout = display->pixelLayout();
+        if (layout != packing.layout() || cpuFrame.value()->pixelLayout() != layout ||
+            !render::displayCellsWithin(layout, readback.pixels, cpuFrame.value()->pixels(),
+                                        kGpuOcioDisplayRgbToleranceCodes)) {
+            return fail(GpuOcioDisplayDiagnosticCode::ParityFailure);
+        }
+        const auto packReport = display->packReport();
+        if (packReport.has_value() != packing.preview()) {
+            return fail(GpuOcioDisplayDiagnosticCode::ParityFailure);
+        }
+        if (packReport.has_value() &&
+            (packReport->layout != layout || packReport->allowsRgb10A2 != tenBit ||
+             packReport->counters.lumaCounted() != packing.luma.has_value() ||
+             packReport->counters.notFinite != cpuFrame.value()->counters().notFinite)) {
             return fail(GpuOcioDisplayDiagnosticCode::ParityFailure);
         }
 

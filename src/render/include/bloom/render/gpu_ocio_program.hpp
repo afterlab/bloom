@@ -31,6 +31,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -55,6 +56,10 @@ enum class GpuOcioProgramDiagnosticCode : std::uint8_t {
     Cancelled,
     NativeTimeout,
     ForeignInput,
+    // #733: a display job asked for Rgb10A2 and the frame holds a pixel that does not allow it.
+    // Nothing is published; displayPackReport() says so and the caller packs again with the
+    // Straight8888 program.
+    LayoutRefused,
 };
 
 struct GpuOcioProgramDiagnostic final {
@@ -123,16 +128,23 @@ class GpuOcioProgram final {
     [[nodiscard]] GpuOcioProgramDiagnostic beginEffect(std::shared_ptr<const GpuImage> input,
                                                        std::span<const std::byte> uniformBytes,
                                                        std::uint64_t byteBudget);
-    [[nodiscard]] GpuOcioProgramDiagnostic beginDisplay(std::shared_ptr<const GpuImage> input,
-                                                        std::span<const std::byte> uniformBytes,
-                                                        std::uint64_t byteBudget);
+    // #733: `pack` is set for a program whose shader is a preview pack (it writes the display
+    // pack's status block, gpu_display_pack.hpp): it names the layout the shader packs, which is
+    // the output image's, and whether the shader counts luma. Empty: the long-standing RGBA8
+    // pack, whose status block is the error word alone.
+    [[nodiscard]] GpuOcioProgramDiagnostic
+    beginDisplay(std::shared_ptr<const GpuImage> input, std::span<const std::byte> uniformBytes,
+                 std::uint64_t byteBudget, const std::optional<GpuDisplayPackRequest>& pack = {});
 
     [[nodiscard]] GpuOcioProgramPollResult poll();
 
     // Valid only after a Ready effect job; moves the resident RGBA32F result out.
     [[nodiscard]] std::shared_ptr<GpuImage> takeEffectOutput() noexcept;
-    // Valid only after a Ready display job; moves the resident RGBA8 result out.
+    // Valid only after a Ready display job; moves the resident packed result out.
     [[nodiscard]] GpuDisplayImage takeDisplayOutput() noexcept;
+    // What the last finished preview pack reported: after Ready, and after a LayoutRefused
+    // failure. Empty otherwise, and once the output was taken (the image carries it then).
+    [[nodiscard]] std::optional<GpuDisplayPackReport> displayPackReport() const noexcept;
 
     [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
     // #386: blocks the owner thread until this object's submission's fence signals (or the

@@ -46,6 +46,7 @@ void GpuOcioProgram::Impl::releaseTransient() {
     }
     effectOutput.reset();
     displayOutput.reset();
+    jobDisplayImage = nullptr;
     inputRetained.reset();
     lastJobBytes = 0;
 }
@@ -57,12 +58,17 @@ void GpuOcioProgram::Impl::clearJob() {
     jobHeight = 0;
     discardRequested.store(false);
     jobDiagnostic = {};
+    jobPack.reset();
+    jobReport.reset();
     releaseTransient();
 }
 
 void GpuOcioProgram::Impl::beginImpl(const bool display, std::shared_ptr<const GpuImage> input,
                                      const std::span<const std::byte> uniformBytes,
-                                     const std::uint64_t byteBudget) {
+                                     const std::uint64_t byteBudget,
+                                     const std::optional<GpuDisplayPackRequest>& pack) {
+    jobPack = display ? pack : std::nullopt;
+    jobReport.reset();
     control->bufferStorageRefusal.reset();
     control->imageStorageRefusal.reset();
     const GpuImageImpl* const inputImpl = gpuImageImpl(*input);
@@ -128,6 +134,13 @@ void GpuOcioProgram::Impl::beginImpl(const bool display, std::shared_ptr<const G
         imageImpl->dataWindow = inputImpl->dataWindow;
         imageImpl->displayWindow = inputImpl->displayWindow;
         imageImpl->pixelAspect = inputImpl->pixelAspect;
+        imageImpl->pixelLayout =
+            jobPack.has_value() ? jobPack->layout : DisplayPixelLayout::Straight8888;
+        if (!displayImageFormatSupported(state, imageImpl->pixelLayout)) {
+            fail(GpuOcioProgramDiagnosticCode::Unsupported,
+                 "the device does not support the display output image format");
+            return;
+        }
         if (!createDisplayImage(state, inputImpl->width, inputImpl->height, *imageImpl)) {
             fail(state.imageStorageRefusal ? GpuOcioProgramDiagnosticCode::OverBudget
                                            : GpuOcioProgramDiagnosticCode::AllocationFailed,
@@ -151,6 +164,7 @@ void GpuOcioProgram::Impl::beginImpl(const bool display, std::shared_ptr<const G
                  "the packed display buffer could not be created");
             return;
         }
+        jobDisplayImage = imageImpl.get();
         displayOutput =
             std::make_unique<GpuDisplayImage>(makeGpuDisplayImage(std::move(imageImpl)));
         jobActual = gpuDisplayImageImpl(*displayOutput)->allocationBytes +
@@ -182,6 +196,7 @@ void GpuOcioProgram::Impl::beginImpl(const bool display, std::shared_ptr<const G
     if (jobActual > byteBudget || jobActual > budgets.maxOwnedBytes ||
         retainedResourceBytes > budgets.maxOwnedBytes - jobActual) {
         displayOutput.reset();
+        jobDisplayImage = nullptr;
         effectOutput.reset();
         fail(GpuOcioProgramDiagnosticCode::OverBudget,
              "the actual request allocation exceeds the byte budget");
@@ -348,15 +363,31 @@ bool GpuOcioProgram::Impl::checkStatus() {
                                        "publish GPU output");
         return false;
     }
-    std::uint32_t flags = 0;
-    std::memcpy(&flags, statusMapped, sizeof(flags));
-    if (flags == 0) {
-        return true;
+    std::array<std::uint32_t, kGpuDisplayPackStatusWords> words{};
+    std::memcpy(words.data(), statusMapped, kGpuDisplayPackStatusBytes);
+    const std::uint32_t flags = words[kGpuDisplayPackStatusErrors];
+    if (flags != 0) {
+        jobDiagnostic = makeDiagnostic(GpuOcioProgramDiagnosticCode::Unsupported,
+                                       "the shader rejected the frame (error flags=" +
+                                           std::to_string(flags) + ")");
+        return false;
     }
-    jobDiagnostic =
-        makeDiagnostic(GpuOcioProgramDiagnosticCode::Unsupported,
-                       "the shader rejected the frame (error flags=" + std::to_string(flags) + ")");
-    return false;
+    // #733: a preview pack's status block also says whether the frame allows the layout it was
+    // packed in. Words packed as 10:10:10:2 from a frame that does not allow it are never handed
+    // on.
+    if (jobPack.has_value() && jobDisplayImage != nullptr) {
+        const auto report =
+            gpuDisplayPackReport(words, jobPack->layout, jobPack->luma.has_value());
+        jobReport = report;
+        if (!report.wordsValid()) {
+            jobDiagnostic =
+                makeDiagnostic(GpuOcioProgramDiagnosticCode::LayoutRefused,
+                               "the frame holds a pixel that does not allow the 10:10:10:2 layout");
+            return false;
+        }
+        jobDisplayImage->packReport = report;
+    }
+    return true;
 }
 
 bool GpuOcioProgram::Impl::drainAndRetire() noexcept {

@@ -236,9 +236,11 @@ GpuOcioProgramDiagnostic GpuOcioProgram::beginEffect(std::shared_ptr<const GpuIm
     return beginDiagnostic(impl.jobDiagnostic);
 }
 
-GpuOcioProgramDiagnostic GpuOcioProgram::beginDisplay(std::shared_ptr<const GpuImage> input,
-                                                      std::span<const std::byte> uniformBytes,
-                                                      const std::uint64_t byteBudget) {
+GpuOcioProgramDiagnostic
+GpuOcioProgram::beginDisplay(std::shared_ptr<const GpuImage> input,
+                             std::span<const std::byte> uniformBytes,
+                             const std::uint64_t byteBudget,
+                             const std::optional<GpuDisplayPackRequest>& pack) {
     if (impl_ == nullptr) {
         return makeDiagnostic(GpuOcioProgramDiagnosticCode::DeviceUnavailable,
                               "no pipeline was created");
@@ -269,7 +271,7 @@ GpuOcioProgramDiagnostic GpuOcioProgram::beginDisplay(std::shared_ptr<const GpuI
     if (impl.jobState != GpuOcioProgramJobState::Idle) {
         impl.clearJob();
     }
-    impl.beginImpl(true, std::move(input), uniformBytes, byteBudget);
+    impl.beginImpl(true, std::move(input), uniformBytes, byteBudget, pack);
     return beginDiagnostic(impl.jobDiagnostic);
 }
 
@@ -362,12 +364,18 @@ GpuDisplayImage GpuOcioProgram::takeDisplayOutput() noexcept {
         return {};
     GpuDisplayImage output = std::move(*impl_->displayOutput);
     impl_->displayOutput.reset();
+    impl_->jobDisplayImage = nullptr;
+    impl_->jobReport.reset();
     impl_->inputRetained.reset();
     // A cancellation observed after Ready belongs to the consumed job, not the next reuse.
     impl_->discardRequested.store(false);
     impl_->jobState = GpuOcioProgramJobState::Idle;
     impl_->jobDiagnostic = {};
     return output;
+}
+
+std::optional<GpuDisplayPackReport> GpuOcioProgram::displayPackReport() const noexcept {
+    return impl_ != nullptr && impl_->onOwnerThread() ? impl_->jobReport : std::nullopt;
 }
 
 bool GpuOcioProgram::discardRetiredFailure(GpuDevice& device) noexcept {
@@ -377,6 +385,7 @@ bool GpuOcioProgram::discardRetiredFailure(GpuDevice& device) noexcept {
         return false;
     impl_->effectOutput.reset();
     impl_->displayOutput.reset();
+    impl_->jobDisplayImage = nullptr;
     static_cast<void>(retireFailedAttemptGpuImage(impl_->inputRetained, device));
     impl_->releaseTransient();
     return true;

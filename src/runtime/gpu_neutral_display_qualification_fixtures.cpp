@@ -4,6 +4,8 @@
 
 #include <bloom/runtime/gpu_neutral_display_qualification.hpp>
 
+#include <bloom/render/display_pack_parity.hpp>
+
 #include <array>
 #include <bit>
 #include <cmath>
@@ -168,6 +170,16 @@ std::optional<std::vector<GpuNeutralDisplayFixture>> makeGpuNeutralDisplayParity
         return std::nullopt;
     }
     fixtures.push_back({"1920x1080", 1920, 1080, *fhd});
+
+    // #733: the two frames the preview packs are qualified on, so the digest names them too.
+    constexpr std::size_t packCount =
+        std::size_t{render::kDisplayPackParityWidth} * render::kDisplayPackParityHeight;
+    fixtures.push_back({"pack-frame", render::kDisplayPackParityWidth,
+                        render::kDisplayPackParityHeight,
+                        render::makeDisplayPackParityPixels(packCount, false)});
+    fixtures.push_back({"pack-frame-soft", render::kDisplayPackParityWidth,
+                        render::kDisplayPackParityHeight,
+                        render::makeDisplayPackParityPixels(packCount, true)});
     return fixtures;
 }
 

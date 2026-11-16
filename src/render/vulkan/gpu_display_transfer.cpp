@@ -266,6 +266,8 @@ struct GpuDisplayTransfer::Impl final {
     GpuDisplayTransferAccounting accounting;
     std::optional<ImageWindow> dataWindow, displayWindow;
     core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
+    DisplayPixelLayout pixelLayout = DisplayPixelLayout::Straight8888;
+    std::optional<GpuDisplayPackReport> packReport;
     std::uint32_t generation = 0;
     std::weak_ptr<const void> deviceBinding;
     std::uint64_t quarantinedToken = 0;
@@ -607,6 +609,8 @@ bool GpuDisplayTransfer::begin(GpuDevice& expectedDevice,
         impl_->dataWindow = source->dataWindow;
         impl_->displayWindow = source->displayWindow;
         impl_->pixelAspect = source->pixelAspect;
+        impl_->pixelLayout = source->pixelLayout;
+        impl_->packReport = source->packReport;
         impl_->generation = source->generation;
         impl_->deviceBinding = source->state;
 
@@ -869,7 +873,7 @@ std::optional<GpuDisplayTransferResult> GpuDisplayTransfer::take() noexcept {
         return std::nullopt;
     GpuDisplayTransferResult result(*impl_->dataWindow, *impl_->displayWindow, impl_->pixelAspect,
                                     impl_->generation, std::move(impl_->pixels), impl_->accounting,
-                                    impl_->deviceBinding);
+                                    impl_->deviceBinding, impl_->pixelLayout, impl_->packReport);
     // This gauge describes transfer ownership. The moved allocation's independent neutral token
     // stays charged in the same phase root through product adoption and immutable publication.
     impl_->retentionState->releaseHost();

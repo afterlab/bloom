@@ -390,10 +390,12 @@ runSourceOverReadback(ProbeContext& context, const render::GpuSourceOverParamete
 
 [[nodiscard]] inline ProbeResult
 runDisplayReadback(ProbeContext& context, const std::shared_ptr<const render::GpuImage>& input,
-                   std::vector<render::Rgba8>& outPixels, std::string& reason) {
+                   std::vector<render::Rgba8>& outPixels, std::string& reason,
+                   const render::GpuDisplayPackRequest* const pack = nullptr) {
     using render::GpuDisplayImageReadbackCode;
     using render::GpuResidentDisplayDiagnosticCode;
-    const auto begin = context.display.begin(input, context.imageBudget);
+    const auto begin = pack != nullptr ? context.display.begin(input, context.imageBudget, *pack)
+                                       : context.display.begin(input, context.imageBudget);
     if (begin.code != GpuResidentDisplayDiagnosticCode::None) {
         if (begin.code == GpuResidentDisplayDiagnosticCode::OverBudget) {
             return fail(GpuResidentPreviewDiagnosticCode::OverBudget, begin.message);

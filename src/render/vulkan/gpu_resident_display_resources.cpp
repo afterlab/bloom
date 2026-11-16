@@ -97,9 +97,29 @@ void destroyResidentBuffer(DeviceAllocatorState& state, ResidentBuffer& buffer,
     buffer = ResidentBuffer{};
 }
 
+VkFormat displayImageFormat(const DisplayPixelLayout layout) noexcept {
+    return layout == DisplayPixelLayout::Rgb10A2 ? VK_FORMAT_A2B10G10R10_UNORM_PACK32
+                                                 : kDisplayFormat;
+}
+
+bool displayImageFormatSupported(DeviceAllocatorState& state,
+                                 const DisplayPixelLayout layout) noexcept {
+    if (state.physicalDevice == nullptr) {
+        return false;
+    }
+    VkFormatProperties formatProperties{};
+    state.physicalDevice.getDispatcher()->vkGetPhysicalDeviceFormatProperties(
+        static_cast<VkPhysicalDevice>(*state.physicalDevice), displayImageFormat(layout),
+        &formatProperties);
+    const VkFormatFeatureFlags required =
+        VK_FORMAT_FEATURE_TRANSFER_DST_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+    return (formatProperties.optimalTilingFeatures & required) == required;
+}
+
 ResidentDisplaySupport queryResidentDisplaySupport(DeviceAllocatorState& state,
                                                    const std::uint32_t width,
-                                                   const std::uint32_t height) noexcept {
+                                                   const std::uint32_t height,
+                                                   const DisplayPixelLayout layout) noexcept {
     ResidentDisplaySupport support;
     if (state.physicalDevice == nullptr) {
         support.reason = "no physical device";
@@ -139,12 +159,10 @@ ResidentDisplaySupport queryResidentDisplaySupport(DeviceAllocatorState& state,
         return support;
     }
 
-    VkFormatProperties formatProperties{};
-    dispatcher->vkGetPhysicalDeviceFormatProperties(physical, kDisplayFormat, &formatProperties);
-    const VkFormatFeatureFlags required =
-        VK_FORMAT_FEATURE_TRANSFER_DST_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
-    if ((formatProperties.optimalTilingFeatures & required) != required) {
-        support.reason = "RGBA8 UNORM output image is not supported";
+    if (!displayImageFormatSupported(state, layout)) {
+        support.reason = layout == DisplayPixelLayout::Rgb10A2
+                             ? "A2B10G10R10 UNORM output image is not supported"
+                             : "RGBA8 UNORM output image is not supported";
         return support;
     }
     support.supported = true;
@@ -162,7 +180,7 @@ bool createDisplayImage(DeviceAllocatorState& state, const std::uint32_t width,
     std::memset(&imageInfo, 0, sizeof(imageInfo));
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = kDisplayFormat;
+    imageInfo.format = displayImageFormat(out.pixelLayout);
     imageInfo.extent = {width, height, 1};
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = 1;
@@ -184,7 +202,7 @@ bool createDisplayImage(DeviceAllocatorState& state, const std::uint32_t width,
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = out.image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = kDisplayFormat;
+    viewInfo.format = displayImageFormat(out.pixelLayout);
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     VkImageView view = VK_NULL_HANDLE;
     const bool viewFault =
@@ -289,6 +307,12 @@ core::PixelAspectRatio GpuDisplayImage::pixelAspect() const noexcept {
 }
 std::uint32_t GpuDisplayImage::generation() const noexcept {
     return impl_ != nullptr ? impl_->generation : 0;
+}
+DisplayPixelLayout GpuDisplayImage::pixelLayout() const noexcept {
+    return impl_ != nullptr ? impl_->pixelLayout : DisplayPixelLayout::Straight8888;
+}
+std::optional<GpuDisplayPackReport> GpuDisplayImage::packReport() const noexcept {
+    return impl_ != nullptr ? impl_->packReport : std::nullopt;
 }
 std::uint64_t GpuDisplayImage::allocationBytes() const noexcept {
     return impl_ != nullptr ? impl_->allocationBytes : 0;

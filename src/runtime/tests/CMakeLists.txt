@@ -757,7 +757,7 @@ target_link_libraries(bloom_render_gpu_neutral_display_test PRIVATE bloom_render
 target_include_directories(bloom_render_gpu_neutral_display_test
     PRIVATE "${PROJECT_SOURCE_DIR}/src/render/vulkan")
 target_compile_definitions(bloom_render_gpu_neutral_display_test
-    PRIVATE "BLOOM_NEUTRAL_DISPLAY_SPV_SHA256=\"fc0a97d36c42aafd3cfce56dcfdd7ff3c75d3ec7fd0e52a83c7f272c54feb3f9\"")
+    PRIVATE "BLOOM_NEUTRAL_DISPLAY_SPV_SHA256=\"c8fd2155e25de742a8175322ab1727075304e7705013d17bc52ac7389c2544b0\"")
 if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
     target_compile_definitions(bloom_render_gpu_neutral_display_test
         PRIVATE BLOOM_RENDER_TEST_VULKAN_BACKEND=1)
@@ -2315,6 +2315,33 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
         TIMEOUT 300
     )
     set_tests_properties(bloom.runtime.gpu_ocio_display_arm
+        PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+# #733: the device display packs in both four-byte layouts (render/gpu_display_pack.hpp): the Bloom
+# Neutral v1 kernel through its host and resident owners and the general OCIO display program
+# through the display arm, each against the CPU packers. Every 10-bit code exact, ordinary frames
+# within one code with alpha exact, the layout rule and its refusal, the frame counters, and the
+# unchanged 8:8:8:8 words. Requires the Vulkan backend; the general display program also needs
+# the pinned shader tools. Skips cleanly without a device.
+if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_render_gpu_display_packing_native_test
+        gpu_display_packing_native_tests.cpp)
+    target_link_libraries(bloom_render_gpu_display_packing_native_test
+        PRIVATE bloom_runtime_evaluator bloom_render bloom_color_ocio)
+    if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
+        target_compile_definitions(bloom_render_gpu_display_packing_native_test PRIVATE
+            "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
+    endif()
+    bloom_enable_warnings(bloom_render_gpu_display_packing_native_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_display_packing_native_test)
+    bloom_add_test(
+        NAME bloom.render.gpu_display_packing_native
+        COMMAND bloom_render_gpu_display_packing_native_test
+        LABELS runtime render unit gpu color
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.render.gpu_display_packing_native
         PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 

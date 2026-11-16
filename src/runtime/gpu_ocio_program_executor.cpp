@@ -50,6 +50,8 @@ mapProgramCode(const render::GpuOcioProgramDiagnosticCode code) noexcept {
         return GpuOcioExecutorDiagnosticCode::NativeTimeout;
     case render::GpuOcioProgramDiagnosticCode::ForeignInput:
         return GpuOcioExecutorDiagnosticCode::InvalidArgument;
+    case render::GpuOcioProgramDiagnosticCode::LayoutRefused:
+        return GpuOcioExecutorDiagnosticCode::LayoutRefused;
     }
     return GpuOcioExecutorDiagnosticCode::InternalInvariant;
 }
@@ -215,6 +217,8 @@ struct GpuOcioProgramExecutor::Impl final {
     std::chrono::steady_clock::time_point jobStart;
     std::atomic<bool> discardRequested{false};
     bool deadlineExpired = false;
+    // #733: the last finished preview display job's report.
+    std::optional<render::GpuDisplayPackReport> packReport;
     bool deviceLost = false;
     GpuOcioExecutorJobState jobState = GpuOcioExecutorJobState::Idle;
     GpuOcioExecutorDiagnostic jobDiagnostic;
@@ -386,8 +390,11 @@ GpuOcioProgramExecutor::begin(std::shared_ptr<const PreparedGpuOcioCommand> comm
                                   ? std::span<const std::byte>(program.uniformBufferData.data(),
                                                                program.uniformBufferData.size())
                                   : uniformOverride;
-    const auto nativeDiagnostic = display ? native->beginDisplay(input, uniformBytes, byteBudget)
-                                          : native->beginEffect(input, uniformBytes, byteBudget);
+    impl.packReport.reset();
+    const auto nativeDiagnostic =
+        display ? native->beginDisplay(input, uniformBytes, byteBudget,
+                                       command->displayPacking().nativeRequest())
+                : native->beginEffect(input, uniformBytes, byteBudget);
     if (nativeDiagnostic.code != render::GpuOcioProgramDiagnosticCode::None) {
         static_cast<void>(native->discardRetiredFailure(*impl.device));
         const auto code = mapProgramCode(nativeDiagnostic.code);
@@ -449,6 +456,7 @@ GpuOcioExecutorPollResult GpuOcioProgramExecutor::poll() {
     if (nativeResult == render::GpuOcioProgramPollResult::Pending) {
         return GpuOcioExecutorPollResult::Pending;
     }
+    impl.packReport = impl.active->displayPackReport();
     if (nativeResult == render::GpuOcioProgramPollResult::Ready) {
         impl.jobState = GpuOcioExecutorJobState::Ready;
         ++impl.counters.jobCompletions;
@@ -492,6 +500,11 @@ std::optional<render::GpuDisplayImage> GpuOcioProgramExecutor::takeDisplayOutput
     auto output = impl_->active->takeDisplayOutput();
     impl_->clearJob();
     return std::optional<render::GpuDisplayImage>(std::move(output));
+}
+
+std::optional<render::GpuDisplayPackReport>
+GpuOcioProgramExecutor::displayPackReport() const noexcept {
+    return impl_ != nullptr ? impl_->packReport : std::nullopt;
 }
 
 void GpuOcioProgramExecutor::cancel() noexcept {

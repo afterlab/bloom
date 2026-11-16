@@ -1,7 +1,7 @@
 {
   "schema": "bloom.gpu.display-shader.manifest.v1",
   "generator": "tools/gpu-shaders/neutral_display_generator",
-  "generatorRevision": 1,
+  "generatorRevision": 2,
   "operation": "BloomNeutralV1Display",
   "entrypoint": "main",
   "ocioFunction": "bloom_neutral_v1_display",
@@ -19,7 +19,7 @@
   "shader": {
     "language": "GLSL_460",
     "stage": "compute",
-    "sha256": "63fa4699a9a6980312d34ad7c0c7f6ad5d20b7c249b0e050942a50baac367057",
+    "sha256": "c5a52b5b1446b37d19157faa8f1b0f187d8a6b82d139028b1a972377a9ffc6bf",
     "localSizeX": 256,
     "textures": 0,
     "textures3D": 0,
@@ -28,19 +28,22 @@
   },
   "bindings": [
     {"set": 0, "binding": 0, "kind": "storage-buffer", "access": "readonly", "element": "vec4", "role": "premultiplied-rgba32f-input"},
-    {"set": 0, "binding": 1, "kind": "storage-buffer", "access": "writeonly", "element": "uint", "packing": "R|(G<<8)|(B<<16)|(A<<24)", "role": "packed-rgba8-output"},
-    {"set": 0, "binding": 2, "kind": "storage-buffer", "access": "readwrite", "element": "uint", "role": "error-flag", "bits": {"inputNonFinite": 1, "inputSubnormal": 8, "unpremultiplyNonFinite": 2, "outputNonFinite": 4}}
+    {"set": 0, "binding": 1, "kind": "storage-buffer", "access": "writeonly", "element": "uint", "packing": {"straight-rgba8": "R|(G<<8)|(B<<16)|(A<<24)", "preview-rgb10-a2": "R|(G<<10)|(B<<20)|(3<<30), or 0 for a transparent pixel"}, "role": "packed-display-output"},
+    {"set": 0, "binding": 2, "kind": "storage-buffer", "access": "readwrite", "element": "uint", "role": "status-block", "words": 12, "layout": {"errors": 0, "refusesRgb10A2": 1, "under": [2, 3, 4, 5], "over": [6, 7, 8, 9], "notFinite": 10, "reserved": 11}, "bits": {"inputNonFinite": 1, "inputSubnormal": 8, "unpremultiplyNonFinite": 2, "outputNonFinite": 4}}
   ],
-  "pushConstant": {"name": "pixelCount", "type": "uint32"},
+  "pushConstant": {"byteCount": 24, "fields": ["uint32 pixelCount", "uint32 pixelLayout", "float lumaRed", "float lumaGreen", "float lumaBlue", "uint32 lumaCounted"]},
   "contracts": {
     "rgbToleranceCodes": 1,
-    "rgbToleranceNote": "OCIO GPU vs CPU float rounding may differ by at most one 8-bit code per channel; alpha is exact",
+    "rgbToleranceNote": "OCIO GPU vs CPU float rounding may differ by at most one code per channel in either layout (one 8-bit code, one 10-bit code); alpha is exact",
     "alphaToleranceCodes": 0,
     "alphaRule": "floor(clamp(alpha,0,1)*255+0.5) with the exact binary64 value of the binary32 alpha; reproduced without shaderFloat64",
     "zeroAlphaRgb": "+0",
     "alphaPreserved": true,
     "ocioChannels": "rgb",
-    "nonFinitePolicy": "atomicOr an error bit and write a zero placeholder; the consumer must not publish a frame while flags[0] is nonzero",
+    "nonFinitePolicy": "atomicOr an error bit and write a zero placeholder; the consumer must not publish a frame while status word 0 is nonzero",
+    "layoutRule": "a frame is 10:10:10:2 only when every pixel has alpha exactly 0 or the 8-bit alpha 255; status word 1 is nonzero otherwise and a 10:10:10:2 pack of such a frame must not be published",
+    "code10Rule": "floor(clamp(value,0,1)*1023+0.5) in binary32, in the order written, no contraction",
+    "counters": "display color times alpha, before any clamp: under and over by the 10-bit code rule per channel and for luma (when coefficients are pushed), and pixels whose signal is not finite; gathered per workgroup, one atomic per word",
     "subnormalPolicy": "any nonzero subnormal input lane sets the whole frame's error flag; the GPU path rejects the frame and a CPU fallback is the intended route until denormal preservation is qualified"
   }
 }

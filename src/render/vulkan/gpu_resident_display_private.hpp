@@ -56,6 +56,10 @@ struct GpuDisplayImageImpl final {
     std::optional<ImageWindow> displayWindow;
     core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
     std::uint32_t generation = 0;
+    // #733: set before createDisplayImage, which picks the image format from it.
+    DisplayPixelLayout pixelLayout = DisplayPixelLayout::Straight8888;
+    // Set by the pack that wrote the pixels, once its status block was read.
+    std::optional<GpuDisplayPackReport> packReport;
     bool deviceLost = false;
     // Set while a readback submission references this image and its completion is unproved.
     mutable std::atomic<bool> submissionUnretired{false};
@@ -86,7 +90,8 @@ void destroyResidentBuffer(
     const std::shared_ptr<GpuProcessingPhaseLease>& failedOrigin = {}) noexcept;
 
 // Device-limit/format facts for the resident route: RGBA32F storage buffer reads, packed-output
-// buffer, RGBA8_UNORM output image, and the aggregate job bytes.
+// buffer, the output image of the asked layout (RGBA8_UNORM or A2B10G10R10_UNORM), and the
+// aggregate job bytes.
 struct ResidentDisplaySupport final {
     bool supported = false;
     std::uint64_t maxOwnedBytes = 0;
@@ -94,8 +99,16 @@ struct ResidentDisplaySupport final {
 };
 [[nodiscard]] ResidentDisplaySupport
 queryResidentDisplaySupport(vulkan_detail::DeviceAllocatorState& state, std::uint32_t width,
-                            std::uint32_t height) noexcept;
+                            std::uint32_t height,
+                            DisplayPixelLayout layout = DisplayPixelLayout::Straight8888) noexcept;
 
+// The image format of a layout: the packed words are the image's texels as they are.
+[[nodiscard]] VkFormat displayImageFormat(DisplayPixelLayout layout) noexcept;
+// The device can copy packed words into an image of that format and sample it.
+[[nodiscard]] bool displayImageFormatSupported(vulkan_detail::DeviceAllocatorState& state,
+                                               DisplayPixelLayout layout) noexcept;
+
+// Creates the image in the format of `out.pixelLayout`.
 [[nodiscard]] bool createDisplayImage(vulkan_detail::DeviceAllocatorState& state,
                                       std::uint32_t width, std::uint32_t height,
                                       GpuDisplayImageImpl& out);
@@ -118,6 +131,8 @@ struct GpuResidentDisplay::Impl final {
         jobDiagnostic = GpuResidentDisplayDiagnostic{};
         discardRequested.store(false);
         residentImage.reset();
+        jobImage = nullptr;
+        jobReport.reset();
         input.reset();
         destroyResidentBuffer(*control, jobInput);
         destroyResidentBuffer(*control, jobOutput);
@@ -145,7 +160,12 @@ struct GpuResidentDisplay::Impl final {
     ResidentBuffer jobOutput;
     ResidentBuffer jobStatus;
     std::unique_ptr<GpuDisplayImage> residentImage;
+    // The impl of residentImage while this job owns it (the report is written into it).
+    GpuDisplayImageImpl* jobImage = nullptr;
     std::shared_ptr<const GpuImage> input;
+    // #733: what the job in flight was asked, and what the last finished one reported.
+    GpuDisplayPackRequest jobPack;
+    std::optional<GpuDisplayPackReport> jobReport;
 
     GpuResidentDisplayJobState jobState = GpuResidentDisplayJobState::Idle;
     bool queueSubmitted = false;

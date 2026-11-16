@@ -3,6 +3,9 @@
 
 #include "gpu_resident_preview_qualification_internal.hpp"
 
+#include <bloom/render/display_pack_parity.hpp>
+#include <bloom/render/gpu_display_pack.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -29,6 +32,109 @@ using render::ImageWindow;
 using render::Rgba32f;
 using render::Rgba32fImage;
 using render::Rgba8;
+
+namespace {
+
+// #733: the resident display's preview packs against the CPU packer, on the shared pack frame
+// (render/display_pack_parity.hpp), held to the rule of the neutral kernel's own qualification:
+// 10:10:10:2 within one code of 1023 on a frame the layout rule allows, a typed refusal that
+// publishes nothing on a frame with a soft pixel, the 8:8:8:8 preview pack within one code of 255
+// with the layout flag, and counters equal to the CPU's.
+[[nodiscard]] ProbeResult verifyResidentPreviewPack(ProbeContext& context, const bool soft) {
+    const std::uint32_t width = render::kDisplayPackParityWidth;
+    const std::uint32_t height = render::kDisplayPackParityHeight;
+    const auto window = makeWindow(0, 0, width, height);
+    if (!window) {
+        return fail(GpuResidentPreviewDiagnosticCode::InternalInvariant,
+                    "the preview pack fixture window did not build");
+    }
+    const auto pixels = render::makeDisplayPackParityPixels(std::size_t{width} * height, soft);
+    auto image = buildImage(*window, *window, PixelAspectRatio::square(), pixels);
+    if (!image) {
+        return fail(GpuResidentPreviewDiagnosticCode::CpuOracleFailure,
+                    "the preview pack CPU image did not build");
+    }
+    auto source = std::make_shared<const Rgba32fImage>(std::move(*image));
+    const auto view = source->view();
+    if (!view) {
+        return fail(GpuResidentPreviewDiagnosticCode::CpuOracleFailure,
+                    "the preview pack CPU view did not build");
+    }
+    std::shared_ptr<const GpuImage> resident;
+    {
+        std::string reason;
+        const auto uploaded = uploadToResident(context, source, resident, reason);
+        if (uploaded.code != GpuResidentPreviewDiagnosticCode::None) {
+            return uploaded;
+        }
+    }
+    for (const auto layout :
+         {render::DisplayPixelLayout::Rgb10A2, render::DisplayPixelLayout::Straight8888}) {
+        const bool tenBit = layout == render::DisplayPixelLayout::Rgb10A2;
+        const auto cpu = color::produceBloomNeutralDisplayFrame(
+            context.processor, *view.value(), kGpuResidentPreviewCpuChunkPixelCount,
+            std::numeric_limits<std::size_t>::max(), context.isCancelled,
+            color::DisplayFramePacking{.allowRgb10A2 = tenBit,
+                                       .luma = render::kDisplayPackParityLuma});
+        if (!cpu) {
+            return fail(context.isCancelled() ? GpuResidentPreviewDiagnosticCode::Cancelled
+                                              : GpuResidentPreviewDiagnosticCode::CpuOracleFailure,
+                        "the CPU display packer rejected the preview pack fixture");
+        }
+        const render::GpuDisplayPackRequest pack{.layout = layout,
+                                                 .luma = render::kDisplayPackParityLuma};
+        std::string reason;
+        if (tenBit && soft) {
+            // The frame holds a pixel 10:10:10:2 cannot hold: the refusal is the only right answer.
+            const auto begin = context.display.begin(resident, context.imageBudget, pack);
+            if (begin.code != GpuResidentDisplayDiagnosticCode::None) {
+                return fail(GpuResidentPreviewDiagnosticCode::NativeFailure,
+                            "the refused preview pack was rejected early: " + begin.message);
+            }
+            const auto status =
+                waitFor(context.display, context.isCancelled, context.deadlineNanoseconds, reason);
+            if (status == NativeStatus::Ok) {
+                static_cast<void>(context.display.takeImage());
+                return fail(GpuResidentPreviewDiagnosticCode::ParityFailure,
+                            "the resident display published a 10:10:10:2 frame with a soft pixel");
+            }
+            if (status != NativeStatus::Failed) {
+                return waitFailure(status, reason);
+            }
+            if (context.display.diagnostic().code !=
+                    GpuResidentDisplayDiagnosticCode::LayoutRefused ||
+                cpu.value()->pixelLayout() != render::DisplayPixelLayout::Straight8888) {
+                return fail(GpuResidentPreviewDiagnosticCode::NativeFailure,
+                            "the soft frame failed with an unexpected diagnostic: " + reason);
+            }
+            static_cast<void>(context.display.takeImage());
+            continue;
+        }
+        std::vector<Rgba8> measured;
+        const auto ran = runDisplayReadback(context, resident, measured, reason, &pack);
+        if (ran.code != GpuResidentPreviewDiagnosticCode::None) {
+            return ran;
+        }
+        const render::GpuDisplayImage* output = context.display.image();
+        std::optional<render::GpuDisplayPackReport> report;
+        if (output != nullptr) {
+            report = output->packReport();
+        }
+        if (output == nullptr || output->pixelLayout() != layout ||
+            cpu.value()->pixelLayout() != layout || !report.has_value() ||
+            report->layout != layout || report->allowsRgb10A2 == soft ||
+            !(report->counters == cpu.value()->counters()) ||
+            !render::displayCellsWithin(layout, measured, cpu.value()->pixels(),
+                                        kGpuResidentPreviewDisplayRgbToleranceCodes)) {
+            return fail(GpuResidentPreviewDiagnosticCode::ParityFailure,
+                        "a resident preview pack differs from the CPU packer");
+        }
+    }
+    hashPixels(context, width, height, pixels);
+    return ok();
+}
+
+} // namespace
 
 ProbeResult verifyResidentDisplayParity(ProbeContext& context) noexcept {
     struct Case final {
@@ -98,6 +204,18 @@ ProbeResult verifyResidentDisplayParity(ProbeContext& context) noexcept {
                         "resident display parity failed: " + reason);
         }
         hashPixels(context, testCase.width, testCase.height, *pixels);
+    }
+    // #733: the preview packs, on a frame the layout rule allows and on one it does not.
+    for (const bool soft : {false, true}) {
+        try {
+            auto packed = verifyResidentPreviewPack(context, soft);
+            if (packed.code != GpuResidentPreviewDiagnosticCode::None) {
+                return packed;
+            }
+        } catch (...) {
+            return fail(GpuResidentPreviewDiagnosticCode::InternalInvariant,
+                        "a preview pack fixture could not be built");
+        }
     }
     return ok();
 }

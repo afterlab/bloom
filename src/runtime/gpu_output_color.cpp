@@ -34,6 +34,8 @@ mapExecutorBegin(const GpuOcioExecutorDiagnosticCode code) noexcept {
         return GpuOutputColorDiagnosticCode::Cancelled;
     case GpuOcioExecutorDiagnosticCode::NativeTimeout:
     case GpuOcioExecutorDiagnosticCode::InternalInvariant:
+    // #733: only a preview display command can be refused for its layout; this route runs none.
+    case GpuOcioExecutorDiagnosticCode::LayoutRefused:
         return GpuOutputColorDiagnosticCode::ExecutorFailed;
     }
     return GpuOutputColorDiagnosticCode::InternalInvariant;
