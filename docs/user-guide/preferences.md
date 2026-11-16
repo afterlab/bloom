@@ -27,13 +27,13 @@ or create, is refused under the field and OK waits.
 | Viewer | Resolution, the background around the composition frame (Solid, Gray, Black, White), the transparency grid inside it, and the safe-areas, center-cross, thirds, rulers and pixel-grid overlays | Immediately |
 | Timeline | Time format, snapping, keyframes, graph editor, layer column width | Immediately |
 | Node Graph | Link style, snap to grid, grid size, **Show minimap** (the overview in the canvas corner, with its zoom row) and **Show zoom controls** (the zoom buttons and slider under the minimap); both on by default | Immediately |
-| Memory & Caches | RAM and VRAM headroom, **Worker memory cap** and **Worker threads** for export workers, media disk cache enable/directory/budget, **Keep local copies of source media** and its folder rules | Headroom on Apply or OK; worker limits on the next export you start; disk cache after restart |
+| Memory & Caches | RAM, VRAM and **Disk headroom**, **Worker memory cap** and **Worker threads** for export workers, media disk cache enable and directory, **Keep local copies of source media** and its folder rules | Headroom (RAM, VRAM and disk) on Apply or OK; worker limits on the next export you start; the other disk cache settings after restart |
 | Shortcuts | The keys of the two Purge commands, **Purge preview cache** and **Purge media cache**. A key another command already answers to is refused under the field, and clearing a field leaves the command without a key | On Apply or OK |
 | Performance | Read-only acceleration status | Not a preference |
 
 Immediate changes reach every open panel: the window hands the committed value to each editor,
 which applies it through the same setters its own menus use. Headroom reaches the engine on Apply or OK. Values marked **Restart** (the disk
-cache enable, location, disk-space budget and local-copy settings, marked once in the Media disk cache header) are read
+cache enable, location and local-copy settings, marked once in the Media disk cache header) are read
 when Bloom starts. Leave the cache directory empty for the default location; **Browse…** picks a
 folder and the reset button beside it returns to the default.
 
@@ -108,7 +108,7 @@ every export the application starts after the change, from the Export panel or o
 [MCP](mcp.md#export-worker-limits)). The result of an export reports the worker's peak memory
 whether or not a cap is set.
 
-## Memory headroom and disk budget
+## Memory and disk headroom
 
 **RAM headroom** and **VRAM headroom** are the memory Bloom leaves free for the rest of your
 computer; Bloom uses everything else for rendering and caching. They are the only memory limits:
@@ -123,8 +123,17 @@ overflowing or above-256-GiB value selects the default, which follows the measur
 The older `playback/operation-cache-bytes` and `playback/ram-preview-memory-bytes` preferences are
 no longer settings and are ignored.
 
-The disk cache budget, and the timeline layer column width, have a mode: **Automatic** (stored as 0)
-selects the machine-derived default, and **Custom** shows the value to enter. See
+**Disk headroom** is the space Bloom keeps free on the drive that holds the disk cache; the cache
+uses the free space beyond it and gives space back when other programs need it. **Automatic** is
+the smaller of 10% of the drive and 32 GiB; **Custom** takes a size up to 4096 GiB, stored as a
+decimal byte string under `media/disk-cache-headroom-bytes`. It applies on Apply or OK. The line
+under the field shows the live figures: the space being kept free, what the cache holds out of
+what it may hold now, and the free space on the cache drive. The disk cache budget of earlier
+versions is gone; a saved value is dropped. See
+[Memory](memory.md#the-disk-cache-disk-headroom) for how the cache uses the space.
+
+Disk headroom and the timeline layer column width have a mode: **Automatic** (stored as 0, or not
+stored) selects the default, and **Custom** shows the value to enter. See
 [Memory](memory.md) for how Bloom derives the defaults. The disk cache can be purged at any time from
 **Edit → Purge… → Purge media cache**, which clears the on-disk store and the applicable in-memory
 decoded media off the interface thread; the source files are never changed.

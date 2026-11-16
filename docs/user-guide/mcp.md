@@ -171,7 +171,8 @@ call goes through the same controllers the window uses, and the window shows it 
   `audioPlayback`, `loopPlayback`, `crashRecovery` (off by default), `ramHeadroomBytes` and `vramHeadroomBytes` (0 to 256 GiB), `exportWorkerMemoryCapBytes` (0 for no
   cap, to 1 TiB) and `exportWorkerThreads` (0 for automatic, to 64),
   `mediaDiskCache`, `mediaDiskCacheDirectory` (absolute, or empty for the default),
-  `mediaDiskCacheBudgetBytes` (0 for the default), `mediaLocalCopies` (`automatic`, `always` or
+  `mediaDiskHeadroomBytes` (the space to keep free on the cache drive: 0 for the default, to
+  4096 GiB; applies at once), `mediaLocalCopies` (`automatic`, `always` or
   `never`), `mediaLocalCopyFolders` (one line per folder rule, `keep:<absolute folder>` or
   `skip:<absolute folder>`; empty for none), `timelineTimeFormat` (`frames` or `timecode`),
   `timelineSnapping`, `timelineKeyframesVisible`, `timelineGraphEditor`, `nodeLinkStyle` (`spline`,

@@ -10,7 +10,7 @@ and gives the detailed counts.
 | Activity | What is happening now: a save, an import, an export, the RAM preview filling, playback preparing or waiting for frames, or a problem with the preview (with **Details** when the composition cannot render). **Idle** when nothing is |
 | Pixel | The color under the pointer in the Viewer, while it is over the frame |
 | RAM | What the caches hold against what they may use, and **Cache**, the frames held for preview. Hover for hits and misses, and for how much of it decoded source media holds |
-| Disk cache | How much the disk cache holds: the local copies Bloom keeps of source media on slow storage. Hover for RAM hits, disk hits and network reads |
+| Disk cache | What the disk cache holds and what it may hold now ("used / available"): the local copies Bloom keeps of source media on slow storage, and the free space beyond the [Disk headroom](memory.md#the-disk-cache-disk-headroom) it may still grow into. Hover for RAM hits, disk hits, network reads, evictions, refused writes and dropped writes, the headroom and the free space on the cache drive |
 | MCP | **MCP :port** while the MCP server runs. Click it to open the MCP Server panel; it is not shown while the server is stopped |
 | Version | The running version of Bloom |
 

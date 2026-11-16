@@ -2,7 +2,7 @@
 
 Status: working; image, video, audio and export are implemented, and the sections marked as research are not
 
-Updated: 2026-11-15
+Updated: 2026-11-16
 
 ## v0 implemented boundary
 
@@ -1221,7 +1221,14 @@ depend on the cache module. The host that opens the store also names it the proc
 (`platform::setProcessSourceStore()`), and every operation cache made afterwards starts with it:
 the evaluators that live for one measurement or one export (layer alignment, the point tracker,
 scripted bounds and node queries, an export's CPU fallback) read through the same local copies
-without being handed the store.
+without being handed the store. The sessions that read a movie outside a frame do the same
+(#732): the Assets panel's movie verification and thumbnail reader, its audio decode, sound
+analysis, the export audio preflight and the export audio decoder each open their
+`VideoDecodeSession` with the process's store and the asset's local-copy choice, so a movie with
+audio opened in a second session reads nothing from its storage. A probe names no digest; a
+source whose identity is on record under a verified digest opens under that digest, by byte
+range, instead of being captured whole. Only the import probe reads the file directly: it is the
+first contact, the one that hashes the file.
 
 **The RAM tier in front of it.** The operation cache's decoded-media entries are the first tier:
 a source revision (the encoded bytes), and the native samples and channel sets decoded from it.
@@ -1241,13 +1248,14 @@ volume is never copied under Automatic.
 
 **Location and settings.** The platform cache directory (`bloom::platform::userCacheDirectory()`)
 plus a `media` leaf, or a `media/disk-cache-directory` override (an absolute path; anything else
-falls back to the platform default). The enable flag, directory, byte budget and the local-copy
-mode with its folder rules are edited under **Edit → Preferences… → Memory & Caches** and read
-once at startup, so a change takes effect after restart; **Edit → Purge… → Purge media cache**
-empties the store at any time. The application publishes the values it started with to
-`settings.v1` beside the cache root (`publishSourceMirrorSettings()`), which is what the
-Qt-free hosts (`bloom-cli`, `bloom-mcp`, headless export) read, so every process of one user
-shares one store with one policy.
+falls back to the platform default). The enable flag, directory and the local-copy mode with its
+folder rules are edited under **Edit → Preferences… → Memory & Caches** and read once at startup,
+so a change takes effect after restart. The **Disk headroom** on the same page applies on Apply
+or OK (`SourceMirror::setHeadroom()`). **Edit → Purge… → Purge media cache** empties the store at
+any time. The application publishes its values to `settings.v1` beside the cache root
+(`publishSourceMirrorSettings()`), at startup and again when the headroom changes; that file is
+what the Qt-free hosts (`bloom-cli`, `bloom-mcp`, headless export) read, so every process of one
+user shares one store with one policy and one headroom.
 
 **Entries.** `sources/<aa>/<sha256 of the source path>.src`: an 80-byte header (the source's
 identity when it was read: size, modification time and file id; and the SHA-256 of the payload)
@@ -1263,11 +1271,13 @@ byte range. `SourceMirror::chunks()` opens `sources/<aa>/<sha256 of the source p
 64-byte header (the same identity: size, modification time and file id), one 8-byte slot per
 1 MiB chunk (the first eight bytes of the chunk's SHA-256, zero while the chunk is missing), and
 the chunks at their offsets in the source. The file is sparse, so it takes the room of the chunks
-it holds, and that is what the byte budget is charged. A chunk's bytes are written before its
+it holds, and that is what the store counts for it. A chunk's room is reserved before the chunk
+is written, under the same rule as a whole entry (see Space and eviction below); a refused chunk
+is not written and its read goes on from the source. A chunk's bytes are written before its
 slot; a chunk is checked against its slot every time it is read back, and one that fails is
 cleared and read from the source again. A changed source drops its chunk file, eviction removes
-a chunk file whole, and a source that could never fit the byte budget gets none. The Assets
-panel reads such a source as partly local until every chunk is there.
+a chunk file whole, and a source larger than everything the store may hold now gets none. The
+Assets panel reads such a source as partly local until every chunk is there.
 
 A video session whose source the mirror keeps (`VideoDecodeSession::setSourceStore()`) opens a
 **progressive snapshot** (`platform::ReadOnlyFileSnapshot::captureProgressive()`) instead of
@@ -1278,7 +1288,7 @@ been told is local it sends `NeedRange` inside the call; the host brings the ran
 the source gave) and answers `RangeReady` with the extent that is now local, which the worker
 remembers. A thread at idle priority fills the rest of the file, yields to any range a decode is
 waiting for, holds no lock across I/O, stops with the session and waits while the mirror has a
-write backlog or the cache volume is short of space. A partly filled source is always usable.
+write backlog or no room for another chunk. A partly filled source is always usable.
 
 The snapshot carries the digest the asset records. It is proved when the fill completes: the
 local file is hashed and compared, and the identity is recorded in the verified-source memo
@@ -1294,27 +1304,69 @@ whole file is brought in first.
 **Writes.** Write-through and never in the frame's way: the read that missed returns its bytes to
 the caller at once and shares them with one background writer thread at idle priority. An entry
 is written to a temporary file in its own directory and renamed over the target, so a reader
-never sees a torn file. The pending-write queue is bounded in bytes
-(`kSourceMirrorWriteQueueByteCapacity`, 256 MiB, lowered under memory pressure): a full queue
-drops its oldest pending write, and a source larger than the whole capacity is taken only while
-the queue is empty. A dropped write only means that source is read once more later. Known gap,
-queued in #732: the memory ledger counts this queue as reusable cache, so during a RAM Preview
-fill its capacity drops to zero and most writes are dropped, while outside a fill it can grow past
-256 MiB; and when a playback loop needs more than the cache budget, least-recently-used eviction
-leaves no hits on the next pass. The index
-(`index.v2`) is rewritten in batches and on idle; the index is read, and anything left by the
-retired store removed, on the writer thread, so startup never waits on the cache directory.
+never sees a torn file. The pending-write queue is **live work** with a fixed ceiling
+(`kSourceMirrorWriteQueueByteCapacity`, 256 MiB), registered with the memory ledger as
+`MemoryBudgetOwnerKind::LiveWork` (#732): the memory budgets neither resize it nor drop what is
+waiting, during a RAM Preview fill or under memory pressure, and it never grows past the ceiling.
+A source larger than the whole capacity is taken only while the queue is empty. What a full queue
+does depends on the work:
 
-**Budget and eviction.** Least recently used first, under a byte budget (default `min(10% of the
-cache volume's free space, 32 GiB)`, `media/disk-cache-budget-bytes` overrides it) and a bounded
-entry count (`kDefaultSourceMirrorMaxEntries`, 200,000). A write that would leave the cache
-volume with less than `kSourceMirrorFreeSpaceReserveBytes` (1 GiB) free is skipped and reported
-as disk pressure.
+- **Playback and every other read with a deadline:** the oldest pending write is dropped and
+  counted (`droppedWrites`). A dropped write only means that source is read once more later.
+- **A RAM Preview fill** (`MemoryBudgetLedger::previewFillActive()`): nothing is dropped. The
+  read that brought the bytes waits in `keep()` for the writer to make room, on the render worker
+  and never on the UI thread, so the first pass of footage that fits the space leaves all of it
+  on disk. The wait ends when there is room, at a purge, at shutdown and when the fill ends (it
+  then follows the playback rule). A fill has no frame deadline, and an idle-priority writer is
+  slower than the reads of a fill; that is why the reads wait here and nowhere else.
 
-**Reporting.** The status bar's Disk cell shows how much the store holds; its tooltip counts RAM
-hits (a decoded frame served from memory), disk hits (a source served from its local copy) and
-network reads (a source read from a network volume), plus reads of other slow storage when there
-are any.
+The index (`index.v2`) is rewritten in batches and on idle; the index is read, and anything left
+by the retired store removed, on the writer thread, so startup never waits on the cache directory.
+
+**Space and eviction (#732).** The store has no byte budget of its own. It keeps a **headroom**
+free on the cache volume, like the RAM and VRAM headroom: the user sets what to leave free and
+the store uses the rest.
+
+- *Headroom.* `media/disk-cache-headroom-bytes`; unset is the default, the smaller of a tenth of
+  the cache volume's capacity and 32 GiB (`defaultSourceMirrorHeadroom()`). Whatever the setting,
+  no write may leave the volume with less than `kSourceMirrorFreeSpaceReserveBytes` (1 GiB) free.
+- *Measured live.* Free space is read from the file system when the store writes (a whole entry
+  on the writer thread, a chunk on the worker that keeps it) and on the writer's idle pass, never
+  on the UI thread and never under the store's lock. One measurement serves the writes of one
+  second, with the store's own writes and removals applied to it meanwhile. The store may hold
+  what it stores now plus the free space beyond the headroom, so its own bytes count as usable:
+  it grows into free space, and a full store does not shrink itself on the next start.
+- *Giving space back.* When other programs bring the free space under the headroom, the store
+  evicts exactly what is missing, least recently used first, whether or not an entry is in use.
+  This happens on the next write and on the idle pass, so space comes back while nothing is
+  being written, and at once when the headroom setting grows.
+- *Making room keeps what is in use.* A write that needs room takes the least recently used
+  entries as victims. It is **refused**, counted (`refusedWrites`) and evicts nothing when a
+  victim is in use, which means either of: (a) the victim was used within the hold window
+  (`kSourceMirrorHoldWindow`, 10 minutes); (b) this same source was asked for before and found
+  no place (it was evicted, or refused), and the victim has been used since. Rule (a) keeps the
+  open project's current work. Rule (b) keeps a loop larger than the space on a stable set of
+  entries however long one pass takes: every entry of a loop is used between two requests for a
+  source that does not fit, so that source is refused again instead of evicting a frame the loop
+  still needs, and the loop gets the same disk hits on every pass. New work still replaces
+  entries nothing has used for the window. A source that was evicted earlier in the same run and
+  returns while the space is still full is refused once (which re-stamps it) and gets in on its
+  next read, when the entries in its way are idle. The record of sources that found no place is
+  a fixed-size table in memory, bounded by the entry limit and cleared by a purge.
+- *Entry limit.* `kDefaultSourceMirrorMaxEntries` (200,000) follows the same rule.
+- *Unreadable volume.* When the file system does not report the volume's space, there is nothing
+  to measure and the store holds at most `kSourceMirrorUnmeasuredByteLimit` (32 GiB).
+- *Two processes* (the application and a headless tool) may share one folder with separate
+  indexes; both obey the measured headroom and neither shares the other's record of use.
+
+**Reporting.** The status bar's Disk cell shows what the store holds and what it may hold now
+(used and available: what it stores plus the room it may still grow into). Its tooltip counts RAM
+hits (a decoded frame served from memory), disk hits (a source served from its local copy),
+network reads (a source read from a network volume), reads of other slow storage when there are
+any, evictions, refused writes and dropped writes, and gives the headroom in effect and the free
+space on the cache volume. The counts start at launch and again after a media purge. Preferences
+shows the same live figures under the Disk headroom field. Both read
+`SourceMirror::statistics()`, which only copies counters: nothing is measured on the UI thread.
 
 **Gestures.** A source's bytes do not depend on a parameter override, so a plan compiled for an
 interactive override reads through the store like any other; only the decoded-frame memory
@@ -1545,21 +1597,24 @@ Linux and macOS capture the source snapshot and hand it to the worker as an inhe
 Windows captures it the same way and hands over an inherited read-only handle. The same tests of
 that path run on all three.
 
-**Controls.** `media/disk-cache-enabled` (default on), `media/disk-cache-budget-bytes`, and
-`media/disk-cache-directory` in QSettings; **Edit → Purge… → Purge media cache** clears every entry
+**Controls.** `media/disk-cache-enabled` (default on), `media/disk-cache-headroom-bytes` (unset
+for the default headroom), and `media/disk-cache-directory` in QSettings. The byte budget of
+earlier builds is gone: its key `media/disk-cache-budget-bytes` is removed at startup and its
+value is never read, and a `budget` line in `settings.v1` is ignored. **Edit → Purge… → Purge media cache** clears every entry
 and resets statistics, together with the applicable in-memory decoded media, on the task system's
 BlockingIo lane (never the UI thread, and with no confirmation, since the caches are rebuildable).
 Source files are never read, written, or changed. The window status bar's own disk-
-cache cell (`mediaDiskCacheStatusText()`, beside the existing RAM-preview cache cell) reports a
-lightweight-polled hit rate and resident byte count, or "Disk cache off" when disabled -- a
-second, independent budget from the RAM preview and operation caches `animation-and-time.md`
-documents.
+cache cell (`mediaDiskCacheStatusText()`, beside the existing RAM-preview cache cell) reports the
+lightweight-polled used and available bytes, or "Disk cache off" when disabled -- independent of
+the RAM preview and operation caches `animation-and-time.md` documents.
 
 | Bound | v0 value |
 | --- | --- |
-| Media disk cache budget | `min(10% of free disk space, 32 GiB)` default; settings override |
+| Media disk cache headroom | `min(10% of the cache volume, 32 GiB)` kept free by default; settings override; never under 1 GiB free |
+| Media disk cache size | what it stores plus the free space beyond the headroom, measured when it writes; 32 GiB when the volume cannot be read |
+| Media disk cache hold window | 10 minutes (`kSourceMirrorHoldWindow`) |
 | Media disk cache entry count | 200,000 |
-| Media disk cache write queue | 256 MiB of encoded source bytes (`kSourceMirrorWriteQueueByteCapacity`), lowered under memory pressure; the oldest pending write is dropped when full |
+| Media disk cache write queue | 256 MiB of encoded source bytes (`kSourceMirrorWriteQueueByteCapacity`), fixed; when full, playback drops the oldest pending write and a RAM Preview fill waits |
 
 ## Export Pipeline
 

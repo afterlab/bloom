@@ -4,7 +4,7 @@ Status: accepted
 
 Date: 2026-11-13
 
-Issues: #718
+Issues: #718, #732
 
 ## Context
 
@@ -92,3 +92,39 @@ again:
   verification pass, not by an unrelated edit.
 - `localCopies` joins the asset interpretation in the project format as an optional member; a
   build that predates it treats it under the format's rules for unknown members.
+
+## Amendment (2026-11-16, #732): a disk headroom instead of a byte budget
+
+The first version gave the mirror a byte budget fixed at startup (a tenth of the cache volume's
+free space, at most 32 GiB, not counting the mirror's own bytes) and evicted the least recently
+used entry. Two things followed on real footage. A playback loop larger than the budget got no
+disk hits after its first pass, because the least recently used entry was always the next frame
+the loop needed. And the write queue was registered with the memory ledger as reusable cache, so
+a RAM Preview fill shrank it to nothing and most writes of the fill were dropped.
+
+This amends decision 4 and the consequence about the byte budget:
+
+1. **A headroom, not a budget.** The user sets the space to keep free on the cache volume
+   (default: the smaller of a tenth of the volume and 32 GiB; never under 1 GiB free). The mirror
+   may hold what it stores plus the free space beyond the headroom, measured when it writes. Its
+   own bytes count as usable. This is the model the RAM and VRAM headroom already use. The byte
+   budget setting is removed and an existing value is dropped.
+2. **Space is given back.** When other programs bring the free space under the headroom, the
+   mirror evicts what is missing, least recently used first.
+3. **Making room keeps what is in use.** A write that needs room is refused and counted, and
+   evicts nothing, when the entry it would evict was used within ten minutes, or was used since
+   the same source last found no place. A loop larger than the space therefore keeps a stable set
+   of disk hits for any pass length, and new work still replaces entries nothing has used for
+   ten minutes. The alternative, a clock window alone, fails when one pass takes longer than the
+   window; protecting entries by project would need the mirror to know about projects.
+4. **The write queue is live work.** Its 256 MiB ceiling is fixed; the memory budgets neither
+   resize it nor drop what is waiting. A full queue drops its oldest write during playback, where
+   a frame has a deadline, and makes the read wait during a RAM Preview fill, where it has none.
+   Decision 4's "never a wait" now holds for every read with a deadline; a fill trades a short
+   wait for leaving everything it read on disk.
+
+Consequences: the disk cache follows the free space of the machine instead of a figure chosen at
+startup, so on a mostly empty drive it holds far more than before and on a nearly full one it
+holds less and gives space back. A source that does not fit is read from its storage on every
+pass and shows up as a refused write in the status bar instead of silently evicting its
+neighbors. The status bar and Preferences show used and available space and the counts.

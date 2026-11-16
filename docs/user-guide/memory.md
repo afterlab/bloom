@@ -117,7 +117,46 @@ every other cache, it may use usable memory (measured RAM minus the RAM headroom
 the other caches inside it; there is no fixed share of physical memory. Like the other reusable
 caches it shares an observed OS process limit. Missing, zero or unreadable settings select
 Automatic. Explicit settings are not reduced to a fraction of physical
-or available RAM. Disk-cache settings still take effect after restart.
+or available RAM. The disk cache's enable, folder and local-copy settings still take effect after
+restart; its **Disk headroom** applies on Apply or OK.
+
+## The disk cache: Disk headroom
+
+The disk cache holds local copies of source media that sits on slow storage (network shares,
+removable and rotational disks), so each file is read from there once. It follows the same rule
+as RAM and VRAM: you set what to leave free, and Bloom uses the rest.
+
+- **Disk headroom** (Preferences → Memory & Caches) is the space Bloom keeps free on the cache
+  drive. **Automatic** is the smaller of 10% of the drive and 32 GiB; **Custom** takes a size up
+  to 4096 GiB. Whatever you set, the cache never writes when that would leave less than 1 GiB
+  free. There is no size limit to set for the cache itself: the old disk cache budget is gone,
+  and a value saved by an earlier version is dropped.
+- **It grows into free space.** Free space is measured when the cache writes, not once at
+  startup, and what the cache already holds counts as usable. On a mostly empty drive it keeps
+  much more than a fixed budget would.
+- **It gives space back.** When other programs fill the drive and the free space falls under the
+  headroom, the cache removes what is missing, least recently used first, also while Bloom is
+  idle. A larger headroom is given its space as soon as you apply it.
+- **It keeps what you are working with.** When the cache is full, a new copy needs room. The
+  cache does not make that room by removing a file used in the last 10 minutes, or one your
+  current loop has used since the new file was last turned away. The new copy is refused and
+  counted instead. So when the footage of a loop is larger than the space, the same part of it
+  stays on disk and is served from there on every pass, and the rest is read from its storage
+  each time; nothing is removed just before it is needed again. Footage nobody has used for 10
+  minutes makes way for new work. A file that was removed for other work earlier in the session
+  can be refused once more when you come back to it; it is copied the next time it is read.
+- **RAM Preview leaves what it read on disk.** While a RAM Preview fills, a read waits a moment
+  for the cache's writer when it falls behind instead of skipping the copy, so the first pass of
+  footage that fits the space leaves all of it on disk. During playback a copy is skipped rather
+  than making a frame wait; that file is copied the next time it is read.
+
+The status bar's **Disk cache** group shows what the cache holds and what it may hold now, for
+example "12.4 GB / 268 GB". Hover it for disk hits, network reads, evictions, refused writes and
+dropped writes since Bloom started (or since the last media purge), the headroom and the free
+space on the cache drive. Refused writes that keep growing while you loop mean the footage of
+that loop is larger than the space: free some space on the cache drive, lower the headroom, or
+move the cache to a larger drive (**Cache directory**, after restart). Preferences shows the same
+live figures under **Disk headroom**.
 
 ## Actual limits and memory availability
 
@@ -167,7 +206,8 @@ of Ctrl on macOS). **Preferences → Shortcuts** changes or clears either one.
   computed again, so the preview cache's held-bytes reading drops to empty and refills only as you
   work. The graphics memory those stores held goes back to the device at once, and the status bar
   says how much (for example "Preview cache purged; 11.8 GB of graphics memory returned").
-- **Purge media cache** clears the on-disk decoded-frame store, the evaluator's in-memory decoded
+- **Purge media cache** clears the disk cache (the local copies of source media) and its counts,
+  the evaluator's in-memory decoded
   still-image and decoded-video media, retained source revisions and completed RAM preview frames,
   and the resident GPU scene store
   (which retains decoded/uploaded media sources). Your source files are never read, written, or
