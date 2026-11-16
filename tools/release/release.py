@@ -4,10 +4,12 @@
 The release workflow (.github/workflows/release.yml) calls them in this order, and the end-to-end
 update test (tools/release/update_e2e.py) calls `publish` to make a release it serves itself.
 
-    release.py version --tag TAG [--source DIR]
+    release.py version (--tag TAG | --rehearsal) [--source DIR]
         checks that TAG is a version tag (v0.1.0-alpha.1), that the source tree is that version
         (the default of BLOOM_PACKAGE_VERSION in CMakeLists.txt) and that the changelog has a
-        dated section for it. Prints `version=` and `date=` lines.
+        dated section for it. Prints `version=`, `date=` and `tag=` lines. A rehearsal has no
+        tag yet: the version is the source tree's, the changelog is checked the same way, and
+        the tag printed is the one that version will get.
 
     release.py validation --statuses FILE [--context NAME]
         FILE holds the commit's statuses as GitHub lists them (JSON, newest first). The newest
@@ -116,16 +118,23 @@ def check_address(url: str, what: str) -> None:
         raise ValueError(f"{what} must be an HTTPS address")
 
 
-def tag_version(tag: str, source: Path) -> tuple[str, str]:
-    found = TAG.match(tag)
-    if not found:
-        raise ValueError(f"'{tag}' is not a version tag such as v0.1.0-alpha.1")
-    version = found.group(1)
+def tag_version(tag: str | None, source: Path) -> tuple[str, str]:
+    """The version and its changelog date; `tag` is None for a rehearsal, which has none yet."""
     declared = DEFAULT_VERSION.search((source / "CMakeLists.txt").read_text(encoding="utf-8"))
     if not declared:
         raise ValueError("CMakeLists.txt does not declare BLOOM_PACKAGE_VERSION")
-    if declared.group(1) != version:
-        raise ValueError(f"the tag is {version} and the source tree is {declared.group(1)}")
+    if tag is None:
+        version = declared.group(1)
+        if not TAG.match(f"v{version}"):
+            raise ValueError(f"the source tree's version '{version}' is not a release version "
+                             f"such as 0.1.0-alpha.1")
+    else:
+        found = TAG.match(tag)
+        if not found:
+            raise ValueError(f"'{tag}' is not a version tag such as v0.1.0-alpha.1")
+        version = found.group(1)
+        if declared.group(1) != version:
+            raise ValueError(f"the tag is {version} and the source tree is {declared.group(1)}")
     changelog = load("changelog")
     text = (source / "CHANGELOG.md").read_text(encoding="utf-8")
     found_problems = changelog.problems(text, version)
@@ -283,7 +292,9 @@ def main(arguments: list[str]) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
 
     version = commands.add_parser("version")
-    version.add_argument("--tag", required=True)
+    which = version.add_mutually_exclusive_group(required=True)
+    which.add_argument("--tag")
+    which.add_argument("--rehearsal", action="store_true")
     version.add_argument("--source", type=Path, default=ROOT)
 
     validation = commands.add_parser("validation")
@@ -319,9 +330,10 @@ def main(arguments: list[str]) -> int:
     options = parser.parse_args(arguments)
     try:
         if options.command == "version":
-            label, date = tag_version(options.tag, options.source)
+            label, date = tag_version(None if options.rehearsal else options.tag, options.source)
             print(f"version={label}")
             print(f"date={date}")
+            print(f"tag=v{label}")
         elif options.command == "validation":
             statuses = json.loads(options.statuses.read_text(encoding="utf-8"))
             if not isinstance(statuses, list):

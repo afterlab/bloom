@@ -821,6 +821,18 @@ work folder and checks the link. It never runs `installer -pkg` and never writes
 folder. A linked `bloom-cli` renders a frame headless through the installed package in
 `bloom.package.check`.
 
+The real installation is done where it is safe: on the release workflow's hosted macOS machine,
+which is thrown away afterwards and whose user needs no password for it
+(`tools/ci/macos-package/installed.sh`, in the job after the build, in a rehearsal as well). It
+runs `sudo installer -pkg` on the built package, requires `/Applications/Bloom.app` owned by
+root and the `/usr/local/bin/bloom-cli` link to the program inside it, runs the package check's
+contents, version and run rules on the installed application through that link, which starts
+the application without a window and renders a frame headless, and attaches the built disk
+image and reads its application, its link, its background file and its window layout. A failure
+fails the run. The same job then takes the desktop captures of the installed application
+(`tools/ci/captures`): `/Applications` and a project file in Finder, the opened disk image with
+its background, the Dock with Bloom running, and the Help menu with Install Command-Line Tool.
+
 ### Worker Memory
 
 Bloom runs media, color and export work in worker processes, each launched with a memory budget

@@ -45,6 +45,27 @@ them. Nobody downloads Bloom from it.
    The workflow refuses a tag whose commit has no such status, or whose newest status of that
    name is not `success`.
 
+## The rehearsal
+
+Before the tag, the workflow is run once on the commit that will be tagged: Actions > Release >
+Run workflow, on the branch, with **rehearsal** checked and no tag.
+
+```sh
+gh workflow run release.yml --ref main -f rehearsal=true
+```
+
+A rehearsal builds that commit as the version the source tree declares and runs every job up to
+and including the release candidate: the three builds, the package checks, the clean-system
+starts, the real installs and the desktop captures. It is how what only a hosted runner can show
+is seen before a tag exists. The last job does not run, so a rehearsal never waits for approval,
+never reads the key, and never creates or changes a release, a tag or the files of
+`alpha-channel`. It does not need the validation record. Where the two repository variables are
+not set yet, it builds with a public key made for the run, whose private half is deleted in the
+same step, and with the address of `alpha.json` among the files of `alpha-channel`.
+
+Its artifacts are the ones a release run makes: `release-candidate`, which the end-to-end
+update test takes (below), and `desktop-captures`.
+
 ## The tag
 
 ```sh
@@ -53,8 +74,9 @@ git push origin v0.1.0-alpha.1
 ```
 
 The workflow starts when the tag is created. It also starts by hand (Actions > Release > Run
-workflow, with the tag's name), which builds an existing tag again. It never runs for a branch or
-a pull request, and it runs although the tagged commit's message skips the other workflows. A
+workflow, with the tag's name), which builds an existing tag again. Apart from a rehearsal it
+never runs for a branch, and never for a pull request, and it runs although the tagged commit's
+message skips the other workflows. A
 tag that is not a version tag (`v<major>.<minor>.<patch>`, optionally `-alpha.<n>`, `-beta.<n>`
 or `-rc.<n>`) ends the run at its first job.
 
@@ -75,14 +97,30 @@ or `-rc.<n>`) ends the run at its first job.
    AppImage, and the install script, which installs, runs and renders through the linked
    `bloom-cli`, and uninstalls. The install script form is signed there with a key made for the
    run, because the release's key is not available to that job.
-4. **Release candidate.** The three platforms' files with `release-notes.md`, `install.sh`,
+4. **Real installs and desktop captures**, each on a fresh hosted machine with the files the
+   build jobs made:
+   - macOS: `tools/ci/macos-package/installed.sh` installs the installer package with the
+     system's installer (`sudo installer -pkg`), requires `/Applications/Bloom.app` and the
+     `/usr/local/bin/bloom-cli` link, runs the package check's contents, version and run rules
+     through that link, which renders a frame headless, and attaches the disk image and reads
+     its window layout.
+   - Windows: the installer runs silently for the current user, as a double click would
+     install, and is uninstalled afterwards.
+   - Linux: the install script installs on a bare Ubuntu 24.04 image.
+
+   Then `tools/ci/captures` takes pictures of the installed application on each desktop: its
+   icon in Finder, the Dock, the opened disk image and the Help menu; in the Start menu, Explorer
+   and the taskbar; in an application menu, a launcher and its own window on Linux. The three
+   sets are the artifact `desktop-captures`. A picture that cannot be taken fails the run.
+5. **Release candidate.** The three platforms' files with `release-notes.md`, `install.sh`,
    `PKGBUILD`, `.SRCINFO` and `SHA256SUMS`, as the artifact `release-candidate`. Nothing is
-   signed yet.
-5. **Sign and publish**, after the approval (below).
+   signed yet. A rehearsal ends here.
+6. **Sign and publish**, after the approval (below).
 
 ## The end-to-end update test
 
-While the run waits for approval, the candidate is tested on the three machines:
+While the run waits for approval, the candidate is tested on the three machines (a rehearsal's
+candidate is tested the same way, before the tag):
 
 ```sh
 gh run download <run> -n release-candidate -D candidate
@@ -145,6 +183,8 @@ environment cannot read that environment's variables.
 | File | What it does |
 | --- | --- |
 | `tools/release/release.py` | The workflow's steps: `version`, `validation`, `settings`, `candidate`, `publish` |
+| `tools/ci/macos-package/installed.sh` | Installs the macOS installer package for real on a hosted machine and checks the result |
+| `tools/ci/captures` | The desktop captures of the installed application, one script per platform |
 | `tools/release/changelog.py` | Checks the changelog and writes a version's release notes |
 | `tools/release/sums.py` | Writes and checks `SHA256SUMS` |
 | `tools/release/sign_release` | Signs files, the checksum list and the feed; the only program that reads the key |
@@ -156,4 +196,5 @@ environment cannot read that environment's variables.
 `bloom.release.tools_tests` and `bloom.release.script_tests` run them on stand-in releases with
 RFC 8032's public test keys, and check the rules the workflow's text must keep: it starts only
 for a created tag or by hand, every action is pinned to a commit, the validation record is
-required before anything is built, and only the last job waits for approval and reads the key.
+required before anything is built, only the last job waits for approval and reads the key, and
+a rehearsal builds the commit it was started for and publishes nothing.

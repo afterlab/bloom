@@ -8,6 +8,14 @@ name: Release
 # repository carries a skip instruction, and that suppresses the workflows of a push, a tag's
 # push included. The first job ends the run for any tag that is not a version tag.
 #
+# A rehearsal is a start by hand with `rehearsal` checked. It builds the commit of the branch or
+# tag it was started for, as the version the source tree declares, and runs every job up to and
+# including the release candidate: the builds, the package checks, the clean-system starts, the
+# real installs and the desktop captures. The last job does not run, so a rehearsal never waits
+# for approval, never reads the key, and never creates or changes a release, a tag or the
+# channel's files. It needs no validation record, and where the two repository variables are not
+# set yet it builds with a key made for the run, whose private half is thrown away at once.
+#
 # What the repository must hold (Settings):
 #   * the variables BLOOM_UPDATE_PUBLIC_KEYS (Base64 of each 32-byte Ed25519 public key, separated
 #     by commas) and BLOOM_UPDATE_FEED_URL (the HTTPS address every build reads its update feed
@@ -28,26 +36,38 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: The version tag to build and release, for example v0.1.0-alpha.1
-        required: true
+        description: The version tag to build and release, for example v0.1.0-alpha.1 (a rehearsal needs none)
+        required: false
         type: string
+      rehearsal:
+        description: Rehearsal. Build and check the selected branch up to the release candidate, and publish nothing
+        required: false
+        type: boolean
+        default: false
+
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch' && inputs.rehearsal
+      && format('Rehearsal of {0}', github.ref_name)
+      || format('Release {0}', github.event_name == 'workflow_dispatch' && inputs.tag || github.event.ref) }}
 
 concurrency:
-  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.ref }}
+  group: >-
+    release-${{ github.event_name == 'workflow_dispatch' && inputs.rehearsal
+                && format('rehearsal-{0}', github.sha)
+                || (github.event_name == 'workflow_dispatch' && inputs.tag || github.event.ref) }}
   cancel-in-progress: false
 
 permissions:
   contents: read
 
 env:
-  BLOOM_UPDATE_PUBLIC_KEYS: ${{ vars.BLOOM_UPDATE_PUBLIC_KEYS }}
-  BLOOM_UPDATE_FEED_URL: ${{ vars.BLOOM_UPDATE_FEED_URL }}
   # Where the versioned release's files and the fixed channel release's files are downloaded.
   BLOOM_RELEASE_DOWNLOADS: ${{ github.server_url }}/${{ github.repository }}/releases/download
 
 jobs:
   # The tag is a version tag of this tree, the commit's hardware validation is recorded, and the
-  # build settings are there. Nothing is built for a tag that fails any of these.
+  # build settings are there. Nothing is built for a tag that fails any of these. A rehearsal
+  # takes the version from the source tree, needs no validation record, and says so.
   gate:
     if: >-
       github.event_name == 'workflow_dispatch' ||
@@ -60,32 +80,46 @@ jobs:
       statuses: read
     env:
       BLOOM_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.ref }}
+      BLOOM_REHEARSAL: ${{ github.event_name == 'workflow_dispatch' && inputs.rehearsal }}
+      BLOOM_UPDATE_PUBLIC_KEYS: ${{ vars.BLOOM_UPDATE_PUBLIC_KEYS }}
+      BLOOM_UPDATE_FEED_URL: ${{ vars.BLOOM_UPDATE_FEED_URL }}
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
       date: ${{ steps.version.outputs.date }}
       commit: ${{ steps.version.outputs.commit }}
+      ref: ${{ steps.version.outputs.ref }}
+      public_keys: ${{ steps.settings.outputs.public_keys }}
+      feed_url: ${{ steps.settings.outputs.feed_url }}
     steps:
       - name: Refuse a name that is not a version tag
+        if: env.BLOOM_REHEARSAL != 'true'
         run: |
           case "$BLOOM_RELEASE_TAG" in
             v[0-9]*) ;;
             *) echo "::error::'$BLOOM_RELEASE_TAG' is not a version tag"; exit 1 ;;
           esac
 
-      - name: Check out the tag
+      - name: Check out the tag, or the commit a rehearsal was started for
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: refs/tags/${{ env.BLOOM_RELEASE_TAG }}
+          ref: ${{ env.BLOOM_REHEARSAL == 'true' && github.sha || format('refs/tags/{0}', env.BLOOM_RELEASE_TAG) }}
 
+      # `ref` is what every later job checks out: the tag, or a rehearsal's commit.
       - name: Check the tag against the source tree and the changelog
         id: version
         run: |
-          python3 -I tools/release/release.py version --tag "$BLOOM_RELEASE_TAG" | tee -a "$GITHUB_OUTPUT"
-          echo "tag=$BLOOM_RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          if [ "$BLOOM_REHEARSAL" = true ]; then
+            python3 -I tools/release/release.py version --rehearsal | tee -a "$GITHUB_OUTPUT"
+            echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            python3 -I tools/release/release.py version --tag "$BLOOM_RELEASE_TAG" | tee -a "$GITHUB_OUTPUT"
+            echo "ref=refs/tags/$BLOOM_RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          fi
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Require the recorded hardware validation of the commit
+        if: env.BLOOM_REHEARSAL != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -93,14 +127,34 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/commits/$commit/statuses?per_page=100" > "$RUNNER_TEMP/statuses.json"
           python3 -I tools/release/release.py validation --statuses "$RUNNER_TEMP/statuses.json"
 
+      # A rehearsal before the repository variables exist builds with a key made here. Its
+      # private half is deleted in the same step, so nothing can be signed for these builds.
       - name: Check the build settings
+        id: settings
         run: |
+          if [ "$BLOOM_REHEARSAL" = true ] &&
+             { [ -z "$BLOOM_UPDATE_PUBLIC_KEYS" ] || [ -z "$BLOOM_UPDATE_FEED_URL" ]; }; then
+            openssl genpkey -algorithm ed25519 -out "$RUNNER_TEMP/rehearsal-key.pem"
+            BLOOM_UPDATE_PUBLIC_KEYS=$(python3 -I tools/release/sign_release public-key --key-file "$RUNNER_TEMP/rehearsal-key.pem")
+            rm -f "$RUNNER_TEMP/rehearsal-key.pem"
+            BLOOM_UPDATE_FEED_URL="$BLOOM_RELEASE_DOWNLOADS/alpha-channel/alpha.json"
+            echo "::notice::Rehearsal without the repository variables: built with a key made for this run and the channel's own feed address"
+          fi
           if [ -z "$BLOOM_UPDATE_PUBLIC_KEYS" ] || [ -z "$BLOOM_UPDATE_FEED_URL" ]; then
             echo "::error::Set the repository variables BLOOM_UPDATE_PUBLIC_KEYS and BLOOM_UPDATE_FEED_URL"
             exit 1
           fi
           python3 -I tools/release/release.py settings \
             --public-keys "$BLOOM_UPDATE_PUBLIC_KEYS" --feed-url "$BLOOM_UPDATE_FEED_URL"
+          echo "public_keys=$BLOOM_UPDATE_PUBLIC_KEYS" >> "$GITHUB_OUTPUT"
+          echo "feed_url=$BLOOM_UPDATE_FEED_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Say what a rehearsal is
+        if: env.BLOOM_REHEARSAL == 'true'
+        env:
+          BLOOM_PACKAGE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          echo "Rehearsal of $(git rev-parse HEAD) as version $BLOOM_PACKAGE_VERSION: every job up to the release candidate runs. The validation record is not required, and nothing is signed or published." >> "$GITHUB_STEP_SUMMARY"
 
   # The Linux files, built inside the official Ubuntu 22.04 image by digest, so they run on
   # glibc 2.35 and newer (tools/ci/linux-package).
@@ -113,14 +167,16 @@ jobs:
     env:
       BLOOM_PACKAGE_VERSION: ${{ needs.gate.outputs.version }}
       BLOOM_RELEASE_TAG: ${{ needs.gate.outputs.tag }}
+      BLOOM_UPDATE_PUBLIC_KEYS: ${{ needs.gate.outputs.public_keys }}
+      BLOOM_UPDATE_FEED_URL: ${{ needs.gate.outputs.feed_url }}
       # An AppImage names where its next version is found: the control file among the files of
       # the fixed channel release.
       BLOOM_UPDATE_APPIMAGE_INFORMATION: gh-releases-zsync|${{ github.repository_owner }}|${{ github.event.repository.name }}|alpha-channel|Bloom-*x86_64.AppImage.zsync
     steps:
-      - name: Check out the tag
+      - name: Check out the source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: refs/tags/${{ needs.gate.outputs.tag }}
+          ref: ${{ needs.gate.outputs.ref }}
 
       - name: Provision the build environment
         run: sh tools/ci/linux-package/provision.sh
@@ -219,10 +275,10 @@ jobs:
             dnf install --assumeyes tar gzip
           fi
 
-      - name: Check out the tag
+      - name: Check out the source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: refs/tags/${{ needs.gate.outputs.tag }}
+          ref: ${{ needs.gate.outputs.ref }}
 
       - name: Prepare the clean system
         run: sh tools/ci/linux-package/clean-system.sh
@@ -255,6 +311,63 @@ jobs:
           cp "release-files/Bloom-$BLOOM_PACKAGE_VERSION-linux-x86_64.tar.xz" start-release/
           sh tools/ci/linux-package/start.sh "$PWD/start-release/install.sh" "$RUNNER_TEMP/start-install"
 
+  # The installed Linux files on a desktop (tools/ci/captures): Bloom installed by the install
+  # script on a bare Ubuntu 24.04 image, then shown in an application menu, in a launcher and
+  # with its own window, on a display of this job's own.
+  linux-desktop:
+    needs: [gate, linux]
+    name: Linux desktop captures
+    runs-on: ubuntu-24.04
+    container: ubuntu:24.04@sha256:73b999393d07f2bf65a40373778a44dc9a6d54ad7718d29247d8ff9413c4d6a8
+    timeout-minutes: 30
+    env:
+      BLOOM_PACKAGE_VERSION: ${{ needs.gate.outputs.version }}
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.gate.outputs.ref }}
+
+      - name: Prepare the clean system
+        run: sh tools/ci/linux-package/clean-system.sh
+
+      - name: Install the desktop the captures are taken on
+        run: |
+          apt-get install --yes --no-install-recommends \
+            xvfb openbox tint2 rofi imagemagick x11-utils xdotool fonts-dejavu-core
+
+      - name: Download the Linux files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: files-linux
+          path: release-files
+
+      - name: Download the install script form
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: start-release-linux
+          path: start-release
+
+      - name: Install with the install script
+        run: |
+          cp "release-files/Bloom-$BLOOM_PACKAGE_VERSION-linux-x86_64.tar.xz" start-release/
+          mkdir -p "$RUNNER_TEMP/desktop-home"
+          HOME="$RUNNER_TEMP/desktop-home" sh start-release/install.sh --from "$PWD/start-release" \
+            --prefix "$RUNNER_TEMP/desktop-home/.local/opt/bloom"
+
+      - name: Take the captures
+        run: |
+          bash tools/ci/captures/linux.sh "$PWD/captures" \
+            "$RUNNER_TEMP/desktop-home/.local/opt/bloom" "$RUNNER_TEMP/desktop-home"
+
+      - name: Upload the captures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: captures-linux
+          if-no-files-found: error
+          path: captures
+
   # The macOS files: the zip the updater downloads, the disk image and the installer package.
   macos:
     needs: gate
@@ -263,11 +376,13 @@ jobs:
     timeout-minutes: 360
     env:
       BLOOM_PACKAGE_VERSION: ${{ needs.gate.outputs.version }}
+      BLOOM_UPDATE_PUBLIC_KEYS: ${{ needs.gate.outputs.public_keys }}
+      BLOOM_UPDATE_FEED_URL: ${{ needs.gate.outputs.feed_url }}
     steps:
-      - name: Check out the tag
+      - name: Check out the source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: refs/tags/${{ needs.gate.outputs.tag }}
+          ref: ${{ needs.gate.outputs.ref }}
 
       - name: Select newest Xcode
         run: |
@@ -355,6 +470,51 @@ jobs:
             build/release/package/Bloom-${{ needs.gate.outputs.version }}-macos-arm64.dmg
             build/release/package/Bloom-${{ needs.gate.outputs.version }}-macos-arm64.pkg
 
+  # The installer package installed for real (tools/ci/macos-package/installed.sh): the hosted
+  # machine is thrown away afterwards and its user needs no password for it. Bloom.app is in
+  # /Applications, bloom-cli is linked in /usr/local/bin and renders a frame through that link,
+  # and the disk image attaches with its window layout. Then the desktop captures of the
+  # installed application (tools/ci/captures). A failure of either fails the run.
+  macos-install:
+    needs: [gate, macos]
+    name: macOS install and desktop captures
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      BLOOM_PACKAGE_VERSION: ${{ needs.gate.outputs.version }}
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.gate.outputs.ref }}
+
+      - name: Download the macOS files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: files-macos
+          path: release-files
+
+      - name: Install the package, render through the linked bloom-cli and attach the disk image
+        run: |
+          sh tools/ci/macos-package/installed.sh \
+            "release-files/Bloom-$BLOOM_PACKAGE_VERSION-macos-arm64.pkg" \
+            "release-files/Bloom-$BLOOM_PACKAGE_VERSION-macos-arm64.dmg" \
+            "$BLOOM_PACKAGE_VERSION" "$RUNNER_TEMP/installed"
+          echo "macOS: the installer package was installed with the system's installer; /Applications/Bloom.app and the /usr/local/bin/bloom-cli link were checked, a frame was rendered through the link, and the disk image was attached and read." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Take the captures
+        run: |
+          bash tools/ci/captures/macos.sh "$PWD/captures" \
+            "release-files/Bloom-$BLOOM_PACKAGE_VERSION-macos-arm64.dmg"
+
+      - name: Upload the captures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: captures-macos
+          if-no-files-found: error
+          path: captures
+
   # The Windows files: the installer and the zip.
   windows:
     needs: gate
@@ -363,13 +523,15 @@ jobs:
     timeout-minutes: 480
     env:
       BLOOM_PACKAGE_VERSION: ${{ needs.gate.outputs.version }}
+      BLOOM_UPDATE_PUBLIC_KEYS: ${{ needs.gate.outputs.public_keys }}
+      BLOOM_UPDATE_FEED_URL: ${{ needs.gate.outputs.feed_url }}
       MSYS2_ROOT: C:\msys64
       MSYS2_PATH_TYPE: inherit
     steps:
-      - name: Check out the tag
+      - name: Check out the source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: refs/tags/${{ needs.gate.outputs.tag }}
+          ref: ${{ needs.gate.outputs.ref }}
 
       # Build tools only. Every library Bloom links comes from the locked prefix.
       - name: Install build tools
@@ -473,22 +635,109 @@ jobs:
             build/release/package/Bloom-${{ needs.gate.outputs.version }}-windows-x86_64.zip
             build/release/package/Bloom-${{ needs.gate.outputs.version }}-windows-x86_64-setup.exe
 
+  # The installer run the way an artist's double click runs it, for the current user and
+  # without a question, then the desktop captures of the installed application
+  # (tools/ci/captures), and the uninstall.
+  windows-install:
+    needs: [gate, windows]
+    name: Windows install and desktop captures
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      BLOOM_PACKAGE_VERSION: ${{ needs.gate.outputs.version }}
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.gate.outputs.ref }}
+
+      - name: Download the Windows files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: files-windows
+          path: release-files
+
+      - name: Install for this user with the installer
+        shell: pwsh
+        run: |
+          $setup = "release-files\Bloom-$env:BLOOM_PACKAGE_VERSION-windows-x86_64-setup.exe"
+          $log = "$env:RUNNER_TEMP\install.log"
+          $run = Start-Process -FilePath $setup -Wait -PassThru `
+            -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$log"
+          if ($run.ExitCode -ne 0) {
+            if (Test-Path $log) { Get-Content $log -Tail 40 }
+            throw "the installer ended with $($run.ExitCode)"
+          }
+          $installed = "$env:LOCALAPPDATA\Programs\Bloom"
+          if (-not (Test-Path "$installed\Bloom.exe")) { throw "Bloom.exe was not installed in $installed" }
+          $shortcut = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Bloom.lnk"
+          if (-not (Test-Path $shortcut)) { throw "the Start menu entry was not made" }
+
+      - name: Take the captures
+        shell: pwsh
+        run: |
+          & tools\ci\captures\windows.ps1 -Out "$PWD\captures" -Installed "$env:LOCALAPPDATA\Programs\Bloom"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Uninstall
+        if: always()
+        shell: pwsh
+        run: |
+          $uninstaller = "$env:LOCALAPPDATA\Programs\Bloom\unins000.exe"
+          if (Test-Path $uninstaller) {
+            $run = Start-Process -FilePath $uninstaller -Wait -PassThru `
+              -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+            if ($run.ExitCode -ne 0) { throw "the uninstaller ended with $($run.ExitCode)" }
+          }
+
+      - name: Upload the captures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: captures-windows
+          if-no-files-found: error
+          path: captures
+
+  # The three platforms' captures as one artifact, one folder per platform.
+  captures:
+    needs: [linux-desktop, macos-install, windows-install]
+    name: Desktop captures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download the platforms' captures
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: captures-*
+          path: desktop-captures
+
+      - name: Upload them as one artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-captures
+          if-no-files-found: error
+          path: desktop-captures
+
   # The release candidate: the three platforms' files with the release notes, the install
   # script, the Arch Linux package description and the checksum list. Nothing is signed yet.
-  # The end-to-end update test runs against these files before the maintainer approves.
+  # The end-to-end update test runs against these files before the maintainer approves. It is
+  # the last job of a rehearsal.
   candidate:
-    needs: [gate, linux, linux-start, macos, windows]
+    needs: [gate, linux, linux-start, macos, windows, captures]
     name: Release candidate
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       BLOOM_PACKAGE_VERSION: ${{ needs.gate.outputs.version }}
       BLOOM_RELEASE_TAG: ${{ needs.gate.outputs.tag }}
+      BLOOM_REHEARSAL: ${{ github.event_name == 'workflow_dispatch' && inputs.rehearsal }}
+      BLOOM_UPDATE_PUBLIC_KEYS: ${{ needs.gate.outputs.public_keys }}
+      BLOOM_UPDATE_FEED_URL: ${{ needs.gate.outputs.feed_url }}
     steps:
-      - name: Check out the tag
+      - name: Check out the source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: refs/tags/${{ needs.gate.outputs.tag }}
+          ref: ${{ needs.gate.outputs.ref }}
 
       - name: Download the platforms' files
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -510,6 +759,10 @@ jobs:
             echo '```'
             echo
             echo "The package check's GPU rule was not run on the hosted runners. The commit's recorded hardware validation is what covers it."
+            if [ "$BLOOM_REHEARSAL" = true ]; then
+              echo
+              echo "This is a rehearsal: the candidate is not signed and not published."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the candidate
@@ -523,9 +776,11 @@ jobs:
 
   # Waits for the maintainer's approval of the `release` environment. Then the candidate is
   # signed, the feed and the appcasts are written, and the pre-release and the channel's files
-  # are published.
+  # are published. A rehearsal skips the whole job, so it asks for no approval; the first step
+  # refuses one all the same.
   publish:
     needs: [gate, candidate]
+    if: github.event_name != 'workflow_dispatch' || !inputs.rehearsal
     name: Sign and publish
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -537,12 +792,22 @@ jobs:
       BLOOM_RELEASE_TAG: ${{ needs.gate.outputs.tag }}
       BLOOM_RELEASE_DATE: ${{ needs.gate.outputs.date }}
       BLOOM_RELEASE_COMMIT: ${{ needs.gate.outputs.commit }}
+      BLOOM_UPDATE_PUBLIC_KEYS: ${{ needs.gate.outputs.public_keys }}
+      BLOOM_UPDATE_FEED_URL: ${{ needs.gate.outputs.feed_url }}
+      BLOOM_REHEARSAL: ${{ github.event_name == 'workflow_dispatch' && inputs.rehearsal }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Check out the tag
+      - name: Refuse to publish a rehearsal
+        run: |
+          if [ "$BLOOM_REHEARSAL" = true ]; then
+            echo "::error::A rehearsal publishes nothing"
+            exit 1
+          fi
+
+      - name: Check out the source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: refs/tags/${{ needs.gate.outputs.tag }}
+          ref: ${{ needs.gate.outputs.ref }}
 
       - name: Download the candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0

@@ -68,6 +68,35 @@ class TagTests(unittest.TestCase):
         self.assertIn("the source tree is", step("version", "--tag", "v9.9.9").stderr)
         self.assertIn("not a version tag", step("version", "--tag", "release").stderr)
 
+    def test_a_rehearsal_takes_the_tree_s_version_and_names_its_tag(self) -> None:
+        declared = release.DEFAULT_VERSION.search(
+            (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")).group(1)
+        tagged = step("version", "--tag", f"v{declared}")
+        rehearsed = step("version", "--rehearsal")
+        self.assertEqual(rehearsed.returncode, 0, rehearsed.stderr)
+        self.assertEqual(rehearsed.stdout, tagged.stdout)
+        self.assertIn(f"tag=v{declared}\n", rehearsed.stdout)
+        # One or the other, never both and never neither.
+        self.assertEqual(step("version", "--rehearsal", "--tag", f"v{declared}").returncode, 2)
+        self.assertEqual(step("version").returncode, 2)
+
+    def test_a_rehearsal_of_a_tree_without_its_changelog_section_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            tree = Path(folder)
+            (tree / "CMakeLists.txt").write_text(
+                'set(BLOOM_PACKAGE_VERSION "9.9.9" CACHE STRING "The version")\n',
+                encoding="utf-8")
+            shutil.copy(ROOT / "CHANGELOG.md", tree / "CHANGELOG.md")
+            result = step("version", "--rehearsal", "--source", str(tree))
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("CHANGELOG.md", result.stderr)
+            (tree / "CMakeLists.txt").write_text(
+                'set(BLOOM_PACKAGE_VERSION "nightly" CACHE STRING "The version")\n',
+                encoding="utf-8")
+            result = step("version", "--rehearsal", "--source", str(tree))
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("not a release version", result.stderr)
+
 
 class ValidationTests(unittest.TestCase):
     CONTEXT = "bloom/hardware-validation"
@@ -134,8 +163,12 @@ class WorkflowTests(unittest.TestCase):
         # Every other job needs the first, which ends the run for anything but a version tag.
         gate = self.job("gate")
         self.assertIn("github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')", gate)
-        for name in ("linux", "macos", "windows", "linux-start", "candidate", "publish"):
+        for name in ("linux", "macos", "windows", "linux-start", "linux-desktop",
+                     "macos-install", "windows-install", "candidate", "publish"):
             self.assertRegex(self.job(name), r"needs: (gate|\[gate, )", name)
+        # The captures only gather what three of those made.
+        self.assertIn("needs: [linux-desktop, macos-install, windows-install]",
+                      self.job("captures"))
 
     def test_every_action_is_pinned_to_a_commit(self) -> None:
         uses = re.findall(r"(?m)^\s+(?:- )?uses: (\S+)", self.code)
@@ -157,6 +190,61 @@ class WorkflowTests(unittest.TestCase):
                      "contents: write", "gh release create"):
             self.assertIn(text, publish)
         self.assertEqual(self.code.count("gh release create"), 2)
+
+    def test_a_rehearsal_is_a_start_by_hand_that_publishes_nothing(self) -> None:
+        dispatch = re.search(r"(?ms)^  workflow_dispatch:\n(.*?)^\S", self.code).group(1)
+        self.assertRegex(dispatch, r"(?m)^      rehearsal:\n(?:        .*\n)*?        type: boolean")
+        self.assertRegex(dispatch, r"(?m)^      rehearsal:\n(?:        .*\n)*?        default: false")
+        rehearsal = "github.event_name == 'workflow_dispatch' && inputs.rehearsal"
+        # The job that signs and publishes does not run, and refuses if it ever did.
+        publish = self.job("publish")
+        self.assertIn("    if: github.event_name != 'workflow_dispatch' || !inputs.rehearsal\n",
+                      publish)
+        self.assertIn(f"BLOOM_REHEARSAL: ${{{{ {rehearsal} }}}}", publish)
+        steps = re.findall(r"(?m)^      - name: (.+)$", publish)
+        self.assertEqual(steps[0], "Refuse to publish a rehearsal")
+        # Nothing outside that job touches a release, a tag or the channel's files.
+        for word in ("gh release", "gh api -X", "git tag", "git push", "alpha-channel --"):
+            self.assertEqual(self.code.replace(publish, "").count(word), 0, word)
+        # Every job before it runs in a rehearsal: none of them is conditional on it.
+        for name in ("linux", "linux-start", "linux-desktop", "macos", "macos-install",
+                     "windows", "windows-install", "captures", "candidate"):
+            self.assertNotRegex(self.job(name), r"(?m)^    if:", name)
+        self.assertIn("needs: [gate, linux, linux-start, macos, windows, captures]",
+                      self.job("candidate"))
+
+    def test_a_rehearsal_builds_the_commit_it_was_started_for(self) -> None:
+        gate = self.job("gate")
+        self.assertIn("release.py version --rehearsal", gate)
+        self.assertIn("ref: ${{ env.BLOOM_REHEARSAL == 'true' && github.sha || "
+                      "format('refs/tags/{0}', env.BLOOM_RELEASE_TAG) }}", gate)
+        # The tag's name and its validation record are required of everything else.
+        for step_name in ("Refuse a name that is not a version tag",
+                          "Require the recorded hardware validation of the commit"):
+            self.assertIn(f"      - name: {step_name}\n        if: env.BLOOM_REHEARSAL != 'true'\n",
+                          gate)
+        # The later jobs check out what the first job decided, and nothing else.
+        refs = re.findall(r"(?m)^          ref: (.+)$", self.code.replace(gate, ""))
+        self.assertEqual(len(refs), 9)
+        self.assertEqual(set(refs), {"${{ needs.gate.outputs.ref }}"})
+        # The key a rehearsal may build with is made and thrown away in one step.
+        made = gate.index("openssl genpkey")
+        self.assertIn('rm -f "$RUNNER_TEMP/rehearsal-key.pem"', gate[made:made + 400])
+        self.assertEqual(self.code.count("vars."), 2)
+        self.assertEqual(gate.count("vars."), 2)
+
+    def test_the_installed_application_is_checked_and_captured(self) -> None:
+        mac = self.job("macos-install")
+        self.assertIn("tools/ci/macos-package/installed.sh", mac)
+        self.assertIn("tools/ci/captures/macos.sh", mac)
+        self.assertIn("tools\\ci\\captures\\windows.ps1", self.job("windows-install"))
+        self.assertIn("tools/ci/captures/linux.sh", self.job("linux-desktop"))
+        self.assertIn("name: desktop-captures", self.job("captures"))
+        script = (ROOT / "tools" / "ci" / "macos-package" / "installed.sh").read_text(
+            encoding="utf-8")
+        for text in ('sudo installer -pkg "$pkg" -target /', "/Applications/Bloom.app",
+                     "/usr/local/bin/bloom-cli", '"-DCLI_PROGRAM=$link"', "hdiutil attach"):
+            self.assertIn(text, script)
 
     def test_the_clean_start_covers_the_three_linux_forms(self) -> None:
         start = self.job("linux-start")

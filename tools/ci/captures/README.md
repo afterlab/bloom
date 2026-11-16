@@ -67,9 +67,14 @@ with `bloom-cli.exe` from the install folder.
 
 ## How the workflow calls them
 
-    bash tools/ci/captures/linux.sh   captures "$HOME/.local/opt/bloom" "$HOME"
+Each platform has a job that installs the files its build job made and then runs the script
+(`.github/workflows/release.yml`: `linux-desktop`, `macos-install`, `windows-install`):
+
+    bash tools/ci/captures/linux.sh   captures <home>/.local/opt/bloom <home>
     bash tools/ci/captures/macos.sh   captures Bloom-<version>-macos-arm64.dmg
     pwsh tools/ci/captures/windows.ps1 -Out captures -Installed "$env:LOCALAPPDATA\Programs\Bloom"
 
-Upload the `captures` folder as one artifact. The workflow decides where the project file for the
-macOS and Windows scripts comes from; without one, they make it with `bloom-cli`.
+Each job uploads its `captures` folder, and the job `captures` gathers the three as the one
+artifact `desktop-captures`, a folder per platform. The workflow passes no project file, so the
+macOS and Windows scripts make theirs with `bloom-cli`. On Linux the job adds a font
+(`fonts-dejavu-core`) to the packages above, for the menu's and the panel's text.
