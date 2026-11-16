@@ -6,6 +6,11 @@
 // evaluators with empty caches (as after a restart) reads nothing at all.
 // Device-free: the CPU reference route. The GPU preparation's reads are covered by
 // bloom.runtime.gpu_media_scene_preparation.
+//
+// #732: two more scenarios, each one session on a cache volume of an injected size. "Fits": the
+// first RAM Preview pass of footage that fits the space leaves all of it on disk. "Larger than
+// the space": RAM Preview, Purge preview cache, RAM Preview again; the second pass is served
+// from disk for the members that fit, and no write is dropped.
 
 #include "await_qt.hpp"
 #include "fixed_memory_budget.hpp"
@@ -26,6 +31,7 @@
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/scripting/render.hpp>
 #include <bloom/scripting/session.hpp>
+#include <bloom/ui/cache_purge_controller.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -42,7 +48,9 @@
 #include <QSettings>
 #include <QTemporaryDir>
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -52,6 +60,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -250,6 +259,221 @@ void pass(const std::string& label, const std::filesystem::path& first,
            label + ": the scheduler is quiet at the end");
 }
 
+// Writes a three-member sequence of solid frames into `folder` and returns its first member.
+[[nodiscard]] std::filesystem::path writeSequence(const std::filesystem::path& folder,
+                                                  const std::array<QColor, kMembers>& colors) {
+    std::filesystem::create_directories(folder);
+    std::filesystem::path first;
+    for (std::uint64_t member = 0; member < kMembers; ++member) {
+        QImage image(static_cast<int>(kWidth), static_cast<int>(kHeight), QImage::Format_RGBA8888);
+        image.fill(colors.at(member));
+        const auto path = folder / ("plate.000" + std::to_string(member + 1) + ".png");
+        expect(image.save(QString::fromStdString(path.string())), "a sequence member is written");
+        if (member == 0)
+            first = path;
+    }
+    return first;
+}
+
+// #732: RAM Preview against a cache volume with room for `roomForMembers` of the sequence's
+// three members beyond its headroom (an injected volume: no real disk size is read). With room
+// for all three this is the "fits" scenario: one pass leaves every member on disk. With room for
+// two it goes on in the same session: Purge preview cache, then RAM Preview again.
+void ramPreviewOnASizedVolume(const std::string& label, const std::filesystem::path& workDir,
+                              const std::uint64_t roomForMembers) {
+    const auto first = writeSequence(
+        workDir / (label + "-footage"),
+        {QColor(200, 150, 20), QColor(20, 150, 200), QColor(150, 20, 200)});
+    // What one member takes in the mirror: its bytes and the 80-byte entry header.
+    std::vector<std::uint64_t> entryBytes;
+    for (std::uint64_t member = 0; member < kMembers; ++member)
+        entryBytes.push_back(std::filesystem::file_size(
+                                 first.parent_path() /
+                                 ("plate.000" + std::to_string(member + 1) + ".png")) +
+                             80);
+    std::ranges::sort(entryBytes);
+    // Room for every member, or for any two of them and half of the third.
+    const std::uint64_t room =
+        roomForMembers >= kMembers ? entryBytes[0] + entryBytes[1] + entryBytes[2] + 4096
+                                   : entryBytes[2] + entryBytes[1] + entryBytes[0] / 2;
+    static constexpr std::uint64_t kCapacity = std::uint64_t{100} << 30U;
+    std::atomic<const media::cache::SourceMirror*> attached{nullptr};
+    media::cache::SourceMirrorConfig config;
+    config.rootDirectory = workDir / (label + "-mirror");
+    config.policy.preference = media::cache::LocalCopyPreference::Always;
+    config.driveSpace = [&attached, room]() -> std::optional<media::cache::SourceMirrorDriveSpace> {
+        const auto* const mirror = attached.load();
+        const auto stored = mirror != nullptr ? mirror->statistics().storedBytes : 0;
+        return media::cache::SourceMirrorDriveSpace{
+            kCapacity, media::cache::defaultSourceMirrorHeadroom(kCapacity) + room -
+                           std::min(stored, room)};
+    };
+    const auto mirror = std::make_shared<media::cache::SourceMirror>(config);
+    attached = mirror.get();
+    mirror->flush();
+    platform::setProcessSourceStore(mirror);
+    const auto sourceReads = [&] {
+        const auto statistics = mirror->statistics();
+        return statistics.networkReads + statistics.otherSourceReads;
+    };
+
+    const auto format = document::CompositionFormat::create(kWidth, kHeight);
+    auto created = scripting::Session::createNew("Routes", "Main",
+                                                 core::RationalTime::fromInteger(1), *format);
+    expect(static_cast<bool>(created), label + ": the session is created");
+    if (!created)
+        return;
+    const auto scripting = std::move(created).takeSession();
+    const auto composition = scripting->snapshot().project().compositions().front().id();
+    const auto imported = scripting->executeJsonOperation(
+        "bloom.asset.import",
+        {{"paths",
+          scripting::Value{scripting::ValueArray{scripting::Value{first.generic_string()}}}}});
+    expect(imported.succeeded() && scripting->snapshot().project().assets().size() == 1,
+           label + ": the numbered files import as one sequence");
+    if (scripting->snapshot().project().assets().size() != 1)
+        return;
+    const auto asset = scripting->snapshot().project().assets().front().id;
+    const auto layered = scripting->executeJsonOperation(
+        "bloom.layer.add-from-assets",
+        {{"composition", scripting::Value{scripting::StableId{composition.value()}}},
+         {"time", scripting::Value{std::int64_t{0}}},
+         {"assets", scripting::Value{scripting::ValueArray{
+                        scripting::Value{scripting::StableId{asset.value()}}}}}});
+    expect(layered.succeeded(), label + ": the sequence becomes a layer");
+    if (!layered.succeeded())
+        return;
+    ui::CompositionSession session(*scripting->document(), *scripting->commandStack(), composition);
+
+    Rig rig;
+    expect(runtime::registerBuiltInNodeDefinitions(rig.definitions),
+           label + ": node definitions register");
+    rig.definitions.freeze();
+    rig.compiler = std::make_unique<runtime::SnapshotCompiler>(rig.definitions);
+    rig.qualified.publish(runtime::buildBloomNeutralQualifiedDisplayProcessor());
+    rig.bridge = std::make_unique<ui::TaskUiBridge>(rig.scheduler, nullptr, 1ms);
+    // The decoded-media tier in memory survives a preview purge. On a project whose footage is
+    // far larger than memory it cannot hold the members, and that is the case this scenario is
+    // about: with a tier that held these three tiny frames the second pass would read nothing
+    // at all, from disk or from the source, and prove nothing. So the tier holds nothing here.
+    rig.evaluator.operationCache()->setByteBudget(0);
+    auto pipeline = ui::makeCompositionPreviewPipeline(*rig.compiler, rig.evaluator,
+                                                       rig.displayPreparer, rig.qualified);
+    ui::CompositionPreviewSettings settings;
+    settings.resolutionPolicy = runtime::PreviewResolutionPolicy::Full;
+    ui::CompositionPreviewController controller(session, rig.scheduler, *rig.bridge, pipeline,
+                                                settings);
+    ui::RamPreviewController ram(session, controller, rig.scheduler, *rig.bridge, pipeline);
+    // The purge the Edit menu runs, with the gate the application gives it.
+    ui::CachePurgeController purge(rig.scheduler, *rig.bridge, mirror.get(),
+                                   rig.evaluator.operationCache().get(), nullptr, {},
+                                   [&controller](const bool gated) {
+                                       controller.setCachePurgeGate(gated);
+                                   });
+    ui::ViewerEditor viewer(session, controller, &ram);
+    viewer.resize(480, 320);
+    viewer.show();
+    controller.requestRefresh();
+    expect(bloom::test_support::awaitQtCondition(
+               "the Viewer shows the first frame",
+               [&] {
+                   return controller.state().activity == ui::PreviewActivity::Ready &&
+                          viewer.displayedFrameForTest() != nullptr;
+               }),
+           label + ": the Viewer shows the first frame");
+    // The first frame's member is on disk before the fill starts, so the fill's own reads are
+    // the only writes that follow.
+    mirror->flush();
+
+    auto* const cache =
+        viewer.findChild<QAbstractButton*>(QStringLiteral("timelineRamPreviewButton"));
+    expect(cache != nullptr && cache->isEnabled(), label + ": the Viewer has RAM Preview");
+    const auto fill = [&](const std::string& which) {
+        if (cache == nullptr)
+            return;
+        cache->click();
+        expect(bloom::test_support::awaitQtCondition(
+                   "RAM Preview caches every frame",
+                   [&] {
+                       return !ram.isCaching() && ram.totalFrameCount() != 0 &&
+                              ram.cachedFrameCount() == ram.totalFrameCount();
+                   }),
+               label + ": the " + which + " RAM Preview caches every frame (" +
+                   std::to_string(ram.cachedFrameCount()) + " of " +
+                   std::to_string(ram.totalFrameCount()) + ")");
+        mirror->flush();
+    };
+    fill("first");
+    const auto afterFirst = mirror->statistics();
+    const auto readsAfterFirst = sourceReads();
+    expect(readsAfterFirst == kMembers,
+           label + ": the first pass reads each member from its storage once (" +
+               std::to_string(readsAfterFirst) + " reads)");
+    expect(afterFirst.droppedWrites == 0, label + ": the first pass drops no write");
+    if (roomForMembers >= kMembers) {
+        expect(afterFirst.entryCount == kMembers && afterFirst.writes == kMembers &&
+                   afterFirst.refusedWrites == 0,
+               label + ": the first RAM Preview pass leaves every member on disk (" +
+                   std::to_string(afterFirst.entryCount) + " entries, " +
+                   std::to_string(afterFirst.writes) + " writes, " +
+                   std::to_string(afterFirst.refusedWrites) + " refused)");
+    } else {
+        expect(afterFirst.entryCount == roomForMembers && afterFirst.writes == roomForMembers &&
+                   afterFirst.refusedWrites == kMembers - roomForMembers &&
+                   afterFirst.evictions == 0,
+               label + ": the first pass keeps the members that fit and refuses the rest (" +
+                   std::to_string(afterFirst.entryCount) + " entries, " +
+                   std::to_string(afterFirst.refusedWrites) + " refused, " +
+                   std::to_string(afterFirst.evictions) + " evictions)");
+
+        // Edit | Purge… | Purge preview cache, as the main window runs it: the purge controller
+        // gates the producers and clears the operation results, the preview controller clears
+        // the finished frames. The disk cache is not part of it.
+        bool purged = false;
+        bool purgeSucceeded = false;
+        QObject::connect(&purge, &ui::CachePurgeController::purgeFinished, &purge,
+                         [&](const bool success, const QString&) {
+                             purged = true;
+                             purgeSucceeded = success;
+                         });
+        expect(purge.requestPreviewPurge(), label + ": the preview purge starts");
+        controller.purgePreviewCache();
+        expect(bloom::test_support::awaitQtCondition("the preview purge finishes",
+                                                     [&] { return purged; }) &&
+                   purgeSucceeded,
+               label + ": the preview purge finishes");
+        expect(ram.cachedFrameCount() == 0, label + ": the purge empties the RAM Preview");
+        expect(mirror->statistics().entryCount == roomForMembers,
+               label + ": a preview purge leaves the disk cache alone");
+        expect(bloom::test_support::awaitQtCondition(
+                   "the Viewer settles after the purge",
+                   [&] { return controller.state().activity == ui::PreviewActivity::Ready; }),
+               label + ": the Viewer settles after the purge");
+
+        fill("second");
+        const auto afterSecond = mirror->statistics();
+        expect(sourceReads() - readsAfterFirst == kMembers - roomForMembers,
+               label + ": the second pass reads only the member that does not fit (" +
+                   std::to_string(sourceReads() - readsAfterFirst) + " reads)");
+        expect(afterSecond.diskHits - afterFirst.diskHits >= roomForMembers,
+               label + ": the second pass is served from disk for the members that fit (" +
+                   std::to_string(afterSecond.diskHits - afterFirst.diskHits) + " disk hits)");
+        expect(afterSecond.droppedWrites == 0, label + ": the second pass drops no write");
+        expect(afterSecond.refusedWrites > afterFirst.refusedWrites,
+               label + ": the write that does not fit is refused again and counted");
+        expect(afterSecond.evictions == 0 && afterSecond.entryCount == roomForMembers,
+               label + ": nothing the loop needs is evicted");
+    }
+
+    ram.beginShutdown();
+    controller.beginShutdown();
+    rig.bridge->beginShutdown();
+    expect(bloom::test_support::awaitQtCondition("the scheduler is quiet",
+                                                 [&] { return rig.scheduler.isQuiescent(); }),
+           label + ": the scheduler is quiet at the end");
+    platform::setProcessSourceStore(nullptr);
+}
+
 } // namespace
 
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
@@ -301,6 +525,10 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
            "a second session with empty caches reads nothing from the sequence's storage");
     expect(afterSecond.diskHits > afterFirst.diskHits,
            "the second session is served from the local copies");
+
+    // #732.
+    ramPreviewOnASizedVolume("fits", workDir, kMembers);
+    ramPreviewOnASizedVolume("larger", workDir, kMembers - 1);
 
     failures += bloom::test_support::awaitFailureCount();
     if (failures != 0) {
