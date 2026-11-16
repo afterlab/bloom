@@ -391,6 +391,45 @@ installed AppImage downloads only the blocks it lacks
 package, writes it, and a release build writes the place the control file is published into
 the runtime's update information (`BLOOM_UPDATE_APPIMAGE_INFORMATION`).
 
+**The install script.** A release publishes `install.sh`, written for that release from
+`tools/install/install.sh.in` by `cmake/package/make_install_script.cmake`, which fills in the
+version, the address of the release's files and the release's public keys. It is a POSIX shell
+script and needs `tar`, `xz`, `sha256sum`, `openssl` (3.0 or later) and `curl` or `wget`.
+
+- It downloads `SHA256SUMS` and `SHA256SUMS.sig`, checks the Ed25519 signature with `openssl`
+  against a key it carries, then downloads the tar and compares its SHA-256 with the signed
+  list. Only then is anything unpacked or any folder made; there is no option that skips the
+  check. `--from <folder>` takes the same files from a folder and verifies them the same way.
+- Without options it installs for the current user and needs no administrator rights: the
+  package in `~/.local/opt/bloom`, the link `~/.local/bin/bloom-cli`, and the menu entry, the
+  icons and the project file type under `~/.local/share` (or `XDG_DATA_HOME`). The menu entry
+  starts the program by its full path.
+- `--system` installs for every user: `/opt/bloom`, `/usr/local/bin/bloom-cli` and
+  `/usr/local/share`. With `DESTDIR` it writes that layout under another folder, for a system
+  image. `--prefix <folder>` names the package's folder; it must be a folder for Bloom alone,
+  and the script refuses one that holds anything else, and the system's own folders.
+- It names the system libraries the package expects and the system lacks, with the command
+  that installs them on Debian and Ubuntu, on Fedora and on Arch Linux. The list is
+  `cmake/package/linux-base-libraries.txt`; `tools/install/linux-library-packages.txt` gives
+  the package of each and says whether the package is linked against it or asks for it only
+  when a feature needs it. The install is completed either way.
+- Run again, it replaces the installed folder with a newly unpacked one and writes the link
+  and the desktop files again, which updates or repairs the install. The folder is replaced by
+  renames beside it; a run that is stopped between them puts the installed version back.
+- It writes `share/bloom/install-kind` (`kind=script`), which tells the update service that
+  the folder can be replaced by the update helper, and `share/bloom/install-manifest`, the
+  list of what it wrote outside the folder. `--uninstall` removes the folder (only one that
+  carries the script's marker), the version an update kept beside it, the link when it still
+  points into the folder, and the listed files. Other files in the shared folders, projects,
+  preferences and caches stay.
+
+`bloom.install.script_tests` (Linux only) runs the script against a stand-in package signed
+with a key made for the run by the release's own tools, in a home folder under the build tree:
+a per-user install through the script's own download, each refused release (a changed
+package, a changed list, another key, another release's list, no signature), the library
+advice for each family, repair, update, `--prefix`, `--system` under `DESTDIR`, and
+`--uninstall` beside other programs' files.
+
 **Where it was started.** `tools/ci/linux-package/start.sh` unpacks a package on a clean
 system, runs the package check's contents and run rules there, and refuses a system that has
 Python, Qt's tools or a compiler. Both forms of the 0.1.0 package passed it on:

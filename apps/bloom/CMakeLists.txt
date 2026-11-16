@@ -456,6 +456,20 @@ if(BUILD_TESTING)
             LABELS quality
             SKIP_RETURN_CODE 77
             TIMEOUT 120)
+        # Linux only: the install script is the Linux installer and a POSIX shell script
+        # (tools/install/install.sh.in); macOS and Windows have installers of their own, with
+        # their own tests. It installs a stand-in package of a few small files into folders
+        # under the build tree and reports a skip without `openssl` or `xz`.
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            bloom_add_test(
+                NAME bloom.install.script_tests
+                COMMAND sh "${PROJECT_SOURCE_DIR}/tools/install/test_install_script.sh"
+                    "${PROJECT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/install-script-test"
+                    "${CMAKE_COMMAND}" "${Python3_EXECUTABLE}"
+                LABELS quality
+                SKIP_RETURN_CODE 77
+                TIMEOUT 120)
+        endif()
     endif()
 endif()
 

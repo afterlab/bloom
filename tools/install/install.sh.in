@@ -1,0 +1,453 @@
+#!/bin/sh
+# Installs Bloom @BLOOM_INSTALL_VERSION@ on Linux (x86-64), updates or repairs an installed copy,
+# or removes it.
+#
+#   sh install.sh [--system] [--prefix <folder>] [--from <folder>]
+#   sh install.sh --uninstall [--system] [--prefix <folder>]
+#
+# Without options it installs for the current user and needs no administrator rights:
+#
+#   ~/.local/opt/bloom              the package
+#   ~/.local/bin/bloom-cli          a link to the package's command-line program
+#   ~/.local/share/...              the menu entry, the icons and the project file type
+#
+#   --system            installs for every user, for example on a render node: the package in
+#                       /opt/bloom, the link in /usr/local/bin, the rest under /usr/local/share.
+#                       It needs administrator rights. DESTDIR=<folder> writes the same layout
+#                       under that folder, for a system image that is being prepared.
+#   --prefix <folder>   puts the package in <folder>. The folder holds Bloom and nothing else:
+#                       an update replaces it as a whole.
+#   --from <folder>     takes the release files from a folder instead of downloading them
+#                       (a computer without a network connection). They are verified the same
+#                       way.
+#   --uninstall         removes what this script installed, and nothing else. Projects,
+#                       preferences and caches stay.
+#
+# What it downloads is verified before anything is unpacked: the release's list of checksums
+# (SHA256SUMS) must carry a signature by the release key this script was published with, and
+# the package must have the checksum that list gives. There is no option that skips this.
+#
+# The file is generated for each release from tools/install/install.sh.in in Bloom's source.
+set -eu
+
+version='@BLOOM_INSTALL_VERSION@'
+base_url='@BLOOM_INSTALL_BASE_URL@'
+public_keys='@BLOOM_INSTALL_PUBLIC_KEYS@'
+application=id.afterlab.bloom
+package="Bloom-$version-linux-x86_64"
+
+# The system libraries the package expects (cmake/package/linux-base-libraries.txt) and the
+# package that has each on Debian and Ubuntu, on Fedora, and on Arch Linux.
+library_table() {
+    cat << 'BLOOM_LIBRARIES'
+@BLOOM_INSTALL_LIBRARIES@
+BLOOM_LIBRARIES
+}
+
+say() {
+    printf '%s\n' "$*"
+}
+
+fail() {
+    printf 'install.sh: %s\n' "$*" >&2
+    exit 1
+}
+
+usage() {
+    sed -n '2,/^set -eu$/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'
+}
+
+mode=user
+prefix=
+from=
+action=install
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --system) mode=system ;;
+        --uninstall) action=uninstall ;;
+        --prefix | --from)
+            [ $# -ge 2 ] || fail "$1 needs a folder"
+            if [ "$1" = --prefix ]; then prefix=$2; else from=$2; fi
+            shift
+            ;;
+        --prefix=*) prefix=${1#--prefix=} ;;
+        --from=*) from=${1#--from=} ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        *) fail "unknown option '$1' (--help lists the options)" ;;
+    esac
+    shift
+done
+
+# --- Where everything goes ---------------------------------------------------------------
+
+absolute() {
+    case "$1" in
+        /*) printf '%s' "$1" ;;
+        *) printf '%s/%s' "$(pwd)" "$1" ;;
+    esac
+}
+
+destdir=
+if [ "$mode" = system ]; then
+    root=/opt/bloom
+    bin_dir=/usr/local/bin
+    data_dir=/usr/local/share
+    if [ -n "${DESTDIR:-}" ]; then
+        destdir=$(absolute "$DESTDIR")
+        destdir=${destdir%/}
+    fi
+else
+    [ -n "${HOME:-}" ] || fail "HOME is not set"
+    root=$HOME/.local/opt/bloom
+    bin_dir=$HOME/.local/bin
+    data_dir=${XDG_DATA_HOME:-$HOME/.local/share}
+fi
+if [ -n "$prefix" ]; then
+    root=$(absolute "$prefix")
+fi
+while [ "$root" != "${root%/}" ]; do
+    root=${root%/}
+done
+
+# The folder is replaced and removed as a whole, and its path is written into a menu entry, so
+# it must be a folder of Bloom's own with a plain name.
+newline='
+'
+case "$root$bin_dir$data_dir$destdir" in
+    *"$newline"* | *'"'* | *'`'* | *'$'* | *'\'* | *'%'*)
+        fail "a folder name with a line break or one of \" \` \$ \\ % cannot be used"
+        ;;
+esac
+case "$root" in
+    '' | /bin | /boot | /dev | /etc | /home | /lib | /lib64 | /opt | /proc | /root | /run | \
+        /sbin | /srv | /sys | /tmp | /usr | /usr/local | /var | "${HOME:-/}" | \
+        "${HOME:-}/.local" | "${HOME:-}/.local/opt")
+        fail "'$root' is not a folder Bloom can have to itself; name a folder for Bloom alone"
+        ;;
+esac
+
+target=$destdir$root
+marker=share/bloom/install-kind
+manifest=share/bloom/install-manifest
+
+# True for a folder this script installed.
+installed_by_script() {
+    [ -f "$1/$marker" ] && grep -q '^kind=script$' "$1/$marker" && [ -e "$1/bin/Bloom" ]
+}
+
+refresh_caches() {
+    # The desktop's own indexes; a system without these tools reads the files directly.
+    if command -v update-desktop-database > /dev/null 2>&1; then
+        update-desktop-database -q "$destdir$data_dir/applications" > /dev/null 2>&1 || true
+    fi
+    if command -v update-mime-database > /dev/null 2>&1 && [ -d "$destdir$data_dir/mime" ]; then
+        update-mime-database "$destdir$data_dir/mime" > /dev/null 2>&1 || true
+    fi
+    if command -v gtk-update-icon-cache > /dev/null 2>&1; then
+        gtk-update-icon-cache -q -t -f "$destdir$data_dir/icons/hicolor" > /dev/null 2>&1 || true
+    fi
+}
+
+# Removes what a manifest lists: links that point into the package and files that carry the
+# application's name. Anything else in those shared folders is someone else's.
+remove_listed() {
+    [ -f "$1" ] || return 0
+    while IFS= read -r line; do
+        case "$line" in
+            'link '*)
+                path=$destdir${line#link }
+                if [ -L "$path" ]; then
+                    case "$(readlink "$path")" in
+                        "$root"/*) rm -f "$path" ;;
+                    esac
+                fi
+                ;;
+            'file '*)
+                path=$destdir${line#file }
+                case "${path##*/}" in
+                    "$application".*) rm -f "$path" ;;
+                esac
+                ;;
+        esac
+    done < "$1"
+}
+
+# --- Removing ------------------------------------------------------------------------------
+
+if [ "$action" = uninstall ]; then
+    [ -d "$target" ] || fail "Bloom is not installed in $root"
+    installed_by_script "$target" ||
+        fail "$root was not installed by this script; nothing was removed"
+    [ -w "$target" ] && [ -w "$(dirname "$target")" ] ||
+        fail "$root cannot be removed by this user (an install made with --system is removed with administrator rights)"
+    remove_listed "$target/$manifest"
+    rm -rf "$target"
+    # The version an update kept for going back.
+    if installed_by_script "$target.previous"; then
+        rm -rf "$target.previous"
+    fi
+    refresh_caches
+    say "Bloom was removed from $root."
+    say "Projects, preferences and caches were not touched."
+    exit 0
+fi
+
+# --- Checks before anything is written ---------------------------------------------------------
+
+[ "$(uname -s)" = Linux ] || fail "this script installs the Linux package; this system is $(uname -s)"
+case "$(uname -m)" in
+    x86_64 | amd64) ;;
+    *) fail "Bloom's Linux package is for x86-64; this computer is $(uname -m)" ;;
+esac
+for tool in tar xz sha256sum openssl mktemp; do
+    command -v "$tool" > /dev/null 2>&1 || fail "the program '$tool' is needed and was not found"
+done
+[ -n "$public_keys" ] || fail "this copy of the script carries no release key and cannot verify a download"
+
+if [ -e "$target" ] && ! installed_by_script "$target"; then
+    if [ ! -d "$target" ] || [ -n "$(ls -A "$target" 2> /dev/null)" ]; then
+        fail "$root exists and is not a Bloom install made by this script; name another folder with --prefix"
+    fi
+fi
+# The folder the package goes into must be one this user can make or write. Nothing is made
+# yet: a download that is refused leaves no trace.
+parent=$(dirname "$target")
+existing=$parent
+while [ ! -e "$existing" ]; do
+    existing=$(dirname "$existing")
+done
+if [ ! -d "$existing" ] || [ ! -w "$existing" ]; then
+    if [ "$mode" = system ]; then
+        fail "$parent cannot be written; an install for every user needs administrator rights (sudo sh install.sh --system)"
+    fi
+    fail "$parent cannot be written"
+fi
+
+# The system libraries: named now, so that a missing one is known before the first start.
+known_libraries() {
+    # The loader's own list of what it finds; without it, the folders it searches.
+    cache=$( { ldconfig -p 2> /dev/null || /sbin/ldconfig -p 2> /dev/null; } |
+        sed -n 's/^[[:space:]]*\([^[:space:]]*\) (.*x86-64.*) => .*/\1/p' || true)
+    if [ -n "$cache" ]; then
+        printf '%s\n' "$cache"
+        return 0
+    fi
+    for folder in /lib64 /usr/lib64 /lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu /lib /usr/lib; do
+        ls "$folder" 2> /dev/null || true
+    done
+}
+
+system_family() {
+    release=${BLOOM_INSTALL_OS_RELEASE:-/etc/os-release}
+    names=
+    if [ -r "$release" ]; then
+        names=$(sed -n 's/^ID\(_LIKE\)\{0,1\}=//p' "$release" | tr -d '"' | tr '\n' ' ')
+    fi
+    for name in $names; do
+        case "$name" in
+            debian | ubuntu) echo debian; return 0 ;;
+            fedora | rhel | centos) echo fedora; return 0 ;;
+            arch) echo arch; return 0 ;;
+        esac
+    done
+    echo unknown
+}
+
+# Prints the packages of column $1 (3 Debian, 4 Fedora, 5 Arch) for the libraries in $2.
+packages_for() {
+    for library in $2; do
+        library_table | awk -v library="$library" -v column="$1" '$1 == library { print $column }'
+    done | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+
+install_command() {
+    case "$1" in
+        debian) echo "sudo apt install $(packages_for 3 "$2")" ;;
+        fedora) echo "sudo dnf install $(packages_for 4 "$2")" ;;
+        arch) echo "sudo pacman -S --needed $(packages_for 5 "$2")" ;;
+    esac
+}
+
+missing_required=
+missing_optional=
+found=$(known_libraries)
+for entry in $(library_table | awk 'NF >= 5 { print $1 ":" $2 }'); do
+    library=${entry%%:*}
+    if ! printf '%s\n' "$found" | grep -q -x -F "$library"; then
+        if [ "${entry##*:}" = required ]; then
+            missing_required="$missing_required $library"
+        else
+            missing_optional="$missing_optional $library"
+        fi
+    fi
+done
+library_notice() {
+    family=$(system_family)
+    if [ -n "$missing_required" ]; then
+        say ""
+        say "This system lacks libraries Bloom needs:$missing_required"
+        if [ "$family" = unknown ]; then
+            say "Install them with your system's package manager. They are in these packages:"
+            say "  Debian, Ubuntu: $(packages_for 3 "$missing_required")"
+            say "  Fedora:         $(packages_for 4 "$missing_required")"
+            say "  Arch Linux:     $(packages_for 5 "$missing_required")"
+        else
+            say "Install them with:"
+            say "  $(install_command "$family" "$missing_required")"
+        fi
+    fi
+    if [ -n "$missing_optional" ]; then
+        say ""
+        say "Not installed, and used only by some features (audio output, hardware video"
+        say "decoding, font downloads in bloom-cli):$missing_optional"
+        if [ "$family" != unknown ]; then
+            say "  $(install_command "$family" "$missing_optional")"
+        fi
+    fi
+}
+
+# --- The release files, verified ---------------------------------------------------------------
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/bloom-install.XXXXXX")
+staged=
+cleanup() {
+    rm -rf "$work"
+    if [ -n "$staged" ]; then
+        # Stopped between taking the installed version away and putting the new one there:
+        # the installed version goes back.
+        if [ -d "$staged/replaced" ] && [ ! -e "$target" ]; then
+            mv "$staged/replaced" "$target"
+        fi
+        rm -rf "$staged"
+    fi
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM HUP
+
+fetch() {
+    if [ -n "$from" ]; then
+        [ -f "$from/$1" ] || fail "$from has no $1"
+        cp "$from/$1" "$work/$1"
+    elif command -v curl > /dev/null 2>&1; then
+        curl --fail --location --silent --show-error --proto '=https,file' \
+            --output "$work/$1" "$base_url/$1" || fail "$1 could not be downloaded from $base_url"
+    elif command -v wget > /dev/null 2>&1; then
+        wget --quiet --output-document "$work/$1" "$base_url/$1" ||
+            fail "$1 could not be downloaded from $base_url"
+    else
+        fail "curl or wget is needed to download Bloom (or use --from <folder> with the release files)"
+    fi
+}
+
+say "Bloom $version"
+fetch SHA256SUMS
+fetch SHA256SUMS.sig
+
+# The signature is 64 bytes by an Ed25519 key. Each key this script carries is 32 bytes in
+# Base64; the bytes before it are the fixed start of such a key in the form openssl reads.
+verified=no
+old_ifs=$IFS
+IFS=,
+for key in $public_keys; do
+    IFS=$old_ifs
+    {
+        printf '\060\052\060\005\006\003\053\145\160\003\041\000'
+        printf '%s\n' "$key" | openssl base64 -d -A
+    } > "$work/key.der" 2> /dev/null || continue
+    if openssl pkeyutl -verify -pubin -keyform DER -inkey "$work/key.der" -rawin \
+        -in "$work/SHA256SUMS" -sigfile "$work/SHA256SUMS.sig" > /dev/null 2>&1; then
+        verified=yes
+        break
+    fi
+done
+IFS=$old_ifs
+[ "$verified" = yes ] ||
+    fail "the list of checksums is not signed by Bloom's release key; nothing was installed"
+
+expected=$(awk -v name="$package.tar.xz" '$2 == name || $2 == "*" name { print $1 }' "$work/SHA256SUMS")
+case "$expected" in
+    *[!0-9a-f]* | '') fail "the signed list of checksums does not name $package.tar.xz; nothing was installed" ;;
+esac
+[ ${#expected} -eq 64 ] ||
+    fail "the signed list of checksums does not name $package.tar.xz once; nothing was installed"
+
+say "Downloading $package.tar.xz"
+fetch "$package.tar.xz"
+actual=$(sha256sum "$work/$package.tar.xz" | awk '{ print $1 }')
+[ "$actual" = "$expected" ] ||
+    fail "$package.tar.xz does not have the checksum the signed list gives; nothing was installed"
+
+# --- Installing --------------------------------------------------------------------------------
+
+# Unpacked beside the place it goes to, so that putting it there is a rename.
+mkdir -p "$parent"
+staged=$(mktemp -d "$target.new.XXXXXX")
+tar -xJf "$work/$package.tar.xz" -C "$staged" --no-same-owner
+tree=$staged/$package
+[ -x "$tree/bin/Bloom" ] && [ -x "$tree/bin/bloom-cli" ] && [ -d "$tree/share/bloom" ] ||
+    fail "the package does not have the expected contents; nothing was installed"
+
+desktop=$data_dir/applications/$application.desktop
+mime=$data_dir/mime/packages/$application.xml
+{
+    echo "# How this copy of Bloom was installed. Bloom's updater reads it."
+    echo "kind=script"
+} > "$tree/$marker"
+{
+    echo "# What Bloom's install script wrote outside this folder; --uninstall removes it."
+    echo "link $bin_dir/bloom-cli"
+    echo "file $desktop"
+    echo "file $mime"
+    for icon in "$tree"/share/icons/hicolor/*/apps/"$application".png; do
+        [ -f "$icon" ] || continue
+        size=${icon%/apps/*}
+        echo "file $data_dir/icons/hicolor/${size##*/}/apps/$application.png"
+    done
+} > "$tree/$manifest"
+
+# What an earlier version listed and this one no longer has is removed with it.
+previous_manifest=
+if [ -f "$target/$manifest" ]; then
+    previous_manifest=$work/previous-manifest
+    cp "$target/$manifest" "$previous_manifest"
+fi
+
+if [ -d "$target" ]; then
+    mv "$target" "$staged/replaced"
+fi
+mv "$tree" "$target"
+rm -rf "$staged"
+staged=
+
+if [ -n "$previous_manifest" ]; then
+    remove_listed "$previous_manifest"
+fi
+
+mkdir -p "$destdir$bin_dir" "$destdir$data_dir/applications" "$destdir$data_dir/mime/packages"
+ln -sfn "$root/bin/bloom-cli" "$destdir$bin_dir/bloom-cli"
+# The menu entry starts the program by its full path, so it works without a PATH entry.
+awk -v program="$root/bin/Bloom" '
+    /^Exec=Bloom( |$)/ {
+        print "TryExec=" program
+        print "Exec=\"" program "\"" substr($0, 11)
+        next
+    }
+    { print }' "$target/share/applications/$application.desktop" > "$destdir$desktop"
+cp "$target/share/mime/packages/$application.xml" "$destdir$mime"
+for icon in "$target"/share/icons/hicolor/*/apps/"$application".png; do
+    [ -f "$icon" ] || continue
+    size=${icon%/apps/*}
+    mkdir -p "$destdir$data_dir/icons/hicolor/${size##*/}/apps"
+    cp "$icon" "$destdir$data_dir/icons/hicolor/${size##*/}/apps/$application.png"
+done
+refresh_caches
+
+say "Bloom $version is installed in $root."
+case ":${PATH:-}:" in
+    *":$bin_dir:"*) ;;
+    *) say "bloom-cli is in $bin_dir, which is not on your PATH." ;;
+esac
+library_notice
