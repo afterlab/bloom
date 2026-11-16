@@ -3473,3 +3473,20 @@ bloom_add_test(NAME bloom.ui.update_tests
                COMMAND bloom_update_ui_test
                LABELS ui integration update TIMEOUT 120
                ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# #734: the AppImage's "Add to Application Menu" offer: the files it writes into a data folder of
+# the test's own, the offer's once-only rule and a moved file's refresh. Offscreen. Linux only:
+# an AppImage is a Linux package, and the entry's path rule refuses a backslash, which is the
+# directory separator of a Windows temporary folder; macOS and Windows never run this offer.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(bloom_appimage_menu_test appimage_menu_tests.cpp)
+    target_include_directories(bloom_appimage_menu_test PRIVATE .. "${PROJECT_SOURCE_DIR}/tests/support")
+    target_link_libraries(bloom_appimage_menu_test PRIVATE bloom_ui bloom_update)
+    target_compile_definitions(bloom_appimage_menu_test PRIVATE
+        BLOOM_APPIMAGE_MENU_SOURCE="${PROJECT_SOURCE_DIR}/apps/bloom/linux")
+    bloom_enable_warnings(bloom_appimage_menu_test)
+    bloom_add_test(NAME bloom.ui.appimage_menu_tests
+                   COMMAND bloom_appimage_menu_test
+                   LABELS ui integration update TIMEOUT 120
+                   ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()

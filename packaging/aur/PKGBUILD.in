@@ -1,0 +1,67 @@
+# Bloom's release for Arch Linux: the release's tar, unpacked into /opt/bloom.
+#
+# This file is generated for each release from packaging/aur/PKGBUILD.in in Bloom's source
+# (cmake/package/make_pkgbuild.cmake). Publishing it to the AUR is a maintainer step.
+pkgname=bloom-bin
+_version=@BLOOM_PKG_LABEL@
+pkgver=@BLOOM_PKG_VERSION@
+pkgrel=1
+pkgdesc='Artist-focused motion graphics and visual effects software (prebuilt release)'
+arch=('x86_64')
+url='https://github.com/afterlab/bloom'
+license=('@BLOOM_PKG_LICENSE@')
+depends=(@BLOOM_PKG_DEPENDS@)
+optdepends=(@BLOOM_PKG_OPTDEPENDS@)
+provides=('bloom')
+conflicts=('bloom')
+# The files of the release are checked by their bytes; stripping would change them.
+options=('!strip')
+source=("https://github.com/afterlab/bloom/releases/download/v${_version}/Bloom-${_version}-linux-x86_64.tar.xz")
+sha256sums=('@BLOOM_PKG_SHA256@')
+
+package() {
+    local tree="$srcdir/Bloom-${_version}-linux-x86_64"
+    local application=id.afterlab.bloom
+
+    [[ -x "$tree/bin/Bloom" && -x "$tree/bin/bloom-cli" && -d "$tree/share/bloom" ]] || {
+        echo 'The release does not have the expected contents.' >&2
+        return 1
+    }
+
+    # The program and everything it carries.
+    install -d "$pkgdir/opt/bloom"
+    cp -a "$tree/." "$pkgdir/opt/bloom/"
+
+    # The command-line program on the PATH.
+    install -d "$pkgdir/usr/bin"
+    ln -s /opt/bloom/bin/bloom-cli "$pkgdir/usr/bin/bloom-cli"
+
+    # The menu entry starts the program by its full path, so it works without a PATH entry.
+    install -d "$pkgdir/usr/share/applications"
+    sed -e 's#^Exec=Bloom\( \|$\)#TryExec=/opt/bloom/bin/Bloom\nExec=/opt/bloom/bin/Bloom\1#' \
+        "$tree/share/applications/$application.desktop" \
+        > "$pkgdir/usr/share/applications/$application.desktop"
+    grep -q '^Exec=/opt/bloom/bin/Bloom ' "$pkgdir/usr/share/applications/$application.desktop"
+    chmod 644 "$pkgdir/usr/share/applications/$application.desktop"
+
+    # The icons and the project file type.
+    local icon size
+    for icon in "$tree"/share/icons/hicolor/*/apps/"$application".png; do
+        size=${icon%/apps/*}
+        install -Dm644 "$icon" "$pkgdir/usr/share/icons/hicolor/${size##*/}/apps/$application.png"
+    done
+    install -Dm644 "$tree/share/mime/packages/$application.xml" \
+        "$pkgdir/usr/share/mime/packages/$application.xml"
+
+    # Tells Bloom that pacman owns these files, so it leaves updates to pacman.
+    printf 'kind=package\nmanager=pacman\n' > "$pkgdir/opt/bloom/share/bloom/install-kind"
+
+    # The license texts.
+    local text
+    for text in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
+        if [[ -f "$tree/share/bloom/$text" ]]; then
+            install -Dm644 "$tree/share/bloom/$text" "$pkgdir/usr/share/licenses/$pkgname/$text"
+        fi
+    done
+    [[ -f "$pkgdir/usr/share/licenses/$pkgname/LICENSE" ]]
+}

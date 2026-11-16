@@ -469,6 +469,20 @@ if(BUILD_TESTING)
                 LABELS quality
                 SKIP_RETURN_CODE 77
                 TIMEOUT 120)
+            # Linux only: the AUR package is an Arch Linux package made by makepkg from a shell
+            # script (packaging/aur/PKGBUILD.in). Two modes, because makepkg is an Arch tool:
+            # where it exists and the user is not root, the test builds the package from a
+            # stand-in release and checks the built package; everywhere else it checks the
+            # generated PKGBUILD and .SRCINFO statically and says so. It reports a skip
+            # without `xz`.
+            bloom_add_test(
+                NAME bloom.package.pkgbuild_tests
+                COMMAND sh "${PROJECT_SOURCE_DIR}/packaging/aur/test_pkgbuild.sh"
+                    "${PROJECT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/pkgbuild-test"
+                    "${CMAKE_COMMAND}"
+                LABELS quality
+                SKIP_RETURN_CODE 77
+                TIMEOUT 120)
         endif()
     endif()
 endif()

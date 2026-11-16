@@ -33,6 +33,7 @@
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/scripting/live_session_host.hpp>
 #include <bloom/ui/acceleration_status.hpp>
+#include <bloom/ui/appimage_menu_entry.hpp>
 #include <bloom/ui/application_identity.hpp>
 #include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
@@ -1046,6 +1047,11 @@ int main(int argc, char* argv[]) try {
         updateService, updateDriver.get(),
         bloom::ui::applicationUpdateHooks([&window] { window.close(); }), window);
     window.setUpdateController(&updateController);
+    // An AppImage offers to add its menu entry once, and keeps an added entry on the file (#734).
+    // Anything else is left alone: the offer finds no AppImage.
+    bloom::ui::AppImageMenuOffer appImageMenuOffer(
+        taskScheduler, taskUiBridge,
+        bloom::ui::applicationAppImageMenuEnvironment(updateService.environment().install), window);
     // The restart installs only once the close it asked for is confirmed (unsaved changes and
     // running exports decided); any other close request forgets it.
     QObject::connect(&window, &bloom::ui::MainWindow::closeRequested, &updateController,
@@ -1228,11 +1234,14 @@ int main(int argc, char* argv[]) try {
     window.show();
     // The artist is told when a version that could not start was put back, and the automatic check
     // begins. The package check and the tests contact nothing.
-    QTimer::singleShot(0, &updateController, [&updateController, updateStartup] {
-        updateController.noticeAtStartup(updateStartup);
-        if (!qEnvironmentVariableIsSet(bloom::ui::kPackageCheckProfileVariable))
-            updateController.startAutomaticChecks();
-    });
+    QTimer::singleShot(
+        0, &updateController, [&updateController, &appImageMenuOffer, updateStartup] {
+            updateController.noticeAtStartup(updateStartup);
+            if (!qEnvironmentVariableIsSet(bloom::ui::kPackageCheckProfileVariable)) {
+                updateController.startAutomaticChecks();
+                appImageMenuOffer.start();
+            }
+        });
     if (mcpPreferences.autoStart)
         mcpService.requestAutoStart();
 

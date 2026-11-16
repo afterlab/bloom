@@ -587,6 +587,7 @@ target_sources(
         qt_update_transport.cpp
         qt_update_transport.hpp
         update_service.cpp
+        appimage_menu_entry.cpp
         update_controller.cpp
         update_window.cpp
         update_window.hpp
@@ -871,6 +872,7 @@ target_sources(
             include/bloom/ui/task_monitor_model.hpp
             include/bloom/ui/task_ui_bridge.hpp
             include/bloom/ui/update_service.hpp
+            include/bloom/ui/appimage_menu_entry.hpp
             include/bloom/ui/update_controller.hpp
             include/bloom/ui/platform_update_driver.hpp
             include/bloom/ui/application_identity.hpp

@@ -391,6 +391,25 @@ installed AppImage downloads only the blocks it lacks
 package, writes it, and a release build writes the place the control file is published into
 the runtime's update information (`BLOOM_UPDATE_APPIMAGE_INFORMATION`).
 
+**The AppImage's menu entry.** An AppImage is one file and installs nothing, so on the first run
+Bloom offers to add itself to the application menu: "Add Bloom to the Application Menu?", with
+**Add to Application Menu** and **Not Now**. The answer is kept (`appimage/menu-offer-answered`),
+so the offer is made once, and only for an AppImage that has no entry of Bloom's yet.
+**Add to Application Menu** writes, in the user's data folder (`XDG_DATA_HOME`, or
+`~/.local/share`), `applications/id.afterlab.bloom.desktop`, the icons under
+`icons/hicolor/<size>/apps` and the project file type under `mime/packages`; nothing else is
+changed. The entry starts the AppImage by its full path (`Exec="<file>" %f`, with `TryExec`) and
+carries the line `X-Bloom-AppImage=true`, which says that Bloom wrote it. When that entry names
+another file than the running AppImage (the file was moved or renamed), Bloom writes it again at
+start-up without asking. An entry without the line, such as the install script's, is left alone.
+The file work is a background job and never runs on the interface thread; the desktop's
+`update-desktop-database` and `update-mime-database` are started afterward when they exist, and
+not waited for. A path the entry cannot carry (a quote, a backquote, `$`, a backslash, `%` or a
+line break) is refused with the reason shown. `bloom.ui.appimage_menu_tests` (Linux only: an
+AppImage is a Linux file) covers the files and their `Exec` and `TryExec` lines, the once-only
+offer, **Not Now** writing nothing, a moved file and a refused path, in folders under the
+build tree.
+
 **The install script.** A release publishes `install.sh`, written for that release from
 `tools/install/install.sh.in` by `cmake/package/make_install_script.cmake`, which fills in the
 version, the address of the release's files and the release's public keys. It is a POSIX shell
@@ -430,9 +449,35 @@ package, a changed list, another key, another release's list, no signature), the
 advice for each family, repair, update, `--prefix`, `--system` under `DESTDIR`, and
 `--uninstall` beside other programs' files.
 
+**The Arch Linux package.** `packaging/aur/PKGBUILD.in` is the source of the `bloom-bin` package
+for the AUR, written for each release (with `.SRCINFO`) by `cmake/package/make_pkgbuild.cmake`
+from the release's label and the checksum of its tar. The package takes the release's tar from
+the release's page on GitHub, puts the tree in `/opt/bloom`, links `/usr/bin/bloom-cli` to
+`/opt/bloom/bin/bloom-cli`, and installs the menu entry (started by `/opt/bloom/bin/Bloom`), the
+icons and the project file type under `/usr/share`, and the license texts under
+`/usr/share/licenses/bloom-bin`. Its `depends` are the Arch Linux packages of the libraries
+`tools/install/linux-library-packages.txt` marks `required`, and its `optdepends` are the
+`optional` ones, each with the reason. It is `x86_64` only, `provides` and `conflicts` with
+`bloom`, and is not stripped, because the files of a release are checked by their bytes.
+`/opt/bloom/share/bloom/install-kind` holds `kind=package` and `manager=pacman`, so Bloom sees
+that pacman owns the install and its update window says to update it there; Bloom does not
+replace the files. Publishing the package to the AUR is a maintainer step.
+`bloom.package.pkgbuild_tests` (Linux only) generates the files for a stand-in release. It
+checks them statically everywhere; where `makepkg` exists and the user is not root, it also
+builds the package from the stand-in, offline, and checks every path, the link's target, the
+marker and the entry's `Exec` line in the built package.
+
 **Where it was started.** `tools/ci/linux-package/start.sh` unpacks a package on a clean
 system, runs the package check's contents and run rules there, and refuses a system that has
-Python, Qt's tools or a compiler. Both forms of the 0.1.0 package passed it on:
+Python, Qt's tools or a compiler. A third form, `sh start.sh <release folder>/install.sh <work>`,
+takes the release's own `install.sh` from the folder that also holds `SHA256SUMS`,
+`SHA256SUMS.sig` and the tar. It installs for a user whose home folder is under the work
+directory (`--from <folder> --prefix <work>/installed`, which verifies the signature and the
+checksum), runs the same rules with the linked `bloom-cli` as the program that runs and
+renders, then runs `install.sh --uninstall` and requires that the folder and the link are gone.
+The table below lists runs of the tar and the AppImage only; a run of the install script form
+is listed with its system when it has been made there. The tar and the AppImage of the 0.1.0
+package passed it on:
 
 | System | C library | How |
 | --- | --- | --- |
