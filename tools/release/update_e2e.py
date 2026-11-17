@@ -32,6 +32,12 @@ folders in ~/Library; on Windows the installation, which the test removes with t
 own uninstaller. The platform's updater on macOS keeps a few values of its own in the bundle
 identifier's defaults, and those stay.
 
+On macOS two things differ, because of the platform's updater. It accepts a new version only
+when that version carries the key the installed one trusts, so the test puts its own public key
+into the candidate's Info.plist and seals the bundle again; every program in it stays the
+candidate's. And it would start the new version through the system's launcher, as the person at
+the computer, so a test build tells it not to and the test starts the new version itself.
+
 A candidate "that cannot start": on Linux and macOS its main program is replaced by one that
 ends at once; on Windows the installer is the candidate's own and is started without the
 argument that starts Bloom again, so the new version never confirms its start. On macOS and
@@ -50,6 +56,7 @@ import http.server
 import importlib.util
 import os
 import platform
+import plistlib
 import re
 import shutil
 import subprocess
@@ -195,8 +202,33 @@ class Run:
 
     # --- the release this machine serves -----------------------------------------------------
 
+    def keyed(self, name: str, file: Path) -> Path:
+        """macOS: the candidate with this test's public key in its Info.plist, sealed again.
+
+        The platform's updater accepts a new version only when it carries the key the installed
+        version trusts (or is signed by the same developer identity, which a test has none of).
+        The installed test build trusts this test's key, and a release candidate carries the
+        release's, so the test puts its own key into the candidate. Every program in it stays
+        the candidate's own."""
+        folder = self.work / name / "keyed"
+        subprocess.run(["ditto", "-x", "-k", str(file), str(folder / "tree")], check=True)
+        bundle = folder / "tree" / "Bloom.app"
+        plist = bundle / "Contents" / "Info.plist"
+        with plist.open("rb") as stream:
+            content = plistlib.load(stream)
+        content["SUPublicEDKey"] = self.public
+        with plist.open("wb") as stream:
+            plistlib.dump(content, stream)
+        subprocess.run(["codesign", "--force", "--sign", "-", str(bundle)], check=True)
+        keyed = folder / file.name
+        subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(bundle),
+                        str(keyed)], check=True)
+        return keyed
+
     def release(self, name: str, file: Path, installer_arguments: str) -> Served:
         served = Served(self.work / name / "served")
+        if SYSTEM == "macos":
+            file = self.keyed(name, file)
         target = served.folder / self.candidate.name
         shutil.copyfile(file, target)
         notes = served.folder / "notes.md"

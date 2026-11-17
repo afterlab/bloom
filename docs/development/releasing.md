@@ -143,6 +143,11 @@ the macOS zip and the Windows installer. Bloom runs without a window and under t
 check's own identity, so the settings of the person at the machine are not touched. On macOS the
 platform's updater would start the new version through the system's launcher, as that person
 and with a window, so a test build tells it not to and the test starts the new version itself.
+The same updater accepts a new version only when it carries the key the installed version
+trusts. The test build trusts the test's key and the candidate carries the release's, so the
+test puts its own key into the candidate's `Info.plist` and seals the bundle again; the
+programs in it stay the candidate's. An update from one released version to the next, with the
+release's key on both sides, is therefore first seen with the second release.
 A part that fails prints the requests its release was asked, the last lines of Bloom's own
 output and the files of the update folder.
 
