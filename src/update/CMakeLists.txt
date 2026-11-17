@@ -136,8 +136,11 @@ target_link_libraries(bloom_update PUBLIC bloom_core
     PRIVATE bloom_platform bloom_update_crypto yyjson::yyjson)
 bloom_enable_warnings(bloom_update)
 if(bloom_update_crypto_build_directory)
+    # A path in a string literal: forward slashes, never the backslashes of a runner's spelling.
+    bloom_path_definition(bloom_update_crypto_build_definition
+        BLOOM_UPDATE_CRYPTO_BUILD_DIRECTORY "${bloom_update_crypto_build_directory}")
     set_source_files_properties(crypto_library.cpp PROPERTIES COMPILE_DEFINITIONS
-        "BLOOM_UPDATE_CRYPTO_BUILD_DIRECTORY=\"${bloom_update_crypto_build_directory}\"")
+        "${bloom_update_crypto_build_definition}")
 endif()
 # The settings reach one file, so a build under other settings recompiles that file alone.
 if(BLOOM_UPDATE_TEST_BUILD)

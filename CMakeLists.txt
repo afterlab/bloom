@@ -68,9 +68,17 @@ include(BloomDependencyPrefix)
 include(BloomVulkanRuntime)
 include(BloomPackageLayout)
 include(BloomVersion)
+include(BloomPathDefinition)
 
 # Before any target is added, so it reaches all of them.
 bloom_disable_floating_point_contraction()
+
+# The prefix reaches compile definitions and generated files, so it is spelled the way CMake spells
+# paths (forward slashes) before anything reads it; a hosted Windows runner passes backslashes
+# (cmake/BloomPathDefinition.cmake).
+if(DEFINED BLOOM_DEPENDENCY_PREFIX)
+    bloom_cmake_path(BLOOM_DEPENDENCY_PREFIX "${BLOOM_DEPENDENCY_PREFIX}")
+endif()
 
 # Dependency-prefix consumption is implemented, so an explicit mode is required: 'qualified'
 # validates the reviewed lock and resolves dependency packages only from the superbuild prefix;
@@ -125,6 +133,18 @@ if(BUILD_TESTING
    AND (CMAKE_SYSTEM_NAME STREQUAL "Linux"
         OR ((APPLE OR WIN32) AND BLOOM_DEPENDENCY_MODE STREQUAL "qualified")))
     set(BLOOM_MEDIA_FIXTURE_TESTS ON)
+endif()
+
+# The spelling of a path in a compile definition, run on every system with the Windows form of a
+# path as its input (cmake/BloomPathDefinition.cmake).
+if(BUILD_TESTING)
+    include(BloomTesting)
+    bloom_add_test(
+        NAME bloom.build.path-definition
+        COMMAND ${CMAKE_COMMAND} "-DMODULE_DIR=${PROJECT_SOURCE_DIR}/cmake"
+            -P "${PROJECT_SOURCE_DIR}/cmake/tests/path_definition.cmake"
+        LABELS unit build
+        TIMEOUT 60)
 endif()
 
 add_subdirectory(tools/quality/json)
