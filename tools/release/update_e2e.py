@@ -27,9 +27,10 @@ A line is printed for every step; the exit status is 0 when both parts passed.
 
 Bloom runs without a window and under the package check's own identity
 (BLOOM_PACKAGE_CHECK_PROFILE), so it never reads or writes the settings of the person whose
-computer it is. What it cannot move is removed afterwards: on macOS the BloomPackageCheck
-folders in ~/Library; on Windows the installation, which the test removes with the installer's
-own uninstaller. The platform's updater on macOS keeps a few values of its own in the bundle
+computer it is. What it cannot move is removed before and afterwards: on macOS the
+BloomPackageCheck folders in ~/Library; on Windows the BloomPackageCheck folder in the local
+application data folder, and the installation, which the test removes with the installer's own
+uninstaller. The platform's updater on macOS keeps a few values of its own in the bundle
 identifier's defaults, and those stay.
 
 On macOS two things differ, because of the platform's updater. It accepts a new version only
@@ -178,6 +179,18 @@ def kind_of(file: Path) -> str:
         if file.name.endswith(suffix):
             return kind
     raise RuntimeError(f"{file.name} is not a file this test installs")
+
+
+def profile_folders() -> list[Path]:
+    """The per-user folders of the check's identity that the system does not let a test move:
+    macOS keeps them in ~/Library, and Windows asks the system, not the environment, for the
+    local application data folder."""
+    if SYSTEM == "macos":
+        return [Path.home() / "Library" / folder / PROFILE_ORGANIZATION
+                for folder in ("Application Support", "Caches")]
+    if SYSTEM == "windows" and os.environ.get("LOCALAPPDATA"):
+        return [Path(os.environ["LOCALAPPDATA"]) / PROFILE_ORGANIZATION]
+    return []
 
 
 class Run:
@@ -336,6 +349,8 @@ class Run:
             "BLOOM_UPDATE_TEST_PUBLIC_KEYS": self.public,
             "BLOOM_UPDATE_TEST_INSTALL_NOW": "1",
             "QT_QPA_PLATFORM": "offscreen",
+            # A Windows program without a console writes its messages to the debugger otherwise.
+            "QT_FORCE_STDERR_LOGGING": "1",
         }
         if SYSTEM == "windows":
             for variable in ("SystemRoot", "SystemDrive", "TEMP", "TMP", "USERPROFILE",
@@ -363,10 +378,7 @@ class Run:
 
     def update_folder(self, name: str) -> Path | None:
         """The update folder of the run: where the plan, its journal and the start are written."""
-        roots = [self.work / name / "home"]
-        if SYSTEM == "macos":
-            roots.append(Path.home() / "Library" / "Application Support" / PROFILE_ORGANIZATION)
-        for root in roots:
+        for root in [self.work / name / "home", *profile_folders()]:
             if root.is_dir():
                 for found in root.rglob("updates"):
                     if found.is_dir():
@@ -398,14 +410,12 @@ class Run:
 
     def processes(self) -> list[int]:
         """The processes this test's Bloom and its helper run as: those whose program file is
-        under DIR (or, on macOS, in the check's own folder, where the helper's copy is). On
+        under DIR (or in the check's own per-user folder, where the helper's copy is). On
         Linux also those started with this test's own settings folder: a program inside an
         AppImage runs from the image's mount, which is not under DIR."""
         found = []
-        markers = [str(self.work) + os.sep]
-        if SYSTEM == "macos":
-            markers.append(str(Path.home() / "Library" / "Application Support"
-                               / PROFILE_ORGANIZATION) + os.sep)
+        markers = [str(self.work) + os.sep] + [str(folder) + os.sep
+                                               for folder in profile_folders()]
         if SYSTEM == "linux":
             profile = f"{PROFILE_VARIABLE}={self.work}{os.sep}".encode()
             for entry in Path("/proc").iterdir():
@@ -587,11 +597,9 @@ class Run:
             self.remove(root)
 
     def clean(self) -> None:
-        if SYSTEM == "macos":
-            for folder in ("Application Support", "Caches"):
-                leftover = Path.home() / "Library" / folder / PROFILE_ORGANIZATION
-                if leftover.is_dir():
-                    shutil.rmtree(leftover, ignore_errors=True)
+        for leftover in profile_folders():
+            if leftover.is_dir():
+                shutil.rmtree(leftover, ignore_errors=True)
 
 
 def main(arguments: list[str]) -> int:
@@ -619,6 +627,8 @@ def main(arguments: list[str]) -> int:
         passed = False
         try:
             say(f"{run.kind} on {run.platform}: {run.old} -> {run.new}")
+            # Nothing of an earlier run may be read as this run's.
+            run.clean()
             passed = run.part("update", run.candidate, INSTALLER_ARGUMENTS + " /RELAUNCH=1",
                               expect_new=True)
             if passed and not options.skip_rollback:
