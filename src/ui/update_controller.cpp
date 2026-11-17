@@ -5,6 +5,7 @@
 #include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/kit/dialog_prompts.hpp>
 #include <bloom/ui/platform_update_driver.hpp>
+#include <bloom/update/install_kind.hpp>
 #include <bloom/update/refusal.hpp>
 
 #include <QDateTime>
@@ -236,6 +237,22 @@ void UpdateController::onCheckFinished(const bool automatic) {
             window_->hide();
         }
         return;
+    }
+    if (unattended_) {
+        // The end-to-end update test reads this line when its update does not happen: nobody
+        // sees the window of a test build that runs without one.
+        qWarning().noquote() << QStringLiteral(
+                                    "Unattended update: check %1, refusal %2 (%3), action %4, "
+                                    "install %5, platform updater %6")
+                                    .arg(static_cast<int>(check->status))
+                                    .arg(QString::fromUtf8(
+                                        update::refusalName(check->diagnostic.refusal)))
+                                    .arg(QString::fromStdString(check->diagnostic.detail))
+                                    .arg(static_cast<int>(check->decision.action))
+                                    .arg(QString::fromUtf8(update::installKindName(
+                                        service_.environment().install.kind)))
+                                    .arg(driver_ != nullptr ? QStringLiteral("present")
+                                                            : QStringLiteral("absent"));
     }
     if (check->status == update::CheckStatus::Decided &&
         check->decision.action == update::UpdateAction::PlatformUpdater && driver_ != nullptr) {
