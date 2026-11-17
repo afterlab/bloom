@@ -90,7 +90,11 @@ class RangeHandler(http.server.SimpleHTTPRequestHandler):
     """Serves a folder, with the one-range requests a delta download makes."""
 
     def log_message(self, format: str, *arguments) -> None:  # noqa: A002
-        pass
+        # Kept for the report of a part that failed: what was asked for, and the answer.
+        asked = getattr(self.server, "asked", None)
+        if asked is not None:
+            line = format % arguments
+            asked[line] = asked.get(line, 0) + 1
 
     def send_head(self):
         wanted = self.headers.get("Range")
@@ -135,6 +139,7 @@ class Served:
         self.folder = folder
         handler = functools.partial(RangeHandler, directory=str(folder))
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.server.asked = {}
         self.address = f"http://127.0.0.1:{self.server.server_address[1]}"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
@@ -434,9 +439,47 @@ class Run:
         except OSError:
             return ""
 
+    def explain(self, name: str, served: Served) -> None:
+        """What a failed part left behind, for whoever reads the output on another machine."""
+        asked = served.server.asked
+        say(f"{name}: requests the release was asked: {len(asked) or 'none'}")
+        for line, count in list(asked.items())[:40]:
+            say(f"    {count} x {line}")
+        output = self.work / name / "bloom-output.txt"
+        try:
+            lines = output.read_text("utf-8", errors="replace").splitlines()
+        except OSError:
+            lines = []
+        say(f"{name}: Bloom's own output, last lines of {len(lines)}:")
+        for line in lines[-60:]:
+            say(f"    {line[:300]}")
+        folder = self.update_folder(name)
+        say(f"{name}: the update folder: {folder or 'none was made'}")
+        if folder:
+            for found in sorted(folder.rglob("*"))[:60]:
+                if found.is_file():
+                    say(f"    {found.relative_to(folder)} ({found.stat().st_size} bytes)")
+            for small in ("plan.log", "started", "restored"):
+                try:
+                    say(f"    {small}: {(folder / small).read_text('utf-8').strip()[:400]}")
+                except OSError:
+                    pass
+        say(f"{name}: processes of this test still running: {len(self.processes())}")
+
     def part(self, name: str, file: Path, installer_arguments: str, expect_new: bool) -> bool:
         served = self.release(name, file, installer_arguments)
+        try:
+            passed = self.run_part(name, served, expect_new)
+        except BaseException:
+            self.explain(name, served)
+            raise
+        if not passed:
+            self.explain(name, served)
+        return passed
+
+    def run_part(self, name: str, served: Served, expect_new: bool) -> bool:
         root, program = self.install(name)
+        output = (self.work / name / "bloom-output.txt").open("wb")
         try:
             if self.reported(program) != self.old:
                 say(f"FAILED: the installed test build does not report {self.old}")
@@ -444,7 +487,7 @@ class Run:
             say(f"{name}: installed {self.old}; the release offers {self.new}")
             subprocess.Popen([str(program)], env=self.environment(name, served),
                              cwd=str(self.work / name), stdin=subprocess.DEVNULL,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             stdout=output, stderr=subprocess.STDOUT,
                              start_new_session=SYSTEM != "windows")
             if expect_new:
                 if not self.wait("the candidate's confirmed start",
@@ -479,6 +522,7 @@ class Run:
             return True
         finally:
             self.stop()
+            output.close()
             say(f"{name}: the helper's log: {self.helper_log(name).strip() or '(none)'}")
             served.close()
             self.remove(root)
