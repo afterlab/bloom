@@ -2,7 +2,7 @@
 """The end-to-end update test of a release candidate, on the machine it runs on.
 
     update_e2e.py --installed FILE --candidate FILE --work DIR [--timeout SECONDS]
-                  [--skip-rollback]
+                  [--skip-rollback] [--desktop]
 
 FILE is a release file of the platform this runs on:
 
@@ -25,19 +25,28 @@ candidate has replaced it and confirmed its start. Then it installs the test bui
 serves a candidate that cannot start, and waits until the helper has put the test build back.
 A line is printed for every step; the exit status is 0 when both parts passed.
 
-Bloom runs without a window and under the package check's own identity
-(BLOOM_PACKAGE_CHECK_PROFILE), so it never reads or writes the settings of the person whose
-computer it is. What it cannot move is removed before and afterwards: on macOS the
+Bloom runs under the package check's own identity (BLOOM_PACKAGE_CHECK_PROFILE), so it never
+reads or writes the settings of the person whose computer it is, and on Linux and Windows it
+runs without a window. What it cannot move is removed before and afterwards: on macOS the
 BloomPackageCheck folders in ~/Library; on Windows the BloomPackageCheck folder in the local
 application data folder, and the installation, which the test removes with the installer's own
 uninstaller. The platform's updater on macOS keeps a few values of its own in the bundle
 identifier's defaults, and those stay.
 
-On macOS two things differ, because of the platform's updater. It accepts a new version only
-when that version carries the key the installed one trusts, so the test puts its own public key
-into the candidate's Info.plist and seals the bundle again; every program in it stays the
-candidate's. And it would start the new version through the system's launcher, as the person at
-the computer, so a test build tells it not to and the test starts the new version itself.
+On macOS the test needs a desktop, and says so with --desktop: it is for a machine that is
+thrown away afterwards, a hosted runner, and refuses to run without the argument. The
+platform's updater asks the system's launcher whether Bloom runs, has it ask Bloom to quit,
+and has it start the new version. A Bloom without a window is not an application the launcher
+knows: the updater takes it for closed and replaces the bundle under it. So Bloom runs there
+with its window, on the desktop of the logged-in user. The new version is started by the
+launcher and not by this test, so the test gives the identity's variable to the launcher
+(`launchctl setenv`) for as long as a part runs, and takes it back.
+
+The updater accepts a new version when its archive has the signature of the key the installed
+version trusts. The installed test build trusts this test's key and a release candidate
+carries the release's, so the test also puts its own public key into the candidate's
+Info.plist and seals the bundle again, which keeps the two the pair an update between two
+releases is; every program in it stays the candidate's.
 
 A candidate "that cannot start": on Linux and macOS its main program is replaced by one that
 ends at once; on Windows the installer is the candidate's own and is started without the
@@ -157,6 +166,24 @@ class Served:
         self.server.server_close()
 
 
+def desktop_problem(allowed: bool) -> str:
+    """macOS: why the test cannot run here, or nothing."""
+    if not allowed:
+        return ("on macOS Bloom runs with its window on the desktop of the logged-in user, and "
+                "the system's launcher is given a variable for new applications; say --desktop "
+                "on a machine that is thrown away afterwards (a hosted runner), and run it "
+                "nowhere else")
+    try:
+        console = Path("/dev/console").owner()
+    except (OSError, KeyError) as error:
+        return f"who is logged in at the desktop could not be read: {error}"
+    import getpass
+    if console != getpass.getuser():
+        return (f"the desktop is {console}'s and this is {getpass.getuser()}: the platform's "
+                "updater needs the desktop of the user the test runs as")
+    return ""
+
+
 def same_bytes(file: Path, wanted: bytes) -> bool:
     try:
         return file.read_bytes() == wanted
@@ -218,11 +245,9 @@ class Run:
     def keyed(self, name: str, file: Path) -> Path:
         """macOS: the candidate with this test's public key in its Info.plist, sealed again.
 
-        The platform's updater accepts a new version only when it carries the key the installed
-        version trusts (or is signed by the same developer identity, which a test has none of).
-        The installed test build trusts this test's key, and a release candidate carries the
-        release's, so the test puts its own key into the candidate. Every program in it stays
-        the candidate's own."""
+        The installed test build trusts this test's key and a release candidate carries the
+        release's. Two releases carry the same key, so the test puts its own into the
+        candidate. Every program in it stays the candidate's own."""
         folder = self.work / name / "keyed"
         subprocess.run(["ditto", "-x", "-k", str(file), str(folder / "tree")], check=True)
         bundle = folder / "tree" / "Bloom.app"
@@ -348,10 +373,12 @@ class Run:
             "BLOOM_UPDATE_TEST_FEED_URL": f"{served.address}/alpha.json",
             "BLOOM_UPDATE_TEST_PUBLIC_KEYS": self.public,
             "BLOOM_UPDATE_TEST_INSTALL_NOW": "1",
-            "QT_QPA_PLATFORM": "offscreen",
             # A Windows program without a console writes its messages to the debugger otherwise.
             "QT_FORCE_STDERR_LOGGING": "1",
         }
+        if SYSTEM != "macos":
+            # macOS: the platform's updater only knows a Bloom with a window (the note above).
+            environment["QT_QPA_PLATFORM"] = "offscreen"
         if SYSTEM == "windows":
             for variable in ("SystemRoot", "SystemDrive", "TEMP", "TMP", "USERPROFILE",
                              "USERNAME", "ProgramData", "ComSpec", "PATHEXT"):
@@ -414,11 +441,12 @@ class Run:
         not end them, and what they wait for is not in Bloom's output."""
         listing = subprocess.run(["ps", "-axo", "pid=,ppid=,etime=,command="],
                                  capture_output=True, text=True, check=False).stdout
-        markers = ("/Autoupdate", "/Updater.app/", "Installer.xpc", "Downloader.xpc",
-                   str(self.work) + os.sep)
+        # Bloom's own bundle identifier is an argument of the updater's programs; another
+        # application's updater is none of this test's business.
+        markers = (" id.afterlab.bloom ", str(self.work) + os.sep)
         found = [line.strip() for line in listing.splitlines()
-                 if any(marker in line for marker in markers)
-                 and f" {os.getpid()} " not in f" {line.strip()} "]
+                 if any(marker in line + " " for marker in markers)
+                 and line.split()[0] != str(os.getpid())]
         say(f"{name}: the platform updater's programs and Bloom, {len(found)} running:")
         for line in found:
             say(f"    {line[:300]}")
@@ -440,6 +468,10 @@ class Run:
             say(f"{name}: the system launcher's job {label}:")
             for row in (printed.stdout + printed.stderr).splitlines()[:40]:
                 say(f"    {row[:220]}")
+        given = subprocess.run(["launchctl", "getenv", PROFILE_VARIABLE], capture_output=True,
+                               text=True, check=False).stdout.strip()
+        say(f"{name}: the system launcher gives new applications {PROFILE_VARIABLE}="
+            f"{given or '(nothing)'}")
 
     def processes(self) -> list[int]:
         """The processes this test's Bloom and its helper run as: those whose program file is
@@ -506,6 +538,13 @@ class Run:
                 except OSError:
                     pass
 
+    def output(self, name: str) -> str:
+        """What the Bloom this test started has written so far."""
+        try:
+            return (self.work / name / "bloom-output.txt").read_text("utf-8", errors="replace")
+        except OSError:
+            return ""
+
     def helper_log(self, name: str) -> str:
         """What the helper wrote when it ended: `updated: ...` or `restored: ...`. The journal
         beside it is cleared by the next start of Bloom, so the log is what is read."""
@@ -552,12 +591,7 @@ class Run:
             # The platform's updater and its installer write to the system's log, not to Bloom's
             # output.
             wanted = ('subsystem BEGINSWITH "org.sparkle-project" '
-                      'OR senderImagePath CONTAINS "Sparkle.framework" '
-                      'OR senderImagePath ENDSWITH "/Autoupdate" '
-                      'OR senderImagePath ENDSWITH "/Updater" '
-                      'OR process == "Autoupdate" OR process == "Updater" '
-                      'OR eventMessage CONTAINS[c] "sparkle-updater" '
-                      'OR eventMessage CONTAINS[c] "sparkle-progress"')
+                      'OR eventMessage CONTAINS "id.afterlab.bloom-sparkle"')
             try:
                 shown = subprocess.run(
                     ["log", "show", "--last", f"{self.timeout // 60 + 5}m", "--style", "compact",
@@ -595,31 +629,38 @@ class Run:
                                  stdout=output, stderr=subprocess.STDOUT,
                                  start_new_session=SYSTEM != "windows")
 
+            if SYSTEM == "macos":
+                # The new version is started by the system's launcher, which gives it the
+                # launcher's variables and none of this test's.
+                subprocess.run(["launchctl", "setenv", PROFILE_VARIABLE,
+                                str(self.work / name / "profile")], check=True)
             start()
             if SYSTEM == "macos":
-                # The platform's updater would start the new version through the system's
-                # launcher, as the person at the computer and with a window. A test build is
-                # told not to (the driver's unattended run), and the test starts it here, under
-                # its own identity: the installed program is the candidate's once the updater
-                # has replaced the application.
+                # The platform's updater asks Bloom to quit, replaces the application and has
+                # the system's launcher start it: the installed program is then the served
+                # one.
                 with zipfile.ZipFile(served.folder / self.candidate.name) as archive:
                     wanted = archive.read("Bloom.app/Contents/MacOS/Bloom")
                 if same_bytes(program, wanted):
-                    say("FAILED: the test build and the candidate have the same program")
+                    say("FAILED: the test build and the served version have the same program")
                     return False
                 if not self.wait("the platform's updater replacing the application",
-                                 lambda: not self.processes() and same_bytes(program, wanted)):
-                    whose = "the candidate's" if same_bytes(program, wanted) \
-                        else "still the test build's"
-                    say(f"{name}: the installed program is {whose}, and "
-                        f"{len(self.processes())} processes of this test run")
+                                 lambda: same_bytes(program, wanted)):
                     self.updater_state(name)
                     return False
                 say(f"{name}: the platform's updater replaced the application")
-                start()
+                # It says "ready" only to a Bloom it knows to be running; one it takes for
+                # closed is replaced without the quit, the kept copy and the watch.
+                if "the platform updater is ready to install" not in self.output(name):
+                    say("FAILED: the platform's updater replaced the application without "
+                        "waiting for Bloom to quit")
+                    self.updater_state(name)
+                    return False
             if expect_new:
                 if not self.wait("the candidate's confirmed start",
                                  lambda: self.started(name) == self.new):
+                    if SYSTEM == "macos":
+                        self.updater_state(name)
                     return False
                 say(f"{name}: {self.new} started and confirmed its start")
                 if not self.wait("the helper's end", lambda: "updated:" in self.helper_log(name)):
@@ -649,6 +690,8 @@ class Run:
             say(f"{name}: the installation is {self.old} again, and it started")
             return True
         finally:
+            if SYSTEM == "macos":
+                subprocess.run(["launchctl", "unsetenv", PROFILE_VARIABLE], check=False)
             self.stop()
             output.close()
             say(f"{name}: the helper's log: {self.helper_log(name).strip() or '(none)'}")
@@ -668,6 +711,8 @@ def main(arguments: list[str]) -> int:
     parser.add_argument("--work", type=Path)
     parser.add_argument("--timeout", type=int, default=1500)
     parser.add_argument("--skip-rollback", action="store_true")
+    parser.add_argument("--desktop", action="store_true",
+                        help="macOS: this machine's desktop may be used (a hosted runner)")
     parser.add_argument("--print-test-key", action="store_true")
     options = parser.parse_args(arguments)
     if options.print_test_key:
@@ -681,6 +726,11 @@ def main(arguments: list[str]) -> int:
     if not SYSTEM:
         print("update_e2e.py: this system has no Bloom release", file=sys.stderr)
         return 2
+    if SYSTEM == "macos":
+        problem = desktop_problem(options.desktop)
+        if problem:
+            print(f"update_e2e.py: {problem}", file=sys.stderr)
+            return 2
     try:
         run = Run(options)
         passed = False

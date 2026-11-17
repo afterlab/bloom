@@ -11,10 +11,12 @@
 # zip, and runs tools/release/update_e2e.py: the test build is updated to the candidate by the
 # platform's updater, and then put back by the update helper when a candidate cannot start.
 #
-# It runs where the build ran because the platform's updater needs the login session of a
-# desktop: its installer waits for a helper that shows progress, and that helper does not come up
-# in a remote session without one. A hosted machine has the session. The build directory is the
-# test build's afterwards, so everything of the release is uploaded before this runs.
+# It runs where the build ran because the test needs a desktop it may use: the platform's
+# updater only knows a Bloom that runs with its window, asks it to quit through the system's
+# launcher and has the launcher start the new version (tools/release/update_e2e.py says more). A
+# hosted machine has such a desktop and is thrown away afterwards; nobody runs this on a
+# personal computer. The build directory is the test build's afterwards, so everything of the
+# release is uploaded before this runs.
 set -eu
 
 if [ $# -ne 3 ]; then
@@ -48,4 +50,4 @@ cmake --build "$build" --target bloom-package-archives --parallel
 
 python3 -I "$source/tools/release/update_e2e.py" \
     --installed "$build/package/Bloom-$older-macos-$processor.zip" \
-    --candidate "$candidate" --work "$work/run"
+    --candidate "$candidate" --work "$work/run" --desktop

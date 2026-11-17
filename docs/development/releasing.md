@@ -122,10 +122,13 @@ or `-rc.<n>`) ends the run at its first job.
 
 The macOS files are tested by the workflow itself, in the job that built them
 (`tools/ci/macos-package/update-test.sh`; its result is the job **macOS end-to-end update** and
-its output the artifact `update-test-macos`). The platform's updater on macOS installs through a
-helper that needs the login session of a desktop, which a hosted machine has and a remote
-session on another Mac has not, so that part cannot be run from a terminal on a machine nobody
-is logged in to.
+its output the artifact `update-test-macos`). The platform's updater on macOS only knows a
+Bloom that runs with its window: it asks the system's launcher whether Bloom runs, has it ask
+Bloom to quit, and has it start the new version. The test therefore needs a desktop it may
+use, shows Bloom's window on it, and gives the launcher one variable for the applications it
+starts while a part runs. A hosted machine is such a desktop and is thrown away afterwards.
+The test refuses to run on macOS without `--desktop`, and nobody gives it that on a personal
+computer.
 
 The Linux and Windows files are tested on the project's machines while the run waits for
 approval (a rehearsal's candidate is tested the same way, before the tag):
@@ -147,15 +150,14 @@ The test installs the test build, serves a release of the candidate from the sam
 and requires that the candidate replaces the test build and confirms its start. Then it
 installs the test build again, serves a candidate that cannot start, and requires that the
 update helper puts the test build back and starts it. It handles the Linux tar and AppImage,
-the macOS zip and the Windows installer. Bloom runs without a window and under the package
-check's own identity, so the settings of the person at the machine are not touched. On macOS the
-platform's updater would start the new version through the system's launcher, as that person
-and with a window, so a test build tells it not to and the test starts the new version itself.
-The same updater accepts a new version only when it carries the key the installed version
-trusts. The test build trusts the test's key and the candidate carries the release's, so the
-test puts its own key into the candidate's `Info.plist` and seals the bundle again; the
-programs in it stay the candidate's. An update from one released version to the next, with the
-release's key on both sides, is therefore first seen with the second release.
+the macOS zip and the Windows installer. Bloom runs under the package check's own identity, so
+the settings of the person at the machine are not touched, and on Linux and Windows without a
+window. On macOS the test also requires that the platform's updater waited for Bloom to quit
+before it replaced the application. The test build trusts the test's key and the candidate
+carries the release's, where two releases carry the same key; so the test puts its own key
+into the candidate's `Info.plist` and seals the bundle again, and the programs in it stay the
+candidate's. An update from one released version to the next, with the release's key on both
+sides, is therefore first seen with the second release.
 A part that fails prints the requests its release was asked, the last lines of Bloom's own
 output and the files of the update folder.
 

@@ -263,8 +263,17 @@ class WorkflowTests(unittest.TestCase):
         script = (ROOT / "tools" / "ci" / "macos-package" / "update-test.sh").read_text(
             encoding="utf-8")
         for text in ("-DBLOOM_UPDATE_TEST_BUILD=ON", "--print-test-key", "update_e2e.py",
-                     '--candidate "$candidate"'):
+                     '--candidate "$candidate"', "--desktop"):
             self.assertIn(text, script)
+
+    def test_the_macos_update_test_uses_a_desktop_only_when_told_to(self) -> None:
+        # It shows Bloom's window and changes what the system's launcher gives applications,
+        # which is for a hosted machine: without the argument it names it and does nothing.
+        spec = importlib.util.spec_from_file_location(
+            "update_e2e", ROOT / "tools" / "release" / "update_e2e.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertIn("--desktop", module.desktop_problem(False))
 
     def test_the_windows_dependency_build_gets_msys2_s_own_programs(self) -> None:
         windows = self.job("windows")

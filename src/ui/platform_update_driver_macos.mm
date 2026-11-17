@@ -9,6 +9,12 @@
 // cancel, checks the archive's Ed25519 signature against the key in the bundle's Info.plist
 // (SUPublicEDKey), installs and starts Bloom again. Bloom gives it the address of the update
 // list, taken from the verified feed, and never lets it check by itself.
+//
+// Sparkle's installer asks the system's launcher whether Bloom runs, asks it to quit through
+// the launcher, and replaces the bundle once the launcher says it is gone. A Bloom on another
+// window platform than the system's own is not an application the launcher knows, so Sparkle
+// would take it for closed and replace the bundle under it, without the copy that is kept for
+// going back. Such a run has no driver.
 
 #include <bloom/ui/platform_update_driver.hpp>
 
@@ -21,11 +27,9 @@
 #include <QDebug>
 #include <QGuiApplication>
 #include <QString>
-#include <QTimer>
 #include <QtGlobal>
 
 #include <filesystem>
-#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -55,8 +59,6 @@ namespace {
 @property(nonatomic, copy) NSString* feed;
 // The label of the version that list offers, from the verified feed.
 @property(nonatomic, copy) NSString* version;
-// The end-to-end update test's run (BloomUnattendedUserDriver below).
-@property(nonatomic) BOOL unattended;
 - (instancetype)initWithEnvironment:
     (std::shared_ptr<const bloom::ui::UpdateEnvironment>)environment;
 @end
@@ -83,13 +85,6 @@ namespace {
 // Bloom has its own switch for the automatic check (Preferences); Sparkle never asks.
 - (BOOL)updaterShouldPromptForPermissionToCheckForUpdates:(SPUUpdater*)updater {
     return NO;
-}
-
-// Sparkle starts Bloom again through the system's launcher, as the person at the computer. The
-// end-to-end update test runs Bloom under an identity of its own, which the launcher would not
-// pass on, so in its run the test starts the new version itself.
-- (BOOL)updaterShouldRelaunchApplication:(SPUUpdater*)updater {
-    return !self.unattended;
 }
 
 // Before Sparkle replaces the bundle and starts Bloom again: the installed bundle is copied to
@@ -137,31 +132,13 @@ namespace {
 
 // The end-to-end update test's stand-in for Sparkle's own window, used only by a test build that
 // its environment tells to (kUpdateTestInstallNowVariable): every question is answered with
-// "install", nothing is shown, and what Sparkle reports goes to the log. Such a run may have no
-// window system, and then nothing delivers the system's Quit: Bloom is closed here when Sparkle
-// says it is waiting for that.
+// "install", nothing is shown, and what Sparkle reports goes to the log. Everything else is
+// Sparkle's own course: it asks Bloom to quit the way the system does, replaces the bundle and
+// starts the new version through the system's launcher.
 @interface BloomUnattendedUserDriver : NSObject <SPUUserDriver>
-- (instancetype)initWithClose:(std::function<void()>)close;
 @end
 
-@implementation BloomUnattendedUserDriver {
-    std::function<void()> _close;
-}
-
-- (instancetype)initWithClose:(std::function<void()>)close {
-    self = [super init];
-    if (self != nil) {
-        _close = std::move(close);
-    }
-    return self;
-}
-
-- (void)closeBloom:(const char*)reason {
-    qWarning().noquote() << "Unattended update:" << reason;
-    if (_close) {
-        _close();
-    }
-}
+@implementation BloomUnattendedUserDriver
 
 - (void)showUpdatePermissionRequest:(SPUUpdatePermissionRequest*)request
                               reply:(void (^)(SUUpdatePermissionResponse*))reply {
@@ -221,15 +198,11 @@ namespace {
     reply(SPUUserUpdateChoiceInstall);
 }
 
-- (void)showSendingTerminationSignal {
-    [self closeBloom:"the platform updater asks Bloom to close"];
-}
-
 - (void)showInstallingUpdateWithApplicationTerminated:(BOOL)applicationTerminated
                           retryTerminatingApplication:(void (^)(void))retryTerminatingApplication {
-    if (!applicationTerminated) {
-        [self closeBloom:"the platform updater waits for Bloom to close"];
-    }
+    qWarning() << "Unattended update: the platform updater installs;"
+               << (applicationTerminated ? "it takes Bloom for closed"
+                                         : "it has asked Bloom to quit");
 }
 
 - (void)showUpdateInstalledAndRelaunched:(BOOL)relaunched
@@ -249,18 +222,8 @@ namespace {
 class SparkleDriver final : public PlatformUpdateDriver {
   public:
     SparkleDriver(SPUUpdater* updater, id<SPUUserDriver> userDriver,
-                  BloomSparkleDelegate* delegate, const bool turnMainRunLoop)
-        : updater_(updater), userDriver_(userDriver), delegate_(delegate) {
-        if (turnMainRunLoop) {
-            // Sparkle works through the main thread's run loop and the main queue. Qt turns
-            // that loop itself on the system's own window platform; on another platform (the
-            // end-to-end update test runs without a window) nothing does, so it is turned here.
-            QObject::connect(&runLoop_, &QTimer::timeout, &runLoop_, [] {
-                (void)CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, false);
-            });
-            runLoop_.start(20);
-        }
-    }
+                  BloomSparkleDelegate* delegate)
+        : updater_(updater), userDriver_(userDriver), delegate_(delegate) {}
 
     void showUpdate(const std::string& appcastUrl, const std::string& version) override {
         @autoreleasepool {
@@ -290,7 +253,6 @@ class SparkleDriver final : public PlatformUpdateDriver {
     [[maybe_unused]] id<SPUUserDriver> userDriver_ = nil;
     BloomSparkleDelegate* delegate_ = nil;
     bool started_ = false;
-    QTimer runLoop_;
 };
 
 // Loads the bundle's own copy of the framework, and nothing from anywhere else.
@@ -308,11 +270,14 @@ class SparkleDriver final : public PlatformUpdateDriver {
 } // namespace
 
 std::unique_ptr<PlatformUpdateDriver>
-makePlatformUpdateDriver(const UpdateEnvironment& environment, PlatformUpdateHooks hooks) {
-    // Sparkle closes Bloom the way the system's Quit does, so it needs no hook of Bloom's; only
-    // the end-to-end update test's run, which may have no window system, uses one.
+makePlatformUpdateDriver(const UpdateEnvironment& environment, PlatformUpdateHooks /*hooks*/) {
+    // Sparkle closes Bloom the way the system's Quit does, so it needs no hook of Bloom's.
     if (environment.install.kind != update::InstallKind::MacBundle ||
         !environment.configuration.configured()) {
+        return nullptr;
+    }
+    // Only an application the system's launcher knows (the note at the top of this file).
+    if (QGuiApplication::platformName() != QLatin1String("cocoa")) {
         return nullptr;
     }
     @autoreleasepool {
@@ -333,8 +298,7 @@ makePlatformUpdateDriver(const UpdateEnvironment& environment, PlatformUpdateHoo
         const bool unattended = environment.configuration.testBuild &&
                                 qEnvironmentVariableIsSet(kUpdateTestInstallNowVariable);
         if (unattended) {
-            userDriver = [[BloomUnattendedUserDriver alloc] initWithClose:hooks.requestClose];
-            delegate.unattended = YES;
+            userDriver = [[BloomUnattendedUserDriver alloc] init];
         } else {
             // The classes are found by name, so each is given its type before it is made.
             SPUStandardUserDriver* standard = [userDriverClass alloc];
@@ -348,9 +312,7 @@ makePlatformUpdateDriver(const UpdateEnvironment& environment, PlatformUpdateHoo
         if (delegate == nil || userDriver == nil || updater == nil) {
             return nullptr;
         }
-        const bool turnMainRunLoop =
-            unattended && QGuiApplication::platformName() != QLatin1String("cocoa");
-        return std::make_unique<SparkleDriver>(updater, userDriver, delegate, turnMainRunLoop);
+        return std::make_unique<SparkleDriver>(updater, userDriver, delegate);
     }
 }
 

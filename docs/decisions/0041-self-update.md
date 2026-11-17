@@ -53,11 +53,9 @@ There is no switch, variable or setting that weakens a check in a release build.
 (`BLOOM_UPDATE_TEST_BUILD`) may be pointed at a feed on the same machine with a test key through
 two environment variables, and a third (`BLOOM_UPDATE_TEST_INSTALL_NOW`) makes it install the
 update it is offered without a question, which is what the end-to-end update test
-(`tools/release/update_e2e.py`) needs. It checks every signature and checksum all the same. On
-macOS that run may have no window system, so three things differ in it and nowhere else: Bloom
-turns the main thread's run loop for Sparkle, Bloom closes when Sparkle says it waits for that,
-and Sparkle is told not to start the new version, which the test starts itself under its own
-identity. The
+(`tools/release/update_e2e.py`) needs. It checks every signature and checksum all the same, and
+everything after the answer is the course a release takes: on macOS Sparkle asks Bloom to quit,
+replaces the bundle and starts the new version through the system's launcher. The
 package check refuses to publish such a build: its `release` rule asks the application what it
 was built with (`Bloom --update-settings`) and passes only a build that carries the release's
 feed address and public keys and is not a test build.
@@ -179,6 +177,16 @@ program and an unpacked Windows zip therefore never need the library, and a copy
 simply has no driver: the update window then says where the next version is. The driver exists
 only in a build with an update key, for a copy the platform's updater can replace (`Bloom.app`,
 or a copy the Windows installer installed).
+
+The macOS driver also exists only when Bloom runs on the system's own window platform.
+Sparkle's installer asks the system's launcher whether Bloom runs, has it ask Bloom to quit,
+and replaces the bundle once the launcher says Bloom is gone. A Bloom started without a window
+(a script's or a test's run on another Qt platform) is not an application the launcher knows:
+Sparkle takes it for closed and replaces the bundle at once, under the running program and
+without the kept copy below. Sparkle accepts an update whose archive has the Ed25519 signature
+of the key the installed bundle carries; the bundle's ad hoc code signature differs between
+any two builds, which Sparkle notes in the system's log and does not refuse, because one of
+the two checks is enough for it.
 
 Before the installation is replaced, the driver starts the helper in its watch mode:
 
