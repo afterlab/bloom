@@ -193,16 +193,31 @@ Before the installation is replaced, the driver starts the helper in its watch m
 - macOS: when Sparkle is about to replace the bundle and start Bloom again, the installed bundle
   is copied to `previous/Bloom.app` in the update folder (a clone on the system's own volume
   format, made off the interface thread), and the helper is started with a plan that names it.
+  That restart is the only way an update is installed. Sparkle would otherwise ask once more
+  when the update is unpacked ("ready to install"), and while that question is open its
+  installer already holds the update and installs it the moment Bloom is gone, without the
+  copy and without the watch; an artist who quit Bloom then would get an update nothing can
+  put back. So Bloom stands between Sparkle and its window and answers that one question with
+  "install" at once: the artist's "Install Update" downloads, unpacks, keeps the copy, starts
+  the watch and asks Bloom to quit, and unsaved work is Bloom's own question at that quit.
 - Windows: WinSparkle first asks whether Bloom can close. Bloom answers yes only when nothing is
   unsaved and nothing is running, because the installer needs Bloom gone and a close that stops
   to ask would leave it waiting. WinSparkle then starts the installer, which waits for Bloom to
   close and renames the installed folder to `<folder>.previous`; Bloom starts the helper with a
   plan that names that folder, and closes.
 
-The helper waits for Bloom to exit and then for the new version to confirm its start. The wait
-is long (15 minutes), because the installation itself happens inside it. When the confirmation
+The helper waits for Bloom to exit and then for the new version to confirm its start. It waits
+for the exit as long as Bloom runs, because the platform's updater installs whenever Bloom is
+gone: a quit that stops at unsaved work and is finished an hour later is still followed by the
+installation, and still watched. The wait for the confirmation is long (15 minutes), because
+the installation itself happens inside it. When the confirmation
 does not come and the kept version exists, the helper puts it back, starts it and leaves the
 notice that version shows. When the watch cannot be started the update goes on without it.
+
+What stays outside the watch on macOS: a Bloom that ends by itself (a crash) in the moment
+between Sparkle's unpacking and the kept copy, and a watch that the system ended while it
+waited (a logout or a restart). Sparkle may still install in both, and the new version then
+starts without a helper beside it.
 
 ### The AppImage's delta
 

@@ -947,8 +947,11 @@ if(WIN32)
     target_compile_definitions(bloom_ui PRIVATE BLOOM_UI_HAS_PLATFORM_UPDATER=1)
 elseif(APPLE AND DEFINED BLOOM_DEPENDENCY_PREFIX
        AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/sparkle/Sparkle.framework/Headers/Sparkle.h")
-    target_sources(bloom_ui PRIVATE platform_update_driver_macos.mm)
-    set_source_files_properties(platform_update_driver_macos.mm PROPERTIES
+    target_sources(bloom_ui PRIVATE platform_update_driver_macos.mm
+                                    platform_update_user_driver_macos.h
+                                    platform_update_user_driver_macos.mm)
+    set_source_files_properties(platform_update_driver_macos.mm
+                                platform_update_user_driver_macos.mm PROPERTIES
         COMPILE_OPTIONS "-fobjc-arc;-iframework${BLOOM_DEPENDENCY_PREFIX}/sparkle")
     target_compile_definitions(bloom_ui PRIVATE BLOOM_UI_HAS_PLATFORM_UPDATER=1)
     target_link_libraries(bloom_ui PRIVATE "-framework Foundation")

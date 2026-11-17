@@ -3491,6 +3491,25 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+# macOS only: the class is Objective-C and is part of the macOS update driver alone
+# (platform_update_user_driver_macos.h); Windows and Linux have no question of Sparkle's to
+# answer. Built where the driver is built, which needs the framework's headers.
+if(APPLE AND DEFINED BLOOM_DEPENDENCY_PREFIX
+   AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/sparkle/Sparkle.framework/Headers/Sparkle.h")
+    add_executable(bloom_update_user_driver_macos_test
+                   platform_update_user_driver_macos_tests.mm)
+    set_source_files_properties(platform_update_user_driver_macos_tests.mm PROPERTIES
+        COMPILE_OPTIONS "-fobjc-arc;-iframework${BLOOM_DEPENDENCY_PREFIX}/sparkle")
+    target_include_directories(bloom_update_user_driver_macos_test
+                               PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+    target_link_libraries(bloom_update_user_driver_macos_test
+                          PRIVATE bloom_ui "-framework Foundation")
+    bloom_enable_warnings(bloom_update_user_driver_macos_test)
+    bloom_add_test(NAME bloom.ui.update_user_driver_macos_tests
+                   COMMAND bloom_update_user_driver_macos_test
+                   LABELS ui update TIMEOUT 60)
+endif()
+
 # #734: Help > Install Command-Line Tool… and the link it makes: every outcome of the link
 # function in a temporary folder, the administrator prompt's arguments, and the menu item
 # (present on macOS, absent elsewhere). Linux and macOS only: Windows has no such link, its PATH

@@ -21,6 +21,8 @@
 #include <bloom/ui/update_service.hpp>
 #include <bloom/update/staging.hpp>
 
+#import "platform_update_user_driver_macos.h"
+
 #import <Foundation/Foundation.h>
 #import <Sparkle/Sparkle.h>
 
@@ -131,7 +133,7 @@ namespace {
 @end
 
 // The end-to-end update test's stand-in for Sparkle's own window, used only by a test build that
-// its environment tells to (kUpdateTestInstallNowVariable): every question is answered with
+// its environment tells to (kUpdateTestInstallNowVariable): the offer is answered with
 // "install", nothing is shown, and what Sparkle reports goes to the log. Everything else is
 // Sparkle's own course: it asks Bloom to quit the way the system does, replaces the bundle and
 // starts the new version through the system's launcher.
@@ -193,8 +195,8 @@ namespace {
 - (void)showExtractionReceivedProgress:(double)progress {
 }
 
+// The protocol asks for it; BloomUserDriver answers this question before it gets here.
 - (void)showReadyToInstallAndRelaunch:(void (^)(SPUUserUpdateChoice))reply {
-    qWarning() << "Unattended update: the platform updater is ready to install";
     reply(SPUUserUpdateChoiceInstall);
 }
 
@@ -294,16 +296,22 @@ makePlatformUpdateDriver(const UpdateEnvironment& environment, PlatformUpdateHoo
         BloomSparkleDelegate* delegate = [[BloomSparkleDelegate alloc]
             initWithEnvironment:std::make_shared<const UpdateEnvironment>(environment)];
         // A test build that the end-to-end update test started installs without a question.
-        id<SPUUserDriver> userDriver = nil;
+        id<SPUUserDriver> shown = nil;
         const bool unattended = environment.configuration.testBuild &&
                                 qEnvironmentVariableIsSet(kUpdateTestInstallNowVariable);
         if (unattended) {
-            userDriver = [[BloomUnattendedUserDriver alloc] init];
+            shown = [[BloomUnattendedUserDriver alloc] init];
         } else {
             // The classes are found by name, so each is given its type before it is made.
             SPUStandardUserDriver* standard = [userDriverClass alloc];
-            userDriver = [standard initWithHostBundle:NSBundle.mainBundle delegate:nil];
+            shown = [standard initWithHostBundle:NSBundle.mainBundle delegate:nil];
         }
+        if (shown == nil) {
+            return nullptr;
+        }
+        // It passes every call on, so it stands for the protocol without declaring each one.
+        id between = [[BloomUserDriver alloc] initWithDriver:shown announce:unattended ? YES : NO];
+        id<SPUUserDriver> userDriver = between;
         SPUUpdater* made = [updaterClass alloc];
         SPUUpdater* updater = [made initWithHostBundle:NSBundle.mainBundle
                                      applicationBundle:NSBundle.mainBundle

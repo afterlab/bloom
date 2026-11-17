@@ -286,7 +286,9 @@ ApplyResult applyUpdate(const ApplyPlan& plan, const std::filesystem::path& jour
         std::filesystem::remove(plan.confirmation, error);
         std::chrono::milliseconds waited{0};
         while (host.processRunning(plan.processId)) {
-            if (waited >= plan.exitTimeout) {
+            // A watch lasts as long as Bloom runs: the platform's updater installs whenever
+            // Bloom is gone, be it an hour after a quit that stopped at unsaved work.
+            if (plan.mode == ApplyMode::Swap && waited >= plan.exitTimeout) {
                 // Not recorded: nothing was touched, and a later run may find Bloom gone.
                 return {ApplyOutcome::StillRunning, "Bloom did not exit"};
             }

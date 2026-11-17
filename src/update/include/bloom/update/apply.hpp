@@ -44,6 +44,8 @@ struct ApplyPlan final {
     std::string version;
     // Written when the previous version was put back, for that version to tell the user.
     std::filesystem::path notice;
+    // How long the helper waits for Bloom to exit before it gives up (Swap). A watch has no
+    // such limit.
     std::chrono::seconds exitTimeout{600};
     std::chrono::seconds confirmTimeout{180};
 };

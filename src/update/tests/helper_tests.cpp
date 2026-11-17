@@ -434,6 +434,27 @@ int main() {
                       "starts and moves nothing");
     }
     {
+        // Bloom's quit stops at unsaved work and is finished much later; the platform's updater
+        // installs then, and the helper is still there to see the new version start.
+        Scene scene(base, "watch-late", true, ApplyMode::Watch);
+        makeVersion(scene.plan.previous, "1", true);
+        FakeHost host(scene.plan, Candidate::Confirms);
+        const int waitsOfAnHour = 5 * 60 * 60;
+        host.bloomExitsAfterWaits = waitsOfAnHour;
+        host.duringWait = [&scene, &host] {
+            if (host.waited > std::chrono::hours(1)) {
+                makeVersion(scene.plan.installed, "2", true);
+                (void)writeStartConfirmation(scene.plan.confirmation, "2");
+            }
+        };
+        const auto result = applyUpdate(scene.plan, scene.journal, host);
+        checks.expect(result.outcome == ApplyOutcome::Updated && scene.installed() == "2" &&
+                          scene.previous() == "1" && host.waited > std::chrono::hours(1) &&
+                          host.waited > scene.plan.exitTimeout && host.moves == 0,
+                      "watch: a Bloom that quits an hour later is still watched: " +
+                          result.detail);
+    }
+    {
         Scene scene(base, "watch-none", true, ApplyMode::Watch);
         makeVersion(scene.plan.previous, "1", true);
         makeVersion(scene.plan.installed, "2", true);
