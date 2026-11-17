@@ -208,7 +208,9 @@ When a newer version exists, Bloom's update window shows the release notes and t
 you can close the window while it runs: it goes on and shows in the Jobs panel. **Cancel** stops
 it. When the download is done, **Restart and Update** closes Bloom, installs the version and opens
 it again. On macOS and Windows installs, the platform's updater shows its own window for the
-update.
+update. On macOS its **Install Update** does all of it: when the download is done, Bloom is
+asked to quit, asks you about unsaved work as it always does, and the new version is installed
+and opened.
 
 Bloom verifies every update. It checks the signature on the list of releases, and then the size,
 the checksum and the signature of each file it downloads. If anything does not match, it installs
