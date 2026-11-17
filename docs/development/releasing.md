@@ -140,7 +140,11 @@ and requires that the candidate replaces the test build and confirms its start. 
 installs the test build again, serves a candidate that cannot start, and requires that the
 update helper puts the test build back and starts it. It handles the Linux tar and AppImage,
 the macOS zip and the Windows installer. Bloom runs without a window and under the package
-check's own identity, so the settings of the person at the machine are not touched.
+check's own identity, so the settings of the person at the machine are not touched. On macOS the
+platform's updater would start the new version through the system's launcher, as that person
+and with a window, so a test build tells it not to and the test starts the new version itself.
+A part that fails prints the requests its release was asked, the last lines of Bloom's own
+output and the files of the update folder.
 
 ## Approval
 

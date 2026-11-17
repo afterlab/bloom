@@ -57,6 +57,7 @@ import sys
 import tarfile
 import threading
 import time
+import zipfile
 from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parent
@@ -146,6 +147,13 @@ class Served:
     def close(self) -> None:
         self.server.shutdown()
         self.server.server_close()
+
+
+def same_bytes(file: Path, wanted: bytes) -> bool:
+    try:
+        return file.read_bytes() == wanted
+    except OSError:
+        return False
 
 
 def version_of(file: Path) -> str:
@@ -485,10 +493,29 @@ class Run:
                 say(f"FAILED: the installed test build does not report {self.old}")
                 return False
             say(f"{name}: installed {self.old}; the release offers {self.new}")
-            subprocess.Popen([str(program)], env=self.environment(name, served),
-                             cwd=str(self.work / name), stdin=subprocess.DEVNULL,
-                             stdout=output, stderr=subprocess.STDOUT,
-                             start_new_session=SYSTEM != "windows")
+            def start() -> None:
+                subprocess.Popen([str(program)], env=self.environment(name, served),
+                                 cwd=str(self.work / name), stdin=subprocess.DEVNULL,
+                                 stdout=output, stderr=subprocess.STDOUT,
+                                 start_new_session=SYSTEM != "windows")
+
+            start()
+            if SYSTEM == "macos":
+                # The platform's updater would start the new version through the system's
+                # launcher, as the person at the computer and with a window. A test build is
+                # told not to (the driver's unattended run), and the test starts it here, under
+                # its own identity: the installed program is the candidate's once the updater
+                # has replaced the application.
+                with zipfile.ZipFile(served.folder / self.candidate.name) as archive:
+                    wanted = archive.read("Bloom.app/Contents/MacOS/Bloom")
+                if same_bytes(program, wanted):
+                    say("FAILED: the test build and the candidate have the same program")
+                    return False
+                if not self.wait("the platform's updater replacing the application",
+                                 lambda: not self.processes() and same_bytes(program, wanted)):
+                    return False
+                say(f"{name}: the platform's updater replaced the application")
+                start()
             if expect_new:
                 if not self.wait("the candidate's confirmed start",
                                  lambda: self.started(name) == self.new):

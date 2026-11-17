@@ -53,7 +53,11 @@ There is no switch, variable or setting that weakens a check in a release build.
 (`BLOOM_UPDATE_TEST_BUILD`) may be pointed at a feed on the same machine with a test key through
 two environment variables, and a third (`BLOOM_UPDATE_TEST_INSTALL_NOW`) makes it install the
 update it is offered without a question, which is what the end-to-end update test
-(`tools/release/update_e2e.py`) needs. It checks every signature and checksum all the same. The
+(`tools/release/update_e2e.py`) needs. It checks every signature and checksum all the same. On
+macOS that run may have no window system, so three things differ in it and nowhere else: Bloom
+turns the main thread's run loop for Sparkle, Bloom closes when Sparkle says it waits for that,
+and Sparkle is told not to start the new version, which the test starts itself under its own
+identity. The
 package check refuses to publish such a build: its `release` rule asks the application what it
 was built with (`Bloom --update-settings`) and passes only a build that carries the release's
 feed address and public keys and is not a test build.
