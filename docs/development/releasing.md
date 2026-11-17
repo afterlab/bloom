@@ -114,13 +114,21 @@ or `-rc.<n>`) ends the run at its first job.
    sets are the artifact `desktop-captures`. A picture that cannot be taken fails the run.
 5. **Release candidate.** The three platforms' files with `release-notes.md`, `install.sh`,
    `PKGBUILD`, `.SRCINFO` and `SHA256SUMS`, as the artifact `release-candidate`. Nothing is
-   signed yet. A rehearsal ends here.
+   signed yet. A rehearsal ends here. Before it, the macOS job has run the end-to-end update
+   test on its own zip (below), and the candidate is not assembled when that failed.
 6. **Sign and publish**, after the approval (below).
 
 ## The end-to-end update test
 
-While the run waits for approval, the candidate is tested on the three machines (a rehearsal's
-candidate is tested the same way, before the tag):
+The macOS files are tested by the workflow itself, in the job that built them
+(`tools/ci/macos-package/update-test.sh`; its result is the job **macOS end-to-end update** and
+its output the artifact `update-test-macos`). The platform's updater on macOS installs through a
+helper that needs the login session of a desktop, which a hosted machine has and a remote
+session on another Mac has not, so that part cannot be run from a terminal on a machine nobody
+is logged in to.
+
+The Linux and Windows files are tested on the project's machines while the run waits for
+approval (a rehearsal's candidate is tested the same way, before the tag):
 
 ```sh
 gh run download <run> -n release-candidate -D candidate
@@ -193,6 +201,7 @@ environment cannot read that environment's variables.
 | --- | --- |
 | `tools/release/release.py` | The workflow's steps: `version`, `validation`, `settings`, `candidate`, `publish` |
 | `tools/ci/macos-package/installed.sh` | Installs the macOS installer package for real on a hosted machine and checks the result |
+| `tools/ci/macos-package/update-test.sh` | Makes the macOS test build in the workflow's build directory and runs the end-to-end update test on the built zip |
 | `tools/ci/captures` | The desktop captures of the installed application, one script per platform |
 | `tools/release/changelog.py` | Checks the changelog and writes a version's release notes |
 | `tools/release/sums.py` | Writes and checks `SHA256SUMS` |

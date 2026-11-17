@@ -369,11 +369,18 @@ jobs:
           path: captures
 
   # The macOS files: the zip the updater downloads, the disk image and the installer package.
+  # After they are uploaded, the same build directory makes the test build of an older version
+  # and the end-to-end update test updates it to the zip and has it put back
+  # (tools/ci/macos-package/update-test.sh). That test runs here and not on the project's own
+  # Mac because the platform's updater needs a desktop's login session. Its result is the job
+  # `macos-update`, so a failure fails the run without holding back the install and the captures.
   macos:
     needs: gate
     name: macOS package
     runs-on: macos-26
     timeout-minutes: 360
+    outputs:
+      update: ${{ steps.update.outcome }}
     env:
       BLOOM_PACKAGE_VERSION: ${{ needs.gate.outputs.version }}
       BLOOM_UPDATE_PUBLIC_KEYS: ${{ needs.gate.outputs.public_keys }}
@@ -469,6 +476,39 @@ jobs:
             build/release/package/Bloom-${{ needs.gate.outputs.version }}-macos-arm64.zip
             build/release/package/Bloom-${{ needs.gate.outputs.version }}-macos-arm64.dmg
             build/release/package/Bloom-${{ needs.gate.outputs.version }}-macos-arm64.pkg
+
+      - name: Update a test build to the zip, and have it put back
+        id: update
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          sh tools/ci/macos-package/update-test.sh build/release "$BLOOM_PACKAGE_VERSION" \
+            "$RUNNER_TEMP/update-test" 2>&1 | tee "$RUNNER_TEMP/update-test.txt"
+
+      - name: Upload the update test's output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: update-test-macos
+          if-no-files-found: error
+          path: ${{ runner.temp }}/update-test.txt
+
+  # The result of the macOS end-to-end update test, which ran in the build job.
+  macos-update:
+    needs: [gate, macos]
+    name: macOS end-to-end update
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      BLOOM_UPDATE_TEST: ${{ needs.macos.outputs.update }}
+    steps:
+      - name: Require that the update and the going back passed
+        run: |
+          if [ "$BLOOM_UPDATE_TEST" != success ]; then
+            echo "::error::The macOS end-to-end update test ended as '$BLOOM_UPDATE_TEST'; its output is the artifact update-test-macos"
+            exit 1
+          fi
+          echo "macOS end-to-end update test: the test build was updated to the built zip by the platform's updater, and put back when a candidate could not start." >> "$GITHUB_STEP_SUMMARY"
 
   # The installer package installed for real (tools/ci/macos-package/installed.sh): the hosted
   # machine is thrown away afterwards and its user needs no password for it. Bloom.app is in
@@ -723,7 +763,7 @@ jobs:
   # The end-to-end update test runs against these files before the maintainer approves. It is
   # the last job of a rehearsal.
   candidate:
-    needs: [gate, linux, linux-start, macos, windows, captures]
+    needs: [gate, linux, linux-start, macos, macos-update, windows, captures]
     name: Release candidate
     runs-on: ubuntu-24.04
     timeout-minutes: 30

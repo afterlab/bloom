@@ -164,7 +164,8 @@ class WorkflowTests(unittest.TestCase):
         gate = self.job("gate")
         self.assertIn("github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')", gate)
         for name in ("linux", "macos", "windows", "linux-start", "linux-desktop",
-                     "macos-install", "windows-install", "candidate", "publish"):
+                     "macos-install", "macos-update", "windows-install", "candidate",
+                     "publish"):
             self.assertRegex(self.job(name), r"needs: (gate|\[gate, )", name)
         # The captures only gather what three of those made.
         self.assertIn("needs: [linux-desktop, macos-install, windows-install]",
@@ -208,9 +209,9 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(self.code.replace(publish, "").count(word), 0, word)
         # Every job before it runs in a rehearsal: none of them is conditional on it.
         for name in ("linux", "linux-start", "linux-desktop", "macos", "macos-install",
-                     "windows", "windows-install", "captures", "candidate"):
+                     "macos-update", "windows", "windows-install", "captures", "candidate"):
             self.assertNotRegex(self.job(name), r"(?m)^    if:", name)
-        self.assertIn("needs: [gate, linux, linux-start, macos, windows, captures]",
+        self.assertIn("needs: [gate, linux, linux-start, macos, macos-update, windows, captures]",
                       self.job("candidate"))
 
     def test_a_rehearsal_builds_the_commit_it_was_started_for(self) -> None:
@@ -226,6 +227,8 @@ class WorkflowTests(unittest.TestCase):
         # The later jobs check out what the first job decided, and nothing else.
         refs = re.findall(r"(?m)^          ref: (.+)$", self.code.replace(gate, ""))
         self.assertEqual(len(refs), 9)
+        checkouts = len(re.findall(r"uses: actions/checkout@", self.code.replace(gate, "")))
+        self.assertEqual(checkouts, len(refs))
         self.assertEqual(set(refs), {"${{ needs.gate.outputs.ref }}"})
         # The key a rehearsal may build with is made and thrown away in one step.
         made = gate.index("openssl genpkey")
@@ -244,6 +247,23 @@ class WorkflowTests(unittest.TestCase):
             encoding="utf-8")
         for text in ('sudo installer -pkg "$pkg" -target /', "/Applications/Bloom.app",
                      "/usr/local/bin/bloom-cli", '"-DCLI_PROGRAM=$link"', "hdiutil attach"):
+            self.assertIn(text, script)
+
+    def test_the_macos_update_test_runs_after_the_upload_and_decides_the_run(self) -> None:
+        mac = self.job("macos")
+        upload = mac.index("name: files-macos")
+        test = mac.index("tools/ci/macos-package/update-test.sh")
+        self.assertLess(upload, test)
+        # It may fail without ending the job, and its result is another job's whole purpose.
+        self.assertIn("        id: update\n        continue-on-error: true\n", mac)
+        self.assertIn("update: ${{ steps.update.outcome }}", mac)
+        result = self.job("macos-update")
+        self.assertIn("BLOOM_UPDATE_TEST: ${{ needs.macos.outputs.update }}", result)
+        self.assertIn('if [ "$BLOOM_UPDATE_TEST" != success ]; then', result)
+        script = (ROOT / "tools" / "ci" / "macos-package" / "update-test.sh").read_text(
+            encoding="utf-8")
+        for text in ("-DBLOOM_UPDATE_TEST_BUILD=ON", "--print-test-key", "update_e2e.py",
+                     '--candidate "$candidate"'):
             self.assertIn(text, script)
 
     def test_the_clean_start_covers_the_three_linux_forms(self) -> None:
