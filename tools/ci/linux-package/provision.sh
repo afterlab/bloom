@@ -38,7 +38,7 @@ $APT update
 # libraries Bloom and the locked Qt are linked against; the D-Bus library Qt's own is linked
 # to; and what makes the two published forms of the package.
 $APT install --yes --no-install-recommends \
-    clang-22 lld-22 libclang-rt-22-dev cmake ninja-build meson make pkg-config git patchelf \
+    clang-22 lld-22 libclang-rt-22-dev cmake ninja-build meson make patch pkg-config git patchelf \
     perl python3 xz-utils bzip2 unzip file binutils libc6-dev libstdc++-12-dev \
     libgl-dev libegl-dev libfontconfig1-dev libxkbcommon-dev libva-dev libdbus-1-3 \
     squashfs-tools desktop-file-utils
