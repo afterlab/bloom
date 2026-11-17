@@ -59,6 +59,7 @@ class TemporaryRepository final {
     void addPolicyFiles() const {
         write("LICENSE", "Apache License\nVersion 2.0\n");
         write("NOTICE", "Bloom\n");
+        write(".gitattributes", "* -text\n");
     }
 
   private:
@@ -193,6 +194,40 @@ void testHygiene(int& failures) {
         const auto count = std::ranges::count_if(
             findings, [](const auto& finding) { return finding.category == "license policy"; });
         expect(count == 2, "root LICENSE and NOTICE are both required", failures);
+    }
+
+    {
+        const auto lineEndings = [](const std::string_view attributes) {
+            TemporaryRepository repository;
+            repository.addPolicyFiles();
+            repository.write(".gitattributes", attributes);
+            const auto files = std::vector<Path>{"LICENSE", "NOTICE", ".gitattributes"};
+            const auto findings = bloom::quality::scanRepositoryHygiene(repository.root(), files);
+            return std::ranges::count_if(findings, [](const auto& finding) {
+                return finding.category == "line endings";
+            });
+        };
+        expect(lineEndings("# Exact bytes.\n* -text\nassets/** -text\n*.png binary\n") == 0,
+               "files checked out unconverted are accepted", failures);
+        expect(lineEndings("* -text\r\n*.ttf -text\r\n") == 0,
+               "a rule file with CRLF lines is read as the same rules", failures);
+        expect(lineEndings("") == 1, "a rule file without the rule is rejected", failures);
+        expect(lineEndings("*.comp -text\n* -text\n") == 1,
+               "the rule for every file must come first", failures);
+        expect(lineEndings("* text=auto\n") == 2,
+               "conversion for every file is rejected", failures);
+        expect(lineEndings("* -text\n*.comp text eol=lf\n*.bat eol=crlf\n") == 3,
+               "a later rule that converts some files is rejected", failures);
+        expect(lineEndings("* -text\n*.cmd !text\n*.txt crlf\n") == 2,
+               "unspecified and legacy conversion are rejected", failures);
+
+        TemporaryRepository repository;
+        repository.addPolicyFiles();
+        std::filesystem::remove(repository.root() / ".gitattributes");
+        const auto findings =
+            bloom::quality::scanRepositoryHygiene(repository.root(), std::span<const Path>{});
+        expect(containsCategory(findings, "line endings"), "a missing rule file is rejected",
+               failures);
     }
 
     {

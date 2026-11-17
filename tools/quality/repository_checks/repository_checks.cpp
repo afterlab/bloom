@@ -305,6 +305,68 @@ void appendContentFindings(const Path& relative, const std::string& text,
     }
 }
 
+// Files are checked out with the bytes that were committed, on every system: the build and the
+// tests pin the exact bytes of source files, and a clone that converted line endings (Git on
+// Windows does by default) would fail those pins or build something else. The first rule of
+// .gitattributes turns conversion off for every file, and no later rule turns it back on.
+void appendLineEndingFindings(const Path& root, std::vector<RepositoryFinding>& findings) {
+    constexpr auto category = std::string_view{"line endings"};
+    std::string text;
+    if (!readText(root / ".gitattributes", text)) {
+        findings.push_back({".gitattributes", std::string{category},
+                            "missing: its first rule must be `* -text`, so no clone converts line "
+                            "endings",
+                            std::nullopt});
+        return;
+    }
+    auto stream = std::istringstream{text};
+    auto lineNumber = std::size_t{0};
+    auto first = true;
+    for (std::string line; std::getline(stream, line);) {
+        ++lineNumber;
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        auto words = std::istringstream{line};
+        std::string pattern;
+        if (!(words >> pattern) || pattern.starts_with('#')) {
+            continue;
+        }
+        std::vector<std::string> attributes;
+        for (std::string attribute; words >> attribute;) {
+            attributes.push_back(std::move(attribute));
+        }
+        if (first) {
+            first = false;
+            if (pattern != "*" || std::ranges::find(attributes, "-text") == attributes.end()) {
+                findings.push_back({".gitattributes", std::string{category},
+                                    "the first rule must be `* -text`, so no clone converts line "
+                                    "endings",
+                                    lineNumber});
+            }
+        }
+        for (const auto& attribute : attributes) {
+            const auto name = std::string_view{attribute}.substr(0, attribute.find('='));
+            const auto converts = name == "text" || name == "!text" || name == "eol" ||
+                                  name == "crlf" || name == "!crlf" ||
+                                  name == "working-tree-encoding";
+            if (converts) {
+                findings.push_back({".gitattributes", std::string{category},
+                                    "`" + attribute + "` on `" + pattern +
+                                        "` lets a clone rewrite the committed bytes; files are "
+                                        "checked out exactly as committed (`-text`)",
+                                    lineNumber});
+            }
+        }
+    }
+    if (first) {
+        findings.push_back({".gitattributes", std::string{category},
+                            "has no rule: its first rule must be `* -text`, so no clone converts "
+                            "line endings",
+                            std::nullopt});
+    }
+}
+
 void appendRepositoryPolicyFindings(const Path& root, const std::span<const Path> candidates,
                                     std::vector<RepositoryFinding>& findings) {
     std::string licenseText;
@@ -694,6 +756,7 @@ auto scanRepositoryHygiene(const Path& root, const std::span<const Path> files)
     const auto candidates = sortedFiles(files);
     std::vector<RepositoryFinding> findings;
     appendRepositoryPolicyFindings(root, candidates, findings);
+    appendLineEndingFindings(root, findings);
 
     for (const auto& relative : candidates) {
         appendPathFindings(root, relative, findings);

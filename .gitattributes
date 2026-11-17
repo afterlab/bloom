@@ -1,3 +1,14 @@
+# Every file is checked out with exactly the bytes that were committed, on every system and
+# whatever the clone's core.autocrlf says: no line ending is ever converted. The build and the
+# tests pin the exact bytes of many source files by SHA-256 (the shader sources, their manifests
+# and embedded SPIR-V, the media worker's build identity, signed fixtures, license and dependency
+# records), and a Windows clone that turned LF into CRLF would fail those checks or build
+# something else than the other systems. One rule for all files, so a file pinned later is
+# covered too. The repository's hygiene check keeps this rule first and refuses any rule that
+# turns conversion back on. The rules below are kept for what they say about why their bytes
+# matter.
+* -text
+
 # Digest-bound dependency artifacts must never be line-ending normalized or otherwise rewritten:
 # the intake contract binds their exact bytes to SHA-256 records.
 dependencies/unicode/** -text
