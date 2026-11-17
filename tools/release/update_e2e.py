@@ -518,8 +518,10 @@ class Run:
         if SYSTEM == "macos":
             # The platform's updater and its installer write to the system's log, not to Bloom's
             # output.
-            wanted = ('subsystem == "org.sparkle-project.Sparkle" OR process == "Autoupdate" '
-                      'OR process == "Updater"')
+            wanted = ('subsystem BEGINSWITH "org.sparkle-project" '
+                      'OR senderImagePath CONTAINS "Sparkle.framework" '
+                      'OR senderImagePath ENDSWITH "/Autoupdate" '
+                      'OR senderImagePath ENDSWITH "/Updater"')
             try:
                 shown = subprocess.run(
                     ["log", "show", "--last", f"{self.timeout // 60 + 5}m", "--style", "compact",
@@ -529,7 +531,7 @@ class Run:
             except (OSError, subprocess.TimeoutExpired) as error:
                 lines = [f"the system's log could not be read: {error}"]
             say(f"{name}: the platform updater's lines in the system's log, last of {len(lines)}:")
-            for line in lines[-80:]:
+            for line in lines[-120:]:
                 say(f"    {line[:400]}")
 
     def part(self, name: str, file: Path, installer_arguments: str, expect_new: bool) -> bool:
