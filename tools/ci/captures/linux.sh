@@ -134,6 +134,13 @@ wait "$rofi_pid" 2> /dev/null || true
 
 # --- 2. A panel launcher -------------------------------------------------------------------------
 
+# The launcher is given a copy of the installed menu entry without the field codes of its Exec
+# line: the panel of Ubuntu 24.04 (tint2 17.0.1) expands them into a buffer it measures wrongly
+# and is ended by the C library for it. The name and the icon are the installed entry's.
+mkdir -p "$work/launcher"
+launcher_entry=$work/launcher/$(basename "$desktop_file")
+sed '/^Exec=/s/ *%[fFuUdDnNickvm]//g' "$desktop_file" > "$launcher_entry"
+
 cat > "$work/tint2rc" << END
 rounded = 0
 border_width = 0
@@ -159,7 +166,7 @@ panel_background_id = 1
 launcher_padding = 6 6 8
 launcher_icon_size = 44
 launcher_icon_theme = hicolor
-launcher_item_app = $desktop_file
+launcher_item_app = $launcher_entry
 task_icon = 1
 task_text = 1
 task_icon_asb = 100 0 0
