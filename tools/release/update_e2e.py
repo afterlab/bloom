@@ -632,8 +632,14 @@ class Run:
             if SYSTEM == "macos":
                 # The new version is started by the system's launcher, which gives it the
                 # launcher's variables and none of this test's.
-                subprocess.run(["launchctl", "setenv", PROFILE_VARIABLE,
-                                str(self.work / name / "profile")], check=True)
+                profile = str(self.work / name / "profile")
+                subprocess.run(["launchctl", "setenv", PROFILE_VARIABLE, profile], check=True)
+                given = subprocess.run(["launchctl", "getenv", PROFILE_VARIABLE],
+                                       capture_output=True, text=True, check=False).stdout
+                if given.strip() != profile:
+                    say("FAILED: the system's launcher did not take the identity's variable "
+                        f"(it gives '{given.strip()}')")
+                    return False
             start()
             if SYSTEM == "macos":
                 # The platform's updater asks Bloom to quit, replaces the application and has
