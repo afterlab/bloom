@@ -266,6 +266,22 @@ class WorkflowTests(unittest.TestCase):
                      '--candidate "$candidate"'):
             self.assertIn(text, script)
 
+    def test_the_windows_dependency_build_gets_msys2_s_own_programs(self) -> None:
+        windows = self.job("windows")
+        step = windows[windows.index("- name: Build dependency superbuild prefix"):]
+        step = step[:step.index("\n      - name:", 10)]
+        path = step.index('set "PATH=%RUNNER_TEMP%\\tools-venv\\Scripts;C:\\msys64\\usr\\bin;%PATH%"')
+        environment = step.index("vcvars64.bat")
+        checked = step.index('if /i not "%BLOOM_FIRST_EXPR%"=="C:\\msys64\\usr\\bin\\expr.exe"')
+        built = step.index("cmake -S dependencies/superbuild")
+        # MSYS2 before the machine's path, the compiler before MSYS2, both checked, then the build.
+        self.assertLess(path, environment)
+        self.assertLess(environment, checked)
+        self.assertLess(checked, built)
+        self.assertIn('findstr /i /c:"\\VC\\Tools\\MSVC\\"', step)
+        self.assertIn('bash.exe -lc "pacman -S --noconfirm --needed make patch pkgconf perl"',
+                      windows)
+
     def test_the_clean_start_covers_the_three_linux_forms(self) -> None:
         start = self.job("linux-start")
         for form in ("linux-x86_64.tar.xz", "linux-x86_64.AppImage", "start-release/install.sh"):
