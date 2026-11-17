@@ -287,7 +287,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertLess(path, environment)
         self.assertLess(environment, checked)
         self.assertLess(checked, built)
-        self.assertIn('findstr /i /c:"\\VC\\Tools\\MSVC\\"', step)
+        # The linker is recognized by cmd's own text replacement: a search program reads a
+        # backslash before a closing quote as part of the text and would never find it.
+        self.assertIn('set "BLOOM_LINK_REST=%BLOOM_FIRST_LINK:\\VC\\Tools\\MSVC\\=%"', step)
+        self.assertIn('if "%BLOOM_LINK_REST%"=="%BLOOM_FIRST_LINK%" echo ::error::', step)
+        self.assertNotIn("findstr", step)
         self.assertIn('bash.exe -lc "pacman -S --noconfirm --needed make patch pkgconf perl"',
                       windows)
 

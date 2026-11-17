@@ -621,8 +621,9 @@ jobs:
           echo link: %BLOOM_FIRST_LINK%
           rem One line each, without brackets: a path may hold one.
           if /i not "%BLOOM_FIRST_EXPR%"=="C:\msys64\usr\bin\expr.exe" echo ::error::The first expr on the search path is not the one of MSYS2& exit /b 1
-          echo %BLOOM_FIRST_LINK% | findstr /i /c:"\VC\Tools\MSVC\" > nul
-          if errorlevel 1 echo ::error::The first link on the search path is not the one of the compiler& exit /b 1
+          rem The compiler's folder is taken out of the path; a path it was not in stays as it was.
+          set "BLOOM_LINK_REST=%BLOOM_FIRST_LINK:\VC\Tools\MSVC\=%"
+          if "%BLOOM_LINK_REST%"=="%BLOOM_FIRST_LINK%" echo ::error::The first link on the search path is not the one of the compiler& exit /b 1
           cmake -S dependencies/superbuild -B "%RUNNER_TEMP%\bloom-superbuild" -G Ninja ^
             -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl -DCMAKE_BUILD_TYPE=Release ^
             -DBLOOM_DEPENDENCY_DOWNLOAD_DIR="%RUNNER_TEMP%\bloom-dependency-downloads" ^
