@@ -324,7 +324,8 @@ and `/System`, on Windows the system directory, without the Visual C++ runtime, 
 part of Windows. On macOS the check also fails on a file built for a newer system than the
 bundle declares. On Windows a program may load one library late and by its full name: the
 libcrypto of the update checks, which must be among the carried interpreter's modules
-(`python\DLLs`), so the package holds one copy of it. Any other late load fails the check.
+(`python\DLLs`), so the package holds one copy of it. Any other late load is held to the same
+rules as an ordinary one.
 
 The run never reads or changes the settings of the person whose computer it is. The check
 gives the application a settings file, data and cache directories of its own, and the

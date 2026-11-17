@@ -35,7 +35,8 @@
 #                          Looked for beside the file and, for a library, beside the programs.
 #                          The one library a program loads late and by its full name, the
 #                          libcrypto of the update checks, must be among the carried
-#                          interpreter's modules (python\DLLs); any other late load fails.
+#                          interpreter's modules (python\DLLs). Any other late load is held
+#                          to the same rules as an ordinary one.
 #               The update helper is held to more: it loads the operating system's own libraries
 #               only and has no search path, because it runs from a copy outside the package.
 #
@@ -714,15 +715,14 @@ elseif(system STREQUAL "windows" AND ("resolution" IN_LIST ONLY OR "run" IN_LIST
                 endif()
                 set(name "${CMAKE_MATCH_1}")
                 string(TOLOWER "${name}" lower_name)
-                # Bloom's programs load one library late, by its full name, from the carried
+                # Bloom's programs load one library late and by its full name, from the carried
                 # interpreter's modules: the libcrypto behind the update checks (ADR 0041).
-                # Windows never searches for it, so it must be in that folder and nowhere else
-                # is right.
-                if(late)
-                    if(NOT lower_name STREQUAL "libcrypto-3-x64.dll")
-                        bloom_fail("${shown}: loads ${name} late, which no rule of the package "
-                                   "allows")
-                    elseif(NOT EXISTS "${python}/DLLs/${name}")
+                # Windows never searches for it, so it must be in that folder, and nowhere
+                # else is right. Any other late load is searched for like an ordinary one and
+                # is held to the same rules below.
+                if(late AND lower_name STREQUAL "libcrypto-3-x64.dll"
+                   AND NOT EXISTS "${directory}/${name}")
+                    if(NOT EXISTS "${python}/DLLs/${name}")
                         bloom_fail("${shown}: loads ${name} late from the interpreter's "
                                    "modules, where it is missing")
                     endif()
