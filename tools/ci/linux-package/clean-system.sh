@@ -30,9 +30,18 @@ packages=$(awk -v column="$column" '!/^#/ && NF >= 5 { print $column }' "$table"
 if [ "$column" = 3 ]; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
+    # A release that renamed a library package for its 64-bit time type has it under the new
+    # name, as the install script's advice has (tools/install/install.sh.in).
+    named=
+    for name in $packages; do
+        if apt-cache show "${name}t64" > /dev/null 2>&1; then
+            name=${name}t64
+        fi
+        named="$named $name"
+    done
     # shellcheck disable=SC2086
     apt-get install --yes --no-install-recommends ca-certificates curl tar xz-utils openssl \
-        coreutils $packages
+        coreutils $named
 else
     tools="tar xz openssl coreutils"
     command -v curl > /dev/null 2>&1 || tools="$tools curl"

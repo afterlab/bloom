@@ -263,9 +263,23 @@ packages_for() {
     done | sort -u | tr '\n' ' ' | sed 's/ $//'
 }
 
+# Debian and Ubuntu renamed some library packages when their time type became 64 bits wide
+# (libasound2 became libasound2t64). Where this system's package list has the new name, that
+# is the package to ask for: the old name is then one that more than one package may answer
+# to, and apt refuses to choose.
+debian_packages() {
+    for name in $1; do
+        if apt-cache show "${name}t64" > /dev/null 2>&1; then
+            echo "${name}t64"
+        else
+            echo "$name"
+        fi
+    done | tr '\n' ' ' | sed 's/ $//'
+}
+
 install_command() {
     case "$1" in
-        debian) echo "sudo apt install $(packages_for 3 "$2")" ;;
+        debian) echo "sudo apt install $(debian_packages "$(packages_for 3 "$2")")" ;;
         fedora) echo "sudo dnf install $(packages_for 4 "$2")" ;;
         arch) echo "sudo pacman -S --needed $(packages_for 5 "$2")" ;;
     esac

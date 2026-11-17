@@ -110,6 +110,13 @@ grep -v -e '^#' -e '^\$' "$source/tools/install/linux-library-packages.txt" |
     done
 END
 chmod +x "$work/tools/ldconfig"
+# A package list that has renamed the packages named in <work>/renamed, and no other.
+: > "$work/renamed"
+cat > "$work/tools/apt-cache" << END
+#!/bin/sh
+[ "\$1" = show ] && grep -q -x -F "\$2" "$work/renamed"
+END
+chmod +x "$work/tools/apt-cache"
 echo 'ID=ubuntu' > "$work/os-release"
 
 # run <home> <log> <script> [options...]: the status is the script's.
@@ -169,6 +176,15 @@ check "libraries: Debian and Ubuntu get the apt command with their packages" \
     has "$work/log-debian" "  sudo apt install libgl1 libxkbcommon0"
 check "libraries: one that only a feature uses is named apart" \
     has "$work/log-debian" "  sudo apt install libjack-jackd2-0"
+printf '%s\n' libasound.so.2 libGL.so.1 > "$work/missing"
+echo libasound2t64 > "$work/renamed"
+run "$work/home-libraries" "$work/log-renamed" "$work/install-1.sh" --from "$work/release-1" || true
+check "libraries: a package the system has renamed is asked for by its new name" \
+    has "$work/log-renamed" "  sudo apt install libasound2t64"
+check "libraries: a package the system has not renamed keeps its name" \
+    has "$work/log-renamed" "  sudo apt install libgl1"
+: > "$work/renamed"
+printf '%s\n' libxkbcommon.so.0 libGL.so.1 libjack.so.0 > "$work/missing"
 echo 'ID=nobara
 ID_LIKE="fedora"' > "$work/os-release"
 run "$work/home-libraries" "$work/log-fedora" "$work/install-1.sh" --from "$work/release-1" || true

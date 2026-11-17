@@ -459,7 +459,9 @@ script and needs `tar`, `xz`, `sha256sum`, `openssl` (3.0 or later) and `curl` o
   that installs them on Debian and Ubuntu, on Fedora and on Arch Linux. The list is
   `cmake/package/linux-base-libraries.txt`; `tools/install/linux-library-packages.txt` gives
   the package of each and says whether the package is linked against it or asks for it only
-  when a feature needs it. The install is completed either way.
+  when a feature needs it. On a Debian or Ubuntu release that renamed a library package for
+  its 64-bit time type (`libasound2` became `libasound2t64`), the command names the package
+  the system has. The install is completed either way.
 - Run again, it replaces the installed folder with a newly unpacked one and writes the link
   and the desktop files again, which updates or repairs the install. The folder is replaced by
   renames beside it; a run that is stopped between them puts the installed version back.
