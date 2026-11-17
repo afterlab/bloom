@@ -518,6 +518,18 @@ class Run:
                     found.append(int(pid))
         return found
 
+    def running(self, name: str) -> None:
+        """What of this test still runs before it is stopped: a helper still waiting is seen
+        here, and no more once `stop` has ended it."""
+        found = self.processes()
+        say(f"{name}: processes of this test running before they are stopped: {len(found)}")
+        if found and SYSTEM != "windows":
+            listing = subprocess.run(["ps", "-o", "pid=,ppid=,stat=,etime=,command=", "-p",
+                                      ",".join(str(pid) for pid in found)],
+                                     capture_output=True, text=True, check=False).stdout
+            for line in listing.splitlines():
+                say(f"    {line.strip()[:300]}")
+
     def stop(self) -> None:
         for pid in self.processes():
             if SYSTEM == "windows":
@@ -586,7 +598,8 @@ class Run:
                     say(f"    {small}: {(folder / small).read_text('utf-8').strip()[:400]}")
                 except OSError:
                     pass
-        say(f"{name}: processes of this test still running: {len(self.processes())}")
+        say(f"{name}: processes of this test still running after they were stopped: "
+            f"{len(self.processes())}")
         if SYSTEM == "macos":
             # The platform's updater and its installer write to the system's log, not to Bloom's
             # output.
@@ -624,6 +637,9 @@ class Run:
                 return False
             say(f"{name}: installed {self.old}; the release offers {self.new}")
             def start() -> None:
+                # Not collected while the part runs (Python does so only at its next start of a
+                # program): an ended Bloom stays a zombie, as under a launcher that has not yet
+                # asked how it ended, and the helper has to take it for ended all the same.
                 subprocess.Popen([str(program)], env=self.environment(name, served),
                                  cwd=str(self.work / name), stdin=subprocess.DEVNULL,
                                  stdout=output, stderr=subprocess.STDOUT,
@@ -698,6 +714,7 @@ class Run:
         finally:
             if SYSTEM == "macos":
                 subprocess.run(["launchctl", "unsetenv", PROFILE_VARIABLE], check=False)
+            self.running(name)
             self.stop()
             output.close()
             say(f"{name}: the helper's log: {self.helper_log(name).strip() or '(none)'}")
