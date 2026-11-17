@@ -19,6 +19,8 @@
 #include <sys/syscall.h>
 #elif defined(__APPLE__)
 #include <cstdio>
+#include <sys/proc.h>
+#include <sys/sysctl.h>
 #endif
 #endif
 
@@ -157,14 +159,26 @@ class SystemApplyHost final : public ApplyHost {
         if (::kill(pid, 0) != 0 && errno == ESRCH) {
             return false;
         }
+        // A process that has exited and waits for its parent to collect it (a zombie) is over.
+        // kill() still finds it, and Bloom stays one for as long as whatever started it has not
+        // asked how it ended.
 #if defined(__linux__)
-        // A process that has exited and waits for its parent to collect it is over.
         std::ifstream stat("/proc/" + std::to_string(pid) + "/stat");
         std::string content;
         std::getline(stat, content);
         if (const auto close = content.rfind(')');
             close != std::string::npos && close + 2 < content.size() && content[close + 2] == 'Z') {
             return false;
+        }
+#elif defined(__APPLE__)
+        int name[] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+        struct kinfo_proc info {};
+        std::size_t size = sizeof(info);
+        if (::sysctl(name, 4, &info, &size, nullptr, 0) == 0) {
+            // No entry at all: the process is gone.
+            if (size < sizeof(info) || info.kp_proc.p_stat == SZOMB) {
+                return false;
+            }
         }
 #endif
         return true;

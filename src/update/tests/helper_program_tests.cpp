@@ -86,7 +86,12 @@ struct Scene final {
     if (meanwhile) {
         meanwhile();
     }
-    return until(host, [&] { return !host.processRunning(*started); });
+    if (until(host, [&] { return !host.processRunning(*started); })) {
+        return true;
+    }
+    // A helper that did not end is not left running after the test.
+    host.terminate(*started);
+    return false;
 }
 
 } // namespace
@@ -189,6 +194,42 @@ int main(const int argc, char* argv[]) {
                                        std::string("1.0.0");
                             }),
                       "watched: the kept version was started");
+    }
+
+    // Watch, with a Bloom whose parent does not collect it at once (a launcher or script that
+    // started it and has not yet asked how it ended). The ended Bloom stays in the process table
+    // as a zombie until then; the helper is not its parent and has to take it for ended all the
+    // same, on every system. Here this test is that parent and collects it only at the end.
+    {
+        Scene scene(base, "uncollected", fakeApp);
+        std::filesystem::rename(scene.plan.installed, scene.plan.previous);
+        Scene::makeVersion(scene.plan.installed, "2.0.0", fakeApp, false);
+        scene.plan.mode = ApplyMode::Watch;
+        scene.plan.staged.clear();
+        const auto release = scene.root / "data" / "release";
+        const auto journal = scene.root / "data" / "plan.journal";
+        const auto running = host->launch(scene.plan.previous / fakeApp.filename(),
+                                          {"--hold", release.string()});
+        checks.expect(running.has_value(), "uncollected: the installed version runs");
+        scene.plan.processId = running.value_or(0);
+        bool exitSeen = false;
+        const bool ended = runHelper(*host, helper, scene, [&] {
+            std::ofstream(release) << '\n';
+            // The helper writes its first journal line when it takes Bloom for ended. Only then
+            // does the new version start, as the platform's updater starts it after the quit.
+            exitSeen = until(*host, [&] { return std::filesystem::exists(journal); });
+            const auto started = host->launch(scene.plan.program,
+                                              {"--confirm", scene.plan.confirmation.string()});
+            (void)until(*host, [&] { return !started || !host->processRunning(*started); });
+        });
+        checks.expect(exitSeen, "uncollected: the helper takes the ended Bloom for ended");
+        checks.expect(ended, "uncollected: the helper ends");
+        checks.expect(scene.log() == "updated: the new version started",
+                      "uncollected: the log says so (" + scene.log() + ")");
+        checks.expect(firstLine(scene.plan.installed / "version") == "2.0.0",
+                      "uncollected: the new version stays installed");
+        // The ended Bloom is collected only now.
+        (void)until(*host, [&] { return !host->processRunning(scene.plan.processId); });
     }
 
     // A plan that cannot be read is refused and nothing is started.
