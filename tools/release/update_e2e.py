@@ -408,6 +408,39 @@ class Run:
         say(f"FAILED: {what} did not happen in {self.timeout} seconds")
         return False
 
+    def updater_state(self, name: str) -> None:
+        """macOS: what the platform updater's own programs are doing, read while they still
+        run. They are started by the system's launcher and not by this test, so the test does
+        not end them, and what they wait for is not in Bloom's output."""
+        listing = subprocess.run(["ps", "-axo", "pid=,ppid=,etime=,command="],
+                                 capture_output=True, text=True, check=False).stdout
+        markers = ("/Autoupdate", "/Updater.app/", "Installer.xpc", "Downloader.xpc",
+                   str(self.work) + os.sep)
+        found = [line.strip() for line in listing.splitlines()
+                 if any(marker in line for marker in markers)
+                 and f" {os.getpid()} " not in f" {line.strip()} "]
+        say(f"{name}: the platform updater's programs and Bloom, {len(found)} running:")
+        for line in found:
+            say(f"    {line[:300]}")
+        for line in found:
+            pid = line.split()[0]
+            try:
+                sampled = subprocess.run(["sample", pid, "1", "-mayDie"], capture_output=True,
+                                         text=True, timeout=120, check=False).stdout
+            except (OSError, subprocess.TimeoutExpired) as error:
+                sampled = f"could not be sampled: {error}"
+            graph = sampled.partition("Call graph:")[2].partition("Total number in stack")[0]
+            say(f"{name}: what process {pid} is doing:")
+            for row in (graph or sampled).splitlines()[:70]:
+                say(f"    {row[:220]}")
+        for job in ("sparkle-updater", "sparkle-progress"):
+            label = f"gui/{os.getuid()}/id.afterlab.bloom-{job}"
+            printed = subprocess.run(["launchctl", "print", label], capture_output=True,
+                                     text=True, check=False)
+            say(f"{name}: the system launcher's job {label}:")
+            for row in (printed.stdout + printed.stderr).splitlines()[:40]:
+                say(f"    {row[:220]}")
+
     def processes(self) -> list[int]:
         """The processes this test's Bloom and its helper run as: those whose program file is
         under DIR (or in the check's own per-user folder, where the helper's copy is). On
@@ -521,17 +554,20 @@ class Run:
             wanted = ('subsystem BEGINSWITH "org.sparkle-project" '
                       'OR senderImagePath CONTAINS "Sparkle.framework" '
                       'OR senderImagePath ENDSWITH "/Autoupdate" '
-                      'OR senderImagePath ENDSWITH "/Updater"')
+                      'OR senderImagePath ENDSWITH "/Updater" '
+                      'OR process == "Autoupdate" OR process == "Updater" '
+                      'OR eventMessage CONTAINS[c] "sparkle-updater" '
+                      'OR eventMessage CONTAINS[c] "sparkle-progress"')
             try:
                 shown = subprocess.run(
                     ["log", "show", "--last", f"{self.timeout // 60 + 5}m", "--style", "compact",
-                     "--info", "--predicate", wanted], capture_output=True, text=True,
-                    timeout=300, check=False)
+                     "--info", "--debug", "--predicate", wanted], capture_output=True,
+                    text=True, timeout=300, check=False)
                 lines = (shown.stdout + shown.stderr).splitlines()
             except (OSError, subprocess.TimeoutExpired) as error:
                 lines = [f"the system's log could not be read: {error}"]
             say(f"{name}: the platform updater's lines in the system's log, last of {len(lines)}:")
-            for line in lines[-120:]:
+            for line in lines[-200:]:
                 say(f"    {line[:400]}")
 
     def part(self, name: str, file: Path, installer_arguments: str, expect_new: bool) -> bool:
@@ -573,6 +609,11 @@ class Run:
                     return False
                 if not self.wait("the platform's updater replacing the application",
                                  lambda: not self.processes() and same_bytes(program, wanted)):
+                    whose = "the candidate's" if same_bytes(program, wanted) \
+                        else "still the test build's"
+                    say(f"{name}: the installed program is {whose}, and "
+                        f"{len(self.processes())} processes of this test run")
+                    self.updater_state(name)
                     return False
                 say(f"{name}: the platform's updater replaced the application")
                 start()
