@@ -53,14 +53,15 @@ shoot() {
 }
 
 # Opens a folder in a Finder window in icon view with the given icon size, in front, and prints
-# the window's id.
+# the window's id. The folder's variable must not be a word of Finder's own: inside its `tell`,
+# `target` is a window's property and not the variable.
 finder_icons() {
     script '
 on run argv
-    set target to POSIX file (item 1 of argv) as alias
+    set shownFolder to POSIX file (item 1 of argv) as alias
     tell application "Finder"
         activate
-        open target
+        open shownFolder
         set w to front Finder window
         set current view of w to icon view
         set icon size of icon view options of w to (item 2 of argv as integer)
