@@ -189,9 +189,9 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 
 ## Current Checkpoint
 
-- The v0.1.0-alpha.1 release comes first: the disk cache headroom (#732), Scopes counted at display
-  time (#733) and the installers, self-update and release build (#734). The three node groups
-  follow, then tests and performance. The [roadmap](roadmap.md) holds the order.
+- v0.1.0-alpha.1, the first alpha, was released on 2026-11-17 with installers for every platform
+  and updates inside Bloom ([installing](user-guide/installing.md)). The three node groups come
+  next, then tests and performance. The [roadmap](roadmap.md) holds the order.
 - Projects save, open and round-trip through the deterministic `.bloom` container, with one
   current document schema, preserved unknown data and the File menu driving it
   ([project format](architecture/project-format.md),

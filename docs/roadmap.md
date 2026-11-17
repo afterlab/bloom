@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-11-15
+Updated: 2026-11-17
 
 This roadmap records what has shipped, what is queued and in what order, and what is parked. It
 follows the backlog tracker (#384), which owns the
@@ -34,8 +34,11 @@ Everything in this section is on `main` and covered by tests. Each row names the
 
 | Group | Issues |
 | --- | --- |
+| v0.1.0-alpha.1, the first alpha (2026-11-17): installers on every platform, signed updates checked inside Bloom with the previous version kept, the release workflow, and the new application icon and installer pictures | #734 #670 |
+| Scopes counted from the frame on screen at display time; cached display frames at 10 bits per channel | #733 |
+| Disk cache headroom: a live headroom instead of a fixed budget, loop-resistant eviction, no dropped writes during a RAM Preview fill, video and audio through the cache | #732 |
 | Node catalogue refresh: every shipped node by family, planned nodes by issue, the historical research rows mapped | documentation only |
-| Scopes rebuild: tables computed and cached with the frame, panes only with header menus, traces matched to the reference grading application | #730 |
+| Scopes rebuild: panes only with header menus, traces matched to the reference grading application | #730 |
 | Scopes panel: Waveform, Parade, Vectorscope, Histogram and CIE chromaticity on CPU and GPU, headless through MCP and Python | #724 |
 | Disk cache, audio and fonts: local copies of slow sources on every route, audio effect nodes and LUFS export, audio data as values, number lists, fonts by ID | #718 #728 #569 #570 #471 #329 #627 #626 #630 #631 #632 #633 #634 #635 #636 #489 |
 | Test suite trim: small tests that prove behavior; stress, bench and compositor-only tests opt-in | #722 #719 |
@@ -58,18 +61,7 @@ and [`plans/production-workflows-release.md`](plans/production-workflows-release
 
 In the tracker's order. Everything starts when the owner gives the go-ahead.
 
-### 1. The v0.1.0-alpha.1 release
-
-The release scope is current `main` plus these three, run side by side because they touch different
-code.
-
-| Issue | What it is |
-| --- | --- |
-| #732 | Disk cache: a live headroom like RAM and VRAM instead of a fixed budget; loop-resistant eviction; no dropped writes during a RAM Preview fill; an accurate status bar; video and audio readers through the cache |
-| #733 | Scopes: count the frame on screen at display time instead of storing tables with every cached frame |
-| #734 | Installers, self-update and the release workflow on all three platforms: a disk image and an installer package on macOS, an installer and a zip on Windows, an install script, an AppImage and a tar on Linux, signed update feeds that Bloom checks before it installs anything, and the user guide for installing, updating and uninstalling |
-
-### 2. Node groups
+### 1. Node groups
 
 Each group is one coherent area with one validation and one landing.
 
@@ -84,7 +76,7 @@ The planned nodes and their delivery levels are in the [node catalogue](product/
 designed in [`architecture/instancing.md`](architecture/instancing.md) under
 [ADR 0023](decisions/0023-instances-and-per-element-data.md).
 
-### 3. Tests
+### 2. Tests
 
 | Issue | What it is |
 | --- | --- |
@@ -94,7 +86,7 @@ designed in [`architecture/instancing.md`](architecture/instancing.md) under
 | #729 | GPU admission policy overwrites the Viewer's recorded device need with another class's grant |
 | #304 | GPU validation: hosted CI, sustained memory tests, LeakSanitizer and native macOS and Windows runs |
 
-### 4. Performance
+### 3. Performance
 
 Waits for benchmarking.
 
