@@ -43,8 +43,13 @@ void componentChangeSpans(const std::vector<Keyframe>& before, const std::vector
     const auto collect = [&](const std::vector<Keyframe>& keys,
                              const std::vector<Keyframe>& other) {
         for (std::size_t index = 0; index < keys.size(); ++index) {
-            if (std::ranges::any_of(
-                    other, [&](const Keyframe& candidate) { return same(candidate, keys[index]); }))
+            // Keys are ordered by strictly increasing time and `same` compares times, so the only
+            // key of `other` that can match is the one at this key's time (#744: one binary
+            // search per key instead of a scan of the other curve).
+            const auto candidate =
+                std::ranges::lower_bound(other, keys[index].time, std::less<>{}, &Keyframe::time);
+            if (candidate != other.end() && candidate->time == keys[index].time &&
+                same(*candidate, keys[index]))
                 continue;
             const auto start = index == 0 ? low : keys[index - 1].time;
             const auto end = index + 1 == keys.size() ? duration : keys[index + 1].time;
@@ -233,17 +238,46 @@ std::optional<AffectedTimeFootprint> parameterEditFootprint(
         !document::sameEvaluationLayout(before->nodeLayout(), after->nodeLayout()))
         return std::nullopt;
 
+    // #744: only the parameters whose records, or whose curves, the two compositions do not
+    // share can have changed what renders; every other one shares its record and its curve.
+    std::set<document::ParameterId> changedIds;
+    if (before->parameters().storageIdentity() != after->parameters().storageIdentity()) {
+        const auto diff =
+            document::diffRecords(before->parameters().records(), after->parameters().records());
+        for (const auto* record : diff.removed)
+            changedIds.insert(record->id);
+        for (const auto* record : diff.added)
+            changedIds.insert(record->id);
+    }
+    if (before->animationCurves().storageIdentity() != after->animationCurves().storageIdentity()) {
+        const auto diff = document::diffRecords(before->animationCurves().records(),
+                                                after->animationCurves().records());
+        std::set<document::AnimationCurveId> curves;
+        for (const auto* record : diff.removed)
+            curves.insert(document::animationCurveId(*record));
+        for (const auto* record : diff.added)
+            curves.insert(document::animationCurveId(*record));
+        const auto ownersOf = [&](const document::ParameterStore& store) {
+            for (const auto& record : store.records())
+                if (const auto* source =
+                        std::get_if<document::AnimationCurveSource>(&record.source);
+                    source != nullptr && curves.contains(source->curveId))
+                    changedIds.insert(record.id);
+        };
+        ownersOf(after->parameters());
+        if (before->parameters().storageIdentity() != after->parameters().storageIdentity())
+            ownersOf(before->parameters());
+    }
     std::map<document::ParameterId,
              std::pair<const document::ParameterRecord*, const document::ParameterRecord*>>
         parameters;
-    for (const auto& record : before->parameters().records())
-        parameters[record.id].first = &record;
-    for (const auto& record : after->parameters().records())
-        parameters[record.id].second = &record;
+    for (const auto id : changedIds)
+        parameters[id] = {before->parameters().find(id), after->parameters().find(id)};
     std::map<document::ParameterId, std::vector<document::NodeId>> owners;
     for (const auto& node : after->graph().nodes())
         for (const auto& binding : node.parameters)
-            owners[binding.parameterId].push_back(node.id);
+            if (changedIds.contains(binding.parameterId))
+                owners[binding.parameterId].push_back(node.id);
     // #502: a Merge entry's own layer is read by its Merge, so its parameters' owner is the Merge.
     // A retimed entry layer's keys are layer time on a clock this proof does not model yet: stay
     // whole-render rather than misplace them.
@@ -253,7 +287,8 @@ std::optional<AffectedTimeFootprint> parameterEditFootprint(
         if (!layer.timing.isIdentityMapping() || hasTimeRemap(*after, layer))
             return std::nullopt;
         for (const auto& binding : layer.parameters)
-            owners[binding.parameterId].push_back(layer.nodeId);
+            if (changedIds.contains(binding.parameterId))
+                owners[binding.parameterId].push_back(layer.nodeId);
     }
     for (const auto& layer : before->graph().layerOutputs())
         if (layer.entryOwned() &&
@@ -262,7 +297,24 @@ std::optional<AffectedTimeFootprint> parameterEditFootprint(
 
     const auto beforeReachShared = document::RenderReachability::of(*before, registry);
     const auto& beforeReach = *beforeReachShared;
-    const auto afterReach = document::RenderReachability::compute(*after, registry);
+    // The two graphs present the same evaluation inputs (checked above), so reachability can only
+    // differ through a parameter it reads: a driver, or an integer naming a composition or group.
+    const auto readByReachability = [](const document::ParameterRecord* record) {
+        if (record == nullptr)
+            return false;
+        if (std::holds_alternative<document::DriverBindingSource>(record->source))
+            return true;
+        const auto* constant = std::get_if<document::ConstantValueSource>(&record->source);
+        return constant != nullptr && std::holds_alternative<std::int64_t>(constant->value);
+    };
+    const bool reachabilityKept = std::ranges::none_of(parameters, [&](const auto& entry) {
+        return entry.second.first == nullptr || entry.second.second == nullptr ||
+               readByReachability(entry.second.first) || readByReachability(entry.second.second);
+    });
+    std::optional<document::RenderReachability> computedAfterReach;
+    if (!reachabilityKept)
+        computedAfterReach = document::RenderReachability::compute(*after, registry);
+    const auto& afterReach = computedAfterReach ? *computedAfterReach : beforeReach;
     if (!beforeReach.known() || !afterReach.known())
         return std::nullopt;
     const bool sameTopology = beforeReach.sameRenderTopology(afterReach);

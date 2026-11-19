@@ -65,13 +65,14 @@ inline bool changesLockedLayers(const document::Project& before, const document:
             for (const auto& binding : layer.parameters) {
                 const auto* parameter = composition.parameters().find(binding.parameterId);
                 const auto* edited = changed->parameters().find(binding.parameterId);
-                if (!parameter || !edited || *parameter != *edited)
+                // #744: a record both versions share is the same allocation and is not compared.
+                if (!parameter || !edited || (parameter != edited && *parameter != *edited))
                     return lockedLayer(layer);
                 if (const auto* curve =
                         std::get_if<document::AnimationCurveSource>(&parameter->source)) {
                     const auto* oldCurve = composition.animationCurves().find(curve->curveId);
                     const auto* newCurve = changed->animationCurves().find(curve->curveId);
-                    if (!oldCurve || !newCurve || *oldCurve != *newCurve)
+                    if (!oldCurve || !newCurve || (oldCurve != newCurve && *oldCurve != *newCurve))
                         return lockedLayer(layer);
                 }
             }
@@ -82,18 +83,19 @@ inline bool changesLockedLayers(const document::Project& before, const document:
                 continue;
             lockedIds.push_back(node.id);
             const auto* next = changed->graph().findNode(node.id);
-            if (!next || node != *next)
+            if (!next || (&node != next && node != *next))
                 return lockedNode(node);
             for (const auto& binding : node.parameters) {
                 const auto* parameter = composition.parameters().find(binding.parameterId);
                 const auto* edited = changed->parameters().find(binding.parameterId);
-                if (!parameter || !edited || *parameter != *edited)
+                // #744: a record both versions share is the same allocation and is not compared.
+                if (!parameter || !edited || (parameter != edited && *parameter != *edited))
                     return lockedNode(node);
                 if (const auto* curve =
                         std::get_if<document::AnimationCurveSource>(&parameter->source)) {
                     const auto* oldCurve = composition.animationCurves().find(curve->curveId);
                     const auto* newCurve = changed->animationCurves().find(curve->curveId);
-                    if (!oldCurve || !newCurve || *oldCurve != *newCurve)
+                    if (!oldCurve || !newCurve || (oldCurve != newCurve && *oldCurve != *newCurve))
                         return lockedNode(node);
                 }
             }

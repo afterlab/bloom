@@ -98,6 +98,13 @@ std::optional<std::size_t> firstInvalidOperation(const document::Document& docum
 // Counts each history-owned shell and immutable payload once. Chunks also reachable from the
 // active document do not consume the history allowance. This is an authored-content estimate,
 // not allocator RSS (which depends on libc and vector spare capacity).
+//
+// #744: a composition's content is charged as its own allocation (contentShellByteCharge) plus one
+// chunk per record (curve, parameter, node, edge, layer), and a record is held by every content
+// that shares it. Consecutive states share every record an edit did not touch, so a step costs
+// what it changed and undo depth does not shrink as the project grows. A record is counted while
+// any retained content holds it; a content's records are visited only when that content enters or
+// leaves the charge.
 class HistoryCharge final {
   public:
     void clear() noexcept {
@@ -112,7 +119,7 @@ class HistoryCharge final {
                      ? std::numeric_limits<std::size_t>::max()
                      : root + sizeof(document::IdAllocator));
         for (const auto& composition : state.project().compositions())
-            addChunk(composition.contentIdentity(), composition.contentByteCharge());
+            addContent(composition);
         for (const auto& record : state.project().extensionRecords())
             if (record.payload.storageIdentity() != nullptr)
                 addChunk(record.payload.storageIdentity(), record.payload.size());
@@ -125,7 +132,7 @@ class HistoryCharge final {
     template <typename State> void remove(const State& state) noexcept {
         removeChunk(state.stateIdentity());
         for (const auto& composition : state.project().compositions())
-            removeChunk(composition.contentIdentity());
+            removeContent(composition);
         for (const auto& record : state.project().extensionRecords())
             if (record.payload.storageIdentity() != nullptr)
                 removeChunk(record.payload.storageIdentity());
@@ -137,38 +144,141 @@ class HistoryCharge final {
 
     void rekeyPublishedDraft(const document::Draft& draft,
                              const document::Snapshot& published) noexcept {
-        // Commit copies the draft into a new root shell and freezes edited composition content.
-        // Node handles transfer the already staged charges without allocating after publication.
+        // Commit copies the draft into a new root shell, freezes edited composition content and
+        // copies the records the draft made. Node handles transfer the already staged charges
+        // without allocating after publication.
         rekeyChunk(draft.stateIdentity(), published.stateIdentity());
         const auto& drafted = draft.project().compositions();
         const auto& frozen = published.project().compositions();
-        for (std::size_t index = 0; index < drafted.size(); ++index)
+        for (std::size_t index = 0; index < drafted.size(); ++index) {
+            if (drafted[index].contentIdentity() == frozen[index].contentIdentity())
+                continue;
             rekeyChunk(drafted[index].contentIdentity(), frozen[index].contentIdentity());
+            // Publication keeps every record list's order and copies only the records the draft
+            // made, so the two lists differ exactly where the draft owned a record.
+            const auto rekeyRecords = [&](const auto draftRecords, const auto frozenRecords) {
+                const auto count = std::min(draftRecords.size(), frozenRecords.size());
+                for (std::size_t position = 0; position < count; ++position)
+                    rekeyChunk(draftRecords.identity(position), frozenRecords.identity(position));
+            };
+            const auto& from = drafted[index];
+            const auto& to = frozen[index];
+            rekeyRecords(from.parameters().records(), to.parameters().records());
+            rekeyRecords(from.animationCurves().records(), to.animationCurves().records());
+            rekeyRecords(from.graph().nodes(), to.graph().nodes());
+            rekeyRecords(from.graph().edges(), to.graph().edges());
+            rekeyRecords(from.graph().layerOutputs(), to.graph().layerOutputs());
+        }
     }
 
     // A commit shares the staged root with the newly published history entry; restore instead
     // makes a new root shell. Both paths share immutable composition and extension payloads.
     template <typename State>
     [[nodiscard]] std::size_t retainedBytes(const State& active, bool sharedRoot) const {
-        std::unordered_set<const void*> activeChunks;
-        if (sharedRoot)
-            activeChunks.insert(active.stateIdentity());
-        for (const auto& composition : active.project().compositions())
-            activeChunks.insert(composition.contentIdentity());
-        for (const auto& record : active.project().extensionRecords())
-            if (record.payload.storageIdentity() != nullptr)
-                activeChunks.insert(record.payload.storageIdentity());
-        for (const auto& block : active.project().typedDataBlocks())
-            if (const auto* payload = std::get_if<document::OpaqueExtensionPayload>(&block.payload);
-                payload != nullptr && payload->storageIdentity() != nullptr)
-                activeChunks.insert(payload->storageIdentity());
-
         auto retained = total_;
-        for (const void* identity : activeChunks)
+        const auto subtract = [&](const void* identity) {
             if (const auto entry = chunks_.find(identity); entry != chunks_.end())
                 retained.subtract(entry->second.bytes);
+        };
+        if (sharedRoot)
+            subtract(active.stateIdentity());
+        std::unordered_set<const void*> seen;
+        for (const auto& composition : active.project().compositions()) {
+            if (!seen.insert(composition.contentIdentity()).second)
+                continue;
+            if (chunks_.contains(composition.contentIdentity())) {
+                // A charged content's records are all charged: its own charge is their sum.
+                retained.subtract(composition.contentByteCharge());
+            } else {
+                composition.forEachRecord([&](const void* identity, const auto&) {
+                    if (seen.insert(identity).second)
+                        subtract(identity);
+                });
+            }
+        }
+        for (const auto& record : active.project().extensionRecords())
+            if (record.payload.storageIdentity() != nullptr &&
+                seen.insert(record.payload.storageIdentity()).second)
+                subtract(record.payload.storageIdentity());
+        for (const auto& block : active.project().typedDataBlocks())
+            if (const auto* payload = std::get_if<document::OpaqueExtensionPayload>(&block.payload);
+                payload != nullptr && payload->storageIdentity() != nullptr &&
+                seen.insert(payload->storageIdentity()).second)
+                subtract(payload->storageIdentity());
         return retained.high == 0 ? retained.low : std::numeric_limits<std::size_t>::max();
     }
+
+    // The bytes, roots aside, that only `to` holds and that only `from` holds. A one-step history
+    // of the two retains both roots plus one of these when the other state is current, as
+    // building a charge of the two states and asking retainedBytes() of each would say, at the
+    // cost of the records the step changed.
+    template <typename From, typename To>
+    [[nodiscard]] static std::pair<std::size_t, std::size_t> stepBytes(const From& from,
+                                                                       const To& to) {
+        WideBytes onlyTo;
+        WideBytes onlyFrom;
+        const auto& before = from.project();
+        const auto& after = to.project();
+        for (const auto& composition : after.compositions()) {
+            const auto* previous = before.findComposition(composition.id());
+            if (previous != nullptr && previous->contentIdentity() == composition.contentIdentity())
+                continue;
+            onlyTo.add(composition.contentShellByteCharge());
+            if (previous == nullptr) {
+                composition.forEachRecord([&](const void*, const auto& record) {
+                    onlyTo.add(document::recordByteCharge(record));
+                });
+                continue;
+            }
+            onlyFrom.add(previous->contentShellByteCharge());
+            const auto changed = [&](const auto earlier, const auto later) {
+                const auto diff = document::diffRecords(earlier, later);
+                for (const auto* record : diff.added)
+                    onlyTo.add(document::recordByteCharge(*record));
+                for (const auto* record : diff.removed)
+                    onlyFrom.add(document::recordByteCharge(*record));
+            };
+            changed(previous->parameters().records(), composition.parameters().records());
+            changed(previous->animationCurves().records(), composition.animationCurves().records());
+            changed(previous->graph().nodes(), composition.graph().nodes());
+            changed(previous->graph().edges(), composition.graph().edges());
+            changed(previous->graph().layerOutputs(), composition.graph().layerOutputs());
+        }
+        for (const auto& composition : before.compositions()) {
+            if (after.findComposition(composition.id()) != nullptr)
+                continue;
+            onlyFrom.add(composition.contentShellByteCharge());
+            composition.forEachRecord([&](const void*, const auto& record) {
+                onlyFrom.add(document::recordByteCharge(record));
+            });
+        }
+        const auto payloads = [](const auto& state) {
+            std::unordered_map<const void*, std::size_t> found;
+            for (const auto& record : state.project().extensionRecords())
+                if (record.payload.storageIdentity() != nullptr)
+                    found.emplace(record.payload.storageIdentity(), record.payload.size());
+            for (const auto& block : state.project().typedDataBlocks())
+                if (const auto* payload =
+                        std::get_if<document::OpaqueExtensionPayload>(&block.payload);
+                    payload != nullptr && payload->storageIdentity() != nullptr)
+                    found.emplace(payload->storageIdentity(), payload->size());
+            return found;
+        };
+        const auto fromPayloads = payloads(from);
+        const auto toPayloads = payloads(to);
+        for (const auto& [identity, bytes] : toPayloads)
+            if (!fromPayloads.contains(identity))
+                onlyTo.add(bytes);
+        for (const auto& [identity, bytes] : fromPayloads)
+            if (!toPayloads.contains(identity))
+                onlyFrom.add(bytes);
+        const auto narrow = [](const WideBytes& bytes) {
+            return bytes.high == 0 ? bytes.low : std::numeric_limits<std::size_t>::max();
+        };
+        return {narrow(onlyTo), narrow(onlyFrom)};
+    }
+
+    [[nodiscard]] std::size_t chunkCount() const noexcept { return chunks_.size(); }
 
   private:
     // A two-word sum remains exact even if the authored-content estimate crosses SIZE_MAX.
@@ -214,6 +324,33 @@ class HistoryCharge final {
             total_.subtract(entry->second.bytes);
             chunks_.erase(entry);
         }
+    }
+    void addContent(const document::Composition& composition) {
+        auto [entry, inserted] = chunks_.try_emplace(
+            composition.contentIdentity(), Chunk{composition.contentShellByteCharge(), 0});
+        ++entry->second.references;
+        if (!inserted)
+            return;
+        total_.add(entry->second.bytes);
+        composition.forEachRecord([&](const void* identity, const auto& record) {
+            auto [held, added] = chunks_.try_emplace(identity, Chunk{0, 0});
+            if (added) {
+                held->second.bytes = document::recordByteCharge(record);
+                total_.add(held->second.bytes);
+            }
+            ++held->second.references;
+        });
+    }
+    void removeContent(const document::Composition& composition) noexcept {
+        auto entry = chunks_.find(composition.contentIdentity());
+        if (entry == chunks_.end())
+            return;
+        if (--entry->second.references != 0)
+            return;
+        total_.subtract(entry->second.bytes);
+        chunks_.erase(entry);
+        composition.forEachRecord(
+            [&](const void* identity, const auto&) { removeChunk(identity); });
     }
 
     std::unordered_map<const void*, Chunk> chunks_;
@@ -540,13 +677,17 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
     // Undo/redo publish a fresh root shell, so reserve enough for either payload direction.
     // A small rename can still proceed when its large immutable payload is shared by both.
     const auto stepTooLarge = [&](const document::Snapshot& from) {
-        HistoryCharge oneStep;
-        oneStep.add(from);
-        oneStep.add(std::as_const(draft));
+        // #744: what a one-step history of the two states retains, from the records the step
+        // changed rather than from charging both states whole.
+        const auto [onlyDraft, onlyFrom] = HistoryCharge::stepBytes(from, std::as_const(draft));
         work_.chargedSnapshotsVisited += 2;
-        return std::max(oneStep.retainedBytes(from, false),
-                        oneStep.retainedBytes(std::as_const(draft), false)) >
-               limits_.maxChargedBytes;
+        const auto rootFrom = from.rootByteCharge() + sizeof(document::IdAllocator);
+        const auto rootDraft =
+            std::as_const(draft).rootByteCharge() + sizeof(document::IdAllocator);
+        const auto roots = rootFrom + rootDraft;
+        const auto worst = std::max(onlyDraft, onlyFrom);
+        return roots < rootFrom || worst > limits_.maxChargedBytes ||
+               roots > limits_.maxChargedBytes - worst;
     };
     // A merged step too large for the policy is not refused: the group's entry is sealed and this
     // commit starts a new one, as an ordinary step would.
