@@ -3,6 +3,8 @@
 #include <bloom/mcp/live_ui_port.hpp>
 #include <bloom/mcp/protocol.hpp>
 
+#include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -70,6 +72,73 @@ struct McpExportAccess final {
     bool callerIsOwner = false;
 };
 
+// A composition an agent's edit left uncompilable (transact's compileFailures, the
+// composition.compile-failed event), carried to the activity log so the application can show it.
+struct McpCompileFailureFact final {
+    std::uint64_t composition = 0;
+    // Plain sentence, no codes or ids.
+    std::string detail{};
+    std::optional<std::uint64_t> node{};
+    std::optional<std::uint64_t> parameter{};
+};
+
+// Progress for a Task tool, published from the export queue snapshot. The transport turns it into
+// notifications/progress against the request's progress token.
+struct McpProgress final {
+    double progress = 0.0;
+    std::optional<double> total;
+    // "Rendering frame 12 of 48", "Waiting for the Viewer" (ADR 0033 WaitingForViewer).
+    std::string message;
+    // #747: a transact's phase (building, waiting, preparing, publishing, checking); not part of
+    // notifications/progress.
+    std::string phase{};
+};
+
+// #747 (D1): an asynchronous transact job's state.
+enum class McpJobState : std::uint8_t {
+    Queued = 0,
+    Running = 1,
+    // The transaction ran to its result: applied, or refused by the document (its result says).
+    Succeeded = 2,
+    Failed = 3,
+    // Cancelled before it started publishing; nothing was applied.
+    Cancelled = 4,
+};
+
+[[nodiscard]] constexpr std::string_view jobStateName(const McpJobState state) {
+    constexpr std::array<std::string_view, 5> names{"queued", "running", "succeeded", "failed",
+                                                    "cancelled"};
+    return names[static_cast<std::size_t>(state)];
+}
+
+// #747 (D1): one step of an asynchronous transact job, in a shape a subscription stream can carry
+// as it is: who submitted it, where it stands, its progress against the progress token the
+// submitting request carried, and, once finished, its outcome. Published through
+// McpCoreDependencies::jobEvents on the thread that moved the job (the job runner, or the request
+// worker that submitted or cancelled it), throttled while it runs.
+struct McpJobEvent final {
+    // "transact-<n>", the id jobs.list, jobs.wait and jobs.cancel take.
+    std::string job;
+    // The protocol session (McpProtocolSession::id) that submitted it.
+    std::uint64_t client = 0;
+    McpJobState state = McpJobState::Queued;
+    // queued, building, waiting, preparing, publishing, checking, done.
+    std::string phase;
+    McpProgress progress;
+    // The raw JSON of params._meta.progressToken of the submitting request, when it carried one.
+    std::optional<std::string> progressToken;
+    // The revision the job's edit made, once it applied.
+    std::optional<std::uint64_t> revision;
+    bool finished = false;
+    bool cancellationRequested = false;
+    // A finished job's diagnostic code (bloom.mcp.* or bloom.scripting.*) when it did not apply.
+    std::string code;
+    // A finished job's activity facts, as McpHandled carries them for a request.
+    std::string summary;
+    std::vector<McpCompileFailureFact> compileFailures;
+    std::chrono::milliseconds duration{0};
+};
+
 // Borrowed collaborators; all must outlive the core.
 struct McpCoreDependencies final {
     McpSessionSource session;
@@ -109,6 +178,9 @@ struct McpCoreDependencies final {
     // #745: the transport's own bounds, advertised in initialize. The defaults are stdio's: one
     // client, one request at a time.
     McpTransportLimits transport{};
+    // #747 (D1): told about every asynchronous transact job step (McpJobEvent). Optional; it must
+    // not block or call back into the core.
+    std::function<void(const McpJobEvent&)> jobEvents{};
 };
 
 inline constexpr std::size_t kMcpRetainedCaptures = 16;
@@ -163,6 +235,8 @@ struct McpLimitRefusal final {
     std::uint64_t value = 0;
     std::uint64_t actual = 0;
     std::string message;
+    // #747: for a busy refusal, when to try again (data.retryAfterMs).
+    std::optional<std::uint64_t> retryAfterMs{};
 };
 
 // What a transport needs to know before it executes a message: which kind it is, which request it
@@ -191,15 +265,6 @@ struct McpEnvelope final {
 [[nodiscard]] McpEnvelope inspectMessage(std::string_view message,
                                          const McpMessageLimits& limits = kMcpMessageLimits);
 
-// Progress for a Task tool, published from the export queue snapshot. The transport turns it into
-// notifications/progress against the request's progress token.
-struct McpProgress final {
-    double progress = 0.0;
-    std::optional<double> total;
-    // "Rendering frame 12 of 48", "Waiting for the Viewer" (ADR 0033 WaitingForViewer).
-    std::string message;
-};
-
 // The calling transport's control over one request.
 struct McpRequestControl final {
     // Fired by notifications/cancelled for this request, by server stop, or by shutdown. A Task
@@ -218,16 +283,6 @@ enum class McpCallOutcome : std::uint8_t {
     // A JSON-RPC error response.
     ProtocolError = 2,
     Cancelled = 3,
-};
-
-// A composition an agent's edit left uncompilable (transact's compileFailures, the
-// composition.compile-failed event), carried to the activity log so the application can show it.
-struct McpCompileFailureFact final {
-    std::uint64_t composition = 0;
-    // Plain sentence, no codes or ids.
-    std::string detail{};
-    std::optional<std::uint64_t> node{};
-    std::optional<std::uint64_t> parameter{};
 };
 
 // What handle() produced, plus the facts the activity log records. `summary` is built from the
@@ -274,6 +329,10 @@ class McpServerCore final {
     // actual count, and data {code, limit, value, actual, unit}.
     [[nodiscard]] static std::string limitResponse(std::optional<std::string_view> requestKey,
                                                    const McpLimitRefusal& refusal);
+
+    // #747 (D1): how long a client refused for load should wait before it tries again: the recent
+    // commit time times (`queuedAhead` + 1), between 100 ms and the commit deadline. Any thread.
+    [[nodiscard]] std::uint64_t retryAfterMs(std::size_t queuedAhead) const;
 
     // The tools/list payload's tool names in listing order (schemas come from the registry and
     // the export queue's vocabularies). Any thread.

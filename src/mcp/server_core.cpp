@@ -65,6 +65,7 @@ constexpr std::array<McpTool, kMcpToolCount> kTools{
     McpTool::ScriptRun,
     McpTool::SessionBegin,
     McpTool::SessionEnd,
+    McpTool::JobsWait,
 };
 // clang-format on
 
@@ -135,7 +136,9 @@ std::string sanitised(yyjson_val* value) {
     return text;
 }
 
-yyjson_mut_val* failureValue(Json& out, const ToolFailure& failure) {
+} // namespace
+
+yyjson_mut_val* toolFailureValue(Json& out, const ToolFailure& failure) {
     auto* value = out.object();
     out.set(value, "succeeded", out.boolean(false));
     auto* diagnostic = out.object();
@@ -152,6 +155,8 @@ yyjson_mut_val* failureValue(Json& out, const ToolFailure& failure) {
         out.set(limit, "unit", out.text(description.unit));
         out.set(diagnostic, "limit", limit);
     }
+    if (failure.retryAfterMs)
+        out.set(diagnostic, "retryAfterMs", out.number(*failure.retryAfterMs));
     out.set(value, "diagnostic", diagnostic);
     if (failure.job)
         out.set(value, "job", out.text(std::to_string(*failure.job)));
@@ -159,6 +164,8 @@ yyjson_mut_val* failureValue(Json& out, const ToolFailure& failure) {
         out.set(value, "log", logEntries(out, *failure.log));
     return value;
 }
+
+namespace {
 
 // #745, #741: every bound a request can meet, keyed by McpLimit's names. The commit bounds belong
 // to the desktop application's live session; the stdio server has no commit queue.
@@ -189,6 +196,18 @@ yyjson_mut_val* limitsValue(Json& out, const McpServerCore::State& state) {
         put(McpLimit::CommitWork, scripting::kLiveCommitWorkLimit);
     }
     put(McpLimit::TransactOutputs, kMcpTransactOutputLimit);
+    // #747 (D1): asynchronous transact and idempotency keys (the jobs need the live session).
+    if (live) {
+        put(McpLimit::AsyncJobs, kMcpAsyncJobs);
+        out.set(value, "retainedJobs", out.number(kMcpRetainedJobs));
+    }
+    out.set(value, "idempotencyKeys", out.number(kMcpIdempotencyKeys));
+    out.set(value, "idempotencyKeyBytes", out.number(kMcpIdempotencyKeyBytes));
+    out.set(value, "idempotencyWindowMs",
+            out.number(static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(kMcpIdempotencyWindow)
+                    .count())));
+    out.set(value, "idempotencyAnswerBytes", out.number(kMcpRememberedAnswerBytes));
     // Bounds that are not refused per request but shape what an agent can send.
     out.set(value, "requestWorkers", out.number(transport.requestWorkers));
     out.set(value, "clients", out.number(transport.clients));
@@ -241,6 +260,8 @@ McpServerCore::State::State(McpCoreDependencies value) : dependencies(std::move(
 }
 
 McpServerCore::State::~State() {
+    // #747: the job runner ends before anything it reads.
+    stopJobs();
     const std::lock_guard lock(subscriptionMutex);
     subscription.reset();
 }
@@ -294,10 +315,23 @@ void McpServerCore::State::syncEvents() {
     auto* live = liveHost();
     if (live == nullptr)
         return;
-    const std::lock_guard lock(subscriptionMutex);
-    const auto generation = live->generation();
-    if (eventGeneration == generation)
-        return;
+    std::optional<std::uint64_t> replacedBy;
+    {
+        const std::lock_guard lock(subscriptionMutex);
+        const auto generation = live->generation();
+        if (eventGeneration == generation)
+            return;
+        if (eventGeneration.has_value())
+            replacedBy = generation;
+        followGeneration(*live, generation);
+    }
+    // #747: asynchronous jobs queued for the replaced project end without applying.
+    if (replacedBy)
+        revokeJobs(*replacedBy);
+}
+
+void McpServerCore::State::followGeneration(scripting::LiveSessionHost& live,
+                                            const std::uint64_t generation) {
     // Release the old subscription without holding eventsMutex: the stream holds its own lock
     // while it delivers, and delivery takes eventsMutex.
     subscription.reset();
@@ -310,7 +344,7 @@ void McpServerCore::State::syncEvents() {
         }
         eventGeneration = generation;
     }
-    if (const auto stream = live->events())
+    if (const auto stream = live.events())
         subscription =
             stream->subscribe([this](const commands::CommandEvent& event) { record(event); });
 }
@@ -407,6 +441,8 @@ std::string McpServerCore::limitResponse(const std::optional<std::string_view> r
     out.set(data, "value", out.number(refusal.value));
     out.set(data, "actual", out.number(refusal.actual));
     out.set(data, "unit", out.text(description.unit));
+    if (refusal.retryAfterMs)
+        out.set(data, "retryAfterMs", out.number(*refusal.retryAfterMs));
     out.set(detail, "data", data);
     out.set(root, "error", detail);
     return out.encode(root);
@@ -626,6 +662,10 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const McpEnvelope
             // #744: the most work one transact carries in the desktop application.
             if (state.liveHost() != nullptr)
                 out.set(bloom, "commitWorkLimit", out.number(scripting::kLiveCommitWorkLimit));
+            // #747: transact async:true (with jobs.list, jobs.wait, jobs.cancel) and
+            // idempotencyKey.
+            out.set(bloom, "asyncTransact", out.boolean(state.liveHost() != nullptr));
+            out.set(bloom, "idempotencyKeys", out.boolean(true));
             // #745, #741: every request limit, by the name its refusal gives.
             out.set(bloom, "limits", limitsValue(out, state));
             out.set(experimental, "bloom", bloom);
@@ -691,7 +731,10 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const McpEnvelope
                     withoutFile = withoutProjectFile(toolArguments);
                     toolArguments = yyjson_doc_get_root(withoutFile.get());
                 }
-                if (*tool == McpTool::ProfilerSnapshot) {
+                if (*tool == McpTool::JobsWait) {
+                    // #747: a job outlives the request that submitted it; no lease is held.
+                    value = jobsWaitTool(state, out, member(params, "arguments"), control);
+                } else if (*tool == McpTool::ProfilerSnapshot) {
                     // Telemetry holds no lease: it answers while a project opens.
                     if (auto* arguments = member(params, "arguments"))
                         members(arguments, {});
@@ -756,7 +799,10 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const McpEnvelope
                                  .gpuProvider =
                                      projectFile ? state.fileGpuProvider : state.gpuExportProvider,
                                  .fileSession = projectFile.has_value(),
-                                 .compact = {}};
+                                 .compact = {},
+                                 .client = protocol.id(),
+                                 .envelope = &message,
+                                 .committed = false};
                     auto* arguments = toolArguments;
                     switch (*tool) {
                     case McpTool::Query:
@@ -798,7 +844,7 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const McpEnvelope
             } catch (const ToolFailure& failure) {
                 failed = true;
                 handled.toolError = failure.code;
-                value = failureValue(out, failure);
+                value = toolFailureValue(out, failure);
                 if (failure.code == McpToolErrorCode::Cancelled)
                     handled.outcome = McpCallOutcome::Cancelled;
             } catch (const std::runtime_error& exception) {

@@ -13,6 +13,10 @@
 #include <bloom/scripting/live_session_host.hpp>
 #include <bloom/scripting/session.hpp>
 
+#include <bloom/core/worker_thread.hpp>
+
+#include <chrono>
+#include <condition_variable>
 #include <deque>
 #include <filesystem>
 #include <functional>
@@ -21,6 +25,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -50,6 +55,8 @@ struct ToolFailure final : std::runtime_error {
         std::uint64_t actual = 0;
     };
     std::optional<Limit> limit;
+    // #747: a busy refusal's advice: when to try again (diagnostic.retryAfterMs).
+    std::optional<std::uint64_t> retryAfterMs;
 };
 
 // What one tools/call works against.
@@ -81,6 +88,13 @@ struct McpCall final {
     // #745: set by a tool whose call already changed the project (transact): its result in a
     // compact form that always fits the response bound, used when the full one does not.
     std::function<yyjson_mut_val*(Json&)> compact;
+    // #747: the calling protocol session (McpProtocolSession::id) and the request itself (its
+    // parsed message and progress token), for transact async:true.
+    std::uint64_t client = 0;
+    const McpEnvelope* envelope = nullptr;
+    // #747: set by transact once its transaction reached the command stack (applied, refused by
+    // the document or stale): only such an answer is remembered for an idempotencyKey.
+    bool committed = false;
 };
 
 // A non-command fact the events tool reports beside command events: a project lifecycle step
@@ -113,6 +127,73 @@ struct McpProtocolSession::State {
     bool initialized = false;
     bool ready = false;
     std::optional<McpClientInfo> client;
+};
+
+// ---- #747 (D1): asynchronous transact jobs and idempotency keys (transact_jobs.cpp)
+
+// An answer kept to be given again: a finished job's transact result, or the result an
+// idempotencyKey remembers. `body` is the structuredContent.
+struct McpStoredAnswer final {
+    std::shared_ptr<const Parsed> body;
+    bool failed = false;
+};
+
+struct McpTransactJob final {
+    std::uint64_t number = 0;
+    std::string id;
+    std::uint64_t client = 0;
+    // The live generation the job was submitted on; it never applies to another project.
+    std::uint64_t generation = 0;
+    std::string label;
+    std::size_t operations = 0;
+    std::optional<std::string> progressToken;
+    std::optional<std::string> idempotencyKey;
+    // Owns `arguments` (the request's own parsed message).
+    std::shared_ptr<const Parsed> message;
+    yyjson_val* arguments = nullptr;
+    std::stop_source stop;
+    std::chrono::steady_clock::time_point submitted;
+    // Guarded by McpTransactJobs::mutex.
+    McpJobState state = McpJobState::Queued;
+    std::string phase = "queued";
+    McpProgress progress;
+    bool cancellationRequested = false;
+    std::optional<std::uint64_t> revision;
+    std::string code;
+    std::shared_ptr<const McpStoredAnswer> result;
+    // Advances with every change, so a waiter forwards each one once.
+    std::uint64_t serial = 0;
+};
+
+struct McpTransactJobs final {
+    std::mutex mutex;
+    std::condition_variable_any changed;
+    // Waiting for the runner, oldest first.
+    std::deque<std::shared_ptr<McpTransactJob>> queue;
+    // Every job still readable, oldest first: the unfinished ones and the newest kMcpRetainedJobs
+    // finished ones.
+    std::deque<std::shared_ptr<McpTransactJob>> jobs;
+    std::uint64_t next = 1;
+    bool stopping = false;
+    // Started with the first job; one runner, since commits publish one at a time anyway.
+    std::optional<core::WorkerThread> runner;
+};
+
+struct McpIdempotency final {
+    struct Entry final {
+        std::string fingerprint;
+        std::chrono::steady_clock::time_point at;
+        // Distinguishes this claim from a later one on the same key.
+        std::uint64_t ticket = 0;
+        // Still running (a synchronous transact), or the job of an asynchronous one.
+        bool pending = true;
+        std::shared_ptr<const McpStoredAnswer> answer;
+        std::shared_ptr<McpTransactJob> job;
+    };
+    std::mutex mutex;
+    std::condition_variable_any changed;
+    std::map<std::string, Entry> entries;
+    std::uint64_t nextTicket = 1;
 };
 
 struct McpServerCore::State {
@@ -183,9 +264,26 @@ struct McpServerCore::State {
     // The retired jobs of `generation` (oldest first); releases those of any other generation.
     [[nodiscard]] std::vector<RetiredTransient> retiredJobs(std::uint64_t generation);
 
+    // #747 (D1): asynchronous transact jobs, idempotency keys and the stdio server's own measure
+    // of recent commit time (the live host measures its own).
+    McpTransactJobs jobs;
+    McpIdempotency idempotency;
+    mutable std::mutex loadMutex;
+    std::optional<double> headlessCommitMs;
+    void recordHeadlessCommit(std::chrono::steady_clock::duration taken);
+    [[nodiscard]] std::uint64_t retryAfterMs(std::size_t queuedAhead) const;
+    // Publishes a job step to McpCoreDependencies::jobEvents (called without jobs.mutex held).
+    void publishJob(const McpJobEvent& event) const;
+    // Fails the queued jobs of a generation other than `generation` (the project was replaced).
+    void revokeJobs(std::uint64_t generation);
+    // Stops the job runner and cancels every unfinished job (the core is going away).
+    void stopJobs();
+
     [[nodiscard]] scripting::LiveSessionHost* liveHost() const noexcept;
     // Follows the live session's current generation's command events (no-op for stdio).
     void syncEvents();
+    // Called with subscriptionMutex held: follows `generation`'s command events from its start.
+    void followGeneration(scripting::LiveSessionHost& live, std::uint64_t generation);
     void record(const commands::CommandEvent& event);
     void notice(McpNotice notice);
 };
@@ -312,6 +410,30 @@ struct TransientResult final {
 // means ask (nothing is replaced silently).
 [[nodiscard]] document::ExportDestination transientDestination(const std::string& path,
                                                                yyjson_val* overwrite);
+
+// ---- #747 (D1) tools and helpers (transact_jobs.cpp)
+// A ToolFailure as structuredContent {succeeded:false, diagnostic:{code, message, limit?,
+// retryAfterMs?}, job?, log?}.
+[[nodiscard]] yyjson_mut_val* toolFailureValue(Json& out, const ToolFailure& failure);
+// transact itself, synchronously, after its #747 arguments (async, idempotencyKey) were read.
+[[nodiscard]] yyjson_mut_val* runTransact(McpServerCore::State& core, Json& out, McpCall& call,
+                                          yyjson_val* arguments);
+// transact async:true: queues a job and answers with its id at once.
+// With `key`, the job is bound to that idempotency key's claim (`ticket`) before it is queued.
+[[nodiscard]] yyjson_mut_val* submitTransactJob(McpServerCore::State& core, Json& out,
+                                                McpCall& call, yyjson_val* arguments,
+                                                const std::string* key = nullptr,
+                                                std::uint64_t ticket = 0);
+// jobs.wait for a transact job.
+[[nodiscard]] yyjson_mut_val* jobsWaitTool(McpServerCore::State& core, Json& out,
+                                           yyjson_val* arguments, const McpRequestControl& control);
+// jobs.list's rows for the transact jobs, appended to `list`.
+void appendTransactJobRows(McpServerCore::State& core, Json& out, yyjson_mut_val* list);
+// jobs.cancel for a transact job id ("transact-<n>").
+[[nodiscard]] yyjson_mut_val* cancelTransactJob(McpServerCore::State& core, Json& out,
+                                                const std::string& job);
+// The structuredContent of `answer`, copied into `out`.
+[[nodiscard]] yyjson_mut_val* storedAnswerValue(Json& out, const McpStoredAnswer& answer);
 
 // ---- Tools
 [[nodiscard]] yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,

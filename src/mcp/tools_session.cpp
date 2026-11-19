@@ -851,6 +851,16 @@ yyjson_mut_val* sessionTool(McpServerCore::State& core, Json& out, const McpTool
     }
     case McpTool::JobsCancel: {
         members(arguments, {"job"}, {"job"});
+        // #747: an asynchronous transact job ("transact-<n>") is the server's own.
+        if (auto* given = member(arguments, "job"); yyjson_is_str(given)) {
+            const auto id = string(given, 64);
+            if (id.starts_with("transact-")) {
+                if (!live)
+                    return notLive();
+                summary = "jobs.cancel " + id;
+                return cancelTransactJob(core, out, id);
+            }
+        }
         const auto job = integer(member(arguments, "job"));
         if (job == 0)
             throw InvalidInput("job must be a job id (jobs.list lists them)");
@@ -952,10 +962,9 @@ yyjson_mut_val* sessionTool(McpServerCore::State& core, Json& out, const McpTool
         members(arguments, {});
         if (!live)
             return notLive();
-        if (!ui.jobs)
-            return unbound();
+        // #747: the transact jobs are listed even where the Jobs panel's rows are not bound.
         std::vector<McpJob> jobs;
-        if (!onOwner(core, control, [&] { jobs = ui.jobs(); }))
+        if (ui.jobs && !onOwner(core, control, [&] { jobs = ui.jobs(); }))
             cancelled();
         summary = std::string(toolName(tool));
         auto* value = out.object();
@@ -975,6 +984,8 @@ yyjson_mut_val* sessionTool(McpServerCore::State& core, Json& out, const McpTool
                     job.exportJob ? out.text(std::to_string(job.exportJob->value())) : out.null());
             out.append(list, item);
         }
+        // #747: then the asynchronous transact jobs, with string ids "transact-<n>".
+        appendTransactJobRows(core, out, list);
         out.set(value, "jobs", list);
         return value;
     }

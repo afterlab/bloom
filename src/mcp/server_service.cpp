@@ -508,7 +508,38 @@ McpServerService::McpServerService(McpServerServiceDependencies dependencies)
         .transport = {.inFlightPerClient = s.dependencies.limits.inFlightPerClient,
                       .requestWorkers = s.dependencies.limits.requestWorkers,
                       .clients = s.dependencies.limits.clients,
-                      .connections = s.dependencies.limits.connections}});
+                      .connections = s.dependencies.limits.connections},
+        // #747: a finished asynchronous transact job is an activity line of its client, as its
+        // request would have been (its compile failures included).
+        .jobEvents = [weak](const McpJobEvent& event) {
+            if (!event.finished)
+                return;
+            const auto state = weak.lock();
+            if (!state)
+                return;
+            McpActivityEntry entry;
+            entry.kind = McpActivityKind::ToolCall;
+            entry.tool = McpTool::Transact;
+            entry.outcome = event.state == McpJobState::Succeeded   ? McpCallOutcome::Succeeded
+                            : event.state == McpJobState::Cancelled ? McpCallOutcome::Cancelled
+                                                                    : McpCallOutcome::ToolError;
+            for (std::size_t code = 0; code < kMcpToolErrorCodeCount; ++code)
+                if (const auto typed = static_cast<McpToolErrorCode>(code);
+                    toolErrorCode(typed) == event.code)
+                    entry.toolError = typed;
+            entry.duration = event.duration;
+            entry.summary = event.summary;
+            entry.compileFailures = event.compileFailures;
+            {
+                const std::lock_guard lock(state->factsMutex);
+                for (const auto& [id, client] : state->sessions)
+                    if (client->protocol && client->protocol->id() == event.client) {
+                        entry.client = client->id;
+                        entry.clientLabel = State::clientLabel(client->info);
+                    }
+            }
+            state->recordActivity(std::move(entry));
+        }});
     // The token loads on the blocking-I/O executor; pump() publishes it.
     if (s.dependencies.tokenFile.empty()) {
         s.tokenState = McpTokenState::Unavailable;

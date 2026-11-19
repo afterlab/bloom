@@ -647,7 +647,8 @@ namespace {
 // The live host's refusal codes, as MCP tool errors. #745: a bound names its value and the actual
 // count (`work`: the transaction's work units; `waited`: how long the commit waited).
 void throwLiveRefusal(const scripting::SessionCommandResult& result, const std::size_t work,
-                      const std::chrono::milliseconds waited) {
+                      const std::chrono::milliseconds waited,
+                      const std::optional<std::uint64_t> retryAfterMs) {
     if (!result.diagnostic)
         return;
     const auto& code = result.diagnostic->code;
@@ -664,14 +665,17 @@ void throwLiveRefusal(const scripting::SessionCommandResult& result, const std::
     };
     if (is(LiveCommitStatus::QueueFull)) {
         const auto capacity = scripting::kLiveCommitQueueCapacity;
-        throw bounded(McpToolErrorCode::CommitQueueFull,
-                      "Bloom has " + grouped(capacity) + " edits waiting and this would make " +
-                          grouped(capacity + 1) + "; at most " + grouped(capacity) +
-                          " wait at once, shared with the Script editor (limit commitQueue). "
-                          "Nothing was queued; send it again once an edit has answered, and "
-                          "batch edits into one transact (one bloom.animation.set-key-columns "
-                          "operation with fromFile columns writes many keys).",
-                      McpLimit::CommitQueue, capacity, capacity + 1);
+        auto failure = bounded(
+            McpToolErrorCode::CommitQueueFull,
+            "Bloom has " + grouped(capacity) + " edits waiting and this would make " +
+                grouped(capacity + 1) + "; at most " + grouped(capacity) +
+                " wait at once, shared with the Script editor (limit commitQueue). Nothing was "
+                "queued; send it again after retryAfterMs, and batch edits into one transact "
+                "(one bloom.animation.set-key-tracks operation with fromFile data writes many "
+                "parameters' keys).",
+            McpLimit::CommitQueue, capacity, capacity + 1);
+        failure.retryAfterMs = retryAfterMs;
+        throw failure;
     }
     if (is(LiveCommitStatus::ProjectReplaced))
         throw ToolFailure(McpToolErrorCode::ProjectReplaced,
@@ -712,8 +716,9 @@ void throwLiveRefusal(const scripting::SessionCommandResult& result, const std::
 // A command the session could not run at all.
 void throwUnavailable(const McpCall& call, const scripting::SessionCommandResult& result,
                       const std::size_t work = 0,
-                      const std::chrono::milliseconds waited = std::chrono::milliseconds{0}) {
-    throwLiveRefusal(result, work, waited);
+                      const std::chrono::milliseconds waited = std::chrono::milliseconds{0},
+                      const std::optional<std::uint64_t> retryAfterMs = std::nullopt) {
+    throwLiveRefusal(result, work, waited, retryAfterMs);
     if (call.lease != nullptr && call.lease->revoked())
         throw ToolFailure(McpToolErrorCode::ProjectReplaced,
                           "The project was replaced; nothing was applied.");
@@ -745,6 +750,63 @@ struct CompileReport final {
     std::vector<CompileRecord> failures;
     std::vector<CompileRecord> warnings;
     std::size_t warningsOmitted = 0;
+};
+
+// #747: a long transact's progress, as notifications/progress (a request with a progress token)
+// or an asynchronous job's state. Building is one unit per operation, preparing one per operation
+// applied, then publishing and the compile check one each. Reported at most every 100 ms, except
+// when the phase changes.
+class TransactProgress final {
+  public:
+    TransactProgress(const McpRequestControl& control, const std::size_t operations)
+        : report_(control.progress), operations_(operations) {}
+
+    [[nodiscard]] bool active() const noexcept { return static_cast<bool>(report_); }
+    void building(const std::size_t built) {
+        tell("building", static_cast<double>(built),
+             "Building operation " + grouped(built) + " of " + grouped(operations_), false);
+    }
+    void waiting(const std::size_t ahead) {
+        tell("waiting", static_cast<double>(operations_),
+             ahead == 0 ? std::string("Waiting for its turn")
+                        : "Waiting behind " + grouped(ahead) + (ahead == 1 ? " edit" : " edits"),
+             true);
+    }
+    void preparing(const std::size_t applied, const std::size_t total) {
+        tell("preparing", static_cast<double>(operations_ + applied),
+             "Applying operation " + grouped(applied) + " of " + grouped(total), false);
+    }
+    void prepared() {
+        tell("prepared", static_cast<double>(2 * operations_),
+             "Waiting for Bloom to publish the edit", true);
+    }
+    void publishing() {
+        tell("publishing", static_cast<double>(2 * operations_), "Publishing the edit", true);
+    }
+    void checking() {
+        tell("checking", static_cast<double>(2 * operations_ + 1), "Checking compositions", true);
+    }
+
+  private:
+    void tell(const std::string_view phase, const double completed, std::string message,
+              const bool always) {
+        if (!report_)
+            return;
+        const auto now = std::chrono::steady_clock::now();
+        if (!always && phase == phase_ && now - last_ < std::chrono::milliseconds(100))
+            return;
+        phase_ = phase;
+        last_ = now;
+        report_({.progress = completed,
+                 .total = static_cast<double>(2 * operations_ + 2),
+                 .message = std::move(message),
+                 .phase = std::string(phase)});
+    }
+
+    std::function<void(const McpProgress&)> report_;
+    std::size_t operations_ = 0;
+    std::string_view phase_;
+    std::chrono::steady_clock::time_point last_{};
 };
 
 CompileReport compileCheck(McpServerCore::State& core, McpCall& call,
@@ -905,9 +967,11 @@ yyjson_mut_val* transactValue(Json& out, const commands::CommandResult& command,
 }
 } // namespace
 
-yyjson_mut_val* transactTool(McpServerCore::State& core, Json& out, McpCall& call,
-                             yyjson_val* arguments) {
-    members(arguments, {"expectedRevision", "operations", "label", "response", "compileCheck"},
+yyjson_mut_val* runTransact(McpServerCore::State& core, Json& out, McpCall& call,
+                            yyjson_val* arguments) {
+    members(arguments,
+            {"expectedRevision", "operations", "label", "response", "compileCheck", "async",
+             "idempotencyKey"},
             {"expectedRevision", "operations"});
     // #745: false skips the compile check (bulk key writes that cannot break a composition).
     const bool check =
@@ -931,9 +995,14 @@ yyjson_mut_val* transactTool(McpServerCore::State& core, Json& out, McpCall& cal
     std::string operationIds;
     std::size_t operationIndex = 0;
     DataFiles dataFiles;
+    TransactProgress progress(call.control, yyjson_arr_size(operations));
     yyjson_arr_iter iterator = yyjson_arr_iter_with(operations);
     for (auto* operation = yyjson_arr_iter_next(&iterator); operation != nullptr;
          operation = yyjson_arr_iter_next(&iterator), ++operationIndex) {
+        progress.building(operationIndex);
+        if (operationIndex != 0 && call.control.stop.stop_requested())
+            throw ToolFailure(McpToolErrorCode::Cancelled,
+                              "The request was cancelled; nothing was applied.");
         // Every argument refusal names the operation's place in the list, so an agent knows which
         // entry to fix.
         const auto at = "operations[" + std::to_string(operationIndex) + "]";
@@ -1004,16 +1073,62 @@ yyjson_mut_val* transactTool(McpServerCore::State& core, Json& out, McpCall& cal
     }
     call.summary = operationIds + " \"" + std::string(label.substr(0, 64)) + "\"";
     if (call.control.stop.stop_requested())
-        throw std::runtime_error("Request cancelled");
+        throw ToolFailure(McpToolErrorCode::Cancelled,
+                          "The request was cancelled; nothing was applied.");
     const auto work = transaction.workUnits();
+    // #747: the commit reports where it stands in the live queue.
+    if (call.lease != nullptr && progress.active()) {
+        auto control = call.lease->control();
+        control.progress = [&progress](const scripting::LiveCommitProgress& step) {
+            using Step = scripting::LiveCommitProgress::Step;
+            switch (step.step) {
+            case Step::Queued:
+                progress.waiting(step.ahead);
+                break;
+            case Step::Preparing:
+                progress.preparing(step.applied, step.total);
+                break;
+            case Step::Prepared:
+                progress.prepared();
+                break;
+            case Step::Publishing:
+                progress.publishing();
+                break;
+            }
+        };
+        call.lease->setControl(std::move(control));
+    } else {
+        progress.waiting(0);
+    }
+    // The lease outlives this call's progress reporter, so it lets go of it on every exit.
+    struct ProgressRelease final {
+        scripting::LiveSessionLease* lease;
+        bool held;
+        ~ProgressRelease() {
+            if (lease == nullptr || !held)
+                return;
+            auto control = lease->control();
+            control.progress = {};
+            lease->setControl(std::move(control));
+        }
+    } release{call.lease, progress.active()};
     const auto started = std::chrono::steady_clock::now();
     auto result = call.session.execute(std::move(transaction));
-    if (!result.command)
+    if (call.lease == nullptr && result.command)
+        core.recordHeadlessCommit(std::chrono::steady_clock::now() - started);
+    if (!result.command) {
+        const auto* live = core.liveHost();
         throwUnavailable(call, result, work,
                          std::chrono::duration_cast<std::chrono::milliseconds>(
-                             std::chrono::steady_clock::now() - started));
+                             std::chrono::steady_clock::now() - started),
+                         core.retryAfterMs(live != nullptr ? live->queuedCommits()
+                                                           : scripting::kLiveCommitQueueCapacity));
+    }
+    call.committed = true;
     const auto command =
         std::make_shared<const commands::CommandResult>(std::move(*result.command));
+    if (check && command->changed() && command->renderAffecting)
+        progress.checking();
     const auto report = std::make_shared<const CompileReport>(
         check ? compileCheck(core, call, *command) : CompileReport{});
     // #745: the full id list up to kMcpTransactOutputLimit; past it the summary form answers, so a

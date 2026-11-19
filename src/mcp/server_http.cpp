@@ -92,8 +92,11 @@ Reply rejectionReply(const McpHttpRejection rejection, std::string_view message 
 Reply limitReply(const McpHttpRejection rejection, const McpLimitRefusal& refusal,
                  const std::optional<std::string>& requestKey = std::nullopt) {
     Fields fields;
+    // #747: Retry-After in whole seconds, rounded up from the refusal's retryAfterMs.
     if (rejection == McpHttpRejection::Busy)
-        fields.emplace_back("Retry-After", "1");
+        fields.emplace_back("Retry-After",
+                            std::to_string(std::max<std::uint64_t>(
+                                1, (refusal.retryAfterMs.value_or(1000) + 999) / 1000)));
     fields.emplace_back("Connection", "close");
     fields.emplace_back("Content-Type", "application/json");
     return {httpResponse(httpStatus(rejection), fields,
@@ -322,8 +325,7 @@ class ConnectionWorker final {
         if (envelope.kind != McpMessageKind::Request && envelope.kind != McpMessageKind::Invalid)
             return send({httpResponse(202, Fields{{"Content-Length", "0"}}, std::nullopt), false},
                         stop);
-        const bool stream = envelope.tool &&
-                            toolExecution(*envelope.tool) == McpToolExecution::Task &&
+        const bool stream = envelope.tool && toolStreamsProgress(*envelope.tool) &&
                             envelope.progressToken.has_value();
         return execute(client, envelope, stream, {}, stop);
     }
@@ -415,10 +417,12 @@ class ConnectionWorker final {
                                         grouped(inFlight + 1) + "; at most " +
                                         grouped(limits.inFlightPerClient) +
                                         " may be in progress at once (limit inFlightPerClient). "
-                                        "Wait for one to finish, then send the rest, or batch "
-                                        "edits into one transact (many keys go in one "
-                                        "bloom.animation.set-key-columns operation with fromFile "
-                                        "columns)."},
+                                        "Wait for one to finish (retryAfterMs), then send the "
+                                        "rest, or batch edits into one transact (many "
+                                        "parameters' keys go in one "
+                                        "bloom.animation.set-key-tracks operation with fromFile "
+                                        "data), or send a long edit with async:true.",
+                             .retryAfterMs = state_.core->retryAfterMs(inFlight)},
                             envelope.requestKey),
                  stop);
             return false;
@@ -453,10 +457,12 @@ class ConnectionWorker final {
                                         " requests are waiting and this would make " +
                                         grouped(pendingCount + 1) + "; at most " +
                                         grouped(kMcpMessageLimits.pendingMessages) +
-                                        " wait at once (limit pendingMessages). Retry shortly, and "
-                                        "batch edits into one transact (many keys go in one "
-                                        "bloom.animation.set-key-columns operation with fromFile "
-                                        "columns)."},
+                                        " wait at once (limit pendingMessages). Retry after "
+                                        "retryAfterMs, and batch edits into one transact (many "
+                                        "parameters' keys go in one "
+                                        "bloom.animation.set-key-tracks operation with fromFile "
+                                        "data).",
+                             .retryAfterMs = state_.core->retryAfterMs(pendingCount)},
                             envelope.requestKey),
                  stop);
             return false;

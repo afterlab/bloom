@@ -71,6 +71,14 @@ QString toolErrorText(const mcp::McpToolErrorCode code) {
         return tr("cannot render as asked");
     case C::CommitTooLarge:
         return tr("edit too large");
+    case C::JobsFull:
+        return tr("too many jobs");
+    case C::IdempotencyConflict:
+        return tr("key reused");
+    case C::NotLive:
+        return tr("needs the app");
+    case C::UnknownJob:
+        return tr("unknown job");
     }
     return {};
 }

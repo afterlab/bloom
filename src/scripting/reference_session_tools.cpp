@@ -651,28 +651,73 @@ void parityTools(std::vector<ReferenceEntry>& out) {
            {"jobs.list"});
 
     simple("jobs.list", "application",
-           "The Jobs panel's rows: imports, previews, thumbnails, purges and export runs.",
-           "An export run's row names its export job.", {.readOnly = true, .liveOnly = true}, {},
+           "The Jobs panel's rows (imports, previews, thumbnails, purges and export runs), then "
+           "the asynchronous transact jobs.",
+           "An export run's row names its export job. An asynchronous transact job (transact "
+           "with async:true) has the string id \"transact-<n>\", kind \"transact\", its label as "
+           "name, a state (queued, running, succeeded, failed or cancelled), a phase (queued, "
+           "building, waiting, preparing, publishing, checking or done), its progress, message, "
+           "revision once applied and code when it did not apply. The newest 64 finished ones "
+           "stay listed.",
+           {.readOnly = true, .liveOnly = true}, {},
            "{succeeded, jobs:[{id, name, phase, state, completed, total, canCancel, "
-           "cancellationRequested, exportJob}]}",
-           R"({"name":"jobs.list","arguments":{}})", notLive, {"jobs.cancel", "query:jobs"});
+           "cancellationRequested, exportJob, kind?, message?, revision?, code?, finished?}]}",
+           R"({"name":"jobs.list","arguments":{}})", notLive,
+           {"jobs.cancel", "jobs.wait", "query:jobs"});
 
     simple("jobs.cancel", "application",
-           "The Jobs panel's Cancel for one job: cooperative cancellation of a queued or running "
-           "job.",
-           "An export run cannot be cancelled here; use export.stop.", live,
+           "Cancel a job: the Jobs panel's Cancel, or an asynchronous transact job.",
+           "An export run cannot be cancelled here; use export.stop. An asynchronous transact "
+           "job stops at once while it is queued, and otherwise before its edit starts "
+           "publishing, and then nothing is applied; an edit that has started publishing "
+           "finishes (one atomic undo step). jobs.wait tells which happened.",
+           live,
            {{.name = "job",
-             .type = "integer",
+             .type = "integer or string",
              .required = true,
              .summary = "The job to cancel.",
-             .unit = "Jobs panel job id (jobs.list)",
+             .unit = "Jobs panel job id, or \"transact-<n>\" (jobs.list)",
              .range = ">= 1"}},
-           windowResult, R"({"name":"jobs.cancel","arguments":{"job":1}})",
+           "{succeeded, message, job?}",
+           R"({"name":"jobs.cancel","arguments":{"job":"transact-3"}})",
            withRefusals({refusal("bloom.mcp.unknown-target", "the panel does not list the job",
                                  "re-read jobs.list"),
-                         refusal("bloom.mcp.invalid-argument", "the job cannot be cancelled here",
+                         refusal("bloom.mcp.unknown-job", "no transact job has that id",
+                                 "re-read jobs.list"),
+                         refusal("bloom.mcp.invalid-argument",
+                                 "the job cannot be cancelled here, or has finished",
                                  "an export run: use export.stop")}),
-           {"jobs.list", "export.stop"});
+           {"jobs.list", "jobs.wait", "export.stop"});
+
+    simple("jobs.wait", "application",
+           "Wait for an asynchronous transact job and read its result.",
+           "Waits until the job finishes or timeoutMs passes, then describes it as jobs.list "
+           "does, with `result`: the job's transact answer, exactly what a synchronous transact "
+           "would have answered (null until it finishes). With _meta.progressToken the answer "
+           "is an event stream of notifications/progress (building, waiting behind other edits, "
+           "applying operation i of n, publishing, checking compositions), then the answer. "
+           "Cancelling the wait leaves the job running; jobs.cancel stops the job.",
+           {.readOnly = true, .liveOnly = true},
+           {{.name = "job",
+             .type = "string",
+             .required = true,
+             .summary = "The job transact async:true answered.",
+             .unit = "\"transact-<n>\""},
+            {.name = "timeoutMs",
+             .type = "integer",
+             .summary = "How long to wait; the answer then says timedOut.",
+             .unit = "milliseconds",
+             .range = "1..86400000",
+             .defaultValue = "30000"}},
+           "{succeeded, id, kind, name, state, phase, completed, total, message, canCancel, "
+           "cancellationRequested, revision, code, finished, timedOut, result}",
+           R"({"name":"jobs.wait","arguments":{"job":"transact-3","timeoutMs":60000}})",
+           withRefusals({refusal("bloom.mcp.unknown-job",
+                                 "no job has that id (or it finished more than 64 jobs ago)",
+                                 "re-read jobs.list"),
+                         refusal("bloom.mcp.cancelled", "the wait was cancelled",
+                                 "the job goes on; wait again or cancel it with jobs.cancel")}),
+           {"transact", "jobs.list", "jobs.cancel"});
 
     simple("asset.reveal", "window", "Reveal an asset's file in the platform's file manager.",
            "Selects the file where the file manager can, else opens its folder. Never changes "

@@ -41,6 +41,7 @@ target_sources(
         streamable_http.cpp
         tool_schemas.cpp
         tools_document.cpp
+        transact_jobs.cpp
         tools_profiler.cpp
         tools_project.cpp
         tools_export.cpp
@@ -96,6 +97,17 @@ if(BUILD_TESTING)
         COMMAND bloom_mcp_core_tools_test
         LABELS unit mcp
         # #745: one case waits out the 30 s commit deadline.
+        TIMEOUT 240
+    )
+    # #747: asynchronous transact jobs, idempotency keys, retry advice and multi-parameter bulk
+    # keys, on a live session whose owner thread the test runs.
+    add_executable(bloom_mcp_transact_jobs_test tests/transact_jobs_tests.cpp)
+    target_link_libraries(bloom_mcp_transact_jobs_test PRIVATE bloom_mcp)
+    bloom_enable_warnings(bloom_mcp_transact_jobs_test)
+    bloom_add_test(
+        NAME bloom.mcp.transact-jobs
+        COMMAND bloom_mcp_transact_jobs_test
+        LABELS unit mcp
         TIMEOUT 240
     )
     # #724 Scopes: query kind `scopes` through the shared core, headless.

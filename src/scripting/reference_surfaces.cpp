@@ -474,7 +474,29 @@ void addTools(std::vector<ReferenceEntry>& out) {
                      "`compileWarnings`). false skips it for bulk key writes that cannot break a "
                      "composition: the result then says `compileChecked: false` and both lists "
                      "are null (MCP only).",
-          .defaultValue = "true"}});
+          .defaultValue = "true"},
+         {.name = "async",
+          .type = "boolean",
+          .summary = "true answers at once with a job id ({succeeded, async, job: "
+                     "\"transact-<n>\", state, phase, queuedAhead, baseRevision}) and runs the "
+                     "edit as a job: jobs.wait waits for it (with progress over a progress token) "
+                     "and returns this tool's answer as `result`, jobs.list lists it and "
+                     "jobs.cancel stops it until its edit starts publishing. At most 16 jobs are "
+                     "queued or running (limit asyncJobs). A job applies only to the project it "
+                     "was sent for: one replaced first fails with bloom.mcp.project-replaced. "
+                     "Desktop application only (MCP only).",
+          .defaultValue = "false"},
+         {.name = "idempotencyKey",
+          .type = "string",
+          .summary = "A key of your own (a UUID) that makes a retry safe: for 10 minutes the "
+                     "same key with the same arguments answers what the first request answered "
+                     "(with `idempotentReplay: true`; for async, the same job) instead of "
+                     "applying again, and while the first is still running the retry waits for "
+                     "it. Only an edit that reached the document is remembered; a busy, "
+                     "cancelled or replaced one is forgotten, so its retry runs. The same key "
+                     "with other arguments is refused with bloom.mcp.idempotency-conflict. Keys "
+                     "are shared by every client (MCP only).",
+          .range = "1..128 printable ASCII characters"}});
     transact.prerequisites = {"Read the current revision (any query result)."};
     transact.result =
         "{succeeded, revision, origin (\"agent\"), diagnostics:[{code, severity?, operationIndex, "
@@ -488,7 +510,8 @@ void addTools(std::vector<ReferenceEntry>& out) {
         "that JSON file (regular file, at most 16 MiB, 2,000,000 values and 16 levels deep; at "
         "most 16 per call) as the argument's value, so a large column of keys never passes "
         "through the conversation. One request is at most 1 MiB and 65,536 JSON values: write "
-        "many keys with bloom.animation.set-key-columns. A transaction that applied is always "
+        "many keys with bloom.animation.set-key-columns, and many parameters' keys with "
+        "bloom.animation.set-key-tracks. A transaction that applied is always "
         "answered: an answer that would exceed the response bound comes back compact "
         "(`responseCompacted`).";
     transact.errors = {
@@ -506,6 +529,20 @@ void addTools(std::vector<ReferenceEntry>& out) {
         makeError("bloom.scripting.operation-warning",
                   "an operation applied but skipped part of its work (severity warning)",
                   "nothing to retry; the message says what was skipped"),
+        makeError("bloom.mcp.commit-queue-full",
+                  "in the desktop application, 16 edits are waiting already (limit commitQueue); "
+                  "diagnostic.retryAfterMs says when to try again",
+                  "wait retryAfterMs, then send it again; or send long edits with async:true",
+                  true),
+        makeError("bloom.mcp.jobs-full",
+                  "async:true while 16 asynchronous jobs are queued or running (limit "
+                  "asyncJobs); diagnostic.retryAfterMs says when to try again",
+                  "wait for one with jobs.wait, or retry after retryAfterMs", true),
+        makeError("bloom.mcp.idempotency-conflict",
+                  "the idempotencyKey was used in the last 10 minutes for other arguments",
+                  "use a new key for a new edit"),
+        makeError("bloom.mcp.not-live", "async:true on the stdio server",
+                  "send it without async; stdio answers when the edit applied"),
         makeError("bloom.mcp.commit-too-large",
                   "in the desktop application, the transaction carries more than 1,000,000 units "
                   "of work (one per operation, or one per key, keyframe or edit an operation "

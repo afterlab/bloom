@@ -132,9 +132,12 @@ enum class McpTool : std::uint8_t {
     // undo step for the session's commits. Live only; never a project edit by itself.
     SessionBegin = 49,
     SessionEnd = 50,
+    // #747 (D1): wait for an asynchronous transact job (transact with async:true), with progress
+    // when the request carries a progress token, and read its result.
+    JobsWait = 51,
 };
 
-inline constexpr std::size_t kMcpToolCount = 51;
+inline constexpr std::size_t kMcpToolCount = 52;
 
 // The wire name. MCP tool names allow [A-Za-z0-9_.-]; the export.* names are ADR 0033's session
 // call names verbatim.
@@ -192,6 +195,7 @@ inline constexpr std::size_t kMcpToolCount = 51;
         "script.run",
         "session.begin",
         "session.end",
+        "jobs.wait",
     };
     // clang-format on
     return names[static_cast<std::size_t>(tool)];
@@ -209,6 +213,7 @@ enum class McpToolExecution : std::uint8_t { Inline = 0, Task = 1 };
     case McpTool::Export:
     case McpTool::Capture:
     case McpTool::ExportWait:
+    case McpTool::JobsWait:
         return McpToolExecution::Task;
     default:
         return McpToolExecution::Inline;
@@ -219,6 +224,12 @@ enum class McpToolExecution : std::uint8_t { Inline = 0, Task = 1 };
 // these tools ever reach the commit marshal.
 [[nodiscard]] constexpr bool toolMutatesDocument(const McpTool tool) {
     return tool == McpTool::Transact || tool == McpTool::History;
+}
+
+// #747: whether a call that carries a progress token is answered as an event stream with
+// notifications/progress: the Task tools, and transact (a long edit reports where it stands).
+[[nodiscard]] constexpr bool toolStreamsProgress(const McpTool tool) {
+    return toolExecution(tool) == McpToolExecution::Task || tool == McpTool::Transact;
 }
 
 // Whether a tool works on the application window rather than the project: it runs on the owner
@@ -285,9 +296,11 @@ enum class McpLimit : std::uint8_t {
     CommitDeadline = 12,
     CommitWork = 13,
     TransactOutputs = 14,
+    // #747 (D1): asynchronous transact jobs queued or running at once, across every client.
+    AsyncJobs = 15,
 };
 
-inline constexpr std::size_t kMcpLimitCount = 15;
+inline constexpr std::size_t kMcpLimitCount = 16;
 
 struct McpLimitDescription final {
     // The member of capabilities.experimental.bloom.limits.
@@ -330,6 +343,7 @@ struct McpLimitDescription final {
         {"commitDeadlineMs", "bloom.mcp.deadline-exceeded", "milliseconds", 0},
         {"commitWork", "bloom.mcp.commit-too-large", "work units", 0},
         {"transactOutputs", "bloom.mcp.outputs-summarized", "outputs", 0},
+        {"asyncJobs", "bloom.mcp.jobs-full", "jobs", 0},
     }};
     // clang-format on
     return table[static_cast<std::size_t>(limit)];
@@ -372,10 +386,20 @@ enum class McpToolErrorCode : std::uint8_t {
     // #744: the transaction carries more work than one live commit takes
     // (scripting::kLiveCommitWorkLimit); nothing was queued. Split it into several transactions.
     CommitTooLarge = 13,
+    // #747: kMcpAsyncJobs asynchronous transact jobs are queued or running; nothing was queued.
+    JobsFull = 14,
+    // #747: an idempotencyKey was used before with different arguments; nothing was applied.
+    IdempotencyConflict = 15,
+    // #747: a call that needs the desktop application on the stdio server (transact async:true).
+    NotLive = 16,
+    // #747: jobs.wait or jobs.cancel for a job id Bloom does not hold.
+    UnknownJob = 17,
 };
 
+inline constexpr std::size_t kMcpToolErrorCodeCount = 18;
+
 [[nodiscard]] constexpr std::string_view toolErrorCode(const McpToolErrorCode code) {
-    constexpr std::array<std::string_view, 14> names{
+    constexpr std::array<std::string_view, kMcpToolErrorCodeCount> names{
         "bloom.mcp.project-unavailable", "bloom.mcp.project-replaced",
         "bloom.mcp.revision-conflict",   "bloom.mcp.commit-queue-full",
         "bloom.mcp.gesture-open",        "bloom.mcp.cancelled",
@@ -383,6 +407,8 @@ enum class McpToolErrorCode : std::uint8_t {
         "bloom.mcp.export-failed",       "bloom.mcp.capture-too-large-for-inline",
         "bloom.mcp.read-only",           "bloom.mcp.operation-rejected",
         "bloom.mcp.preflight-blocked",   "bloom.mcp.commit-too-large",
+        "bloom.mcp.jobs-full",           "bloom.mcp.idempotency-conflict",
+        "bloom.mcp.not-live",            "bloom.mcp.unknown-job",
     };
     return names[static_cast<std::size_t>(code)];
 }
@@ -394,6 +420,23 @@ enum class McpToolErrorCode : std::uint8_t {
 // withdrawn with GestureOpen or DeadlineExceeded. Task tools have no deadline; they are cancelled
 // explicitly.
 inline constexpr std::chrono::seconds kMcpCommitDeadline{30};
+
+// #747 (D1): asynchronous transact. At most kMcpAsyncJobs jobs are queued or running at once
+// (limit asyncJobs, bloom.mcp.jobs-full); the newest kMcpRetainedJobs finished ones stay readable
+// through jobs.list and jobs.wait.
+inline constexpr std::size_t kMcpAsyncJobs = 16;
+inline constexpr std::size_t kMcpRetainedJobs = 64;
+// #747 (D1): an idempotencyKey (1..128 printable ASCII bytes) is remembered for this long, at most
+// this many at once (the oldest finished one goes first), with an answer of at most this many
+// bytes (a larger one is kept in its compact form).
+inline constexpr std::chrono::minutes kMcpIdempotencyWindow{10};
+inline constexpr std::size_t kMcpIdempotencyKeys = 1024;
+inline constexpr std::size_t kMcpIdempotencyKeyBytes = 128;
+inline constexpr std::size_t kMcpRememberedAnswerBytes = std::size_t{64} * 1024U;
+// #747 (D1): a busy answer's retryAfterMs is the recent commit time (this default before any) times
+// the work queued ahead plus one, between the floor and kMcpCommitDeadline.
+inline constexpr std::chrono::milliseconds kMcpDefaultCommitTime{250};
+inline constexpr std::chrono::milliseconds kMcpRetryAfterFloor{100};
 
 // #745: the most created ids a transact lists in full. A transaction that creates more is
 // answered in the summary form (counts by name and one digest), never refused after it applied.
