@@ -10,7 +10,13 @@
 
 namespace bloom::ui {
 
-document::Snapshot CompositionSession::liveSnapshot() const { return document_->snapshot(); }
+document::Snapshot CompositionSession::liveSnapshot() const {
+    // Only an agent session's held commits put the document ahead of the window, and a rebind
+    // clears that hold, so the document is read only while it is the session's own. Otherwise the
+    // window's snapshot is the document's newest: during a project replacement the old document
+    // may already be gone while the window still shows it.
+    return panelsDeferred_ ? document_->snapshot() : snapshot_;
+}
 
 void CompositionSession::setAgentRefreshHold(std::optional<AgentRefreshHold> hold) {
     Q_ASSERT(QThread::currentThread() == thread());

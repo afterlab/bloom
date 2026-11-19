@@ -424,7 +424,7 @@ class Protocol(unittest.TestCase):
                           'preferences.set', 'cache.purge', 'jobs.list', 'jobs.cancel',
                           'asset.reveal', 'composition.presets', 'composition.save-preset',
                           'composition.rename-preset', 'composition.delete-preset', 'help',
-                          'dialog.answer', 'script.run'})
+                          'dialog.answer', 'script.run', 'session.begin', 'session.end'})
         self.assertTrue(responses[2]['result']['structuredContent']['succeeded'])
         self.assertEqual(responses[3]['result']['structuredContent']['project']['name'], 'MCP')
         self.assertFalse(responses[4]['result']['structuredContent']['succeeded'])
