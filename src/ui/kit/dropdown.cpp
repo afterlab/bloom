@@ -260,6 +260,7 @@ void KDropdown::showPopup() {
         Q_EMIT openRequested();
         return;
     }
+    Q_EMIT itemsNeeded();
     if (model_->rowCount() == 0) {
         return;
     }
@@ -375,6 +376,7 @@ void KDropdown::mousePressEvent(QMouseEvent* event) {
 }
 
 void KDropdown::stepValue(const int direction) {
+    Q_EMIT itemsNeeded();
     for (int index = currentIndex_ + direction; index >= 0 && index < count(); index += direction) {
         if (isItemEnabled(index)) {
             chooseIndex(index);
@@ -388,6 +390,7 @@ void KDropdown::typeAhead(const QString& text) {
         typed_.clear();
     typedClock_.start();
     typed_ += text;
+    Q_EMIT itemsNeeded();
     const int start = std::max(0, currentIndex_ + (typed_.size() == 1 ? 1 : 0));
     for (int step = 0; step < count(); ++step) {
         const int index = (start + step) % count();
@@ -425,6 +428,7 @@ void KDropdown::keyPressEvent(QKeyEvent* event) {
     case Qt::Key_Home:
     case Qt::Key_End:
         if (!alt) {
+            Q_EMIT itemsNeeded();
             const bool last = event->key() == Qt::Key_End;
             for (int step = 0; step < count(); ++step) {
                 const int index = last ? count() - 1 - step : step;

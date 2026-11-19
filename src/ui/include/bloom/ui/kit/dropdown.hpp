@@ -149,6 +149,10 @@ class KDropdown final : public QWidget {
     void itemsChanged();
     // With setExternalPopup(true): the artist asked to open the popup.
     void openRequested();
+    // The artist is about to read the list: the popup opens, or the closed field steps or
+    // type-aheads through it. An owner that fills its list only when it is needed (the Timeline's
+    // Track Matte column, #744) fills it here; the dropdown then reads the list as filled.
+    void itemsNeeded();
 
   protected:
     void paintEvent(QPaintEvent* event) override;

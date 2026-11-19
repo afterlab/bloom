@@ -55,6 +55,32 @@ void populate(kit::KDropdown& dropdown, const CompositionSession& session,
                               : text("Use another layer as this layer's matte"));
 }
 
+void showCurrent(kit::KDropdown& dropdown, const CompositionSession& session,
+                 const LayerTarget& target) {
+    dropdown.clearItems();
+    const auto* composition = session.composition();
+    const auto* boundary = composition != nullptr && target.layer.isValid()
+                               ? composition->graph().findLayer(target.layer)
+                               : nullptr;
+    const auto matte = boundary != nullptr ? boundary->trackMatte : std::nullopt;
+    if (!matte) {
+        dropdown.addItem(text("None"), QVariant::fromValue(0LL));
+        dropdown.setToolTip(text("Use another layer as this layer's matte"));
+        return;
+    }
+    if (matte->node) {
+        dropdown.addItem(text("Node: %1").arg(masks::matteNodeText(*composition, *matte->node)),
+                         QVariant::fromValue(kNodeMatteBase));
+    } else {
+        const auto* source = composition->graph().findLayer(matte->source);
+        dropdown.addItem(source != nullptr ? QString::fromStdString(source->name) : text("None"),
+                         QVariant::fromValue(static_cast<long long>(matte->source.value())));
+    }
+    dropdown.setToolTip(text("Track matte: %1%2")
+                            .arg(masks::channelText(matte->channel),
+                                 matte->inverted ? text(", inverted") : QString()));
+}
+
 bool activate(CompositionSession& session, const document::LayerId layer, const long long code) {
     const auto* composition = session.composition();
     const auto* boundary = composition ? composition->graph().findLayer(layer) : nullptr;

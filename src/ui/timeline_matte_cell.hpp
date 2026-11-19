@@ -26,6 +26,13 @@ inline constexpr long long kNodeMatteBase = -1000;
 // Rebuilds the items from the document and selects the current source. Never authors anything.
 void populate(kit::KDropdown& dropdown, const CompositionSession& session, document::LayerId layer);
 
+// #744: the closed cell. One item, the current matte (or None), and the cell's tooltip: what a row
+// shows without listing every candidate, which costs a pass over the Merge's layers and the
+// composition's Mask outputs per row. The row fills the list with populate() only when the artist
+// opens it (KDropdown::itemsNeeded). Never authors anything.
+void showCurrent(kit::KDropdown& dropdown, const CompositionSession& session,
+                 const LayerTarget& target);
+
 // Applies the picked item as one SetTrackMatte. Returns whether the document changed.
 bool activate(CompositionSession& session, document::LayerId layer, long long code);
 
