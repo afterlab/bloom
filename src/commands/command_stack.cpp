@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -78,10 +79,9 @@ CommandResult resultForCommit(CommandAction action, std::string label,
 
 // The operation that made a transaction's draft invalid: the first prefix that no longer
 // validates. Runs only after a refusal, so a valid transaction never pays for it.
-std::optional<std::size_t> firstInvalidOperation(const document::Document& document,
-                                                 const document::Snapshot& before,
+std::optional<std::size_t> firstInvalidOperation(const document::Snapshot& before,
                                                  const Transaction& transaction) {
-    document::Draft draft = document.draft(before);
+    document::Draft draft = document::Draft::of(before);
     std::size_t index = 0;
     for (const auto& operation : transaction.operations()) {
         static_cast<void>(operation->apply(draft));
@@ -140,35 +140,6 @@ class HistoryCharge final {
             if (const auto* payload = std::get_if<document::OpaqueExtensionPayload>(&block.payload);
                 payload != nullptr && payload->storageIdentity() != nullptr)
                 removeChunk(payload->storageIdentity());
-    }
-
-    void rekeyPublishedDraft(const document::Draft& draft,
-                             const document::Snapshot& published) noexcept {
-        // Commit copies the draft into a new root shell, freezes edited composition content and
-        // copies the records the draft made. Node handles transfer the already staged charges
-        // without allocating after publication.
-        rekeyChunk(draft.stateIdentity(), published.stateIdentity());
-        const auto& drafted = draft.project().compositions();
-        const auto& frozen = published.project().compositions();
-        for (std::size_t index = 0; index < drafted.size(); ++index) {
-            if (drafted[index].contentIdentity() == frozen[index].contentIdentity())
-                continue;
-            rekeyChunk(drafted[index].contentIdentity(), frozen[index].contentIdentity());
-            // Publication keeps every record list's order and copies only the records the draft
-            // made, so the two lists differ exactly where the draft owned a record.
-            const auto rekeyRecords = [&](const auto draftRecords, const auto frozenRecords) {
-                const auto count = std::min(draftRecords.size(), frozenRecords.size());
-                for (std::size_t position = 0; position < count; ++position)
-                    rekeyChunk(draftRecords.identity(position), frozenRecords.identity(position));
-            };
-            const auto& from = drafted[index];
-            const auto& to = frozen[index];
-            rekeyRecords(from.parameters().records(), to.parameters().records());
-            rekeyRecords(from.animationCurves().records(), to.animationCurves().records());
-            rekeyRecords(from.graph().nodes(), to.graph().nodes());
-            rekeyRecords(from.graph().edges(), to.graph().edges());
-            rekeyRecords(from.graph().layerOutputs(), to.graph().layerOutputs());
-        }
     }
 
     // A commit shares the staged root with the newly published history entry; restore instead
@@ -301,15 +272,6 @@ class HistoryCharge final {
         std::size_t bytes = 0;
         std::size_t references = 0;
     };
-    void rekeyChunk(const void* from, const void* to) noexcept {
-        if (from == to)
-            return;
-        auto node = chunks_.extract(from);
-        if (node.empty())
-            return;
-        node.key() = to;
-        chunks_.insert(std::move(node));
-    }
     void addChunk(const void* identity, const std::size_t bytes) {
         auto [entry, inserted] = chunks_.try_emplace(identity, Chunk{bytes, 0});
         ++entry->second.references;
@@ -430,39 +392,107 @@ void CommandStack::notify(const CommandResult& result) const noexcept {
     send(CommandEventKind::HistoryChanged);
 }
 
+struct PreparedTransaction::Detail final {
+    explicit Detail(const document::Snapshot& baseValue, Transaction&& transactionValue)
+        : base(baseValue), transaction(std::move(transactionValue)), origin(transaction.origin()) {}
+
+    document::Snapshot base;
+    Transaction transaction;
+    CommandOrigin origin = CommandOrigin::User;
+    bool cancelled = false;
+    // The transaction expected another revision than the base's, so nothing was applied: publish
+    // refuses it as stale, or the owner re-bases it on the revision it expects.
+    bool unapplied = false;
+    // An operation refusal, a reconcile refusal or NoChange, reported as is once the stale checks
+    // pass.
+    std::optional<CommandResult> terminal;
+    // The validated, frozen state to publish; not ready() for an invalid draft, which carries
+    // the index of the first operation that made it so.
+    std::optional<document::PreparedCommit> commit;
+    std::optional<std::size_t> validationOperationIndex;
+    std::vector<CommandOutput> outputs;
+    std::vector<OperationFailure> warnings;
+    bool renderAffecting = false;
+    std::optional<AffectedTimeFootprint> affectedTimes;
+    std::optional<std::vector<LayerIdentityRemap>> layerIdentityRemaps;
+    std::optional<document::CompositionId> affectedComposition;
+    CommandStack::Work work;
+};
+
+PreparedTransaction::PreparedTransaction(std::unique_ptr<Detail> detail) noexcept
+    : detail_(std::move(detail)) {}
+PreparedTransaction::PreparedTransaction(PreparedTransaction&&) noexcept = default;
+PreparedTransaction& PreparedTransaction::operator=(PreparedTransaction&&) noexcept = default;
+PreparedTransaction::~PreparedTransaction() = default;
+
+document::Revision PreparedTransaction::baseRevision() const noexcept {
+    return detail_->base.revision();
+}
+std::string_view PreparedTransaction::label() const noexcept {
+    return detail_->transaction.label();
+}
+CommandOrigin PreparedTransaction::origin() const noexcept { return detail_->origin; }
+std::optional<document::Revision> PreparedTransaction::expectedRevision() const noexcept {
+    return detail_->transaction.expectedRevision();
+}
+bool PreparedTransaction::cancelled() const noexcept { return detail_->cancelled; }
+Transaction PreparedTransaction::takeTransaction() && { return std::move(detail_->transaction); }
+
 CommandResult CommandStack::execute(Transaction&& transaction) {
     const auto origin = transaction.origin();
     currentOrigin_ = origin;
-    auto result = executeStep(std::move(transaction));
+    const document::Snapshot before = document_.snapshot();
+    auto result = publishStep(prepare(before, std::move(transaction)));
     result.origin = origin;
     currentOrigin_ = CommandOrigin::User;
     return result;
 }
 
-CommandResult CommandStack::executeStep(Transaction&& transaction) {
-    const document::Snapshot before = document_.snapshot();
-    if (const auto stale =
-            staleResult(CommandAction::Execute, std::string(transaction.label()), before)) {
-        auto result = *stale;
-        notify(result);
-        return result;
-    }
-    if (transaction.expectedRevision().has_value() &&
-        *transaction.expectedRevision() != before.revision()) {
-        auto result = makeResult(CommandAction::Execute, CommandStatus::StaleRevision, before,
-                                 std::string(transaction.label()));
-        result.expectedRevision = transaction.expectedRevision();
-        notify(result);
-        return result;
-    }
-    if (transaction.empty()) {
-        auto result = makeResult(CommandAction::Execute, CommandStatus::NoChange, before,
-                                 std::string(transaction.label()));
-        notify(result);
-        return result;
-    }
+CommandResult CommandStack::publish(PreparedTransaction&& prepared) {
+    const auto origin = prepared.origin();
+    currentOrigin_ = origin;
+    auto result = publishStep(std::move(prepared));
+    result.origin = origin;
+    currentOrigin_ = CommandOrigin::User;
+    return result;
+}
 
-    document::Draft draft = document_.draft(before);
+bool CommandStack::rebaseNeeded(const PreparedTransaction& prepared) const {
+    const auto live = document_.snapshot().revision();
+    if (live == prepared.baseRevision() || trackedRevision_ != live)
+        return false;
+    const auto expected = prepared.expectedRevision();
+    return !expected.has_value() || *expected == live;
+}
+
+PreparedTransaction CommandStack::prepare(const document::Snapshot& before,
+                                          Transaction&& transaction,
+                                          const std::function<bool()>& cancelled) {
+    auto owned = std::make_unique<PreparedTransaction::Detail>(before, std::move(transaction));
+    auto& prepared = *owned;
+    const auto& ops = prepared.transaction;
+    const auto label = [&] { return std::string(ops.label()); };
+    const auto stop = [&] {
+        if (cancelled && cancelled()) {
+            prepared.cancelled = true;
+            return true;
+        }
+        return false;
+    };
+    if (ops.expectedRevision().has_value() && *ops.expectedRevision() != before.revision()) {
+        prepared.unapplied = true;
+        return PreparedTransaction(std::move(owned));
+    }
+    if (ops.empty()) {
+        prepared.terminal =
+            makeResult(CommandAction::Execute, CommandStatus::NoChange, before, label());
+        return PreparedTransaction(std::move(owned));
+    }
+    if (stop())
+        return PreparedTransaction(std::move(owned));
+
+    auto& work = prepared.work;
+    document::Draft draft = document::Draft::of(before);
     bool changed = false;
     bool renderAffecting = false;
     // True as soon as an applied render-affecting operation did NOT prove a finite footprint, which
@@ -484,18 +514,20 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
     std::vector<CommandOutput> outputs;
     std::vector<OperationFailure> warnings;
     std::size_t operationIndex = 0;
-    for (const auto& operation : transaction.operations()) {
+    for (const auto& operation : ops.operations()) {
+        if (operationIndex != 0 && stop())
+            return PreparedTransaction(std::move(owned));
         OperationResult operationResult = operation->apply(draft);
-        ++work_.operationApplies;
-        ++work_.lockedLayerChecks;
+        ++work.operationApplies;
+        ++work.lockedLayerChecks;
         std::string lockedWhat;
         if (operationResult.status != OperationStatus::Rejected &&
             detail::changesLockedLayers(before.project(), draft.project(), &lockedWhat))
             operationResult =
                 OperationResult::rejected(OperationIssueCode::InvalidValue, std::move(lockedWhat));
         if (operationResult.status == OperationStatus::Rejected) {
-            auto result = makeResult(CommandAction::Execute, CommandStatus::Rejected, before,
-                                     std::string(transaction.label()));
+            auto result =
+                makeResult(CommandAction::Execute, CommandStatus::Rejected, before, label());
             if (operationResult.issues.empty()) {
                 operationResult.issues.push_back(
                     {OperationIssueCode::InvalidValue,
@@ -507,8 +539,8 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
                 result.operationFailures.push_back(
                     {operationIndex, std::string(operation->typeId()), std::move(issue)});
             }
-            notify(result);
-            return result;
+            prepared.terminal = std::move(result);
+            return PreparedTransaction(std::move(owned));
         }
         for (auto& output : operationResult.outputs) {
             outputs.push_back(
@@ -588,29 +620,30 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
     // #502. Entries and Layer nodes reconcile once every operation has applied, in the same draft
     // and therefore the same undo step: an inserted Layer node adopts its entry's values, a removed
     // one returns them, and entry layers whose slot vanished leave with their parameters.
+    if (stop())
+        return PreparedTransaction(std::move(owned));
     if (changed) {
-        ++work_.entryLayerReconcilePasses;
+        ++work.entryLayerReconcilePasses;
         EntryLayerReconcileWork reconcileWork;
         auto reconciled = reconcileEntryLayers(before.project(), draft, &reconcileWork);
-        work_.entryLayerReconcileSkips += reconcileWork.compositionsSkipped;
-        work_.entryLayerReconcileCompositions += reconcileWork.compositionsReconciled;
-        ++work_.lockedLayerChecks;
+        work.entryLayerReconcileSkips += reconcileWork.compositionsSkipped;
+        work.entryLayerReconcileCompositions += reconcileWork.compositionsReconciled;
+        ++work.lockedLayerChecks;
         std::string lockedWhat;
         if (!reconciled.failure && reconciled.changed &&
             detail::changesLockedLayers(before.project(), draft.project(), &lockedWhat))
             reconciled.failure =
                 OperationIssue{OperationIssueCode::InvalidValue, std::move(lockedWhat)};
         if (reconciled.failure) {
-            auto result = makeResult(CommandAction::Execute, CommandStatus::Rejected, before,
-                                     std::string(transaction.label()));
-            result.operationFailures.push_back({transaction.size(),
-                                                "bloom.merge.reconcile-entry-layers",
-                                                std::move(*reconciled.failure)});
-            notify(result);
-            return result;
+            auto result =
+                makeResult(CommandAction::Execute, CommandStatus::Rejected, before, label());
+            result.operationFailures.push_back(
+                {ops.size(), "bloom.merge.reconcile-entry-layers", std::move(*reconciled.failure)});
+            prepared.terminal = std::move(result);
+            return PreparedTransaction(std::move(owned));
         }
         if (reconciled.changed) {
-            ++work_.entryLayerReconcileEdits;
+            ++work.entryLayerReconcileEdits;
             // The pass keeps the picture, but it edits records the operations' footprints did not
             // describe: publish the conservative whole render.
             renderAffecting = true;
@@ -629,7 +662,7 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
     // themselves render-neutral but which changed an evaluation input fails closed to a whole
     // render.
     if (changed) {
-        ++work_.evaluationInputProofs;
+        ++work.evaluationInputProofs;
         const bool sameInputs =
             document::sameEvaluationInputs(before.project(), std::as_const(draft).project());
         if (sameInputs && !publishedFootprint) {
@@ -643,7 +676,7 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
     }
 
     if (changed && renderAffecting && !wholeRender && remapsValid && parameterScope.has_value()) {
-        ++work_.parameterFootprintDiffs;
+        ++work.parameterFootprintDiffs;
         const auto proven = detail::parameterEditFootprint(
             before.project(), std::as_const(draft).project(), *parameterScope);
         const auto merged =
@@ -657,18 +690,99 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
     }
 
     if (!changed) {
-        auto result = makeResult(CommandAction::Execute, CommandStatus::NoChange, before,
-                                 std::string(transaction.label()));
+        auto result = makeResult(CommandAction::Execute, CommandStatus::NoChange, before, label());
         result.outputs = std::move(outputs);
         result.warnings = std::move(warnings);
+        prepared.terminal = std::move(result);
+        return PreparedTransaction(std::move(owned));
+    }
+    if (stop())
+        return PreparedTransaction(std::move(owned));
+
+    // Everything Document::commit does before its lock: the incremental validation (the whole one
+    // only for a draft it cannot prove) and the frozen state to publish.
+    prepared.commit = document::Document::prepare(draft);
+    if (!prepared.commit->ready())
+        prepared.validationOperationIndex = firstInvalidOperation(before, ops);
+    prepared.outputs = std::move(outputs);
+    prepared.warnings = std::move(warnings);
+    prepared.renderAffecting = renderAffecting;
+    // A finite footprint is published only when the whole transaction's render effect is confined
+    // to it. A layout-only transaction (renderAffecting false) publishes none, matching its
+    // render-neutral semantics.
+    if (renderAffecting && !wholeRender && remapsValid && affectedTimes.has_value()) {
+        prepared.affectedTimes = affectedTimes;
+        // Remaps require the whole transaction to be finite; a nonempty set is published only when
+        // every descriptor validated. An empty set is a legitimate "no remaps".
+        const auto normalized = normalizeLayerIdentityRemaps(layerIdentityRemaps);
+        if (normalized.has_value())
+            prepared.layerIdentityRemaps = *normalized;
+        else
+            prepared.affectedTimes.reset();
+    }
+    if (renderAffecting && renderScopeKnown)
+        prepared.affectedComposition = renderScope;
+    return PreparedTransaction(std::move(owned));
+}
+
+CommandResult CommandStack::publishStep(PreparedTransaction&& preparedValue) {
+    auto& prepared = *preparedValue.detail_;
+    const auto label = [&] { return std::string(prepared.transaction.label()); };
+    const auto addWork = [this](const Work& done) {
+        work_.operationApplies += done.operationApplies;
+        work_.lockedLayerChecks += done.lockedLayerChecks;
+        work_.evaluationInputProofs += done.evaluationInputProofs;
+        work_.parameterFootprintDiffs += done.parameterFootprintDiffs;
+        work_.entryLayerReconcilePasses += done.entryLayerReconcilePasses;
+        work_.entryLayerReconcileSkips += done.entryLayerReconcileSkips;
+        work_.entryLayerReconcileCompositions += done.entryLayerReconcileCompositions;
+        work_.entryLayerReconcileEdits += done.entryLayerReconcileEdits;
+    };
+    addWork(prepared.work);
+    const document::Snapshot before = document_.snapshot();
+    if (const auto stale = staleResult(CommandAction::Execute, label(), before)) {
+        auto result = *stale;
         notify(result);
         return result;
     }
+    if (const auto expected = prepared.transaction.expectedRevision();
+        expected.has_value() && *expected != before.revision()) {
+        auto result =
+            makeResult(CommandAction::Execute, CommandStatus::StaleRevision, before, label());
+        result.expectedRevision = expected;
+        notify(result);
+        return result;
+    }
+    // #744 (A2): prepared on a base the document has since moved past (rebaseNeeded() says
+    // whether to prepare it again), or never applied.
+    if (prepared.unapplied || prepared.cancelled || prepared.base.revision() != before.revision()) {
+        auto result =
+            makeResult(CommandAction::Execute, CommandStatus::StaleRevision, before, label());
+        result.expectedRevision = prepared.base.revision();
+        notify(result);
+        return result;
+    }
+    if (prepared.terminal.has_value()) {
+        auto result = std::move(*prepared.terminal);
+        notify(result);
+        return result;
+    }
+    if (!prepared.commit->ready()) {
+        // The document names the refusal (and tells its observers), as commit() would.
+        auto failed =
+            resultForCommit(CommandAction::Execute, label(), before,
+                            document_.publish(before.revision(), std::move(*prepared.commit)));
+        if (failed.status == CommandStatus::ValidationFailed)
+            failed.validationOperationIndex = prepared.validationOperationIndex;
+        notify(failed);
+        return failed;
+    }
+    const document::PreparedCommit& candidate = *prepared.commit;
 
     // #746: a commit of the open group's origin joins the group's entry when that entry is still
     // the newest and nothing has happened since; the merged entry spans from the state before the
     // group's first commit to this one, and the state in between leaves the history.
-    const bool groupCommit = group_.has_value() && transaction.origin() == group_->origin;
+    const bool groupCommit = group_.has_value() && prepared.origin == group_->origin;
     bool merge = groupCommit && group_->entryOpen && cursor_ > 0 && cursor_ == history_.size() &&
                  history_.back().after.revision() == before.revision() &&
                  group_->entryAfter == before.revision();
@@ -679,11 +793,10 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
     const auto stepTooLarge = [&](const document::Snapshot& from) {
         // #744: what a one-step history of the two states retains, from the records the step
         // changed rather than from charging both states whole.
-        const auto [onlyDraft, onlyFrom] = HistoryCharge::stepBytes(from, std::as_const(draft));
+        const auto [onlyDraft, onlyFrom] = HistoryCharge::stepBytes(from, candidate);
         work_.chargedSnapshotsVisited += 2;
         const auto rootFrom = from.rootByteCharge() + sizeof(document::IdAllocator);
-        const auto rootDraft =
-            std::as_const(draft).rootByteCharge() + sizeof(document::IdAllocator);
+        const auto rootDraft = candidate.rootByteCharge() + sizeof(document::IdAllocator);
         const auto roots = rootFrom + rootDraft;
         const auto worst = std::max(onlyDraft, onlyFrom);
         return roots < rootFrom || worst > limits_.maxChargedBytes ||
@@ -695,34 +808,23 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
         merge = false;
     const document::Snapshot entryBefore = merge ? history_.back().before : before;
     if (!merge && stepTooLarge(before)) {
-        // Keep malformed-draft diagnostics ahead of resource policy, as Document::commit does.
-        // Ordinary fits still pass through commit's single full validation.
+        // Malformed-draft diagnostics come ahead of resource policy: preparation validated it.
         ++work_.overBudgetValidations;
-        auto validation = draft.validate();
-        if (!validation.ok()) {
-            auto invalid = makeResult(CommandAction::Execute, CommandStatus::ValidationFailed,
-                                      before, std::string(transaction.label()));
-            invalid.validation = std::move(validation);
-            invalid.validationOperationIndex =
-                firstInvalidOperation(document_, before, transaction);
-            notify(invalid);
-            return invalid;
-        }
         if (document_.snapshot().revision() != before.revision()) {
-            auto stale = makeResult(CommandAction::Execute, CommandStatus::StaleRevision, before,
-                                    std::string(transaction.label()));
+            auto stale =
+                makeResult(CommandAction::Execute, CommandStatus::StaleRevision, before, label());
             stale.expectedRevision = before.revision();
             notify(stale);
             return stale;
         }
         if (before.revision().value() == std::numeric_limits<std::uint64_t>::max()) {
             auto overflow = makeResult(CommandAction::Execute, CommandStatus::RevisionOverflow,
-                                       before, std::string(transaction.label()));
+                                       before, label());
             notify(overflow);
             return overflow;
         }
-        auto result = makeResult(CommandAction::Execute, CommandStatus::HistoryLimit, before,
-                                 std::string(transaction.label()));
+        auto result =
+            makeResult(CommandAction::Execute, CommandStatus::HistoryLimit, before, label());
         notify(result);
         return result;
     }
@@ -741,7 +843,7 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
         work_.chargedSnapshotsVisited += 2;
     }
     projected.add(entryBefore);
-    projected.add(std::as_const(draft));
+    projected.add(candidate);
     work_.chargedSnapshotsVisited += 2;
     std::size_t oldestDropped = 0;
     // The entries that may be retired: every one before the new step (or before the group's entry
@@ -751,7 +853,7 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
     const auto worstRetainedBytes = [&] {
         // Every retained state can become current through undo/redo. Restores share payloads
         // but allocate a new root; check every reachable payload set before publishing.
-        auto worst = projected.retainedBytes(std::as_const(draft), false);
+        auto worst = projected.retainedBytes(candidate, false);
         worst = std::max(worst, projected.retainedBytes(entryBefore, false));
         for (std::size_t index = oldestDropped; index < retirable; ++index) {
             worst = std::max(worst, projected.retainedBytes(history_[index].before, false));
@@ -774,36 +876,24 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
         ++oldestDropped;
         --projectedEntries;
     }
-    const auto currentHistoryCharge = projected.retainedBytes(std::as_const(draft), true);
+    const auto currentHistoryCharge = projected.retainedBytes(candidate, true);
     auto stagedCharge = std::make_unique<HistoryCharge>(std::move(projected));
 
     // Stage every allocation needed for history and event publication before Document::commit.
     // A committed edit must never be left without its newest undo step by a later allocation.
-    auto result = makeResult(CommandAction::Execute, CommandStatus::Succeeded, before,
-                             std::string(transaction.label()));
-    result.outputs = std::move(outputs);
-    result.warnings = std::move(warnings);
-    result.renderAffecting = renderAffecting;
-    // A finite footprint is published only when the whole transaction's render effect is confined
-    // to it. A layout-only transaction (renderAffecting false) publishes none, matching its
-    // render-neutral semantics.
-    if (renderAffecting && !wholeRender && remapsValid && affectedTimes.has_value()) {
-        result.affectedTimes = affectedTimes;
-        // Remaps require the whole transaction to be finite; a nonempty set is published only when
-        // every descriptor validated. An empty set is a legitimate "no remaps".
-        const auto normalized = normalizeLayerIdentityRemaps(layerIdentityRemaps);
-        if (normalized.has_value())
-            result.layerIdentityRemaps = *normalized;
-        else
-            result.affectedTimes.reset();
-    }
-    if (renderAffecting && renderScopeKnown)
-        result.affectedComposition = renderScope;
+    auto result = makeResult(CommandAction::Execute, CommandStatus::Succeeded, before, label());
+    result.outputs = std::move(prepared.outputs);
+    result.warnings = std::move(prepared.warnings);
+    result.renderAffecting = prepared.renderAffecting;
+    result.affectedTimes = prepared.affectedTimes;
+    result.layerIdentityRemaps = prepared.layerIdentityRemaps;
+    result.affectedComposition = prepared.affectedComposition;
+    const bool renderAffecting = prepared.renderAffecting;
     result.historyEntriesDropped = oldestDropped;
     result.historyEntryLimitReached = entryLimitReached;
     result.historyMemoryLimitReached = memoryLimitReached;
     result.historyGrouped = groupCommit;
-    HistoryEntry staged{groupCommit ? group_->label : std::string(transaction.label()),
+    HistoryEntry staged{groupCommit ? group_->label : label(),
                         entryBefore,
                         entryBefore,
                         renderAffecting,
@@ -829,18 +919,18 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
     static_assert(std::is_nothrow_move_constructible_v<HistoryEntry> &&
                   std::is_nothrow_move_assignable_v<HistoryEntry>);
 
-    document::CommitResult commitResult = document_.commit(before.revision(), std::move(draft));
+    // The history charge was staged from the prepared state itself, which publication keeps as the
+    // new snapshot's state, so nothing is re-keyed after the swap.
+    document::CommitResult commitResult =
+        document_.publish(before.revision(), std::move(*prepared.commit));
     if (!commitResult.committed() || !commitResult.snapshot.has_value()) {
-        auto failed = resultForCommit(CommandAction::Execute, std::string(transaction.label()),
-                                      before, std::move(commitResult));
-        if (failed.status == CommandStatus::ValidationFailed)
-            failed.validationOperationIndex = firstInvalidOperation(document_, before, transaction);
+        auto failed =
+            resultForCommit(CommandAction::Execute, label(), before, std::move(commitResult));
         notify(failed);
         return failed;
     }
 
     const document::Snapshot after = *commitResult.snapshot;
-    stagedCharge->rekeyPublishedDraft(std::as_const(draft), after);
     result.afterRevision = after.revision();
     staged.after = after;
     if (merge) {

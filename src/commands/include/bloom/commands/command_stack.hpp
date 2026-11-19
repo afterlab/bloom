@@ -46,6 +46,36 @@ struct HistoryGroupStats final {
     friend bool operator==(const HistoryGroupStats&, const HistoryGroupStats&) = default;
 };
 
+class CommandStack;
+
+// #744 (A2). A transaction applied to a draft of a base snapshot, its render footprint proven and
+// its result validated and frozen, by CommandStack::prepare on any thread. CommandStack::publish
+// then does only the owner's part: the revision check, the history step and its charge, the swap
+// and the events. Move-only; it holds the base snapshot, so it never borrows the document.
+class PreparedTransaction final {
+  public:
+    PreparedTransaction(PreparedTransaction&&) noexcept;
+    PreparedTransaction& operator=(PreparedTransaction&&) noexcept;
+    PreparedTransaction(const PreparedTransaction&) = delete;
+    PreparedTransaction& operator=(const PreparedTransaction&) = delete;
+    ~PreparedTransaction();
+
+    [[nodiscard]] document::Revision baseRevision() const noexcept;
+    [[nodiscard]] std::string_view label() const noexcept;
+    [[nodiscard]] CommandOrigin origin() const noexcept;
+    [[nodiscard]] std::optional<document::Revision> expectedRevision() const noexcept;
+    // Preparation stopped because its cancellation check fired; nothing was prepared.
+    [[nodiscard]] bool cancelled() const noexcept;
+    // Gives the transaction back, to prepare it again on a newer base (CommandStack::rebaseNeeded).
+    [[nodiscard]] Transaction takeTransaction() &&;
+
+  private:
+    friend class CommandStack;
+    struct Detail;
+    explicit PreparedTransaction(std::unique_ptr<Detail> detail) noexcept;
+    std::unique_ptr<Detail> detail_;
+};
+
 class CommandStack final {
   public:
     struct HistoryLimits final {
@@ -79,7 +109,26 @@ class CommandStack final {
     CommandStack& operator=(CommandStack&&) = delete;
     ~CommandStack();
 
+    // execute() is prepare() on the live snapshot followed by publish(), on the calling thread.
     [[nodiscard]] CommandResult execute(Transaction&& transaction);
+    // #744 (A2). Any thread; touches neither this stack nor the document. Applies `transaction` to
+    // a draft of `base`, reconciles entry layers, proves the render footprint and validates and
+    // freezes the result. `cancelled` is polled between operations and phases; when it fires the
+    // result is cancelled() and nothing else. A transaction whose expected revision is not `base`'s
+    // is not applied: publish refuses it as stale, or rebaseNeeded() asks for a newer base.
+    [[nodiscard]] static PreparedTransaction prepare(const document::Snapshot& base,
+                                                     Transaction&& transaction,
+                                                     const std::function<bool()>& cancelled = {});
+    // #744 (A2). Owner thread. True when the document has moved past `prepared`'s base and the
+    // transaction would still apply on the live revision (it expects that revision or none), so it
+    // must be prepared again on the live snapshot before publish. Answers no for a transaction
+    // publish would refuse as stale anyway.
+    [[nodiscard]] bool rebaseNeeded(const PreparedTransaction& prepared) const;
+    // #744 (A2). Owner thread. Publishes what prepare() built, exactly as execute() would have from
+    // the same base: the stale checks, the operation and validation refusals, the history step and
+    // its charge, Document::publish and the events. A base the document has moved past is refused
+    // as stale (call rebaseNeeded() first to re-base instead).
+    [[nodiscard]] CommandResult publish(PreparedTransaction&& prepared);
     [[nodiscard]] CommandResult undo(CommandOrigin origin = CommandOrigin::User);
     [[nodiscard]] CommandResult redo(CommandOrigin origin = CommandOrigin::User);
 
@@ -152,7 +201,7 @@ class CommandStack final {
         HistoryGroupStats stats;
     };
 
-    [[nodiscard]] CommandResult executeStep(Transaction&& transaction);
+    [[nodiscard]] CommandResult publishStep(PreparedTransaction&& prepared);
     [[nodiscard]] CommandResult undoStep();
     [[nodiscard]] CommandResult redoStep();
     void notify(const CommandResult& result) const noexcept;
