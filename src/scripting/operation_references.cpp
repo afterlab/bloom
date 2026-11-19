@@ -149,12 +149,18 @@ std::optional<OperationDiagnostic> resolveObjectReferences(const OperationSchema
     const auto holdsReference = [](const Value& value) {
         return std::holds_alternative<ObjectReference>(value.storage);
     };
+    // #747: a key track whose parameter is a {layer, role} reference.
+    const auto trackReference = [](const Value& value) {
+        const auto* track = std::get_if<KeyTrack>(&value.storage);
+        return track != nullptr && std::holds_alternative<ObjectReference>(track->parameter);
+    };
     bool any = false;
     for (const auto& [name, value] : arguments) {
         if (holdsReference(value)) {
             any = true;
         } else if (const auto* list = std::get_if<ValueArray>(&value.storage)) {
-            any = any || std::ranges::any_of(*list, holdsReference);
+            any = any || std::ranges::any_of(*list, holdsReference) ||
+                  std::ranges::any_of(*list, trackReference);
         }
     }
     if (!any)
@@ -176,6 +182,12 @@ std::optional<OperationDiagnostic> resolveObjectReferences(const OperationSchema
         const bool has = holdsReference(value) ||
                          (listed && std::ranges::any_of(std::get<ValueArray>(value.storage),
                                                         holdsReference));
+        // A key track's parameter may be a reference in the tracks of set-key-tracks only.
+        const bool tracks = listed && std::ranges::any_of(std::get<ValueArray>(value.storage),
+                                                          trackReference);
+        if (tracks && !(name == "tracks" && schema.typeId == "bloom.animation.set-key-tracks"))
+            return refuse(name, "\"" + name + "\" takes ids; only layer, layers, parent (of a "
+                                "layer operation) and parameter also accept a name reference");
         if (has && !ok)
             return refuse(name, "\"" + name + "\" takes ids; only layer, layers, parent (of a "
                                 "layer operation) and parameter also accept a name reference");
@@ -226,6 +238,17 @@ std::optional<OperationDiagnostic> resolveObjectReferences(const OperationSchema
         if (const auto* list = std::get_if<ValueArray>(&value.storage)) {
             ValueArray resolved;
             for (const auto& item : *list) {
+                if (const auto* track = std::get_if<KeyTrack>(&item.storage);
+                    track != nullptr && std::holds_alternative<ObjectReference>(track->parameter)) {
+                    auto one = resolveOne(name, Value(std::get<ObjectReference>(track->parameter)),
+                                          true);
+                    if (auto* failure = std::get_if<OperationDiagnostic>(&one))
+                        return *failure;
+                    auto copy = *track;
+                    copy.parameter = std::get<StableId>(std::get<Value>(std::move(one)).storage);
+                    resolved.push_back(Value(std::move(copy)));
+                    continue;
+                }
                 auto one = resolveOne(name, item, false);
                 if (auto* failure = std::get_if<OperationDiagnostic>(&one))
                     return *failure;

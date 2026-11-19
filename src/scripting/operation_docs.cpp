@@ -145,6 +145,21 @@ constexpr std::array kNotes{
         "interpolations at most one.\nTwo keys share a time => give each key its own time.\n"
         "The parameter is driven by a value node => give it a constant with "
         "bloom.parameter.set-source first."},
+    OperationNotes{"bloom.animation.set-key-tracks",
+        "Sets the keys of many parameters in one operation and one undo step: `tracks` holds one "
+        "{parameter, times, values, interpolations?, replace?} per parameter, each exactly the "
+        "arguments of set-key-columns for that parameter, and each merged into its curve in one "
+        "pass. If any track is refused (an unknown parameter, a value of the wrong width, two "
+        "keys at one time) nothing is applied, and the message names the track. Over MCP the "
+        "whole list can come from one data file: \"tracks\": {\"fromFile\": \"<absolute .json "
+        "path>\"}. Its work is every track's keys, within the one-commit bound of 1,000,000.",
+        "animationCurve (when created), keyframe (one per key), track after track",
+        "bloom.animation.set-key-columns bloom.animation.set-keys query:keyframes",
+        "[invalid-argument] A track is not {parameter, times, values} => the message names "
+        "tracks[i].\nTwo tracks key one parameter => merge them into one track.\nThe columns of "
+        "a track differ in length => values has one entry per time, interpolations at most "
+        "one.\nTrack i is refused when it applies (an unknown parameter or a value that does "
+        "not fit) => nothing was applied; fix that track and send the whole edit again."},
     OperationNotes{"bloom.animation.set-keyframe-at-time-for-parameter",
         "Sets an animated parameter's value at `time`: updates the key there or inserts one. The "
         "parameter must already be animated; make a constant one animated first with "
@@ -928,6 +943,9 @@ void refine(const std::string& op, ArgumentSchema& argument) {
                         "follows the project";
     } else if (name == "times" && op == "bloom.animation.set-key-columns") {
         argument.unit = "list of times, one per value; in " + std::string(kKeyTimeUnit);
+    } else if (name == "tracks" && op == "bloom.animation.set-key-tracks") {
+        argument.unit = "list of {parameter, times, values, interpolations?, replace?}; times in " +
+                        std::string(kKeyTimeUnit);
     } else if (name == "keys" && op == "bloom.animation.set-keys") {
         argument.unit = "list of [time, value, interpolation?]; times in " +
                         std::string(kKeyTimeUnit);

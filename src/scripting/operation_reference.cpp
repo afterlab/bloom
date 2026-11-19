@@ -380,6 +380,20 @@ std::string valueJson(const Value& value) {
                 for (std::size_t index = 0; index < held.values.size(); ++index)
                     text += (index == 0 ? "" : ",") + numberText(held.values[index]);
                 return text + "]}";
+            } else if constexpr (std::is_same_v<Held, KeyTrack>) {
+                // #747: {"parameter": ..., "times": [...], "values": [...], ...}.
+                std::string text = "{\"parameter\":";
+                if (const auto* id = std::get_if<StableId>(&held.parameter))
+                    text += std::to_string(id->value);
+                else
+                    text += valueJson(Value(std::get<ObjectReference>(held.parameter)));
+                text += ",\"times\":" + valueJson(Value(held.times)) +
+                        ",\"values\":" + valueJson(Value(held.values));
+                if (held.interpolations)
+                    text += ",\"interpolations\":" + valueJson(Value(*held.interpolations));
+                if (held.replace)
+                    text += std::string(",\"replace\":") + (*held.replace ? "true" : "false");
+                return text + "}";
             } else {
                 std::string text = "[";
                 for (std::size_t index = 0; index < held.size(); ++index)

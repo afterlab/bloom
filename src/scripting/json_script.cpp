@@ -585,6 +585,54 @@ class Parser final {
     return Value{std::move(reference)};
 }
 
+[[nodiscard]] std::optional<Value> convert(const JsonValue& json);
+
+// #747 (D3): a key track of bloom.animation.set-key-tracks: {"parameter": id or {"layer",
+// "role"}, "times": [...], "values": [...], "interpolations": [...]?, "replace": bool?}. nullopt for
+// any other member or shape.
+[[nodiscard]] std::optional<Value> keyTrackOf(const JsonObject& object) {
+    KeyTrack track;
+    bool hasValues = false;
+    for (const auto& [key, field] : object) {
+        if (key == "parameter") {
+            if (const auto* whole = std::get_if<std::int64_t>(&field.storage); whole && *whole > 0) {
+                track.parameter = StableId{static_cast<std::uint64_t>(*whole)};
+            } else if (const auto* mapping = std::get_if<JsonObject>(&field.storage)) {
+                auto reference = referenceOf(*mapping);
+                if (!reference)
+                    return std::nullopt;
+                track.parameter = std::get<ObjectReference>(std::move(reference->storage));
+            } else {
+                return std::nullopt;
+            }
+        } else if (key == "times" || key == "values" || key == "interpolations") {
+            if (!std::holds_alternative<JsonArray>(field.storage))
+                return std::nullopt;
+            auto converted = convert(field);
+            if (!converted)
+                return std::nullopt;
+            auto column = std::get<ValueArray>(std::move(converted->storage));
+            if (key == "times")
+                track.times = std::move(column);
+            else if (key == "values") {
+                track.values = std::move(column);
+                hasValues = true;
+            } else
+                track.interpolations = std::move(column);
+        } else if (key == "replace") {
+            const auto* flag = std::get_if<bool>(&field.storage);
+            if (flag == nullptr)
+                return std::nullopt;
+            track.replace = *flag;
+        } else {
+            return std::nullopt;
+        }
+    }
+    if (!hasValues)
+        return std::nullopt;
+    return Value{std::move(track)};
+}
+
 [[nodiscard]] std::optional<Value> convert(const JsonValue& json) {
     return std::visit(
         [](const auto& value) -> std::optional<Value> {
@@ -601,6 +649,8 @@ class Parser final {
                 }
                 return Value{std::move(result)};
             } else if constexpr (std::is_same_v<Type, JsonObject>) {
+                if (value.contains("parameter") && value.contains("times"))
+                    return keyTrackOf(value);
                 if (value.contains("stops"))
                     return gradientOf(value);
                 if (value.contains("values"))

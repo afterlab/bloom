@@ -34,6 +34,18 @@ struct ObjectReference final {
     std::optional<std::uint64_t> composition;
 };
 
+// #747 (D3): one parameter's keys in bloom.animation.set-key-tracks, written as the mapping
+// {parameter, times, values, interpolations?, replace?}: set-key-columns' columns for one parameter
+// of many in one operation. `parameter` is the parameter's id or a {layer, role} reference, which
+// the operation registry resolves before the operation is created.
+struct KeyTrack final {
+    std::variant<StableId, ObjectReference> parameter;
+    ValueArray times;
+    ValueArray values;
+    std::optional<ValueArray> interpolations;
+    std::optional<bool> replace;
+};
+
 // document::PathValue is ADR 0028's whole-value path (closed flag and cubic anchors), the value of
 // a mask path. Each client reads it from its own projection of a path: a mapping with `closed` and
 // `anchors`, each anchor a `point` and optional in/out handles.
@@ -44,7 +56,7 @@ struct ObjectReference final {
 using ValueStorage =
     std::variant<bool, std::int64_t, double, std::string, document::Vec2d, document::Vec3d,
                  core::Color4d, StableId, ValueArray, document::PathValue, document::GradientValue,
-                 ObjectReference, document::NumberListValue>;
+                 ObjectReference, document::NumberListValue, KeyTrack>;
 
 struct Value final {
     ValueStorage storage;
@@ -65,6 +77,7 @@ struct Value final {
     Value(document::GradientValue value) : storage(std::move(value)) {}
     Value(ObjectReference value) : storage(std::move(value)) {}
     Value(document::NumberListValue value) : storage(std::move(value)) {}
+    Value(KeyTrack value) : storage(std::move(value)) {}
 };
 
 using Arguments = std::map<std::string, Value, std::less<>>;

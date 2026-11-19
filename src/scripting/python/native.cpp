@@ -450,6 +450,53 @@ Value referenceValue(const nb::dict& mapping) {
     return Value(std::move(reference));
 }
 
+// #747 (D3): a key track of bloom.ops.animation.set_key_tracks: {'parameter': id or {'layer',
+// 'role'}, 'times': [...], 'values': [...], 'interpolations': [...]?, 'replace': bool?}.
+Value keyTrackValue(const nb::dict& mapping, const std::size_t depth) {
+    constexpr const char* shape = "A key track is {'parameter': id or {'layer', 'role'}, 'times': "
+                                  "[...], 'values': [...], 'interpolations': [...], 'replace': "
+                                  "bool}; interpolations and replace are optional";
+    KeyTrack track;
+    for (const auto [key, unused] : mapping) {
+        static_cast<void>(unused);
+        if (!nb::isinstance<nb::str>(key))
+            throw nb::type_error(shape);
+        const auto name = nb::cast<std::string>(key);
+        if (name != "parameter" && name != "times" && name != "values" &&
+            name != "interpolations" && name != "replace")
+            throw nb::type_error(shape);
+    }
+    const auto parameter = mapping["parameter"];
+    if (nb::isinstance<nb::dict>(parameter) &&
+        isReferenceMapping(nb::borrow<nb::dict>(parameter))) {
+        track.parameter =
+            std::get<ObjectReference>(referenceValue(nb::borrow<nb::dict>(parameter)).storage);
+    } else if (nb::isinstance<nb::int_>(parameter) && !nb::isinstance<nb::bool_>(parameter) &&
+               nb::cast<std::int64_t>(parameter) > 0) {
+        track.parameter = StableId{static_cast<std::uint64_t>(nb::cast<std::int64_t>(parameter))};
+    } else {
+        throw nb::type_error(shape);
+    }
+    const auto column = [&](const char* name) {
+        const auto field = mapping[name];
+        if (!nb::isinstance<nb::tuple>(field) && !nb::isinstance<nb::list>(field))
+            throw nb::type_error(shape);
+        return std::get<ValueArray>(scriptValue(field, depth + 1).storage);
+    };
+    track.times = column("times");
+    if (!mapping.contains("values"))
+        throw nb::type_error(shape);
+    track.values = column("values");
+    if (mapping.contains("interpolations") && !mapping["interpolations"].is_none())
+        track.interpolations = column("interpolations");
+    if (mapping.contains("replace") && !mapping["replace"].is_none()) {
+        if (!nb::isinstance<nb::bool_>(mapping["replace"]))
+            throw nb::type_error(shape);
+        track.replace = nb::cast<bool>(mapping["replace"]);
+    }
+    return Value(std::move(track));
+}
+
 Value scriptValue(const nb::handle value, const std::size_t depth) {
     if (depth > 16) {
         throw nb::value_error("Argument nesting exceeds 16 levels");
@@ -487,6 +534,8 @@ Value scriptValue(const nb::handle value, const std::size_t depth) {
     }
     if (nb::isinstance<nb::dict>(value)) {
         const auto mapping = nb::borrow<nb::dict>(value);
+        if (mapping.contains("parameter") && mapping.contains("times"))
+            return keyTrackValue(mapping, depth);
         if (isReferenceMapping(mapping))
             return referenceValue(mapping);
         if (mapping.contains("stops"))

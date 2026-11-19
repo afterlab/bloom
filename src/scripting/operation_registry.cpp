@@ -1188,6 +1188,28 @@ std::string pythonLiteral(const Value& value) {
                     text += (index == 0 ? std::string() : std::string(", ")) +
                             pythonLiteral(Value(held.values[index]));
                 return text + "]}";
+            } else if constexpr (std::is_same_v<Held, KeyTrack>) {
+                // #747: {"parameter": ..., "times": [...], "values": [...], ...}; lists, so a
+                // one-key column still reads as a list.
+                const auto column = [](const ValueArray& items) {
+                    std::string text = "[";
+                    for (std::size_t index = 0; index < items.size(); ++index)
+                        text += (index == 0 ? std::string() : std::string(", ")) +
+                                pythonLiteral(items[index]);
+                    return text + "]";
+                };
+                std::string text = "{\"parameter\": ";
+                if (const auto* id = std::get_if<StableId>(&held.parameter))
+                    text += std::to_string(id->value);
+                else
+                    text += pythonLiteral(Value(std::get<ObjectReference>(held.parameter)));
+                text += ", \"times\": " + column(held.times) + ", \"values\": " +
+                        column(held.values);
+                if (held.interpolations)
+                    text += ", \"interpolations\": " + column(*held.interpolations);
+                if (held.replace)
+                    text += std::string(", \"replace\": ") + (*held.replace ? "True" : "False");
+                return text + "}";
             } else {
                 std::string text = "(";
                 for (std::size_t index = 0; index < held.size(); ++index) {
@@ -1393,6 +1415,103 @@ OperationRegistry OperationRegistry::builtIn() {
             }
             return parameterKeysOperation(*composition, *parameter, std::move(keys),
                                           replace.value_or(false));
+        });
+
+    // #747 (D3): set-key-columns for many parameters in one operation. Each track becomes one
+    // SetParameterKeys (the one-pass merge), all applied to the same draft, so any refused track
+    // refuses the transaction and nothing is applied.
+    add("bloom.animation.set-key-tracks",
+        {compositionArgument(),
+         need("tracks", ValueKind::Array,
+              ValueArray{Value(KeyTrack{.parameter = StableId{12},
+                                        .times = ValueArray{Value(std::int64_t{0}),
+                                                            Value(std::int64_t{24})},
+                                        .values = ValueArray{Value(0.0), Value(1.0)},
+                                        .interpolations = ValueArray{Value("hold")},
+                                        .replace = std::nullopt}),
+                         Value(KeyTrack{.parameter = StableId{15},
+                                        .times = ValueArray{Value(std::int64_t{0}),
+                                                            Value(std::int64_t{24})},
+                                        .values = ValueArray{Value(ValueArray{Value(0.0),
+                                                                              Value(0.0)}),
+                                                             Value(ValueArray{Value(100.0),
+                                                                              Value(50.0)})},
+                                        .interpolations = std::nullopt,
+                                        .replace = true})},
+              "One track per parameter: {\"parameter\": id or {\"layer\", \"role\"}, "
+              "\"times\": [...], \"values\": [...], \"interpolations\": [...] (optional), "
+              "\"replace\": true|false (optional)}, each exactly the arguments of "
+              "set-key-columns for that parameter. Each parameter has at most one track.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            if (!composition || error)
+                return error;
+            const auto* given = findArgument(args, "tracks");
+            const auto* tracks = given == nullptr ? nullptr : std::get_if<ValueArray>(&given->storage);
+            if (tracks == nullptr)
+                return failure(op, "tracks",
+                               "expects a list of {parameter, times, values, interpolations?, "
+                               "replace?} tracks");
+            if (tracks->empty())
+                return failure(op, "tracks", "is empty; give at least one parameter's keys");
+            std::map<std::uint64_t, std::size_t> seen;
+            std::vector<std::unique_ptr<commands::SetParameterKeys>> built;
+            built.reserve(tracks->size());
+            for (std::size_t index = 0; index < tracks->size(); ++index) {
+                const auto where = "tracks[" + std::to_string(index) + "]";
+                const auto* track = std::get_if<KeyTrack>(&(*tracks)[index].storage);
+                if (track == nullptr)
+                    return failure(op, "tracks",
+                                   where + " expects {parameter, times, values, interpolations?, "
+                                           "replace?}");
+                const auto* parameter = std::get_if<StableId>(&track->parameter);
+                if (parameter == nullptr || parameter->value == 0)
+                    return failure(op, "tracks",
+                                   where + " parameter expects a parameter id or a {layer, role} "
+                                           "reference");
+                if (const auto [found, inserted] = seen.emplace(parameter->value, index); !inserted)
+                    return failure(op, "tracks",
+                                   where + " keys parameter " + std::to_string(parameter->value) +
+                                       ", which tracks[" + std::to_string(found->second) +
+                                       "] already keys; give each parameter one track");
+                const auto& times = track->times;
+                const auto& values = track->values;
+                if (times.size() != values.size())
+                    return failure(op, "tracks",
+                                   where + " values has " + std::to_string(values.size()) +
+                                       " entries but times has " + std::to_string(times.size()) +
+                                       "; give one value per time");
+                const auto* modes = track->interpolations ? &*track->interpolations : nullptr;
+                if (modes != nullptr && modes->size() > times.size())
+                    return failure(op, "tracks",
+                                   where + " interpolations has " + std::to_string(modes->size()) +
+                                       " entries but times has " + std::to_string(times.size()));
+                const bool replace = track->replace.value_or(false);
+                if (times.empty() && !replace)
+                    return failure(op, "tracks",
+                                   where + " has no keys; pass replace to return the parameter "
+                                           "to a constant");
+                std::vector<commands::ParameterKey> keys;
+                keys.reserve(times.size());
+                for (std::size_t key = 0; key < times.size(); ++key) {
+                    commands::ParameterKey parsed;
+                    if (auto refused = parseParameterKey(
+                            op, "tracks", where + ".values[" + std::to_string(key) + "]",
+                            times[key], values[key],
+                            modes != nullptr && key < modes->size() ? &(*modes)[key] : nullptr,
+                            parsed))
+                        return std::move(*refused);
+                    keys.push_back(std::move(parsed));
+                }
+                built.push_back(std::make_unique<commands::SetParameterKeys>(
+                    document::CompositionId::fromRaw(*composition),
+                    document::ParameterId::fromRaw(parameter->value), std::move(keys), replace));
+            }
+            return OperationCreateResult(
+                std::make_unique<commands::SetParameterKeyTracks>(
+                    document::CompositionId::fromRaw(*composition), std::move(built)),
+                std::nullopt);
         });
 
     add("bloom.animation.create-for-parameter",

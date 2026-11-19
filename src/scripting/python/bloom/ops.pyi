@@ -778,6 +778,83 @@ class AnimationOps:
         transact
         """
         ...
+    def set_key_tracks(self, tracks: tuple, *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.animation.set-key-tracks  (operation, animation)
+        Sets the keys of many parameters in one operation and one undo step: `tracks` holds one
+        {parameter, times, values, interpolations?, replace?} per parameter, each exactly the arguments
+        of set-key-columns for that parameter, and each merged into its curve in one pass. If any track
+        is refused (an unknown parameter, a value of the wrong width, two keys at one time) nothing is
+        applied, and the message names the track. Over MCP the whole list can come from one data file:
+        "tracks": {"fromFile": "<absolute .json path>"}. Its work is every track's keys, within the
+        one-commit bound of 1,000,000.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          tracks  array  required
+              One track per parameter: {"parameter": id or {"layer", "role"}, "times": [...], "values":
+              [...], "interpolations": [...] (optional), "replace": true|false (optional)}, each exactly
+              the arguments of set-key-columns for that parameter. Each parameter has at most one track.
+              Unit: list of {parameter, times, values, interpolations?, replace?}; times in frames at
+              the composition's frame rate (an integer), or exact seconds as [numerator, denominator],
+              in the unit of the key's owner: LAYER time for a layer's own parameters (query:layers
+              .parameters: position, opacity, blend mode, Time Remap), which is the composition time
+              minus the layer's start, times its speed (a layer starting at frame 48 shows its frame 0
+              at composition frame 48); COMPOSITION time for every other parameter (a node's, a
+              source's, an effect's). A layer key outside the layer's range never plays; the edit
+              succeeds and returns a warning naming the range
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          animationCurve animation-curve - when created
+          keyframe keyframe repeated - one per key
+          track track - after track
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names:
+          animationCurve, keyframe (repeated), track (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: A track is not {parameter, times, values}
+              Do: the message names tracks[i].
+          bloom.scripting.command-rejected
+              When: Two tracks key one parameter
+              Do: merge them into one track.
+          bloom.scripting.command-rejected
+              When: The columns of a track differ in length
+              Do: values has one entry per time, interpolations at most one.
+          bloom.scripting.command-rejected
+              When: Track i is refused when it applies (an unknown parameter or a value that does not
+              fit)
+              Do: nothing was applied; fix that track and send the whole edit again.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.animation.set-key-tracks","args":{"tracks":[{"parameter":12,"times":[0,24],"values":[0,1],"interpolations":["hold"]},{"parameter":15,"times":[0,24],"values":[[0,0],[100,50]],"replace":true}]}}]}}
+          Python:
+            bloom.ops.animation.set_key_tracks(tracks=({"parameter": 12, "times": [0, 24], "values": [0, 1], "interpolations": ["hold"]}, {"parameter": 15, "times": [0, 24], "values": [(0, 0), (100, 50)], "replace": True}))
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.animation.set-key-tracks","args":{"tracks":[{"parameter":12,"times":[0,24],"values":[0,1],"interpolations":["hold"]},{"parameter":15,"times":[0,24],"values":[[0,0],[100,50]],"replace":true}]}}]
+
+        Related: bloom.animation.set-key-columns, bloom.animation.set-keys, query:keyframes, transact
+        """
+        ...
     def set_keyframe_at_time(self, curve: int | Proxy, value: Value, *, composition: int | Proxy = ..., time: Time = ...) -> Mapping[str, Any] | None:
         """bloom.animation.set-keyframe-at-time  (operation, animation)
         Sets a curve's value at `time`: updates the key there, or inserts one. The value has the curve's

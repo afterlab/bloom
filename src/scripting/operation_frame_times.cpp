@@ -41,6 +41,11 @@ constexpr std::array<TimeList, 1> kTimeLists{{
     {"bloom.animation.set-key-columns", "times"},
 }};
 
+// #747: times inside the key tracks of a list argument: {operation, argument}.
+constexpr std::array<TimeList, 1> kTrackTimes{{
+    {"bloom.animation.set-key-tracks", "tracks"},
+}};
+
 bool isFrameCount(const Value& value) {
     if (std::holds_alternative<std::int64_t>(value.storage))
         return true;
@@ -72,6 +77,20 @@ void forEachFrameTime(const OperationSchema& schema, Arguments& arguments, Visit
                 isFrameCount((*entry)[nested.index]))
                 visit((*entry)[nested.index]);
         }
+    }
+    for (const auto& tracks : kTrackTimes) {
+        if (tracks.operation != schema.typeId)
+            continue;
+        const auto found = arguments.find(tracks.argument);
+        auto* list =
+            found == arguments.end() ? nullptr : std::get_if<ValueArray>(&found->second.storage);
+        if (list == nullptr)
+            continue;
+        for (auto& item : *list)
+            if (auto* track = std::get_if<KeyTrack>(&item.storage))
+                for (auto& time : track->times)
+                    if (isFrameCount(time))
+                        visit(time);
     }
     for (const auto& flat : kTimeLists) {
         if (flat.operation != schema.typeId)

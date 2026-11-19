@@ -359,7 +359,58 @@ scripting::ObjectReference referenceValue(yyjson_val* item) {
     return reference;
 }
 
-scripting::Value value(yyjson_val* item, const std::size_t depth = 0) {
+scripting::Value value(yyjson_val* item, std::size_t depth = 0);
+
+// #747 (D3): a key track of bloom.animation.set-key-tracks: an object with "parameter" and "times"
+// (and "values", optional "interpolations" and "replace").
+bool isKeyTrackObject(yyjson_val* item) {
+    return yyjson_is_obj(item) && yyjson_obj_get(item, "parameter") != nullptr &&
+           yyjson_obj_get(item, "times") != nullptr;
+}
+
+scripting::KeyTrack keyTrackValue(yyjson_val* item, const std::size_t depth) {
+    constexpr std::string_view shape =
+        "A key track is {\"parameter\": id or {\"layer\", \"role\"}, \"times\": [...], "
+        "\"values\": [...], \"interpolations\": [...] (optional), \"replace\": true|false "
+        "(optional)}";
+    scripting::KeyTrack track;
+    yyjson_obj_iter iterator = yyjson_obj_iter_with(item);
+    while (auto* key = yyjson_obj_iter_next(&iterator)) {
+        const std::string_view name(yyjson_get_str(key), yyjson_get_len(key));
+        if (name != "parameter" && name != "times" && name != "values" &&
+            name != "interpolations" && name != "replace")
+            throw InvalidInput(std::string(shape) + "; \"" + std::string(name) +
+                               "\" is not one of its members");
+    }
+    const auto column = [&](const char* name) {
+        auto* field = yyjson_obj_get(item, name);
+        if (!yyjson_is_arr(field))
+            throw InvalidInput(std::string(shape) + "; \"" + name + "\" must be a list");
+        auto converted = value(field, depth + 1);
+        return std::get<scripting::ValueArray>(std::move(converted.storage));
+    };
+    auto* parameter = yyjson_obj_get(item, "parameter");
+    if (isReferenceObject(parameter))
+        track.parameter = referenceValue(parameter);
+    else if (yyjson_is_uint(parameter) && yyjson_get_uint(parameter) != 0)
+        track.parameter = scripting::StableId{yyjson_get_uint(parameter)};
+    else
+        throw InvalidInput(std::string(shape) + "; \"parameter\" is a parameter id");
+    track.times = column("times");
+    if (yyjson_obj_get(item, "values") == nullptr)
+        throw InvalidInput(std::string(shape) + "; \"values\" is missing");
+    track.values = column("values");
+    if (auto* modes = yyjson_obj_get(item, "interpolations"); modes != nullptr && !yyjson_is_null(modes))
+        track.interpolations = column("interpolations");
+    if (auto* replace = yyjson_obj_get(item, "replace"); replace != nullptr && !yyjson_is_null(replace)) {
+        if (!yyjson_is_bool(replace))
+            throw InvalidInput(std::string(shape) + "; \"replace\" is true or false");
+        track.replace = yyjson_get_bool(replace);
+    }
+    return track;
+}
+
+scripting::Value value(yyjson_val* item, const std::size_t depth) {
     if (depth > 16)
         throw InvalidInput("Argument exceeds nesting limit");
     if (yyjson_is_bool(item))
@@ -387,6 +438,8 @@ scripting::Value value(yyjson_val* item, const std::size_t depth = 0) {
             values.push_back(value(child, depth + 1));
         return scripting::Value(std::move(values));
     }
+    if (isKeyTrackObject(item))
+        return scripting::Value(keyTrackValue(item, depth));
     if (isReferenceObject(item))
         return scripting::Value(referenceValue(item));
     if (yyjson_is_obj(item) && yyjson_obj_get(item, "stops") != nullptr)

@@ -2530,6 +2530,53 @@ OperationResult SetParameterKeys::apply(document::Draft& draft) const {
     return result;
 }
 
+SetParameterKeyTracks::SetParameterKeyTracks(
+    const document::CompositionId composition,
+    std::vector<std::unique_ptr<SetParameterKeys>> tracks)
+    : composition_(composition), tracks_(std::move(tracks)) {}
+
+std::string_view SetParameterKeyTracks::typeId() const noexcept {
+    return "bloom.animation.set-key-tracks";
+}
+
+std::size_t SetParameterKeyTracks::workUnits() const noexcept {
+    std::size_t total = 0;
+    for (const auto& track : tracks_)
+        total += track->workUnits();
+    return total == 0 ? 1 : total;
+}
+
+OperationResult SetParameterKeyTracks::apply(document::Draft& draft) const {
+    if (tracks_.empty())
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "tracks is empty; give at least one parameter's keys");
+    std::vector<OperationOutput> outputs;
+    std::vector<OperationIssue> issues;
+    bool changed = false;
+    for (std::size_t index = 0; index < tracks_.size(); ++index) {
+        auto result = tracks_[index]->apply(draft);
+        const auto where = "Track " + std::to_string(index) + ": ";
+        if (result.status == OperationStatus::Rejected) {
+            // The draft is discarded with the transaction, so the tracks before it apply nothing.
+            auto issue = result.issues.empty()
+                             ? OperationIssue{OperationIssueCode::InvalidValue, "refused"}
+                             : std::move(result.issues.front());
+            return OperationResult::rejected(issue.code, where + issue.message);
+        }
+        changed = changed || result.status == OperationStatus::Applied;
+        for (auto& output : result.outputs)
+            outputs.push_back(std::move(output));
+        for (auto& issue : result.issues) {
+            issue.message = where + issue.message;
+            issues.push_back(std::move(issue));
+        }
+    }
+    auto result = changed ? OperationResult::applied(std::move(outputs))
+                          : OperationResult::noChange(std::move(outputs));
+    result.issues = std::move(issues);
+    return result;
+}
+
 std::string_view PasteKeyframes::typeId() const noexcept {
     return "bloom.animation.paste-keyframes";
 }

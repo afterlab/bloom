@@ -8,6 +8,7 @@
 #include <bloom/document/parameter.hpp>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -739,6 +740,27 @@ class SetParameterKeys final : public Operation {
     document::ParameterId parameter_;
     std::vector<ParameterKey> keys_;
     bool replace_ = false;
+};
+// #747 (D3): many parameters' keys in one operation (MCP bloom.animation.set-key-tracks). Each
+// track is exactly a SetParameterKeys merge applied to the same draft, one after the other, so a
+// track that is refused (an unknown parameter, a value of the wrong width, two keys at one time)
+// refuses the whole transaction and nothing is applied. Outputs as SetParameterKeys, track after
+// track; its work is every track's keys.
+class SetParameterKeyTracks final : public Operation {
+  public:
+    SetParameterKeyTracks(document::CompositionId composition,
+                          std::vector<std::unique_ptr<SetParameterKeys>> tracks);
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::size_t workUnits() const noexcept override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return composition_;
+    }
+
+  private:
+    document::CompositionId composition_;
+    std::vector<std::unique_ptr<SetParameterKeys>> tracks_;
 };
 class PasteKeyframes final : public Operation {
   public:
