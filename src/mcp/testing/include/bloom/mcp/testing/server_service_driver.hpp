@@ -62,6 +62,8 @@ class McpServerServiceDriver final {
     // The HTTP connections the server holds open right now (accepted and not yet closed); a
     // connection over McpServerLimits::connections is answered 503 and never counted.
     [[nodiscard]] std::size_t openConnections() const;
+    // #745: the requests the request workers are executing plus the ones waiting for a worker.
+    [[nodiscard]] std::size_t requestsInProgress() const;
 
     // Holds 127.0.0.1:<port> so McpServerService::start() is refused with PortInUse naming it.
     // Null when the port could not be bound by the test itself.

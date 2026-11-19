@@ -44,6 +44,14 @@ std::size_t McpServerServiceDriver::openConnections() const {
     return s.openConnections;
 }
 
+std::size_t McpServerServiceDriver::requestsInProgress() const {
+    auto& s = *service_.state_;
+    if (!s.network)
+        return 0;
+    const std::lock_guard lock(s.network->mutex);
+    return s.network->executing + s.network->pending.size();
+}
+
 namespace {
 std::shared_ptr<Client> find(McpServerService::State& s, const std::uint64_t id) {
     for (const auto& [session, client] : s.sessions) {

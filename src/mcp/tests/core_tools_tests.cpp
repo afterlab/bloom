@@ -73,7 +73,8 @@ struct Headless final {
 
     explicit Headless(mcp::McpLiveUiPort ui = {},
                       std::function<bool(runtime::ProfilerSnapshot&)> profiler = {},
-                      std::filesystem::path captures = {}) {
+                      std::filesystem::path captures = {},
+                      const mcp::McpMessageLimits limits = mcp::kMcpMessageLimits) {
         std::shared_ptr<host::GpuExportProvider> renderProvider;
         if (!captures.empty()) {
             runtime::GpuProcessFrameEvaluatorOptions options;
@@ -96,7 +97,7 @@ struct Headless final {
             .ui = std::move(ui),
             .profilerSnapshot = std::move(profiler),
             .serverVersion = "test",
-            .limits = mcp::kMcpMessageLimits});
+            .limits = limits});
         protocol = core->openSession();
         static_cast<void>(send(R"({"jsonrpc":"2.0","id":0,"method":"initialize","params":{)"
                                R"("protocolVersion":"2025-11-25","capabilities":{},)"
@@ -2356,6 +2357,237 @@ class IdleInput final : public std::streambuf {
 
 // The stdio transport returns when its stop token fires while stdin is idle, instead of waiting
 // for the next line.
+// #745, #741: every request limit is advertised at initialize, and each refusal names the limit,
+// its value and the actual count with its own code, pointing at set-key-columns and fromFile.
+void requestLimits() {
+    const auto folder =
+        std::filesystem::temp_directory_path() /
+        ("bloom-mcp-limits-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(folder);
+    struct Remove final {
+        std::filesystem::path path;
+        ~Remove() {
+            std::error_code ignored;
+            std::filesystem::remove_all(path, ignored);
+        }
+    } remove{folder};
+    const auto data = [](const std::string& error) {
+        return firstMatch(error, R"re("data":(\{[^}]*\}))re");
+    };
+    {
+        Headless server;
+        auto protocol = server.core->openSession();
+        const auto initialized =
+            server.core
+                ->handle(*protocol,
+                         R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{)"
+                         R"("protocolVersion":"2025-11-25","capabilities":{},)"
+                         R"("clientInfo":{"name":"limits","version":"1"}}})",
+                         {})
+                .response.value_or("");
+        for (const auto* limit :
+             {R"("requestBytes":1048576)", R"("responseBytes":4194304)", R"("jsonValues":65536)",
+              R"("jsonDepth":32)", R"("jsonMemoryBytes":33554432)", R"("dataFilesPerCall":16)",
+              R"("dataFileBytes":16777216)", R"("dataFileValues":2000000)", R"("dataFileDepth":16)",
+              R"("inFlightPerClient":1)", R"("pendingMessages":16)", R"("transactOutputs":10000)"})
+            expect(contains(initialized, R"("limits":{)") && contains(initialized, limit),
+                   std::string("initialize advertises ") + limit + ": " + initialized);
+        expect(!contains(initialized, "commitQueue") && !contains(initialized, "commitWork"),
+               "stdio has no commit queue or commit bound to advertise: " + initialized);
+
+        // Values: one request over 65,536 JSON values, answered with its id and the count.
+        std::string keys;
+        for (int key = 0; key < 22000; ++key)
+            keys += (key ? "," : "") + std::string("[") + std::to_string(key) + ",0.5]";
+        const auto values = server.call(
+            "transact", R"({"expectedRevision":0,"operations":[{"op":"bloom.animation.set-keys",)"
+                        R"("args":{"composition":1,"parameter":1,"keys":[)" +
+                            keys + "]}}]}");
+        expect(contains(values, R"("code":-32004)") &&
+                   contains(values, R"("id":)" + std::to_string(server.nextId)) &&
+                   contains(data(values), R"("code":"bloom.mcp.limit.json-values")") &&
+                   contains(data(values), R"("limit":"jsonValues","value":65536,"actual":66)") &&
+                   contains(values, "set-key-columns") && contains(values, "fromFile"),
+               "too many values are refused by name with the count: " + values);
+        // Depth: the exact level is counted, without recursion, however deep.
+        const auto deep = server.send(std::string(40, '[') + "0" + std::string(40, ']'));
+        expect(contains(deep, R"("code":-32005)") &&
+                   contains(data(deep), R"("limit":"jsonDepth","value":32,"actual":40)"),
+               "too deep is refused by name with the depth: " + deep);
+        const auto deeper = server.send(std::string(60000, '[') + std::string(60000, ']'));
+        expect(contains(deeper, R"("code":-32005)") && contains(deeper, R"("actual":59999)"),
+               "a very deep request is measured: " + deeper.substr(0, 400));
+        // Bytes.
+        const auto bytes = server.send(std::string(1024 * 1024 + 5, ' '));
+        expect(
+            contains(bytes, R"("code":-32003)") &&
+                contains(data(bytes), R"("limit":"requestBytes","value":1048576,"actual":1048581)"),
+            "an oversized request is refused by name with its size: " + bytes);
+        expect(!contains(values + deep + bytes, "-32700"), "no limit answers the parse error code");
+        // A request at the bound still parses, and the session keeps working.
+        expect(contains(server.call("query", R"({"kind":"project"})"), R"("isError":false)"),
+               "the session answers after the refusals");
+
+        // Data files: count, size, values and depth.
+        const auto file = [&](const std::string& name, const std::string& text) {
+            std::ofstream(folder / name, std::ios::binary) << text;
+            return R"({"fromFile":")" + (folder / name).generic_string() + R"("})";
+        };
+        const auto small = file("small.json", R"("Named from a file")");
+        std::string many;
+        for (int index = 0; index < 17; ++index)
+            many += std::string(index ? "," : "") +
+                    R"({"op":"bloom.project.set-name","args":{"name":)" + small + "}}";
+        const auto files =
+            server.call("transact", R"({"expectedRevision":0,"operations":[)" + many + "]}");
+        expect(contains(files, R"("code":-32009)") &&
+                   contains(data(files), R"("limit":"dataFilesPerCall","value":16,"actual":17)"),
+               "a seventeenth data file is refused by name: " + files);
+        const auto readFile = [&](const std::string& reference) {
+            return server.call(
+                "transact", R"({"expectedRevision":0,"operations":[{"op":"bloom.project.set-name",)"
+                            R"("args":{"name":)" +
+                                reference + "}}]}");
+        };
+        const auto big = readFile(file("big.json", "[" + std::string(16 * 1024 * 1024, ' ') + "]"));
+        expect(contains(big, R"("code":-32010)") &&
+                   contains(data(big),
+                            R"("limit":"dataFileBytes","value":16777216,"actual":16777218)"),
+               "a data file over 16 MiB is refused by name with its size: " + big);
+        std::string zeros = "[";
+        for (int index = 0; index < 2'000'001; ++index)
+            zeros += index ? ",0" : "0";
+        zeros += "]";
+        const auto counted = readFile(file("values.json", zeros));
+        expect(contains(counted, R"("code":-32011)") &&
+                   contains(data(counted),
+                            R"("limit":"dataFileValues","value":2000000,"actual":2000002)"),
+               "a data file over 2,000,000 values is refused with the count: " + counted);
+        const auto nested =
+            readFile(file("deep.json", std::string(18, '[') + std::string(18, ']')));
+        expect(contains(nested, R"("code":-32012)") &&
+                   contains(data(nested), R"("limit":"dataFileDepth","value":16,"actual":17)"),
+               "a data file 17 levels deep is refused by name: " + nested);
+    }
+    {
+        // A transaction that creates more ids than transactOutputs answers in the summary form,
+        // and compileCheck false skips the compile check.
+        Headless server;
+        std::ofstream times(folder / "times.json");
+        std::ofstream values(folder / "values.json");
+        times << '[';
+        values << '[';
+        for (int key = 0; key < 12000; ++key) {
+            times << (key ? "," : "") << '[' << key << ",10000]";
+            values << (key ? "," : "") << (key % 2 ? "0.25" : "0.75");
+        }
+        times << ']';
+        values << ']';
+        times.close();
+        values.close();
+        auto result = server.call(
+            "transact", R"({"expectedRevision":0,"operations":[{"op":"bloom.layer.add-solid",)"
+                        R"("args":{"composition":1,"name":"Wash","color":[1,1,1,1]}}]})");
+        expect(contains(result, R"("isError":false)"), "the solid applies: " + result);
+        const auto keysCall = [&](const std::string& extra) {
+            return server.call(
+                "transact", R"({"expectedRevision":)" + revisionOf(server) + extra +
+                                R"(,"operations":[{"op":"bloom.animation.set-key-columns","args":{)"
+                                R"("composition":1,"parameter":{"layer":"Wash","role":"opacity"},)"
+                                R"("replace":true,"times":{"fromFile":")" +
+                                (folder / "times.json").generic_string() +
+                                R"("},"values":{"fromFile":")" +
+                                (folder / "values.json").generic_string() + R"("}}}]})");
+        };
+        result = keysCall("");
+        expect(contains(result, R"("isError":false)") && contains(result, "outputSummary") &&
+                   !contains(result, R"("outputs":)") &&
+                   contains(result, R"("outputsSummarized":{"name":"transactOutputs",)"
+                                    R"("value":10000,"actual":120)") &&
+                   contains(result, R"("compileChecked":true)"),
+               "12,000 created ids answer in the summary form: " + result.substr(0, 600));
+        result = keysCall(R"(,"compileCheck":false)");
+        expect(contains(result, R"("isError":false)") &&
+                   contains(result, R"("compileChecked":false)") &&
+                   contains(result, R"("compileFailures":null)") &&
+                   contains(result, R"("compileWarnings":null)"),
+               "compileCheck false skips the compile check: " + result.substr(0, 600));
+        // The events tool keeps a large event's count, not its 12,000 ids.
+        const auto events = server.call("events", R"({"sinceRevision":0})");
+        expect(contains(events, R"("outputCount":120)") &&
+                   contains(events, R"("outputsOmitted":true)") &&
+                   contains(events, R"("truncated":false)"),
+               "a large event keeps its count: " + events.substr(0, 600));
+    }
+    {
+        // A response over the bound: a query is refused by name with the size; a transaction
+        // that applied still answers, compact.
+        auto limits = mcp::kMcpMessageLimits;
+        limits.responseBytes = 24 * 1024;
+        Headless server({}, {}, {}, limits);
+        std::string solids;
+        for (int index = 0; index < 120; ++index)
+            solids += std::string(index ? "," : "") +
+                      R"({"op":"bloom.layer.add-solid","args":{"composition":1,"name":"S)" +
+                      std::to_string(index) + R"(","color":[1,0,0,1]}})";
+        const auto applied =
+            server.call("transact", R"({"expectedRevision":0,"operations":[)" + solids + "]}");
+        expect(contains(applied, R"("isError":false)") &&
+                   contains(applied, R"(\"responseCompacted\":true)") &&
+                   contains(applied, "outputSummary") && applied.size() <= limits.responseBytes,
+               "an applied transaction over the response bound answers compact: " +
+                   applied.substr(0, 600));
+        expect(contains(server.call("query", R"({"kind":"project"})"), R"("revision":1)"),
+               "the compact answer's transaction applied");
+        const auto layers = server.call("query", R"({"kind":"layers","composition":1})");
+        expect(contains(layers, R"("code":-32006)") &&
+                   contains(data(layers), R"("limit":"responseBytes","value":24576,"actual":)"),
+               "a read over the response bound is refused by name with its size: " +
+                   layers.substr(0, 600));
+    }
+    {
+        // The desktop host advertises the commit bounds; a transaction over the work bound is
+        // refused before it is queued, naming the bound and the actual work.
+        Live server({});
+        auto protocol = server.core->openSession();
+        const auto initialized =
+            server.core
+                ->handle(*protocol,
+                         R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{)"
+                         R"("protocolVersion":"2025-11-25","capabilities":{},)"
+                         R"("clientInfo":{"name":"limits","version":"1"}}})",
+                         {})
+                .response.value_or("");
+        expect(contains(initialized, R"("commitQueue":16)") &&
+                   contains(initialized, R"("commitDeadlineMs":30000)") &&
+                   contains(initialized, R"("commitWork":1000000)"),
+               "the desktop host advertises its commit bounds: " + initialized);
+        std::ofstream times(folder / "work-times.json");
+        std::ofstream values(folder / "work-values.json");
+        times << '[';
+        values << '[';
+        for (int key = 0; key < 1'000'001; ++key) {
+            times << (key ? "," : "") << key;
+            values << (key ? ",0" : "0");
+        }
+        times << ']';
+        values << ']';
+        times.close();
+        values.close();
+        const auto refused = server.call(
+            "transact",
+            R"({"expectedRevision":0,"operations":[{"op":"bloom.animation.set-key-columns",)"
+            R"("args":{"composition":1,"parameter":1,"times":{"fromFile":")" +
+                (folder / "work-times.json").generic_string() + R"("},"values":{"fromFile":")" +
+                (folder / "work-values.json").generic_string() + R"("}}}]})");
+        expect(contains(refused, "bloom.mcp.commit-too-large") &&
+                   contains(refused, R"("limit":{"name":"commitWork","value":1000000,)"
+                                     R"("actual":1000001,"unit":"work units"})"),
+               "a transaction over the work bound names it: " + refused.substr(0, 600));
+    }
+}
+
 void stdioStopsWhileInputIdle() {
     Headless world;
     // Static: a reader left blocked on idle input outlives serveStdio() and ends when released.
@@ -2835,6 +3067,7 @@ int main() {
         parityTools();
         inspectionQueries();
         stdioStopsWhileInputIdle();
+        requestLimits();
     } catch (const std::exception& error) {
         std::cerr << "FAILED: " << error.what() << '\n';
         return 1;

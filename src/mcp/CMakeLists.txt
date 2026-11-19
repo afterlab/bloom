@@ -117,6 +117,17 @@ if(BUILD_TESTING)
         LABELS unit mcp
         TIMEOUT 120
     )
+    # #745: the JSON layer's memory cap, exact value and depth counts, and the node reference's
+    # values written straight into a response (equal to parsing the scripting text).
+    add_executable(bloom_mcp_json_values_test tests/json_values_tests.cpp)
+    target_include_directories(bloom_mcp_json_values_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(bloom_mcp_json_values_test PRIVATE bloom_mcp yyjson::yyjson)
+    bloom_enable_warnings(bloom_mcp_json_values_test)
+    bloom_add_test(
+        NAME bloom.mcp.json-values
+        COMMAND bloom_mcp_json_values_test
+        LABELS unit mcp
+    )
     add_executable(bloom_mcp_http_parser_test tests/http_parser_tests.cpp)
     target_link_libraries(bloom_mcp_http_parser_test PRIVATE bloom_mcp)
     bloom_enable_warnings(bloom_mcp_http_parser_test)

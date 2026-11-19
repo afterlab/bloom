@@ -4,11 +4,15 @@
 // main: pump, drain one commit per slice, pump the queue.
 //
 // usage: bloom_mcp_http_test_host --port <n> --folder <dir> [--header-timeout-ms <n>]
+//        [--connections <n>]
 // Prints "READY <port>" or "REFUSED <reason>", then follows commands on stdin, one per line:
-// start, stop, regenerate, await-connections <n>, quit (end of input also quits). The token is in
-// <dir>/mcp/token. "DONE <line>" answers each one once it has taken effect: regenerate once the
-// new token is in force (or the attempt failed), await-connections once exactly <n> HTTP
-// connections are open, so the test waits on the server's state rather than on a delay.
+// start, stop, regenerate, await-connections <n>, hold-commits, release-commits,
+// await-requests <n>, quit (end of input also quits). The token is in <dir>/mcp/token.
+// "DONE <line>" answers each one once it has taken effect: regenerate once the new token is in
+// force (or the attempt failed), await-connections once exactly <n> HTTP connections are open,
+// await-requests once exactly <n> requests are executing or waiting for a worker, so the test
+// waits on the server's state rather than on a delay. hold-commits stops publishing commits (a
+// transact then keeps its request worker busy) until release-commits.
 #include "fixed_memory_budget.hpp"
 #include <bloom/host/export_presets.hpp>
 #include <bloom/host/export_queue.hpp>
@@ -56,6 +60,8 @@ int main(int argc, char** argv) {
             folder = value;
         else if (flag == "--header-timeout-ms")
             limits.http.headerTimeout = std::chrono::milliseconds(std::stoul(value));
+        else if (flag == "--connections")
+            limits.connections = std::stoul(value);
     }
     if (port == 0 || folder.empty()) {
         std::cerr << "usage: bloom_mcp_http_test_host --port <n> --folder <dir>\n";
@@ -178,10 +184,12 @@ int main(int argc, char** argv) {
             commands.closed = true;
         });
         const mcp::testing::McpServerServiceDriver driver(service);
+        bool holdCommits = false;
         const auto turn = [&] {
             service.pump();
             queue->pump();
-            static_cast<void>(live.drainOne(committer));
+            if (!holdCommits)
+                static_cast<void>(live.drainOne(committer));
             std::this_thread::sleep_for(1ms);
         };
         bool quit = exitCode != 0;
@@ -211,6 +219,14 @@ int main(int argc, char** argv) {
                 } else if (line.starts_with("await-connections ")) {
                     const auto wanted = std::stoul(line.substr(line.find(' ') + 1));
                     while (driver.openConnections() != wanted)
+                        turn();
+                } else if (line == "hold-commits") {
+                    holdCommits = true;
+                } else if (line == "release-commits") {
+                    holdCommits = false;
+                } else if (line.starts_with("await-requests ")) {
+                    const auto wanted = std::stoul(line.substr(line.find(' ') + 1));
+                    while (driver.requestsInProgress() != wanted)
                         turn();
                 }
                 std::cout << "DONE " << line << std::endl;

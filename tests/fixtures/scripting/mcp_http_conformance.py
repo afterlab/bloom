@@ -351,6 +351,95 @@ class Conformance(unittest.TestCase):
                 client.request('DELETE')
 
 
+class Limits(unittest.TestCase):
+    """#745, #741: every request limit is advertised, and each refusal names the limit, its value
+    and the actual count with its own code."""
+
+    def setUp(self):
+        # More connections than the default 16, so twenty requests can be in progress at once.
+        self.host = Host(extra=('--connections', '32'))
+        assert self.host.status.startswith('READY'), self.host.status
+
+    def tearDown(self):
+        self.host.command('release-commits')
+        self.host.close()
+
+    def test_limits_are_advertised(self):
+        limits = Client(self.host).initialize()['result']['capabilities']['experimental'][
+            'bloom']['limits']
+        expected = {'requestBytes': 1048576, 'responseBytes': 4194304, 'jsonValues': 65536,
+                    'jsonDepth': 32, 'jsonMemoryBytes': 33554432, 'dataFilesPerCall': 16,
+                    'dataFileBytes': 16777216, 'dataFileValues': 2000000, 'dataFileDepth': 16,
+                    'inFlightPerClient': 4, 'pendingMessages': 16, 'commitQueue': 16,
+                    'commitDeadlineMs': 30000, 'commitWork': 1000000, 'transactOutputs': 10000}
+        for name, value in expected.items():
+            self.assertEqual(limits.get(name), value, name)
+
+    def test_oversized_body_names_the_limit(self):
+        status, _, body = Client(self.host).request(body=b' ' * (1024 * 1024 + 1))
+        self.assertEqual(status, 413)
+        error = json.loads(body)['error']
+        self.assertEqual(error['code'], -32003)
+        self.assertEqual(error['data'], {'code': 'bloom.mcp.limit.request-bytes',
+                                         'limit': 'requestBytes', 'value': 1048576,
+                                         'actual': 1048577, 'unit': 'bytes'})
+        self.assertIn('set-key-columns', error['message'])
+        self.assertIn('fromFile', error['message'])
+
+    def test_in_flight_and_pending_refusals(self):
+        import threading
+        clients = [Client(self.host) for _ in range(6)]
+        for client in clients:
+            client.initialize()
+        revision = json.loads(clients[0].call(2, 'query', {'kind': 'project'})[2])[
+            'result']['structuredContent']['revision']
+        # Commits wait while the owner holds them, so four transacts keep the four workers busy.
+        self.host.command('hold-commits')
+        answers = []
+        threads = []
+
+        def send(client, request_id, tool, arguments):
+            answers.append(client.call(request_id, tool, arguments))
+
+        for index in range(4):
+            arguments = {'expectedRevision': revision, 'operations': [
+                {'op': 'bloom.project.set-name', 'args': {'name': f'Held {index}'}}]}
+            threads.append(threading.Thread(target=send,
+                                            args=(clients[0], 10 + index, 'transact', arguments)))
+        for thread in threads:
+            thread.start()
+        self.host.command('await-requests 4')
+        status, headers, body = clients[0].call(20, 'query', {'kind': 'project'})
+        self.assertEqual((status, headers.get('retry-after')), (503, '1'))
+        error = json.loads(body)
+        self.assertEqual(error['id'], 20)
+        self.assertEqual(error['error']['code'], -32008)
+        self.assertEqual(error['error']['data']['limit'], 'inFlightPerClient')
+        self.assertEqual((error['error']['data']['value'], error['error']['data']['actual']),
+                         (4, 5))
+        # Sixteen more wait for a worker; the seventeenth is refused by the pending bound.
+        waiting = []
+        for client in clients[1:5]:
+            for index in range(4):
+                waiting.append(threading.Thread(
+                    target=send, args=(client, 30 + index, 'query', {'kind': 'project'})))
+        for thread in waiting:
+            thread.start()
+        self.host.command('await-requests 20')
+        status, _, body = clients[5].call(40, 'query', {'kind': 'project'})
+        self.assertEqual(status, 503)
+        error = json.loads(body)['error']
+        self.assertEqual(error['code'], -32000)
+        self.assertEqual((error['data']['limit'], error['data']['value'], error['data']['actual']),
+                         ('pendingMessages', 16, 17))
+        self.host.command('release-commits')
+        for thread in threads + waiting:
+            thread.join(timeout=60)
+        self.assertEqual(len(answers), 20)
+        self.assertTrue(all(status == 200 for status, _, _ in answers),
+                        [status for status, _, _ in answers])
+
+
 class Lifecycle(unittest.TestCase):
     def test_port_in_use_and_regenerate(self):
         first = Host()
