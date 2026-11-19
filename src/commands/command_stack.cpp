@@ -528,16 +528,32 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
         return result;
     }
 
+    // #746: a commit of the open group's origin joins the group's entry when that entry is still
+    // the newest and nothing has happened since; the merged entry spans from the state before the
+    // group's first commit to this one, and the state in between leaves the history.
+    const bool groupCommit = group_.has_value() && transaction.origin() == group_->origin;
+    bool merge = groupCommit && group_->entryOpen && cursor_ > 0 && cursor_ == history_.size() &&
+                 history_.back().after.revision() == before.revision() &&
+                 group_->entryAfter == before.revision();
     // Preflight the charge of the new undo step before publication. A single step too large for
     // the policy is refused atomically; older steps are retired only when the new one fits.
-    HistoryCharge oneStep;
-    oneStep.add(before);
-    oneStep.add(std::as_const(draft));
-    work_.chargedSnapshotsVisited += 2;
     // Undo/redo publish a fresh root shell, so reserve enough for either payload direction.
     // A small rename can still proceed when its large immutable payload is shared by both.
-    if (std::max(oneStep.retainedBytes(before, false),
-                 oneStep.retainedBytes(std::as_const(draft), false)) > limits_.maxChargedBytes) {
+    const auto stepTooLarge = [&](const document::Snapshot& from) {
+        HistoryCharge oneStep;
+        oneStep.add(from);
+        oneStep.add(std::as_const(draft));
+        work_.chargedSnapshotsVisited += 2;
+        return std::max(oneStep.retainedBytes(from, false),
+                        oneStep.retainedBytes(std::as_const(draft), false)) >
+               limits_.maxChargedBytes;
+    };
+    // A merged step too large for the policy is not refused: the group's entry is sealed and this
+    // commit starts a new one, as an ordinary step would.
+    if (merge && stepTooLarge(history_.back().before))
+        merge = false;
+    const document::Snapshot entryBefore = merge ? history_.back().before : before;
+    if (!merge && stepTooLarge(before)) {
         // Keep malformed-draft diagnostics ahead of resource policy, as Document::commit does.
         // Ordinary fits still pass through commit's single full validation.
         ++work_.overBudgetValidations;
@@ -576,24 +592,35 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
         projected.remove(history_[index].after);
         work_.chargedSnapshotsVisited += 2;
     }
-    projected.add(before);
+    // A merge replaces the group's entry: its two states leave the charge before the merged ones
+    // join it, so the history never holds the state in between.
+    if (merge) {
+        projected.remove(history_.back().before);
+        projected.remove(history_.back().after);
+        work_.chargedSnapshotsVisited += 2;
+    }
+    projected.add(entryBefore);
     projected.add(std::as_const(draft));
     work_.chargedSnapshotsVisited += 2;
     std::size_t oldestDropped = 0;
-    auto projectedEntries = cursor_ + 1;
+    // The entries that may be retired: every one before the new step (or before the group's entry
+    // it replaces).
+    const std::size_t retirable = merge ? cursor_ - 1 : cursor_;
+    auto projectedEntries = retirable + 1;
     const auto worstRetainedBytes = [&] {
         // Every retained state can become current through undo/redo. Restores share payloads
         // but allocate a new root; check every reachable payload set before publishing.
         auto worst = projected.retainedBytes(std::as_const(draft), false);
-        worst = std::max(worst, projected.retainedBytes(before, false));
-        for (std::size_t index = oldestDropped; index < cursor_; ++index) {
+        worst = std::max(worst, projected.retainedBytes(entryBefore, false));
+        for (std::size_t index = oldestDropped; index < retirable; ++index) {
             worst = std::max(worst, projected.retainedBytes(history_[index].before, false));
             worst = std::max(worst, projected.retainedBytes(history_[index].after, false));
         }
         return worst;
     };
-    while (projectedEntries > limits_.maxEntries ||
-           worstRetainedBytes() > limits_.maxChargedBytes) {
+    // The step alone fits (checked above), so retiring every older entry always ends the loop.
+    while (oldestDropped < retirable && (projectedEntries > limits_.maxEntries ||
+                                         worstRetainedBytes() > limits_.maxChargedBytes)) {
         projected.remove(history_[oldestDropped].before);
         projected.remove(history_[oldestDropped].after);
         ++oldestDropped;
@@ -625,13 +652,29 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
     if (renderAffecting && renderScopeKnown)
         result.affectedComposition = renderScope;
     result.historyEntriesDropped = oldestDropped;
-    HistoryEntry staged{std::string(transaction.label()),
-                        before,
-                        before,
+    result.historyGrouped = groupCommit;
+    HistoryEntry staged{groupCommit ? group_->label : std::string(transaction.label()),
+                        entryBefore,
+                        entryBefore,
                         renderAffecting,
                         result.affectedTimes,
                         result.layerIdentityRemaps,
                         result.affectedComposition};
+    if (merge) {
+        // The merged entry restores across every commit of the group, so it publishes the
+        // conservative whole render of what any of them touched on undo and redo: no finite
+        // footprint or remaps, and a composition only when every commit was confined to it.
+        const auto& previous = history_.back();
+        staged.renderAffecting = previous.renderAffecting || renderAffecting;
+        staged.affectedTimes.reset();
+        staged.layerIdentityRemaps.reset();
+        if (!previous.renderAffecting)
+            staged.affectedComposition = result.affectedComposition;
+        else if (renderAffecting && previous.affectedComposition != result.affectedComposition)
+            staged.affectedComposition.reset();
+        else
+            staged.affectedComposition = previous.affectedComposition;
+    }
     history_.reserve(history_.size() + 1);
     static_assert(std::is_nothrow_move_constructible_v<HistoryEntry> &&
                   std::is_nothrow_move_assignable_v<HistoryEntry>);
@@ -650,10 +693,25 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
     stagedCharge->rekeyPublishedDraft(std::as_const(draft), after);
     result.afterRevision = after.revision();
     staged.after = after;
-    history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(cursor_), history_.end());
-    history_.push_back(std::move(staged));
+    if (merge) {
+        history_.back() = std::move(staged);
+    } else {
+        history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(cursor_), history_.end());
+        history_.push_back(std::move(staged));
+    }
     history_.erase(history_.begin(), history_.begin() + static_cast<std::ptrdiff_t>(oldestDropped));
     cursor_ = history_.size();
+    if (groupCommit) {
+        ++group_->stats.commits;
+        if (!merge)
+            ++group_->stats.entries;
+        group_->entryOpen = true;
+        group_->entryAfter = after.revision();
+    } else if (group_.has_value() && group_->entryOpen) {
+        // The artist's own edit inside the session: it is its own step, after the group's.
+        group_->entryOpen = false;
+        ++group_->stats.interruptions;
+    }
     historyChargedBytes_ = currentHistoryCharge;
     historyCharge_.swap(stagedCharge);
     work_.historyEntriesRetired += oldestDropped;
@@ -667,7 +725,25 @@ CommandResult CommandStack::undo(const CommandOrigin origin) {
     auto result = undoStep();
     result.origin = origin;
     currentOrigin_ = CommandOrigin::User;
+    if (result.changed() && group_.has_value() && group_->entryOpen) {
+        group_->entryOpen = false;
+        if (origin != group_->origin)
+            ++group_->stats.interruptions;
+    }
     return result;
+}
+
+void CommandStack::beginGroup(std::string label, const CommandOrigin origin) {
+    static_cast<void>(endGroup());
+    group_ = OpenGroup{std::move(label), origin, false, {}, {}};
+}
+
+HistoryGroupStats CommandStack::endGroup() {
+    if (!group_.has_value())
+        return {};
+    const auto stats = group_->stats;
+    group_.reset();
+    return stats;
 }
 
 CommandResult CommandStack::undoStep() {
@@ -716,6 +792,11 @@ CommandResult CommandStack::redo(const CommandOrigin origin) {
     auto result = redoStep();
     result.origin = origin;
     currentOrigin_ = CommandOrigin::User;
+    if (result.changed() && group_.has_value() && group_->entryOpen) {
+        group_->entryOpen = false;
+        if (origin != group_->origin)
+            ++group_->stats.interruptions;
+    }
     return result;
 }
 
@@ -787,6 +868,8 @@ void CommandStack::clear() {
     }
     history_.clear();
     cursor_ = 0;
+    if (group_.has_value())
+        group_->entryOpen = false;
     historyChargedBytes_ = 0;
     historyCharge_->clear();
     const auto snapshot = document_.snapshot();

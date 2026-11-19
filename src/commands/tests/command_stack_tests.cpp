@@ -880,6 +880,105 @@ void testBoundedUndoHistoryAndByteAccounting(TestContext& test) {
                 "an oversized single undo step rejects before publication without losing truth");
 }
 
+// #746: an agent session's commits group into one undo step labelled with the session. The merged
+// entry keeps only the state before the session and the newest state, so the history holds no more
+// than one step for the whole session; the artist's own edit seals the group's entry and stays its
+// own step, so nothing is folded into the agent's step or lost.
+void testAgentSessionGroupsIntoOneUndoStep(TestContext& test) {
+    const auto rename = [](CommandStack& stack, Document& document, std::string name,
+                           const CommandOrigin origin) {
+        Transaction transaction(origin == CommandOrigin::Agent ? "Agent edit" : "Rename",
+                                document.snapshot().revision());
+        transaction.setOrigin(origin);
+        transaction.emplace<SetProjectName>(std::move(name));
+        return stack.execute(std::move(transaction));
+    };
+    Document document(makeProject());
+    CommandStack stack(document);
+    test.expect(rename(stack, document, "Before", CommandOrigin::User).changed(),
+                "the artist's edit before the session is its own step");
+    const auto chargeOfOneStep = stack.historyChargedBytes();
+
+    stack.beginGroup("Agent session \u201cShot 12\u201d", CommandOrigin::Agent);
+    for (int index = 0; index < 50; ++index) {
+        const auto result =
+            rename(stack, document, "Agent " + std::to_string(index), CommandOrigin::Agent);
+        test.expect(result.changed() && result.historyGrouped && result.label == "Agent edit",
+                    "every session commit lands, grouped, with its own label in its result");
+    }
+    test.expect(stack.size() == 2 && stack.undoLabel() == "Agent session \u201cShot 12\u201d",
+                "fifty commits make one undo step labelled with the session");
+    test.expect(stack.historyChargedBytes() <= 2 * chargeOfOneStep,
+                "the grouped step holds the states before and after the session, not the fifty");
+    test.expect(stack.groupStats() ==
+                    HistoryGroupStats{.commits = 50, .entries = 1, .interruptions = 0},
+                "the group counts its commits");
+
+    // The artist's own edit inside the session seals the group's entry and is its own step.
+    test.expect(rename(stack, document, "Artist", CommandOrigin::User).changed() &&
+                    stack.groupStats().interruptions == 1,
+                "the artist's edit applies inside the session and seals the group's step");
+    test.expect(stack.size() == 3 && stack.undoLabel() == "Rename",
+                "the artist's edit is a step of its own, after the session's");
+    test.expect(rename(stack, document, "Agent again", CommandOrigin::Agent).historyGrouped &&
+                    stack.size() == 4 && stack.undoLabel() == "Agent session \u201cShot 12\u201d",
+                "the session's next commit starts a new group step after the artist's");
+    const auto stats = stack.endGroup();
+    test.expect(stats == HistoryGroupStats{.commits = 51, .entries = 2, .interruptions = 1},
+                "ending the group reports its commits, steps and the interruption");
+    test.expect(!stack.groupOpen() &&
+                    !rename(stack, document, "After", CommandOrigin::Agent).historyGrouped &&
+                    stack.size() == 5,
+                "after the session every commit is its own step again");
+
+    // Undo walks back exactly: the commit after the session, the second group step, the artist's
+    // edit, then the whole first group step at once.
+    test.expect(stack.undo().changed() && document.snapshot().project().name() == "Agent again",
+                "undo the edit after the session");
+    test.expect(stack.undo().changed() && document.snapshot().project().name() == "Artist",
+                "undo the session's second step restores the artist's edit");
+    test.expect(stack.undo().changed() && document.snapshot().project().name() == "Agent 49",
+                "undo the artist's edit restores the session's newest state");
+    test.expect(stack.undo().changed() && document.snapshot().project().name() == "Before",
+                "one undo takes back all fifty session commits");
+    test.expect(stack.redo().changed() && document.snapshot().project().name() == "Agent 49",
+                "redo brings the whole session step back");
+
+    // An agent's undo inside a session seals the entry too: the next commit is a new step.
+    Document other(makeProject());
+    CommandStack otherStack(other);
+    otherStack.beginGroup("Agent session", CommandOrigin::Agent);
+    static_cast<void>(rename(otherStack, other, "One", CommandOrigin::Agent));
+    static_cast<void>(rename(otherStack, other, "Two", CommandOrigin::Agent));
+    test.expect(otherStack.undo(CommandOrigin::Agent).changed() &&
+                    other.snapshot().project().name() == "Original Project",
+                "an agent's undo inside the session takes back the session so far");
+    static_cast<void>(rename(otherStack, other, "Three", CommandOrigin::Agent));
+    test.expect(otherStack.size() == 1 && !otherStack.canRedo() &&
+                    otherStack.groupStats().entries == 2 &&
+                    otherStack.groupStats().interruptions == 0,
+                "the next commit starts a new group step and replaces the redo branch");
+
+    // Grouping keeps the history bounded: a two-entry history never retires the group's step to
+    // make room for it.
+    Document bounded(makeProject());
+    CommandStack boundedStack(bounded, {.maxEntries = 2, .maxChargedBytes = 512ULL * 1024 * 1024});
+    static_cast<void>(rename(boundedStack, bounded, "A", CommandOrigin::User));
+    static_cast<void>(rename(boundedStack, bounded, "B", CommandOrigin::User));
+    boundedStack.beginGroup("Agent session", CommandOrigin::Agent);
+    const auto firstGrouped = rename(boundedStack, bounded, "C", CommandOrigin::Agent);
+    std::size_t retiredLater = 0;
+    for (int index = 0; index < 10; ++index)
+        retiredLater +=
+            rename(boundedStack, bounded, "D" + std::to_string(index), CommandOrigin::Agent)
+                .historyEntriesDropped;
+    test.expect(firstGrouped.historyEntriesDropped == 1 && retiredLater == 0 &&
+                    boundedStack.size() == 2,
+                "only the group's first commit retires a step; merging retires nothing");
+    test.expect(boundedStack.undo().changed() && bounded.snapshot().project().name() == "B",
+                "the bounded history still undoes the session in one step");
+}
+
 void testSharedPayloadRetentionAndReplacementPressure(TestContext& test) {
     constexpr std::size_t largeBytes = 2 * 1024 * 1024;
     auto project = makeProject();
@@ -994,6 +1093,7 @@ int main() {
         bloom::commands::test::testExhaustionSurvivesUndoAndRedo(test);
         bloom::commands::test::testBoundedUndoHistoryAndByteAccounting(test);
         bloom::commands::test::testSharedPayloadRetentionAndReplacementPressure(test);
+        bloom::commands::test::testAgentSessionGroupsIntoOneUndoStep(test);
     } catch (const std::exception& error) {
         test.fail(std::string("unexpected test exception: ") + error.what());
     }

@@ -33,6 +33,19 @@ struct CommandEvent final {
 using CommandObserverId = std::uint64_t;
 using CommandObserver = std::function<void(const CommandEvent&)>;
 
+// #746: what an open history group has gathered (CommandStack::beginGroup).
+struct HistoryGroupStats final {
+    // Successful changing executes of the group's origin.
+    std::uint64_t commits = 0;
+    // Undo entries the group made: 1 unless something interrupted it.
+    std::uint64_t entries = 0;
+    // Times another origin's edit, undo or redo sealed the group's entry (the artist's own edit
+    // during an agent session); the group's next commit then started a new entry.
+    std::uint64_t interruptions = 0;
+
+    friend bool operator==(const HistoryGroupStats&, const HistoryGroupStats&) = default;
+};
+
 class CommandStack final {
   public:
     struct HistoryLimits final {
@@ -89,6 +102,23 @@ class CommandStack final {
     // new text the author emptied) undoes and then discards, so Redo can never bring it back.
     void discardRedo();
 
+    // #746: history grouping for an agent session. While a group is open, each successful execute
+    // whose transaction origin is `origin` merges into the group's newest undo entry, labelled
+    // `label`, so the whole session undoes in one step. The merged entry keeps only the state from
+    // before the group's first commit and the newest state, never the ones in between, so a group
+    // holds no more history than one ordinary step and merging does no more work than recording a
+    // step does. Another origin's edit (the artist's own), any undo or redo, or a merged state too
+    // large for the history charge seals the entry; the group's next commit starts a new entry
+    // with the same label, after the artist's step, so nothing the artist did is folded into the
+    // agent's step or lost. Beginning a group while one is open replaces it (sealing the entry).
+    void beginGroup(std::string label, CommandOrigin origin);
+    // Seals and closes the open group and returns what it gathered (zeros when none was open).
+    HistoryGroupStats endGroup();
+    [[nodiscard]] bool groupOpen() const noexcept { return group_.has_value(); }
+    [[nodiscard]] HistoryGroupStats groupStats() const noexcept {
+        return group_ ? group_->stats : HistoryGroupStats{};
+    }
+
     [[nodiscard]] CommandObserverId addObserver(CommandObserver observer);
     void removeObserver(CommandObserverId observerId) noexcept;
 
@@ -113,6 +143,15 @@ class CommandStack final {
 
     [[nodiscard]] std::optional<CommandResult> staleResult(CommandAction action, std::string label,
                                                            const document::Snapshot& current) const;
+    struct OpenGroup final {
+        std::string label;
+        CommandOrigin origin = CommandOrigin::Agent;
+        // The newest history entry is the group's and the next group commit may merge into it.
+        bool entryOpen = false;
+        document::Revision entryAfter;
+        HistoryGroupStats stats;
+    };
+
     [[nodiscard]] CommandResult executeStep(Transaction&& transaction);
     [[nodiscard]] CommandResult undoStep();
     [[nodiscard]] CommandResult redoStep();
@@ -126,6 +165,7 @@ class CommandStack final {
     Work work_;
     document::Revision trackedRevision_;
     CommandOrigin currentOrigin_ = CommandOrigin::User;
+    std::optional<OpenGroup> group_;
     document::Document& document_;
     mutable std::mutex observerMutex_;
     std::vector<std::pair<CommandObserverId, CommandObserver>> observers_;

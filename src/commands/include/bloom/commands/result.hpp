@@ -250,6 +250,9 @@ struct CommandResult {
     // Oldest undo entries retired to keep the configured history entry/charged-byte bounds.
     // Redo-branch replacement is ordinary branch semantics and is not included here.
     std::size_t historyEntriesDropped = 0;
+    // #746: the step joined an open history group (CommandStack::beginGroup): its undo entry is
+    // the group's, labelled with the group's label, not one of its own.
+    bool historyGrouped = false;
 
     [[nodiscard]] bool succeeded() const noexcept {
         return status == CommandStatus::Succeeded || status == CommandStatus::NoChange;

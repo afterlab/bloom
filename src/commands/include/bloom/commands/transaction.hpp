@@ -40,6 +40,11 @@ class Transaction final {
     [[nodiscard]] std::optional<document::Revision> expectedRevision() const noexcept {
         return expectedRevision_;
     }
+    // #746: re-aims an artist's edit built against a window an agent session held behind at the
+    // document's newest revision (CompositionSession::runTransaction); nothing else re-aims one.
+    void setExpectedRevision(const std::optional<document::Revision> revision) noexcept {
+        expectedRevision_ = revision;
+    }
     // Who is making this edit. User unless the caller says otherwise (MCP: Agent; scripting
     // sessions: Script). The command result and its event carry it.
     [[nodiscard]] CommandOrigin origin() const noexcept { return origin_; }
