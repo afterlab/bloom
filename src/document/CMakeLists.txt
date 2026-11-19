@@ -167,6 +167,15 @@ if(BUILD_TESTING)
         LABELS unit
     )
 
+    add_executable(bloom_document_shared_records_test tests/shared_records_tests.cpp)
+    target_link_libraries(bloom_document_shared_records_test PRIVATE bloom_document)
+    bloom_enable_warnings(bloom_document_shared_records_test)
+    bloom_add_test(
+        NAME bloom.document.shared-records
+        COMMAND bloom_document_shared_records_test
+        LABELS unit
+    )
+
     add_executable(bloom_document_model_test tests/document_model_tests.cpp)
     target_link_libraries(bloom_document_model_test PRIVATE bloom_document)
     bloom_enable_warnings(bloom_document_model_test)

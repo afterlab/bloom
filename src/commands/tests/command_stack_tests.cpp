@@ -1,9 +1,13 @@
 #include "command_test_support.hpp"
 
+#include <bloom/commands/animation_operations.hpp>
+
 #include <algorithm>
 #include <cstddef>
 #include <limits>
 #include <optional>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace bloom::commands::test {
@@ -1082,6 +1086,171 @@ void testSharedPayloadRetentionAndReplacementPressure(TestContext& test) {
 } // namespace
 } // namespace bloom::commands::test
 
+namespace bloom::commands::test {
+namespace {
+
+// #744: an independent oracle for the undo allowance. Every root, content allocation, record and
+// payload the retained states hold is counted once by identity; whatever the active state holds
+// is not charged (its root only when it is shared with the newest history state).
+[[nodiscard]] std::size_t expectedHistoryCharge(const std::vector<document::Snapshot>& retained,
+                                                const document::Snapshot& active,
+                                                const bool sharedRoot) {
+    std::unordered_map<const void*, std::size_t> chunks;
+    const auto collect = [](const document::Snapshot& state,
+                            std::unordered_map<const void*, std::size_t>& into) {
+        into.emplace(state.stateIdentity(), state.rootByteCharge() + sizeof(document::IdAllocator));
+        for (const auto& composition : state.project().compositions()) {
+            into.emplace(composition.contentIdentity(), composition.contentShellByteCharge());
+            composition.forEachRecord([&](const void* identity, const auto& record) {
+                into.emplace(identity, document::recordByteCharge(record));
+            });
+        }
+        for (const auto& record : state.project().extensionRecords())
+            if (record.payload.storageIdentity() != nullptr)
+                into.emplace(record.payload.storageIdentity(), record.payload.size());
+    };
+    for (const auto& state : retained)
+        collect(state, chunks);
+    std::unordered_map<const void*, std::size_t> current;
+    collect(active, current);
+    if (!sharedRoot)
+        current.erase(active.stateIdentity());
+    std::size_t bytes = 0;
+    for (const auto& [identity, size] : chunks)
+        if (!current.contains(identity))
+            bytes += size;
+    return bytes;
+}
+
+// #744: content is shared per record, so after a bulk key bake every one-key edit charges the undo
+// allowance for what it changed, the history charge matches the oracle through undo, redo, a
+// branch and an agent group, and undo and redo restore every record exactly.
+void testUndoChargesSharedRecordsOnce(TestContext& test) {
+    constexpr std::uint64_t kParameters = 120;
+    constexpr std::size_t kKeysPerParameter = 100;
+    auto project = makeProject();
+    auto* main = project.findComposition(kCompositionId);
+    const auto parameterOf = [](const std::uint64_t index) {
+        return ParameterId::fromRaw(5'000 + index);
+    };
+    for (std::uint64_t index = 0; index < kParameters; ++index)
+        requireFixture(main->parameters().insert(
+                           {parameterOf(index), std::string(document::kRotationParameterSchemaKey),
+                            ConstantValueSource{0.0}}),
+                       "bulk rotation parameter must be accepted");
+    Document document(std::move(project));
+    CommandStack stack(document);
+    std::vector<document::Snapshot> states{document.snapshot()};
+    const auto keysFor = [](const double offset, const std::size_t count) {
+        std::vector<ParameterKey> keys;
+        for (std::size_t frame = 0; frame < count; ++frame)
+            keys.push_back({*core::RationalTime::create(static_cast<std::int64_t>(frame), 24),
+                            offset + static_cast<double>(frame)});
+        return keys;
+    };
+    const auto checkCharge = [&](const std::vector<document::Snapshot>& retained,
+                                 const bool sharedRoot, const char* message) {
+        test.expect(stack.historyChargedBytes() ==
+                        expectedHistoryCharge(retained, document.snapshot(), sharedRoot),
+                    message);
+    };
+
+    // Bulk bake: four transactions of 30 parameters x 100 keys.
+    for (std::uint64_t batch = 0; batch < 4; ++batch) {
+        Transaction transaction("Bake", document.snapshot().revision());
+        for (std::uint64_t index = batch * 30; index < (batch + 1) * 30; ++index)
+            transaction.emplace<SetParameterKeys>(
+                kCompositionId, parameterOf(index),
+                keysFor(static_cast<double>(index), kKeysPerParameter), true);
+        test.expect(stack.execute(std::move(transaction)).changed(), "a bulk bake applies");
+        states.push_back(document.snapshot());
+        checkCharge(states, true, "the charge after a bulk bake matches the oracle");
+    }
+    const auto afterBake = stack.historyChargedBytes();
+    const auto contentCharge =
+        document.snapshot().project().findComposition(kCompositionId)->contentByteCharge();
+
+    // One-key edits: each costs its curve and the content's own allocation, not the composition.
+    constexpr int kEdits = 20;
+    for (int edit = 0; edit < kEdits; ++edit) {
+        Transaction transaction("Key", document.snapshot().revision());
+        transaction.emplace<SetParameterKeys>(
+            kCompositionId, parameterOf(static_cast<std::uint64_t>(edit) * 5),
+            std::vector<ParameterKey>{{*core::RationalTime::create(500 + edit, 24), 1.0 + edit}},
+            false);
+        test.expect(stack.execute(std::move(transaction)).changed(), "a one-key edit applies");
+        states.push_back(document.snapshot());
+        checkCharge(states, true, "the charge after a one-key edit matches the oracle");
+    }
+    const auto perEdit = (stack.historyChargedBytes() - afterBake) / kEdits;
+    test.expect(perEdit * 10 < contentCharge,
+                "a one-key edit charges a small part of the composition, not a copy of it");
+
+    // Undo every step: each restores the exact records of the state before it.
+    const auto sameRecords = [](const document::Composition& left,
+                                const document::Composition& right) {
+        return std::ranges::equal(left.parameters().records(), right.parameters().records()) &&
+               std::ranges::equal(left.animationCurves().records(),
+                                  right.animationCurves().records()) &&
+               std::ranges::equal(left.graph().nodes(), right.graph().nodes()) &&
+               std::ranges::equal(left.graph().edges(), right.graph().edges()) &&
+               std::ranges::equal(left.graph().layerOutputs(), right.graph().layerOutputs()) &&
+               left.animationCurves().keyframeIds().size() ==
+                   right.animationCurves().keyframeIds().size();
+    };
+    for (auto index = states.size() - 1; index > 0; --index) {
+        test.expect(stack.undo().changed(), "undo applies");
+        const auto& now = *document.snapshot().project().findComposition(kCompositionId);
+        const auto& then = *states[index - 1].project().findComposition(kCompositionId);
+        test.expect(sameRecords(now, then) && now.contentIdentity() == then.contentIdentity(),
+                    "undo restores the exact records of the state before the step");
+        checkCharge(states, false, "the charge after undo matches the oracle");
+    }
+    for (std::size_t index = 1; index < states.size(); ++index) {
+        test.expect(stack.redo().changed(), "redo applies");
+        const auto& now = *document.snapshot().project().findComposition(kCompositionId);
+        const auto& then = *states[index].project().findComposition(kCompositionId);
+        test.expect(sameRecords(now, then), "redo restores the exact records of the later state");
+        checkCharge(states, false, "the charge after redo matches the oracle");
+    }
+
+    // Branch: undo three steps and edit; the redone states leave the history and its charge.
+    for (int step = 0; step < 3; ++step)
+        test.expect(stack.undo().changed(), "undo before the branch applies");
+    states.erase(states.end() - 3, states.end());
+    // The branch's step starts from the restored state, a new root sharing the undone-to content.
+    states.push_back(document.snapshot());
+    {
+        Transaction transaction("Branch", document.snapshot().revision());
+        transaction.emplace<SetParameterKeys>(
+            kCompositionId, parameterOf(1),
+            std::vector<ParameterKey>{{*core::RationalTime::create(900, 24), 7.0}}, false);
+        test.expect(stack.execute(std::move(transaction)).changed(), "the branch edit applies");
+        states.push_back(document.snapshot());
+        checkCharge(states, true, "the charge after a branch matches the oracle");
+    }
+
+    // An agent group keeps the state before the group and its newest state.
+    stack.beginGroup("Agent", CommandOrigin::Agent);
+    const auto beforeGroup = states;
+    for (int edit = 0; edit < 5; ++edit) {
+        Transaction transaction("Agent key", document.snapshot().revision());
+        transaction.setOrigin(CommandOrigin::Agent);
+        transaction.emplace<SetParameterKeys>(
+            kCompositionId, parameterOf(static_cast<std::uint64_t>(edit) + 60),
+            std::vector<ParameterKey>{{*core::RationalTime::create(700 + edit, 24), 2.0}}, false);
+        test.expect(stack.execute(std::move(transaction)).historyGrouped, "a group commit lands");
+        auto retained = beforeGroup;
+        retained.push_back(document.snapshot());
+        checkCharge(retained, true, "the charge of a grouped entry matches the oracle");
+    }
+    static_cast<void>(stack.endGroup());
+    test.expect(document.snapshot().project().validate().ok(), "the final project validates");
+}
+
+} // namespace
+} // namespace bloom::commands::test
+
 int main() {
     bloom::commands::test::TestContext test;
     try {
@@ -1099,6 +1268,7 @@ int main() {
         bloom::commands::test::testBoundedUndoHistoryAndByteAccounting(test);
         bloom::commands::test::testSharedPayloadRetentionAndReplacementPressure(test);
         bloom::commands::test::testAgentSessionGroupsIntoOneUndoStep(test);
+        bloom::commands::test::testUndoChargesSharedRecordsOnce(test);
     } catch (const std::exception& error) {
         test.fail(std::string("unexpected test exception: ") + error.what());
     }
