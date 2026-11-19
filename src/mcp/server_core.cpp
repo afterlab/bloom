@@ -458,6 +458,9 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
             out.set(bloom, "facadeVersion", out.text("1.0"));
             out.set(bloom, "headless", out.boolean(state.liveHost() == nullptr));
             out.set(bloom, "requestByteLimit", out.number(state.dependencies.limits.requestBytes));
+            // #744: the most work one transact carries in the desktop application.
+            if (state.liveHost() != nullptr)
+                out.set(bloom, "commitWorkLimit", out.number(scripting::kLiveCommitWorkLimit));
             out.set(experimental, "bloom", bloom);
             out.set(capabilities, "experimental", experimental);
             out.set(result, "capabilities", capabilities);

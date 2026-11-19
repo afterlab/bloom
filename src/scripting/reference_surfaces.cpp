@@ -423,7 +423,10 @@ void addTools(std::vector<ReferenceEntry>& out) {
         "Every operation in `operations` is validated first; if any is invalid, nothing is "
         "applied. They then run in order as one command with one undo entry named `label`. In "
         "the desktop application the edit lands in the artist's undo history and waits for an "
-        "open drag or text edit to finish (up to 30 s). Operation ids and their arguments: "
+        "open drag or text edit to finish (up to 30 s); it is built and checked off Bloom's main "
+        "thread, and one transaction carries at most 1,000,000 units of work (one per "
+        "operation, or one per key, keyframe or edit an operation lists). Operation ids and their "
+        "arguments: "
         "help with no name lists them, help <operation id> describes one, query:operations "
         "returns every schema. Omitted contextual arguments are filled from the editor context "
         "(concept:context).");
@@ -480,7 +483,12 @@ void addTools(std::vector<ReferenceEntry>& out) {
                   "read the message; re-query the ids it names"),
         makeError("bloom.scripting.operation-warning",
                   "an operation applied but skipped part of its work (severity warning)",
-                  "nothing to retry; the message says what was skipped")};
+                  "nothing to retry; the message says what was skipped"),
+        makeError("bloom.mcp.commit-too-large",
+                  "in the desktop application, the transaction carries more than 1,000,000 units "
+                  "of work (one per operation, or one per key, keyframe or edit an operation "
+                  "lists)",
+                  "split it into several transactions")};
     addExamples(
         transact,
         {{"mcp",

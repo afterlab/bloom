@@ -228,9 +228,9 @@ int main() {
 
     std::set<std::string_view> codes;
     for (std::uint8_t code = 0;
-         code <= static_cast<std::uint8_t>(mcp::McpToolErrorCode::PreflightBlocked); ++code)
+         code <= static_cast<std::uint8_t>(mcp::McpToolErrorCode::CommitTooLarge); ++code)
         codes.insert(mcp::toolErrorCode(static_cast<mcp::McpToolErrorCode>(code)));
-    failures += expect(codes.size() == 13, "every tool error has a distinct stable code");
+    failures += expect(codes.size() == 14, "every tool error has a distinct stable code");
 
     failures +=
         expect(scripting::liveCommitDiagnosticCode(scripting::LiveCommitStatus::Completed).empty(),

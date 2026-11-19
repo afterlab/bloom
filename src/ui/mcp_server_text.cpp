@@ -69,6 +69,8 @@ QString toolErrorText(const mcp::McpToolErrorCode code) {
         return tr("operation rejected");
     case C::PreflightBlocked:
         return tr("cannot render as asked");
+    case C::CommitTooLarge:
+        return tr("edit too large");
     }
     return {};
 }

@@ -264,17 +264,20 @@ enum class McpToolErrorCode : std::uint8_t {
     // The render or export request itself cannot run as given (a destination the format cannot
     // write, an existing file without overwrite); the message says what to change.
     PreflightBlocked = 12,
+    // #744: the transaction carries more work than one live commit takes
+    // (scripting::kLiveCommitWorkLimit); nothing was queued. Split it into several transactions.
+    CommitTooLarge = 13,
 };
 
 [[nodiscard]] constexpr std::string_view toolErrorCode(const McpToolErrorCode code) {
-    constexpr std::array<std::string_view, 13> names{
+    constexpr std::array<std::string_view, 14> names{
         "bloom.mcp.project-unavailable", "bloom.mcp.project-replaced",
         "bloom.mcp.revision-conflict",   "bloom.mcp.commit-queue-full",
         "bloom.mcp.gesture-open",        "bloom.mcp.cancelled",
         "bloom.mcp.deadline-exceeded",   "bloom.mcp.export-unavailable",
         "bloom.mcp.export-failed",       "bloom.mcp.capture-too-large-for-inline",
         "bloom.mcp.read-only",           "bloom.mcp.operation-rejected",
-        "bloom.mcp.preflight-blocked",
+        "bloom.mcp.preflight-blocked",   "bloom.mcp.commit-too-large",
     };
     return names[static_cast<std::size_t>(code)];
 }

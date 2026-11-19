@@ -583,6 +583,13 @@ void throwLiveRefusal(const scripting::SessionCommandResult& result) {
     if (is(LiveCommitStatus::GestureOpen))
         throw ToolFailure(McpToolErrorCode::GestureOpen,
                           "The artist kept an edit open past the deadline; nothing was applied.");
+    if (is(LiveCommitStatus::TooLarge))
+        throw ToolFailure(McpToolErrorCode::CommitTooLarge,
+                          "The transaction carries more than " +
+                              std::to_string(scripting::kLiveCommitWorkLimit) +
+                              " units of work (one per operation, or one per key, keyframe or "
+                              "edit an operation lists); split it into several transactions. "
+                              "Nothing was queued.");
 }
 
 // A command the session could not run at all.
