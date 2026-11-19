@@ -619,8 +619,15 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
         return worst;
     };
     // The step alone fits (checked above), so retiring every older entry always ends the loop.
-    while (oldestDropped < retirable && (projectedEntries > limits_.maxEntries ||
-                                         worstRetainedBytes() > limits_.maxChargedBytes)) {
+    bool entryLimitReached = false;
+    bool memoryLimitReached = false;
+    while (oldestDropped < retirable) {
+        if (projectedEntries > limits_.maxEntries)
+            entryLimitReached = true;
+        else if (worstRetainedBytes() > limits_.maxChargedBytes)
+            memoryLimitReached = true;
+        else
+            break;
         projected.remove(history_[oldestDropped].before);
         projected.remove(history_[oldestDropped].after);
         ++oldestDropped;
@@ -652,6 +659,8 @@ CommandResult CommandStack::executeStep(Transaction&& transaction) {
     if (renderAffecting && renderScopeKnown)
         result.affectedComposition = renderScope;
     result.historyEntriesDropped = oldestDropped;
+    result.historyEntryLimitReached = entryLimitReached;
+    result.historyMemoryLimitReached = memoryLimitReached;
     result.historyGrouped = groupCommit;
     HistoryEntry staged{groupCommit ? group_->label : std::string(transaction.label()),
                         entryBefore,

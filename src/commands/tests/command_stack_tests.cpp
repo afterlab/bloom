@@ -850,6 +850,8 @@ void testBoundedUndoHistoryAndByteAccounting(TestContext& test) {
                     boundedStack.historyChargedBytes() <=
                         boundedStack.historyLimits().maxChargedBytes,
                 "the oldest entry is explicitly retired while the newest stays undoable");
+    test.expect(third.historyEntryLimitReached && !third.historyMemoryLimitReached,
+                "the retirement names the entry-count bound, not the memory bound (#744)");
     test.expect(boundedStack.undo().changed() &&
                     bounded.snapshot().project().name() == "Project name 002" &&
                     boundedStack.undo().changed() &&
@@ -869,6 +871,9 @@ void testBoundedUndoHistoryAndByteAccounting(TestContext& test) {
                     byteSecond.historyEntriesDropped == 1 && byteStack.size() == 1 &&
                     byteStack.historyChargedBytes() <= oneStepBytes,
                 "a retained byte cap retires old snapshots without refusing the newest step");
+    test.expect(byteSecond.historyMemoryLimitReached && !byteSecond.historyEntryLimitReached &&
+                    !byteFirst.historyMemoryLimitReached && !byteFirst.historyEntryLimitReached,
+                "the retirement names the memory bound, and a step that retires nothing names none");
 
     Document refused(makeProject());
     CommandStack refusedStack(refused, {.maxEntries = 10, .maxChargedBytes = oneStepBytes - 1});
