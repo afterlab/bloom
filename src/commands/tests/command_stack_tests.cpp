@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <future>
 #include <limits>
 #include <optional>
 #include <unordered_map>
@@ -1248,6 +1249,104 @@ void testUndoChargesSharedRecordsOnce(TestContext& test) {
     test.expect(document.snapshot().project().validate().ok(), "the final project validates");
 }
 
+// #744 (A2): prepare() on another thread then publish() on the stack's own is execute(): the same
+// result, history step and events; preparation touches neither the stack nor the document; a
+// cancelled preparation publishes nothing; a base the document moved past is re-based when the
+// transaction still applies on the live revision and refused as stale otherwise.
+void testPrepareOffThreadThenPublish(TestContext& test) {
+    {
+        Document document(makeProject());
+        CommandStack stack(document);
+        std::size_t events = 0;
+        const auto observer = stack.addObserver([&](const CommandEvent&) { ++events; });
+        const auto base = document.snapshot();
+        const auto workBefore = document.work();
+        Transaction transaction("Prepared rename", base.revision());
+        transaction.setOrigin(CommandOrigin::Agent);
+        transaction.emplace<SetProjectName>("Prepared");
+        auto prepared = std::async(std::launch::async, [&base, &transaction] {
+                            return CommandStack::prepare(base, std::move(transaction));
+                        }).get();
+        test.expect(document.snapshot().revision() == base.revision() && stack.size() == 0 &&
+                        events == 0 && document.work().publications == workBefore.publications,
+                    "preparation publishes nothing and sends no event");
+        test.expect(!prepared.cancelled() && prepared.baseRevision() == base.revision() &&
+                        prepared.label() == "Prepared rename" &&
+                        prepared.origin() == CommandOrigin::Agent && !stack.rebaseNeeded(prepared),
+                    "a prepared transaction names its base, label and origin");
+        const auto result = stack.publish(std::move(prepared));
+        test.expect(result.succeeded() && result.origin == CommandOrigin::Agent &&
+                        document.snapshot().project().name() == "Prepared" && stack.size() == 1 &&
+                        stack.undoLabel() == std::optional<std::string_view>("Prepared rename"),
+                    "publish lands the prepared edit as one undo step");
+        test.expect(events == 2, "publish sends RevisionChanged and HistoryChanged");
+        test.expect(stack.undo().succeeded() &&
+                        document.snapshot().project().name() == "Original Project",
+                    "the published step undoes");
+        stack.removeObserver(observer);
+    }
+    {
+        Document document(makeProject());
+        CommandStack stack(document);
+        Transaction transaction("Cancelled", document.snapshot().revision());
+        transaction.emplace<SetProjectName>("Cancelled");
+        auto prepared =
+            CommandStack::prepare(document.snapshot(), std::move(transaction), [] { return true; });
+        test.expect(prepared.cancelled(), "a cancellation check that fires stops preparation");
+        const auto result = stack.publish(std::move(prepared));
+        test.expect(!result.succeeded() &&
+                        document.snapshot().project().name() == "Original Project" &&
+                        stack.size() == 0,
+                    "a cancelled preparation publishes nothing");
+    }
+    {
+        // The artist edits between preparation and publication.
+        Document document(makeProject());
+        CommandStack stack(document);
+        const auto base = document.snapshot();
+        Transaction expecting("Agent", base.revision());
+        expecting.emplace<SetProjectName>("Agent");
+        auto stale = CommandStack::prepare(base, std::move(expecting));
+        Transaction open("Agent");
+        open.emplace<SetProjectName>("Agent");
+        auto rebased = CommandStack::prepare(base, std::move(open));
+        Transaction artist("Artist", base.revision());
+        artist.emplace<SetCompositionName>(kCompositionId, "Artist");
+        test.expect(stack.execute(std::move(artist)).succeeded(), "the artist's edit lands");
+        test.expect(!stack.rebaseNeeded(stale),
+                    "an edit expecting the old revision is not rebased");
+        const auto refused = stack.publish(std::move(stale));
+        test.expect(refused.status == CommandStatus::StaleRevision &&
+                        refused.expectedRevision == base.revision() &&
+                        document.snapshot().project().name() == "Original Project",
+                    "and is refused as stale without publishing");
+        test.expect(stack.rebaseNeeded(rebased), "an edit expecting no revision is rebased");
+        const auto live = document.snapshot();
+        auto again = CommandStack::prepare(live, std::move(rebased).takeTransaction());
+        test.expect(!stack.rebaseNeeded(again), "prepared again on the live snapshot");
+        const auto published = stack.publish(std::move(again));
+        test.expect(published.succeeded() && document.snapshot().project().name() == "Agent" &&
+                        document.snapshot().project().findComposition(kCompositionId)->name() ==
+                            "Artist" &&
+                        stack.historyLabels() == std::vector<std::string>{"Artist", "Agent"},
+                    "the re-based edit lands after the artist's, keeping both");
+    }
+    {
+        // A refused operation and an invalid draft are reported as execute() reports them.
+        Document document(makeProject());
+        CommandStack stack(document);
+        Transaction invalid("Break", document.snapshot().revision());
+        invalid.emplace<SetProjectName>("Fine");
+        invalid.emplace<BreakProject>();
+        auto prepared = CommandStack::prepare(document.snapshot(), std::move(invalid));
+        const auto result = stack.publish(std::move(prepared));
+        test.expect(result.status == CommandStatus::ValidationFailed &&
+                        result.validationOperationIndex == std::optional<std::size_t>(1) &&
+                        document.snapshot().project().name() == "Original Project",
+                    "an invalid prepared draft names its first invalid operation");
+    }
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
@@ -1269,6 +1368,7 @@ int main() {
         bloom::commands::test::testSharedPayloadRetentionAndReplacementPressure(test);
         bloom::commands::test::testAgentSessionGroupsIntoOneUndoStep(test);
         bloom::commands::test::testUndoChargesSharedRecordsOnce(test);
+        bloom::commands::test::testPrepareOffThreadThenPublish(test);
     } catch (const std::exception& error) {
         test.fail(std::string("unexpected test exception: ") + error.what());
     }

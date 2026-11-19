@@ -2142,6 +2142,15 @@ bloom_add_test(NAME bloom.ui.mcp-live-undo COMMAND bloom_ui_mcp_live_undo_test
     LABELS ui mcp integration TIMEOUT 120
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 
+# #744 (A2): a live commit is prepared off the UI thread; the UI thread only publishes it.
+add_executable(bloom_ui_live_commit_preparation_test live_commit_preparation_tests.cpp)
+target_include_directories(bloom_ui_live_commit_preparation_test PRIVATE ..)
+target_link_libraries(bloom_ui_live_commit_preparation_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_ui_live_commit_preparation_test)
+bloom_add_test(NAME bloom.ui.live-commit-preparation COMMAND bloom_ui_live_commit_preparation_test
+    LABELS ui mcp integration TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+
 # MCP is a UI for agents: the real binding of mcp::McpLiveUiPort over the real window.
 add_executable(bloom_ui_mcp_live_ui_binding_test mcp_live_ui_binding_tests.cpp)
 target_include_directories(bloom_ui_mcp_live_ui_binding_test PRIVATE ..)
