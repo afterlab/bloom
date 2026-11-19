@@ -325,7 +325,9 @@ void testUnchangedContentSkipsTheProjection() {
     auto& counters = nodeCanvasWorkCounters();
     const auto before = identity(f);
     counters = {};
+    // #744: the canvas rebuilds on panelRebuildDue, which follows every snapshotChanged.
     Q_EMIT f.session.snapshotChanged();
+    Q_EMIT f.session.panelRebuildDue();
     Q_EMIT f.session.compositionChanged();
     QCoreApplication::processEvents();
     expect(counters.projectionsSkipped == 2 && counters.projections == 0,
