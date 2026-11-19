@@ -2585,6 +2585,38 @@ void requestLimits() {
                    contains(refused, R"("limit":{"name":"commitWork","value":1000000,)"
                                      R"("actual":1000001,"unit":"work units"})"),
                "a transaction over the work bound names it: " + refused.substr(0, 600));
+
+        // Nothing drains here, so sixteen commits fill the queue and the seventeenth is refused
+        // by name; the sixteen then wait out the commit deadline, which names itself too.
+        const auto edit = [&](const int id) {
+            return R"({"jsonrpc":"2.0","id":)" + std::to_string(id) +
+                   R"(,"method":"tools/call","params":{"name":"transact","arguments":{)"
+                   R"("expectedRevision":0,"operations":[{"op":"bloom.project.set-name",)"
+                   R"("args":{"name":"Queued"}}]}}})";
+        };
+        std::vector<std::future<std::string>> queued;
+        for (int index = 0; index < 16; ++index)
+            queued.push_back(
+                std::async(std::launch::async, [&server, message = edit(1000 + index)] {
+                    return server.send(message);
+                }));
+        const auto filled = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+        while (server.host.queuedCommits() < 16 && std::chrono::steady_clock::now() < filled)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        const auto full = server.send(edit(1100));
+        expect(contains(full, "bloom.mcp.commit-queue-full") &&
+                   contains(full, R"("limit":{"name":"commitQueue","value":16,"actual":17,)") &&
+                   contains(full, "set-key-columns"),
+               "a seventeenth commit is refused by the queue bound: " + full.substr(0, 600));
+        for (auto& waiting : queued) {
+            const auto late = waiting.get();
+            const auto waited =
+                firstMatch(late, R"re("name":"commitDeadlineMs","value":30000,"actual":(\d+))re");
+            expect(contains(late, "bloom.mcp.deadline-exceeded") && !waited.empty() &&
+                       std::stoull(waited) >= 29000,
+                   "a commit past the deadline names the bound and how long it waited: " +
+                       late.substr(0, 600));
+        }
     }
 }
 

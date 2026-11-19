@@ -95,7 +95,8 @@ if(BUILD_TESTING)
         NAME bloom.mcp.core-tools
         COMMAND bloom_mcp_core_tools_test
         LABELS unit mcp
-        TIMEOUT 120
+        # #745: one case waits out the 30 s commit deadline.
+        TIMEOUT 240
     )
     # #724 Scopes: query kind `scopes` through the shared core, headless.
     add_executable(bloom_mcp_scope_query_test tests/scope_query_tests.cpp)
