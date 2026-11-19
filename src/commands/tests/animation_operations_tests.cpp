@@ -1514,6 +1514,254 @@ void testEasyEase(TestContext& test) {
                 "an existing Bezier far side keeps its handle");
 }
 
+// --- Issue #744: SetParameterKeys merges its keys in one pass ------------------------------------
+
+// The first key sequence's key at `at` (a vector or colour curve's first component that has one).
+[[nodiscard]] std::optional<document::KeyframeId> keyIdAt(const document::AnimationCurveRecord& record,
+                                                          const core::RationalTime at) {
+    std::optional<document::KeyframeId> found;
+    std::visit(
+        [&](const auto& curve) {
+            using Curve = std::decay_t<decltype(curve)>;
+            const auto search = [&](const auto& keys) {
+                const auto key = std::ranges::find(keys, at, [](const auto& item) { return item.time; });
+                if (!found && key != keys.end())
+                    found = key->id;
+            };
+            if constexpr (document::kWholeValueAnimationCurve<Curve>)
+                search(curve.keyframes);
+            else
+                for (const auto& component : curve.components)
+                    search(component.keyframes);
+        },
+        record);
+    return found;
+}
+
+[[nodiscard]] std::optional<core::RationalTime> lastKeyTime(const document::AnimationCurveRecord& record) {
+    std::optional<core::RationalTime> last;
+    std::visit(
+        [&](const auto& curve) {
+            using Curve = std::decay_t<decltype(curve)>;
+            const auto take = [&](const auto& keys) {
+                if (!keys.empty() && (!last || *last < keys.back().time))
+                    last = keys.back().time;
+            };
+            if constexpr (document::kWholeValueAnimationCurve<Curve>)
+                take(curve.keyframes);
+            else
+                for (const auto& component : curve.components)
+                    take(component.keyframes);
+        },
+        record);
+    return last;
+}
+
+// The path SetParameterKeys replaced: one SetKeyframeAtTimeForParameter per key, then
+// SetKeyframeInterpolation for every eased key short of the last time.
+void keyOneByOne(Document& document, CommandStack& stack, const ParameterId parameterId,
+                 const std::vector<ParameterKey>& keys) {
+    Transaction values("Keys one by one", document.snapshot().revision());
+    for (const auto& key : keys)
+        std::visit(
+            [&](const auto& value) {
+                values.emplace<SetKeyframeAtTimeForParameter>(kCompositionId, parameterId,
+                                                              key.time, value);
+            },
+            key.value);
+    requireFixture(stack.execute(std::move(values)).succeeded(), "one-by-one keys apply");
+    const auto curveId = animationSource(document.snapshot(), parameterId);
+    const auto* record = composition(document.snapshot()).animationCurves().find(curveId);
+    requireFixture(record != nullptr, "one-by-one curve exists");
+    const auto last = lastKeyTime(*record);
+    Transaction modes("Interpolations one by one", document.snapshot().revision());
+    bool any = false;
+    for (const auto& key : keys) {
+        if (key.interpolation == document::KeyframeInterpolation::Linear || key.time == last)
+            continue;
+        const auto id = keyIdAt(*record, key.time);
+        requireFixture(id.has_value(), "one-by-one key exists");
+        modes.emplace<SetKeyframeInterpolation>(kCompositionId, curveId, *id, key.interpolation);
+        any = true;
+    }
+    if (any)
+        requireFixture(stack.execute(std::move(modes)).succeeded(), "one-by-one modes apply");
+}
+
+[[nodiscard]] const document::AnimationCurveRecord& curveOf(const Document& document,
+                                                            const ParameterId parameterId) {
+    const auto* record = composition(document.snapshot())
+                             .animationCurves()
+                             .find(animationSource(document.snapshot(), parameterId));
+    requireFixture(record != nullptr, "parameter curve exists");
+    return *record;
+}
+
+[[nodiscard]] CommandResult setKeys(Document& document, CommandStack& stack,
+                                    const ParameterId parameterId, std::vector<ParameterKey> keys,
+                                    const bool replace = false) {
+    Transaction transaction("Set keys", document.snapshot().revision());
+    transaction.emplace<SetParameterKeys>(kCompositionId, parameterId, std::move(keys), replace);
+    return stack.execute(std::move(transaction));
+}
+
+[[nodiscard]] std::vector<document::KeyframeId> keyOutputs(const CommandResult& result) {
+    std::vector<document::KeyframeId> ids;
+    for (const auto& item : result.outputs)
+        if (item.output.name == kKeyframeOutput)
+            if (const auto* id = std::get_if<document::KeyframeId>(&item.output.id))
+                ids.push_back(*id);
+    return ids;
+}
+
+[[nodiscard]] std::string refusal(const CommandResult& result) {
+    return result.operationFailures.empty() ? std::string()
+                                            : result.operationFailures.front().issue.message;
+}
+
+void testSetParameterKeysMergesInOnePass(TestContext& test) {
+    using document::KeyframeInterpolation;
+    const auto key = [](const std::int64_t frame, decltype(ParameterKey::value) value,
+                        const KeyframeInterpolation mode = KeyframeInterpolation::Linear) {
+        return ParameterKey{core::RationalTime::fromInteger(frame), std::move(value), mode};
+    };
+
+    // Scalar, non-replace, on a curve with an Auto key: updates, new keys between and after the
+    // existing ones, eased keys, and an eased key at the last time that stays Linear. The merged
+    // curve is exactly the curve the one-key-at-a-time path builds, ids included.
+    const auto seedScalar = [&](Document& document, CommandStack& stack) {
+        keyOneByOne(document, stack, kOpacityId,
+                    {key(0, 0.2), key(4, 0.6), key(9, 0.4)});
+        const auto curveId = animationSource(document.snapshot(), kOpacityId);
+        const auto middle = keyIdAt(curveOf(document, kOpacityId), core::RationalTime::fromInteger(4));
+        Transaction automatic("Auto handles", document.snapshot().revision());
+        automatic.emplace<SetKeyframesHandleMode>(
+            kCompositionId, std::vector<KeyframeAddress>{{curveId, *middle, std::nullopt}},
+            document::KeyframeHandleMode::Auto);
+        requireFixture(stack.execute(std::move(automatic)).succeeded(), "seed Auto key applies");
+    };
+    const std::vector<ParameterKey> scalarKeys{
+        key(4, 0.9, KeyframeInterpolation::Hold), key(1, 0.3, KeyframeInterpolation::EaseInOut),
+        key(12, 0.5, KeyframeInterpolation::Hold), key(6, 0.1), key(0, 0.2),
+        key(7, 0.8, KeyframeInterpolation::Quad)};
+    Document merged(makeProject());
+    CommandStack mergedStack(merged);
+    seedScalar(merged, mergedStack);
+    const auto beforeMerge = curveOf(merged, kOpacityId);
+    const auto revisionBefore = merged.snapshot().revision();
+    const auto applied = setKeys(merged, mergedStack, kOpacityId, scalarKeys);
+    Document reference(makeProject());
+    CommandStack referenceStack(reference);
+    seedScalar(reference, referenceStack);
+    keyOneByOne(reference, referenceStack, kOpacityId, scalarKeys);
+    test.expect(applied.changed() && curveOf(merged, kOpacityId) == curveOf(reference, kOpacityId),
+                "set-keys builds exactly the scalar curve setting each key in turn builds");
+    const auto ids = keyOutputs(applied);
+    test.expect(ids.size() == scalarKeys.size() &&
+                    ids[0] == keyIdAt(curveOf(merged, kOpacityId), scalarKeys[0].time) &&
+                    ids[4] == keyIdAt(beforeMerge, core::RationalTime::fromInteger(0)) &&
+                    ids[1] < ids[2] && ids[2] < ids[3] && ids[3] < ids[5],
+                "one key output per key in key order; new ids are allocated in key order");
+    const auto* scalar = std::get_if<document::ScalarAnimationCurve>(&curveOf(merged, kOpacityId));
+    test.expect(scalar != nullptr && scalar->keyframes.size() == 7 &&
+                    scalar->keyframes.back().outgoingInterpolation == KeyframeInterpolation::Linear,
+                "the merged curve holds old and new keys, the last one Linear");
+    test.expect(mergedStack.undo().changed() && curveOf(merged, kOpacityId) == beforeMerge &&
+                    merged.snapshot().revision() != revisionBefore,
+                "undo restores the curve set-keys merged into");
+    test.expect(setKeys(merged, mergedStack, kOpacityId, {key(0, 0.2), key(9, 0.4)}).status ==
+                    CommandStatus::NoChange,
+                "keys equal to the stored ones change nothing");
+
+    // Component curves whose components hold different key times: each component merges on its
+    // own, and each key reports one id per component.
+    const auto seedPosition = [&](Document& document, CommandStack& stack) {
+        keyOneByOne(document, stack, kFirstPositionId, {key(0, Vec2d{0.0, 0.0})});
+        Transaction component("Key X alone", document.snapshot().revision());
+        component.emplace<SetKeyframeAtTimeForParameterComponent>(
+            kCompositionId, kFirstPositionId, document::AnimationComponent::X,
+            core::RationalTime::fromInteger(2), 9.0);
+        requireFixture(stack.execute(std::move(component)).succeeded(), "seed X key applies");
+    };
+    const std::vector<ParameterKey> positionKeys{
+        key(2, Vec2d{5.0, 6.0}, KeyframeInterpolation::Hold),
+        key(1, Vec2d{1.0, 1.0}, KeyframeInterpolation::Sine), key(3, Vec2d{2.0, 2.0})};
+    Document position(makeProject());
+    CommandStack positionStack(position);
+    seedPosition(position, positionStack);
+    const auto positioned = setKeys(position, positionStack, kFirstPositionId, positionKeys);
+    Document positionReference(makeProject());
+    CommandStack positionReferenceStack(positionReference);
+    seedPosition(positionReference, positionReferenceStack);
+    keyOneByOne(positionReference, positionReferenceStack, kFirstPositionId, positionKeys);
+    test.expect(positioned.changed() &&
+                    curveOf(position, kFirstPositionId) ==
+                        curveOf(positionReference, kFirstPositionId) &&
+                    keyOutputs(positioned).size() == positionKeys.size() * 2,
+                "component curves merge per component, exactly as keying each in turn does");
+
+    // A constant parameter becomes animated at the first key's time, in the same operation.
+    Document fresh(makeProject());
+    CommandStack freshStack(fresh);
+    const std::vector<ParameterKey> freshKeys{key(5, 0.5), key(2, 0.25, KeyframeInterpolation::Hold)};
+    const auto animated = setKeys(fresh, freshStack, kSecondOpacityId, freshKeys);
+    Document freshReference(makeProject());
+    CommandStack freshReferenceStack(freshReference);
+    keyOneByOne(freshReference, freshReferenceStack, kSecondOpacityId, freshKeys);
+    test.expect(animated.changed() &&
+                    animated.outputId<document::AnimationCurveId>(kAnimationCurveOutput).has_value() &&
+                    curveOf(fresh, kSecondOpacityId) == curveOf(freshReference, kSecondOpacityId),
+                "a constant parameter is animated and keyed in one step");
+
+    // Replace: the old keys go first, and an empty list with replace leaves the constant.
+    const auto replaced = setKeys(fresh, freshStack, kSecondOpacityId, {key(7, 0.5), key(9, 0.1)}, true);
+    const auto* replacedCurve =
+        std::get_if<document::ScalarAnimationCurve>(&curveOf(fresh, kSecondOpacityId));
+    test.expect(replaced.changed() && replacedCurve != nullptr &&
+                    replacedCurve->keyframes.size() == 2 &&
+                    replacedCurve->keyframes[0].time == core::RationalTime::fromInteger(7) &&
+                    replacedCurve->keyframes[1].time == core::RationalTime::fromInteger(9),
+                "replace leaves exactly the keys given");
+    test.expect(setKeys(fresh, freshStack, kSecondOpacityId, {}, true).changed() &&
+                    std::holds_alternative<ConstantValueSource>(
+                        parameter(fresh.snapshot(), kSecondOpacityId).source),
+                "an empty replace returns the parameter to its constant");
+
+    // Duplicate times, found by sorting: the earliest key with a later twin, and that twin.
+    const auto duplicate = setKeys(fresh, freshStack, kSecondOpacityId,
+                                   {key(0, 0.1), key(2, 0.2), key(1, 0.3), key(2, 0.4), key(1, 0.5)});
+    test.expect(duplicate.status == CommandStatus::Rejected &&
+                    refusal(duplicate).find("keys 1 and 3 are at the same time") != std::string::npos,
+                "duplicate key times are refused naming the first clashing pair: " +
+                    refusal(duplicate));
+
+    // Value refusals name the key: a wrong kind, and a colour alpha outside its domain.
+    const auto wrongKind = setKeys(position, positionStack, kFirstPositionId, {key(8, Vec2d{1.0, 1.0}), key(9, 0.5)});
+    test.expect(wrongKind.status == CommandStatus::Rejected &&
+                    refusal(wrongKind).starts_with("Key 1 of parameter") &&
+                    refusal(wrongKind).find("does not hold a scalar value") != std::string::npos,
+                "a key of the wrong kind is refused by its index: " + refusal(wrongKind));
+    Document color(makeSourceProject());
+    CommandStack colorStack(color);
+    const auto alpha = setKeys(color, colorStack, kSolidColorId,
+                               {key(0, core::Color4d{0.1, 0.2, 0.3, 1.0}),
+                                key(1, core::Color4d{0.1, 0.2, 0.3, 1.5})});
+    test.expect(alpha.status == CommandStatus::Rejected &&
+                    refusal(alpha).find("Key 1 of parameter") != std::string::npos &&
+                    refusal(alpha).find("Alpha keyframe value is outside") != std::string::npos,
+                "a colour key outside its alpha domain is refused: " + refusal(alpha));
+
+    // The layer-range warning: once per operation, naming how many keys fall outside the layer.
+    const auto outside = setKeys(fresh, freshStack, kOpacityId,
+                                 {key(1, 0.5), key(12, 0.25), key(15, 0.75)});
+    test.expect(outside.changed() && outside.warnings.size() == 1 &&
+                    outside.warnings.front().issue.message.starts_with("2 of 3 key time(s)"),
+                "keys past the layer apply with one warning naming them");
+    const auto inside = setKeys(fresh, freshStack, kOpacityId, {key(2, 0.5), key(3, 0.25)});
+    test.expect(inside.changed() && inside.warnings.empty(),
+                "keys inside the layer apply without a warning");
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
@@ -1538,6 +1786,7 @@ int main() {
         bloom::commands::test::testKeyframeHandleModes(test);
         bloom::commands::test::testEasyEase(test);
         bloom::commands::test::testKeyEqualToConstantCreatesTheKey(test);
+        bloom::commands::test::testSetParameterKeysMergesInOnePass(test);
     } catch (const std::exception& error) {
         test.fail(std::string("unexpected test exception: ") + error.what());
     }

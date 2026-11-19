@@ -11,12 +11,15 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <tuple>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 
 namespace bloom::commands {
@@ -54,8 +57,20 @@ keysOutsideLayerRange(const document::Composition& composition,
                       const document::ParameterId parameter,
                       const std::vector<core::RationalTime>& times) {
     const auto& graph = composition.graph();
+    // One index of the graph's nodes per check, so finding the layer that owns the parameter costs
+    // the layers plus the nodes once, not a linear node search per layer (issue #744).
+    std::unordered_map<document::NodeId, const document::NodeRecord*> nodes;
     for (const auto& layer : graph.layerOutputs()) {
-        const auto bindings = document::layerParameterBindings(graph, layer);
+        std::span<const document::ParameterBinding> bindings;
+        if (layer.entryOwned()) {
+            bindings = layer.parameters;
+        } else {
+            if (nodes.empty())
+                for (const auto& node : graph.nodes())
+                    nodes.emplace(node.id, &node);
+            if (const auto node = nodes.find(layer.nodeId); node != nodes.end())
+                bindings = node->second->parameters;
+        }
         if (std::ranges::none_of(bindings, [&](const document::ParameterBinding& binding) {
                 return binding.parameterId == parameter;
             }))
@@ -714,15 +729,21 @@ std::string_view CreateAnimationForParameter::typeId() const noexcept {
     return "bloom.animation.create-for-parameter";
 }
 
-OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const {
-    return withKeyRangeWarning(draft, compositionId_, parameterId_, {initialTime_}, [&]() -> OperationResult {
-    auto* composition = draft.project().findComposition(compositionId_);
+namespace {
+// CreateAnimationForParameter without its key-range warning, for SetParameterKeys, which checks the
+// range once for all of its keys.
+OperationResult createAnimationForParameter(document::Draft& draft,
+                                            const document::CompositionId compositionId,
+                                            const document::ParameterId parameterId,
+                                            const core::RationalTime initialTime,
+                                            const std::optional<document::AnimationComponent> component) {
+    auto* composition = draft.project().findComposition(compositionId);
     if (composition == nullptr) {
-        return invalidComposition(compositionId_);
+        return invalidComposition(compositionId);
     }
-    const auto* parameter = composition->parameters().find(parameterId_);
+    const auto* parameter = composition->parameters().find(parameterId);
     if (parameter == nullptr) {
-        return invalidParameter(parameterId_);
+        return invalidParameter(parameterId);
     }
     const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source);
     if (constant == nullptr) {
@@ -742,7 +763,7 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
         if (value == nullptr || !value->isValid())
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Path constant is invalid for its schema");
-        if (component_.has_value())
+        if (component.has_value())
             return OperationResult::rejected(OperationIssueCode::Unsupported,
                                              "Path parameters do not have components");
         const auto curveId = draft.ids().allocateAnimationCurve();
@@ -751,7 +772,7 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
             return exhaustedIds("animation curve and keyframe");
         document::PathKeyframe key;
         key.id = *keyId;
-        key.time = initialTime_;
+        key.time = initialTime;
         key.value = *value;
         key.outgoingInterpolation = document::KeyframeInterpolation::Linear;
         document::PathAnimationCurve curve;
@@ -760,7 +781,7 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
         const document::ParameterValue defaultValue = constant->value;
         if (!composition->animationCurves().insert(std::move(curve)) ||
             !composition->parameters().setSource(
-                parameterId_, document::AnimationCurveSource{*curveId, defaultValue}))
+                parameterId, document::AnimationCurveSource{*curveId, defaultValue}))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Animation could not be attached to the parameter");
         return OperationResult::applied(
@@ -773,7 +794,7 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
         if (value == nullptr || !value->isValid())
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Gradient constant is invalid for its schema");
-        if (component_.has_value())
+        if (component.has_value())
             return OperationResult::rejected(OperationIssueCode::Unsupported,
                                              "Gradient parameters do not have components");
         const auto curveId = draft.ids().allocateAnimationCurve();
@@ -782,7 +803,7 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
             return exhaustedIds("animation curve and keyframe");
         document::GradientKeyframe key;
         key.id = *keyId;
-        key.time = initialTime_;
+        key.time = initialTime;
         key.value = *value;
         key.outgoingInterpolation = document::KeyframeInterpolation::Linear;
         document::GradientAnimationCurve curve;
@@ -791,7 +812,7 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
         const document::ParameterValue defaultValue = constant->value;
         if (!composition->animationCurves().insert(std::move(curve)) ||
             !composition->parameters().setSource(
-                parameterId_, document::AnimationCurveSource{*curveId, defaultValue}))
+                parameterId, document::AnimationCurveSource{*curveId, defaultValue}))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Animation could not be attached to the parameter");
         return OperationResult::applied(
@@ -843,13 +864,13 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
                                        : std::holds_alternative<document::Vec2d>(initialValue) ? 2
                                        : std::holds_alternative<document::Vec3d>(initialValue) ? 3
                                                                                                : 4;
-    if (component_.has_value() && componentCount == 1) {
+    if (component.has_value() && componentCount == 1) {
         return OperationResult::rejected(OperationIssueCode::Unsupported,
                                          "Scalar parameters do not have components");
     }
     std::vector<document::KeyframeId> keyframeIds;
-    keyframeIds.reserve(component_.has_value() ? 1 : componentCount);
-    for (std::size_t index = 0; index < (component_.has_value() ? 1 : componentCount); ++index) {
+    keyframeIds.reserve(component.has_value() ? 1 : componentCount);
+    for (std::size_t index = 0; index < (component.has_value() ? 1 : componentCount); ++index) {
         const auto keyframeId = draft.ids().allocateKeyframe();
         if (!keyframeId.has_value())
             return exhaustedIds("keyframe");
@@ -860,7 +881,7 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
     if (const auto* value = std::get_if<double>(&initialValue)) {
         inserted = composition->animationCurves().insert(
             document::ScalarAnimationCurve{*curveId,
-                                           {{keyframeIds.front(), initialTime_, *value,
+                                           {{keyframeIds.front(), initialTime, *value,
                                              document::KeyframeInterpolation::Linear}}});
     } else if (const auto* vectorValue = std::get_if<document::Vec2d>(&initialValue)) {
         document::Vec2AnimationCurve curve{*curveId, {}};
@@ -868,10 +889,10 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
             std::array{document::AnimationComponent::X, document::AnimationComponent::Y};
         const auto values = std::array{vectorValue->x, vectorValue->y};
         for (std::size_t index = 0; index < names.size(); ++index) {
-            if (component_.has_value() && *component_ != names[index])
+            if (component.has_value() && *component != names[index])
                 continue;
-            const auto keyIndex = component_.has_value() ? 0 : index;
-            curve.components[index].keyframes.push_back({keyframeIds[keyIndex], initialTime_,
+            const auto keyIndex = component.has_value() ? 0 : index;
+            curve.components[index].keyframes.push_back({keyframeIds[keyIndex], initialTime,
                                                          values[index],
                                                          document::KeyframeInterpolation::Linear});
         }
@@ -883,9 +904,9 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
             std::array{document::AnimationComponent::X, document::AnimationComponent::Y,
                        document::AnimationComponent::Z};
         for (std::size_t index = 0; index < values.size(); ++index)
-            if (!component_.has_value() || *component_ == names[index])
+            if (!component.has_value() || *component == names[index])
                 curve.components[index].keyframes.push_back(
-                    {keyframeIds[component_.has_value() ? 0 : index], initialTime_, values[index],
+                    {keyframeIds[component.has_value() ? 0 : index], initialTime, values[index],
                      document::KeyframeInterpolation::Linear});
         inserted = composition->animationCurves().insert(std::move(curve));
     } else {
@@ -897,9 +918,9 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
             std::array{document::AnimationComponent::Red, document::AnimationComponent::Green,
                        document::AnimationComponent::Blue, document::AnimationComponent::Alpha};
         for (std::size_t index = 0; index < values.size(); ++index)
-            if (!component_.has_value() || *component_ == names[index])
+            if (!component.has_value() || *component == names[index])
                 curve.components[index].keyframes.push_back(
-                    {keyframeIds[component_.has_value() ? 0 : index], initialTime_, values[index],
+                    {keyframeIds[component.has_value() ? 0 : index], initialTime, values[index],
                      document::KeyframeInterpolation::Linear});
         inserted = composition->animationCurves().insert(std::move(curve));
     }
@@ -907,7 +928,7 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
     const auto defaultValue = std::visit(
         [](const auto& value) -> document::ParameterValue { return value; }, initialValue);
     if (!inserted || !composition->parameters().setSource(
-                         parameterId_, document::AnimationCurveSource{*curveId, defaultValue})) {
+                         parameterId, document::AnimationCurveSource{*curveId, defaultValue})) {
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Animation could not be attached to the parameter");
     }
@@ -916,6 +937,13 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
     for (const auto keyframeId : keyframeIds)
         outputs.push_back({std::string(kKeyframeOutput), DurableObjectId{keyframeId}});
     return OperationResult::applied(std::move(outputs));
+}
+} // namespace
+
+OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const {
+    return withKeyRangeWarning(draft, compositionId_, parameterId_, {initialTime_}, [&] {
+        return createAnimationForParameter(draft, compositionId_, parameterId_, initialTime_,
+                                           component_);
     });
 }
 
@@ -2114,54 +2142,242 @@ std::string_view SetParameterKeys::typeId() const noexcept {
 }
 
 namespace {
-template <typename Curve, typename Callback>
-void forEachStoredKeyframe(const Curve& curve, Callback&& callback) {
-    if constexpr (document::kWholeValueAnimationCurve<Curve>) {
-        for (const auto& keyframe : curve.keyframes)
-            callback(keyframe);
-    } else {
-        for (const auto& component : curve.components)
-            for (const auto& keyframe : component.keyframes)
-                callback(keyframe);
-    }
+// SetParameterKeys merges its keys into each key sequence of the parameter's curve in one pass
+// (issue #744): a whole-value curve has one sequence, a vector or colour curve one per component.
+// Each key is found by binary search on the curve as it was, new keys are collected on the side and
+// merged in by time once, and handles are settled once against the curve as it was. Before, every
+// key was its own SetKeyframeAtTimeForParameter, each with a linear search of its curve, a sorted
+// insert and a layer-range walk, which made a bulk key write quadratic.
+template <typename Keyframe> struct KeySequenceEdit {
+    std::vector<Keyframe>* keys = nullptr;
+    std::vector<Keyframe> added;
+};
+
+template <typename Keyframe>
+[[nodiscard]] auto keyAtTime(std::vector<Keyframe>& keys, const core::RationalTime time) {
+    const auto at = std::ranges::lower_bound(keys, time, {}, &Keyframe::time);
+    return at != keys.end() && at->time == time ? at : keys.end();
 }
 
-// The id of the key at `time` in a curve: for a vector or colour curve the first component that
-// has one (SetKeyframeInterpolation then reaches its siblings by time).
+// Sets the key at `time` to `value`, or adds a Linear key there with a newly allocated id. Returns
+// the key's id, or nullopt when the keyframe id space is exhausted.
+template <typename Keyframe, typename Value>
 [[nodiscard]] std::optional<document::KeyframeId>
-keyAtTime(const document::AnimationCurveStore& store, const document::AnimationCurveId curveId,
-          const core::RationalTime time) {
-    const auto* record = store.find(curveId);
-    if (record == nullptr)
+upsertKey(KeySequenceEdit<Keyframe>& edit, document::IdAllocator& ids,
+          const core::RationalTime time, const Value& value, bool& changed) {
+    if (const auto at = keyAtTime(*edit.keys, time); at != edit.keys->end()) {
+        if (!(at->value == value)) {
+            at->value = value;
+            changed = true;
+        }
+        return at->id;
+    }
+    const auto id = ids.allocateKeyframe();
+    if (!id)
         return std::nullopt;
-    std::optional<document::KeyframeId> found;
-    std::visit(
-        [&](const auto& curve) {
-            forEachStoredKeyframe(curve, [&](const auto& key) {
-                if (!found && key.time == time)
-                    found = key.id;
-            });
-        },
-        *record);
-    return found;
+    Keyframe key{};
+    key.id = *id;
+    key.time = time;
+    key.value = value;
+    key.outgoingInterpolation = document::KeyframeInterpolation::Linear;
+    edit.added.push_back(std::move(key));
+    changed = true;
+    return id;
 }
 
-// The latest key time on a curve, over every component.
-[[nodiscard]] std::optional<core::RationalTime>
-lastKeyTime(const document::AnimationCurveStore& store, const document::AnimationCurveId curveId) {
-    const auto* record = store.find(curveId);
-    if (record == nullptr)
-        return std::nullopt;
-    std::optional<core::RationalTime> last;
-    std::visit(
-        [&](const auto& curve) {
-            forEachStoredKeyframe(curve, [&](const auto& key) {
-                if (!last || key.time > *last)
-                    last = key.time;
-            });
+template <typename Keyframe> void mergeAddedKeys(KeySequenceEdit<Keyframe>& edit) {
+    if (edit.added.empty())
+        return;
+    std::ranges::sort(edit.added, {}, &Keyframe::time);
+    std::vector<Keyframe> merged;
+    merged.reserve(edit.keys->size() + edit.added.size());
+    std::ranges::merge(std::make_move_iterator(edit.keys->begin()),
+                       std::make_move_iterator(edit.keys->end()),
+                       std::make_move_iterator(edit.added.begin()),
+                       std::make_move_iterator(edit.added.end()), std::back_inserter(merged),
+                       {}, &Keyframe::time, &Keyframe::time);
+    *edit.keys = std::move(merged);
+    edit.added.clear();
+}
+
+using ParameterKeyValue = std::variant<double, document::Vec2d, document::Vec3d, core::Color4d,
+                                       document::PathValue, document::GradientValue>;
+
+// The refusal for a key whose value is not the kind the curve holds, worded as setting that one key
+// always was.
+template <typename Curve>
+[[nodiscard]] std::optional<OperationResult>
+keyKindRejection(const ParameterKeyValue& value, const document::AnimationCurveId curveId) {
+    const auto doesNotHold = [&](const std::string_view kind) {
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Animation curve " + std::to_string(curveId.value()) +
+                                             " does not hold " + std::string(kind) +
+                                             " value, which is what this operation keys");
+    };
+    return std::visit(
+        [&](const auto& held) -> std::optional<OperationResult> {
+            using Held = std::decay_t<decltype(held)>;
+            if constexpr (std::is_same_v<Held, document::GradientValue>) {
+                if (!std::is_same_v<Curve, document::GradientAnimationCurve>)
+                    return doesNotHold("a gradient");
+            } else if constexpr (std::is_same_v<Held, document::PathValue>) {
+                if (!std::is_same_v<Curve, document::PathAnimationCurve>)
+                    return doesNotHold("a path");
+            } else if constexpr (std::is_same_v<Held, double>) {
+                if (!std::is_same_v<Curve, document::ScalarAnimationCurve>)
+                    return wrongCurveKind<document::ScalarAnimationCurve>(curveId);
+            } else if constexpr (std::is_same_v<Held, document::Vec2d>) {
+                if (!std::is_same_v<Curve, document::Vec2AnimationCurve>)
+                    return wrongCurveKind<document::Vec2AnimationCurve>(curveId);
+            } else if constexpr (std::is_same_v<Held, document::Vec3d>) {
+                if (!std::is_same_v<Curve, document::Vec3AnimationCurve>)
+                    return wrongCurveKind<document::Vec3AnimationCurve>(curveId);
+            } else if (!std::is_same_v<Curve, document::Color4AnimationCurve>) {
+                return wrongCurveKind<document::Color4AnimationCurve>(curveId);
+            }
+            return std::nullopt;
         },
-        *record);
-    return last;
+        value);
+}
+
+[[nodiscard]] std::vector<double> componentValues(const ParameterKeyValue& value) {
+    if (const auto* vector = std::get_if<document::Vec2d>(&value))
+        return {vector->x, vector->y};
+    if (const auto* vector = std::get_if<document::Vec3d>(&value))
+        return {vector->x, vector->y, vector->z};
+    const auto& color = std::get<core::Color4d>(value);
+    return {color.red, color.green, color.blue, color.alpha};
+}
+
+// Every key of `keys` merged into `curve` (a staged copy of the parameter's curve). Values are
+// checked key by key in the order given, and the first refusal is returned with its key's index.
+// `outputs` gets each key's id (one per component for a vector or colour curve), in key order.
+template <typename Curve, typename At>
+[[nodiscard]] std::optional<OperationResult>
+mergeParameterKeys(document::Draft& draft, const document::Composition& composition,
+                   const document::ParameterRecord& owner, Curve& curve,
+                   const std::vector<ParameterKey>& keys, std::vector<OperationOutput>& outputs,
+                   bool& changed, const At& at) {
+    using Keyframe = std::conditional_t<
+        std::is_same_v<Curve, document::PathAnimationCurve>, document::PathKeyframe,
+        std::conditional_t<std::is_same_v<Curve, document::GradientAnimationCurve>,
+                           document::GradientKeyframe, document::ScalarKeyframe>>;
+    std::vector<KeySequenceEdit<Keyframe>> sequences;
+    if constexpr (document::kWholeValueAnimationCurve<Curve>) {
+        sequences.push_back({&curve.keyframes, {}});
+    } else {
+        for (auto& component : curve.components)
+            sequences.push_back({&component.keyframes, {}});
+    }
+    std::vector<std::vector<Keyframe>> before;
+    before.reserve(sequences.size());
+    for (const auto& sequence : sequences)
+        before.push_back(document::hasNonFreeHandleMode(*sequence.keys) ? *sequence.keys
+                                                                         : std::vector<Keyframe>{});
+    const bool curveKey = document::isGradeCurveSchemaKey(owner.schemaKey);
+    outputs.reserve(outputs.size() + keys.size() * sequences.size());
+    for (std::size_t index = 0; index < keys.size(); ++index) {
+        const auto& key = keys[index];
+        if (auto rejection = keyKindRejection<Curve>(key.value, curve.id))
+            return at(index, *rejection);
+        const auto output = [&](const std::optional<document::KeyframeId> id)
+            -> std::optional<OperationResult> {
+            if (!id)
+                return at(index, exhaustedIds("keyframe"));
+            outputs.push_back({std::string(kKeyframeOutput), DurableObjectId{*id}});
+            return std::nullopt;
+        };
+        if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+            const auto value = std::get<double>(key.value);
+            if (!curveSchemaMatches<Curve>(owner) || !std::isfinite(value) ||
+                !document::isScalarWithinSchemaDomain(owner.schemaKey, value))
+                return at(index, OperationResult::rejected(
+                                     OperationIssueCode::InvalidValue,
+                                     keyframeValueRefusal<Curve>(composition, curve.id, value)));
+            if (auto refused =
+                    output(upsertKey(sequences.front(), draft.ids(), key.time, value, changed)))
+                return refused;
+        } else if constexpr (std::is_same_v<Curve, document::PathAnimationCurve>) {
+            const auto& path = std::get<document::PathValue>(key.value);
+            if (!path.isValid())
+                return at(index, OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                           "Path keyframe value is invalid"));
+            // #493: a Curves key is a point list within its curve's domain, like its constant.
+            // #547: an auto anchor with no handles is a plain point.
+            const auto normalized =
+                curveKey ? document::normalizedGradeCurveValue(path) : document::PathValue{};
+            if (curveKey) {
+                if (const auto problem =
+                        document::gradeCurveValueProblem(owner.schemaKey, normalized);
+                    !problem.empty())
+                    return at(index, OperationResult::rejected(
+                                         OperationIssueCode::InvalidValue,
+                                         "Curve key cannot take this point list: " + problem +
+                                             "."));
+            }
+            if (auto refused = output(upsertKey(sequences.front(), draft.ids(), key.time,
+                                                curveKey ? normalized : path, changed)))
+                return refused;
+        } else if constexpr (std::is_same_v<Curve, document::GradientAnimationCurve>) {
+            const auto& gradient = std::get<document::GradientValue>(key.value);
+            if (!gradient.isValid())
+                return at(index, OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                           "Gradient keyframe value is invalid"));
+            if (auto refused =
+                    output(upsertKey(sequences.front(), draft.ids(), key.time, gradient, changed)))
+                return refused;
+        } else {
+            const auto values = componentValues(key.value);
+            for (std::size_t component = 0; component < values.size(); ++component) {
+                if (!std::isfinite(values[component]))
+                    return at(index,
+                              OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                        "Component keyframe value is invalid"));
+                if (std::is_same_v<Curve, document::Color4AnimationCurve> && component == 3 &&
+                    (values[component] < 0.0 || values[component] > 1.0))
+                    return at(index, OperationResult::rejected(
+                                         OperationIssueCode::InvalidValue,
+                                         "Alpha keyframe value is outside its schema domain"));
+            }
+            for (std::size_t component = 0; component < values.size(); ++component)
+                if (auto refused = output(upsertKey(sequences[component], draft.ids(), key.time,
+                                                    values[component], changed)))
+                    return refused;
+        }
+    }
+    for (auto& sequence : sequences)
+        mergeAddedKeys(sequence);
+
+    // Interpolations, against the merged curve: the key at the curve's last time stays Linear.
+    std::optional<core::RationalTime> last;
+    for (const auto& sequence : sequences)
+        if (!sequence.keys->empty() && (!last || *last < sequence.keys->back().time))
+            last = sequence.keys->back().time;
+    for (std::size_t index = 0; index < keys.size(); ++index) {
+        const auto& key = keys[index];
+        if (key.interpolation == document::KeyframeInterpolation::Linear ||
+            (last && key.time == *last))
+            continue;
+        if (!validInterpolation(key.interpolation))
+            return at(index, OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                       "Keyframe interpolation mode is unsupported"));
+        for (auto& sequence : sequences) {
+            const auto found = keyAtTime(*sequence.keys, key.time);
+            if (found == sequence.keys->end() || found->outgoingInterpolation == key.interpolation)
+                continue;
+            if (found + 1 == sequence.keys->end())
+                return at(index, OperationResult::rejected(
+                                     OperationIssueCode::InvalidValue,
+                                     "The final keyframe interpolation must stay canonical Linear"));
+            found->outgoingInterpolation = key.interpolation;
+            changed = true;
+        }
+    }
+    // Aligned handles follow and Auto handles are recomputed, once, against the curve as it was.
+    for (std::size_t index = 0; index < sequences.size(); ++index)
+        if (!before[index].empty())
+            document::settleKeyframeHandles(*sequences[index].keys, before[index]);
+    return std::nullopt;
 }
 } // namespace
 
@@ -2182,13 +2398,28 @@ OperationResult SetParameterKeys::apply(document::Draft& draft) const {
             OperationIssueCode::InvalidValue,
             which + " is driven by a value node and has no keys; give it a constant value with "
                     "bloom.parameter.set-source first");
-    for (std::size_t first = 0; first < keys_.size(); ++first)
-        for (std::size_t second = first + 1; second < keys_.size(); ++second)
-            if (keys_[first].time == keys_[second].time)
-                return OperationResult::rejected(
-                    OperationIssueCode::InvalidOrder,
-                    which + ": keys " + std::to_string(first) + " and " + std::to_string(second) +
-                        " are at the same time; give each key its own time");
+    // Duplicate times by sorting: the pair named is the earliest key that has a later twin, with
+    // its first twin, exactly as a pairwise comparison in key order would find it.
+    {
+        std::vector<std::size_t> order(keys_.size());
+        for (std::size_t index = 0; index < order.size(); ++index)
+            order[index] = index;
+        std::ranges::stable_sort(order, {}, [&](const std::size_t index) { return keys_[index].time; });
+        std::optional<std::pair<std::size_t, std::size_t>> clash;
+        for (std::size_t position = 1; position < order.size(); ++position) {
+            const bool groupStart =
+                position == 1 || !(keys_[order[position - 2]].time == keys_[order[position - 1]].time);
+            if (groupStart && keys_[order[position]].time == keys_[order[position - 1]].time &&
+                (!clash || order[position - 1] < clash->first))
+                clash = std::pair{order[position - 1], order[position]};
+        }
+        if (clash)
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidOrder,
+                which + ": keys " + std::to_string(clash->first) + " and " +
+                    std::to_string(clash->second) +
+                    " are at the same time; give each key its own time");
+    }
 
     std::vector<OperationOutput> outputs;
     bool changed = false;
@@ -2222,64 +2453,80 @@ OperationResult SetParameterKeys::apply(document::Draft& draft) const {
             changed = true;
         }
     }
-    std::vector<core::RationalTime> times;
-    times.reserve(keys_.size());
-    for (std::size_t index = 0; index < keys_.size(); ++index) {
-        const auto& key = keys_[index];
-        const auto at = [&](const OperationResult& rejected) {
-            return OperationResult::rejected(
-                rejected.issues.empty() ? OperationIssueCode::InvalidValue
-                                        : rejected.issues.front().code,
-                "Key " + std::to_string(index) + " of parameter " +
-                    std::to_string(parameter_.value()) + ": " +
-                    (rejected.issues.empty() ? std::string("refused")
-                                             : rejected.issues.front().message));
-        };
-        auto set = std::visit(
-            [&](const auto& held) {
-                return SetKeyframeAtTimeForParameter(composition_, parameter_, key.time, held)
-                    .apply(draft);
-            },
-            key.value);
-        if (set.status == OperationStatus::Rejected)
-            return at(set);
-        changed = changed || set.status == OperationStatus::Applied;
-        for (auto& output : set.outputs)
-            outputs.push_back(std::move(output));
-        times.push_back(key.time);
-    }
+    if (keys_.empty())
+        return changed ? OperationResult::applied() : OperationResult::noChange();
+
+    const auto at = [&](const std::size_t index, const OperationResult& rejected) {
+        return OperationResult::rejected(
+            rejected.issues.empty() ? OperationIssueCode::InvalidValue
+                                    : rejected.issues.front().code,
+            "Key " + std::to_string(index) + " of parameter " +
+                std::to_string(parameter_.value()) + ": " +
+                (rejected.issues.empty() ? std::string("refused")
+                                         : rejected.issues.front().message));
+    };
+    // A constant parameter is made animated at the first key's time, in this same operation (one
+    // undo step): its constant becomes a key there, which the first key then sets.
     composition = draft.project().findComposition(composition_);
     parameter = composition->parameters().find(parameter_);
-    if (const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source)) {
-        const auto last = lastKeyTime(composition->animationCurves(), source->curveId);
-        for (std::size_t index = 0; index < keys_.size(); ++index) {
-            const auto& key = keys_[index];
-            if (key.interpolation == document::KeyframeInterpolation::Linear ||
-                (last && key.time == *last))
-                continue;
-            const auto id = keyAtTime(composition->animationCurves(), source->curveId, key.time);
-            if (!id)
-                continue;
-            auto applied = SetKeyframeInterpolation(composition_, source->curveId, *id,
-                                                    key.interpolation)
-                               .apply(draft);
-            if (applied.status == OperationStatus::Rejected)
-                return OperationResult::rejected(
-                    applied.issues.empty() ? OperationIssueCode::InvalidValue
-                                           : applied.issues.front().code,
-                    "Key " + std::to_string(index) + " of parameter " +
-                        std::to_string(parameter_.value()) + ": " +
-                        (applied.issues.empty() ? std::string("interpolation refused")
-                                                : applied.issues.front().message));
-            changed = changed || applied.status == OperationStatus::Applied;
-            composition = draft.project().findComposition(composition_);
+    if (std::holds_alternative<document::ConstantValueSource>(parameter->source)) {
+        auto animated = createAnimationForParameter(draft, composition_, parameter_,
+                                                    keys_.front().time, std::nullopt);
+        if (animated.status == OperationStatus::Rejected) {
+            auto issue = animated.issues.empty()
+                             ? OperationIssue{OperationIssueCode::InvalidValue, ""}
+                             : animated.issues.front();
+            issue.message = "Parameter " + std::to_string(parameter_.value()) +
+                            " cannot be animated: " +
+                            (issue.message.empty() ? std::string("its schema has no animation")
+                                                   : issue.message);
+            return at(0, OperationResult::rejected(issue.code, issue.message));
         }
+        outputs = std::move(animated.outputs);
+        changed = true;
+        composition = draft.project().findComposition(composition_);
+        parameter = composition->parameters().find(parameter_);
     }
+    const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source);
+    if (source == nullptr)
+        return at(0, OperationResult::rejected(
+                         OperationIssueCode::InvalidValue,
+                         which + " is driven by a value node and has no keys; give it a constant "
+                                 "value with bloom.parameter.set-source first"));
+    const auto* stored = composition->animationCurves().find(source->curveId);
+    if (stored == nullptr)
+        return at(0, invalidCurve(source->curveId));
+
+    auto staged = *stored;
+    bool merged = false;
+    auto rejection = std::visit(
+        [&](auto& curve) {
+            return mergeParameterKeys(draft, *composition, *parameter, curve, keys_, outputs,
+                                      merged, at);
+        },
+        staged);
+    if (rejection)
+        return *rejection;
+    if (merged) {
+        if (!composition->animationCurves().replace(std::move(staged)))
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidValue,
+                "Animation curve " + std::to_string(source->curveId.value()) +
+                    " refused the keys of parameter " + std::to_string(parameter_.value()) +
+                    " (a time or value is not valid for the curve)");
+        changed = true;
+    }
+
     auto result = changed ? OperationResult::applied(std::move(outputs))
                           : OperationResult::noChange(std::move(outputs));
-    if (changed)
+    if (changed) {
+        std::vector<core::RationalTime> times;
+        times.reserve(keys_.size());
+        for (const auto& key : keys_)
+            times.push_back(key.time);
         if (auto warning = keysOutsideLayerRange(*composition, parameter_, times))
             result.issues.push_back(std::move(*warning));
+    }
     return result;
 }
 
