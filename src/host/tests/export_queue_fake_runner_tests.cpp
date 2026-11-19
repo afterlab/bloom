@@ -203,6 +203,11 @@ void testSucceedsWithProgressAndWaitingForViewer() {
                std::holds_alternative<host::ExportJobSucceeded>(events.events.front().payload) &&
                std::holds_alternative<host::ExportQueueDrained>(events.events.back().payload),
            "terminal event, then the drain");
+    // #746: a queue job's terminal event says it is not transient.
+    expect(!events.events.empty() &&
+               std::holds_alternative<host::ExportJobSucceeded>(events.events.front().payload) &&
+               !std::get<host::ExportJobSucceeded>(events.events.front().payload).transient,
+           "a queue job's terminal event is not transient");
     const auto log = f.service->log(job, 0);
     expect(!log.entries.empty() && log.entries.back().sequence == log.lastSequence,
            "the log is readable");
@@ -466,6 +471,15 @@ void testTransientAndPlatform() {
                "an active transient job cannot be acknowledged");
         expect(f.pumpUntil([&] { return host::isTerminal(f.view(*submitted.job)->state); }),
                "the transient job finishes");
+        {
+            // #746: the terminal event carries the transient flag, so feedback can tell an agent's
+            // or a script's render from the artist's own queue job.
+            bool sawTransient = false;
+            for (const auto& event : f.service->events(0).events)
+                if (const auto* done = std::get_if<host::ExportJobSucceeded>(&event.payload))
+                    sawTransient = sawTransient || (done->job == *submitted.job && done->transient);
+            expect(sawTransient, "a transient job's terminal event is marked transient");
+        }
         {
             // Issue #585: a finished job shows no pending destination check.
             const auto done = f.view(*submitted.job);

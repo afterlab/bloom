@@ -917,9 +917,9 @@ struct Pump final {
         case ExportJobState::DoneWithWarnings:
             terminal == ExportJobState::Done ? ++s.drained.succeeded
                                              : ++s.drained.succeededWithWarnings;
-            produced.push_back(ExportJobSucceeded{id, run,
-                                                  terminal == ExportJobState::DoneWithWarnings,
-                                                  std::move(verifications), std::move(imports)});
+            produced.push_back(
+                ExportJobSucceeded{id, run, terminal == ExportJobState::DoneWithWarnings,
+                                   std::move(verifications), std::move(imports), job.transient});
             log(id, job,
                 detail::exportLog(runtime::DiagnosticSeverity::Information, "export.job.done",
                                   "Export finished"));
@@ -927,13 +927,14 @@ struct Pump final {
         case ExportJobState::Failed:
             ++s.drained.failed;
             produced.push_back(ExportJobFailed{id, run, job.failure.value_or(ExportFailure{}),
-                                               std::move(verifications), std::move(imports)});
+                                               std::move(verifications), std::move(imports),
+                                               job.transient});
             break;
         default:
             ++s.drained.cancelled;
-            produced.push_back(ExportJobCancelled{id, run,
-                                                  job.stopCause.value_or(ExportStopCause::User),
-                                                  std::move(verifications), std::move(imports)});
+            produced.push_back(
+                ExportJobCancelled{id, run, job.stopCause.value_or(ExportStopCause::User),
+                                   std::move(verifications), std::move(imports), job.transient});
             log(id, job,
                 detail::exportLog(runtime::DiagnosticSeverity::Information, "export.job.stopped",
                                   "Export stopped"));

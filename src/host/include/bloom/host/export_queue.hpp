@@ -577,7 +577,9 @@ struct ExportQueueSnapshot final {
 // Typed terminal transitions so a panel, a sound or an OS-notification service can react without
 // polling. The engine names what happened; it has no notion of sounds or notifications. Each job
 // event carries its outputs' verification and, separately, their asset import results: an import
-// failure never turns a succeeded export into a failure.
+// failure never turns a succeeded export into a failure. `transient` says the job was a transient
+// one (submitTransient(): an agent's or a script's render, export or capture, issue #746), so a
+// feedback service can tell it from the artist's own queue jobs without reading the snapshot.
 struct ExportJobSucceeded final {
     ExportJobId job;
     std::uint64_t run = 0;
@@ -585,6 +587,7 @@ struct ExportJobSucceeded final {
     bool withWarnings = false;
     std::vector<ExportOutputVerification> outputs;
     std::vector<ExportAssetImportResult> imports;
+    bool transient = false;
 };
 
 struct ExportJobFailed final {
@@ -594,6 +597,7 @@ struct ExportJobFailed final {
     std::vector<ExportOutputVerification> outputs;
     // Outputs that published before the failure still import when they asked to.
     std::vector<ExportAssetImportResult> imports;
+    bool transient = false;
 };
 
 struct ExportJobCancelled final {
@@ -604,6 +608,7 @@ struct ExportJobCancelled final {
     // published stay published and are counted here.
     std::vector<ExportOutputVerification> outputs;
     std::vector<ExportAssetImportResult> imports;
+    bool transient = false;
 };
 
 // The runner went idle: every started job is terminal. Counts cover the jobs that reached a
