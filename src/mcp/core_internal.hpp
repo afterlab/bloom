@@ -198,7 +198,10 @@ inline constexpr std::size_t kMcpFileSessions = 4;
                                               const McpRequestControl& control);
 
 // ---- Projections (projections.cpp, tools_document.cpp)
-[[nodiscard]] yyjson_mut_val* commandResult(Json& out, const commands::CommandResult& result);
+// `withOutputs` false leaves out the `outputs` list (transact's "summary" response replaces it, so
+// a transaction that creates hundreds of thousands of ids never builds them as JSON, #744).
+[[nodiscard]] yyjson_mut_val* commandResult(Json& out, const commands::CommandResult& result,
+                                            bool withOutputs = true);
 [[nodiscard]] yyjson_mut_val* parameterRecord(Json& out, const document::ParameterRecord& value);
 [[nodiscard]] yyjson_mut_val* parameterSummary(Json& out, const document::ParameterRecord& value);
 // query kind=enums: the interpolation, ease and Easy Ease vocabularies with their stable ids.

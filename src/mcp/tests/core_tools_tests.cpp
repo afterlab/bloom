@@ -2442,6 +2442,31 @@ void mcpFold() {
                    contains(result, "sha256:") && contains(result, R"("byName":{)") &&
                    !contains(result, R"("outputs":)"),
                "keys read from files answer with a summary and no id list: " + result);
+        {
+            // #744: a summary never builds the id list, so a transaction that creates 150,000 keys
+            // answers within the response arena instead of failing after it applied.
+            std::ofstream times(dataFolder / "many-times.json");
+            std::ofstream values(dataFolder / "many-values.json");
+            times << '[';
+            values << '[';
+            for (int key = 0; key < 150000; ++key) {
+                times << (key ? "," : "") << '[' << key << ",10000]";
+                values << (key ? "," : "") << (key % 2 ? "0.25" : "0.75");
+            }
+            times << ']';
+            values << ']';
+        }
+        result = server.call(
+            "transact",
+            R"({"expectedRevision":)" + revisionOf(server) +
+                R"(,"response":"summary","operations":[{"op":"bloom.animation.set-key-columns",)"
+                R"("args":{"composition":1,"parameter":{"layer":"Wash","role":"opacity"},)"
+                R"("replace":true,"times":)" +
+                fromFile("many-times.json") + R"(,"values":)" + fromFile("many-values.json") +
+                "}}]}");
+        expect(contains(result, R"("isError":false)") && contains(result, R"("keyframe":150001)") &&
+                   !contains(result, R"("outputs":)"),
+               "a 150,000-key summary answers: " + result.substr(0, 400));
         const auto washNodes = server.call("query", R"({"kind":"nodes","composition":1})");
         const auto washOpacity = firstMatch(washNodes, R"re("opacity":(\d+))re");
         const auto keysBack = server.call(

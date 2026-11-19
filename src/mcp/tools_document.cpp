@@ -522,7 +522,8 @@ bool matches(yyjson_val* value, const scripting::ValueKind kind) {
 }
 } // namespace
 
-yyjson_mut_val* commandResult(Json& out, const commands::CommandResult& result) {
+yyjson_mut_val* commandResult(Json& out, const commands::CommandResult& result,
+                              const bool withOutputs) {
     auto* value = out.object();
     out.set(value, "succeeded", out.boolean(result.succeeded()));
     out.set(value, "revision", out.number(result.afterRevision.value()));
@@ -543,6 +544,8 @@ yyjson_mut_val* commandResult(Json& out, const commands::CommandResult& result) 
         out.append(diagnostics, detail);
     }
     out.set(value, "diagnostics", diagnostics);
+    if (!withOutputs)
+        return value;
     auto* outputs = out.array();
     for (const auto& output : result.outputs) {
         auto* record = out.object();
@@ -830,7 +833,7 @@ yyjson_mut_val* transactTool(McpServerCore::State& core, Json& out, McpCall& cal
     const auto result = call.session.execute(std::move(transaction));
     if (!result.command)
         throwUnavailable(call, result);
-    auto* value = commandResult(out, *result.command);
+    auto* value = commandResult(out, *result.command, response != "summary");
     if (response == "summary")
         summarizeOutputs(out, value, *result.command);
     auto* warnings = out.array();
