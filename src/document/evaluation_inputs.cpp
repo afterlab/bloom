@@ -179,4 +179,29 @@ bool sameEvaluationInputs(const Project& left, const Project& right) {
            sameRecords(left.typedDataBlocks(), right.typedDataBlocks());
 }
 
+EvaluationInputChanges evaluationInputChanges(const Project& left, const Project& right) {
+    EvaluationInputChanges changes;
+    changes.project = left.id() != right.id() ||
+                      !sameRecords(left.assets(), right.assets(),
+                                   [](const AssetRecord& a, const AssetRecord& b) {
+                                       return sameEvaluationRecord(a, b);
+                                   }) ||
+                      !sameRecords(left.extensionRecords(), right.extensionRecords()) ||
+                      !sameRecords(left.typedDataBlocks(), right.typedDataBlocks());
+    const auto before = left.compositions();
+    const auto after = right.compositions();
+    const bool aligned = before.size() == after.size() &&
+                         std::ranges::equal(before, after, {}, &Composition::id, &Composition::id);
+    changes.structure = !aligned;
+    if (aligned && before.data() == after.data())
+        return changes;
+    for (std::size_t index = 0; index < after.size(); ++index) {
+        const auto& composition = after[index];
+        const auto* previous = aligned ? &before[index] : left.findComposition(composition.id());
+        if (previous == nullptr || !sameEvaluationInputs(*previous, composition))
+            changes.compositions.push_back(composition.id());
+    }
+    return changes;
+}
+
 } // namespace bloom::document

@@ -247,6 +247,13 @@ struct CommandResult {
     // composition that renders it", so other compositions keep their retained frames; std::nullopt
     // here is the conservative "any composition". Replayed by undo/redo.
     std::optional<document::CompositionId> affectedComposition;
+    // #745. A changed execute: the compositions whose evaluation inputs it changed, from the
+    // evaluation-input proof itself (document::evaluationInputChanges), so a caller that checks
+    // what an edit may have broken (MCP's compile check) reuses the commit's own footprint.
+    // std::nullopt when the change reaches beyond named compositions (the project id, an asset,
+    // an extension record or a typed data block), and for every other result; empty for a
+    // render-neutral step. Not replayed by undo/redo.
+    std::optional<std::vector<document::CompositionId>> evaluationChangedCompositions;
     // Oldest undo entries retired to keep the configured history entry/charged-byte bounds.
     // Redo-branch replacement is ordinary branch semantics and is not included here.
     std::size_t historyEntriesDropped = 0;

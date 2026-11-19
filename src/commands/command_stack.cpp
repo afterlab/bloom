@@ -38,6 +38,7 @@ CommandResult makeResult(CommandAction action, CommandStatus status,
         .affectedTimes = std::nullopt,
         .layerIdentityRemaps = std::nullopt,
         .affectedComposition = std::nullopt,
+        .evaluationChangedCompositions = std::nullopt,
     };
 }
 
@@ -424,6 +425,7 @@ struct PreparedTransaction::Detail final {
     std::optional<AffectedTimeFootprint> affectedTimes;
     std::optional<std::vector<LayerIdentityRemap>> layerIdentityRemaps;
     std::optional<document::CompositionId> affectedComposition;
+    std::optional<std::vector<document::CompositionId>> evaluationChangedCompositions;
     CommandStack::Work work;
 };
 
@@ -671,8 +673,11 @@ PreparedTransaction CommandStack::prepare(const document::Snapshot& before,
     // render.
     if (changed) {
         ++work.evaluationInputProofs;
-        const bool sameInputs =
-            document::sameEvaluationInputs(before.project(), std::as_const(draft).project());
+        auto inputChanges =
+            document::evaluationInputChanges(before.project(), std::as_const(draft).project());
+        const bool sameInputs = inputChanges.same();
+        if (!inputChanges.project)
+            prepared.evaluationChangedCompositions = std::move(inputChanges.compositions);
         if (sameInputs && !publishedFootprint) {
             renderAffecting = false;
         } else if (!sameInputs && !renderAffecting) {
@@ -896,6 +901,7 @@ CommandResult CommandStack::publishStep(PreparedTransaction&& preparedValue) {
     result.affectedTimes = prepared.affectedTimes;
     result.layerIdentityRemaps = prepared.layerIdentityRemaps;
     result.affectedComposition = prepared.affectedComposition;
+    result.evaluationChangedCompositions = std::move(prepared.evaluationChangedCompositions);
     const bool renderAffecting = prepared.renderAffecting;
     result.historyEntriesDropped = oldestDropped;
     result.historyEntryLimitReached = entryLimitReached;

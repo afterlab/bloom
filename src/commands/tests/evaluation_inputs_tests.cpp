@@ -12,8 +12,11 @@
 #include <array>
 #include <functional>
 #include <map>
+#include <optional>
 #include <set>
+#include <stdexcept>
 #include <string_view>
+#include <vector>
 
 namespace bloom::commands::test {
 namespace {
@@ -26,7 +29,12 @@ using namespace document;
     const auto before = document.snapshot();
     auto draft = Draft::isolatedFrom(before);
     edit(draft.project());
-    return sameEvaluationInputs(before.project(), std::as_const(draft).project());
+    const bool same = sameEvaluationInputs(before.project(), std::as_const(draft).project());
+    // #745: the per-composition diff the command stack proves with gives the same answer.
+    const auto changes = evaluationInputChanges(before.project(), std::as_const(draft).project());
+    if (changes.same() != same)
+        throw std::logic_error("evaluationInputChanges disagrees with sameEvaluationInputs");
+    return same;
 }
 
 [[nodiscard]] Composition& mainComposition(Project& project) {
@@ -119,6 +127,21 @@ void testClassification(TestContext& test) {
     }),
                 "a stack entry is an evaluation input");
 
+    {
+        // #745: the diff names the changed composition, an added one, and a change outside any
+        // composition (an asset) as `project`.
+        Document document(makeProject());
+        const auto before = document.snapshot();
+        auto draft = Draft::isolatedFrom(before);
+        firstLayer(draft.project()).enabled = false;
+        auto changes = evaluationInputChanges(before.project(), std::as_const(draft).project());
+        test.expect(!changes.project && !changes.structure &&
+                        changes.compositions == std::vector<CompositionId>{kCompositionId},
+                    "a layer edit names its composition only");
+        test.expect(evaluationInputChanges(before.project(), before.project()).same(),
+                    "an unchanged project names nothing");
+    }
+
     NodeLayoutRecord mutedRecord;
     mutedRecord.muted = true;
     test.expect(nodeMuted(NodeLayout{{kFirstLayerNodeId, mutedRecord}}, kFirstLayerNodeId) &&
@@ -142,6 +165,9 @@ void expectNeutralRoundTrip(TestContext& test, Fixture& fixture, const CommandRe
                             const std::string_view what) {
     test.expect(result.changed() && !result.renderAffecting && !result.affectedTimes.has_value(),
                 what);
+    test.expect(!result.evaluationChangedCompositions ||
+                    result.evaluationChangedCompositions->empty(),
+                "a presentation edit names no composition");
     const auto undo = fixture.stack.undo();
     test.expect(undo.changed() && !undo.renderAffecting, "undo of a presentation edit is neutral");
     const auto redo = fixture.stack.redo();
@@ -151,6 +177,10 @@ void expectNeutralRoundTrip(TestContext& test, Fixture& fixture, const CommandRe
 void expectAffecting(TestContext& test, Fixture& fixture, const CommandResult& result,
                      const std::string_view what) {
     test.expect(result.changed() && result.renderAffecting, what);
+    // #745: the commit names the one composition whose evaluation inputs it changed.
+    test.expect(result.evaluationChangedCompositions ==
+                    std::optional(std::vector<CompositionId>{kCompositionId}),
+                "the commit names the composition it changed");
     const auto undo = fixture.stack.undo();
     test.expect(undo.changed() && undo.renderAffecting, "undo of an evaluation edit invalidates");
     const auto redo = fixture.stack.redo();

@@ -2,6 +2,8 @@
 
 #include <bloom/document/project.hpp>
 
+#include <vector>
+
 namespace bloom::document {
 
 // Issue #399. The ONE classification of project truth into evaluation inputs and presentation.
@@ -66,5 +68,23 @@ namespace bloom::document {
 // between them cannot change any rendered pixel of any composition. Unchanged shared storage is
 // recognized by identity, so the cost is proportional to what the edit touched.
 [[nodiscard]] bool sameEvaluationInputs(const Project& left, const Project& right);
+
+// #745: where two versions of a project differ in evaluation inputs. `project` is a change outside
+// any one composition (the project id, assets, extension records, typed data blocks); `structure`
+// is a composition added, removed or moved; `compositions` lists, in the right version's order,
+// each composition whose own evaluation inputs changed or which the left version lacks. The two
+// versions present identical evaluation inputs exactly when same() holds, so this one diff is both
+// the command stack's proof and the scope of what an edit may have broken. Same cost as
+// sameEvaluationInputs(Project).
+struct EvaluationInputChanges final {
+    bool project = false;
+    bool structure = false;
+    std::vector<CompositionId> compositions;
+    [[nodiscard]] bool same() const noexcept {
+        return !project && !structure && compositions.empty();
+    }
+};
+[[nodiscard]] EvaluationInputChanges evaluationInputChanges(const Project& left,
+                                                            const Project& right);
 
 } // namespace bloom::document
