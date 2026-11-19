@@ -49,7 +49,7 @@ connected since, last activity, requests in flight, the last tool), and the acti
 tool call with its client, outcome, error and duration, and every refused request (a wrong token,
 a browser origin, too many clients). Identical refusals within a second are counted on one line,
 and repeated compile failures of one composition update its line with a count ("×3"). An open
-agent session is named on the status line.
+agent session is named on the status line, and an event stream's opening and closing are listed.
 Up to 512 lines are kept; "Earlier activity was trimmed." marks a gap.
 
 ### Limits
@@ -92,14 +92,23 @@ same in whole seconds, rounded up.
 | `commitWork`: work in one `transact` (desktop only) | 1,000,000 units | `bloom.mcp.commit-too-large` |
 | `transactOutputs`: created ids a `transact` lists in `outputs` | 10,000 | never refused: answered in the summary form |
 | `asyncJobs`: asynchronous `transact` jobs queued or running, all clients (desktop only) | 16 | `bloom.mcp.jobs-full`, busy |
+| `retainedEvents`: events kept for `events` and every subscription (the one buffer subscribers share) | 1,024 | never refused: a cursor further behind is told `resetRequired` (reason `overflow`) |
+| `eventsPerAnswer`: events one `events` answer lists (its `limit`) | 1,024 | a larger `limit` is an invalid argument; past it, `truncated` and continue from `sequence` |
+| `eventIntervalMinMs`, `eventIntervalMaxMs`: an `events.subscribe` interval | 50 to 60,000 ms | an invalid argument outside them |
+| `eventCompositions`: compositions one notification or summary lists | 64 | never refused: the rest are counted in `compositionsOmitted` |
+| `eventJobs`: asynchronous `transact` jobs a subscription follows | 80 | never refused: the oldest finished job is left out |
+| `eventStreamsPerClient`: open `GET` streams of one session | 1 | never refused: a newer `GET` ends the older stream |
 
 `initialize` also reports `requestWorkers`, `clients`, `connections`, `renderFrames`,
 `retainedEvents`, `eventOutputs` (the ids an `events` record keeps), `eventsOutputsPerAnswer`,
 `retainedJobs` (finished asynchronous jobs that stay listed: 64), `idempotencyKeys` (keys remembered
 at once: 1,024; the oldest goes first), `idempotencyKeyBytes` (128), `idempotencyWindowMs` (how long
 a key is remembered: 600,000) and `idempotencyAnswerBytes` (the largest answer a key keeps whole:
-64 KiB; a larger one is kept in its compact form). Nothing that was refused ran, so send it again
-once the condition clears.
+64 KiB; a larger one is kept in its compact form). For [event subscriptions](#being-told-what-changed-event-subscriptions)
+it reports `eventsPerAnswer` (1,024), `eventIntervalMinMs` (50), `eventIntervalMaxMs` (60,000),
+`eventCompositions` (64), `eventJobs` (80), `eventStreamsPerClient` (1) and `eventKeepAliveMs`
+(15,000); they are in the table below. Nothing that was refused ran, so send it again once the
+condition clears.
 
 ### Edits, undo and project changes
 
@@ -118,7 +127,8 @@ with a stable code: `bloom.mcp.cancelled`, `bloom.mcp.deadline-exceeded`, `bloom
 queue of 16 edits. The [limits](#limits) table lists every bound an edit can meet.
 
 Clients stay connected when you open or create a project. While a project is opening, calls answer
-`bloom.mcp.project-unavailable`; an `events` cursor from the old project reports `resetRequired`.
+`bloom.mcp.project-unavailable`; an `events` cursor from the old project reports `resetRequired`, and
+an event subscription says so in its next notification.
 
 #### Long edits: asynchronous transact, progress and cancellation
 
@@ -160,6 +170,58 @@ the project is remembered, applied or refused (a stale revision, for example): o
 cancelled or outlived its project is forgotten, so sending it again runs it. The same key with
 different arguments is refused with `bloom.mcp.idempotency-conflict` and nothing is applied. Keys
 are shared by every client and kept by both hosts.
+
+#### Being told what changed: event subscriptions
+
+Instead of polling `events`, an agent can be told. `events.subscribe` subscribes the calling MCP
+session: `{kinds?, compositions?, intervalMs?, afterSequence?}`, where `kinds` names the event
+kinds above plus `job` (the steps of asynchronous `transact` jobs), `compositions` lists the
+compositions to hear about (a project-wide change always comes through), and `intervalMs` (50 to
+60,000, default 250) is the least time between two notifications. It answers `{subscription,
+created, method, sequence, intervalMs, kinds, compositions}`; calling it again changes the filter
+and interval in place, and `events.unsubscribe` ends it. Ending the MCP session ends it too.
+
+Bloom then sends `notifications/bloom/events`. The first change after a quiet spell is sent at once,
+and everything after it within the interval is coalesced into the next one, so a burst of a
+thousand edits is a handful of notifications. Each says what changed since the previous one:
+
+```json
+{"jsonrpc":"2.0","method":"notifications/bloom/events","params":{
+  "subscription":1,"sequence":212,"fromSequence":181,"toSequence":212,
+  "resetRequired":false,"count":16,"fromRevision":91,"toRevision":106,
+  "kinds":{"revision":16},"origins":{"agent":15,"user":1},
+  "compositions":[{"composition":1,"count":15,"fromRevision":91,"toRevision":106}],
+  "compositionsOmitted":0,"project":{"count":1,"fromRevision":97,"toRevision":97},
+  "jobs":[{"job":"transact-4","mine":true,"state":"running","phase":"preparing",
+           "completed":120,"total":400,"message":"Applying operation 120 of 400",
+           "finished":false}]}}
+```
+
+`count`, `kinds` and `origins` count the selected events; `compositions` gives each composition's
+count and revision range (at most 64; the rest are counted in `compositionsOmitted`), and `project`
+the changes that name no composition. `jobs` lists each followed job that moved since the
+previous notification, with its newest step (`mine` is true for the session's own). Read the events
+themselves with `events` from the previous notification's `sequence`. `events` with `response`
+`summary` answers the same object for one call.
+
+Over Streamable HTTP, open the stream with `GET /mcp`, `Accept: text/event-stream` and the
+session's `Mcp-Session-Id`. Each notification is a server-sent event whose `id` is its `sequence`;
+reconnect with `Last-Event-ID` to continue after it, or without it to continue after the last
+notification Bloom sent. A session has one stream: a newer `GET` ends the older one. A quiet stream
+sends an SSE comment every 15 seconds, and the stream ends when the subscription ends, the session
+ends or the server stops. While its stream is open and reading, a client counts as active, so it is
+not ended for idling. The stream holds one of the 16 connections, and the MCP Server editor
+lists when it opened and closed. On stdio (`bloom-mcp`) the notifications arrive on stdout between
+answers, as JSON-RPC notifications.
+
+Bloom keeps no backlog for a subscriber: each notification is built when it is due from the events
+`events` retains (`limits.retainedEvents`, 1,024), which every subscriber shares. A subscriber that
+falls further behind than that (a stream that stopped reading, or more changes in one interval than
+are retained) gets one notification with `resetRequired: true`, `reason: "overflow"` and `count`
+0, and continues from the newest event. When the project is replaced (opened, created or closed,
+from the File menu or an agent) the next notification says `resetRequired` with
+`reason: "project-replaced"`, and the subscription goes on with the new project. Either way, read
+again whatever you cache.
 
 ### Projects and the application window
 
@@ -390,7 +452,7 @@ and needs `Content-Type: application/json` and an `Accept` that allows both `app
 `DELETE /mcp` ends the session; an ended or expired session answers 404 and the client initializes
 again. A task tool (`render`, `export`, `capture`, `export.wait`, `jobs.wait`) or a `transact` that
 carries `_meta.progressToken` is answered as `text/event-stream`: `notifications/progress` events,
-then the result (a call that finishes before it has progress to report answers as plain JSON). `GET` is 405: Bloom sends no server-initiated messages. Requests from a browser `Origin`, a
+then the result (a call that finishes before it has progress to report answers as plain JSON). `GET` (with `Accept: text/event-stream` and the `Mcp-Session-Id`) opens the session's stream of server-initiated notifications once it called `events.subscribe` (see [Being told what changed](#being-told-what-changed-event-subscriptions)); without a subscription it is 405, and without that `Accept` 406. Requests from a browser `Origin`, a
 `Host` other than `127.0.0.1:<port>` or `localhost:<port>`, or without the token are refused (403
 or 401) before anything else is read. Disconnecting does not cancel a request; send
 `notifications/cancelled`.
@@ -467,7 +529,8 @@ Use `tools/call` with `name` and `arguments`:
 | `transact` | `expectedRevision`, an `operations` array of `{op,args}`, and optional `label`, `response` (`full`, the default, or `summary`) and `compileCheck` (default `true`). Returns one atomic command result, created IDs, structured diagnostics and `compileFailures` and `compileWarnings` (see [Edits and diagnostics](#edits-and-diagnostics)). `outputs` lists at most 10,000 created ids (`transactOutputs`): past that the answer is in the summary form, `outputSummary` `{count, byName, digest}`, with `outputsSummarized` naming the limit. At most 256 diagnostics are listed (the rest are counted in `diagnosticsOmitted`). A transaction that applied is always answered: one whose full answer would exceed the response bound comes back compact, with `responseCompacted: true`. Arguments the descriptor marks `contextual` may be omitted and are filled from the session (the live editor context in the desktop application). Coded failures carry `structuredContent.diagnostic` `{code, message}` with a `bloom.mcp.*` code. |
 | `render` | `composition`, `frame` or inclusive `first`/`last`, `preset`, `destination`, optional `overwrite` (`ask`, the default, `replace` or `refuse`). Returns `publishedFrames`, `preservationReport` and `files` with SHA-256 digests. Output keeps alpha; the composition background colour is not rendered. With `loudnessLufs` the audio is normalized to that EBU R128 integrated loudness under the true-peak ceiling, and the result carries `loudness` (measured and delivered level and true peak, the gain, and the limiter's deepest reduction; a level that could not be measured, as in silence, is `null`). |
 | `export` | Render arguments plus optional `profile`, `audio`, `sampleRate`, `loudnessLufs` (-40 to -5) with `truePeakDbtp` (-12 to 0, default -1), `encoder` (`automatic`, the default, `software` or `hardware`; on macOS `automatic` makes ProRes with the system's encoder and fails if it cannot, and `software` uses Bloom's FFmpeg encoder), `workerMemoryCapBytes` and `workerThreads` (see [Export worker limits](#export-worker-limits)). Uses the existing MEDIA-4 composition runner for ProRes preview, DNxHR and PCM output. Output keeps alpha; the composition background colour is not rendered. |
-| `events` | `sinceRevision`, optionally `afterSequence`. Returns revision-inclusive events, a sequence cursor and `resetRequired` when retained history cannot cover the cursor. Each command event carries `outputCount`; it lists its created ids only when it made at most 1,024 (otherwise `outputsOmitted: true`). One answer lists at most 8,192 ids: when it stops early, `truncated` is `true` and `sequence` is the last event listed, so pass it as `afterSequence` to continue. |
+| `events` | `sinceRevision`, optionally `afterSequence`, `limit` (1 to 1,024, the default), `kinds`, `compositions` and `response` (`events`, the default, or `summary`). Returns revision-inclusive events, a sequence cursor and `resetRequired` when retained history cannot cover the cursor. Each command event carries `outputCount`; it lists its created ids only when it made at most 1,024 (otherwise `outputsOmitted: true`). One answer lists at most `limit` events and 8,192 ids: when it stops early, `truncated` is `true` and `sequence` is the last event listed; pass it as `afterSequence` to continue. `kinds` and `compositions` select events (see [Being told what changed](#being-told-what-changed-event-subscriptions)); `response` `summary` answers the same ranges and counts a subscription's notification carries instead of the events. |
+| `events.subscribe`, `events.unsubscribe` | Optional `kinds`, `compositions`, `intervalMs` (50 to 60,000, default 250) and `afterSequence`. Subscribes this MCP session to coalesced change notifications, or ends the subscription; see [Being told what changed](#being-told-what-changed-event-subscriptions). |
 | `history` | `action` (`undo` or `redo`) and `expectedRevision`. One step of the project's history, refused with a stale-revision result when the revision moved. In the desktop application it is queued like a `transact`, and it undoes the most recent step of any origin, including the artist's. |
 | `capture` | Optional `composition` and `frame` (defaults: the context composition at the context time; on stdio the session's composition at frame 0). Renders one PNG at composition resolution through the still export route, with the Viewer's display and view in the desktop application (not its exposure, gamma, channel, region of interest or preview resolution), and returns it as MCP `image` content. Output keeps alpha; the composition background colour is not rendered. A PNG larger than about 2.9 MiB is returned as a `resource_link` to the file with the notice `bloom.mcp.capture-too-large-for-inline`. Captures go to an `mcp-captures` folder in Bloom's per-user cache, which keeps the newest 16. |
 | `export.start`, `export.start-all`, `export.pause`, `export.resume`, `export.stop`, `export.stop-all`, `export.retry`, `export.confirm-replace` | The export queue's session commands (`jobs`, `job`, `output`). Each returns `accepted`, the queue revision and, when refused, the availability code and reason. |
@@ -677,10 +740,14 @@ another configuration must stay editable), and says so in `compileWarnings`: cod
 `bloom.runtime.evaluation.color-space-missing`, a `detail` naming the space, and the node and
 parameter as the subject. The node leaves the image unchanged until a listed space is chosen.
 
-**Events.** Besides command events (`kind` `revision`, `history` or `rejected`), `events` reports
-`{kind, revision, message, composition?, subject?, path?, projectName?, sequence}` records for
-`composition.compile-failed`, `project.saved`, `project.opened`, `project.created`,
-`project.closed` and `project.copy-saved`.
+**Events.** Besides command events (`kind` `revision` when the project changed, by an edit, an
+undo or a redo; `history` when the undo history changed, which follows every applied step; or
+`rejected`), `events` reports `{kind, revision, message, composition?, subject?, path?,
+projectName?, sequence}` records for `composition.compile-failed`, `project.saved`,
+`project.opened`, `project.created`, `project.closed` and `project.copy-saved`. A command event
+names the compositions it changed when the edit could name them; one that cannot (a project-wide
+change such as the project's name or an asset) names none and matches every `compositions`
+filter.
 
 Command events and every `transact` and `history` result also carry `origin`: `user` (the artist),
 `agent` (an MCP call) or `script` (the Script editor or `bloom-cli`), so a client can tell its own

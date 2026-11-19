@@ -63,6 +63,31 @@ them over MCP) through the same one-pass key merge, counted per key against the 
 `bloom-mcp` keeps idempotency keys and answers `async: true` and `jobs.wait` with
 `bloom.mcp.not-live`.
 
+Amendment (2026-11-20, issue #747, D2): agents can be told what changed instead of polling, and
+this supersedes every statement in this record that `GET` is 405 or that Bloom sends no
+server-initiated messages (kept as history). The tools `events.subscribe` and `events.unsubscribe`
+(both hosts) give the calling protocol session one subscription: a filter by event kind (the
+command and notice kinds, plus `job` for asynchronous transact steps) and by composition (a
+project-wide change matches every composition), and an interval of 50 ms to 60 s. The core
+delivers it through `McpEventStream` (`McpServerCore::openEventStream`) as
+`notifications/bloom/events`, at most one per interval, each the sequence and revision ranges of
+what changed since the previous one with counts by kind, origin and composition, and the newest
+step of each followed job (`McpJobEvent` from D1). Nothing is buffered per subscriber: a
+notification is built when it is due from the retained command events, the one bounded buffer
+every subscriber shares; a subscriber that falls behind it is told `resetRequired` with reason
+`overflow`, and a replaced project, which now takes a sequence of its own so even a caught-up
+cursor resets, gives reason `project-replaced`. The in-app server serves it on the Streamable HTTP
+`GET /mcp` stream (`Accept: text/event-stream`, the session id): each notification is an SSE event
+whose id is its sequence, so `Last-Event-ID` resumes after it; one stream per session, a newer
+one ends the older, a comment every 15 seconds keeps it alive, and it ends with its subscription,
+its session or the server. A session without a subscription is answered 405, so a client that
+opens the stream by habit is unaffected. `bloom-mcp` writes the notifications on stdout between
+answers. `events` gains `limit` (paging, at most 1,024 events per answer), `kinds`,
+`compositions` and `response: "summary"`, which answers the notification's shape. The bounds are
+advertised under `capabilities.experimental.bloom.limits` (`eventsPerAnswer`,
+`eventIntervalMinMs`, `eventIntervalMaxMs`, `eventCompositions`, `eventJobs`,
+`eventStreamsPerClient`, `eventKeepAliveMs`) and `eventSubscriptions: true`.
+
 Amendment (2026-11-20, issue #746): agent work is quiet, and agents can open a session. The
 export queue's terminal events carry `transient`. A transient (agent or script) job's outcome,
 an agent's refused command and an agent's compile failure are counted by `UiFeedback` and told

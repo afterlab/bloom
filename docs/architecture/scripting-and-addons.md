@@ -274,13 +274,29 @@ cancellation reaches the commit until it starts publishing. Every step is an `Mc
 (`McpCoreDependencies::jobEvents`): job id, client, state, phase, progress with the submitting
 request's progress token, revision and, when finished, its outcome, compile failures and activity
 summary. The service records a finished job as an activity line of its client, as it records a
-request; a subscription stream can carry the events unchanged. `jobs.wait` waits on the job and
+request; the core also keeps each job's newest step for event subscriptions (below). `jobs.wait` waits on the job and
 streams its progress; `jobs.list` and `jobs.cancel` list and stop transact jobs beside the Jobs
 panel's rows. An `idempotencyKey` maps to an `McpIdempotency` entry: the arguments' SHA-256 and the
 remembered answer (or the job), for ten minutes and at most 1,024 keys; an answer where the
 transaction never reached the command stack is forgotten so a retry runs. Asynchronous jobs need
 the live host; `bloom-mcp` keeps idempotency keys but answers `async: true` with
 `bloom.mcp.not-live`.
+
+**Subscriptions and coalesced events (#747 D2).** The core keeps the newest
+`retainedCommandEvents` command events and notices in one sequence-numbered ring, which the
+`events` tool pages (`limit`, `kinds`, `compositions`, or one `summary`) and every subscription
+shares. `events.subscribe` stores an `McpSubscription` on the protocol session (filter, interval,
+cursor); `McpServerCore::openEventStream` returns an `McpEventStream` whose `next()` waits on the
+core's `eventsChanged` condition and, once the interval since the previous notification has passed,
+builds `notifications/bloom/events` from the ring entries after its cursor (`summarizeEvents`) and
+the transact jobs that moved (`McpJobLine`, at most 80). Recording an event on the UI thread only
+appends to the ring and notifies; it never builds a notification or touches a subscriber, so its
+cost does not grow with subscribers. A cursor the ring no longer covers answers `resetRequired`
+(`overflow`); a project replacement takes a sequence of its own so every older cursor answers
+`project-replaced`. The HTTP host serves a stream on `GET /mcp` from the connection thread that
+received it (SSE id = sequence, `Last-Event-ID` resumes, one per session, ended through the
+client's stop source on DELETE, eviction or expiry); `serveStdio` runs one delivery thread that
+writes between answers under the output lock.
 
 ## Binding Stack
 
