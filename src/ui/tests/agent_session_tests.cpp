@@ -18,6 +18,7 @@
 #include <QKeyEvent>
 #include <QSignalSpy>
 #include <QWidget>
+#include <QWindow>
 
 #include <iostream>
 #include <memory>
@@ -176,9 +177,14 @@ void deferredRefresh() {
            "the Viewer still shows what it showed");
 
     // The artist presses a key: the Viewer refreshes before the key lands.
+    // Input sent to a widget directly is not the window's delivery and changes nothing.
     QWidget widget;
+    widget.show();
+    QKeyEvent toWidget(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+    QCoreApplication::sendEvent(&widget, &toWidget);
+    expect(evaluations.count() == 0, "only the window's delivery of the input refreshes");
     QKeyEvent press(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
-    QCoreApplication::sendEvent(&widget, &press);
+    QCoreApplication::sendEvent(widget.windowHandle(), &press);
     expect(evaluations.count() == 1 && !rig.session.viewerRefreshPending(),
            "the artist's interaction refreshes the Viewer");
 

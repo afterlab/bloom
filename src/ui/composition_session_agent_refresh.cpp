@@ -3,6 +3,8 @@
 // on demand or on the artist's own interaction (docs/user-guide/mcp.md, "Agent sessions").
 #include <bloom/ui/composition_session.hpp>
 
+#include <bloom/commands/transaction.hpp>
+
 #include <QThread>
 #include <QTimer>
 
@@ -39,6 +41,18 @@ void CompositionSession::deferPanelRefresh() {
     // commits still reaches the panels once per cadence instead of never.
     if (!deferredRefreshTimer_->isActive() && refreshHold_.has_value())
         deferredRefreshTimer_->start(refreshHold_->panelCadence);
+}
+
+void CompositionSession::catchUpForArtist(commands::Transaction* const transaction) {
+    // Only the agent's own commits can hold the window behind (an artist's commit adopts at once),
+    // so catching up shows the artist what the agent did, then the edit lands on the newest
+    // revision; its operations still validate against it.
+    if (!panelsDeferred_)
+        return;
+    const auto shown = snapshot_.revision();
+    refreshHeldViewer();
+    if (transaction != nullptr && transaction->expectedRevision() == shown)
+        transaction->setExpectedRevision(snapshot_.revision());
 }
 
 void CompositionSession::refreshHeldPanels() {

@@ -185,7 +185,9 @@ bool AgentSessionController::eventFilter(QObject* watched, QEvent* event) {
     case QEvent::TabletPress:
     case QEvent::TouchBegin:
         // The artist is at the window: show them what the agent did before their input lands.
-        if (open_.has_value() &&
+        // Only on the top-level window's delivery, before Qt picks the widget that receives it,
+        // so a panel that rebuilds while catching up never loses the widget the input was for.
+        if (open_.has_value() && watched != nullptr && watched->isWindowType() &&
             (session_.panelRefreshPending() || session_.viewerRefreshPending()))
             session_.refreshHeldViewer();
         break;

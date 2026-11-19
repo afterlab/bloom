@@ -1076,6 +1076,10 @@ class CompositionSession final : public QObject {
     // and `holdEvaluation` keeping the Viewer's provenance where it was.
     void adoptDocumentSnapshot(const commands::CommandResult* evidence, bool holdEvaluation);
     void deferPanelRefresh();
+    // #746: an artist's edit while an agent session holds the window behind the document. Catches
+    // the window up and, when `transaction` was built against what the window showed, re-aims it
+    // at the newest revision, so the artist's edit is never refused as stale.
+    void catchUpForArtist(commands::Transaction* transaction = nullptr);
     [[nodiscard]] bool handleResult(const commands::CommandResult& result);
     [[nodiscard]] const document::NodeRecord*
     nodeForSelection(const CompositionSelection& selection) const noexcept;
