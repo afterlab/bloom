@@ -20,8 +20,9 @@ int main() {
     auto registry = bloom::scripting::OperationRegistry::builtIn();
     // #637 adds bloom.node.write-to-path; #703 bloom.node.insert-on-link; #701
     // bloom.node.delete-unused; #627 bloom.node.write-to-number-list; #636
-    // bloom.node.bake-to-keyframes.
-    if (registry.descriptors().size() != 156U ||
+    // bloom.node.bake-to-keyframes; #747 bloom.animation.set-key-tracks.
+    if (registry.descriptors().size() != 157U ||
+        registry.find("bloom.animation.set-key-tracks") == nullptr ||
         registry.find("bloom.node.bake-to-keyframes") == nullptr ||
         registry.find("bloom.node.write-to-number-list") == nullptr ||
         registry.find("bloom.layer.set-timing") == nullptr ||
@@ -102,6 +103,77 @@ int main() {
     }
     session->document()->removeObserver(documentObserver);
     session->commandStack()->removeObserver(observer);
+
+    // #747: bloom-cli's JSON script carries a multi-parameter bulk key operation: tracks parse as
+    // {parameter, times, values, interpolations?, replace?}, its work is every track's keys, and a
+    // track the document refuses applies nothing.
+    {
+        const auto added = session->executeJsonOperation(
+            "bloom.layer.add-solid",
+            {{"name", bloom::scripting::Value{"Keyed"}},
+             {"color", bloom::scripting::Value{bloom::core::Color4d{1.0, 0.0, 0.0, 1.0}}}});
+        const auto script = bloom::scripting::parseScriptJson(
+            R"([{"op":"bloom.animation.set-key-tracks","args":{"tracks":[)"
+            R"({"parameter":{"layer":"Keyed","role":"opacity"},"times":[0,12],)"
+            R"("values":[0.0,1.0],"interpolations":["hold"]},)"
+            R"({"parameter":{"layer":"Keyed","role":"position"},"times":[0,6,12],)"
+            R"("values":[[0,0],[10,10],[20,0]],"replace":true}]}}])");
+        if (!added.succeeded() || !script || script.transactions().size() != 1U) {
+            std::cerr << "a set-key-tracks script does not parse\n";
+            return 23;
+        }
+        const auto transactions = script.transactions();
+        const auto& tracks = transactions.front().arguments.at("tracks");
+        const auto* list = std::get_if<bloom::scripting::ValueArray>(&tracks.storage);
+        if (list == nullptr || list->size() != 2U ||
+            !std::holds_alternative<bloom::scripting::KeyTrack>(list->front().storage)) {
+            std::cerr << "a set-key-tracks script does not carry key tracks\n";
+            return 24;
+        }
+        auto checked = registry.create(
+            "bloom.animation.set-key-tracks",
+            {{"composition", bloom::scripting::Value{bloom::scripting::StableId{1}}},
+             {"tracks", bloom::scripting::Value{bloom::scripting::ValueArray{
+                            bloom::scripting::Value{bloom::scripting::KeyTrack{
+                                .parameter = bloom::scripting::StableId{7},
+                                .times = {bloom::scripting::Value{0}, bloom::scripting::Value{1},
+                                          bloom::scripting::Value{2}},
+                                .values = {bloom::scripting::Value{0.0},
+                                           bloom::scripting::Value{0.5},
+                                           bloom::scripting::Value{1.0}},
+                                .interpolations = std::nullopt,
+                                .replace = std::nullopt}},
+                            bloom::scripting::Value{bloom::scripting::KeyTrack{
+                                .parameter = bloom::scripting::StableId{8},
+                                .times = {bloom::scripting::Value{0}, bloom::scripting::Value{1}},
+                                .values = {bloom::scripting::Value{0.0},
+                                           bloom::scripting::Value{1.0}},
+                                .interpolations = std::nullopt,
+                                .replace = std::nullopt}}}}}},
+            session->operationContext());
+        if (!checked || std::move(checked).takeOperation()->workUnits() != 5U) {
+            std::cerr << "set-key-tracks does not count every track's keys as work\n";
+            return 25;
+        }
+        const auto before = session->snapshot().revision();
+        const auto& script0 = script.transactions().front();
+        const auto keyed = session->executeJsonOperation(script0.operation, script0.arguments);
+        if (!keyed.succeeded() || session->snapshot().revision() == before) {
+            std::cerr << "a set-key-tracks script does not apply\n";
+            return 26;
+        }
+        const auto mixed = bloom::scripting::parseScriptJson(
+            R"([{"op":"bloom.animation.set-key-tracks","args":{"tracks":[)"
+            R"({"parameter":{"layer":"Keyed","role":"opacity"},"times":[24],"values":[0.5]},)"
+            R"({"parameter":999999,"times":[0],"values":[1.0]}]}}])");
+        const auto after = session->snapshot().revision();
+        const auto& mixed0 = mixed.transactions().front();
+        const auto refused = session->executeJsonOperation(mixed0.operation, mixed0.arguments);
+        if (refused.succeeded() || session->snapshot().revision() != after) {
+            std::cerr << "a set-key-tracks script with an invalid track applies something\n";
+            return 27;
+        }
+    }
 
     // Issue #409: an export output added by a script records its display/view, the Viewer's
     // default pair for the project's configuration, never the config's tone-mapped default view.

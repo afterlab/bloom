@@ -86,6 +86,43 @@ class AgentFeedback(unittest.TestCase):
             bloom.ops.animation.set_key_columns(opacity, (0,), (0.0,), interpolations=('a', 'b'))
         self.assertIn('interpolations', str(extra.exception))
 
+    def test_set_key_tracks_keys_many_parameters_at_once(self):
+        # #747: one operation carries {parameter, times, values, interpolations} for many
+        # parameters; any invalid track applies nothing.
+        bloom.ops.layer.add_solid(name='Left', color=(1, 0, 0, 1))
+        bloom.ops.layer.add_solid(name='Right', color=(0, 0, 1, 1))
+        tracks = bloom.ops.animation.set_key_tracks([
+            {'parameter': {'layer': 'Left', 'role': 'opacity'}, 'times': (0, 12),
+             'values': (0.0, 1.0), 'interpolations': ('hold',)},
+            {'parameter': {'layer': 'Right', 'role': 'opacity'}, 'times': (0, 6, 12),
+             'values': (1.0, 0.5, 0.0), 'replace': True},
+        ])
+        self.assertTrue(tracks['succeeded'])
+        made = sum(o['name'] == 'keyframe' for o in tracks['outputs'])
+        self.assertGreaterEqual(made, 5)
+        # The same keys as one set_key_columns per parameter.
+        bloom.transactions.undo()
+        left = bloom.ops.animation.set_key_columns(
+            {'layer': 'Left', 'role': 'opacity'}, (0, 12), (0.0, 1.0), interpolations=('hold',))
+        right = bloom.ops.animation.set_key_columns(
+            {'layer': 'Right', 'role': 'opacity'}, (0, 6, 12), (1.0, 0.5, 0.0), replace=True)
+        self.assertEqual(sum(o['name'] == 'keyframe' for o in left['outputs'] + right['outputs']),
+                         made)
+        before = bloom.data.snapshot()['revision']
+        with self.assertRaises(bloom.OperationError) as refused:
+            bloom.ops.animation.set_key_tracks([
+                {'parameter': {'layer': 'Left', 'role': 'opacity'}, 'times': (24,),
+                 'values': (0.5,)},
+                {'parameter': 999999, 'times': (0,), 'values': (1.0,)},
+            ])
+        self.assertIn('Track 1', str(refused.exception))
+        self.assertEqual(bloom.data.snapshot()['revision'], before)
+        with self.assertRaises(bloom.OperationError) as uneven:
+            bloom.ops.animation.set_key_tracks([
+                {'parameter': {'layer': 'Left', 'role': 'opacity'}, 'times': (0, 6),
+                 'values': (0.5,)}])
+        self.assertIn('tracks[0] values has 1', str(uneven.exception))
+
     def test_scene_library_builds_wires_and_animates(self):
         # #602: a scene is declared, then committed through transactions as two undo steps.
         before = len(self.composition()['layers'])
