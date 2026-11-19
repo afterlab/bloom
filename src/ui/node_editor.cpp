@@ -213,7 +213,8 @@ NodeGraphEditor::NodeGraphEditor(CompositionSession& session, QWidget* parent)
     }
     layout->addWidget(view_);
 
-    connect(&session_, &CompositionSession::snapshotChanged, this, &NodeGraphEditor::rebuild);
+    // #744: rebuilt at most once per display frame for a burst of agent or script commits.
+    connect(&session_, &CompositionSession::panelRebuildDue, this, &NodeGraphEditor::rebuild);
     // #720: a projection that waited for a gesture to end.
     connect(scene_, &NodeGraphicsScene::projectionDue, this, &NodeGraphEditor::rebuild);
     // #694: another composition (or project) opens at the opening frame, as a fresh panel does.
@@ -310,6 +311,7 @@ void NodeGraphEditor::applyApplicationPreferences(const ApplicationPreferences& 
 NodeGraphicsView* NodeGraphEditor::graphView() const noexcept { return view_; }
 
 void NodeGraphEditor::rebuild() {
+    ++rebuilds_;
     rebuilding_ = true;
     scene_->setProjection(session_.snapshot(), session_.compositionId());
     updateSelection();

@@ -291,7 +291,7 @@ void TimelineEditor::createHeaderMenus() {
             &TimelineEditor::refreshHeaderMenus);
     connect(&session_, &CompositionSession::compositionChanged, this,
             &TimelineEditor::refreshHeaderMenus);
-    connect(&session_, &CompositionSession::snapshotChanged, this,
+    connect(&session_, &CompositionSession::panelRebuildDue, this,
             &TimelineEditor::refreshHeaderMenus);
 }
 

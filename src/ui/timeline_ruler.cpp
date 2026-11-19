@@ -1070,7 +1070,9 @@ TimelineKeyframePanel::TimelineKeyframePanel(CompositionSession& session, QWidge
     rowsLayout_ = new QVBoxLayout(this);
     rowsLayout_->setContentsMargins(0, 0, 0, 0);
     rowsLayout_->setSpacing(0);
-    connect(&session_, &CompositionSession::snapshotChanged, this, &TimelineKeyframePanel::rebuild);
+    // #744: rebuilt at most once per display frame for a burst of agent or script commits.
+    connect(&session_, &CompositionSession::panelRebuildDue, this,
+            &TimelineKeyframePanel::rebuild);
     connect(&session_, &CompositionSession::compositionChanged, this,
             &TimelineKeyframePanel::rebuild);
     connect(&session_, &CompositionSession::selectionChanged, this,
@@ -1207,6 +1209,7 @@ void TimelineKeyframePanel::setKeysVisible(const bool visible) {
 }
 
 void TimelineKeyframePanel::rebuild() {
+    ++rebuilds_;
     if (gridMode_)
         return;
     const auto specs = collectAnimatedParameters(session_);

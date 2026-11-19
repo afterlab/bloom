@@ -169,7 +169,7 @@ kit::KColorConverter CompositionSession::colorConverter(const std::string_view s
             state->published = true;
             if (!ready)
                 reportUnavailable(tr("Color conversion unavailable"));
-            Q_EMIT snapshotChanged();
+            publishSnapshotChanged();
             // The qualified display transform landing changes pixels without changing the document
             // revision, so it is an evaluation transition rather than a live-document edit.
             Q_EMIT evaluationChanged();
@@ -233,7 +233,7 @@ void CompositionSession::setProjectDirectory(std::filesystem::path directory) {
         colorConverterState_->cancelled.store(true);
     colorConverterState_.reset();
     emit colorSettingsChanged();
-    emit snapshotChanged();
+    publishSnapshotChanged();
     emit evaluationChanged();
 }
 
@@ -249,7 +249,7 @@ void CompositionSession::setColorSettings(document::ColorSettings settings) {
     colorSettings_ = std::move(settings);
     refreshColorIntentUri();
     emit colorSettingsChanged();
-    emit snapshotChanged();
+    publishSnapshotChanged();
     emit evaluationChanged();
 }
 
@@ -475,6 +475,9 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
     evaluationDeferred_ = false;
     if (deferredRefreshTimer_ != nullptr)
         deferredRefreshTimer_->stop();
+    // #744: the new project's first retirement of undo steps is news again.
+    if (undoRetirementBurst_ != nullptr)
+        undoRetirementBurst_->stop();
     // Reset the time-indexed evaluation provenance to the newly bound document BEFORE any signal is
     // published, so no observer can pair a new document with the old document's eval state, and a
     // same-numeric-ID document can never reuse it.
@@ -503,7 +506,7 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
     // first, so caches keyed by colliding numeric ids are dropped before any refresh is built.
     emit documentRebound();
     emit liveValueChanged();
-    emit snapshotChanged();
+    publishSnapshotChanged();
     emit evaluationChanged();
     emit compositionChanged();
     emit currentTimeChanged();
@@ -2342,15 +2345,10 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
         emit historyChanged();
         return;
     }
-    // #746: an agent's edit is answered over MCP; retiring undo steps for it is no refusal of the
-    // artist's, so it plays no cue and flashes no status message.
-    if (event.kind == commands::CommandEventKind::HistoryChanged &&
-        event.result.historyEntriesDropped != 0 &&
-        event.result.origin != commands::CommandOrigin::Agent) {
-        emit commandRejected(
-            QStringLiteral("Undo memory limit reached: %1 oldest undo step(s) were retired")
-                .arg(static_cast<qulonglong>(event.result.historyEntriesDropped)));
-    }
+    // #744: retiring old undo steps to keep a new edit is information, not a refusal: no cue, once
+    // per burst, naming the bound reached. #746: an agent's retirement says nothing.
+    if (event.kind == commands::CommandEventKind::HistoryChanged)
+        noteUndoRetirement(event.result);
     if (event.kind == commands::CommandEventKind::RevisionChanged) {
         // #746: while an agent session holds refreshes, an agent's commit is adopted later (the
         // panels at a slow cadence) and the Viewer is not re-rendered for it. Every other origin's
@@ -2485,7 +2483,10 @@ void CompositionSession::adoptDocumentSnapshot(const commands::CommandResult* co
         lastDocumentChangeAffectedEvaluation_ = provenanceChanged;
         normalizeSelection();
         normalizeViewerLevel();
-        emit snapshotChanged();
+        // #744: a burst of agent or script commits rebuilds the panels once per display frame.
+        publishSnapshotChanged(evidence != nullptr &&
+                               (evidence->origin == commands::CommandOrigin::Agent ||
+                                evidence->origin == commands::CommandOrigin::Script));
         // #716: the edit that takes the composition's Output away says what that means, however
         // it was made (Delete, Dissolve, a script, an agent, redo).
         if (const auto* before = previousSnapshot.project().findComposition(compositionId_);

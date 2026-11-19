@@ -3249,6 +3249,14 @@ target_link_libraries(bloom_timeline_mask_test PRIVATE bloom_ui bloom_runtime bl
 bloom_enable_warnings(bloom_timeline_mask_test)
 bloom_add_test(NAME bloom.ui.timeline-masks COMMAND bloom_timeline_mask_test LABELS ui integration TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# #744: agent and script commits rebuild the panels once per display frame; the artist's edit and a
+# rebind at once; a retirement of undo steps is a notice reported once per burst.
+add_executable(bloom_panel_rebuild_test panel_rebuild_tests.cpp)
+target_include_directories(bloom_panel_rebuild_test PRIVATE ..)
+target_link_libraries(bloom_panel_rebuild_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
+bloom_enable_warnings(bloom_panel_rebuild_test)
+bloom_add_test(NAME bloom.ui.panel-rebuild COMMAND bloom_panel_rebuild_test LABELS ui integration TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # ADR 0028: content <-> composition mapping, primitive mask paths and outline geometry.
 add_executable(bloom_layer_mask_support_test layer_mask_support_tests.cpp)
 target_include_directories(bloom_layer_mask_support_test PRIVATE ..)

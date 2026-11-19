@@ -152,9 +152,13 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider, public
     // nested Timeline's show-time width can precede its splitter's final extent, so the showEvent()
     // default alone would compute the share from a not-yet-final width.
     void applyDefaultLayerColumnWidth();
+    // #744 work counter: rebuilds since construction, so a test can prove a burst of commits
+    // rebuilds this panel once per frame.
+    [[nodiscard]] std::uint64_t rebuildCount() const noexcept { return rebuilds_; }
 
   private:
     EditorChromeSpec chrome_;
+    std::uint64_t rebuilds_ = 0;
     void rebuild();
     // task TL-FIX2. Applies `width` (clamped to the layer table's own minimum, and, once this
     // widget's own width() is meaningful, to a maximum that leaves Size::PanelMinWidth for the
@@ -208,8 +212,10 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider, public
     std::set<document::LayerSlotId> expandedEntries_;
     // Appends the rows of `merge`'s entries, topmost first, `nesting` levels deep, each followed by
     // its property rows and (for an open group row) its own entries.
+    // #744: the graph lookups one rebuild needs, built once per rebuild (timeline_editor.cpp).
+    struct MergeRowIndex;
     void appendMergeRows(document::NodeId merge, int nesting, std::vector<TimelineLayerEntry>& rows,
-                         std::set<document::NodeId>& visiting);
+                         std::set<document::NodeId>& visiting, const MergeRowIndex& index);
     // Add > Adjustment Layer: into the Merge of the selected row, above it, else at the top of the
     // timeline Merge.
     void addAdjustmentLayer();

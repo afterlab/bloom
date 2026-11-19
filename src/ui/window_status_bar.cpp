@@ -105,6 +105,9 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     // could not do, the command did not run, and the reason belongs where every other notice is.
     connect(&session_, &CompositionSession::commandRejected, this,
             [this](const QString& reason) { showTransientMessage(reason); });
+    // #744: information (a retirement of undo steps) reads where every notice does, with no cue.
+    connect(&session_, &CompositionSession::noticePosted, this,
+            [this](const QString& message) { showTransientMessage(message); });
     // A blank project (no active composition) has no colour or preview truth to report, so the
     // cells switch to a neutral status the moment a composition is created or removed.
     connect(&session_, &CompositionSession::compositionChanged, this,

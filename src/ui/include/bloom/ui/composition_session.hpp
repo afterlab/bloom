@@ -348,6 +348,22 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool viewerRefreshPending() const noexcept {
         return panelsDeferred_ || evaluationDeferred_;
     }
+    // #744: how often a burst of agent or script commits may rebuild the panels: once per display
+    // frame. See panelRebuildDue().
+    static constexpr std::chrono::milliseconds kPanelRebuildInterval{16};
+    // True while a panelRebuildDue() waits for its frame.
+    [[nodiscard]] bool panelRebuildPending() const noexcept { return panelRebuildPending_; }
+    // Emits a waiting panelRebuildDue() now; nothing when none waits.
+    void flushPanelRebuild();
+    // #744: a retirement of undo steps within this gap of the previous one belongs to the same
+    // burst and is not reported again (noticePosted()).
+    static constexpr std::chrono::milliseconds kUndoRetirementBurstGap{10000};
+    void setUndoRetirementBurstGapForTest(const std::chrono::milliseconds gap) noexcept {
+        undoRetirementBurstGap_ = gap;
+    }
+    // The notice for a step that retired undo steps: which bound it reached, and its size.
+    [[nodiscard]] static QString undoRetirementNotice(const commands::CommandResult& result,
+                                                      commands::CommandStack::HistoryLimits limits);
     [[nodiscard]] const document::Composition* composition() const noexcept;
     // #716: the status bar's words for a composition whose Output node was deleted, and the
     // refusal playback and export make of one: true (with that message through commandRejected())
@@ -1000,6 +1016,15 @@ class CompositionSession final : public QObject {
     // collide with the new document's -- before the ordinary refresh signals build new requests.
     void documentRebound();
     void snapshotChanged();
+    // #744: the panels that rebuild their rows from the snapshot (Timeline, Node editor,
+    // Properties, the keyframe panel, Assets) rebuild on this, not on snapshotChanged(). It follows
+    // every snapshotChanged(): at once for the artist's own edit, undo or redo and for every change
+    // that is not a command (a rebind, a composition switch, colour settings), and at most once per
+    // display frame (kPanelRebuildInterval) for agent and script commits, so a burst of them
+    // rebuilds each panel once per frame instead of once per commit. A waiting rebuild is emitted
+    // at once by the next change that does not wait, and dropped into the rebind's own rebuild,
+    // so no row outlives a rebind.
+    void panelRebuildDue();
     // Fired when the composition's EFFECTIVE work area changes -- Set/ClearWorkArea, and the
     // undo/redo of either. It is deliberately separate from snapshotChanged: a range edit is
     // render-neutral, so it must not refresh pixels or advance the evaluation snapshot, but it does
@@ -1030,6 +1055,10 @@ class CompositionSession final : public QObject {
     // emitted for an agent's command (#746): an agent's refusal is answered over MCP and listed in
     // the MCP Server activity, and an agent edit that retires old undo steps says nothing here.
     void commandRejected(const QString& message);
+    // Information the artist should read in the status bar, never a refusal: it plays no cue.
+    // #744: retiring old undo steps to keep a new edit is reported here, at most once per burst of
+    // retirements, saying which bound was reached (the step count or the memory allowance).
+    void noticePosted(const QString& message);
     // Emitted on begin/update/cancel/commit of a position interaction (docs/architecture/
     // animation-and-time.md, "Direct Manipulation And Preview Overrides").
     // CompositionPreviewController consumes it to (re)build a preview request carrying the fresh
@@ -1076,6 +1105,11 @@ class CompositionSession final : public QObject {
     // and `holdEvaluation` keeping the Viewer's provenance where it was.
     void adoptDocumentSnapshot(const commands::CommandResult* evidence, bool holdEvaluation);
     void deferPanelRefresh();
+    // #744: reports a retirement of undo steps once per burst (see noticePosted()).
+    void noteUndoRetirement(const commands::CommandResult& result);
+    // #744: snapshotChanged(), then panelRebuildDue() at once or, with `coalescePanels`, once the
+    // display frame ends.
+    void publishSnapshotChanged(bool coalescePanels = false);
     // #746: an artist's edit while an agent session holds the window behind the document. Catches
     // the window up and, when `transaction` was built against what the window showed, re-aims it
     // at the newest revision, so the artist's edit is never refused as stale.
@@ -1274,6 +1308,13 @@ class CompositionSession final : public QObject {
     bool panelsDeferred_ = false;
     bool evaluationDeferred_ = false;
     QTimer* deferredRefreshTimer_ = nullptr;
+    // #744: running while a burst of undo retirements lasts; a retirement inside it is not
+    // reported again.
+    QTimer* undoRetirementBurst_ = nullptr;
+    std::chrono::milliseconds undoRetirementBurstGap_ = kUndoRetirementBurstGap;
+    // #744: the frame a coalesced panelRebuildDue() waits for.
+    QTimer* panelRebuildTimer_ = nullptr;
+    bool panelRebuildPending_ = false;
     // TEMPORAL-2A time-indexed provenance. Sorted, non-overlapping, full-cover spans of the active
     // composition's time, each naming a genuine snapshot. Empty until the first refresh; then a
     // single full-cover span of the live snapshot.

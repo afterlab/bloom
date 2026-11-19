@@ -286,8 +286,14 @@ class TimelineKeyframePanel final : public QWidget {
     void contextMenuEvent(QContextMenuEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
 
+  public:
+    // #744 work counter: rebuilds since construction, so a test can prove a burst of commits
+    // rebuilds this panel once per frame.
+    [[nodiscard]] std::uint64_t rebuildCount() const noexcept { return rebuilds_; }
+
   private:
     void rebuild();
+    std::uint64_t rebuilds_ = 0;
     bool gridMode_ = false;
     struct LaneKey {
         KeyframeSelection selection;

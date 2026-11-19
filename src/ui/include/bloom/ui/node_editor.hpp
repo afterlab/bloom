@@ -428,8 +428,13 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider, publi
     [[nodiscard]] static LinkStyle linkStyleFromSettingsValue(const QString& value) noexcept;
     [[nodiscard]] static QString linkStyleSettingsValue(LinkStyle style) noexcept;
 
+    // #744 work counter: rebuilds since construction, so a test can prove a burst of commits
+    // rebuilds this panel once per frame.
+    [[nodiscard]] std::uint64_t rebuildCount() const noexcept { return rebuilds_; }
+
   private:
     EditorChromeSpec chrome_;
+    std::uint64_t rebuilds_ = 0;
     void rebuild();
     void updateSelection();
     void sceneSelectionChanged();

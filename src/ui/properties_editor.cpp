@@ -233,7 +233,8 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     buildDataBlockSection(bodyLayout);
     bindCommits();
 
-    connect(&session_, &CompositionSession::snapshotChanged, this, &PropertiesEditor::rebuild);
+    // #744: rebuilt at most once per display frame for a burst of agent or script commits.
+    connect(&session_, &CompositionSession::panelRebuildDue, this, &PropertiesEditor::rebuild);
     connect(&session_, &QObject::destroyed, this, [this] { sessionGone_ = true; });
     connect(&session_, &CompositionSession::liveValueChanged, this,
             &PropertiesEditor::refreshLiveValues);

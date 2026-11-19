@@ -123,7 +123,7 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     connect(tree_, &QTreeWidget::itemExpanded, this, expanded);
     connect(tree_, &QTreeWidget::itemCollapsed, this, expanded);
 
-    connect(&session_, &CompositionSession::snapshotChanged, this, [this] {
+    connect(&session_, &CompositionSession::panelRebuildDue, this, [this] {
         refreshRows();
         refreshSelectionHeader();
     });

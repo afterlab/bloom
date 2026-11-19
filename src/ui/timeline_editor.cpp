@@ -88,8 +88,10 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <numeric>
 #include <optional>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 
@@ -411,6 +413,21 @@ class TimelineLayerRow final : public kit::KRow {
                                        matteDropdown_->itemData(index).toLongLong());
             const QSignalBlocker blocker(matteDropdown_);
             matte_cell::populate(*matteDropdown_, *session_, target);
+            matteFilled_ = true;
+        });
+        // #744: the cell lists its candidates only when the artist opens or steps through it; a
+        // bound row shows just the current matte (matte_cell::showCurrent).
+        connect(matteDropdown_, &kit::KDropdown::itemsNeeded, this, [this] {
+            if (matteFilled_ || !bound_)
+                return;
+            const bool wasBinding = binding_;
+            binding_ = true;
+            {
+                const QSignalBlocker blocker(matteDropdown_);
+                matte_cell::populate(*matteDropdown_, *session_, rowTarget(entry_));
+            }
+            binding_ = wasBinding;
+            matteFilled_ = true;
         });
         QList<QWidget*> cells;
         for (int index = 0; index < kToggleCellCount; ++index) {
@@ -577,8 +594,9 @@ class TimelineLayerRow final : public kit::KRow {
         parentDropdown_->setEnabled(!locked_);
         parentDropdown_->setToolTip(TimelineEditor::tr("Transform relative to another layer"));
         parentDropdown_->show();
-        // ADR 0028 Track Matte column.
-        matte_cell::populate(*matteDropdown_, *session_, rowTarget(entry));
+        // ADR 0028 Track Matte column: the current matte only, the candidates when it opens.
+        matte_cell::showCurrent(*matteDropdown_, *session_, rowTarget(entry));
+        matteFilled_ = false;
         matteDropdown_->setEnabled(!locked_);
         blending_->setCurrentIndex(row >= 0 ? row : 0);
         blending_->setToolTip(mode.has_value()
@@ -686,6 +704,8 @@ class TimelineLayerRow final : public kit::KRow {
     kit::KDropdown* blending_ = nullptr;
     kit::KDropdown* parentDropdown_ = nullptr;
     kit::KDropdown* matteDropdown_ = nullptr;
+    // #744: whether the matte list holds every candidate (filled on open) or only the current one.
+    bool matteFilled_ = false;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -2821,7 +2841,8 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     // document.
     connect(&session_, &CompositionSession::documentRebound, stack_,
             &TimelineLayerStack::clearPooledRows);
-    connect(&session_, &CompositionSession::snapshotChanged, this, &TimelineEditor::rebuild);
+    // #744: rebuilt at most once per display frame for a burst of agent or script commits.
+    connect(&session_, &CompositionSession::panelRebuildDue, this, &TimelineEditor::rebuild);
     connect(&session_, &CompositionSession::compositionChanged, this, &TimelineEditor::rebuild);
     connect(&session_, &CompositionSession::selectionChanged, this,
             &TimelineEditor::updateSelection);
@@ -2920,29 +2941,70 @@ void TimelineEditor::setLayerColumnWidth(const int width, const bool persist) {
     }
 }
 
+// #744: one pass over the graph per rebuild for what every row asks: a node by id, a slot's image
+// and audio edges, an entry's layer and a layer's entries. Asking the graph per row searched every
+// node, edge and Merge entry once per row, so a rebuild grew with the square of the layers.
+struct TimelineEditor::MergeRowIndex {
+    using SlotKey = std::pair<document::NodeId, document::LayerSlotId>;
+
+    explicit MergeRowIndex(const document::CanonicalGraph& graph) {
+        for (const auto& node : graph.nodes())
+            nodes.emplace(node.id, &node);
+        // emplace keeps the first edge per slot and role, as a search in edge order finds it.
+        for (const auto& edge : graph.edges())
+            if (const auto* input = std::get_if<document::LayerStackInputRef>(&edge.destination)) {
+                const SlotKey key{input->stackNodeId, input->slotId};
+                if (input->role == document::kLayerStackContentInputRole)
+                    imageEdges.emplace(key, &edge);
+                else if (input->role == document::kLayerStackAudioInputRole)
+                    audioEdges.emplace(key, &edge);
+            }
+        // In graph.merges() then entry order, as document::mergeEntriesOfLayer() lists them.
+        for (const auto& stack : graph.merges())
+            for (const auto& entry : stack.entries()) {
+                const auto* layer = document::mergeEntryLayer(graph, stack.nodeId(), entry.slotId);
+                entryLayers.emplace(SlotKey{stack.nodeId(), entry.slotId}, layer);
+                if (layer != nullptr)
+                    entriesOfLayer[layer->layerId].push_back({stack.nodeId(), entry.slotId});
+            }
+    }
+
+    [[nodiscard]] const document::NodeRecord* node(const document::NodeId id) const {
+        const auto found = nodes.find(id);
+        return found == nodes.end() ? nullptr : found->second;
+    }
+    template <typename Map>
+    [[nodiscard]] static auto at(const Map& map, const SlotKey& key) {
+        const auto found = map.find(key);
+        return found == map.end() ? nullptr : found->second;
+    }
+
+    std::unordered_map<document::NodeId, const document::NodeRecord*> nodes;
+    std::map<SlotKey, const document::EdgeRecord*> imageEdges;
+    std::map<SlotKey, const document::EdgeRecord*> audioEdges;
+    std::map<SlotKey, const document::LayerOutputBoundary*> entryLayers;
+    std::unordered_map<document::LayerId, std::vector<document::MergeEntryRef>> entriesOfLayer;
+};
+
 void TimelineEditor::appendMergeRows(const document::NodeId mergeId, const int nesting,
                                      std::vector<TimelineLayerEntry>& rows,
-                                     std::set<document::NodeId>& visiting) {
+                                     std::set<document::NodeId>& visiting,
+                                     const MergeRowIndex& index) {
     const auto* composition = session_.composition();
     const auto* merge = composition ? composition->graph().merge(mergeId) : nullptr;
     if (merge == nullptr || !visiting.insert(mergeId).second)
         return;
     const auto& graph = composition->graph();
-    const auto edges = graph.edges();
     for (const auto& slot : merge->entries()) {
         const document::MergeEntryRef ref{mergeId, slot.slotId};
-        const auto* imageEdge = document::mergeSlotImageEdge(graph, mergeId, slot.slotId);
-        const auto audioEdge = std::ranges::find_if(edges, [&](const auto& candidate) {
-            const auto* input = std::get_if<document::LayerStackInputRef>(&candidate.destination);
-            return input && input->stackNodeId == mergeId && input->slotId == slot.slotId &&
-                   input->role == document::kLayerStackAudioInputRole;
-        });
-        if (imageEdge == nullptr && audioEdge == edges.end())
+        const MergeRowIndex::SlotKey key{mergeId, slot.slotId};
+        const auto* imageEdge = MergeRowIndex::at(index.imageEdges, key);
+        const auto* audioEdge = MergeRowIndex::at(index.audioEdges, key);
+        if (imageEdge == nullptr && audioEdge == nullptr)
             continue;
-        const auto* imageSource = imageEdge ? graph.findNode(imageEdge->source.nodeId) : nullptr;
-        const auto* audioSource =
-            audioEdge != edges.end() ? graph.findNode(audioEdge->source.nodeId) : nullptr;
-        const auto* layer = document::mergeEntryLayer(graph, mergeId, slot.slotId);
+        const auto* imageSource = imageEdge ? index.node(imageEdge->source.nodeId) : nullptr;
+        const auto* audioSource = audioEdge ? index.node(audioEdge->source.nodeId) : nullptr;
+        const auto* layer = MergeRowIndex::at(index.entryLayers, key);
         const auto layerId = layer ? layer->layerId : document::LayerId{};
         // The master Shy toggle and the label filter take rows out of the list only; the layers
         // still render (layout state, never part of the render).
@@ -2985,7 +3047,9 @@ void TimelineEditor::appendMergeRows(const document::NodeId mergeId, const int n
         if (layer && !layer->entryOwned()) {
             if (imageSource && imageSource->id == layer->nodeId)
                 row.directLayerNode = layer->nodeId;
-            const auto others = document::mergeEntriesOfLayer(graph, layerId);
+            const auto found = index.entriesOfLayer.find(layerId);
+            static const std::vector<document::MergeEntryRef> kNone;
+            const auto& others = found == index.entriesOfLayer.end() ? kNone : found->second;
             if (others.size() > 1) {
                 QStringList names;
                 for (const auto& other : others) {
@@ -3068,7 +3132,7 @@ void TimelineEditor::appendMergeRows(const document::NodeId mergeId, const int n
             std::vector<TimelineLayerEntry> nested;
             nested.push_back(contents);
             if (contents.expanded)
-                appendMergeRows(row.groupMerge, nesting + 1, nested, visiting);
+                appendMergeRows(row.groupMerge, nesting + 1, nested, visiting, index);
             block.insert(block.begin() + 1, nested.begin(), nested.end());
         }
         rows.insert(rows.end(), std::make_move_iterator(block.begin()),
@@ -3078,10 +3142,12 @@ void TimelineEditor::appendMergeRows(const document::NodeId mergeId, const int n
 }
 
 void TimelineEditor::rebuild() {
+    ++rebuilds_;
     std::vector<TimelineLayerEntry> entries;
     if (session_.composition() != nullptr && session_.timelineMerge()) {
         std::set<document::NodeId> visiting;
-        appendMergeRows(session_.timelineMerge()->nodeId(), 0, entries, visiting);
+        const MergeRowIndex index(session_.composition()->graph());
+        appendMergeRows(session_.timelineMerge()->nodeId(), 0, entries, visiting, index);
     }
     stack_->setEntries(entries);
     lanes_->setEntries(std::move(entries));

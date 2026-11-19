@@ -92,9 +92,12 @@ int main(int argc, char** argv) {
     expect(matte != nullptr, "the layer row carries a Track Matte cell");
     if (matte == nullptr)
         return failures == 0 ? 0 : 1;
-    expect(matte->count() == 5 && matte->currentIndex() == 0, "None, one layer, three actions");
+    // #744: a bound row shows only the current matte; the list fills when the cell opens.
+    expect(matte->count() == 1 && matte->currentText() == QStringLiteral("None"),
+           "the closed cell holds only the current matte");
     click(matte);
     expect(matte->isPopupVisible(), "clicking the cell opens its menu");
+    expect(matte->count() == 5 && matte->currentIndex() == 0, "None, one layer, three actions");
     pickPopupRow(*matte, 1);
     expect(surfaces.session.composition()->graph().findLayer(top)->trackMatte &&
                surfaces.session.composition()->graph().findLayer(top)->trackMatte->source == bottom,

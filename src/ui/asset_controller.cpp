@@ -564,7 +564,8 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
     dragToken_ = QUuid::createUuid().toByteArray();
     session_.setAssetController(this);
     connect(&bridge_, &TaskUiBridge::resultsAvailable, this, &AssetController::poll);
-    connect(&session_, &CompositionSession::snapshotChanged, this, &AssetController::refresh);
+    // #744: refreshed at most once per display frame for a burst of agent or script commits.
+    connect(&session_, &CompositionSession::panelRebuildDue, this, &AssetController::refresh);
     // The playhead is deliberately not connected (task N1, item 2; bug #401). Source cards carry
     // no per-node preview, so a playback tick or a scrub starts no job, probes no file and hashes
     // nothing here. refresh() itself starts a job only when the thumbnail inputs changed (#718).

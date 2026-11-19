@@ -491,6 +491,7 @@ target_sources(
         audio_device_control.cpp
         composition_session_drivers.cpp
         composition_session_agent_refresh.cpp
+        composition_session_panel_rebuild.cpp
         composition_session_entries.cpp
         composition_session_viewer_level.cpp
         entry_layer_session_operations.cpp
