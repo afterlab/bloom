@@ -124,7 +124,7 @@ template <typename Visitor>
 // #357. Reserves only what a draft added relative to the published `base` it was copied from: the
 // draft's allocator already covers everything `base` declared.
 static void reserveChangedProjectIds(IdAllocator& ids, const Project& project,
-                                     const Project& base) noexcept {
+                                     const Project& base) {
     const auto reserve = [&ids](const auto id) {
         ids.reserveExisting(id);
         return true;
@@ -149,7 +149,44 @@ static void reserveChangedProjectIds(IdAllocator& ids, const Project& project,
         const auto* before = base.findComposition(composition.id());
         if (before != nullptr && before->contentIdentity() == composition.contentIdentity())
             continue;
-        [[maybe_unused]] const auto visited = visitCompositionIds(composition, reserve);
+        if (before == nullptr) {
+            [[maybe_unused]] const auto visited = visitCompositionIds(composition, reserve);
+            continue;
+        }
+        // #744: only the records the composition does not share with its base can hold an id
+        // the base's allocator did not cover; Merges and groups are small and visited whole.
+        reserve(composition.id());
+        const auto& after = composition;
+        const auto parameters =
+            diffRecords(before->parameters().records(), after.parameters().records());
+        for (const auto* parameter : parameters.added)
+            reserve(parameter->id);
+        const auto curves =
+            diffRecords(before->animationCurves().records(), after.animationCurves().records());
+        for (const auto* curve : curves.added) {
+            reserve(animationCurveId(*curve));
+            forEachAnimationKeyframeId(*curve, reserve);
+        }
+        for (const auto* node : diffRecords(before->graph().nodes(), after.graph().nodes()).added)
+            reserve(node->id);
+        for (const auto* edge : diffRecords(before->graph().edges(), after.graph().edges()).added)
+            reserve(edge->id);
+        for (const auto* layer :
+             diffRecords(before->graph().layerOutputs(), after.graph().layerOutputs()).added) {
+            reserve(layer->layerId);
+            for (const auto& mask : layer->masks)
+                reserve(mask.id);
+        }
+        for (const auto& stack : after.graph().merges())
+            for (const auto& entry : stack.entries()) {
+                reserve(entry.slotId);
+                if (entry.layerId.isValid())
+                    reserve(entry.layerId);
+            }
+        for (const auto& [groupId, group] : after.nodeGroups()) {
+            static_cast<void>(group);
+            reserve(groupId);
+        }
     }
 }
 
@@ -402,6 +439,11 @@ CommitResult Document::commit(const Revision expectedRevision, Draft&& draftValu
     auto publishedState = std::make_shared<detail::DocumentState>(*draftValue.state_);
     publishedState->project.freezeCompositionContent();
     publishedState->rootByteCharge = publishedState->project.rootByteCharge();
+    // Reserving only what the draft added allocates (#744), so it runs before the commit lock;
+    // a reservation is a high-water maximum, so merging the current allocator later is the same.
+    if (draftValue.base_ != nullptr)
+        detail::reserveChangedProjectIds(publishedState->ids, publishedState->project,
+                                         draftValue.base_->project);
 
     std::unique_lock lock(mutex_);
     if (expectedRevision != revision_) {
@@ -415,10 +457,7 @@ CommitResult Document::commit(const Revision expectedRevision, Draft&& draftValu
     }
 
     publishedState->ids.mergeHighWater(state_->ids);
-    if (draftValue.base_ != nullptr)
-        detail::reserveChangedProjectIds(publishedState->ids, publishedState->project,
-                                         draftValue.base_->project);
-    else
+    if (draftValue.base_ == nullptr)
         detail::reserveProjectIds(publishedState->ids, publishedState->project);
     state_ = std::move(publishedState);
     // Leave the caller's Draft independent and alive until its own destructor. A reference kept

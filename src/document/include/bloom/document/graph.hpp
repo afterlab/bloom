@@ -5,6 +5,7 @@
 #include <bloom/document/layer_time.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/document/record_table.hpp>
 #include <bloom/document/validation.hpp>
 #include <bloom/document/value_nodes.hpp>
 
@@ -237,10 +238,25 @@ class CanonicalGraph final {
             layerStacks_.emplace_back(layerStackNodeId);
     }
 
-    [[nodiscard]] std::span<const NodeRecord> nodes() const noexcept { return nodes_; }
-    [[nodiscard]] std::span<const EdgeRecord> edges() const noexcept { return edges_; }
-    [[nodiscard]] std::span<const LayerOutputBoundary> layerOutputs() const noexcept {
-        return layerOutputs_;
+    // #744: every node, edge and layer record has its own shared, immutable storage
+    // (record_table.hpp): copying the graph copies lists of record pointers, and an edit copies
+    // only the records it changes.
+    [[nodiscard]] RecordView<NodeRecord> nodes() const noexcept { return nodes_.view(); }
+    [[nodiscard]] RecordView<EdgeRecord> edges() const noexcept { return edges_.view(); }
+    [[nodiscard]] RecordView<LayerOutputBoundary> layerOutputs() const noexcept {
+        return layerOutputs_.view();
+    }
+    // Shared exactly when neither graph edited that kind of record since they diverged.
+    [[nodiscard]] const void* nodeStorageIdentity() const noexcept { return nodes_.identity(); }
+    [[nodiscard]] const void* edgeStorageIdentity() const noexcept { return edges_.identity(); }
+    [[nodiscard]] const void* layerStorageIdentity() const noexcept {
+        return layerOutputs_.identity();
+    }
+    // Called only on a publication copy (see RecordTable::freeze).
+    void freeze() {
+        nodes_.freeze();
+        edges_.freeze();
+        layerOutputs_.freeze();
     }
     [[nodiscard]] const NodeRecord* findNode(NodeId id) const noexcept;
     [[nodiscard]] NodeRecord* findNode(NodeId id) noexcept;
@@ -304,9 +320,12 @@ class CanonicalGraph final {
     rerouteKind(NodeId id, const NodeDefinitionRegistry& registry,
                 std::unordered_set<std::uint64_t>& seen) const;
 
-    std::vector<NodeRecord> nodes_;
-    std::vector<EdgeRecord> edges_;
-    std::vector<LayerOutputBoundary> layerOutputs_;
+    [[nodiscard]] std::optional<std::size_t> nodeIndex(NodeId id) const noexcept;
+    [[nodiscard]] std::optional<std::size_t> layerIndex(LayerId id) const noexcept;
+
+    RecordTable<NodeRecord> nodes_;
+    RecordTable<EdgeRecord> edges_;
+    RecordTable<LayerOutputBoundary> layerOutputs_;
     std::vector<LayerStack> layerStacks_;
     LayerStack emptyStack_{NodeId{}};
     std::optional<OutputPortRef> compositionOutput_;

@@ -1325,16 +1325,37 @@ core::Color4d gradientColorAt(const GradientValue& value, const double position)
             mix(from.color.blue, to.color.blue), mix(from.color.alpha, to.color.alpha)};
 }
 
-const ParameterRecord* ParameterStore::find(const ParameterId id) const noexcept {
+std::optional<std::size_t> ParameterStore::indexOf(const ParameterId id) const noexcept {
+    const auto records = records_.view();
     if (sorted_) {
-        const auto iterator = std::lower_bound(
-            records_.begin(), records_.end(), id,
-            [](const ParameterRecord& record, const ParameterId wanted) { return record.id < wanted; });
-        return iterator != records_.end() && iterator->id == id ? &*iterator : nullptr;
+        const auto iterator =
+            std::lower_bound(records.begin(), records.end(), id,
+                             [](const ParameterRecord& record, const ParameterId wanted) {
+                                 return record.id < wanted;
+                             });
+        if (iterator != records.end() && iterator->id == id)
+            return static_cast<std::size_t>(iterator - records.begin());
+        return std::nullopt;
     }
-    const auto iterator = std::find_if(records_.begin(), records_.end(),
+    const auto iterator = std::find_if(records.begin(), records.end(),
                                        [id](const auto& record) { return record.id == id; });
-    return iterator == records_.end() ? nullptr : &*iterator;
+    if (iterator == records.end())
+        return std::nullopt;
+    return static_cast<std::size_t>(iterator - records.begin());
+}
+
+bool ParameterStore::holdsOnce(const ParameterId id) const noexcept {
+    const auto records = records_.view();
+    if (!sorted_)
+        return std::ranges::count(records, id, &ParameterRecord::id) == 1;
+    const auto [first, last] =
+        std::ranges::equal_range(records, id, std::less<>{}, &ParameterRecord::id);
+    return last - first == 1;
+}
+
+const ParameterRecord* ParameterStore::find(const ParameterId id) const noexcept {
+    const auto index = indexOf(id);
+    return index ? &records_[*index] : nullptr;
 }
 
 bool ParameterStore::insert(ParameterRecord record) {
@@ -1343,39 +1364,48 @@ bool ParameterStore::insert(ParameterRecord record) {
         return false;
     }
 
-    if (!records_.empty() && !(records_.back().id < record.id))
+    if (!records_.empty() && !(records_[records_.size() - 1].id < record.id))
         sorted_ = false;
     records_.push_back(std::move(record));
     return true;
 }
 
 bool ParameterStore::erase(const ParameterId id) {
-    const auto iterator = std::find_if(records_.begin(), records_.end(),
-                                       [id](const auto& record) { return record.id == id; });
-    if (iterator == records_.end()) {
+    const auto index = indexOf(id);
+    if (!index) {
         return false;
     }
 
-    records_.erase(iterator);
+    records_.erase(*index);
     return true;
 }
 
 bool ParameterStore::setSource(const ParameterId id, ParameterSource source) {
-    const auto record = std::find_if(records_.begin(), records_.end(),
-                                     [id](const auto& item) { return item.id == id; });
-    if (record == records_.end() || !isValidSourceForSchema(record->schemaKey, source)) {
+    const auto index = indexOf(id);
+    if (!index || !isValidSourceForSchema(records_[*index].schemaKey, source)) {
         return false;
     }
 
-    record->source = std::move(source);
+    records_.edit(*index).source = std::move(source);
     return true;
+}
+
+void ParameterStore::validateRecord(const ParameterRecord& record, ValidationResult& result) {
+    const auto path = "parameters[" + std::to_string(record.id.value()) + "]";
+    if (!record.id.isValid())
+        result.add(ValidationCode::InvalidId, path, "Parameter ID must not be zero");
+    validateStructuralText(record.schemaKey, path + ".schemaKey", "Parameter schema key", result);
+    if (!isValidSourceForSchema(record.schemaKey, record.source)) {
+        result.add(ValidationCode::InvalidValue, path + ".source",
+                   "Parameter source does not satisfy its schema");
+    }
 }
 
 ValidationResult ParameterStore::validate() const {
     ValidationResult result;
     std::unordered_set<ParameterId> ids;
 
-    for (const auto& record : records_) {
+    for (const auto& record : records_.view()) {
         const auto path = "parameters[" + std::to_string(record.id.value()) + "]";
         if (!record.id.isValid()) {
             result.add(ValidationCode::InvalidId, path, "Parameter ID must not be zero");

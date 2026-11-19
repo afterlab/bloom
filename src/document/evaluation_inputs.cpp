@@ -28,6 +28,24 @@ template <typename Record>
     return sameRecords(left, right, std::equal_to<>{});
 }
 
+// #744: records two versions share are the same allocation and are not compared by value, so the
+// cost is the records an edit changed, not every key of every curve.
+template <typename Record, typename Equal>
+[[nodiscard]] bool sameRecords(const RecordView<Record> left, const RecordView<Record> right,
+                               Equal equal) {
+    if (left.size() != right.size())
+        return false;
+    for (std::size_t index = 0; index < left.size(); ++index)
+        if (left.identity(index) != right.identity(index) && !equal(left[index], right[index]))
+            return false;
+    return true;
+}
+
+template <typename Record>
+[[nodiscard]] bool sameRecords(const RecordView<Record> left, const RecordView<Record> right) {
+    return sameRecords(left, right, std::equal_to<>{});
+}
+
 // A full match first: an unchanged record never pays for the copy evaluationView() makes.
 template <typename Record>
 [[nodiscard]] bool sameEvaluationRecord(const Record& left, const Record& right) {

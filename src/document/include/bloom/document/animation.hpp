@@ -4,11 +4,13 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/document/record_table.hpp>
 #include <bloom/document/validation.hpp>
 
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -331,35 +333,53 @@ inline constexpr bool kWholeValueAnimationCurve = std::is_same_v<Curve, ScalarAn
 [[nodiscard]] AnimationCurveId animationCurveId(const AnimationCurveRecord& record) noexcept;
 
 // The keyframe ids a store holds, for the composition-wide uniqueness check on every key insert.
-// Ids are sorted; an id above the highest one ever held (the IdAllocator high-water case: every
-// key an operation allocates) is answered in O(1) and appended in O(1), any other id by binary
-// search. An erased id stays in place as a tombstone, so erasing or re-inserting an id is
-// O(log n); tombstones are compacted away once they are half the index. Copying the index copies
-// two flat arrays, nothing per key. Before issue #744 every insert scanned every key of every
-// curve, which made building a keyframe-dense composition quadratic.
+// Before issue #744 every insert scanned every key of every curve, which made building a
+// keyframe-dense composition quadratic. The ids are kept sorted in chunks of at most
+// kKeyframeIdChunk ids; an id above the highest one held (the IdAllocator high-water case: every
+// key an operation allocates) is answered in O(1), any other id by two binary searches. Each chunk
+// is shared, immutable storage: copying the index copies one pointer per chunk, and an edit copies
+// only the chunk it changes, so a one-key edit of a large composition copies at most one chunk
+// (#744). Published compositions read the same index for project-wide keyframe-id uniqueness.
 class KeyframeIdIndex final {
   public:
+    static constexpr std::size_t kKeyframeIdChunk = 512;
+
     [[nodiscard]] bool contains(KeyframeId id) const noexcept;
     // Adds an id; adding one already held changes nothing.
     void insert(KeyframeId id);
-    // Adds sorted ids in one pass over the index.
+    // Adds sorted ids.
     void insertSorted(std::span<const KeyframeId> ids);
     // Removes an id; removing one not held changes nothing.
-    void erase(KeyframeId id) noexcept;
-    [[nodiscard]] std::size_t size() const noexcept { return ids_.size() - tombstones_; }
+    void erase(KeyframeId id);
+    [[nodiscard]] std::size_t size() const noexcept { return size_; }
+    // Every id held, ascending.
+    template <typename Visit> void forEach(Visit&& visit) const {
+        for (const auto& chunk : chunks_)
+            for (const auto id : *chunk)
+                visit(id);
+    }
+    // Chunks this index shares with `other`, for tests of the sharing contract.
+    [[nodiscard]] std::size_t sharedChunks(const KeyframeIdIndex& other) const noexcept;
+    [[nodiscard]] std::size_t chunkCount() const noexcept { return chunks_.size(); }
 
   private:
-    void compact() noexcept;
+    using Chunk = std::vector<KeyframeId>;
+    // The first chunk whose highest id is not below `id`, or chunks_.size().
+    [[nodiscard]] std::size_t chunkFor(KeyframeId id) const noexcept;
+    // Chunk `index`, made this index's own first when another index shares it.
+    Chunk& own(std::size_t index);
 
-    std::vector<KeyframeId> ids_;
-    std::vector<std::uint8_t> live_;
-    std::size_t tombstones_ = 0;
+    std::vector<std::shared_ptr<const Chunk>> chunks_;
+    std::size_t size_ = 0;
 };
 
+// #744: each curve has its own shared, immutable storage (record_table.hpp). Copying the store
+// copies a list of curve pointers and the keyframe-id index's chunk pointers; an edit copies the
+// curve it changes and the index chunks its key ids fall in.
 class AnimationCurveStore final {
   public:
-    [[nodiscard]] std::span<const AnimationCurveRecord> records() const noexcept {
-        return records_;
+    [[nodiscard]] RecordView<AnimationCurveRecord> records() const noexcept {
+        return records_.view();
     }
     [[nodiscard]] const AnimationCurveRecord* find(AnimationCurveId id) const noexcept;
     [[nodiscard]] const ScalarAnimationCurve* findScalar(AnimationCurveId id) const noexcept;
@@ -382,6 +402,8 @@ class AnimationCurveStore final {
     [[nodiscard]] bool containsKeyframe(KeyframeId id) const noexcept {
         return keyframeIds_.contains(id);
     }
+    // Every keyframe id the store holds.
+    [[nodiscard]] const KeyframeIdIndex& keyframeIds() const noexcept { return keyframeIds_; }
 
     [[nodiscard]] bool insertKeyframe(AnimationCurveId curveId, ScalarKeyframe keyframe);
     [[nodiscard]] bool insertKeyframe(AnimationCurveId curveId, AnimationComponent component,
@@ -402,14 +424,45 @@ class AnimationCurveStore final {
                                      KeyframeId keyframeId);
 
     [[nodiscard]] ValidationResult validate() const;
+    // The checks validate() makes of one curve, without the store-wide ID uniqueness and order.
+    static void validateRecord(const AnimationCurveRecord& record, ValidationResult& result);
+
+    // Shared exactly when neither store edited its curves since they diverged.
+    [[nodiscard]] const void* storageIdentity() const noexcept { return records_.identity(); }
+    // Called only on a publication copy (see RecordTable::freeze).
+    void freeze() { records_.freeze(); }
 
   private:
-    [[nodiscard]] AnimationCurveRecord* findMutable(AnimationCurveId id) noexcept;
+    [[nodiscard]] std::optional<std::size_t> indexOf(AnimationCurveId id) const noexcept;
+    [[nodiscard]] AnimationCurveRecord* findMutable(AnimationCurveId id);
 
-    std::vector<AnimationCurveRecord> records_;
+    RecordTable<AnimationCurveRecord> records_;
     // Every keyframe id held by records_, kept in step by every mutator above.
     KeyframeIdIndex keyframeIds_;
 };
+
+// Calls `visit` with the id of every key of one curve, every component's keys included.
+template <typename Visit>
+void forEachAnimationKeyframeId(const AnimationCurveRecord& record, Visit&& visit) {
+    std::visit(
+        [&](const auto& curve) {
+            using Curve = std::decay_t<decltype(curve)>;
+            if constexpr (kWholeValueAnimationCurve<Curve>) {
+                for (const auto& keyframe : curve.keyframes)
+                    visit(keyframe.id);
+            } else {
+                for (const auto& component : curve.components)
+                    for (const auto& keyframe : component.keyframes)
+                        visit(keyframe.id);
+            }
+        },
+        record);
+}
+
+// The checks validateAnimationCurveReferences() makes of one parameter and the curve it names:
+// the curve kind its schema animates with and every key inside the schema's domain.
+void validateAnimationCurveReference(const ParameterRecord& parameter,
+                                     const AnimationCurveRecord& curve, ValidationResult& result);
 
 [[nodiscard]] ValidationResult
 validateAnimationCurveReferences(const ParameterStore& parameters,

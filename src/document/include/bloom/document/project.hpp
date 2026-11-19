@@ -113,11 +113,27 @@ class Composition final {
     // The identity/charge of the immutable authored collections, for deterministic undo
     // accounting. Draft-local mutable content has its own identity until publication freezes it.
     [[nodiscard]] const void* contentIdentity() const noexcept { return &content(); }
+    // The content's whole charge: contentShellByteCharge() plus every record's charge.
     [[nodiscard]] std::size_t contentByteCharge() const;
+    // #744. The charge of the content's own allocation (layout, groups, Merges), without the
+    // records, which have their own shared storage and are charged by forEachChargedRecord().
+    [[nodiscard]] std::size_t contentShellByteCharge() const;
+    // Calls visit(identity, record) for every record of the content (curves, parameters, nodes,
+    // edges, layers): two compositions hold the same record exactly when the identities match,
+    // so undo history can count a record once however many states share it. recordByteCharge()
+    // charges one record.
+    template <typename Visit> void forEachRecord(Visit&& visit) const;
     struct CopyWork final {
         std::uint64_t draftDetaches = 0;
         std::uint64_t editableCopies = 0;
         std::uint64_t contentChargeWalks = 0;
+        // #744: records whose charge, index entries or validation were (re)computed, and freezes
+        // that reused the previous content's indexes because their inputs were unchanged.
+        std::uint64_t recordsCharged = 0;
+        std::uint64_t recordsValidated = 0;
+        std::uint64_t incrementalFreezes = 0;
+        std::uint64_t lockIndexReuses = 0;
+        std::uint64_t reachabilityReuses = 0;
     };
     [[nodiscard]] static CopyWork copyWork() noexcept;
 
@@ -161,23 +177,49 @@ class Composition final {
 
     [[nodiscard]] ValidationResult validate() const;
 
+    // #744. True only when this composition is provably valid given that `base` -- the published
+    // composition with the same id it was drafted from -- is valid: only the records the two do
+    // not share are validated, with the cross-record rules they take part in. The graph section
+    // (nodes, edges, layers, Merges, layout, groups) is revalidated whole when any of it changed,
+    // or when a parameter it reads changed. False means "not proven"; callers then run validate().
+    [[nodiscard]] bool validatesAgainst(const Composition& base) const;
+
   private:
     friend class Project;
     // #357. Every project-unique ID this content declares, by kind, sorted. Published content
     // carries one built at freeze time so cross-composition uniqueness checks never rescan an
-    // unchanged composition.
+    // unchanged composition. #744: each kind is shared storage reused by the next freeze when its
+    // records did not change, and the keyframe ids are the curve store's own chunked index.
     struct DeclaredIdIndex final {
+        using Ids = std::shared_ptr<const std::vector<std::uint64_t>>;
+        Ids nodes, edges, parameters, curves, layers, layerSlots, groups;
+        KeyframeIdIndex keyframes;
+    };
+    struct Content;
+    // The ids the records of `after` declare that the records of `before` do not (`added`), and
+    // the reverse (`removed`), by kind. Each list is sorted; the cost is the records the two
+    // contents do not share.
+    struct DeclaredIdChanges final {
         std::vector<std::uint64_t> nodes, edges, parameters, curves, keyframes, layers, layerSlots,
             groups;
     };
-    struct Content;
+    static void declaredIdChangesBetween(const Content& before, const Content& after,
+                                         DeclaredIdChanges& added, DeclaredIdChanges& removed);
     [[nodiscard]] static DeclaredIdIndex buildDeclaredIdIndex(const Content& authored);
+    [[nodiscard]] static DeclaredIdIndex updateDeclaredIdIndex(const DeclaredIdIndex& previous,
+                                                               const Content& before,
+                                                               const Content& after);
     // Constant Composition Source references (raw ids > 0) in node order; existence is checked by
     // the caller, exactly as validateCompositionNesting() always did.
     [[nodiscard]] static std::vector<CompositionId> buildNestedReferences(const Content& authored);
     [[nodiscard]] const DeclaredIdIndex* frozenDeclaredIds() const noexcept;
     [[nodiscard]] std::vector<CompositionId> nestedReferences() const;
     [[nodiscard]] bool sameShell(const Composition& other) const noexcept;
+    // The sections of validate(): the shell's own settings, the layer ranges against the
+    // duration, and every rule that reads the graph's records, the layout and the groups.
+    void validateShell(ValidationResult& result) const;
+    void validateLayerRanges(ValidationResult& result) const;
+    void validateGraphSection(ValidationResult& result) const;
     struct Content final {
         explicit Content(CanonicalGraph graphValue)
             : graph(std::move(graphValue)), nodeLayout(defaultNodeLayout(graph.nodes())) {}
@@ -187,21 +229,33 @@ class Composition final {
         NodeLayout nodeLayout;
         NodeGroups nodeGroups;
         // Computed once before this payload is published through frozenContent_. Editable
-        // draft copies ignore this value and recompute their live charge on demand.
-        std::size_t frozenByteCharge = 0;
-        // Built once at freeze time; editable copies ignore it and build their own on demand.
-        std::optional<LockIndex> frozenLockIndex;
-        std::optional<DeclaredIdIndex> frozenDeclaredIds;
-        std::optional<std::vector<CompositionId>> frozenNestedReferences;
+        // draft copies ignore these values and recompute their live charge on demand.
+        std::size_t frozenShellCharge = 0;
+        std::size_t frozenRecordCharge = 0;
+        // Built once at freeze time (or reused from `origin` when their inputs did not change);
+        // editable copies ignore them and build their own on demand.
+        std::shared_ptr<const LockIndex> frozenLockIndex;
+        std::shared_ptr<const DeclaredIdIndex> frozenDeclaredIds;
+        std::shared_ptr<const std::vector<CompositionId>> frozenNestedReferences;
         // #355/#357. Built once at freeze time against the built-in registry; immutable thereafter.
         std::shared_ptr<const RenderReachability> frozenReachability;
+        // #744. For editable content only: the published content it was copied from, so freezing
+        // and charging it cost only the records the draft changed. Cleared when it is frozen.
+        std::shared_ptr<const Content> origin;
     };
     [[nodiscard]] const Content& content() const noexcept {
         return editableContent_ ? *editableContent_ : *frozenContent_;
     }
     [[nodiscard]] Content& mutableContent();
-    [[nodiscard]] static std::size_t calculateContentByteCharge(const Content& authored);
+    [[nodiscard]] static std::size_t calculateShellByteCharge(const Content& authored);
+    [[nodiscard]] static std::size_t calculateRecordByteCharge(const Content& authored);
+    // The record charge of `after`, from `before`'s and the records the two do not share.
+    [[nodiscard]] static std::size_t
+    updateRecordByteCharge(std::size_t beforeCharge, const Content& before, const Content& after);
     [[nodiscard]] static LockIndex buildLockIndex(const Content& authored);
+    // The lock index published content built at freeze time, or the one its origin built when a
+    // draft has not changed the graph's records; null when it must be built.
+    [[nodiscard]] const LockIndex* sharedLockIndex() const noexcept;
     void freezeContent();
     // Every member below and every Content field is classified as an evaluation input or as
     // presentation in evaluation_inputs.hpp; a new one must be classified there too (#399).
@@ -218,6 +272,27 @@ class Composition final {
     std::shared_ptr<const Content> frozenContent_;
     std::unique_ptr<Content> editableContent_;
 };
+
+// #744. The authored-content charge of one record, as undo history counts it: the record's own
+// size and the strings, bindings, keys and values it owns.
+[[nodiscard]] std::size_t recordByteCharge(const ParameterRecord& record);
+[[nodiscard]] std::size_t recordByteCharge(const AnimationCurveRecord& record);
+[[nodiscard]] std::size_t recordByteCharge(const NodeRecord& record);
+[[nodiscard]] std::size_t recordByteCharge(const EdgeRecord& record);
+[[nodiscard]] std::size_t recordByteCharge(const LayerOutputBoundary& record);
+
+template <typename Visit> void Composition::forEachRecord(Visit&& visit) const {
+    const auto each = [&](const auto records) {
+        for (std::size_t index = 0; index < records.size(); ++index)
+            visit(records.identity(index), records[index]);
+    };
+    const auto& authored = content();
+    each(authored.parameters.records());
+    each(authored.animationCurves.records());
+    each(authored.graph.nodes());
+    each(authored.graph.edges());
+    each(authored.graph.layerOutputs());
+}
 
 class Project final {
   public:

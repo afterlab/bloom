@@ -164,7 +164,7 @@ NodeLayoutRecord defaultNodeLayoutRecord(const std::size_t column, const std::si
             false};
 }
 
-NodeLayout defaultNodeLayout(const std::span<const NodeRecord> nodes) {
+NodeLayout defaultNodeLayout(const RecordView<NodeRecord> nodes) {
     std::array<std::size_t, 4> rows{};
     NodeLayout layout;
     for (const auto& node : nodes) {

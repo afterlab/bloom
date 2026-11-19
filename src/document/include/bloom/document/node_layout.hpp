@@ -87,7 +87,7 @@ using NodeGroups = std::map<NodeGroupId, NodeGroupRecord>;
 [[nodiscard]] std::size_t defaultNodeLayoutColumn(std::string_view typeId) noexcept;
 [[nodiscard]] NodeLayoutRecord defaultNodeLayoutRecord(std::size_t column,
                                                        std::size_t row) noexcept;
-[[nodiscard]] NodeLayout defaultNodeLayout(std::span<const NodeRecord> nodes);
+[[nodiscard]] NodeLayout defaultNodeLayout(RecordView<NodeRecord> nodes);
 [[nodiscard]] ValidationResult validateNodeLayout(const NodeLayout& layout,
                                                   const CanonicalGraph& graph);
 [[nodiscard]] ValidationResult validateNodeGroups(const NodeGroups& groups,

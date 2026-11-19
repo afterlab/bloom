@@ -537,124 +537,105 @@ AnimationCurveId animationCurveId(const AnimationCurveRecord& record) noexcept {
     return {};
 }
 
+std::size_t KeyframeIdIndex::chunkFor(const KeyframeId id) const noexcept {
+    const auto at = std::ranges::lower_bound(chunks_, id, std::less<>{},
+                                             [](const auto& chunk) { return chunk->back(); });
+    return static_cast<std::size_t>(at - chunks_.begin());
+}
+
+KeyframeIdIndex::Chunk& KeyframeIdIndex::own(const std::size_t index) {
+    // A chunk only this index holds is changed in place; one another index (a published snapshot,
+    // a history state) still reads is copied first.
+    if (chunks_[index].use_count() != 1)
+        chunks_[index] = std::make_shared<const Chunk>(*chunks_[index]);
+    return const_cast<Chunk&>(*chunks_[index]);
+}
+
 bool KeyframeIdIndex::contains(const KeyframeId id) const noexcept {
-    // Above the highest id ever held: every id an operation has just allocated.
-    if (ids_.empty() || ids_.back() < id) {
+    // Above the highest id held: every id an operation has just allocated.
+    if (chunks_.empty() || chunks_.back()->back() < id)
         return false;
-    }
-    const auto at = std::ranges::lower_bound(ids_, id);
-    return at != ids_.end() && *at == id && live_[static_cast<std::size_t>(at - ids_.begin())] != 0;
+    const auto& chunk = *chunks_[chunkFor(id)];
+    return std::ranges::binary_search(chunk, id);
 }
 
 void KeyframeIdIndex::insert(const KeyframeId id) {
-    if (ids_.empty() || ids_.back() < id) {
-        ids_.push_back(id);
-        live_.push_back(1);
+    if (chunks_.empty() || chunks_.back()->back() < id) {
+        if (chunks_.empty() || chunks_.back()->size() >= kKeyframeIdChunk)
+            chunks_.push_back(std::make_shared<const Chunk>(Chunk{id}));
+        else
+            own(chunks_.size() - 1).push_back(id);
+        ++size_;
         return;
     }
-    const auto at = std::ranges::lower_bound(ids_, id);
-    const auto index = static_cast<std::size_t>(at - ids_.begin());
-    if (*at == id) {
-        if (live_[index] == 0) {
-            live_[index] = 1;
-            --tombstones_;
-        }
+    const auto index = chunkFor(id);
+    const auto& held = *chunks_[index];
+    const auto at = std::ranges::lower_bound(held, id);
+    if (at != held.end() && *at == id)
         return;
+    const auto offset = at - held.begin();
+    auto& chunk = own(index);
+    chunk.insert(chunk.begin() + offset, id);
+    ++size_;
+    if (chunk.size() > 2 * kKeyframeIdChunk) {
+        // Split a full chunk in two, so an edit never copies more than 2 * kKeyframeIdChunk ids.
+        const auto middle = chunk.begin() + static_cast<std::ptrdiff_t>(chunk.size() / 2);
+        auto upper = std::make_shared<const Chunk>(middle, chunk.end());
+        chunk.erase(middle, chunk.end());
+        chunks_.insert(chunks_.begin() + static_cast<std::ptrdiff_t>(index) + 1, std::move(upper));
     }
-    ids_.insert(at, id);
-    live_.insert(live_.begin() + static_cast<std::ptrdiff_t>(index), 1);
 }
 
 void KeyframeIdIndex::insertSorted(const std::span<const KeyframeId> ids) {
-    // Ids above the highest one held are appended; the rest revive a tombstone or are merged in
-    // with one pass, so a whole curve costs O(n + k), not O(n) per key.
-    const auto tail = std::ranges::find_if(
-        ids, [this](const KeyframeId id) { return ids_.empty() || ids_.back() < id; });
-    std::vector<KeyframeId> missing;
-    for (auto id = ids.begin(); id != tail; ++id) {
-        const auto at = std::ranges::lower_bound(ids_, *id);
-        const auto index = static_cast<std::size_t>(at - ids_.begin());
-        if (at != ids_.end() && *at == *id) {
-            if (live_[index] == 0) {
-                live_[index] = 1;
-                --tombstones_;
-            }
-        } else {
-            missing.push_back(*id);
-        }
-    }
-    if (missing.size() < 8) {
-        for (const auto id : missing) {
-            insert(id);
-        }
-    } else if (!missing.empty()) {
-        std::vector<KeyframeId> mergedIds;
-        std::vector<std::uint8_t> mergedLive;
-        mergedIds.reserve(ids_.size() + missing.size());
-        mergedLive.reserve(ids_.size() + missing.size());
-        std::size_t held = 0;
-        for (const auto id : missing) {
-            for (; held < ids_.size() && ids_[held] < id; ++held) {
-                mergedIds.push_back(ids_[held]);
-                mergedLive.push_back(live_[held]);
-            }
-            mergedIds.push_back(id);
-            mergedLive.push_back(1);
-        }
-        for (; held < ids_.size(); ++held) {
-            mergedIds.push_back(ids_[held]);
-            mergedLive.push_back(live_[held]);
-        }
-        ids_ = std::move(mergedIds);
-        live_ = std::move(mergedLive);
-    }
-    for (auto id = tail; id != ids.end(); ++id) {
-        ids_.push_back(*id);
-        live_.push_back(1);
-    }
+    for (const auto id : ids)
+        insert(id);
 }
 
-void KeyframeIdIndex::erase(const KeyframeId id) noexcept {
-    const auto at = std::ranges::lower_bound(ids_, id);
-    const auto index = static_cast<std::size_t>(at - ids_.begin());
-    if (at == ids_.end() || *at != id || live_[index] == 0) {
+void KeyframeIdIndex::erase(const KeyframeId id) {
+    if (chunks_.empty() || chunks_.back()->back() < id)
         return;
+    const auto index = chunkFor(id);
+    const auto& held = *chunks_[index];
+    const auto at = std::ranges::lower_bound(held, id);
+    if (at == held.end() || *at != id)
+        return;
+    const auto offset = at - held.begin();
+    if (held.size() == 1) {
+        chunks_.erase(chunks_.begin() + static_cast<std::ptrdiff_t>(index));
+    } else {
+        auto& chunk = own(index);
+        chunk.erase(chunk.begin() + offset);
     }
-    live_[index] = 0;
-    ++tombstones_;
-    if (tombstones_ * 2 > ids_.size()) {
-        compact();
-    }
+    --size_;
 }
 
-void KeyframeIdIndex::compact() noexcept {
-    std::size_t kept = 0;
-    for (std::size_t index = 0; index < ids_.size(); ++index) {
-        if (live_[index] != 0) {
-            ids_[kept] = ids_[index];
-            live_[kept] = 1;
-            ++kept;
-        }
-    }
-    ids_.resize(kept);
-    live_.resize(kept);
-    tombstones_ = 0;
+std::size_t KeyframeIdIndex::sharedChunks(const KeyframeIdIndex& other) const noexcept {
+    std::unordered_set<const void*> mine;
+    for (const auto& chunk : chunks_)
+        mine.insert(chunk.get());
+    return static_cast<std::size_t>(std::ranges::count_if(
+        other.chunks_, [&](const auto& chunk) { return mine.contains(chunk.get()); }));
+}
+
+std::optional<std::size_t> AnimationCurveStore::indexOf(const AnimationCurveId id) const noexcept {
+    const auto records = records_.view();
+    const auto record = std::lower_bound(records.begin(), records.end(), id,
+                                         [](const auto& candidate, const auto curveId) {
+                                             return animationCurveId(candidate) < curveId;
+                                         });
+    if (record == records.end() || animationCurveId(*record) != id)
+        return std::nullopt;
+    return static_cast<std::size_t>(record - records.begin());
 }
 
 const AnimationCurveRecord* AnimationCurveStore::find(const AnimationCurveId id) const noexcept {
-    const auto record = std::lower_bound(records_.begin(), records_.end(), id,
-                                         [](const auto& candidate, const auto curveId) {
-                                             return animationCurveId(candidate) < curveId;
-                                         });
-    return record == records_.end() || animationCurveId(*record) != id ? nullptr : &*record;
+    const auto index = indexOf(id);
+    return index ? &records_[*index] : nullptr;
 }
 
-AnimationCurveRecord* AnimationCurveStore::findMutable(const AnimationCurveId id) noexcept {
-    const auto record = std::lower_bound(records_.begin(), records_.end(), id,
-                                         [](const auto& candidate, const auto curveId) {
-                                             return animationCurveId(candidate) < curveId;
-                                         });
-    return record == records_.end() || animationCurveId(*record) != id ? nullptr : &*record;
+AnimationCurveRecord* AnimationCurveStore::findMutable(const AnimationCurveId id) {
+    const auto index = indexOf(id);
+    return index ? &records_.edit(*index) : nullptr;
 }
 
 const ScalarAnimationCurve*
@@ -724,33 +705,31 @@ bool AnimationCurveStore::insert(AnimationCurveRecord record) {
         return false;
     }
     normalizeRecordFinalInterpolation(record);
-    const auto position = std::lower_bound(records_.begin(), records_.end(), id,
+    const auto records = records_.view();
+    const auto position = std::lower_bound(records.begin(), records.end(), id,
                                            [](const auto& candidate, const auto curveId) {
                                                return animationCurveId(candidate) < curveId;
                                            });
-    records_.insert(position, std::move(record));
+    records_.insert(static_cast<std::size_t>(position - records.begin()), std::move(record));
     keyframeIds_.insertSorted(recordIds);
     return true;
 }
 
 bool AnimationCurveStore::erase(const AnimationCurveId id) {
-    const auto record = std::lower_bound(records_.begin(), records_.end(), id,
-                                         [](const auto& candidate, const auto curveId) {
-                                             return animationCurveId(candidate) < curveId;
-                                         });
-    if (record == records_.end() || animationCurveId(*record) != id) {
+    const auto index = indexOf(id);
+    if (!index) {
         return false;
     }
-    forEachKeyframeId(*record, [this](const KeyframeId keyframeId) {
-        keyframeIds_.erase(keyframeId);
-    });
-    records_.erase(record);
+    forEachKeyframeId(records_[*index],
+                      [this](const KeyframeId keyframeId) { keyframeIds_.erase(keyframeId); });
+    records_.erase(*index);
     return true;
 }
 
 bool AnimationCurveStore::replace(AnimationCurveRecord record) {
     const auto id = animationCurveId(record);
-    auto* current = findMutable(id);
+    const auto index = indexOf(id);
+    const auto* current = index ? &records_[*index] : nullptr;
     if (current == nullptr || current->index() != record.index() || !canEnterStore(record)) {
         return false;
     }
@@ -770,7 +749,7 @@ bool AnimationCurveStore::replace(AnimationCurveRecord record) {
     std::vector<KeyframeId> removed;
     std::ranges::set_difference(currentIds, recordIds, std::back_inserter(removed));
     normalizeRecordFinalInterpolation(record);
-    *current = std::move(record);
+    records_.replace(*index, std::move(record));
     for (const auto keyframeId : removed) {
         keyframeIds_.erase(keyframeId);
     }
@@ -950,12 +929,38 @@ bool AnimationCurveStore::eraseKeyframe(const AnimationCurveId curveId,
     return true;
 }
 
+void AnimationCurveStore::validateRecord(const AnimationCurveRecord& record,
+                                         ValidationResult& result) {
+    std::visit(
+        [&](const auto& curve) {
+            using Curve = std::decay_t<decltype(curve)>;
+            if constexpr (kWholeValueCurve<Curve>) {
+                validateCurve(curve, result);
+            } else {
+                for (std::size_t componentIndex = 0; componentIndex < curve.components.size();
+                     ++componentIndex) {
+                    const auto path = "[" + std::to_string(curve.id.value()) + "].components[" +
+                                      std::to_string(componentIndex) + "]";
+                    validateComponentCurve(curve.components[componentIndex], path, result);
+                }
+                if (!std::ranges::any_of(curve.components, [](const auto& item) {
+                        return !item.keyframes.empty();
+                    })) {
+                    result.add(ValidationCode::InvalidValue,
+                               "[" + std::to_string(curve.id.value()) + "].components",
+                               "Component animation curve must contain at least one keyframe");
+                }
+            }
+        },
+        record);
+}
+
 ValidationResult AnimationCurveStore::validate() const {
     ValidationResult result;
     std::unordered_set<AnimationCurveId> curveIds;
     std::unordered_set<KeyframeId> keyframeIds;
     AnimationCurveId previousId;
-    for (const auto& record : records_) {
+    for (const auto& record : records_.view()) {
         const auto id = animationCurveId(record);
         if (!curveIds.insert(id).second) {
             result.add(ValidationCode::DuplicateId, "[" + std::to_string(id.value()) + "].id",
@@ -966,11 +971,11 @@ ValidationResult AnimationCurveStore::validate() const {
                        "Animation curves must be ordered by ID");
         }
         previousId = id;
+        validateRecord(record, result);
         std::visit(
             [&](const auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
                 if constexpr (kWholeValueCurve<Curve>) {
-                    validateCurve(curve, result);
                     for (const auto& keyframe : curve.keyframes) {
                         if (keyframe.id.isValid() && !keyframeIds.insert(keyframe.id).second) {
                             result.add(ValidationCode::DuplicateId,
@@ -984,7 +989,6 @@ ValidationResult AnimationCurveStore::validate() const {
                          ++componentIndex) {
                         const auto path = "[" + std::to_string(curve.id.value()) + "].components[" +
                                           std::to_string(componentIndex) + "]";
-                        validateComponentCurve(curve.components[componentIndex], path, result);
                         for (const auto& keyframe : curve.components[componentIndex].keyframes) {
                             if (keyframe.id.isValid() && !keyframeIds.insert(keyframe.id).second) {
                                 result.add(ValidationCode::DuplicateId,
@@ -994,18 +998,109 @@ ValidationResult AnimationCurveStore::validate() const {
                             }
                         }
                     }
-                    if (!std::ranges::any_of(curve.components, [](const auto& item) {
-                            return !item.keyframes.empty();
-                        })) {
-                        result.add(ValidationCode::InvalidValue,
-                                   "[" + std::to_string(curve.id.value()) + "].components",
-                                   "Component animation curve must contain at least one keyframe");
-                    }
                 }
             },
             record);
     }
     return result;
+}
+
+void validateAnimationCurveReference(const ParameterRecord& parameter,
+                                     const AnimationCurveRecord& curve, ValidationResult& result) {
+    const auto parameterPath = "parameters[" + std::to_string(parameter.id.value()) + "]";
+    // Animatability and curve kind both come from the shared schema predicates in
+    // bloom/document/parameter.hpp, so this validation and the animation commands cannot
+    // disagree about which parameters may be animated.
+    if (isVec2AnimatableSchemaKey(parameter.schemaKey)) {
+        if (!isVec2(curve)) {
+            result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
+                       "This transform parameter requires a Vec2 animation curve");
+        }
+    } else if (isVec3AnimatableSchemaKey(parameter.schemaKey)) {
+        if (!isVec3(curve)) {
+            result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
+                       "This value parameter requires a Vec3 animation curve");
+        }
+    } else if (isScalarAnimatableSchemaKey(parameter.schemaKey)) {
+        if (!isScalar(curve)) {
+            result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
+                       "This scalar parameter requires a scalar animation curve");
+        }
+    } else if (isColor4AnimatableSchemaKey(parameter.schemaKey)) {
+        if (!isColor4(curve)) {
+            result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
+                       "This color parameter requires a Color4 animation curve");
+        }
+    } else if (isPathAnimatableSchemaKey(parameter.schemaKey)) {
+        if (!isPath(curve)) {
+            result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
+                       "This path parameter requires a Path animation curve");
+        }
+    } else if (isGradientAnimatableSchemaKey(parameter.schemaKey)) {
+        if (!isGradient(curve)) {
+            result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
+                       "This gradient parameter requires a Gradient animation curve");
+        }
+    } else {
+        result.add(ValidationCode::InvalidValue, parameterPath + ".source",
+                   "This parameter schema does not support animation");
+    }
+
+    // A scalar DOMAIN belongs to the schema, not to scalar curves in general: opacity is
+    // confined to [0, 1] and text size to (0, kMaximumTextSizePixels], while a rotation curve
+    // measures degrees and must be free to wind past a full turn in either direction. The one
+    // gate is isScalarWithinSchemaDomain() so a key and a constant are admitted identically.
+    if (const auto* scalar = std::get_if<ScalarAnimationCurve>(&curve)) {
+        for (const auto& keyframe : scalar->keyframes) {
+            if (!isScalarWithinSchemaDomain(parameter.schemaKey, keyframe.value)) {
+                result.add(ValidationCode::InvalidValue,
+                           "animationCurves[" + std::to_string(scalar->id.value()) +
+                               "].keyframes[" + std::to_string(keyframe.id.value()) + "].value",
+                           "Keyframe value is outside the domain its schema declares");
+            }
+        }
+    } else if (const auto* path = std::get_if<PathAnimationCurve>(&curve);
+               path != nullptr && isGradeCurveSchemaKey(parameter.schemaKey)) {
+        // #493: a Curves key is a point list within its curve's domain, like a constant.
+        for (const auto& keyframe : path->keyframes)
+            if (!isGradeCurveValueValid(parameter.schemaKey, keyframe.value))
+                result.add(ValidationCode::InvalidValue,
+                           "animationCurves[" + std::to_string(path->id.value()) + "].keyframes[" +
+                               std::to_string(keyframe.id.value()) + "].value",
+                           "Curve key is outside the domain its schema declares");
+    } else if (const auto* maskPath = std::get_if<PathAnimationCurve>(&curve);
+               maskPath != nullptr && parameter.schemaKey == kLayerMaskPathSchemaKey) {
+        // #589: a mask holds one contour, keyed or not.
+        for (const auto& keyframe : maskPath->keyframes)
+            if (!keyframe.value.isSimple())
+                result.add(ValidationCode::InvalidValue,
+                           "animationCurves[" + std::to_string(maskPath->id.value()) +
+                               "].keyframes[" + std::to_string(keyframe.id.value()) + "].value",
+                           "A mask path key holds one contour");
+    } else if (const auto* gradient = std::get_if<GradientAnimationCurve>(&curve)) {
+        // #541: a Gradient key satisfies its schema like a constant.
+        for (const auto& keyframe : gradient->keyframes) {
+            ParameterStore probe;
+            if (!probe.insert(
+                    {parameter.id, parameter.schemaKey, ConstantValueSource{keyframe.value}}))
+                result.add(ValidationCode::InvalidValue,
+                           "animationCurves[" + std::to_string(gradient->id.value()) +
+                               "].keyframes[" + std::to_string(keyframe.id.value()) + "].value",
+                           "Gradient key is outside the domain its schema declares");
+        }
+    } else if (const auto* color = std::get_if<Color4AnimationCurve>(&curve)) {
+        if (const auto* alpha = color->component(AnimationComponent::Alpha)) {
+            for (const auto& keyframe : alpha->keyframes) {
+                if (keyframe.value < 0.0 || keyframe.value > 1.0) {
+                    result.add(ValidationCode::InvalidValue,
+                               "animationCurves[" + std::to_string(color->id.value()) +
+                                   "].components[3].keyframes[" +
+                                   std::to_string(keyframe.id.value()) + "].value",
+                               "Alpha keyframe value is outside the color domain");
+                }
+            }
+        }
+    }
 }
 
 ValidationResult validateAnimationCurveReferences(const ParameterStore& parameters,
@@ -1032,99 +1127,7 @@ ValidationResult validateAnimationCurveReferences(const ParameterStore& paramete
                        "Animation curve may be owned by only one parameter");
         }
 
-        // Animatability and curve kind both come from the shared schema predicates in
-        // bloom/document/parameter.hpp, so this validation and the animation commands cannot
-        // disagree about which parameters may be animated.
-        if (isVec2AnimatableSchemaKey(parameter.schemaKey)) {
-            if (!isVec2(*curve)) {
-                result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
-                           "This transform parameter requires a Vec2 animation curve");
-            }
-        } else if (isVec3AnimatableSchemaKey(parameter.schemaKey)) {
-            if (!isVec3(*curve)) {
-                result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
-                           "This value parameter requires a Vec3 animation curve");
-            }
-        } else if (isScalarAnimatableSchemaKey(parameter.schemaKey)) {
-            if (!isScalar(*curve)) {
-                result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
-                           "This scalar parameter requires a scalar animation curve");
-            }
-        } else if (isColor4AnimatableSchemaKey(parameter.schemaKey)) {
-            if (!isColor4(*curve)) {
-                result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
-                           "This color parameter requires a Color4 animation curve");
-            }
-        } else if (isPathAnimatableSchemaKey(parameter.schemaKey)) {
-            if (!isPath(*curve)) {
-                result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
-                           "This path parameter requires a Path animation curve");
-            }
-        } else if (isGradientAnimatableSchemaKey(parameter.schemaKey)) {
-            if (!isGradient(*curve)) {
-                result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
-                           "This gradient parameter requires a Gradient animation curve");
-            }
-        } else {
-            result.add(ValidationCode::InvalidValue, parameterPath + ".source",
-                       "This parameter schema does not support animation");
-        }
-
-        // A scalar DOMAIN belongs to the schema, not to scalar curves in general: opacity is
-        // confined to [0, 1] and text size to (0, kMaximumTextSizePixels], while a rotation curve
-        // measures degrees and must be free to wind past a full turn in either direction. The one
-        // gate is isScalarWithinSchemaDomain() so a key and a constant are admitted identically.
-        if (const auto* scalar = std::get_if<ScalarAnimationCurve>(curve)) {
-            for (const auto& keyframe : scalar->keyframes) {
-                if (!isScalarWithinSchemaDomain(parameter.schemaKey, keyframe.value)) {
-                    result.add(ValidationCode::InvalidValue,
-                               "animationCurves[" + std::to_string(scalar->id.value()) +
-                                   "].keyframes[" + std::to_string(keyframe.id.value()) + "].value",
-                               "Keyframe value is outside the domain its schema declares");
-                }
-            }
-        } else if (const auto* path = std::get_if<PathAnimationCurve>(curve);
-                   path != nullptr && isGradeCurveSchemaKey(parameter.schemaKey)) {
-            // #493: a Curves key is a point list within its curve's domain, like a constant.
-            for (const auto& keyframe : path->keyframes)
-                if (!isGradeCurveValueValid(parameter.schemaKey, keyframe.value))
-                    result.add(ValidationCode::InvalidValue,
-                               "animationCurves[" + std::to_string(path->id.value()) +
-                                   "].keyframes[" + std::to_string(keyframe.id.value()) + "].value",
-                               "Curve key is outside the domain its schema declares");
-        } else if (const auto* maskPath = std::get_if<PathAnimationCurve>(curve);
-                   maskPath != nullptr && parameter.schemaKey == kLayerMaskPathSchemaKey) {
-            // #589: a mask holds one contour, keyed or not.
-            for (const auto& keyframe : maskPath->keyframes)
-                if (!keyframe.value.isSimple())
-                    result.add(ValidationCode::InvalidValue,
-                               "animationCurves[" + std::to_string(maskPath->id.value()) +
-                                   "].keyframes[" + std::to_string(keyframe.id.value()) + "].value",
-                               "A mask path key holds one contour");
-        } else if (const auto* gradient = std::get_if<GradientAnimationCurve>(curve)) {
-            // #541: a Gradient key satisfies its schema like a constant.
-            for (const auto& keyframe : gradient->keyframes) {
-                ParameterStore probe;
-                if (!probe.insert({parameter.id, parameter.schemaKey,
-                                   ConstantValueSource{keyframe.value}}))
-                    result.add(ValidationCode::InvalidValue,
-                               "animationCurves[" + std::to_string(gradient->id.value()) +
-                                   "].keyframes[" + std::to_string(keyframe.id.value()) + "].value",
-                               "Gradient key is outside the domain its schema declares");
-            }
-        } else if (const auto* color = std::get_if<Color4AnimationCurve>(curve)) {
-            if (const auto* alpha = color->component(AnimationComponent::Alpha)) {
-                for (const auto& keyframe : alpha->keyframes) {
-                    if (keyframe.value < 0.0 || keyframe.value > 1.0) {
-                        result.add(ValidationCode::InvalidValue,
-                                   "animationCurves[" + std::to_string(color->id.value()) +
-                                       "].components[3].keyframes[" +
-                                       std::to_string(keyframe.id.value()) + "].value",
-                                   "Alpha keyframe value is outside the color domain");
-                    }
-                }
-            }
-        }
+        validateAnimationCurveReference(parameter, *curve, result);
     }
 
     for (const auto& record : animationCurves.records()) {

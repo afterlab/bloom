@@ -3,21 +3,22 @@
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/chromatic_aberration_nodes.hpp>
+#include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/depth_effect_parameters.hpp>
-#include <bloom/document/lens_flare_nodes.hpp>
-#include <bloom/document/film_grain_nodes.hpp>
-#include <bloom/document/codec_degrade_nodes.hpp>
-#include <bloom/document/lens_distortion_nodes.hpp>
-#include <bloom/document/chromatic_aberration_nodes.hpp>
-#include <bloom/document/test_card_nodes.hpp>
-#include <bloom/document/motion_blur_parameters.hpp>
-#include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/field_parameters.hpp>
+#include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/gradient_interpolation.hpp>
 #include <bloom/document/ids.hpp>
+#include <bloom/document/lens_distortion_nodes.hpp>
+#include <bloom/document/lens_flare_nodes.hpp>
+#include <bloom/document/motion_blur_parameters.hpp>
+#include <bloom/document/record_table.hpp>
+#include <bloom/document/sharpen_nodes.hpp>
+#include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/validation.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 
@@ -564,9 +565,11 @@ struct ParameterBinding {
     friend bool operator==(const ParameterBinding&, const ParameterBinding&) = default;
 };
 
+// #744: each record has its own shared, immutable storage (record_table.hpp), so copying the store
+// copies a list of record pointers and an edit copies only the record it changes.
 class ParameterStore final {
   public:
-    [[nodiscard]] std::span<const ParameterRecord> records() const noexcept { return records_; }
+    [[nodiscard]] RecordView<ParameterRecord> records() const noexcept { return records_.view(); }
     [[nodiscard]] const ParameterRecord* find(ParameterId id) const noexcept;
 
     [[nodiscard]] bool insert(ParameterRecord record);
@@ -574,9 +577,21 @@ class ParameterStore final {
     [[nodiscard]] bool setSource(ParameterId id, ParameterSource source);
 
     [[nodiscard]] ValidationResult validate() const;
+    // The checks validate() makes of one record, without the store-wide ID uniqueness.
+    static void validateRecord(const ParameterRecord& record, ValidationResult& result);
+
+    // Whether exactly one record has this id: O(log n) while the records are in id order.
+    [[nodiscard]] bool holdsOnce(ParameterId id) const noexcept;
+
+    // Shared exactly when neither store edited its records since they diverged.
+    [[nodiscard]] const void* storageIdentity() const noexcept { return records_.identity(); }
+    // Called only on a publication copy (see RecordTable::freeze).
+    void freeze() { records_.freeze(); }
 
   private:
-    std::vector<ParameterRecord> records_;
+    [[nodiscard]] std::optional<std::size_t> indexOf(ParameterId id) const noexcept;
+
+    RecordTable<ParameterRecord> records_;
     // True while the records are in ascending id order, which is how ids are allocated and how a
     // document is read, so a lookup is a binary search. An out-of-order insert clears it and
     // lookups scan, as they always did.

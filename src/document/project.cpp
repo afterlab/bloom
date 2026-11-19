@@ -1,6 +1,7 @@
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/project.hpp>
 
+#include <bloom/document/evaluation_inputs.hpp>
 #include <bloom/document/merge_entries.hpp>
 
 #include <bloom/document/persisted_text.hpp>
@@ -41,6 +42,9 @@ void validateProjectUniqueDeclaration(const Id id, const std::size_t composition
 } // namespace
 
 namespace bloom::document {
+
+// Defined with the incremental validation (project_incremental_validation.cpp).
+std::atomic<std::uint64_t>& recordsValidatedCount() noexcept;
 
 namespace {
 std::atomic<std::uint64_t> draftContentDetaches{0};
@@ -127,25 +131,110 @@ Composition& Composition::operator=(const Composition& other) {
 
 Composition::Content& Composition::mutableContent() {
     if (!editableContent_) {
+        // #744: the copy shares every record with the published content; only the records the
+        // draft then edits are copied, and freezing it later costs only those.
         editableContent_ = std::make_unique<Content>(*frozenContent_);
+        editableContent_->origin = frozenContent_;
         draftContentDetaches.fetch_add(1, std::memory_order_relaxed);
     }
     return *editableContent_;
 }
 
+namespace {
+std::atomic<std::uint64_t> recordsChargedCount{0};
+std::atomic<std::uint64_t> incrementalFreezeCount{0};
+std::atomic<std::uint64_t> lockIndexReuseCount{0};
+std::atomic<std::uint64_t> reachabilityReuseCount{0};
+
+// Whether a parameter record is read by the render reachability walk or the nesting references
+// beyond its binding: a driver names a node, and an integer constant may name a composition or a
+// group. Any other source change leaves both answers as they were.
+[[nodiscard]] bool readByGraphReferences(const ParameterRecord& record) {
+    if (std::holds_alternative<DriverBindingSource>(record.source))
+        return true;
+    const auto* constant = std::get_if<ConstantValueSource>(&record.source);
+    return constant != nullptr && std::holds_alternative<std::int64_t>(constant->value);
+}
+
+[[nodiscard]] bool sameGraphRecords(const CanonicalGraph& left, const CanonicalGraph& right) {
+    return left.nodeStorageIdentity() == right.nodeStorageIdentity() &&
+           left.edgeStorageIdentity() == right.edgeStorageIdentity() &&
+           left.layerStorageIdentity() == right.layerStorageIdentity();
+}
+} // namespace
+
 void Composition::freezeContent() {
-    if (editableContent_) {
-        // Called on a COPY of the draft's Project. Moving this copy's buffer into immutable
-        // storage cannot let a pointer retained from the original Draft mutate a Snapshot.
-        auto frozen = std::make_shared<Content>(std::move(*editableContent_));
-        frozen->frozenByteCharge = calculateContentByteCharge(*frozen);
-        frozen->frozenLockIndex = buildLockIndex(*frozen);
-        frozen->frozenDeclaredIds = buildDeclaredIdIndex(*frozen);
-        frozen->frozenNestedReferences = buildNestedReferences(*frozen);
-        // Publish first so the reachability walk reads the frozen payload through *this; nothing
-        // else shares `frozen` until this function returns.
-        frozenContent_ = frozen;
-        editableContent_.reset();
+    if (!editableContent_)
+        return;
+    // Called on a COPY of the draft's Project. Moving this copy's buffer into immutable storage
+    // cannot let a pointer retained from the original Draft mutate a Snapshot: the copy already
+    // made its own copies of every record the draft edited (RecordTable's copy).
+    auto frozen = std::make_shared<Content>(std::move(*editableContent_));
+    frozen->parameters.freeze();
+    frozen->animationCurves.freeze();
+    frozen->graph.freeze();
+    const auto origin = std::exchange(frozen->origin, nullptr);
+    frozen->frozenShellCharge = calculateShellByteCharge(*frozen);
+    const auto& graph = frozen->graph;
+    bool reachabilityReusable = false;
+    if (origin != nullptr && origin->frozenLockIndex && origin->frozenDeclaredIds &&
+        origin->frozenNestedReferences) {
+        // #744: only the records this content does not share with the one it was copied from are
+        // charged, indexed and checked.
+        incrementalFreezeCount.fetch_add(1, std::memory_order_relaxed);
+        frozen->frozenRecordCharge =
+            updateRecordByteCharge(origin->frozenRecordCharge, *origin, *frozen);
+        const bool sameGraph = sameGraphRecords(origin->graph, graph);
+        if (sameGraph) {
+            frozen->frozenLockIndex = origin->frozenLockIndex;
+            lockIndexReuseCount.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            frozen->frozenLockIndex = std::make_shared<const LockIndex>(buildLockIndex(*frozen));
+        }
+        frozen->frozenDeclaredIds = std::make_shared<const DeclaredIdIndex>(
+            updateDeclaredIdIndex(*origin->frozenDeclaredIds, *origin, *frozen));
+        bool referencesKept = sameGraph;
+        if (referencesKept &&
+            origin->parameters.storageIdentity() != frozen->parameters.storageIdentity()) {
+            const auto changed =
+                diffRecords(origin->parameters.records(), frozen->parameters.records());
+            referencesKept = std::ranges::none_of(changed.removed,
+                                                  [](const auto* record) {
+                                                      return readByGraphReferences(*record);
+                                                  }) &&
+                             std::ranges::none_of(changed.added, [](const auto* record) {
+                                 return readByGraphReferences(*record);
+                             });
+        }
+        frozen->frozenNestedReferences = referencesKept
+                                             ? origin->frozenNestedReferences
+                                             : std::make_shared<const std::vector<CompositionId>>(
+                                                   buildNestedReferences(*frozen));
+        reachabilityReusable =
+            referencesKept && origin->frozenReachability != nullptr &&
+            std::ranges::equal(origin->graph.merges(), graph.merges(),
+                               [](const LayerStack& a, const LayerStack& b) {
+                                   return a.nodeId() == b.nodeId() && a.enabled() == b.enabled() &&
+                                          std::ranges::equal(a.entries(), b.entries());
+                               }) &&
+            origin->graph.compositionOutput() == graph.compositionOutput() &&
+            sameEvaluationLayout(origin->nodeLayout, frozen->nodeLayout);
+    } else {
+        frozen->frozenRecordCharge = calculateRecordByteCharge(*frozen);
+        frozen->frozenLockIndex = std::make_shared<const LockIndex>(buildLockIndex(*frozen));
+        frozen->frozenDeclaredIds =
+            std::make_shared<const DeclaredIdIndex>(buildDeclaredIdIndex(*frozen));
+        frozen->frozenNestedReferences =
+            std::make_shared<const std::vector<CompositionId>>(buildNestedReferences(*frozen));
+    }
+    // Publish first so the reachability walk reads the frozen payload through *this; nothing
+    // else shares `frozen` until this function returns.
+    frozenContent_ = frozen;
+    editableContent_.reset();
+    if (reachabilityReusable) {
+        frozen->frozenReachability = origin->frozenReachability;
+        reachabilityReuseCount.fetch_add(1, std::memory_order_relaxed);
+    } else {
         frozen->frozenReachability = std::make_shared<const RenderReachability>(
             RenderReachability::compute(*this, builtInNodeDefinitions()));
     }
@@ -158,62 +247,129 @@ std::shared_ptr<const RenderReachability> Composition::frozenRenderReachability(
 Composition::CopyWork Composition::copyWork() noexcept {
     return {.draftDetaches = draftContentDetaches.load(std::memory_order_relaxed),
             .editableCopies = editableContentCopies.load(std::memory_order_relaxed),
-            .contentChargeWalks = contentChargeWalks.load(std::memory_order_relaxed)};
+            .contentChargeWalks = contentChargeWalks.load(std::memory_order_relaxed),
+            .recordsCharged = recordsChargedCount.load(std::memory_order_relaxed),
+            .recordsValidated = recordsValidatedCount().load(std::memory_order_relaxed),
+            .incrementalFreezes = incrementalFreezeCount.load(std::memory_order_relaxed),
+            .lockIndexReuses = lockIndexReuseCount.load(std::memory_order_relaxed),
+            .reachabilityReuses = reachabilityReuseCount.load(std::memory_order_relaxed)};
 }
 
 std::size_t Composition::contentByteCharge() const {
-    return editableContent_ ? calculateContentByteCharge(*editableContent_)
-                            : frozenContent_->frozenByteCharge;
+    if (!editableContent_) {
+        const auto total = frozenContent_->frozenShellCharge + frozenContent_->frozenRecordCharge;
+        return total < frozenContent_->frozenShellCharge ? std::numeric_limits<std::size_t>::max()
+                                                         : total;
+    }
+    const auto& authored = *editableContent_;
+    std::size_t total = calculateShellByteCharge(authored);
+    const auto& origin = authored.origin;
+    charge(total, origin != nullptr
+                      ? updateRecordByteCharge(origin->frozenRecordCharge, *origin, authored)
+                      : calculateRecordByteCharge(authored));
+    return total;
 }
 
-std::size_t Composition::calculateContentByteCharge(const Content& authored) {
+std::size_t Composition::contentShellByteCharge() const {
+    return editableContent_ ? calculateShellByteCharge(*editableContent_)
+                            : frozenContent_->frozenShellCharge;
+}
+
+std::size_t recordByteCharge(const ParameterRecord& record) {
+    recordsChargedCount.fetch_add(1, std::memory_order_relaxed);
+    std::size_t bytes = sizeof(ParameterRecord);
+    charge(bytes, record.schemaKey.size());
+    std::visit(
+        [&](const auto& source) {
+            using Source = std::decay_t<decltype(source)>;
+            if constexpr (std::is_same_v<Source, ConstantValueSource>)
+                chargeValue(bytes, source.value);
+            else if constexpr (std::is_same_v<Source, AnimationCurveSource>) {
+                if (source.defaultValue)
+                    chargeValue(bytes, *source.defaultValue);
+            } else
+                charge(bytes, source.outputPort.size());
+        },
+        record.source);
+    return bytes;
+}
+
+std::size_t recordByteCharge(const AnimationCurveRecord& record) {
+    recordsChargedCount.fetch_add(1, std::memory_order_relaxed);
+    std::size_t bytes = sizeof(AnimationCurveRecord);
+    std::visit(
+        [&](const auto& curve) {
+            using Curve = std::decay_t<decltype(curve)>;
+            if constexpr (std::is_same_v<Curve, ScalarAnimationCurve>) {
+                chargeRecords<ScalarKeyframe>(bytes, curve.keyframes.size());
+            } else if constexpr (std::is_same_v<Curve, PathAnimationCurve>) {
+                chargeRecords<PathKeyframe>(bytes, curve.keyframes.size());
+                for (const auto& keyframe : curve.keyframes)
+                    chargePath(bytes, keyframe.value);
+            } else if constexpr (std::is_same_v<Curve, GradientAnimationCurve>) {
+                chargeRecords<GradientKeyframe>(bytes, curve.keyframes.size());
+                for (const auto& keyframe : curve.keyframes)
+                    chargeRecords<GradientStop>(bytes, keyframe.value.stops.size());
+            } else {
+                for (const auto& component : curve.components)
+                    chargeRecords<ScalarKeyframe>(bytes, component.keyframes.size());
+            }
+        },
+        record);
+    return bytes;
+}
+
+std::size_t recordByteCharge(const NodeRecord& record) {
+    recordsChargedCount.fetch_add(1, std::memory_order_relaxed);
+    std::size_t bytes = sizeof(NodeRecord);
+    charge(bytes, record.typeId.size());
+    chargeRecords<ParameterBinding>(bytes, record.parameters.size());
+    for (const auto& binding : record.parameters)
+        charge(bytes, binding.role.size());
+    return bytes;
+}
+
+std::size_t recordByteCharge(const EdgeRecord& record) {
+    recordsChargedCount.fetch_add(1, std::memory_order_relaxed);
+    std::size_t bytes = sizeof(EdgeRecord);
+    charge(bytes, record.source.port.size());
+    std::visit(
+        [&](const auto& destination) {
+            using Destination = std::decay_t<decltype(destination)>;
+            if constexpr (std::is_same_v<Destination, NodeInputRef>)
+                charge(bytes, destination.port.size());
+            else
+                charge(bytes, destination.role.size());
+        },
+        record.destination);
+    return bytes;
+}
+
+std::size_t recordByteCharge(const LayerOutputBoundary& record) {
+    recordsChargedCount.fetch_add(1, std::memory_order_relaxed);
+    std::size_t bytes = sizeof(LayerOutputBoundary);
+    charge(bytes, record.name.size());
+    charge(bytes, record.outputPort.size());
+    chargeRecords<LayerMask>(bytes, record.masks.size());
+    for (const auto& mask : record.masks)
+        charge(bytes, mask.name.size());
+    chargeRecords<ParameterBinding>(bytes, record.parameters.size());
+    for (const auto& binding : record.parameters)
+        charge(bytes, binding.role.size());
+    return bytes;
+}
+
+std::size_t Composition::calculateShellByteCharge(const Content& authored) {
     contentChargeWalks.fetch_add(1, std::memory_order_relaxed);
     std::size_t bytes = sizeof(Content);
-    chargeRecords<ParameterRecord>(bytes, authored.parameters.records().size());
-    chargeRecords<AnimationCurveRecord>(bytes, authored.animationCurves.records().size());
-    chargeRecords<NodeRecord>(bytes, authored.graph.nodes().size());
-    chargeRecords<EdgeRecord>(bytes, authored.graph.edges().size());
-    chargeRecords<LayerOutputBoundary>(bytes, authored.graph.layerOutputs().size());
+    // One pointer per record in each record list (record_table.hpp).
+    chargeRecords<std::shared_ptr<void>>(
+        bytes, authored.parameters.records().size() + authored.animationCurves.records().size() +
+                   authored.graph.nodes().size() + authored.graph.edges().size() +
+                   authored.graph.layerOutputs().size());
     chargeRecords<LayerStack>(bytes, authored.graph.merges().size());
     chargeRecords<std::pair<const NodeId, NodeLayoutRecord>>(bytes, authored.nodeLayout.size());
     chargeRecords<std::pair<const NodeGroupId, NodeGroupRecord>>(bytes, authored.nodeGroups.size());
-    for (const auto& node : authored.graph.nodes()) {
-        charge(bytes, node.typeId.size());
-        chargeRecords<ParameterBinding>(bytes, node.parameters.size());
-        for (const auto& binding : node.parameters)
-            charge(bytes, binding.role.size());
-    }
-    for (const auto& parameter : authored.parameters.records()) {
-        charge(bytes, parameter.schemaKey.size());
-        std::visit(
-            [&](const auto& source) {
-                using Source = std::decay_t<decltype(source)>;
-                if constexpr (std::is_same_v<Source, ConstantValueSource>)
-                    chargeValue(bytes, source.value);
-                else if constexpr (std::is_same_v<Source, AnimationCurveSource>) {
-                    if (source.defaultValue)
-                        chargeValue(bytes, *source.defaultValue);
-                } else
-                    charge(bytes, source.outputPort.size());
-            },
-            parameter.source);
-    }
-    for (const auto& edge : authored.graph.edges()) {
-        charge(bytes, edge.source.port.size());
-        std::visit(
-            [&](const auto& destination) {
-                using Destination = std::decay_t<decltype(destination)>;
-                if constexpr (std::is_same_v<Destination, NodeInputRef>)
-                    charge(bytes, destination.port.size());
-                else
-                    charge(bytes, destination.role.size());
-            },
-            edge.destination);
-    }
-    for (const auto& boundary : authored.graph.layerOutputs()) {
-        charge(bytes, boundary.name.size());
-        charge(bytes, boundary.outputPort.size());
-    }
     for (const auto& stack : authored.graph.merges())
         chargeRecords<LayerStackEntry>(bytes, stack.entries().size());
     for (const auto& [id, group] : authored.nodeGroups) {
@@ -221,28 +377,53 @@ std::size_t Composition::calculateContentByteCharge(const Content& authored) {
         charge(bytes, group.name.size());
         chargeRecords<NodeId>(bytes, group.members.size());
     }
-    for (const auto& curve : authored.animationCurves.records()) {
-        std::visit(
-            [&](const auto& record) {
-                using Record = std::decay_t<decltype(record)>;
-                if constexpr (std::is_same_v<Record, ScalarAnimationCurve>) {
-                    chargeRecords<ScalarKeyframe>(bytes, record.keyframes.size());
-                } else if constexpr (std::is_same_v<Record, PathAnimationCurve>) {
-                    chargeRecords<PathKeyframe>(bytes, record.keyframes.size());
-                    for (const auto& keyframe : record.keyframes)
-                        chargePath(bytes, keyframe.value);
-                } else if constexpr (std::is_same_v<Record, GradientAnimationCurve>) {
-                    chargeRecords<GradientKeyframe>(bytes, record.keyframes.size());
-                    for (const auto& keyframe : record.keyframes)
-                        chargeRecords<GradientStop>(bytes, keyframe.value.stops.size());
-                } else {
-                    for (const auto& component : record.components)
-                        chargeRecords<ScalarKeyframe>(bytes, component.keyframes.size());
-                }
-            },
-            curve);
-    }
     return bytes;
+}
+
+std::size_t Composition::calculateRecordByteCharge(const Content& authored) {
+    std::size_t bytes = 0;
+    const auto each = [&](const auto records) {
+        for (const auto& record : records)
+            charge(bytes, recordByteCharge(record));
+    };
+    each(authored.parameters.records());
+    each(authored.animationCurves.records());
+    each(authored.graph.nodes());
+    each(authored.graph.edges());
+    each(authored.graph.layerOutputs());
+    return bytes;
+}
+
+std::size_t Composition::updateRecordByteCharge(const std::size_t beforeCharge,
+                                                const Content& before, const Content& after) {
+    // Exact in two words, like the history charge: a saturated sum would not subtract back.
+    std::size_t low = beforeCharge;
+    std::size_t high = 0;
+    const auto apply = [&](const auto diff) {
+        for (const auto* record : diff.added) {
+            const auto bytes = recordByteCharge(*record);
+            if (bytes > std::numeric_limits<std::size_t>::max() - low)
+                ++high;
+            low += bytes;
+        }
+        for (const auto* record : diff.removed) {
+            const auto bytes = recordByteCharge(*record);
+            if (bytes > low)
+                --high;
+            low -= bytes;
+        }
+    };
+    if (before.parameters.storageIdentity() != after.parameters.storageIdentity())
+        apply(diffRecords(before.parameters.records(), after.parameters.records()));
+    if (before.animationCurves.storageIdentity() != after.animationCurves.storageIdentity())
+        apply(diffRecords(before.animationCurves.records(), after.animationCurves.records()));
+    if (before.graph.nodeStorageIdentity() != after.graph.nodeStorageIdentity())
+        apply(diffRecords(before.graph.nodes(), after.graph.nodes()));
+    if (before.graph.edgeStorageIdentity() != after.graph.edgeStorageIdentity())
+        apply(diffRecords(before.graph.edges(), after.graph.edges()));
+    if (before.graph.layerStorageIdentity() != after.graph.layerStorageIdentity())
+        apply(diffRecords(before.graph.layerOutputs(), after.graph.layerOutputs()));
+    return high == 0 ? low : std::numeric_limits<std::size_t>::max();
 }
 
 void Project::freezeCompositionContent() {
@@ -375,9 +556,24 @@ namespace {
 std::atomic<std::uint64_t> lockIndexBuildCount{0};
 } // namespace
 
+const Composition::LockIndex* Composition::sharedLockIndex() const noexcept {
+    if (!editableContent_)
+        return frozenContent_ && frozenContent_->frozenLockIndex
+                   ? frozenContent_->frozenLockIndex.get()
+                   : nullptr;
+    // #744: a draft that has not touched the graph's records locks exactly what its origin did.
+    const auto& origin = editableContent_->origin;
+    if (origin != nullptr && origin->frozenLockIndex &&
+        origin->graph.nodeStorageIdentity() == editableContent_->graph.nodeStorageIdentity() &&
+        origin->graph.edgeStorageIdentity() == editableContent_->graph.edgeStorageIdentity() &&
+        origin->graph.layerStorageIdentity() == editableContent_->graph.layerStorageIdentity())
+        return origin->frozenLockIndex.get();
+    return nullptr;
+}
+
 Composition::LockIndex Composition::lockIndex() const {
-    if (!editableContent_ && frozenContent_ && frozenContent_->frozenLockIndex)
-        return *frozenContent_->frozenLockIndex;
+    if (const auto* shared = sharedLockIndex())
+        return *shared;
     return buildLockIndex(content());
 }
 
@@ -435,13 +631,13 @@ std::uint64_t Composition::lockIndexBuilds() noexcept {
 }
 
 bool Composition::nodeLocked(const NodeId node) const {
-    if (!editableContent_ && frozenContent_ && frozenContent_->frozenLockIndex)
-        return frozenContent_->frozenLockIndex->nodes.contains(node);
+    if (const auto* shared = sharedLockIndex())
+        return shared->nodes.contains(node);
     return buildLockIndex(content()).nodes.contains(node);
 }
 bool Composition::parameterLocked(const ParameterId parameter) const {
-    if (!editableContent_ && frozenContent_ && frozenContent_->frozenLockIndex)
-        return frozenContent_->frozenLockIndex->parameters.contains(parameter);
+    if (const auto* shared = sharedLockIndex())
+        return shared->parameters.contains(parameter);
     return buildLockIndex(content()).parameters.contains(parameter);
 }
 
@@ -453,8 +649,7 @@ bool Composition::setDuration(const core::RationalTime duration) noexcept {
     return true;
 }
 
-ValidationResult Composition::validate() const {
-    ValidationResult result;
+void Composition::validateShell(ValidationResult& result) const {
     if (!id_.isValid()) {
         result.add(ValidationCode::InvalidId, "id", "Composition ID must not be zero");
     }
@@ -478,6 +673,9 @@ ValidationResult Composition::validate() const {
                    "Invalid composition background color");
     if (!safeAreas_.isValid())
         result.add(ValidationCode::InvalidValue, "safeAreas", "Invalid composition safe areas");
+}
+
+void Composition::validateLayerRanges(ValidationResult& result) const {
     for (const auto& layer : graph().layerOutputs()) {
         // ADR 0024: an explicit range is in placement time and may extend past either composition
         // bound (keeping a frame inside is a gesture rule). A stored zero outPoint stays the
@@ -489,14 +687,24 @@ ValidationResult Composition::validate() const {
             result.add(ValidationCode::InvalidValue, "graph.layerOutputs.timing",
                        "Invalid layer timing");
     }
-    result.append("parameters", parameters().validate());
-    result.append("animationCurves", animationCurves().validate());
-    result.append("", validateAnimationCurveReferences(parameters(), animationCurves()));
+}
+
+void Composition::validateGraphSection(ValidationResult& result) const {
     result.append("graph", graph().validate(parameters(), builtInNodeDefinitions(), id_));
     result.append("", validateLayerMasks(graph(), parameters()));
     result.append("graph", validateEntryLayers(graph(), parameters()));
     result.append("", validateNodeLayout(nodeLayout(), graph()));
     result.append("", validateNodeGroups(nodeGroups(), graph()));
+}
+
+ValidationResult Composition::validate() const {
+    ValidationResult result;
+    validateShell(result);
+    validateLayerRanges(result);
+    result.append("parameters", parameters().validate());
+    result.append("animationCurves", animationCurves().validate());
+    result.append("", validateAnimationCurveReferences(parameters(), animationCurves()));
+    validateGraphSection(result);
     return result;
 }
 
