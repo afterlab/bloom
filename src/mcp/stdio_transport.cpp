@@ -1,6 +1,8 @@
 // The stdio transport (newline-delimited UTF-8 JSON-RPC), moved from apps/bloom-mcp/transport.cpp:
 // a bounded reader thread, the 16-message inbox, cancellation intercepted while a call runs, and
 // one protocol session. Cancellation now stops only the cancelled request's own work.
+#include "json.hpp"
+
 #include <bloom/core/worker_thread.hpp>
 #include <bloom/mcp/server_core.hpp>
 
@@ -18,8 +20,12 @@ namespace {
 
 struct Message {
     std::string text;
+    // Bytes of the line, counted past the bound (#745: the refusal names them).
+    std::uint64_t bytes = 0;
     bool oversized = false;
     bool unterminated = false;
+    // Parsed once, by the reader (#745).
+    McpEnvelope envelope;
 };
 
 // Shared with the reader thread, which may outlive serveStdio() (see below).
@@ -59,8 +65,9 @@ void serveStdio(McpServerCore& core, std::istream& input, std::ostream& output,
             box.ready.notify_one();
         };
         // notifications/cancelled is handled here, while the call it cancels may be running.
-        const auto intercept = [&](const std::string& text) {
-            const auto envelope = inspectMessage(text, limits);
+        const auto intercept = [&](Message& message) {
+            message.envelope = inspectMessage(message.text, limits);
+            const auto& envelope = message.envelope;
             if (envelope.kind != McpMessageKind::Notification ||
                 envelope.method != "notifications/cancelled")
                 return false;
@@ -73,13 +80,15 @@ void serveStdio(McpServerCore& core, std::istream& input, std::ostream& output,
         char byte = 0;
         while (input.get(byte)) {
             if (byte == '\n') {
-                if (message.oversized || !intercept(message.text))
+                if (message.oversized || !intercept(message))
                     send(std::move(message));
                 message = {};
             } else if (message.text.size() < limits.requestBytes) {
                 message.text.push_back(byte);
+                ++message.bytes;
             } else {
                 message.oversized = true;
+                ++message.bytes;
             }
         }
         if (!message.text.empty() || message.oversized) {
@@ -124,19 +133,25 @@ void serveStdio(McpServerCore& core, std::istream& input, std::ostream& output,
             inbox.space.notify_one();
             if (!message.oversized && !message.unterminated) {
                 inbox.cancel = std::stop_source();
-                inbox.active = inspectMessage(message.text, limits).requestKey;
+                inbox.active = message.envelope.requestKey;
                 control.stop = inbox.cancel.get_token();
             }
         }
         std::optional<std::string> response;
         if (message.oversized)
-            response = McpServerCore::errorResponse(std::nullopt, McpProtocolError::InvalidRequest,
-                                                    "Request exceeds 1 MiB");
+            response = McpServerCore::limitResponse(
+                std::nullopt,
+                {.limit = McpLimit::RequestBytes,
+                 .value = limits.requestBytes,
+                 .actual = message.bytes,
+                 .message = "The request is " + grouped(message.bytes) +
+                            " bytes; Bloom reads at most " + grouped(limits.requestBytes) +
+                            " (limit requestBytes). " + std::string(kMcpLimitAdvice)});
         else if (message.unterminated)
             response = McpServerCore::errorResponse(std::nullopt, McpProtocolError::ParseError,
                                                     "Unterminated stdio message");
         else
-            response = core.handle(*session, message.text, control).response;
+            response = core.handle(*session, message.envelope, control).response;
         {
             const std::lock_guard lock(inbox.mutex);
             inbox.active.reset();

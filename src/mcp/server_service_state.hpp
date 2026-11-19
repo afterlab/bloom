@@ -66,7 +66,8 @@ struct Exchange {
 
 struct Job {
     std::shared_ptr<Client> client;
-    std::string body;
+    // The request, parsed once on the connection thread (#745).
+    McpEnvelope envelope;
     std::shared_ptr<std::stop_source> stop;
     bool streamProgress = false;
     std::shared_ptr<Exchange> exchange;

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 
 namespace bloom::mcp {
@@ -85,6 +86,34 @@ std::string requestIdentity(yyjson_val* id) {
     throw InvalidInput("Invalid request ID");
 }
 
+// The JSON-RPC id of a canonical request identity, written without parsing it again.
+yyjson_mut_val* requestId(Json& out, const std::optional<std::string_view> requestKey) {
+    if (!requestKey || requestKey->size() < 2)
+        return out.null();
+    const auto text = requestKey->substr(2);
+    if (requestKey->starts_with("s:"))
+        return out.text(text);
+    if (text.starts_with('-')) {
+        std::int64_t value = 0;
+        const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+        if (error == std::errc{} && end == text.data() + text.size())
+            return out.signedNumber(value);
+    } else {
+        std::uint64_t value = 0;
+        const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+        if (error == std::errc{} && end == text.data() + text.size())
+            return out.number(value);
+    }
+    return out.null();
+}
+
+McpLimitRefusal refusalOf(const LimitExceeded& exceeded) {
+    return {.limit = exceeded.limit,
+            .value = exceeded.value,
+            .actual = exceeded.actual,
+            .message = exceeded.what()};
+}
+
 // Client identity strings shown in the panel: control characters removed, at most 256 bytes cut
 // on a UTF-8 boundary.
 std::string sanitised(yyjson_val* value) {
@@ -114,11 +143,61 @@ yyjson_mut_val* failureValue(Json& out, const ToolFailure& failure) {
     out.set(diagnostic, "message", out.text(failure.what()));
     if (!failure.detail.empty())
         out.set(diagnostic, "detail", out.text(failure.detail));
+    if (failure.limit) {
+        const auto description = describeLimit(failure.limit->limit);
+        auto* limit = out.object();
+        out.set(limit, "name", out.text(description.name));
+        out.set(limit, "value", out.number(failure.limit->value));
+        out.set(limit, "actual", out.number(failure.limit->actual));
+        out.set(limit, "unit", out.text(description.unit));
+        out.set(diagnostic, "limit", limit);
+    }
     out.set(value, "diagnostic", diagnostic);
     if (failure.job)
         out.set(value, "job", out.text(std::to_string(*failure.job)));
     if (failure.log)
         out.set(value, "log", logEntries(out, *failure.log));
+    return value;
+}
+
+// #745, #741: every bound a request can meet, keyed by McpLimit's names. The commit bounds belong
+// to the desktop application's live session; the stdio server has no commit queue.
+yyjson_mut_val* limitsValue(Json& out, const McpServerCore::State& state) {
+    const auto& limits = state.dependencies.limits;
+    const auto& transport = state.dependencies.transport;
+    const bool live = state.liveHost() != nullptr;
+    auto* value = out.object();
+    const auto put = [&](const McpLimit limit, const std::uint64_t amount) {
+        out.set(value, describeLimit(limit).name, out.number(amount));
+    };
+    put(McpLimit::RequestBytes, limits.requestBytes);
+    put(McpLimit::ResponseBytes, limits.responseBytes);
+    put(McpLimit::JsonValues, limits.jsonValues);
+    put(McpLimit::JsonDepth, limits.jsonDepth);
+    put(McpLimit::JsonMemory, limits.arenaBytes);
+    put(McpLimit::DataFiles, kMcpDataFilesPerCall);
+    put(McpLimit::DataFileBytes, kMcpDataFileBytes);
+    put(McpLimit::DataFileValues, kMcpDataFileValues);
+    put(McpLimit::DataFileDepth, kMcpDataFileDepth);
+    put(McpLimit::InFlightPerClient, transport.inFlightPerClient);
+    put(McpLimit::PendingMessages, limits.pendingMessages);
+    if (live) {
+        put(McpLimit::CommitQueue, scripting::kLiveCommitQueueCapacity);
+        put(McpLimit::CommitDeadline,
+            static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(kMcpCommitDeadline).count()));
+        put(McpLimit::CommitWork, scripting::kLiveCommitWorkLimit);
+    }
+    put(McpLimit::TransactOutputs, kMcpTransactOutputLimit);
+    // Bounds that are not refused per request but shape what an agent can send.
+    out.set(value, "requestWorkers", out.number(transport.requestWorkers));
+    out.set(value, "clients", out.number(transport.clients));
+    if (transport.connections != 0)
+        out.set(value, "connections", out.number(transport.connections));
+    out.set(value, "renderFrames", out.number(limits.renderFrames));
+    out.set(value, "retainedEvents", out.number(limits.retainedCommandEvents));
+    out.set(value, "eventOutputs", out.number(kMcpEventOutputLimit));
+    out.set(value, "eventsOutputsPerAnswer", out.number(kMcpEventsOutputBudget));
     return value;
 }
 
@@ -173,10 +252,35 @@ scripting::LiveSessionHost* McpServerCore::State::liveHost() const noexcept {
 }
 
 void McpServerCore::State::record(const commands::CommandEvent& event) {
+    // Runs on the thread that published the command (the UI thread for the live host): the copy
+    // leaves out a large event's ids (#745).
+    const auto& source = event.result;
+    McpRetainedCommand retained{
+        .kind = event.kind, .result = {}, .outputCount = source.outputs.size()};
+    auto& kept = retained.result;
+    kept.action = source.action;
+    kept.status = source.status;
+    kept.origin = source.origin;
+    kept.beforeRevision = source.beforeRevision;
+    kept.afterRevision = source.afterRevision;
+    kept.expectedRevision = source.expectedRevision;
+    kept.label = source.label;
+    kept.operationFailures = source.operationFailures;
+    kept.warnings = source.warnings;
+    kept.validation = source.validation;
+    kept.validationOperationIndex = source.validationOperationIndex;
+    kept.renderAffecting = source.renderAffecting;
+    kept.affectedComposition = source.affectedComposition;
+    kept.historyEntriesDropped = source.historyEntriesDropped;
+    kept.historyEntryLimitReached = source.historyEntryLimitReached;
+    kept.historyMemoryLimitReached = source.historyMemoryLimitReached;
+    kept.historyGrouped = source.historyGrouped;
+    if (source.outputs.size() <= kMcpEventOutputLimit)
+        kept.outputs = source.outputs;
     const std::lock_guard lock(eventsMutex);
     if (events.size() >= dependencies.limits.retainedCommandEvents)
         events.pop_front();
-    events.emplace_back(++sequence, event);
+    events.emplace_back(++sequence, std::move(retained));
 }
 
 void McpServerCore::State::notice(McpNotice value) {
@@ -279,15 +383,7 @@ std::string McpServerCore::errorResponse(const std::optional<std::string_view> r
     Json out;
     auto* root = out.object();
     out.set(root, "jsonrpc", out.text("2.0"));
-    if (!requestKey || requestKey->size() < 2) {
-        out.set(root, "id", out.null());
-    } else if (requestKey->starts_with("s:")) {
-        out.set(root, "id", out.text(requestKey->substr(2)));
-    } else {
-        const std::string digits(requestKey->substr(2));
-        Parsed number(digits);
-        out.set(root, "id", out.copy(number.root()));
-    }
+    out.set(root, "id", requestId(out, requestKey));
     auto* detail = out.object();
     out.set(detail, "code", out.signedNumber(static_cast<std::int64_t>(code)));
     out.set(detail, "message", out.text(message));
@@ -295,55 +391,114 @@ std::string McpServerCore::errorResponse(const std::optional<std::string_view> r
     return out.encode(root);
 }
 
+std::string McpServerCore::limitResponse(const std::optional<std::string_view> requestKey,
+                                         const McpLimitRefusal& refusal) {
+    const auto description = describeLimit(refusal.limit);
+    Json out;
+    auto* root = out.object();
+    out.set(root, "jsonrpc", out.text("2.0"));
+    out.set(root, "id", requestId(out, requestKey));
+    auto* detail = out.object();
+    out.set(detail, "code", out.signedNumber(description.rpcCode));
+    out.set(detail, "message", out.text(refusal.message));
+    auto* data = out.object();
+    out.set(data, "code", out.text(description.code));
+    out.set(data, "limit", out.text(description.name));
+    out.set(data, "value", out.number(refusal.value));
+    out.set(data, "actual", out.number(refusal.actual));
+    out.set(data, "unit", out.text(description.unit));
+    out.set(detail, "data", data);
+    out.set(root, "error", detail);
+    return out.encode(root);
+}
+
 McpEnvelope inspectMessage(const std::string_view message, const McpMessageLimits& limits) {
     McpEnvelope envelope;
-    if (message.empty() || message.size() > limits.requestBytes)
+    if (message.size() > limits.requestBytes) {
+        envelope.refusal = McpLimitRefusal{
+            .limit = McpLimit::RequestBytes,
+            .value = limits.requestBytes,
+            .actual = message.size(),
+            .message = "The request is " + grouped(message.size()) +
+                       " bytes; Bloom reads at most " + grouped(limits.requestBytes) +
+                       " (limit requestBytes). " + std::string(kMcpLimitAdvice)};
         return envelope;
+    }
+    std::shared_ptr<const Parsed> held;
     try {
-        Parsed parsed(message);
-        auto* root = parsed.root();
-        if (!yyjson_is_obj(root))
-            return envelope;
-        auto* method = member(root, "method");
-        auto* id = member(root, "id");
-        if (method == nullptr) {
-            if (id != nullptr && (member(root, "result") || member(root, "error")))
-                envelope.kind = McpMessageKind::Response;
-            return envelope;
-        }
-        envelope.method = string(method, 128);
-        if (id != nullptr && (yyjson_is_int(id) || yyjson_is_str(id))) {
-            envelope.kind = McpMessageKind::Request;
-            envelope.requestKey = requestIdentity(id);
-        } else if (id == nullptr) {
-            envelope.kind = McpMessageKind::Notification;
-        } else {
-            return envelope;
-        }
-        auto* params = member(root, "params");
-        if (envelope.method == "tools/call" && yyjson_is_obj(params)) {
-            if (auto* name = member(params, "name"); yyjson_is_str(name))
-                envelope.tool =
-                    toolFromName(std::string_view(yyjson_get_str(name), yyjson_get_len(name)));
-            if (auto* meta = member(params, "_meta"); yyjson_is_obj(meta)) {
-                if (auto* token = member(meta, "progressToken");
-                    yyjson_is_str(token) || yyjson_is_int(token)) {
-                    Json out;
-                    envelope.progressToken = out.encode(out.copy(token));
+        held = std::make_shared<const Parsed>(message, true);
+    } catch (const LimitExceeded& exceeded) {
+        envelope.refusal = refusalOf(exceeded);
+        return envelope;
+    } catch (const std::exception& error) {
+        envelope.parseError = error.what();
+        return envelope;
+    }
+    envelope.message = held;
+    if (const auto& refusal = held->refusal())
+        envelope.refusal = refusalOf(*refusal);
+    const auto classify = [&] {
+        try {
+            const auto& parsed = *held;
+            auto* root = parsed.root();
+            if (!yyjson_is_obj(root))
+                return;
+            auto* method = member(root, "method");
+            auto* id = member(root, "id");
+            if (method == nullptr) {
+                if (id != nullptr && (member(root, "result") || member(root, "error")))
+                    envelope.kind = McpMessageKind::Response;
+                return;
+            }
+            envelope.method = string(method, 128);
+            if (id != nullptr && (yyjson_is_int(id) || yyjson_is_str(id))) {
+                envelope.kind = McpMessageKind::Request;
+                envelope.requestKey = requestIdentity(id);
+            } else if (id == nullptr) {
+                envelope.kind = McpMessageKind::Notification;
+            } else {
+                return;
+            }
+            auto* params = member(root, "params");
+            if (envelope.method == "tools/call" && yyjson_is_obj(params)) {
+                if (auto* name = member(params, "name"); yyjson_is_str(name))
+                    envelope.tool =
+                        toolFromName(std::string_view(yyjson_get_str(name), yyjson_get_len(name)));
+                if (auto* meta = member(params, "_meta"); yyjson_is_obj(meta)) {
+                    if (auto* token = member(meta, "progressToken");
+                        yyjson_is_str(token) || yyjson_is_int(token)) {
+                        Json out;
+                        envelope.progressToken = out.encode(out.copy(token));
+                    }
                 }
             }
+            if (envelope.method == "notifications/cancelled" && yyjson_is_obj(params)) {
+                if (auto* cancelled = member(params, "requestId"))
+                    envelope.cancels = requestIdentity(cancelled);
+            }
+        } catch (const std::exception&) {
+            // Not a JSON-RPC message Bloom reads; handle() answers it from the parsed document.
+            envelope.kind = McpMessageKind::Invalid;
+            envelope.requestKey.reset();
+            envelope.method.clear();
+            envelope.tool.reset();
+            envelope.progressToken.reset();
+            envelope.cancels.reset();
         }
-        if (envelope.method == "notifications/cancelled" && yyjson_is_obj(params)) {
-            if (auto* cancelled = member(params, "requestId"))
-                envelope.cancels = requestIdentity(cancelled);
-        }
-    } catch (const std::exception&) {
-        envelope = {};
-    }
+    };
+    classify();
+    // A refused message is answered even when it is a notification.
+    if (envelope.refusal && envelope.kind != McpMessageKind::Request)
+        envelope.kind = McpMessageKind::Invalid;
     return envelope;
 }
 
 McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string_view message,
+                                 const McpRequestControl& control) {
+    return handle(protocol, inspectMessage(message, state_->dependencies.limits), control);
+}
+
+McpHandled McpServerCore::handle(McpProtocolSession& protocol, const McpEnvelope& message,
                                  const McpRequestControl& control) {
     auto& state = *state_;
     auto& session = *protocol.state_;
@@ -361,13 +516,23 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
         handled.response = errorResponse(key, code, text);
         return handled;
     };
-    std::unique_ptr<Parsed> parsed;
-    try {
-        parsed = std::make_unique<Parsed>(message);
-    } catch (const std::exception& exception) {
-        return protocolError(nullptr, McpProtocolError::ParseError, exception.what());
+    const auto limitError = [&](const McpLimitRefusal& refusal) {
+        handled.outcome = McpCallOutcome::ProtocolError;
+        handled.response = limitResponse(message.requestKey, refusal);
+        return handled;
+    };
+    if (message.message == nullptr) {
+        if (message.refusal)
+            return limitError(*message.refusal);
+        return protocolError(nullptr, McpProtocolError::ParseError,
+                             message.parseError.empty() ? "Invalid JSON" : message.parseError);
     }
-    auto* request = parsed->root();
+    if (message.refusal) {
+        handled.kind = message.kind;
+        handled.method = message.method;
+        return limitError(*message.refusal);
+    }
+    auto* request = message.message->root();
     yyjson_val* id = nullptr;
     try {
         // A JSON-RPC response from the client: Bloom sends no requests, so acknowledge and
@@ -461,6 +626,8 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
             // #744: the most work one transact carries in the desktop application.
             if (state.liveHost() != nullptr)
                 out.set(bloom, "commitWorkLimit", out.number(scripting::kLiveCommitWorkLimit));
+            // #745, #741: every request limit, by the name its refusal gives.
+            out.set(bloom, "limits", limitsValue(out, state));
             out.set(experimental, "bloom", bloom);
             out.set(capabilities, "experimental", experimental);
             out.set(result, "capabilities", capabilities);
@@ -498,10 +665,11 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
             yyjson_mut_val* value = nullptr;
             bool failed = false;
             std::vector<yyjson_mut_val*> content;
+            std::function<yyjson_mut_val*(Json&)> compact;
             try {
                 // `projectFile` points a tool at another project file, in a headless session of
                 // its own; the tool itself never sees the member.
-                std::optional<Parsed> withoutFile;
+                FrozenJson withoutFile(nullptr, yyjson_doc_free);
                 yyjson_val* toolArguments = member(params, "arguments");
                 const auto projectFile = projectFileArgument(toolArguments);
                 if (projectFile) {
@@ -520,8 +688,8 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
                                            "render, export, capture, project.save and "
                                            "project.close");
                     }
-                    withoutFile.emplace(withoutProjectFile(toolArguments));
-                    toolArguments = withoutFile->root();
+                    withoutFile = withoutProjectFile(toolArguments);
+                    toolArguments = yyjson_doc_get_root(withoutFile.get());
                 }
                 if (*tool == McpTool::ProfilerSnapshot) {
                     // Telemetry holds no lease: it answers while a project opens.
@@ -585,9 +753,10 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
                                  .summary = {},
                                  .notice = std::nullopt,
                                  .compileFailures = {},
-                                 .gpuProvider = projectFile ? state.fileGpuProvider
-                                                            : state.gpuExportProvider,
-                                 .fileSession = projectFile.has_value()};
+                                 .gpuProvider =
+                                     projectFile ? state.fileGpuProvider : state.gpuExportProvider,
+                                 .fileSession = projectFile.has_value(),
+                                 .compact = {}};
                     auto* arguments = toolArguments;
                     switch (*tool) {
                     case McpTool::Query:
@@ -624,6 +793,7 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
                     content = std::move(call.content);
                     handled.toolError = call.notice;
                     handled.compileFailures = std::move(call.compileFailures);
+                    compact = std::move(call.compact);
                 }
             } catch (const ToolFailure& failure) {
                 failed = true;
@@ -632,7 +802,8 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
                 if (failure.code == McpToolErrorCode::Cancelled)
                     handled.outcome = McpCallOutcome::Cancelled;
             } catch (const std::runtime_error& exception) {
-                if (dynamic_cast<const InvalidInput*>(&exception))
+                if (dynamic_cast<const InvalidInput*>(&exception) ||
+                    dynamic_cast<const LimitExceeded*>(&exception))
                     throw;
                 failed = true;
                 if (control.stop.stop_requested()) {
@@ -647,24 +818,49 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
                 failed = true;
             if (failed && handled.outcome == McpCallOutcome::Succeeded)
                 handled.outcome = McpCallOutcome::ToolError;
-            out.set(result, "isError", out.boolean(failed));
-            out.set(result, "structuredContent", value);
-            auto* blocks = out.array();
-            for (auto* block : content)
-                out.append(blocks, block);
-            auto* text = out.object();
-            out.set(text, "type", out.text("text"));
-            out.set(text, "text", out.text(out.encode(value)));
-            out.append(blocks, text);
-            out.set(result, "content", blocks);
+            const auto respond = [&](Json& json, yyjson_mut_val* answer, yyjson_mut_val* body,
+                                     const std::vector<yyjson_mut_val*>& blocksBefore) {
+                auto* envelope = json.object();
+                json.set(envelope, "jsonrpc", json.text("2.0"));
+                json.set(envelope, "id", json.copy(id));
+                json.set(answer, "isError", json.boolean(failed));
+                json.set(answer, "structuredContent", body);
+                auto* blocks = json.array();
+                for (auto* block : blocksBefore)
+                    json.append(blocks, block);
+                auto* text = json.object();
+                json.set(text, "type", json.text("text"));
+                json.set(text, "text",
+                         json.text(json.encode(body, state.dependencies.limits.responseBytes)));
+                json.append(blocks, text);
+                json.set(answer, "content", blocks);
+                json.set(envelope, "result", answer);
+                return json.encode(envelope, state.dependencies.limits.responseBytes);
+            };
+            try {
+                handled.response = respond(out, result, value, content);
+            } catch (const LimitExceeded&) {
+                // #745: a transaction that applied is always answered. Its compact form (no id
+                // list, bounded diagnostics) replaces a full answer that does not fit.
+                if (!compact)
+                    throw;
+                Json small;
+                auto* answer = small.object();
+                handled.response = respond(small, answer, compact(small), {});
+            }
+            if (handled.summary.size() > 256)
+                handled.summary.resize(256);
+            return handled;
         } else {
             return protocolError(id, McpProtocolError::MethodNotFound, "Method not found");
         }
         out.set(root, "result", result);
-        handled.response = out.encode(root);
+        handled.response = out.encode(root, state.dependencies.limits.responseBytes);
         if (handled.summary.size() > 256)
             handled.summary.resize(256);
         return handled;
+    } catch (const LimitExceeded& exceeded) {
+        return limitError(refusalOf(exceeded));
     } catch (const InvalidInput& exception) {
         return protocolError(id, McpProtocolError::InvalidParams, exception.what());
     } catch (const std::exception& exception) {

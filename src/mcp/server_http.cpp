@@ -2,6 +2,7 @@
 // connection (read with deadlines, parse, admit), and the request workers that run
 // McpServerCore::handle. None of this runs on the owner (UI) thread; it records facts that pump()
 // publishes.
+#include "json.hpp"
 #include "server_service_state.hpp"
 
 #include <bloom/core/worker_thread.hpp>
@@ -87,6 +88,19 @@ Reply rejectionReply(const McpHttpRejection rejection, std::string_view message 
             true};
 }
 
+// #745: a refused request limit, answered with its own code and data naming the limit.
+Reply limitReply(const McpHttpRejection rejection, const McpLimitRefusal& refusal,
+                 const std::optional<std::string>& requestKey = std::nullopt) {
+    Fields fields;
+    if (rejection == McpHttpRejection::Busy)
+        fields.emplace_back("Retry-After", "1");
+    fields.emplace_back("Connection", "close");
+    fields.emplace_back("Content-Type", "application/json");
+    return {httpResponse(httpStatus(rejection), fields,
+                         McpServerCore::limitResponse(requestKey, refusal)),
+            true};
+}
+
 Reply statusReply(const int status) {
     const Fields fields{{"Connection", "close"}, {"Content-Length", "0"}};
     return {httpResponse(status, fields, std::nullopt), true};
@@ -164,7 +178,7 @@ class ConnectionWorker final {
                     std::span(reinterpret_cast<const char*>(buffer.data()), read.bytes));
             }
             if (status != McpHttpParseStatus::Complete) {
-                respondParseFailure(status, stop);
+                respondParseFailure(status, parser.refusedBodyBytes(), stop);
                 return;
             }
             const auto request = parser.take();
@@ -178,7 +192,8 @@ class ConnectionWorker final {
     }
 
   private:
-    void respondParseFailure(const McpHttpParseStatus status, const std::stop_token& stop) {
+    void respondParseFailure(const McpHttpParseStatus status, const std::uint64_t bodyBytes,
+                             const std::stop_token& stop) {
         Reply reply;
         switch (status) {
         case McpHttpParseStatus::HeaderTooLarge:
@@ -187,7 +202,15 @@ class ConnectionWorker final {
             break;
         case McpHttpParseStatus::BodyTooLarge:
             reject(McpHttpRejection::PayloadTooLarge, {});
-            reply = rejectionReply(McpHttpRejection::PayloadTooLarge, "Request exceeds 1 MiB");
+            reply =
+                limitReply(McpHttpRejection::PayloadTooLarge,
+                           {.limit = McpLimit::RequestBytes,
+                            .value = kMcpMessageLimits.requestBytes,
+                            .actual = bodyBytes,
+                            .message = "The request is " + grouped(bodyBytes) +
+                                       " bytes; Bloom reads at most " +
+                                       grouped(kMcpMessageLimits.requestBytes) +
+                                       " (limit requestBytes). " + std::string(kMcpLimitAdvice)});
             break;
         case McpHttpParseStatus::UnsupportedVersion:
             reply = statusReply(505);
@@ -275,7 +298,7 @@ class ConnectionWorker final {
         }
         const auto envelope = inspectMessage(request.body);
         if (envelope.isInitialize() && envelope.kind == McpMessageKind::Request)
-            return initialize(request, stop);
+            return initialize(envelope, stop);
         if (!sessionId)
             return refuse(McpHttpRejection::MissingSession, client, stop);
         if (!client)
@@ -294,7 +317,7 @@ class ConnectionWorker final {
                     found->second->request_stop();
             }
         } else if (envelope.kind != McpMessageKind::Request) {
-            static_cast<void>(state_.core->handle(*client->protocol, request.body, {}));
+            static_cast<void>(state_.core->handle(*client->protocol, envelope, {}));
         }
         if (envelope.kind != McpMessageKind::Request && envelope.kind != McpMessageKind::Invalid)
             return send({httpResponse(202, Fields{{"Content-Length", "0"}}, std::nullopt), false},
@@ -302,7 +325,7 @@ class ConnectionWorker final {
         const bool stream = envelope.tool &&
                             toolExecution(*envelope.tool) == McpToolExecution::Task &&
                             envelope.progressToken.has_value();
-        return execute(client, request.body, envelope, stream, {}, stop);
+        return execute(client, envelope, stream, {}, stop);
     }
 
     bool refuse(const McpHttpRejection rejection, const std::shared_ptr<Client>& client,
@@ -322,7 +345,7 @@ class ConnectionWorker final {
         state_.dirty = true;
     }
 
-    bool initialize(const McpHttpRequest& request, const std::stop_token& stop) {
+    bool initialize(const McpEnvelope& envelope, const std::stop_token& stop) {
         const auto& limits = state_.dependencies.limits;
         {
             const std::lock_guard lock(state_.factsMutex);
@@ -363,35 +386,44 @@ class ConnectionWorker final {
         client->protocol = std::shared_ptr<McpProtocolSession>(state_.core->openSession());
         client->lastActivity = SteadyClock::now();
         client->connectedAt = client->lastActivityAt = SystemClock::now();
-        const auto envelope = inspectMessage(request.body);
-        return execute(client, request.body, envelope, false, newSessionId(), stop);
+        return execute(client, envelope, false, newSessionId(), stop);
     }
 
     // Runs one request on the worker pool and answers it. `newSession` registers the client when
     // the request completes initialize.
-    bool execute(const std::shared_ptr<Client>& client, const std::string& body,
-                 const McpEnvelope& envelope, const bool stream, const std::string& newSession,
-                 const std::stop_token& stop) {
+    bool execute(const std::shared_ptr<Client>& client, const McpEnvelope& envelope,
+                 const bool stream, const std::string& newSession, const std::stop_token& stop) {
         const auto& limits = state_.dependencies.limits;
         auto exchange = std::make_shared<Exchange>();
         auto cancel = std::make_shared<std::stop_source>();
+        std::size_t inFlight = 0;
         {
             const std::lock_guard facts(state_.factsMutex);
+            inFlight = client->inFlight;
             if (client->inFlight >= limits.inFlightPerClient)
                 busy_ = true;
         }
         if (busy_) {
             busy_ = false;
             reject(McpHttpRejection::Busy, client);
-            send(rejectionReply(McpHttpRejection::Busy,
-                                "Too many requests from this client: at most " +
-                                    std::to_string(limits.inFlightPerClient) +
-                                    " may be in progress at once. Wait for one to finish, then "
-                                    "send the rest.",
-                                McpProtocolError::ServerBusy),
+            send(limitReply(McpHttpRejection::Busy,
+                            {.limit = McpLimit::InFlightPerClient,
+                             .value = limits.inFlightPerClient,
+                             .actual = inFlight + 1,
+                             .message = "Too many requests from this client: " + grouped(inFlight) +
+                                        " are in progress and this would make " +
+                                        grouped(inFlight + 1) + "; at most " +
+                                        grouped(limits.inFlightPerClient) +
+                                        " may be in progress at once (limit inFlightPerClient). "
+                                        "Wait for one to finish, then send the rest, or batch "
+                                        "edits into one transact (many keys go in one "
+                                        "bloom.animation.set-key-columns operation with fromFile "
+                                        "columns)."},
+                            envelope.requestKey),
                  stop);
             return false;
         }
+        std::size_t pendingCount = 0;
         {
             const std::lock_guard lock(network_.mutex);
             if (network_.stop.stop_requested()) {
@@ -400,11 +432,12 @@ class ConnectionWorker final {
                      stop);
                 return false;
             }
-            if (network_.pending.size() >= kMcpMessageLimits.pendingMessages)
+            if (network_.pending.size() >= kMcpMessageLimits.pendingMessages) {
                 busy_ = true;
-            else
+                pendingCount = network_.pending.size();
+            } else
                 network_.pending.push_back(Job{.client = client,
-                                               .body = body,
+                                               .envelope = envelope,
                                                .stop = cancel,
                                                .streamProgress = stream,
                                                .exchange = exchange});
@@ -412,8 +445,19 @@ class ConnectionWorker final {
         if (busy_) {
             busy_ = false;
             reject(McpHttpRejection::Busy, client);
-            send(rejectionReply(McpHttpRejection::Busy, "Bloom is busy; retry shortly",
-                                McpProtocolError::ServerBusy),
+            send(limitReply(McpHttpRejection::Busy,
+                            {.limit = McpLimit::PendingMessages,
+                             .value = kMcpMessageLimits.pendingMessages,
+                             .actual = pendingCount + 1,
+                             .message = "Bloom is busy: " + grouped(pendingCount) +
+                                        " requests are waiting and this would make " +
+                                        grouped(pendingCount + 1) + "; at most " +
+                                        grouped(kMcpMessageLimits.pendingMessages) +
+                                        " wait at once (limit pendingMessages). Retry shortly, and "
+                                        "batch edits into one transact (many keys go in one "
+                                        "bloom.animation.set-key-columns operation with fromFile "
+                                        "columns)."},
+                            envelope.requestKey),
                  stop);
             return false;
         }
@@ -557,16 +601,15 @@ void McpServerService::State::startNetwork(std::unique_ptr<platform::LoopbackLis
                 const auto started = SteadyClock::now();
                 McpHandled handled;
                 try {
-                    handled = core->handle(*job.client->protocol, job.body, control);
+                    handled = core->handle(*job.client->protocol, job.envelope, control);
                 } catch (const std::exception& error) {
-                    handled.response =
-                        McpServerCore::errorResponse(inspectMessage(job.body).requestKey,
-                                                     McpProtocolError::InternalError, error.what());
+                    handled.response = McpServerCore::errorResponse(
+                        job.envelope.requestKey, McpProtocolError::InternalError, error.what());
                     handled.outcome = McpCallOutcome::ProtocolError;
                 }
                 const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
                     SteadyClock::now() - started);
-                const auto key = inspectMessage(job.body).requestKey;
+                const auto& key = job.envelope.requestKey;
                 {
                     const std::lock_guard facts(factsMutex);
                     --activeRequests;
@@ -701,9 +744,8 @@ void McpServerService::State::stopNetwork() {
     for (auto& job : pending) {
         {
             const std::lock_guard lock(job.exchange->mutex);
-            job.exchange->handled.response =
-                McpServerCore::errorResponse(inspectMessage(job.body).requestKey,
-                                             McpProtocolError::ShuttingDown, "The server stopped");
+            job.exchange->handled.response = McpServerCore::errorResponse(
+                job.envelope.requestKey, McpProtocolError::ShuttingDown, "The server stopped");
             job.exchange->done = true;
         }
         job.exchange->changed.notify_all();

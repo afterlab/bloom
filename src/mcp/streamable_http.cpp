@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <limits>
 
 namespace bloom::mcp {
 namespace {
@@ -291,8 +292,12 @@ McpHttpParseStatus McpHttpRequestParser::parseHead(const std::string_view head) 
             return fail(McpHttpParseStatus::Malformed);
         std::uint64_t length = 0;
         const auto parsed = std::from_chars(text.data(), text.data() + text.size(), length);
-        if (parsed.ec == std::errc::result_out_of_range || length > bodyLimit_)
+        if (parsed.ec == std::errc::result_out_of_range || length > bodyLimit_) {
+            refusedBodyBytes_ = parsed.ec == std::errc::result_out_of_range
+                                    ? std::numeric_limits<std::uint64_t>::max()
+                                    : length;
             return fail(McpHttpParseStatus::BodyTooLarge);
+        }
         if (parsed.ec != std::errc{})
             return fail(McpHttpParseStatus::Malformed);
         remaining_ = static_cast<std::size_t>(length);
@@ -334,8 +339,10 @@ McpHttpParseStatus McpHttpRequestParser::advanceChunked() {
             if (std::from_chars(digits.data(), digits.data() + digits.size(), size, 16).ec !=
                 std::errc{})
                 return fail(McpHttpParseStatus::Malformed);
-            if (size > bodyLimit_ || request_.body.size() + size > bodyLimit_)
+            if (size > bodyLimit_ || request_.body.size() + size > bodyLimit_) {
+                refusedBodyBytes_ = size > bodyLimit_ ? size : request_.body.size() + size;
                 return fail(McpHttpParseStatus::BodyTooLarge);
+            }
             consumed_ += end + 2;
             remaining_ = static_cast<std::size_t>(size);
             chunkStep_ = size == 0 ? ChunkStep::Trailer : ChunkStep::Data;

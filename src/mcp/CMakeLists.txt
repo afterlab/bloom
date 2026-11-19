@@ -32,6 +32,7 @@ target_sources(
         json.cpp
         json.hpp
         projections.cpp
+        reference_values.cpp
         server_core.cpp
         server_http.cpp
         server_service.cpp

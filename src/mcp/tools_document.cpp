@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -401,10 +402,6 @@ scripting::Value value(yyjson_val* item, const std::size_t depth = 0) {
 // An argument written {"fromFile": "<absolute .json path>"} is read from that file by the server,
 // so a large column of numbers never passes through the conversation. The file must be a regular
 // JSON file; its size and value count are bounded, and nothing but the parsed JSON is used.
-constexpr std::uintmax_t kFromFileBytes = std::uintmax_t{16} * 1024U * 1024U;
-constexpr std::size_t kFromFileValues = 2'000'000;
-constexpr std::size_t kFromFilesPerCall = 16;
-
 struct DataFiles final {
     struct Release {
         void operator()(yyjson_doc* document) const noexcept { yyjson_doc_free(document); }
@@ -417,25 +414,22 @@ struct DataFiles final {
            yyjson_obj_get(item, "fromFile") != nullptr;
 }
 
-void countValues(yyjson_val* item, const std::size_t depth, std::size_t& total) {
-    if (depth > 16 || ++total > kFromFileValues)
-        throw InvalidInput("The data file is nested too deeply or holds too many values");
-    if (yyjson_is_arr(item)) {
-        yyjson_arr_iter iterator = yyjson_arr_iter_with(item);
-        while (auto* child = yyjson_arr_iter_next(&iterator))
-            countValues(child, depth + 1, total);
-    } else if (yyjson_is_obj(item)) {
-        yyjson_obj_iter iterator = yyjson_obj_iter_with(item);
-        while (auto* key = yyjson_obj_iter_next(&iterator))
-            countValues(yyjson_obj_iter_get_val(key), depth + 1, total);
-    }
+// #745: the refusal of a data-file bound, naming it, its value and the actual count.
+[[noreturn]] void refuseDataFile(const McpLimit limit, const std::uint64_t value,
+                                 const std::uint64_t actual, const std::string& message) {
+    throw LimitExceeded(limit, value, actual,
+                        message + " (limit " + std::string(describeLimit(limit).name) +
+                            "). Split the data over several calls or files; "
+                            "bloom.animation.set-key-columns takes one column per component, the "
+                            "fewest values per key.");
 }
 
 [[nodiscard]] yyjson_val* readDataFile(yyjson_val* reference, DataFiles& held,
                                        const std::string& at) {
-    if (held.documents.size() == kFromFilesPerCall)
-        throw InvalidInput(at + ": a call reads at most " + std::to_string(kFromFilesPerCall) +
-                           " data files");
+    if (held.documents.size() == kMcpDataFilesPerCall)
+        refuseDataFile(McpLimit::DataFiles, kMcpDataFilesPerCall, kMcpDataFilesPerCall + 1,
+                       at + ": this would be data file " + grouped(kMcpDataFilesPerCall + 1) +
+                           " of the call; a call reads at most " + grouped(kMcpDataFilesPerCall));
     auto* path = yyjson_obj_get(reference, "fromFile");
     if (!yyjson_is_str(path))
         throw InvalidInput(at + ": fromFile is the absolute path of a .json file");
@@ -446,8 +440,12 @@ void countValues(yyjson_val* item, const std::size_t depth, std::size_t& total) 
     if (!std::filesystem::is_regular_file(file, error))
         throw InvalidInput(at + ": fromFile is not a regular file Bloom can read");
     const auto size = std::filesystem::file_size(file, error);
-    if (error || size == 0 || size > kFromFileBytes)
-        throw InvalidInput(at + ": the data file must be between 1 byte and 16 MiB");
+    if (error || size == 0)
+        throw InvalidInput(at + ": the data file is empty or cannot be measured");
+    if (size > kMcpDataFileBytes)
+        refuseDataFile(McpLimit::DataFileBytes, kMcpDataFileBytes, size,
+                       at + ": the data file is " + grouped(size) +
+                           " bytes; a data file holds at most " + grouped(kMcpDataFileBytes));
     std::string bytes(static_cast<std::size_t>(size), '\0');
     {
         std::ifstream stream(file, std::ios::binary);
@@ -458,9 +456,35 @@ void countValues(yyjson_val* item, const std::size_t depth, std::size_t& total) 
         yyjson_read(bytes.data(), bytes.size(), 0));
     if (!document || yyjson_doc_get_root(document.get()) == nullptr)
         throw InvalidInput(at + ": the data file is not valid JSON");
-    std::size_t total = 0;
-    countValues(yyjson_doc_get_root(document.get()), 0, total);
     auto* root = yyjson_doc_get_root(document.get());
+    // Counted as the request is: the root and every array item and member value.
+    std::size_t total = 0;
+    std::size_t deepest = 0;
+    std::vector<std::pair<yyjson_val*, std::size_t>> pending{{root, 0}};
+    while (!pending.empty()) {
+        const auto [item, depth] = pending.back();
+        pending.pop_back();
+        ++total;
+        deepest = std::max(deepest, depth);
+        if (yyjson_is_arr(item)) {
+            yyjson_arr_iter iterator = yyjson_arr_iter_with(item);
+            while (auto* child = yyjson_arr_iter_next(&iterator))
+                pending.emplace_back(child, depth + 1);
+        } else if (yyjson_is_obj(item)) {
+            yyjson_obj_iter iterator = yyjson_obj_iter_with(item);
+            while (auto* key = yyjson_obj_iter_next(&iterator))
+                pending.emplace_back(yyjson_obj_iter_get_val(key), depth + 1);
+        }
+    }
+    if (total > kMcpDataFileValues)
+        refuseDataFile(McpLimit::DataFileValues, kMcpDataFileValues, total,
+                       at + ": the data file holds " + grouped(total) +
+                           " JSON values; a data file holds at most " +
+                           grouped(kMcpDataFileValues));
+    if (deepest > kMcpDataFileDepth)
+        refuseDataFile(McpLimit::DataFileDepth, kMcpDataFileDepth, deepest,
+                       at + ": the data file nests " + grouped(deepest) +
+                           " levels deep; a data file nests at most " + grouped(kMcpDataFileDepth));
     held.documents.push_back(std::move(document));
     return root;
 }
@@ -523,13 +547,18 @@ bool matches(yyjson_val* value, const scripting::ValueKind kind) {
 } // namespace
 
 yyjson_mut_val* commandResult(Json& out, const commands::CommandResult& result,
-                              const bool withOutputs) {
+                              const bool withOutputs, const std::size_t diagnosticLimit) {
     auto* value = out.object();
     out.set(value, "succeeded", out.boolean(result.succeeded()));
     out.set(value, "revision", out.number(result.afterRevision.value()));
     out.set(value, "origin", out.text(commands::commandOriginName(result.origin)));
     auto* diagnostics = out.array();
-    for (const auto& diagnostic : scripting::commandDiagnostics(result)) {
+    const auto all = scripting::commandDiagnostics(result);
+    // #745: a result answers with a bounded list; the rest are counted.
+    if (all.size() > diagnosticLimit)
+        out.set(value, "diagnosticsOmitted", out.number(all.size() - diagnosticLimit));
+    for (std::size_t index = 0; index < std::min(all.size(), diagnosticLimit); ++index) {
+        const auto& diagnostic = all[index];
         auto* detail = out.object();
         out.set(detail, "code", out.text(diagnostic.code));
         if (diagnostic.severity != "error")
@@ -562,8 +591,10 @@ yyjson_mut_val* commandResult(Json& out, const commands::CommandResult& result,
 
 namespace {
 
-// The live host's refusal codes, as MCP tool errors.
-void throwLiveRefusal(const scripting::SessionCommandResult& result) {
+// The live host's refusal codes, as MCP tool errors. #745: a bound names its value and the actual
+// count (`work`: the transaction's work units; `waited`: how long the commit waited).
+void throwLiveRefusal(const scripting::SessionCommandResult& result, const std::size_t work,
+                      const std::chrono::milliseconds waited) {
     if (!result.diagnostic)
         return;
     const auto& code = result.diagnostic->code;
@@ -571,33 +602,65 @@ void throwLiveRefusal(const scripting::SessionCommandResult& result) {
     const auto is = [&](const LiveCommitStatus status) {
         return code == scripting::liveCommitDiagnosticCode(status);
     };
-    if (is(LiveCommitStatus::QueueFull))
-        throw ToolFailure(McpToolErrorCode::CommitQueueFull,
-                          "Bloom has too many edits waiting; nothing was queued.");
+    const auto bounded = [](const McpToolErrorCode error, const std::string& message,
+                            const McpLimit limit, const std::uint64_t value,
+                            const std::uint64_t actual) {
+        ToolFailure failure(error, message);
+        failure.limit = ToolFailure::Limit{.limit = limit, .value = value, .actual = actual};
+        return failure;
+    };
+    if (is(LiveCommitStatus::QueueFull)) {
+        const auto capacity = scripting::kLiveCommitQueueCapacity;
+        throw bounded(McpToolErrorCode::CommitQueueFull,
+                      "Bloom has " + grouped(capacity) + " edits waiting and this would make " +
+                          grouped(capacity + 1) + "; at most " + grouped(capacity) +
+                          " wait at once, shared with the Script editor (limit commitQueue). "
+                          "Nothing was queued; send it again once an edit has answered, and "
+                          "batch edits into one transact (one bloom.animation.set-key-columns "
+                          "operation with fromFile columns writes many keys).",
+                      McpLimit::CommitQueue, capacity, capacity + 1);
+    }
     if (is(LiveCommitStatus::ProjectReplaced))
         throw ToolFailure(McpToolErrorCode::ProjectReplaced,
                           "The project was replaced; nothing was applied.");
     if (is(LiveCommitStatus::Cancelled) || is(LiveCommitStatus::ShuttingDown))
         throw ToolFailure(McpToolErrorCode::Cancelled,
                           "The request was cancelled; nothing was applied.");
+    const auto deadline = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(kMcpCommitDeadline).count());
+    const auto waitedMs = static_cast<std::uint64_t>(std::max<std::int64_t>(waited.count(), 0));
     if (is(LiveCommitStatus::DeadlineExceeded))
-        throw ToolFailure(McpToolErrorCode::DeadlineExceeded,
-                          "Bloom was busy past the request's deadline; nothing was applied.");
+        throw bounded(McpToolErrorCode::DeadlineExceeded,
+                      "Bloom was busy past the request's deadline: the edit waited " +
+                          grouped(waitedMs) + " ms and a commit may wait at most " +
+                          grouped(deadline) +
+                          " ms (limit commitDeadlineMs). Nothing was applied; split a large "
+                          "edit into several transactions (bloom.animation.set-key-columns with "
+                          "fromFile columns for keys).",
+                      McpLimit::CommitDeadline, deadline, waitedMs);
     if (is(LiveCommitStatus::GestureOpen))
-        throw ToolFailure(McpToolErrorCode::GestureOpen,
-                          "The artist kept an edit open past the deadline; nothing was applied.");
+        throw bounded(McpToolErrorCode::GestureOpen,
+                      "The artist kept an edit open past the deadline: the edit waited " +
+                          grouped(waitedMs) + " ms of at most " + grouped(deadline) +
+                          " ms (limit commitDeadlineMs). Nothing was applied.",
+                      McpLimit::CommitDeadline, deadline, waitedMs);
     if (is(LiveCommitStatus::TooLarge))
-        throw ToolFailure(McpToolErrorCode::CommitTooLarge,
-                          "The transaction carries more than " +
-                              std::to_string(scripting::kLiveCommitWorkLimit) +
-                              " units of work (one per operation, or one per key, keyframe or "
-                              "edit an operation lists); split it into several transactions. "
-                              "Nothing was queued.");
+        throw bounded(McpToolErrorCode::CommitTooLarge,
+                      "The transaction carries " + grouped(work) +
+                          " units of work (one per operation, or one per key, keyframe or edit "
+                          "an operation lists); one commit takes at most " +
+                          grouped(scripting::kLiveCommitWorkLimit) +
+                          " (limit commitWork). Split it into several transactions, each a "
+                          "bloom.animation.set-key-columns operation per parameter with fromFile "
+                          "columns. Nothing was queued.",
+                      McpLimit::CommitWork, scripting::kLiveCommitWorkLimit, work);
 }
 
 // A command the session could not run at all.
-void throwUnavailable(const McpCall& call, const scripting::SessionCommandResult& result) {
-    throwLiveRefusal(result);
+void throwUnavailable(const McpCall& call, const scripting::SessionCommandResult& result,
+                      const std::size_t work = 0,
+                      const std::chrono::milliseconds waited = std::chrono::milliseconds{0}) {
+    throwLiveRefusal(result, work, waited);
     if (call.lease != nullptr && call.lease->revoked())
         throw ToolFailure(McpToolErrorCode::ProjectReplaced,
                           "The project was replaced; nothing was applied.");
@@ -606,32 +669,54 @@ void throwUnavailable(const McpCall& call, const scripting::SessionCommandResult
     throw std::runtime_error("The session cannot edit");
 }
 
-// After a successful edit, every edited composition is compiled once (never rendered) so an edit
-// that leaves one uncompilable is reported with the edit instead of surfacing later as a failed
-// preview or export: compileFailures in the result, and a composition.compile-failed event. A
-// composition that still compiles but degrades (a text layer drawn in the fallback face because its
-// Font asset is gone) reports each warning in compileWarnings.
-yyjson_mut_val* compileFailures(McpServerCore::State& core, Json& out, McpCall& call,
-                                const commands::CommandResult& command,
-                                yyjson_mut_val* warnings) {
-    auto* failures = out.array();
-    const auto subjectRecord = [&](const runtime::CompileSubject& subject) {
-        auto* record = out.object();
-        out.set(record, "composition", out.number(subject.compositionId.value()));
-        out.set(record, "node", subject.nodeId ? out.number(subject.nodeId->value()) : out.null());
-        out.set(record, "parameter",
-                subject.parameterId ? out.number(subject.parameterId->value()) : out.null());
-        return record;
-    };
+// After a successful edit, every composition whose evaluation inputs it changed is compiled once
+// (never rendered) so an edit that leaves one uncompilable is reported with the edit instead of
+// surfacing later as a failed preview or export: compileFailures in the result, and a
+// composition.compile-failed event. A composition that still compiles but degrades (a text layer
+// drawn in the fallback face because its Font asset is gone) reports each warning in
+// compileWarnings. #745: the scope is the commit's own evaluation-input proof
+// (CommandResult::evaluationChangedCompositions); only a change beyond named compositions (an
+// asset, for example) compiles every composition.
+struct CompileRecord final {
+    std::uint64_t composition = 0;
+    std::string code;
+    std::string detail;
+    runtime::CompileSubject subject;
+};
+
+// At most this many records of each list in one answer; the rest are counted.
+constexpr std::size_t kCompileRecordLimit = 256;
+
+struct CompileReport final {
+    bool checked = false;
+    std::vector<CompileRecord> failures;
+    std::vector<CompileRecord> warnings;
+    std::size_t warningsOmitted = 0;
+};
+
+CompileReport compileCheck(McpServerCore::State& core, McpCall& call,
+                           const commands::CommandResult& command) {
+    CompileReport report;
+    report.checked = true;
+    if (!command.changed() || !command.renderAffecting)
+        return report;
     const auto source = call.session.renderSourceSnapshot();
     const auto& snapshot = source.snapshot;
     std::vector<document::CompositionId> edited;
-    if (command.affectedComposition) {
+    if (command.evaluationChangedCompositions) {
+        edited = *command.evaluationChangedCompositions;
+    } else if (command.affectedComposition) {
         edited.push_back(*command.affectedComposition);
     } else {
         for (const auto& composition : snapshot.project().compositions())
             edited.push_back(composition.id());
     }
+    const auto warn = [&](CompileRecord record) {
+        if (report.warnings.size() < kCompileRecordLimit)
+            report.warnings.push_back(std::move(record));
+        else
+            ++report.warningsOmitted;
+    };
     const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
     for (const auto composition : edited) {
         if (call.control.stop.stop_requested() ||
@@ -645,46 +730,35 @@ yyjson_mut_val* compileFailures(McpServerCore::State& core, Json& out, McpCall& 
             auto text = diagnostic.summary;
             if (!diagnostic.detail.empty())
                 text += (text.empty() ? "" : ": ") + diagnostic.detail;
-            auto* warning = out.object();
-            out.set(warning, "composition", out.number(composition.value()));
-            out.set(warning, "code", out.text(std::string(runtime::compileDiagnosticCodeId(
-                                           diagnostic.code))));
-            out.set(warning, "detail", out.text(text));
-            out.set(warning, "subject", subjectRecord(diagnostic.subject));
-            out.append(warnings, warning);
+            warn({.composition = composition.value(),
+                  .code = std::string(runtime::compileDiagnosticCodeId(diagnostic.code)),
+                  .detail = std::move(text),
+                  .subject = diagnostic.subject});
         }
         // #610: a stored color space the project's color configuration lacks is a warning of the
         // edit that stored it (the node leaves the image unchanged).
         if (const auto* edit = snapshot.project().findComposition(composition); edit != nullptr)
             for (const auto& missing : scripting::missingEffectColorSpaces(source, *edit)) {
-                auto* warning = out.object();
-                out.set(warning, "composition", out.number(composition.value()));
-                out.set(warning, "code",
-                        out.text(std::string(scripting::kMissingColorSpaceWarningCode)));
-                out.set(warning, "detail", out.text(missing.detail));
                 runtime::CompileSubject subject;
                 subject.compositionId = composition;
                 subject.nodeId = missing.node;
                 subject.parameterId = missing.parameter;
-                out.set(warning, "subject", subjectRecord(subject));
-                out.append(warnings, warning);
+                warn({.composition = composition.value(),
+                      .code = std::string(scripting::kMissingColorSpaceWarningCode),
+                      .detail = missing.detail,
+                      .subject = subject});
             }
         const auto failure = runtime::compileFailureSummary(compiled, composition);
         if (!failure)
             continue;
-        auto* record = out.object();
-        out.set(record, "composition", out.number(composition.value()));
-        out.set(record, "code", out.text(failure->code));
-        out.set(record, "detail", out.text(failure->detail));
-        out.set(record, "subject",
-                subjectRecord({.compositionId = failure->compositionId,
-                               .nodeId = failure->nodeId,
-                               .edgeId = std::nullopt,
-                               .parameterId = failure->parameterId,
-                               .layerId = std::nullopt,
-                               .layerSlotId = std::nullopt,
-                               .field = {}}));
-        out.append(failures, record);
+        runtime::CompileSubject subject;
+        subject.compositionId = failure->compositionId;
+        subject.nodeId = failure->nodeId;
+        subject.parameterId = failure->parameterId;
+        report.failures.push_back({.composition = composition.value(),
+                                   .code = failure->code,
+                                   .detail = failure->detail,
+                                   .subject = subject});
         call.compileFailures.push_back(
             {.composition = failure->compositionId.value(),
              .detail = failure->detail,
@@ -702,9 +776,35 @@ yyjson_mut_val* compileFailures(McpServerCore::State& core, Json& out, McpCall& 
              .path = {},
              .projectName = {}});
     }
-    return failures;
+    return report;
 }
 
+// `limit` records at most; the omitted ones are counted in `<name>Omitted`.
+void setCompileRecords(Json& out, yyjson_mut_val* value, const std::string_view name,
+                       const std::vector<CompileRecord>& records, const std::size_t limit,
+                       const std::size_t alreadyOmitted) {
+    auto* list = out.array();
+    const auto shown = std::min(records.size(), limit);
+    for (std::size_t index = 0; index < shown; ++index) {
+        const auto& source = records[index];
+        auto* record = out.object();
+        out.set(record, "composition", out.number(source.composition));
+        out.set(record, "code", out.text(source.code));
+        out.set(record, "detail", out.text(source.detail));
+        auto* subject = out.object();
+        out.set(subject, "composition", out.number(source.subject.compositionId.value()));
+        out.set(subject, "node",
+                source.subject.nodeId ? out.number(source.subject.nodeId->value()) : out.null());
+        out.set(subject, "parameter",
+                source.subject.parameterId ? out.number(source.subject.parameterId->value())
+                                           : out.null());
+        out.set(record, "subject", subject);
+        out.append(list, record);
+    }
+    out.set(value, name, list);
+    if (const auto omitted = records.size() - shown + alreadyOmitted; omitted != 0)
+        out.set(value, std::string(name) + "Omitted", out.number(omitted));
+}
 
 // response "summary": the created ids replaced by how many there are per output name and one
 // SHA-256 digest over the full list (operation index, name and id of each, in order), so a large
@@ -731,12 +831,34 @@ void summarizeOutputs(Json& out, yyjson_mut_val* value, const commands::CommandR
     out.set(summary, "digest", out.text("sha256:" + std::string(hex.data(), hex.size())));
     out.set(value, "outputSummary", summary);
 }
+
+// One transact answer: the command result, its ids (listed or summarized) and the compile check.
+yyjson_mut_val* transactValue(Json& out, const commands::CommandResult& command,
+                              const CompileReport& report, const bool listOutputs,
+                              const std::size_t diagnosticLimit, const std::size_t compileLimit) {
+    auto* value = commandResult(out, command, listOutputs, diagnosticLimit);
+    if (!listOutputs)
+        summarizeOutputs(out, value, command);
+    out.set(value, "compileChecked", out.boolean(report.checked));
+    if (report.checked) {
+        setCompileRecords(out, value, "compileFailures", report.failures, compileLimit, 0);
+        setCompileRecords(out, value, "compileWarnings", report.warnings, compileLimit,
+                          report.warningsOmitted);
+    } else {
+        out.set(value, "compileFailures", out.null());
+        out.set(value, "compileWarnings", out.null());
+    }
+    return value;
+}
 } // namespace
 
 yyjson_mut_val* transactTool(McpServerCore::State& core, Json& out, McpCall& call,
                              yyjson_val* arguments) {
-    members(arguments, {"expectedRevision", "operations", "label", "response"},
+    members(arguments, {"expectedRevision", "operations", "label", "response", "compileCheck"},
             {"expectedRevision", "operations"});
+    // #745: false skips the compile check (bulk key writes that cannot break a composition).
+    const bool check =
+        member(arguments, "compileCheck") ? boolean(member(arguments, "compileCheck")) : true;
     const auto revision = integer(member(arguments, "expectedRevision"));
     // "full" lists every created id; "summary" counts them by name and gives one digest.
     const auto response = member(arguments, "response") ? string(member(arguments, "response"), 16)
@@ -830,18 +952,37 @@ yyjson_mut_val* transactTool(McpServerCore::State& core, Json& out, McpCall& cal
     call.summary = operationIds + " \"" + std::string(label.substr(0, 64)) + "\"";
     if (call.control.stop.stop_requested())
         throw std::runtime_error("Request cancelled");
-    const auto result = call.session.execute(std::move(transaction));
+    const auto work = transaction.workUnits();
+    const auto started = std::chrono::steady_clock::now();
+    auto result = call.session.execute(std::move(transaction));
     if (!result.command)
-        throwUnavailable(call, result);
-    auto* value = commandResult(out, *result.command, response != "summary");
-    if (response == "summary")
-        summarizeOutputs(out, value, *result.command);
-    auto* warnings = out.array();
-    out.set(value, "compileFailures",
-            result.command->changed() && result.command->renderAffecting
-                ? compileFailures(core, out, call, *result.command, warnings)
-                : out.array());
-    out.set(value, "compileWarnings", warnings);
+        throwUnavailable(call, result, work,
+                         std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - started));
+    const auto command =
+        std::make_shared<const commands::CommandResult>(std::move(*result.command));
+    const auto report = std::make_shared<const CompileReport>(
+        check ? compileCheck(core, call, *command) : CompileReport{});
+    // #745: the full id list up to kMcpTransactOutputLimit; past it the summary form answers, so a
+    // transaction Bloom applied is never refused for the size of its answer.
+    const bool listed = response == "full" && command->outputs.size() <= kMcpTransactOutputLimit;
+    // Once the transaction changed the project, a compact answer stands by in case the full one
+    // still exceeds the response bound.
+    if (command->changed())
+        call.compact = [command, report](Json& json) {
+            auto* compact = transactValue(json, *command, *report, false, 16, 16);
+            json.set(compact, "responseCompacted", json.boolean(true));
+            return compact;
+        };
+    auto* value =
+        transactValue(out, *command, *report, listed, kResultDiagnosticLimit, kCompileRecordLimit);
+    if (response == "full" && !listed) {
+        auto* limit = out.object();
+        out.set(limit, "name", out.text(describeLimit(McpLimit::TransactOutputs).name));
+        out.set(limit, "value", out.number(kMcpTransactOutputLimit));
+        out.set(limit, "actual", out.number(command->outputs.size()));
+        out.set(value, "outputsSummarized", limit);
+    }
     return value;
 }
 
@@ -890,10 +1031,9 @@ yyjson_mut_val* eventsTool(McpServerCore::State& core, Json& out, McpCall& call,
         throw InvalidInput("Event cursor is in the future");
     auto* result = out.object();
     out.set(result, "revision", out.number(revision));
-    out.set(result, "sequence", out.number(core.sequence));
     const auto& events = core.events;
     const auto revisionOf = [](const McpEventEntry& entry) {
-        if (const auto* command = std::get_if<commands::CommandEvent>(&entry))
+        if (const auto* command = std::get_if<McpRetainedCommand>(&entry))
             return command->result.afterRevision.value();
         return std::get<McpNotice>(entry).revision;
     };
@@ -903,12 +1043,27 @@ yyjson_mut_val* eventsTool(McpServerCore::State& core, Json& out, McpCall& call,
                                      since <= revisionOf(events.front().second))));
     auto* list = out.array();
     constexpr std::array<std::string_view, 3> names{"revision", "history", "rejected"};
+    // #745: one answer lists at most kMcpEventsOutputBudget created ids; a client continues from
+    // `sequence`, which is then the last event listed.
+    std::size_t listedOutputs = 0;
+    std::optional<std::uint64_t> lastListed;
+    bool truncated = false;
     for (const auto& [sequence, entry] : events) {
         if ((!replaced && sequence <= after) || (!replaced && revisionOf(entry) < since))
             continue;
         yyjson_mut_val* value = nullptr;
-        if (const auto* event = std::get_if<commands::CommandEvent>(&entry)) {
-            value = commandResult(out, event->result);
+        if (const auto* event = std::get_if<McpRetainedCommand>(&entry)) {
+            const auto kept = event->result.outputs.size();
+            if (lastListed && listedOutputs + kept > kMcpEventsOutputBudget) {
+                truncated = true;
+                break;
+            }
+            listedOutputs += kept;
+            const bool listed = kept == event->outputCount;
+            value = commandResult(out, event->result, listed);
+            out.set(value, "outputCount", out.number(event->outputCount));
+            if (!listed)
+                out.set(value, "outputsOmitted", out.boolean(true));
             out.set(value, "kind", out.text(names.at(static_cast<std::size_t>(event->kind))));
         } else {
             const auto& notice = std::get<McpNotice>(entry);
@@ -916,7 +1071,10 @@ yyjson_mut_val* eventsTool(McpServerCore::State& core, Json& out, McpCall& call,
         }
         out.set(value, "sequence", out.number(sequence));
         out.append(list, value);
+        lastListed = sequence;
     }
+    out.set(result, "sequence", out.number(truncated ? *lastListed : core.sequence));
+    out.set(result, "truncated", out.boolean(truncated));
     out.set(result, "events", list);
     return result;
 }

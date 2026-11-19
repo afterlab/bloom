@@ -106,6 +106,9 @@ struct McpCoreDependencies final {
     // serverInfo.version in initialize.
     std::string serverVersion;
     McpMessageLimits limits = kMcpMessageLimits;
+    // #745: the transport's own bounds, advertised in initialize. The defaults are stdio's: one
+    // client, one request at a time.
+    McpTransportLimits transport{};
 };
 
 inline constexpr std::size_t kMcpRetainedCaptures = 16;
@@ -152,8 +155,19 @@ enum class McpMessageKind : std::uint8_t {
     Invalid = 3,
 };
 
+class Parsed;
+
+// A refusal of one of the request limits (#745): the JSON-RPC error's code and data.
+struct McpLimitRefusal final {
+    McpLimit limit = McpLimit::RequestBytes;
+    std::uint64_t value = 0;
+    std::uint64_t actual = 0;
+    std::string message;
+};
+
 // What a transport needs to know before it executes a message: which kind it is, which request it
 // cancels, whether it should stream progress. Pure; parses under the same limits; any thread.
+// #745: it also holds the parsed message, so handle() never parses the body again.
 struct McpEnvelope final {
     McpMessageKind kind = McpMessageKind::Invalid;
     // Canonical request identity ("s:<string>" or "n:<integer>") for requests.
@@ -166,6 +180,11 @@ struct McpEnvelope final {
     std::optional<std::string> progressToken;
     // notifications/cancelled: the canonical identity of the request it cancels.
     std::optional<std::string> cancels;
+    // The parsed message (null when it did not parse), why it did not parse, and the limit it
+    // exceeds (a message over the value or depth bound still parses, so its id is answered).
+    std::shared_ptr<const Parsed> message;
+    std::string parseError;
+    std::optional<McpLimitRefusal> refusal;
     [[nodiscard]] bool isInitialize() const noexcept { return method == "initialize"; }
 };
 
@@ -243,11 +262,18 @@ class McpServerCore final {
     // for the owner thread and a Task tool waits for its export job.
     [[nodiscard]] McpHandled handle(McpProtocolSession& session, std::string_view message,
                                     const McpRequestControl& control);
+    // The same for a message inspectMessage already parsed (#745: each body is parsed once).
+    [[nodiscard]] McpHandled handle(McpProtocolSession& session, const McpEnvelope& message,
+                                    const McpRequestControl& control);
 
     // A JSON-RPC error response for a message the transport refused before handle() (oversized,
     // unterminated, busy). `requestKey` is the inspected id when one was readable.
     [[nodiscard]] static std::string errorResponse(std::optional<std::string_view> requestKey,
                                                    McpProtocolError code, std::string_view message);
+    // #745: a limit's refusal: its own code, the message naming the limit, its value and the
+    // actual count, and data {code, limit, value, actual, unit}.
+    [[nodiscard]] static std::string limitResponse(std::optional<std::string_view> requestKey,
+                                                   const McpLimitRefusal& refusal);
 
     // The tools/list payload's tool names in listing order (schemas come from the registry and
     // the export queue's vocabularies). Any thread.

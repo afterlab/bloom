@@ -504,7 +504,11 @@ McpServerService::McpServerService(McpServerServiceDependencies dependencies)
         .ui = s.liveUi,
         .profilerSnapshot = s.dependencies.profilerSnapshot,
         .serverVersion = s.dependencies.serverVersion,
-        .limits = kMcpMessageLimits});
+        .limits = kMcpMessageLimits,
+        .transport = {.inFlightPerClient = s.dependencies.limits.inFlightPerClient,
+                      .requestWorkers = s.dependencies.limits.requestWorkers,
+                      .clients = s.dependencies.limits.clients,
+                      .connections = s.dependencies.limits.connections}});
     // The token loads on the blocking-I/O executor; pump() publishes it.
     if (s.dependencies.tokenFile.empty()) {
         s.tokenState = McpTokenState::Unavailable;

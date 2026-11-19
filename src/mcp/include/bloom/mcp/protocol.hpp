@@ -23,9 +23,12 @@ struct McpMessageLimits final {
     std::size_t requestBytes = std::size_t{1024} * 1024U;
     // One JSON-RPC response (JSON body or one SSE `data:` payload).
     std::size_t responseBytes = std::size_t{4} * 1024U * 1024U;
+    // JSON values in one message (array items and member values, not member names) and its
+    // nesting depth.
     std::size_t jsonValues = 65536;
     std::size_t jsonDepth = 32;
-    // Each parse and write uses a fixed allocation arena of this size.
+    // The most memory one parse or one response build may allocate (#745: a cap, not an
+    // allocation; each document allocates what it needs).
     std::size_t arenaBytes = std::size_t{32} * 1024U * 1024U;
     // Messages accepted but not yet executing, across every client of one server.
     std::size_t pendingMessages = 16;
@@ -42,6 +45,17 @@ struct McpMessageLimits final {
 };
 
 inline constexpr McpMessageLimits kMcpMessageLimits{};
+
+// #745: a transport's own bounds, advertised in initialize beside the message limits. The
+// defaults are stdio's (one client, one request at a time); the in-app server passes its
+// McpServerLimits.
+struct McpTransportLimits final {
+    std::size_t inFlightPerClient = 1;
+    std::size_t requestWorkers = 1;
+    std::size_t clients = 1;
+    // Open connections; 0 for a transport without them (stdio).
+    std::size_t connections = 0;
+};
 
 // ---------------------------------------------------------------------------------------------
 // Tools
@@ -231,10 +245,101 @@ enum class McpProtocolError : std::int32_t {
     InvalidParams = -32602,
     InternalError = -32603,
     // Server-defined range.
+    // Server-defined range. #745: each request limit has its own code, and its error carries
+    // `data` {code, limit, value, actual, unit} (McpLimit).
     ServerBusy = -32000,
     ShuttingDown = -32001,
     ClientLimitReached = -32002,
+    RequestTooLarge = -32003,
+    TooManyJsonValues = -32004,
+    JsonTooDeep = -32005,
+    ResponseTooLarge = -32006,
+    JsonMemoryExceeded = -32007,
+    ClientRequestLimit = -32008,
+    TooManyDataFiles = -32009,
+    DataFileTooLarge = -32010,
+    DataFileTooManyValues = -32011,
+    DataFileTooDeep = -32012,
 };
+
+// ---------------------------------------------------------------------------------------------
+// Request limits (#745, #741)
+
+// Every bound a request can meet. initialize advertises each one's value under
+// capabilities.experimental.bloom.limits.<name>, and a refusal names it with its value and the
+// actual count: a JSON-RPC error with its own code and `data`, or for the commit bounds a tool
+// diagnostic with its own bloom.mcp code and `limit`.
+enum class McpLimit : std::uint8_t {
+    RequestBytes = 0,
+    ResponseBytes = 1,
+    JsonValues = 2,
+    JsonDepth = 3,
+    JsonMemory = 4,
+    DataFiles = 5,
+    DataFileBytes = 6,
+    DataFileValues = 7,
+    DataFileDepth = 8,
+    InFlightPerClient = 9,
+    PendingMessages = 10,
+    CommitQueue = 11,
+    CommitDeadline = 12,
+    CommitWork = 13,
+    TransactOutputs = 14,
+};
+
+inline constexpr std::size_t kMcpLimitCount = 15;
+
+struct McpLimitDescription final {
+    // The member of capabilities.experimental.bloom.limits.
+    std::string_view name;
+    // The stable refusal code (data.code of the JSON-RPC error, or diagnostic.code of the tool).
+    std::string_view code;
+    // The unit of the value and the actual count.
+    std::string_view unit;
+    // The JSON-RPC error code of a protocol refusal; 0 for a bound refused as a tool diagnostic
+    // (the commit bounds) or never refused (transactOutputs answers in summary form instead).
+    std::int32_t rpcCode = 0;
+};
+
+[[nodiscard]] constexpr McpLimitDescription describeLimit(const McpLimit limit) {
+    // clang-format off
+    constexpr std::array<McpLimitDescription, kMcpLimitCount> table{{
+        {"requestBytes", "bloom.mcp.limit.request-bytes", "bytes",
+         static_cast<std::int32_t>(McpProtocolError::RequestTooLarge)},
+        {"responseBytes", "bloom.mcp.limit.response-bytes", "bytes",
+         static_cast<std::int32_t>(McpProtocolError::ResponseTooLarge)},
+        {"jsonValues", "bloom.mcp.limit.json-values", "values",
+         static_cast<std::int32_t>(McpProtocolError::TooManyJsonValues)},
+        {"jsonDepth", "bloom.mcp.limit.json-depth", "levels",
+         static_cast<std::int32_t>(McpProtocolError::JsonTooDeep)},
+        {"jsonMemoryBytes", "bloom.mcp.limit.json-memory", "bytes",
+         static_cast<std::int32_t>(McpProtocolError::JsonMemoryExceeded)},
+        {"dataFilesPerCall", "bloom.mcp.limit.data-files", "files",
+         static_cast<std::int32_t>(McpProtocolError::TooManyDataFiles)},
+        {"dataFileBytes", "bloom.mcp.limit.data-file-bytes", "bytes",
+         static_cast<std::int32_t>(McpProtocolError::DataFileTooLarge)},
+        {"dataFileValues", "bloom.mcp.limit.data-file-values", "values",
+         static_cast<std::int32_t>(McpProtocolError::DataFileTooManyValues)},
+        {"dataFileDepth", "bloom.mcp.limit.data-file-depth", "levels",
+         static_cast<std::int32_t>(McpProtocolError::DataFileTooDeep)},
+        {"inFlightPerClient", "bloom.mcp.limit.in-flight", "requests",
+         static_cast<std::int32_t>(McpProtocolError::ClientRequestLimit)},
+        {"pendingMessages", "bloom.mcp.limit.pending", "requests",
+         static_cast<std::int32_t>(McpProtocolError::ServerBusy)},
+        {"commitQueue", "bloom.mcp.commit-queue-full", "commits", 0},
+        {"commitDeadlineMs", "bloom.mcp.deadline-exceeded", "milliseconds", 0},
+        {"commitWork", "bloom.mcp.commit-too-large", "work units", 0},
+        {"transactOutputs", "bloom.mcp.outputs-summarized", "outputs", 0},
+    }};
+    // clang-format on
+    return table[static_cast<std::size_t>(limit)];
+}
+
+// What every refusal of a request-shape limit suggests: the columnar key form and data files.
+inline constexpr std::string_view kMcpLimitAdvice =
+    "Write many keys with bloom.animation.set-key-columns (one column of times, one per "
+    "component), and pass a large column as {\"fromFile\": \"<absolute .json path>\"} so it never "
+    "travels in the request.";
 
 // Stable tool diagnostic codes ("diagnostic.code" in structuredContent).
 enum class McpToolErrorCode : std::uint8_t {
@@ -289,6 +394,22 @@ enum class McpToolErrorCode : std::uint8_t {
 // withdrawn with GestureOpen or DeadlineExceeded. Task tools have no deadline; they are cancelled
 // explicitly.
 inline constexpr std::chrono::seconds kMcpCommitDeadline{30};
+
+// #745: the most created ids a transact lists in full. A transaction that creates more is
+// answered in the summary form (counts by name and one digest), never refused after it applied.
+inline constexpr std::size_t kMcpTransactOutputLimit = 10'000;
+// The events tool keeps the created ids of a command event that has at most this many (a larger
+// one keeps their count), and one events answer lists at most kMcpEventsOutputBudget ids (it then
+// stops early and its `sequence` continues from the last event listed).
+inline constexpr std::size_t kMcpEventOutputLimit = 1'024;
+inline constexpr std::size_t kMcpEventsOutputBudget = 8'192;
+
+// A data file passed as {"fromFile": ...}: at most this many per call, each at most this many
+// bytes, values and levels deep.
+inline constexpr std::size_t kMcpDataFilesPerCall = 16;
+inline constexpr std::size_t kMcpDataFileBytes = std::size_t{16} * 1024U * 1024U;
+inline constexpr std::size_t kMcpDataFileValues = 2'000'000;
+inline constexpr std::size_t kMcpDataFileDepth = 16;
 
 // Inline capture images: PNG bytes above this are linked, not embedded, so the base64 image plus
 // the JSON envelope stays within responseBytes.

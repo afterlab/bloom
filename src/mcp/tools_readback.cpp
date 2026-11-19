@@ -13,10 +13,15 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cmath>
+#include <initializer_list>
 #include <limits>
 #include <optional>
 #include <set>
 #include <string>
+#include <type_traits>
+#include <utility>
+#include <variant>
 #include <vector>
 
 namespace bloom::mcp {
@@ -52,11 +57,6 @@ yyjson_mut_val* roles(Json& out, const document::NodeRecord* node) {
     return value;
 }
 
-yyjson_mut_val* parsedJson(Json& out, const std::string& text) {
-    Parsed parsed(text);
-    return out.copy(parsed.root());
-}
-
 // #502: a layer's parameters by role (its Layer node's, or an entry layer's own).
 yyjson_mut_val* layerRoles(Json& out, const document::CanonicalGraph& graph,
                            const document::LayerOutputBoundary& layer) {
@@ -71,9 +71,7 @@ yyjson_mut_val* layerRoles(Json& out, const document::CanonicalGraph& graph,
 yyjson_mut_val* roleValues(Json& out, const std::vector<scripting::LayerRoleValue>& roles) {
     auto* value = out.object();
     for (const auto& role : roles)
-        out.set(value, role.role,
-                role.value ? parsedJson(out, scripting::parameterValueJson(*role.value))
-                           : out.null());
+        out.set(value, role.role, role.value ? referenceValue(out, *role.value) : out.null());
     return value;
 }
 
@@ -398,7 +396,8 @@ struct KeyRow final {
     std::uint64_t keyframe = 0;
     std::optional<std::string_view> component;
     core::RationalTime time;
-    std::string value;
+    // A component's number, or a gradient or path keyframe's value.
+    std::variant<double, const document::GradientValue*, const document::PathValue*> value;
     document::KeyframeInterpolation interpolation = document::KeyframeInterpolation::Linear;
     document::KeyframeHandle outgoing;
     document::KeyframeHandle incoming;
@@ -406,11 +405,8 @@ struct KeyRow final {
     document::KeyframeHandleMode handleMode = document::KeyframeHandleMode::Free;
 };
 
-std::string number(const double value) {
-    std::array<char, 64> buffer{};
-    const auto converted = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
-    return std::string(buffer.data(), converted.ptr);
-}
+// A keyframe number as its shortest decimal text reads back (shortestNumber).
+yyjson_mut_val* keyNumber(Json& out, const double value) { return shortestNumber(out, value); }
 
 void scalarRows(std::vector<KeyRow>& rows, const std::vector<document::ScalarKeyframe>& keys,
                 const std::optional<std::string_view> component) {
@@ -418,7 +414,7 @@ void scalarRows(std::vector<KeyRow>& rows, const std::vector<document::ScalarKey
         rows.push_back({.keyframe = key.id.value(),
                         .component = component,
                         .time = key.time,
-                        .value = number(key.value),
+                        .value = key.value,
                         .interpolation = key.outgoingInterpolation,
                         .outgoing = key.outgoingHandle,
                         .incoming = key.incomingHandle,
@@ -484,7 +480,7 @@ yyjson_mut_val* keyframesQuery(Json& out, yyjson_mut_val* result,
                     rows.push_back({.keyframe = key.id.value(),
                                     .component = std::nullopt,
                                     .time = key.time,
-                                    .value = scripting::parameterValueJson(key.value),
+                                    .value = &key.value,
                                     .interpolation = key.outgoingInterpolation,
                                     .outgoing = key.outgoingHandle,
                                     .incoming = key.incomingHandle,
@@ -507,37 +503,48 @@ yyjson_mut_val* keyframesQuery(Json& out, yyjson_mut_val* result,
             : 0;
     const auto end = offset + std::min<std::size_t>(pageSize, rows.size() - offset);
     const auto rate = comp.format().frameRate();
-    std::string text = "[";
+    auto* records = out.array();
     for (auto index = offset; index < end; ++index) {
         const auto& row = rows[index];
-        const auto handle = [](const document::KeyframeHandle& value) {
-            return "{\"time\":" + number(value.time) + ",\"value\":" + number(value.value) + "}";
+        const auto handle = [&](const document::KeyframeHandle& value) {
+            auto* handleValue = out.object();
+            out.set(handleValue, "time", keyNumber(out, value.time));
+            out.set(handleValue, "value", keyNumber(out, value.value));
+            return handleValue;
         };
-        text +=
-            (index == offset ? "" : ",") + std::string("{\"keyframe\":") +
-            std::to_string(row.keyframe) + ",\"component\":" +
-            (row.component ? "\"" + std::string(*row.component) + "\"" : std::string("null")) +
-            ",\"time\":" + scripting::timeJson(row.time, rate) + ",\"value\":" + row.value +
-            ",\"interpolation\":\"" +
-            std::string(document::keyframeInterpolationToken(row.interpolation)) +
-            "\",\"interpolationId\":" +
-            std::to_string(static_cast<std::uint64_t>(row.interpolation)) +
-            ",\"outgoingHandle\":" + handle(row.outgoing) +
-            ",\"incomingHandle\":" + handle(row.incoming) + ",\"ease\":\"" +
-            std::string(document::keyframeEasingToken(row.easing.easing)) +
-            "\",\"back\":" + number(row.easing.back) +
-            ",\"amplitude\":" + number(row.easing.amplitude) +
-            ",\"period\":" + number(row.easing.period) + ",\"handleMode\":\"" +
-            std::string(document::keyframeHandleModeToken(row.handleMode)) +
-            "\",\"handleModeId\":" + std::to_string(static_cast<std::uint64_t>(row.handleMode)) +
-            "}";
+        auto* entry = out.object();
+        out.set(entry, "keyframe", out.number(row.keyframe));
+        out.set(entry, "component", row.component ? out.text(*row.component) : out.null());
+        out.set(entry, "time", referenceTime(out, row.time, rate));
+        out.set(entry, "value",
+                std::visit(
+                    [&](const auto& held) -> yyjson_mut_val* {
+                        if constexpr (std::is_same_v<std::decay_t<decltype(held)>, double>)
+                            return keyNumber(out, held);
+                        else
+                            return referenceValue(out, document::ParameterValue(*held));
+                    },
+                    row.value));
+        out.set(entry, "interpolation",
+                out.text(document::keyframeInterpolationToken(row.interpolation)));
+        out.set(entry, "interpolationId",
+                out.number(static_cast<std::uint64_t>(row.interpolation)));
+        out.set(entry, "outgoingHandle", handle(row.outgoing));
+        out.set(entry, "incomingHandle", handle(row.incoming));
+        out.set(entry, "ease", out.text(document::keyframeEasingToken(row.easing.easing)));
+        out.set(entry, "back", keyNumber(out, row.easing.back));
+        out.set(entry, "amplitude", keyNumber(out, row.easing.amplitude));
+        out.set(entry, "period", keyNumber(out, row.easing.period));
+        out.set(entry, "handleMode", out.text(document::keyframeHandleModeToken(row.handleMode)));
+        out.set(entry, "handleModeId", out.number(static_cast<std::uint64_t>(row.handleMode)));
+        out.append(records, entry);
     }
     out.set(result, "composition", out.number(comp.id().value()));
     out.set(result, "parameter", parameterId ? out.number(parameterId->value()) : out.null());
     out.set(result, "curve", out.number(curveId.value()));
     out.set(result, "valueKind", out.text(valueKind));
     out.set(result, "frameRate", pair(out, rate.numerator(), rate.denominator()));
-    out.set(result, "records", parsedJson(out, text + "]"));
+    out.set(result, "records", records);
     out.set(result, "totalRecords", out.number(rows.size()));
     out.set(result, "nextCursor",
             end < rows.size() ? out.text(pageCursor(binding[0], binding[1], binding[2], binding[3],
@@ -558,13 +565,13 @@ yyjson_mut_val* nodeTypesQuery(Json& out, yyjson_mut_val* result, yyjson_val* ar
         if (found == definitions.end())
             throw InvalidInput("Unknown node type " + typeId +
                                "; query {kind:\"node-types\"} lists every type");
-        out.set(result, "record", parsedJson(out, scripting::nodeTypeJson(*found, true)));
+        out.set(result, "record", referenceNodeType(out, *found, true));
         return result;
     }
-    std::string text = "[";
+    auto* records = out.array();
     for (const auto& definition : registry.definitions())
-        text += (text.size() > 1 ? "," : "") + scripting::nodeTypeJson(definition, false);
-    out.set(result, "records", parsedJson(out, text + "]"));
+        out.append(records, referenceNodeType(out, definition, false));
+    out.set(result, "records", records);
     return result;
 }
 
@@ -980,15 +987,23 @@ yyjson_mut_val* parameterMetadata(Json& out, const document::Composition& compos
                                   const document::ParameterRecord& parameter) {
     const auto& registry = document::builtInNodeDefinitions();
     const document::ParameterDefinition* definition = nullptr;
-    std::string owner = "null";
+    yyjson_mut_val* owner = nullptr;
+    const auto ownerOf =
+        [&](const std::initializer_list<std::pair<std::string_view, yyjson_mut_val*>> members) {
+            auto* value = out.object();
+            for (const auto& [name, item] : members)
+                out.set(value, name, item);
+            return value;
+        };
     for (const auto& node : composition.graph().nodes()) {
         for (const auto& binding : node.parameters) {
             if (binding.parameterId != parameter.id)
                 continue;
             if (const auto* type = registry.find(node.typeId, node.schemaVersion))
                 definition = scripting::findParameterDefinition(*type, binding.role);
-            owner = "{\"node\":" + std::to_string(node.id.value()) + ",\"typeId\":\"" +
-                    node.typeId + "\",\"role\":\"" + binding.role + "\"}";
+            owner = ownerOf({{"node", out.number(node.id.value())},
+                             {"typeId", out.text(node.typeId)},
+                             {"role", out.text(binding.role)}});
         }
     }
     for (const auto& layer : composition.graph().layerOutputs()) {
@@ -1000,10 +1015,10 @@ yyjson_mut_val* parameterMetadata(Json& out, const document::Composition& compos
             if (const auto* type = registry.find(document::kLayerOutputNodeType,
                                                  document::kLayerOutputNodeSchemaVersion))
                 definition = scripting::findParameterDefinition(*type, binding.role);
-            owner = "{\"layer\":" + std::to_string(layer.layerId.value()) +
-                    ",\"merge\":" + std::to_string(layer.nodeId.value()) + ",\"slot\":" +
-                    std::to_string(layer.entrySlot ? layer.entrySlot->value() : 0) +
-                    ",\"role\":\"" + binding.role + "\"}";
+            owner = ownerOf({{"layer", out.number(layer.layerId.value())},
+                             {"merge", out.number(layer.nodeId.value())},
+                             {"slot", out.number(layer.entrySlot ? layer.entrySlot->value() : 0)},
+                             {"role", out.text(binding.role)}});
         }
         for (const auto& mask : layer.masks) {
             const std::array<std::pair<document::ParameterId, std::string_view>, 4> roles{
@@ -1013,9 +1028,9 @@ yyjson_mut_val* parameterMetadata(Json& out, const document::Composition& compos
                  {mask.opacity, "opacity"}}};
             for (const auto& [id, role] : roles)
                 if (id == parameter.id)
-                    owner = "{\"layer\":" + std::to_string(layer.layerId.value()) +
-                            ",\"mask\":" + std::to_string(mask.id.value()) + ",\"role\":\"" +
-                            std::string(role) + "\"}";
+                    owner = ownerOf({{"layer", out.number(layer.layerId.value())},
+                                     {"mask", out.number(mask.id.value())},
+                                     {"role", out.text(role)}});
         }
     }
     // The value kind of the stored value, or of the definition when the value is a curve.
@@ -1049,10 +1064,9 @@ yyjson_mut_val* parameterMetadata(Json& out, const document::Composition& compos
             },
             constant->value);
     }
-    auto text = scripting::parameterMetadataJson(parameter.schemaKey, kind, definition);
-    text.pop_back();
-    text += ",\"owner\":" + owner + "}";
-    return parsedJson(out, text);
+    auto* metadata = referenceMetadata(out, parameter.schemaKey, kind, definition);
+    out.set(metadata, "owner", owner != nullptr ? owner : out.null());
+    return metadata;
 }
 
 } // namespace bloom::mcp

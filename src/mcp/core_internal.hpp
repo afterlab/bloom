@@ -15,8 +15,9 @@
 
 #include <deque>
 #include <filesystem>
-#include <memory>
+#include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -42,6 +43,13 @@ struct ToolFailure final : std::runtime_error {
     // published as structuredContent.job and structuredContent.log.
     std::optional<std::uint64_t> job;
     std::shared_ptr<const std::vector<host::ExportLogEntry>> log;
+    // #745: the bound the call met, published as diagnostic.limit {name, value, actual, unit}.
+    struct Limit final {
+        McpLimit limit = McpLimit::CommitQueue;
+        std::uint64_t value = 0;
+        std::uint64_t actual = 0;
+    };
+    std::optional<Limit> limit;
 };
 
 // What one tools/call works against.
@@ -70,6 +78,9 @@ struct McpCall final {
     std::shared_ptr<host::GpuExportProvider> gpuProvider;
     // True for a projectFile call: the result reports which route rendered it.
     bool fileSession = false;
+    // #745: set by a tool whose call already changed the project (transact): its result in a
+    // compact form that always fits the response bound, used when the full one does not.
+    std::function<yyjson_mut_val*(Json&)> compact;
 };
 
 // A non-command fact the events tool reports beside command events: a project lifecycle step
@@ -85,7 +96,15 @@ struct McpNotice final {
     std::string path;
     std::string projectName;
 };
-using McpEventEntry = std::variant<commands::CommandEvent, McpNotice>;
+// #745: a command event as the events tool keeps it. Its created ids are copied only when there
+// are at most kMcpEventOutputLimit of them; a larger event keeps the count, so recording one on
+// the UI thread never copies hundreds of thousands of ids.
+struct McpRetainedCommand final {
+    commands::CommandEventKind kind = commands::CommandEventKind::Rejected;
+    commands::CommandResult result;
+    std::size_t outputCount = 0;
+};
+using McpEventEntry = std::variant<McpRetainedCommand, McpNotice>;
 
 struct McpProtocolSession::State {
     // Process-unique, from 1 (#746: an agent session names the protocol session that owns it).
@@ -177,7 +196,8 @@ inline constexpr std::size_t kMcpFileSessions = 4;
 // when absent.
 [[nodiscard]] std::optional<std::filesystem::path> projectFileArgument(yyjson_val* arguments);
 // `arguments` without projectFile, for the tools that do not know the member.
-[[nodiscard]] std::string withoutProjectFile(yyjson_val* arguments);
+using FrozenJson = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>;
+[[nodiscard]] FrozenJson withoutProjectFile(yyjson_val* arguments);
 // The headless session for `path`, opened on first use. The caller holds State::fileMutex. Refuses
 // a file that is open in the application or as the server's own project, and more than
 // kMcpFileSessions files at once. The open-in-Bloom check runs on every call (`recheck`; project.close
@@ -200,9 +220,28 @@ inline constexpr std::size_t kMcpFileSessions = 4;
 // ---- Projections (projections.cpp, tools_document.cpp)
 // `withOutputs` false leaves out the `outputs` list (transact's "summary" response replaces it, so
 // a transaction that creates hundreds of thousands of ids never builds them as JSON, #744).
+// #745: a result lists at most this many diagnostics; the rest are counted in diagnosticsOmitted.
+inline constexpr std::size_t kResultDiagnosticLimit = 256;
 [[nodiscard]] yyjson_mut_val* commandResult(Json& out, const commands::CommandResult& result,
-                                            bool withOutputs = true);
+                                            bool withOutputs = true,
+                                            std::size_t diagnosticLimit = kResultDiagnosticLimit);
 [[nodiscard]] yyjson_mut_val* parameterRecord(Json& out, const document::ParameterRecord& value);
+// ---- The node reference's values written straight into a response (reference_values.cpp, #745):
+// each equals parsing the matching scripting/node_reference.hpp text (a number that is whole and
+// below 1e15 is an integer; a non-finite one is null).
+[[nodiscard]] yyjson_mut_val* referenceNumber(Json& out, double value);
+// A number as its shortest decimal text (std::to_chars) reads back: digits alone are an integer
+// when they fit 64 bits, anything else a real; non-finite is null.
+[[nodiscard]] yyjson_mut_val* shortestNumber(Json& out, double value);
+[[nodiscard]] yyjson_mut_val* referenceValue(Json& out, const document::ParameterValue& value);
+[[nodiscard]] yyjson_mut_val* referenceTime(Json& out, core::RationalTime time,
+                                            const document::FrameRate& rate);
+[[nodiscard]] yyjson_mut_val* referenceMetadata(Json& out, std::string_view schemaKey,
+                                                document::ParameterValueKind kind,
+                                                const document::ParameterDefinition* definition,
+                                                std::string_view role = {});
+[[nodiscard]] yyjson_mut_val*
+referenceNodeType(Json& out, const document::NodeDefinition& definition, bool full);
 [[nodiscard]] yyjson_mut_val* parameterSummary(Json& out, const document::ParameterRecord& value);
 // query kind=enums: the interpolation, ease and Easy Ease vocabularies with their stable ids.
 void appendAnimationEnums(Json& out, yyjson_mut_val* records);

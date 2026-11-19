@@ -28,16 +28,18 @@ std::optional<std::filesystem::path> projectFileArgument(yyjson_val* arguments) 
     return normalized(path);
 }
 
-std::string withoutProjectFile(yyjson_val* arguments) {
-    auto* document = yyjson_mut_doc_new(nullptr);
-    yyjson_mut_doc_set_root(document, yyjson_val_mut_copy(document, arguments));
-    yyjson_mut_obj_remove_str(yyjson_mut_doc_get_root(document), "projectFile");
-    std::size_t length = 0;
-    char* text = yyjson_mut_write(document, 0, &length);
-    std::string result = text != nullptr ? std::string(text, length) : std::string("{}");
-    std::free(text);
-    yyjson_mut_doc_free(document);
-    return result;
+FrozenJson withoutProjectFile(yyjson_val* arguments) {
+    // #745: copied without the member, never written out and parsed again.
+    const std::unique_ptr<yyjson_mut_doc, decltype(&yyjson_mut_doc_free)> document(
+        yyjson_mut_doc_new(nullptr), yyjson_mut_doc_free);
+    if (!document)
+        throw std::bad_alloc();
+    yyjson_mut_doc_set_root(document.get(), yyjson_val_mut_copy(document.get(), arguments));
+    yyjson_mut_obj_remove_str(yyjson_mut_doc_get_root(document.get()), "projectFile");
+    FrozenJson frozen(yyjson_mut_doc_imut_copy(document.get(), nullptr), yyjson_doc_free);
+    if (!frozen)
+        throw std::bad_alloc();
+    return frozen;
 }
 
 namespace {

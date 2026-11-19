@@ -107,6 +107,9 @@ class McpHttpRequestParser final {
     [[nodiscard]] bool readingBody() const noexcept {
         return phase_ == Phase::Body || phase_ == Phase::Chunked;
     }
+    // After BodyTooLarge: the body's declared length (Content-Length, saturated), or for a chunked
+    // body the bytes it had reached when it crossed the bound (#745: the refusal names them).
+    [[nodiscard]] std::uint64_t refusedBodyBytes() const noexcept { return refusedBodyBytes_; }
 
   private:
     enum class Phase : std::uint8_t { Head, Body, Chunked, Done, Failed };
@@ -118,6 +121,7 @@ class McpHttpRequestParser final {
 
     McpHttpLimits limits_;
     std::size_t bodyLimit_ = 0;
+    std::uint64_t refusedBodyBytes_ = 0;
     std::string buffer_;
     // Bytes of buffer_ consumed by the request in progress.
     std::size_t consumed_ = 0;

@@ -123,7 +123,12 @@ void addConcepts(std::vector<ReferenceEntry>& out) {
         "error with code -32602 and a message naming the field. A tool that ran but failed "
         "answers isError:true with structuredContent {succeeded:false, diagnostic:{code, "
         "message}} or, for transact, {succeeded:false, diagnostics:[{code, operationIndex, "
-        "operation, argument, message}]}. Retry bloom.mcp.project-unavailable, "
+        "operation, argument, message}]}. A request over one of the advertised limits "
+        "(initialize: capabilities.experimental.bloom.limits) is a JSON-RPC error with that "
+        "limit's own code (-32003 to -32012, or -32000 for the pending queue) and error.data "
+        "{code, limit, value, actual, unit}; the commit bounds answer bloom.mcp.commit-queue-full, "
+        "bloom.mcp.deadline-exceeded and bloom.mcp.commit-too-large with diagnostic.limit. "
+        "Retry bloom.mcp.project-unavailable, "
         "bloom.mcp.commit-queue-full, bloom.mcp.gesture-open, bloom.mcp.deadline-exceeded and "
         "bloom.scripting.stale-revision (after re-reading the revision); fix the request for "
         "every other code.");
@@ -455,20 +460,37 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .summary = "\"full\" lists every id the operations created in `outputs`; \"summary\" "
                      "replaces that list with `outputSummary` {count, byName, digest}: how many "
                      "ids each output name made and one SHA-256 over the full list (MCP only). "
-                     "Use it for edits that create hundreds of keys.",
+                     "Use it for edits that create hundreds of keys. A transaction that creates "
+                     "more than 10,000 ids (limit transactOutputs) answers in the summary form "
+                     "even when \"full\" was asked, with `outputsSummarized` {name, value, "
+                     "actual}.",
           .defaultValue = "\"full\"",
           .choices = {{"full", "Every created id in `outputs`"},
-                      {"summary", "`outputSummary`: counts by output name and one digest"}}}});
+                      {"summary", "`outputSummary`: counts by output name and one digest"}}},
+         {.name = "compileCheck",
+          .type = "boolean",
+          .summary = "Whether to compile, after the edit, every composition whose evaluation "
+                     "inputs it changed and report what no longer compiles (`compileFailures`, "
+                     "`compileWarnings`). false skips it for bulk key writes that cannot break a "
+                     "composition: the result then says `compileChecked: false` and both lists "
+                     "are null (MCP only).",
+          .defaultValue = "true"}});
     transact.prerequisites = {"Read the current revision (any query result)."};
     transact.result =
         "{succeeded, revision, origin (\"agent\"), diagnostics:[{code, severity?, operationIndex, "
-        "operation, argument?, message}], outputs:[{operationIndex, name, id}]}. `revision` is "
+        "operation, argument?, message}], outputs:[{operationIndex, name, id}], compileChecked, "
+        "compileFailures, compileWarnings}. `revision` is "
         "the new "
         "revision; `outputs` lists every id the operations created, by the zero-based index of "
-        "the operation that made it (an operation's reference names its outputs). Over MCP any "
+        "the operation that made it (an operation's reference names its outputs). At most 256 "
+        "diagnostics are listed (the rest are counted in `diagnosticsOmitted`). Over MCP any "
         "operation argument may be {\"fromFile\": \"<absolute .json path>\"}: the server reads "
-        "that JSON file (regular file, at most 16 MiB) as the argument's value, so a large column "
-        "of keys never passes through the conversation.";
+        "that JSON file (regular file, at most 16 MiB, 2,000,000 values and 16 levels deep; at "
+        "most 16 per call) as the argument's value, so a large column of keys never passes "
+        "through the conversation. One request is at most 1 MiB and 65,536 JSON values: write "
+        "many keys with bloom.animation.set-key-columns. A transaction that applied is always "
+        "answered: an answer that would exceed the response bound comes back compact "
+        "(`responseCompacted`).";
     transact.errors = {
         makeError("bloom.scripting.invalid-argument",
                   "an argument is missing, of the wrong kind or out of range",
@@ -487,8 +509,20 @@ void addTools(std::vector<ReferenceEntry>& out) {
         makeError("bloom.mcp.commit-too-large",
                   "in the desktop application, the transaction carries more than 1,000,000 units "
                   "of work (one per operation, or one per key, keyframe or edit an operation "
-                  "lists)",
-                  "split it into several transactions")};
+                  "lists); diagnostic.limit names the bound and the actual count",
+                  "split it into several transactions"),
+        makeError("bloom.mcp.limit.json-values",
+                  "the request holds more than 65,536 JSON values (JSON-RPC error -32004; "
+                  "error.data names the limit, its value and the actual count)",
+                  "write keys with bloom.animation.set-key-columns and pass long columns as "
+                  "{\"fromFile\": ...}"),
+        makeError("bloom.mcp.limit.request-bytes",
+                  "the request is larger than 1 MiB (JSON-RPC error -32003)",
+                  "pass long columns as {\"fromFile\": ...}, or split the edit"),
+        makeError("bloom.mcp.limit.data-file-values",
+                  "a data file holds more than 2,000,000 values (-32011; also -32009 more than 16 "
+                  "files, -32010 a file over 16 MiB, -32012 deeper than 16 levels)",
+                  "split the data over several files or calls")};
     addExamples(
         transact,
         {{"mcp",
@@ -549,8 +583,13 @@ void addTools(std::vector<ReferenceEntry>& out) {
                            .summary = "Skip events up to and including this sequence.",
                            .range = ">= 0",
                            .defaultValue = "0"}});
-    events.result = "{revision, sequence, resetRequired, events:[{sequence, kind, succeeded, "
-                    "revision, origin (user|agent|script), diagnostics, outputs}]}";
+    events.result = "{revision, sequence, resetRequired, truncated, events:[{sequence, kind, "
+                    "succeeded, revision, origin (user|agent|script), diagnostics, outputs, "
+                    "outputCount, outputsOmitted?}]}. An event keeps its created ids when it made "
+                    "at most 1,024 (otherwise `outputsOmitted` and only `outputCount`); one "
+                    "answer lists at most 8,192 ids, and when it stops early `truncated` is true "
+                    "and `sequence` is the last event listed: pass it as afterSequence to "
+                    "continue.";
     addExamples(events, {{"mcp", R"({"name":"events","arguments":{"sinceRevision":0}})"}});
     addRelated(events, {"concept:revisions"});
     out.push_back(std::move(events));
