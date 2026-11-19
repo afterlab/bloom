@@ -68,6 +68,8 @@ class Snapshot final {
     std::shared_ptr<const detail::DocumentState> state_;
 };
 
+class PreparedCommit;
+
 class Draft final {
   public:
     Draft(const Draft&) = delete;
@@ -91,9 +93,14 @@ class Draft final {
     // only the root shell; validation through valid() is incremental against `base`. For read-only
     // "would this operation apply?" probes.
     [[nodiscard]] static Draft isolatedFrom(const Snapshot& base);
+    // #744 (A2). A draft of `base` that its own document can commit, made without the Document
+    // object, so a live commit can be built on a worker thread. Snapshots are immutable and their
+    // content is shared, so any thread may call this.
+    [[nodiscard]] static Draft of(const Snapshot& base);
 
   private:
     friend class Document;
+    friend class PreparedCommit;
     Draft(Revision baseRevision, std::shared_ptr<const detail::DocumentIdentity> identity,
           std::unique_ptr<detail::DocumentState> state,
           std::shared_ptr<const detail::DocumentState> base) noexcept;
@@ -121,6 +128,40 @@ struct CommitResult {
     ValidationResult validation;
 
     [[nodiscard]] bool committed() const noexcept { return status == CommitStatus::Committed; }
+};
+
+// #744 (A2). A draft validated and frozen for publication: everything Document::commit does before
+// it takes its lock, done by Document::prepare on any thread. Document::publish then only checks
+// the revision and swaps the state in. Move-only; it shares no mutable state with the draft it was
+// made from, so the draft may change or die afterwards.
+class PreparedCommit final {
+  public:
+    PreparedCommit(const PreparedCommit&) = delete;
+    PreparedCommit& operator=(const PreparedCommit&) = delete;
+    PreparedCommit(PreparedCommit&&) noexcept;
+    PreparedCommit& operator=(PreparedCommit&&) noexcept;
+    ~PreparedCommit();
+
+    // False when the draft is invalid (validation() says why) or foreign; publish refuses it.
+    [[nodiscard]] bool ready() const noexcept { return state_ != nullptr; }
+    [[nodiscard]] CommitStatus status() const noexcept { return status_; }
+    [[nodiscard]] const ValidationResult& validation() const noexcept { return validation_; }
+    [[nodiscard]] Revision baseRevision() const noexcept { return baseRevision_; }
+    // The state publication makes current, already frozen: the history charge is staged from it
+    // before publication, and publication keeps its identity. Only when ready().
+    [[nodiscard]] const Project& project() const noexcept;
+    [[nodiscard]] const void* stateIdentity() const noexcept { return state_.get(); }
+    [[nodiscard]] std::size_t rootByteCharge() const noexcept;
+
+  private:
+    friend class Document;
+    PreparedCommit() = default;
+
+    CommitStatus status_ = CommitStatus::InvalidDraft;
+    Revision baseRevision_;
+    std::shared_ptr<const detail::DocumentIdentity> identity_;
+    std::shared_ptr<detail::DocumentState> state_;
+    ValidationResult validation_;
 };
 
 enum class DocumentEventKind : std::uint8_t {
@@ -158,6 +199,12 @@ class Document final {
     [[nodiscard]] Snapshot snapshot() const;
     [[nodiscard]] Draft draft(const Snapshot& base) const;
     [[nodiscard]] CommitResult commit(Revision expectedRevision, Draft&& draft);
+    // #744 (A2). commit() in two halves. prepare() validates the draft against its base and
+    // freezes the state to publish; it reads nothing of this Document, so a worker thread may run
+    // it while the owner keeps publishing. publish() is the owner's cheap half: the provenance,
+    // base and revision checks, the swap and the observers. commit() is prepare() then publish().
+    [[nodiscard]] static PreparedCommit prepare(const Draft& draft);
+    [[nodiscard]] CommitResult publish(Revision expectedRevision, PreparedCommit&& prepared);
     [[nodiscard]] CommitResult restore(Revision expectedRevision,
                                        const Snapshot& historicalSnapshot);
     [[nodiscard]] Work work() const noexcept;

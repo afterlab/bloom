@@ -402,7 +402,74 @@ Draft Document::draft(const Snapshot& base) const {
     return Draft(base.revision_, identity_, std::move(state), base.state_);
 }
 
+PreparedCommit::PreparedCommit(PreparedCommit&&) noexcept = default;
+PreparedCommit& PreparedCommit::operator=(PreparedCommit&&) noexcept = default;
+PreparedCommit::~PreparedCommit() = default;
+
+const Project& PreparedCommit::project() const noexcept { return state_->project; }
+std::size_t PreparedCommit::rootByteCharge() const noexcept { return state_->rootByteCharge; }
+
+Draft Draft::of(const Snapshot& base) {
+    if (base.state_ == nullptr || base.identity_ == nullptr)
+        throw std::invalid_argument("Cannot draft from an empty snapshot");
+    return Draft(base.revision_, base.identity_,
+                 std::make_unique<detail::DocumentState>(*base.state_), base.state_);
+}
+
+PreparedCommit Document::prepare(const Draft& draftValue) {
+    PreparedCommit prepared;
+    prepared.baseRevision_ = draftValue.baseRevision_;
+    prepared.identity_ = draftValue.identity_;
+    if (draftValue.state_ == nullptr) {
+        prepared.validation_.add(ValidationCode::InvalidValue, "draft",
+                                 "Draft has no document state");
+        return prepared;
+    }
+    // #357. A successful commit discards diagnostics, so the incremental proof is enough; only a
+    // draft it cannot prove valid pays for the whole-project validation and its exact diagnostics.
+    if (draftValue.base_ == nullptr ||
+        !draftValue.state_->project.validatesAgainst(draftValue.base_->project)) {
+        auto validation = draftValue.validate();
+        if (!validation.ok()) {
+            prepared.validation_ = std::move(validation);
+            return prepared;
+        }
+    }
+
+    // A Draft exposes mutable Project/Composition references. Publish a separate shell and
+    // freeze the shell's private copy of every edited payload; moving the Draft itself would let a
+    // retained reference mutate an immutable Snapshot.
+    auto publishedState = std::make_shared<detail::DocumentState>(*draftValue.state_);
+    publishedState->project.freezeCompositionContent();
+    publishedState->rootByteCharge = publishedState->project.rootByteCharge();
+    // Reserving only what the draft added allocates (#744), so it runs before publication; a
+    // reservation is a high-water maximum, so merging the current allocator later is the same.
+    if (draftValue.base_ != nullptr)
+        detail::reserveChangedProjectIds(publishedState->ids, publishedState->project,
+                                         draftValue.base_->project);
+    else
+        detail::reserveProjectIds(publishedState->ids, publishedState->project);
+    prepared.status_ = CommitStatus::Committed;
+    prepared.state_ = std::move(publishedState);
+    return prepared;
+}
+
 CommitResult Document::commit(const Revision expectedRevision, Draft&& draftValue) {
+    if (draftValue.identity_ != identity_ || draftValue.baseRevision_ != expectedRevision ||
+        draftValue.state_ == nullptr) {
+        // publish() names the refusal; nothing is worth preparing.
+        PreparedCommit refused;
+        refused.baseRevision_ = draftValue.baseRevision_;
+        refused.identity_ = draftValue.identity_;
+        if (draftValue.state_ == nullptr)
+            refused.validation_.add(ValidationCode::InvalidValue, "draft",
+                                    "Draft has no document state");
+        return publish(expectedRevision, std::move(refused));
+    }
+    return publish(expectedRevision, prepare(draftValue));
+}
+
+CommitResult Document::publish(const Revision expectedRevision, PreparedCommit&& prepared) {
     const auto reject = [this, expectedRevision](CommitResult result) {
         const auto currentRevision = snapshot().revision();
         notify({.kind = DocumentEventKind::Rejected,
@@ -411,39 +478,16 @@ CommitResult Document::commit(const Revision expectedRevision, Draft&& draftValu
                 .afterRevision = currentRevision});
         return result;
     };
-    if (draftValue.identity_ != identity_) {
+    if (prepared.identity_ != identity_) {
         return reject(provenanceResult("draft", "Draft is owned by another document"));
     }
-    if (draftValue.baseRevision_ != expectedRevision) {
+    if (prepared.baseRevision_ != expectedRevision) {
         return reject(baseMismatchResult());
     }
-    if (draftValue.state_ == nullptr) {
-        ValidationResult validation;
-        validation.add(ValidationCode::InvalidValue, "draft", "Draft has no document state");
-        return reject({CommitStatus::InvalidDraft, std::nullopt, std::move(validation)});
-    }
     validations_.fetch_add(1, std::memory_order_relaxed);
-    // #357. A successful commit discards diagnostics, so the incremental proof is enough; only a
-    // draft it cannot prove valid pays for the whole-project validation and its exact diagnostics.
-    if (draftValue.base_ == nullptr ||
-        !draftValue.state_->project.validatesAgainst(draftValue.base_->project)) {
-        auto validation = draftValue.validate();
-        if (!validation.ok()) {
-            return reject({CommitStatus::InvalidDraft, std::nullopt, std::move(validation)});
-        }
+    if (!prepared.ready()) {
+        return reject({CommitStatus::InvalidDraft, std::nullopt, std::move(prepared.validation_)});
     }
-
-    // A Draft exposes mutable Project/Composition references. Publish a separate shell and
-    // freeze the shell's private copy of every edited payload before taking the commit lock;
-    // moving the Draft itself would let a retained reference mutate an immutable Snapshot.
-    auto publishedState = std::make_shared<detail::DocumentState>(*draftValue.state_);
-    publishedState->project.freezeCompositionContent();
-    publishedState->rootByteCharge = publishedState->project.rootByteCharge();
-    // Reserving only what the draft added allocates (#744), so it runs before the commit lock;
-    // a reservation is a high-water maximum, so merging the current allocator later is the same.
-    if (draftValue.base_ != nullptr)
-        detail::reserveChangedProjectIds(publishedState->ids, publishedState->project,
-                                         draftValue.base_->project);
 
     std::unique_lock lock(mutex_);
     if (expectedRevision != revision_) {
@@ -456,10 +500,8 @@ CommitResult Document::commit(const Revision expectedRevision, Draft&& draftValu
         return reject(overflowResult());
     }
 
-    publishedState->ids.mergeHighWater(state_->ids);
-    if (draftValue.base_ == nullptr)
-        detail::reserveProjectIds(publishedState->ids, publishedState->project);
-    state_ = std::move(publishedState);
+    prepared.state_->ids.mergeHighWater(state_->ids);
+    state_ = std::move(prepared.state_);
     // Leave the caller's Draft independent and alive until its own destructor. A reference kept
     // while editing remains valid, but it can only mutate the unpublished draft copy.
     revision_ = *publishedRevision;
