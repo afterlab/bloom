@@ -274,9 +274,11 @@ flows ask the artist about unsaved changes and destinations; the artist owns the
 
 | Bound | Value | Refusal |
 | --- | --- | --- |
-| Request body | 1 MiB (unchanged) | 413 |
-| Response | 4 MiB (unchanged) | capture links instead of embedding (section 5) |
-| JSON values / depth / arena | 65,536 / 32 / 32 MiB (unchanged) | -32602 |
+| Request body | 1 MiB (unchanged) | 413, -32003 |
+| Response | 4 MiB (unchanged) | -32006; capture links instead of embedding (section 5); an applied transact answers compact |
+| JSON values / depth / memory | 65,536 / 32 / 32 MiB cap (unchanged) | -32004 / -32005 / -32007 |
+| `fromFile` data files per call / bytes / values / depth | 16 / 16 MiB / 2,000,000 / 16 | -32009 / -32010 / -32011 / -32012 |
+| Created ids one transact lists (#745) | 10,000 | answered in the summary form |
 | Request line plus headers | 16 KiB, 64 fields | 431 and close |
 | Header / body / write deadlines | 10 s / 30 s / 30 s | close |
 | Idle keep-alive | 60 s | close |
@@ -284,11 +286,19 @@ flows ask the artist about unsaved changes and destinations; the artist owns the
 | Clients (protocol sessions) | 8 (see section 6) | 503, -32002 |
 | Request workers | 4 | wait in the pending queue |
 | Pending messages | 16 (unchanged) | 503 with Retry-After: 1, -32000 |
-| Requests per client, executing or pending | 4 | 503, -32000 |
+| Requests per client, executing or pending | 4 | 503 with Retry-After: 1, -32008 |
 | Queued commits, all clients and the Script editor | 16 (unchanged) | `bloom.mcp.commit-queue-full` |
 | Work in one live commit (#744) | 1,000,000 units: one per operation, or per key, keyframe or edit it lists | `bloom.mcp.commit-too-large` |
 | Render request | 10,000 frames (unchanged) | -32602 |
 | Command events retained | 1,024 (unchanged) | `resetRequired` |
+
+**Amended (#745, #741): every limit is advertised and named.** initialize lists each request
+bound under `capabilities.experimental.bloom.limits`, and a refusal names the limit, its value and
+the actual count, with that limit's own JSON-RPC code and `error.data` `{code, limit, value,
+actual, unit}` (the commit bounds as tool diagnostics with `diagnostic.limit`); none answers the
+parse-error code. The JSON memory bound is a cap, no longer a 32 MiB arena allocated per parse and
+per build, and each request body is parsed once, on the connection thread (stdio: the reader). The
+user guide's limits table is the one list ([Using Bloom from an agent](../user-guide/mcp.md#limits)).
 
 Client disconnection is not cancellation, as the specification requires. A request finishes and
 its response is dropped. Cancellation is `notifications/cancelled` (scoped to the caller's own

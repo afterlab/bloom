@@ -56,12 +56,39 @@ Up to 512 lines are kept; "Earlier activity was trimmed." marks a gap.
 
 Up to 8 clients at once. When a ninth connects, the least recently used client that has been idle
 for 5 minutes with nothing in flight is disconnected; otherwise the new client is refused. A client
-idle for 60 minutes is ended and reconnects on its next request. At most 16 connections, 4 requests
-in progress per client, 4 executing at once and 16 waiting. Every request is at most 1 MiB and every
-response at most 4 MiB, as on stdio. A client that has 4 requests in progress and sends a fifth gets
-error `-32000` "Too many requests from this client" (HTTP 503) naming that limit; nothing was run, so
-send it again once one of the four has answered. The limit protects the main thread, so batch many
-edits into one `transact` instead of sending them in parallel.
+idle for 60 minutes is ended and reconnects on its next request. At most 16 connections and 4
+requests executing at once. The in-progress limit protects the main thread, so batch many edits
+into one `transact` instead of sending them in parallel.
+
+Every request limit is listed in the table below and advertised by `initialize` under
+`capabilities.experimental.bloom.limits`, by the name in the first column. A request over one is
+refused before anything runs, and the refusal names the limit, its value and the actual count: a
+JSON-RPC error with the limit's own code and `error.data` `{code, limit, value, actual, unit}`, or for
+the commit bounds a tool result whose `diagnostic` carries `limit` `{name, value, actual, unit}`.
+Refusals of the request's size or JSON shape suggest the columnar key form
+(`bloom.animation.set-key-columns`) and `{"fromFile": ...}` data files.
+
+| Limit (`limits.<name>`) | Value | Refused with |
+| --- | --- | --- |
+| `requestBytes`: one request (HTTP body or stdio line) | 1 MiB | `-32003` (HTTP 413) |
+| `responseBytes`: one response | 4 MiB | `-32006`; an applied `transact` answers compact instead |
+| `jsonValues`: JSON values in one request (array items and member values) | 65,536 | `-32004` |
+| `jsonDepth`: levels below the root | 32 | `-32005` |
+| `jsonMemoryBytes`: memory one parse or response may take | 32 MiB | `-32007` |
+| `dataFilesPerCall`: `fromFile` data files in one call | 16 | `-32009` |
+| `dataFileBytes`: one data file | 16 MiB | `-32010` |
+| `dataFileValues`: JSON values in one data file | 2,000,000 | `-32011` |
+| `dataFileDepth`: levels in one data file | 16 | `-32012` |
+| `inFlightPerClient`: requests one client has executing or waiting (1 on stdio) | 4 | `-32008` (HTTP 503, `Retry-After: 1`) |
+| `pendingMessages`: requests waiting for a worker, all clients | 16 | `-32000` (HTTP 503, `Retry-After: 1`) |
+| `commitQueue`: edits waiting to apply, MCP and the Script editor together (desktop only) | 16 | `bloom.mcp.commit-queue-full` |
+| `commitDeadlineMs`: how long an edit may wait to apply (desktop only) | 30,000 ms | `bloom.mcp.deadline-exceeded`, `bloom.mcp.gesture-open` |
+| `commitWork`: work in one `transact` (desktop only) | 1,000,000 units | `bloom.mcp.commit-too-large` |
+| `transactOutputs`: created ids a `transact` lists in `outputs` | 10,000 | never refused: answered in the summary form |
+
+`initialize` also reports `requestWorkers`, `clients`, `connections`, `renderFrames`,
+`retainedEvents`, `eventOutputs` (the ids an `events` record keeps) and `eventsOutputsPerAnswer`.
+Nothing that was refused ran, so send it again once the condition clears.
 
 ### Edits, undo and project changes
 
@@ -77,7 +104,7 @@ a larger one is refused with `bloom.mcp.commit-too-large`, so split it into seve
 that is cancelled, times out or outlives its project is never applied, and the result names why
 with a stable code: `bloom.mcp.cancelled`, `bloom.mcp.deadline-exceeded`, `bloom.mcp.gesture-open`,
 `bloom.mcp.project-replaced`, `bloom.mcp.commit-queue-full`. The Script editor and MCP share one
-queue of 16 edits.
+queue of 16 edits. The [limits](#limits) table lists every bound an edit can meet.
 
 Clients stay connected when you open or create a project. While a project is opening, calls answer
 `bloom.mcp.project-unavailable`; an `events` cursor from the old project reports `resetRequired`.
@@ -345,8 +372,9 @@ from the [MCP Server panel](mcp-server-panel.md).
 
 Send `initialize` with `protocolVersion`, `capabilities` and `clientInfo`, then send the
 `notifications/initialized` notification. `initialize` returns Bloom's version, facade version,
-headless status, tool and resource support, the request limit and short `instructions` that point
-an agent at `help` and the getting-started guide.
+headless status, tool and resource support, every request limit (`experimental.bloom.limits`, see
+[Limits](#limits)) and short `instructions` that point an agent at `help` and the getting-started
+guide.
 
 An agent never needs Bloom's source to use it:
 
@@ -383,10 +411,10 @@ Use `tools/call` with `name` and `arguments`:
 | --- | --- |
 | `help` | Optional `name`. Returns `found`, `text` (the readable entry or index), and `entry`, `index` or `suggestions` as data. |
 | `query` | `kind`: project, compositions, layers, nodes, node-types, parameters, parameter, parameter-value, keyframes, assets, operations, context or enums (the interpolation, ease and Easy Ease vocabularies). layers, nodes, parameters, parameter, parameter-value and keyframes also need `composition`. `compositions` records carry size, `frameRate`, `fps`, `pixelAspect`, `duration` and `start` as `{frames, seconds}`, `dropFrame`, `workArea` (end exclusive, or null), `backgroundColor` (display-only), `workingColorSpace`, `safeAreas`, `layerCount` and `folder`. `layers` lists a composition's layers topmost first: `index`, `slot`, `merge`, `layerOutputNode`, `sourceNode`, `sourceType`, enabled, solo, locked, label colour, parent, `start` and exclusive `end`, `timing` (start time, speed, before and after modes, extent), masks, track matte, and the parameter ids of the layer's transform (`parameters`) and its source (`sourceParameters`). `nodes` records carry `name`, `category`, `parameters`, `position`, `width`, `collapsed`, `muted`, `group`, `inputs` (port, kind, required and the connected `source`) and `outputs` (port, kind and `targets`); Merge nodes add their `stack`; the result adds `links` and `groups`. `node-types` lists every type `bloom.node.add` accepts; with `nodeType` it returns one type with each parameter's metadata. A node's `category` (in `nodes` and `node-types`) is its group in the Add menu ([UI grammar](../ux/ui-grammar.md)): one of `sources`, `compositing`, `channels`, `keying-mattes`, `transform`, `distort`, `blur-sharpen`, `light-shadow`, `stylize`, `color-correction`, `color-management`, `time`, `text-paths`, `instances-particles`, `tracking-analysis`, `fields`, `values`, `math`, `convert`, `string`, `logic`, `time-values`, `color-values`, `vector`, `utilities` or `output`. Earlier builds reported `filters`, `grade`, `color` and `layers`, and reported the value nodes as `values`, `math` or `utilities` only. `parameter` with `parameter` returns the record and `metadata`: `valueKind`, `animatable`, `default`, `unit`, `displayScale`, `minimum`, `maximum`, `softMinimum`, `softMaximum`, `choices` (`{value, label}`; `bloom.parameter.set-source` takes either the value or the label, matched case-insensitively, and refuses anything else naming the valid choices) and `owner`; write values in stored units (the units of `minimum`, `maximum` and `default`), while `unit` and `displayScale` are how Properties shows them (an opacity stored as 0.5 shows as 50 %). `keyframes` with `parameter` (an animated one) or `curve` returns the keys sorted by time: `keyframe`, `component` (x, y, z, red, green, blue, alpha, or null), `time` as `{frames, seconds}`, `value`, `interpolation` (hold, linear, ease-in-out) and the ease handles, paged like parameters (`pageSize` 1–64, `nextCursor`). `parameters` without paging returns full records; with `pageSize` (1–64) and optional `cursor` it returns bounded summaries and `nextCursor`; constant values are explicitly marked `valueOmitted`. `parameter-value` with `parameter` ID and `expectedRevision` reads UTF-8 string chunks using optional byte `offset` and `limit` (4–131072). `assets` records carry `kind` as a name (image, sequence, audio, video, lut), `path`, size, `frames`, digest, `folder` and `tags`, and the result lists the Assets `folders` (`id`, `name`, `parent`); an image, sequence or video also carries its `interpretation` (the [Interpret Footage](interpret-footage.md) members `bloom.asset.set-interpretation` takes, plus the resolved `playbackFrameRate` and `filePixelAspect`). `layers` records also carry `shy`, `nameFollowsSource` and `sourceName`, and (every Merge entry is a layer, see [Merge entries and adjustment layers](#merge-entries-and-adjustment-layers)) `layerKind` (`node` for a Layer node, `entry` for a Merge entry's own layer, whose `layerOutputNode` is null and whose `merge` and `slot` own it), `entryLayer`, `pivot` (`content` or `frame`), `entries` (`[{merge, slot}]` of every entry it is the layer of), `shared`, `adjustment` (the Adjustment node serving its entry, or null) and `values` (`{role: value}`, null for an animated or driven control); the `layers` result adds `entries`, every Merge entry (output Merge first, each top to bottom) whether or not it has a layer yet: `merge`, `slot`, `index`, `outputMerge`, `resolvedLayer` (the entry's layer id, or null), `layerKind` (`node`, `entry` or `none`), `entryLayer`, `layerNode`, `sourceNode`, `sourceType`, `name`, `enabled`, `solo`, `locked`, `shy`, `pivot`, `adjustment`, `shared`, `nestedMerge` (the Merge it shows, for a nested Merge), `parameters` and `values` (an entry without a layer reports the defaults it renders with). A Merge node's `stack` rows (`nodes`) carry the same entry fields after `slot`, `layer` and `index`. A `parameter` of an entry layer reports `owner` `{layer, merge, slot, role}` and the Layer node's metadata. An operations record carries a `description`, every argument's `kind`, `required`, `contextual`, `context`, `summary`, `unit`, `minimum`, `maximum`, `default` and `choices`, plus a pasteable `example` call. `context` returns the editor context contextual arguments fall back to: project, composition, selected nodes and layers, time (seconds as `[n, d]`), the Viewer's display and view, the Viewer's drill `level` (entered group layers, outermost first) and `points` (the shape in point editing, or null), read-only state and `live` (false on stdio, which reports the session defaults, an empty level). |
-| `transact` | `expectedRevision`, an `operations` array of `{op,args}`, and optional `label`. Returns one atomic command result, created IDs, structured diagnostics and `compileFailures` and `compileWarnings` (see [Edits and diagnostics](#edits-and-diagnostics)). Arguments the descriptor marks `contextual` may be omitted and are filled from the session (the live editor context in the desktop application). Coded failures carry `structuredContent.diagnostic` `{code, message}` with a `bloom.mcp.*` code. |
+| `transact` | `expectedRevision`, an `operations` array of `{op,args}`, and optional `label`, `response` (`full`, the default, or `summary`) and `compileCheck` (default `true`). Returns one atomic command result, created IDs, structured diagnostics and `compileFailures` and `compileWarnings` (see [Edits and diagnostics](#edits-and-diagnostics)). `outputs` lists at most 10,000 created ids (`transactOutputs`): past that the answer is in the summary form, `outputSummary` `{count, byName, digest}`, with `outputsSummarized` naming the limit. At most 256 diagnostics are listed (the rest are counted in `diagnosticsOmitted`). A transaction that applied is always answered: one whose full answer would exceed the response bound comes back compact, with `responseCompacted: true`. Arguments the descriptor marks `contextual` may be omitted and are filled from the session (the live editor context in the desktop application). Coded failures carry `structuredContent.diagnostic` `{code, message}` with a `bloom.mcp.*` code. |
 | `render` | `composition`, `frame` or inclusive `first`/`last`, `preset`, `destination`, optional `overwrite` (`ask`, the default, `replace` or `refuse`). Returns `publishedFrames`, `preservationReport` and `files` with SHA-256 digests. Output keeps alpha; the composition background colour is not rendered. With `loudnessLufs` the audio is normalized to that EBU R128 integrated loudness under the true-peak ceiling, and the result carries `loudness` (measured and delivered level and true peak, the gain, and the limiter's deepest reduction; a level that could not be measured, as in silence, is `null`). |
 | `export` | Render arguments plus optional `profile`, `audio`, `sampleRate`, `loudnessLufs` (-40 to -5) with `truePeakDbtp` (-12 to 0, default -1), `encoder` (`automatic`, the default, `software` or `hardware`; on macOS `automatic` makes ProRes with the system's encoder and fails if it cannot, and `software` uses Bloom's FFmpeg encoder), `workerMemoryCapBytes` and `workerThreads` (see [Export worker limits](#export-worker-limits)). Uses the existing MEDIA-4 composition runner for ProRes preview, DNxHR and PCM output. Output keeps alpha; the composition background colour is not rendered. |
-| `events` | `sinceRevision`, optionally `afterSequence`. Returns revision-inclusive events, a sequence cursor and `resetRequired` when retained history cannot cover the cursor. |
+| `events` | `sinceRevision`, optionally `afterSequence`. Returns revision-inclusive events, a sequence cursor and `resetRequired` when retained history cannot cover the cursor. Each command event carries `outputCount`; it lists its created ids only when it made at most 1,024 (otherwise `outputsOmitted: true`). One answer lists at most 8,192 ids: when it stops early, `truncated` is `true` and `sequence` is the last event listed, so pass it as `afterSequence` to continue. |
 | `history` | `action` (`undo` or `redo`) and `expectedRevision`. One step of the project's history, refused with a stale-revision result when the revision moved. In the desktop application it is queued like a `transact`, and it undoes the most recent step of any origin, including the artist's. |
 | `capture` | Optional `composition` and `frame` (defaults: the context composition at the context time; on stdio the session's composition at frame 0). Renders one PNG at composition resolution through the still export route, with the Viewer's display and view in the desktop application (not its exposure, gamma, channel, region of interest or preview resolution), and returns it as MCP `image` content. Output keeps alpha; the composition background colour is not rendered. A PNG larger than about 2.9 MiB is returned as a `resource_link` to the file with the notice `bloom.mcp.capture-too-large-for-inline`. Captures go to an `mcp-captures` folder in Bloom's per-user cache, which keeps the newest 16. |
 | `export.start`, `export.start-all`, `export.pause`, `export.resume`, `export.stop`, `export.stop-all`, `export.retry`, `export.confirm-replace` | The export queue's session commands (`jobs`, `job`, `output`). Each returns `accepted`, the queue revision and, when refused, the availability code and reason. |
@@ -572,12 +600,17 @@ names where), `bloom.scripting.stale-revision`, `bloom.scripting.history-limit` 
 JSON type is a protocol error whose message starts with `operations[<index>] (<op>)` and gives a
 working example.
 
-**Compile failures.** After a successful edit, every composition it touched is compiled (never
-rendered). `compileFailures` lists those that cannot render now:
+**Compile failures.** After a successful edit, every composition whose evaluation inputs it
+changed is compiled (never rendered); the edit's own commit names them, and a change outside any
+one composition (an asset, for example) compiles every composition. `compileFailures` lists those
+that cannot render now:
 `[{composition, code, detail, subject: {composition, node, parameter}}]`, where `detail` is one
 plain sentence and `node`/`parameter` are `null` when the failure has no narrower subject. Each one
 is also recorded as a `composition.compile-failed` event. An empty list means every touched
-composition compiles.
+composition compiles. `compileChecked` says whether the check ran: `transact` with
+`"compileCheck": false` skips it, for bulk key writes that cannot break a composition, and then
+answers `compileChecked: false` with both lists `null`. At most 256 records of each list are
+returned; the rest are counted in `compileWarningsOmitted` or `compileFailuresOmitted`.
 
 `compileWarnings` lists what still compiles but degrades, in the same record shape: for example a
 text layer whose font is not installed and cannot be fetched, which is
@@ -871,8 +904,9 @@ verification and cancellation behavior. Export uses the requested preset and app
 host analysis digest; the returned report preserves implementation notes.
 
 On both transports each request is at most 1 MiB, each response at most 4 MiB, at most 65,536 JSON
-values, and JSON depth at most 32. Arrays have no separate item cap. Parsing and writing use fixed 32 MiB allocation arenas. The pending request queue holds
-at most 16 messages. Duplicate decoded keys, malformed Unicode, non-finite JSON numbers, invalid ID
+values, and JSON depth at most 32. Arrays have no separate item cap. Parsing and writing allocate
+what the message needs, at most 32 MiB each, and a request is parsed once. The pending request
+queue holds at most 16 messages (see [Limits](#limits) for every bound and its refusal). Duplicate decoded keys, malformed Unicode, non-finite JSON numbers, invalid ID
 types and unknown schema members are rejected. A render request is limited to 10,000 frames; event
 history retains 1024 records. Clients should advance `afterSequence` and re-query the snapshot when
 `resetRequired` is true. This local process uses its launcher's filesystem permissions.

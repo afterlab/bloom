@@ -751,7 +751,11 @@ current time and panel state are session state and never reach the document at a
 runs on shared immutable storage first, so an edit pays only for the composition it touched. The
 proof also checks declarations the other way: a transaction whose operations all declared
 themselves render-neutral but which changed an evaluation input fails closed to a whole render.
-An operation that publishes its own finite footprint keeps it as published.
+An operation that publishes its own finite footprint keeps it as published. The proof runs as
+`document::evaluationInputChanges()`, which also names the compositions whose evaluation inputs
+changed; the result carries them as `CommandResult::evaluationChangedCompositions` (absent when an
+asset, extension record or typed data block changed), and MCP's post-commit compile check reuses
+that list instead of compiling every composition (#745).
 
 A field is classified where it lives. Presentation collections (node groups, asset folders, the
 export queue, the project name) are skipped whole, so any field added to them -- a group frame
