@@ -370,12 +370,20 @@ void CommandStack::notify(const CommandResult& result) const noexcept {
         return;
     }
 
-    const auto send = [this, &callbacks, &result](const CommandEventKind kind) noexcept {
+    // #744: one event serves every observer and both kinds; a result can carry hundreds of
+    // thousands of outputs, so it is copied once, not once per observer and kind.
+    std::optional<CommandEvent> event;
+    try {
+        event.emplace(CommandEvent{.kind = CommandEventKind::Rejected, .result = result});
+        event->result.origin = currentOrigin_;
+    } catch (...) {
+        return;
+    }
+    const auto send = [&callbacks, &event](const CommandEventKind kind) noexcept {
+        event->kind = kind;
         for (const auto& callback : callbacks) {
             try {
-                CommandEvent event{.kind = kind, .result = result};
-                event.result.origin = currentOrigin_;
-                callback(event);
+                callback(*event);
             } catch (...) {
                 // Observers cannot change the command outcome or interrupt history publication.
                 static_cast<void>(0);
