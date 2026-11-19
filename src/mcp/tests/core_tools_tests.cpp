@@ -226,7 +226,6 @@ void unboundSeams() {
              {"preferences.get", "{}"},
              {"preferences.set", R"({"preferences":{"loopPlayback":false}})"},
              {"cache.purge", R"({"cache":"preview"})"},
-             {"jobs.list", "{}"},
              {"jobs.cancel", R"({"job":3})"},
              {"asset.reveal", R"({"asset":1})"},
              {"composition.presets", "{}"},
@@ -238,6 +237,11 @@ void unboundSeams() {
         const auto result = server.call(tool, arguments);
         expect(contains(result, "bloom.mcp.ui-unbound"), tool + " unbound is typed: " + result);
     }
+    // #747: jobs.list also lists asynchronous transact jobs, so it answers without the Jobs
+    // panel's rows bound, with only those jobs.
+    const auto jobs = server.call("jobs.list", "{}");
+    expect(contains(jobs, R"("succeeded":true)") && contains(jobs, R"("jobs":[])"),
+           "jobs.list without the Jobs panel lists no rows: " + jobs);
 }
 
 } // namespace
@@ -2604,9 +2608,10 @@ void requestLimits() {
         while (server.host.queuedCommits() < 16 && std::chrono::steady_clock::now() < filled)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         const auto full = server.send(edit(1100));
+        // #747: with the advice when to try again, from the queue depth and recent commit time.
         expect(contains(full, "bloom.mcp.commit-queue-full") &&
                    contains(full, R"("limit":{"name":"commitQueue","value":16,"actual":17,)") &&
-                   contains(full, "set-key-columns"),
+                   contains(full, "set-key-tracks") && contains(full, R"("retryAfterMs":)"),
                "a seventeenth commit is refused by the queue bound: " + full.substr(0, 600));
         for (auto& waiting : queued) {
             const auto late = waiting.get();

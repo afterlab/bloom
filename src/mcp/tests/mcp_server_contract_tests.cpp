@@ -110,7 +110,16 @@ static_assert(mcp::toolUsesLiveUi(mcp::McpTool::SessionBegin) &&
               mcp::toolUsesLiveUi(mcp::McpTool::SessionEnd));
 static_assert(!mcp::toolMutatesDocument(mcp::McpTool::SessionBegin) &&
               !mcp::toolMutatesDocument(mcp::McpTool::SessionEnd));
-static_assert(static_cast<std::size_t>(mcp::McpTool::SessionEnd) + 1 == mcp::kMcpToolCount);
+static_assert(static_cast<std::size_t>(mcp::McpTool::JobsWait) + 1 == mcp::kMcpToolCount);
+// #747: jobs.wait waits for an asynchronous transact job, holds no lease and streams progress, as
+// a transact with a progress token does.
+static_assert(mcp::toolName(mcp::McpTool::JobsWait) == "jobs.wait");
+static_assert(mcp::toolExecution(mcp::McpTool::JobsWait) == mcp::McpToolExecution::Task);
+static_assert(!mcp::toolUsesLiveUi(mcp::McpTool::JobsWait) &&
+              !mcp::toolMutatesDocument(mcp::McpTool::JobsWait));
+static_assert(mcp::toolStreamsProgress(mcp::McpTool::Transact) &&
+              mcp::toolStreamsProgress(mcp::McpTool::JobsWait) &&
+              !mcp::toolStreamsProgress(mcp::McpTool::Query));
 // Project colour settings are project session state, not a document command.
 static_assert(!mcp::toolMutatesDocument(mcp::McpTool::ProjectSetColorSettings));
 static_assert(mcp::toolExecution(mcp::McpTool::Render) == mcp::McpToolExecution::Task);

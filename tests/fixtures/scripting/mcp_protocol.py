@@ -421,7 +421,7 @@ class Protocol(unittest.TestCase):
                           'composition.activate', 'transport', 'viewer.set', 'export.reveal',
                           'project.set-color-settings', 'profiler.snapshot',
                           'project.save-copy', 'project.cancel-open', 'preferences.get',
-                          'preferences.set', 'cache.purge', 'jobs.list', 'jobs.cancel',
+                          'preferences.set', 'cache.purge', 'jobs.list', 'jobs.cancel', 'jobs.wait',
                           'asset.reveal', 'composition.presets', 'composition.save-preset',
                           'composition.rename-preset', 'composition.delete-preset', 'help',
                           'dialog.answer', 'script.run', 'session.begin', 'session.end'})

@@ -371,7 +371,11 @@ class Limits(unittest.TestCase):
                     'jsonDepth': 32, 'jsonMemoryBytes': 33554432, 'dataFilesPerCall': 16,
                     'dataFileBytes': 16777216, 'dataFileValues': 2000000, 'dataFileDepth': 16,
                     'inFlightPerClient': 4, 'pendingMessages': 16, 'commitQueue': 16,
-                    'commitDeadlineMs': 30000, 'commitWork': 1000000, 'transactOutputs': 10000}
+                    'commitDeadlineMs': 30000, 'commitWork': 1000000, 'transactOutputs': 10000,
+                    # #747: asynchronous transact jobs and idempotency keys.
+                    'asyncJobs': 16, 'retainedJobs': 64, 'idempotencyKeys': 1024,
+                    'idempotencyKeyBytes': 128, 'idempotencyWindowMs': 600000,
+                    'idempotencyAnswerBytes': 65536}
         for name, value in expected.items():
             self.assertEqual(limits.get(name), value, name)
 
@@ -410,8 +414,13 @@ class Limits(unittest.TestCase):
             thread.start()
         self.host.command('await-requests 4')
         status, headers, body = clients[0].call(20, 'query', {'kind': 'project'})
-        self.assertEqual((status, headers.get('retry-after')), (503, '1'))
         error = json.loads(body)
+        # #747: a busy answer says when to try again, from the queue ahead of it and the recent
+        # commit time (100 ms to 30 s); Retry-After is the same in whole seconds, rounded up.
+        retry = error['error']['data']['retryAfterMs']
+        self.assertTrue(100 <= retry <= 30000, retry)
+        self.assertEqual((status, headers.get('retry-after')),
+                         (503, str(max(1, (retry + 999) // 1000))))
         self.assertEqual(error['id'], 20)
         self.assertEqual(error['error']['code'], -32008)
         self.assertEqual(error['error']['data']['limit'], 'inFlightPerClient')
@@ -426,9 +435,11 @@ class Limits(unittest.TestCase):
         for thread in waiting:
             thread.start()
         self.host.command('await-requests 20')
-        status, _, body = clients[5].call(40, 'query', {'kind': 'project'})
+        status, headers, body = clients[5].call(40, 'query', {'kind': 'project'})
         self.assertEqual(status, 503)
         error = json.loads(body)['error']
+        self.assertEqual(headers.get('retry-after'),
+                         str(max(1, (error['data']['retryAfterMs'] + 999) // 1000)))
         self.assertEqual(error['code'], -32000)
         self.assertEqual((error['data']['limit'], error['data']['value'], error['data']['actual']),
                          ('pendingMessages', 16, 17))
@@ -438,6 +449,64 @@ class Limits(unittest.TestCase):
         self.assertEqual(len(answers), 20)
         self.assertTrue(all(status == 200 for status, _, _ in answers),
                         [status for status, _, _ in answers])
+
+
+class AsyncTransact(unittest.TestCase):
+    """#747: transact async:true answers with a job id at once; jobs.wait with a progress token
+    streams the job's progress as notifications/progress, then the result."""
+
+    def setUp(self):
+        self.host = Host()
+        assert self.host.status.startswith('READY'), self.host.status
+
+    def tearDown(self):
+        self.host.command('release-commits')
+        self.host.close()
+
+    def test_job_progress_streams(self):
+        import threading
+        client = Client(self.host)
+        client.initialize()
+        revision = json.loads(client.call(2, 'query', {'kind': 'project'})[2])[
+            'result']['structuredContent']['revision']
+        self.host.command('hold-commits')
+        status, headers, body = client.call(3, 'transact', {
+            'expectedRevision': revision, 'async': True, 'idempotencyKey': 'conformance-1',
+            'operations': [{'op': 'bloom.project.set-name', 'args': {'name': 'Async'}}]})
+        self.assertEqual((status, headers['content-type']), (200, 'application/json'))
+        submitted = json.loads(body)['result']['structuredContent']
+        self.assertTrue(submitted['async'], submitted)
+        job = submitted['job']
+        self.assertTrue(job.startswith('transact-'), job)
+        answers = []
+        waiter = threading.Thread(target=lambda: answers.append(client.call(
+            4, 'jobs.wait', {'job': job, 'timeoutMs': 60000}, meta={'progressToken': 'j1'})))
+        waiter.start()
+        self.host.command('await-requests 1')
+        # The job waits for the held commit; once released it publishes and the wait answers.
+        listed = json.loads(client.call(5, 'jobs.list', {})[2])['result']['structuredContent']
+        self.assertIn(job, [row['id'] for row in listed['jobs']])
+        self.host.command('release-commits')
+        waiter.join(timeout=60)
+        status, headers, body = answers[0]
+        self.assertEqual((status, headers['content-type']), (200, 'text/event-stream'))
+        messages = [json.loads(line[len(b'data: '):]) for line in body.split(b'\r\n')
+                    if line.startswith(b'data: ')]
+        self.assertGreaterEqual(len(messages), 2)
+        for message in messages[:-1]:
+            self.assertEqual(message['method'], 'notifications/progress')
+            self.assertEqual(message['params']['progressToken'], 'j1')
+        final = messages[-1]['result']['structuredContent']
+        self.assertEqual(final['state'], 'succeeded', final)
+        self.assertEqual(final['result']['revision'], revision + 1)
+        # The same key again names the same job, applied once.
+        status, _, body = client.call(6, 'transact', {
+            'expectedRevision': revision, 'async': True, 'idempotencyKey': 'conformance-1',
+            'operations': [{'op': 'bloom.project.set-name', 'args': {'name': 'Async'}}]})
+        replay = json.loads(body)['result']['structuredContent']
+        self.assertEqual((replay['job'], replay['idempotentReplay']), (job, True))
+        self.assertEqual(replay['result']['revision'], revision + 1)
+        client.request('DELETE')
 
 
 class Lifecycle(unittest.TestCase):
