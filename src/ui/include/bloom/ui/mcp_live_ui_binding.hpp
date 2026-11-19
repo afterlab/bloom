@@ -141,7 +141,8 @@ class McpLiveUiBinding final : public QObject {
     void onCopyFinished(ProjectHostOperationOutcome outcome, const QString& message);
     void beginPending(mcp::McpProjectRequestKind kind,
                       std::function<void(mcp::McpProjectResult)> done);
-    void finishPending(mcp::McpUiRefusal refusal, const QString& message);
+    void finishPending(mcp::McpUiRefusal refusal, const QString& message,
+                       std::optional<mcp::McpSaveFailureDetail> saveFailure = std::nullopt);
     void settleThenRun(const mcp::McpProjectRequest& request, std::function<void()> run);
     void pollJobs();
     [[nodiscard]] QString projectName() const;

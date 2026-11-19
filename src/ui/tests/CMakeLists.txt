@@ -2142,6 +2142,21 @@ bloom_add_test(NAME bloom.ui.mcp-live-ui-binding COMMAND bloom_ui_mcp_live_ui_bi
     LABELS ui mcp integration TIMEOUT 240
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 
+# Issue #737: a failed Save or Save As names its stage and cause (agent diagnostic, status bar,
+# artist dialog), and an agent's failed save never opens a dialog, with the binding built before the
+# window as the application builds it.
+add_executable(bloom_ui_mcp_save_failure_test mcp_save_failure_tests.cpp)
+target_include_directories(bloom_ui_mcp_save_failure_test PRIVATE ..)
+target_link_libraries(bloom_ui_mcp_save_failure_test PRIVATE bloom_ui bloom_runtime_compiler
+    Qt6::Test)
+target_compile_definitions(bloom_ui_mcp_save_failure_test PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+target_include_directories(bloom_ui_mcp_save_failure_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
+bloom_enable_warnings(bloom_ui_mcp_save_failure_test)
+bloom_add_test(NAME bloom.ui.mcp-save-failure COMMAND bloom_ui_mcp_save_failure_test
+    LABELS ui mcp integration TIMEOUT 240
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+
 # #389: the live-UI port's application members (Viewer settings, preferences, purge, jobs, cancel
 # open, reveal, composition presets) over the real window.
 add_executable(bloom_ui_mcp_live_ui_application_test mcp_live_ui_binding_application_tests.cpp)

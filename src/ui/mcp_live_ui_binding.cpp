@@ -970,12 +970,15 @@ void McpLiveUiBinding::pollJobs() {
     run();
 }
 
-void McpLiveUiBinding::finishPending(const McpUiRefusal refusal, const QString& message) {
+void McpLiveUiBinding::finishPending(const McpUiRefusal refusal, const QString& message,
+                                     std::optional<mcp::McpSaveFailureDetail> saveFailure) {
     if (!pending_)
         return;
     project_.setAgentOperation(false);
     const auto pending = std::move(pending_);
-    pending->done(projectResult(refusal, message));
+    auto result = projectResult(refusal, message);
+    result.saveFailure = std::move(saveFailure);
+    pending->done(std::move(result));
 }
 
 void McpLiveUiBinding::onSaveFinished(const ProjectHostOperationOutcome outcome,
@@ -985,8 +988,22 @@ void McpLiveUiBinding::onSaveFinished(const ProjectHostOperationOutcome outcome,
         return;
     const bool saved = outcome == ProjectHostOperationOutcome::Published ||
                        outcome == ProjectHostOperationOutcome::PublishedWithWarning;
-    finishPending(saved ? McpUiRefusal::None : McpUiRefusal::Failed,
-                  saved ? tr("Saved %1. %2").arg(quoted(projectName()), message) : message);
+    if (saved) {
+        finishPending(McpUiRefusal::None, tr("Saved %1. %2").arg(quoted(projectName()), message));
+        return;
+    }
+    // Issue #737: a save that did not write the file answers its own code with the stage it
+    // stopped at and the cause; one refused because Bloom was busy answers bloom.mcp.busy.
+    const auto& failure = project_.lastSaveFailure();
+    if (!failure.has_value()) {
+        finishPending(McpUiRefusal::Failed, message);
+        return;
+    }
+    const auto refusal = failure->stage == "start" && failure->cause == "busy"
+                             ? McpUiRefusal::Busy
+                             : McpUiRefusal::SaveFailed;
+    finishPending(refusal, message,
+                  mcp::McpSaveFailureDetail{.stage = failure->stage, .cause = failure->cause});
 }
 
 void McpLiveUiBinding::onCopyFinished(const ProjectHostOperationOutcome outcome,

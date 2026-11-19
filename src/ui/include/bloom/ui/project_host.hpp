@@ -6,6 +6,7 @@
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
+#include <bloom/host/save_failure_description.hpp>
 #include <bloom/host/session_async_io.hpp>
 #include <bloom/host/session_open.hpp>
 #include <bloom/host/session_recovery.hpp>
@@ -30,6 +31,7 @@ class KDialog;
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -86,6 +88,15 @@ enum class ProjectHostOperationOutcome : std::uint8_t {
     Failed,
     Oversize,
     Refused,
+};
+
+// Who asked for the operation a saveFinished()/openFinished()/copyFinished() reports. Captured when
+// the signal is emitted, so a receiver's decision (a window opens a failure dialog only for the
+// Artist) never depends on the order receivers run in: the MCP binding ends its agent operation in
+// its own slot, which may run before the window's (issue #737).
+enum class ProjectHostOperationOrigin : std::uint8_t {
+    Artist,
+    Agent,
 };
 
 // What ProjectHost is currently doing, for the menu's enabled-state and the status bar's
@@ -254,6 +265,16 @@ class ProjectHost final : public QObject {
     [[nodiscard]] static kit::KDialog*
     buildRecoveryPrompt(QWidget& owner, const std::filesystem::path& recoveryPath);
 
+    // Why the last Save or Save As did not write the project file: the stage it stopped at, the
+    // cause, and the message saveFinished() carried (issue #737). Set before saveFinished() is
+    // emitted for every outcome that is not a success and cleared for one that is, so a receiver of
+    // that signal reads the description of the save it reports. The MCP binding answers it as the
+    // detail of a bloom.mcp.save-failed diagnostic.
+    [[nodiscard]] const std::optional<host::SaveFailureDescription>&
+    lastSaveFailure() const noexcept {
+        return lastSaveFailure_;
+    }
+
   public slots:
     // Composes the unsaved-change flow, then REPLACES the session in-place with a fresh
     // createNew() session (decision 1). Emits sessionReplaced() on success.
@@ -290,6 +311,9 @@ class ProjectHost final : public QObject {
     // True while an agent's project call (MCP) owns the running save or open. The finished signals
     // fire as always, but windows must not open a dialog for it: the agent gets the typed refusal
     // and the artist sees a status message. Set by the MCP binding around begin*().
+    // While it is set, no dialog seam (unsaved changes, Open, Save As, recovery) is ever asked: an
+    // operation that would need one is refused instead, so an agent's call can never open a modal
+    // dialog.
     void setAgentOperation(bool agent) noexcept { agentOperation_ = agent; }
     [[nodiscard]] bool agentOperation() const noexcept { return agentOperation_; }
     // Lower-level primitives (decision 1's literal list): begin the async op against an
@@ -319,13 +343,17 @@ class ProjectHost final : public QObject {
     void colorSettingsChanged();
     void dirtyStateChanged();
     void activityChanged();
-    // Typed outcome + a display-ready message (never collapses Superseded/failed into success).
-    void saveFinished(bloom::ui::ProjectHostOperationOutcome outcome, QString message);
-    void openFinished(bloom::ui::ProjectHostOperationOutcome outcome, QString message);
+    // Typed outcome + a display-ready message (never collapses Superseded/failed into success) +
+    // who asked for it (see ProjectHostOperationOrigin).
+    void saveFinished(bloom::ui::ProjectHostOperationOutcome outcome, QString message,
+                      bloom::ui::ProjectHostOperationOrigin origin);
+    void openFinished(bloom::ui::ProjectHostOperationOutcome outcome, QString message,
+                      bloom::ui::ProjectHostOperationOrigin origin);
     // Honest copy outcome (task SC1, issue #77): published / superseded / conflict / failed; the
     // success message names the target file. Never fired for a state that also changes
     // dirtyStateChanged()/sessionReplaced() -- Save Copy never touches session state.
-    void copyFinished(bloom::ui::ProjectHostOperationOutcome outcome, QString message);
+    void copyFinished(bloom::ui::ProjectHostOperationOutcome outcome, QString message,
+                      bloom::ui::ProjectHostOperationOrigin origin);
     void recoveryScanActivityChanged(bool active);
     void recoveryDiagnostic(QString message);
 
@@ -339,6 +367,16 @@ class ProjectHost final : public QObject {
     void startSave(std::filesystem::path targetPath, host::SessionPathIntentCapture intent);
     void startSaveCopy(std::filesystem::path targetPath);
     void handleSaveResult(host::SessionSaveResult result);
+    // Every saveFinished()/openFinished()/copyFinished() goes through these, which add the origin.
+    void finishSave(ProjectHostOperationOutcome outcome, const QString& message);
+    // A save refused before it ran: records `cause` (stage "start") for lastSaveFailure().
+    void refuseSave(std::string_view cause, const QString& message);
+    void finishOpen(ProjectHostOperationOutcome outcome, const QString& message);
+    void finishCopy(ProjectHostOperationOutcome outcome, const QString& message);
+    [[nodiscard]] ProjectHostOperationOrigin operationOrigin() const noexcept {
+        return agentOperation_ ? ProjectHostOperationOrigin::Agent
+                               : ProjectHostOperationOrigin::Artist;
+    }
     void handleOpenResult(host::SessionOpenResult result,
                           std::shared_ptr<const host::detail::AsyncSessionOpenArchive> archive);
     void handleCopyResult(host::CopyPublicationResult result);
@@ -364,6 +402,7 @@ class ProjectHost final : public QObject {
     std::unique_ptr<host::ExportQueueService> exportQueue_;
     bool confirmingExports_ = false;
     bool agentOperation_ = false;
+    std::optional<host::SaveFailureDescription> lastSaveFailure_;
     void createExportQueue();
     void retireExportQueue(host::ExportStopCause cause);
 

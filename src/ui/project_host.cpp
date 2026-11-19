@@ -48,31 +48,6 @@ constexpr int kPollIntervalMs = 100;
     return QUuid::createUuid().toString(QUuid::Id128).toLower().toStdString();
 }
 
-// The document path of the field a save refused as non-finite, or an empty view when this failure
-// is not a non-finite refusal. The chain is the one the save pipeline composes: publication ->
-// staged save -> archive build -> document encode (see docs/architecture/project-format.md,
-// "Numbers"). A save can only ever fail this way -- it never aborts the process -- so the message
-// this feeds is a plain, editable-session failure like any other.
-[[nodiscard]] std::string_view
-nonFiniteSaveFieldPath(const host::SavePublicationFailure* const failure) noexcept {
-    if (failure == nullptr) {
-        return {};
-    }
-    const auto* staged = failure->payloadAs<project::StagedSaveFailure>();
-    if (staged == nullptr) {
-        return {};
-    }
-    const auto* archive = staged->payloadAs<project::SaveArchiveFailure>();
-    if (archive == nullptr) {
-        return {};
-    }
-    const auto* encoding = archive->payloadAs<project::SaveArchiveDocumentEncodingFailure>();
-    if (encoding == nullptr || encoding->error != project::CanonicalDocumentError::NonFiniteValue) {
-        return {};
-    }
-    return encoding->fieldPath.view();
-}
-
 } // namespace
 
 struct RecoveryWorkerState final {
@@ -527,7 +502,7 @@ void ProjectHost::pollRecoveryScan() {
 }
 
 void ProjectHost::handleRecoveryOffer(const host::SessionRecoveryOffer& offer) {
-    if (!recoveryDecisionProvider_) {
+    if (!recoveryDecisionProvider_ || agentOperation_) {
         return;
     }
     protectedRecoveryOfferPath_ = offer.recoveryPath;
@@ -791,8 +766,9 @@ void ProjectHost::confirmUnsavedChanges(std::function<void()> onProceed,
         onProceed();
         return;
     }
-    if (!decisionProvider_) {
-        // No provider configured: never silently discard an artist's edit.
+    if (!decisionProvider_ || agentOperation_) {
+        // No provider configured, or an agent's call that must never open a dialog (issue #737):
+        // never silently discard an artist's edit.
         return;
     }
 
@@ -859,7 +835,7 @@ void ProjectHost::requestOpen() {
     }
     confirmUnsavedChanges(
         [this] {
-            if (!openPathProvider_) {
+            if (!openPathProvider_ || agentOperation_) {
                 return;
             }
             auto chosen = openPathProvider_();
@@ -898,17 +874,21 @@ void ProjectHost::requestOpenPath(const std::filesystem::path& path) {
 
 void ProjectHost::requestSaveAs() {
     if (isBusy()) {
-        emit saveFinished(ProjectHostOperationOutcome::Refused,
-                          tr("Another project operation is already in progress."));
+        refuseSave("busy", tr("Another project operation is already in progress."));
         return;
     }
     promptAndBeginSaveAs();
 }
 
 void ProjectHost::promptAndBeginSaveAs() {
+    if (agentOperation_) {
+        // An agent's call never opens the Save As dialog (issue #737); it names the file itself.
+        refuseSave("path-required",
+                   tr("This project has never been saved. Save it As with a file path."));
+        return;
+    }
     if (!saveAsPathProvider_) {
-        emit saveFinished(ProjectHostOperationOutcome::Refused,
-                          tr("No Save As dialog is configured."));
+        refuseSave("no-dialog", tr("No Save As dialog is configured."));
         return;
     }
     auto chosen = saveAsPathProvider_();
@@ -920,13 +900,13 @@ void ProjectHost::promptAndBeginSaveAs() {
 
 void ProjectHost::requestSaveCopy() {
     if (isBusy()) {
-        emit copyFinished(ProjectHostOperationOutcome::Refused,
-                          tr("Another project operation is already in progress."));
+        finishCopy(ProjectHostOperationOutcome::Refused,
+                   tr("Another project operation is already in progress."));
         return;
     }
     if (!canSaveCopy()) {
-        emit copyFinished(ProjectHostOperationOutcome::Refused,
-                          tr("Save a Copy is not available for this project."));
+        finishCopy(ProjectHostOperationOutcome::Refused,
+                   tr("Save a Copy is not available for this project."));
         return;
     }
     promptAndBeginSaveCopy();
@@ -936,9 +916,13 @@ void ProjectHost::promptAndBeginSaveCopy() {
     // Reuses the SAME Save As dialog provider seam (decision 4: "same seam pattern for the file
     // dialogs" / "do NOT add a third provider unless something genuinely breaks") -- Save Copy's
     // dialog is presentation-identical to Save As's: choose a destination file.
+    if (agentOperation_) {
+        finishCopy(ProjectHostOperationOutcome::Refused,
+                   tr("Save a Copy needs a file path when an agent asks for it."));
+        return;
+    }
     if (!saveAsPathProvider_) {
-        emit copyFinished(ProjectHostOperationOutcome::Refused,
-                          tr("No Save dialog is configured."));
+        finishCopy(ProjectHostOperationOutcome::Refused, tr("No Save dialog is configured."));
         return;
     }
     auto chosen = saveAsPathProvider_();
@@ -950,16 +934,14 @@ void ProjectHost::promptAndBeginSaveCopy() {
 
 void ProjectHost::beginSave() {
     if (isBusy() || !session_.has_value()) {
-        emit saveFinished(ProjectHostOperationOutcome::Refused,
-                          tr("Another project operation is already in progress."));
+        refuseSave("busy", tr("Another project operation is already in progress."));
         return;
     }
     const auto snapshot = session_->stateSnapshot();
     if (!snapshot.valid ||
         snapshot.contentKind != host::ProjectSessionContentKind::DecodedDocument ||
         snapshot.editability != host::DecodedProjectEditability::Editable) {
-        emit saveFinished(ProjectHostOperationOutcome::Refused,
-                          tr("This project cannot be saved."));
+        refuseSave("not-saveable", tr("This project cannot be saved."));
         return;
     }
     if (!snapshot.displayPath.has_value()) {
@@ -970,7 +952,7 @@ void ProjectHost::beginSave() {
     }
     const auto intent = session_->capturePlainSavePathIntent();
     if (!intent.isValid()) {
-        emit saveFinished(ProjectHostOperationOutcome::Refused, tr("Save could not start."));
+        refuseSave("intent-unavailable", tr("Save could not start."));
         return;
     }
     startSave(snapshot.displayPath->value(), intent);
@@ -978,13 +960,12 @@ void ProjectHost::beginSave() {
 
 void ProjectHost::beginSaveAs(std::filesystem::path path) {
     if (isBusy() || !session_.has_value()) {
-        emit saveFinished(ProjectHostOperationOutcome::Refused,
-                          tr("Another project operation is already in progress."));
+        refuseSave("busy", tr("Another project operation is already in progress."));
         return;
     }
     auto advance = session_->advancePathIntentForSaveAs();
     if (!advance) {
-        emit saveFinished(ProjectHostOperationOutcome::Refused, tr("Save As could not start."));
+        refuseSave("intent-unavailable", tr("Save As could not start."));
         return;
     }
     startSave(std::move(path), advance.capture());
@@ -992,8 +973,8 @@ void ProjectHost::beginSaveAs(std::filesystem::path path) {
 
 void ProjectHost::beginSaveCopy(std::filesystem::path path) {
     if (isBusy() || !canSaveCopy()) {
-        emit copyFinished(ProjectHostOperationOutcome::Refused,
-                          tr("Another project operation is already in progress."));
+        finishCopy(ProjectHostOperationOutcome::Refused,
+                   tr("Another project operation is already in progress."));
         return;
     }
     startSaveCopy(std::move(path));
@@ -1005,14 +986,12 @@ void ProjectHost::startSave(std::filesystem::path targetPath,
     // guards are repeated defensively so this function is never the one place that assumes a
     // caller-side check without stating its own.
     if (!session_.has_value() || !publicationCoordinator_ || !artifactCoordinator_) {
-        emit saveFinished(ProjectHostOperationOutcome::Refused,
-                          tr("Another project operation is already in progress."));
+        refuseSave("busy", tr("Another project operation is already in progress."));
         return;
     }
     auto operation = makeOperation();
     if (!operation.has_value()) {
-        emit saveFinished(ProjectHostOperationOutcome::Refused,
-                          tr("Not enough memory is available to start this save."));
+        refuseSave("resource-exhausted", tr("Not enough memory is available to start this save."));
         return;
     }
     const host::SessionSaveRequest request{
@@ -1025,8 +1004,7 @@ void ProjectHost::startSave(std::filesystem::path targetPath,
     auto begun = host::beginSessionSave(*session_, scheduler_, *publicationCoordinator_,
                                         *artifactCoordinator_, request, std::move(*operation));
     if (!begun) {
-        emit saveFinished(ProjectHostOperationOutcome::Refused,
-                          tr("The save could not be started."));
+        refuseSave("not-started", tr("The save could not be started."));
         return;
     }
     inFlight_.emplace<host::AsyncSessionSave>(std::move(begun).takeHandle());
@@ -1038,14 +1016,14 @@ void ProjectHost::startSaveCopy(std::filesystem::path targetPath) {
     // Callers (requestSaveCopy()/beginSaveCopy()) already checked isBusy()/canSaveCopy(); repeated
     // defensively, matching startSave()'s own precedent.
     if (!canSaveCopy() || !publicationCoordinator_ || !artifactCoordinator_) {
-        emit copyFinished(ProjectHostOperationOutcome::Refused,
-                          tr("Another project operation is already in progress."));
+        finishCopy(ProjectHostOperationOutcome::Refused,
+                   tr("Another project operation is already in progress."));
         return;
     }
     auto operation = makeOperation();
     if (!operation.has_value()) {
-        emit copyFinished(ProjectHostOperationOutcome::Refused,
-                          tr("Not enough memory is available to start this copy."));
+        finishCopy(ProjectHostOperationOutcome::Refused,
+                   tr("Not enough memory is available to start this copy."));
         return;
     }
     host::AsyncCopyPublicationRequest request{
@@ -1060,8 +1038,7 @@ void ProjectHost::startSaveCopy(std::filesystem::path targetPath) {
         host::beginCopyPublication(scheduler_, *publicationCoordinator_, *artifactCoordinator_,
                                    std::move(request), std::move(*operation));
     if (!begun) {
-        emit copyFinished(ProjectHostOperationOutcome::Refused,
-                          tr("The copy could not be started."));
+        finishCopy(ProjectHostOperationOutcome::Refused, tr("The copy could not be started."));
         return;
     }
     inFlight_.emplace<host::AsyncCopyPublication>(std::move(begun).takeHandle());
@@ -1072,8 +1049,8 @@ void ProjectHost::startSaveCopy(std::filesystem::path targetPath) {
 
 void ProjectHost::beginOpen(const std::filesystem::path& path) {
     if (isBusy() || !session_.has_value()) {
-        emit openFinished(ProjectHostOperationOutcome::Refused,
-                          tr("Another project operation is already in progress."));
+        finishOpen(ProjectHostOperationOutcome::Refused,
+                   tr("Another project operation is already in progress."));
         return;
     }
 
@@ -1081,23 +1058,21 @@ void ProjectHost::beginOpen(const std::filesystem::path& path) {
 
     auto displayPath = host::ProjectDisplayPath::create(path);
     if (!displayPath.has_value()) {
-        emit openFinished(ProjectHostOperationOutcome::Refused,
-                          tr("The chosen path is not valid."));
+        finishOpen(ProjectHostOperationOutcome::Refused, tr("The chosen path is not valid."));
         return;
     }
 
     auto operation = makeOpenOperation();
     if (!operation.has_value()) {
-        emit openFinished(ProjectHostOperationOutcome::Refused,
-                          tr("Not enough memory is available to start this open."));
+        finishOpen(ProjectHostOperationOutcome::Refused,
+                   tr("Not enough memory is available to start this open."));
         return;
     }
 
     auto begun = host::beginSessionOpen(*session_, scheduler_, path, std::move(displayPath), limits,
                                         std::move(*operation));
     if (!begun) {
-        emit openFinished(ProjectHostOperationOutcome::Refused,
-                          tr("The open could not be started."));
+        finishOpen(ProjectHostOperationOutcome::Refused, tr("The open could not be started."));
         return;
     }
     pendingOpenRecoveryPath_ = currentRecoveryPath();
@@ -1117,7 +1092,7 @@ void ProjectHost::cancelOpen() {
     pendingOpenRecoveryPath_.clear();
     protectedRecoveryOfferPath_.reset();
     setActivity(ProjectHostActivity::Idle);
-    emit openFinished(ProjectHostOperationOutcome::Cancelled, tr("The open was cancelled."));
+    finishOpen(ProjectHostOperationOutcome::Cancelled, tr("The open was cancelled."));
 }
 
 void ProjectHost::replaceWithNewProject() {
@@ -1221,35 +1196,55 @@ void ProjectHost::setActivity(const ProjectHostActivity activity) {
     emit activityChanged();
 }
 
+void ProjectHost::finishSave(const ProjectHostOperationOutcome outcome, const QString& message) {
+    if (outcome == ProjectHostOperationOutcome::Published ||
+        outcome == ProjectHostOperationOutcome::PublishedWithWarning) {
+        lastSaveFailure_.reset();
+    }
+    emit saveFinished(outcome, message, operationOrigin());
+}
+
+void ProjectHost::refuseSave(const std::string_view cause, const QString& message) {
+    lastSaveFailure_ = host::SaveFailureDescription{
+        .stage = "start",
+        .cause = std::string(cause),
+        .message = message.toStdString(),
+    };
+    emit saveFinished(ProjectHostOperationOutcome::Refused, message, operationOrigin());
+}
+
+void ProjectHost::finishOpen(const ProjectHostOperationOutcome outcome, const QString& message) {
+    emit openFinished(outcome, message, operationOrigin());
+}
+
+void ProjectHost::finishCopy(const ProjectHostOperationOutcome outcome, const QString& message) {
+    emit copyFinished(outcome, message, operationOrigin());
+}
+
 void ProjectHost::handleSaveResult(host::SessionSaveResult result) {
     emit dirtyStateChanged();
 
     auto outcome = ProjectHostOperationOutcome::Failed;
     QString message;
+    // Every failure names the stage it stopped at and its cause, in the dialog, the status bar and
+    // the MCP diagnostic alike (issue #737); nothing collapses into one fixed sentence.
+    auto failure = host::describeSessionSaveFailure(result);
+    const auto failureMessage = [&failure] {
+        return failure.has_value() ? QString::fromStdString(failure->message) : QString{};
+    };
 
     switch (result.stage()) {
     case host::SessionSaveStage::None:
-        outcome = ProjectHostOperationOutcome::Refused;
-        message = tr("The save did not run.");
-        break;
     case host::SessionSaveStage::Capture:
         outcome = ProjectHostOperationOutcome::Refused;
-        message = tr("The save could not capture the current project state.");
+        message = failureMessage();
         break;
-    case host::SessionSaveStage::Publication: {
+    case host::SessionSaveStage::Publication:
+        // The session stays open and editable and nothing was written over the project file: a
+        // value the format cannot spell is still in the document for the artist to correct.
         outcome = ProjectHostOperationOutcome::Failed;
-        const auto fieldPath = nonFiniteSaveFieldPath(result.publicationFailure());
-        if (!fieldPath.empty()) {
-            // The session stays open and editable: the offending value is still in the document
-            // for the user to correct, and nothing was written over the project file.
-            message = tr("Save failed: %1 is not a finite number.")
-                          .arg(QString::fromUtf8(fieldPath.data(),
-                                                 static_cast<qsizetype>(fieldPath.size())));
-        } else {
-            message = tr("The save failed before the file could be written.");
-        }
+        message = failureMessage();
         break;
-    }
     case host::SessionSaveStage::Savepoint: {
         const auto* publication = result.publication();
         const auto publicationOutcome =
@@ -1269,19 +1264,34 @@ void ProjectHost::handleSaveResult(host::SessionSaveResult result) {
         case platform::StagedArtifactPublicationOutcome::Superseded:
             outcome = ProjectHostOperationOutcome::Superseded;
             message = tr("This save was superseded by a newer save.");
+            failure = host::SaveFailureDescription{
+                .stage = "publication.publish",
+                .cause = "superseded",
+                .message = message.toStdString(),
+            };
             break;
         case platform::StagedArtifactPublicationOutcome::CancelledBeforePublication:
             outcome = ProjectHostOperationOutcome::Cancelled;
             message = tr("The save was cancelled.");
+            failure = host::SaveFailureDescription{
+                .stage = "publication.publish",
+                .cause = "cancelled",
+                .message = message.toStdString(),
+            };
             break;
         case platform::StagedArtifactPublicationOutcome::ExternalModificationConflict:
             outcome = ProjectHostOperationOutcome::ExternalConflict;
             message =
                 tr("The file changed outside Bloom. Reload, Save As, or overwrite explicitly.");
+            failure = host::SaveFailureDescription{
+                .stage = "publication.publish",
+                .cause = "external-modification-conflict",
+                .message = message.toStdString(),
+            };
             break;
         case platform::StagedArtifactPublicationOutcome::FailedBeforePublication:
             outcome = ProjectHostOperationOutcome::Failed;
-            message = tr("The save failed before the file could be replaced.");
+            message = failureMessage();
             break;
         }
         if (publication != nullptr && publication->targetWasPublished() && !isDirty() &&
@@ -1297,14 +1307,18 @@ void ProjectHost::handleSaveResult(host::SessionSaveResult result) {
             // even though a real file now exists on disk -- see
             // docs/architecture/project-session.md, "Save Result Acceptance".
             outcome = ProjectHostOperationOutcome::Failed;
-            message = tr("The project file was written, but this open project is now out of date "
-                         "with it; reopen the file to continue editing it.");
+            message = failureMessage();
         }
         break;
     }
     }
+    if (message.isEmpty()) {
+        // Unreachable: every failure above has a description. Kept so no outcome is ever silent.
+        message = tr("The save failed before the file could be written.");
+    }
 
-    emit saveFinished(outcome, message);
+    lastSaveFailure_ = std::move(failure);
+    finishSave(outcome, message);
 
     if (pendingUnsavedContinuation_.has_value()) {
         auto continuation = std::move(*pendingUnsavedContinuation_);
@@ -1408,7 +1422,7 @@ void ProjectHost::handleOpenResult(
     protectedRecoveryOfferPath_.reset();
 
     emit dirtyStateChanged();
-    emit openFinished(outcome, message);
+    finishOpen(outcome, message);
 
     if (installed) {
         emit sessionReplaced();
@@ -1424,12 +1438,11 @@ void ProjectHost::handleCopyResult(host::CopyPublicationResult result) {
     if (!result) {
         const auto* failure = result.failure();
         if (failure != nullptr && failure->stage() == host::CopyPublicationStage::Cancelled) {
-            emit copyFinished(ProjectHostOperationOutcome::Cancelled,
-                              tr("The copy was cancelled."));
+            finishCopy(ProjectHostOperationOutcome::Cancelled, tr("The copy was cancelled."));
             return;
         }
-        emit copyFinished(ProjectHostOperationOutcome::Failed,
-                          tr("The copy failed before the file could be written."));
+        finishCopy(ProjectHostOperationOutcome::Failed,
+                   tr("The copy failed before the file could be written."));
         return;
     }
 
@@ -1469,7 +1482,7 @@ void ProjectHost::handleCopyResult(host::CopyPublicationResult result) {
         message = tr("The copy failed before the file could be written.");
         break;
     }
-    emit copyFinished(outcome, message);
+    finishCopy(outcome, message);
 }
 
 std::optional<project::ProjectIoOperationMemory> ProjectHost::makeOperation() const {

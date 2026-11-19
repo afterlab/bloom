@@ -67,9 +67,13 @@ struct WindowFixture {
     std::unique_ptr<MainWindow> window;
 
     // NOLINTBEGIN(clang-analyzer-cplusplus.NewDeleteLeaks) -- QApplication owns its style.
+    // `beforeWindow`, when set, runs once every controller exists and just before the window is
+    // created: what apps/bloom/main.cpp constructs ahead of its window (the MCP binding) is built
+    // there, so its signal connections run in the application's order (issue #737).
     explicit WindowFixture(const std::function<void(WindowFixture&)>& author = {},
                            const std::size_t audioCacheCapacity = std::size_t{2} * 1024 * 1024 *
-                                                                  1024) {
+                                                                  1024,
+                           const std::function<void(WindowFixture&)>& beforeWindow = {}) {
         QCoreApplication::setApplicationVersion("0.1.0");
         // Match apps/bloom/main.cpp: the application installs this proxy after the theme.
         QApplication::setStyle(new kit::AltUnderlineProxyStyle());
@@ -157,6 +161,8 @@ struct WindowFixture {
         if (imagePreviews)
             imagePreviewController =
                 std::make_unique<ImagePreviewController>(session, *preview, scheduler, bridge);
+        if (beforeWindow)
+            beforeWindow(*this);
         window = std::make_unique<MainWindow>(registry, session, projectHost, nullptr,
                                               preview.get(), nullptr, nullptr,
                                               evaluator.operationCache().get());

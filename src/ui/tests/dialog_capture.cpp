@@ -358,7 +358,8 @@ void projectDialogs(test::WindowFixture& fixture) {
     // A failure notice through MainWindow's own path.
     emit fixture.projectHost.saveFinished(
         ProjectHostOperationOutcome::Failed,
-        QStringLiteral("The disk is full. Free some space and save again."));
+        QStringLiteral("The disk is full. Free some space and save again."),
+        ProjectHostOperationOrigin::Artist);
     shootAsync(QStringLiteral("failure-inform"), QStringLiteral("projectSaveFailed"));
     trigger(window, "projectColorSettingsAction");
     shootAsync(QStringLiteral("project-colour"), QStringLiteral("projectColorSettingsDialog"));

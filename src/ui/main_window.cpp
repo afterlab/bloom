@@ -181,11 +181,14 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
     // decision 1's wiring point -- "Switching happens on sessionReplaced() by asking the host's
     // stateSnapshot()".
     connect(&projectHost_, &ProjectHost::sessionReplaced, this, &MainWindow::updateContentSurface);
+    // An agent's call reports its outcome to the agent, never in a dialog. The origin travels with
+    // the signal because the MCP binding ends the agent operation in its own slot, which can run
+    // before this one (issue #737).
     connect(&projectHost_, &ProjectHost::saveFinished, this,
-            [this](const ProjectHostOperationOutcome outcome, const QString& message) {
+            [this](const ProjectHostOperationOutcome outcome, const QString& message,
+                   const ProjectHostOperationOrigin origin) {
                 if (outcome == ProjectHostOperationOutcome::Published ||
-                    projectHost_.agentOperation()) {
-                    // An agent's call reports its failure to the agent, never in a dialog.
+                    origin == ProjectHostOperationOrigin::Agent) {
                     statusStrip_->showTransientMessage(message);
                     return;
                 }
@@ -194,8 +197,9 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                             QStringLiteral("projectSaveFailed"));
             });
     connect(&projectHost_, &ProjectHost::openFinished, this,
-            [this](const ProjectHostOperationOutcome outcome, const QString& message) {
-                if (projectHost_.agentOperation()) {
+            [this](const ProjectHostOperationOutcome outcome, const QString& message,
+                   const ProjectHostOperationOrigin origin) {
+                if (origin == ProjectHostOperationOrigin::Agent) {
                     statusStrip_->showTransientMessage(message);
                     return;
                 }
@@ -212,8 +216,10 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                             QStringLiteral("projectOpenFailed"));
             });
     connect(&projectHost_, &ProjectHost::copyFinished, this,
-            [this](const ProjectHostOperationOutcome outcome, const QString& message) {
-                if (outcome == ProjectHostOperationOutcome::Published) {
+            [this](const ProjectHostOperationOutcome outcome, const QString& message,
+                   const ProjectHostOperationOrigin origin) {
+                if (outcome == ProjectHostOperationOutcome::Published ||
+                    origin == ProjectHostOperationOrigin::Agent) {
                     statusStrip_->showTransientMessage(message);
                     return;
                 }

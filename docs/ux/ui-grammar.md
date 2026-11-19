@@ -2017,6 +2017,22 @@ naming the exact field (for example
 untouched and the session stays open and editable, so the artist can correct that value and save
 again; the message is a status report, not a dialog, and never an abort.
 
+Every other save that does not write the project file names the step it stopped at and why, in one
+sentence of the form
+
+> Save failed `<while step>`: `<cause>`.
+
+for example "Save failed while checking the destination file: the destination is not a regular
+file." or "Save failed while encoding document.json: the project holds more values than one
+project file can (the limit is 8000000)." A limit cause names the limit. The step is one of
+starting the save, checking, registering or creating the destination's temporary file, encoding
+`manifest.json` or `document.json`, packing the archive, writing, finishing, sizing or reading back
+the temporary file, verifying the written file (naming the verification step), and replacing the
+project file. A cancelled save reads "The save was cancelled before the file was written." The
+status bar always shows the sentence. A Save, Save As or Save a Copy the artist started also opens
+"The project could not be saved." with the sentence beneath it; one an agent started never opens a
+dialog, so the agent gets the same sentence with a typed code instead, and the window is left free.
+
 On the launch after an abnormal exit, a recovery file describing work the project on disk does not
 hold is offered once, before the artist starts editing: "Bloom closed unexpectedly with unsaved
 changes. Recover the unsaved changes from `<file>`?" with Yes/No. Yes opens that file through the
