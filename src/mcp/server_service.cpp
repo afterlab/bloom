@@ -286,6 +286,9 @@ void McpServerService::State::dropClientLocked(const std::string& sessionId,
         static_cast<void>(key);
         stop->request_stop();
     }
+    // #747 (D2): its event stream ends with it.
+    if (client->eventStream)
+        client->eventStream->request_stop();
     pendingEvents.emplace_back(McpClientDisconnected{client->id, cause});
     McpActivityEntry entry;
     entry.id = nextActivity++;

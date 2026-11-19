@@ -69,7 +69,7 @@ Reply rejectionReply(const McpHttpRejection rejection, std::string_view message 
         fields.emplace_back("WWW-Authenticate", R"(Bearer realm="bloom")");
         break;
     case McpHttpRejection::MethodNotAllowed:
-        fields.emplace_back("Allow", "POST, DELETE");
+        fields.emplace_back("Allow", "GET, POST, DELETE");
         break;
     case McpHttpRejection::Busy:
         fields.emplace_back("Retry-After", "1");
@@ -299,6 +299,16 @@ class ConnectionWorker final {
             state_.wake();
             return send({httpResponse(204, Fields{}, std::nullopt), false}, stop);
         }
+        if (request.method == McpHttpMethod::Get) {
+            if (!sessionId)
+                return refuse(McpHttpRejection::MissingSession, client, stop);
+            if (!client)
+                return refuse(McpHttpRejection::UnknownSession, client, stop);
+            if (const auto version = request.header("mcp-protocol-version");
+                version && *version != kMcpProtocolVersion)
+                return refuse(McpHttpRejection::UnsupportedProtocolVersion, client, stop);
+            return streamEvents(client, request, stop);
+        }
         const auto envelope = inspectMessage(request.body);
         if (envelope.isInitialize() && envelope.kind == McpMessageKind::Request)
             return initialize(envelope, stop);
@@ -328,6 +338,78 @@ class ConnectionWorker final {
         const bool stream = envelope.tool && toolStreamsProgress(*envelope.tool) &&
                             envelope.progressToken.has_value();
         return execute(client, envelope, stream, {}, stop);
+    }
+
+    // #747 (D2): GET /mcp, the session's stream of events.subscribe notifications. It holds this
+    // connection until the subscription ends, a newer stream replaces it, the client goes away
+    // (DELETE, eviction, idle expiry or a failed write) or the server stops. Each notification is
+    // an SSE event whose id is its sequence; a quiet stream sends a comment every
+    // kMcpEventKeepAlive so a dead connection is noticed.
+    bool streamEvents(const std::shared_ptr<Client>& client, const McpHttpRequest& request,
+                      const std::stop_token& stop) {
+        std::optional<std::uint64_t> resume;
+        if (const auto header = request.header("last-event-id")) {
+            resume = lastEventId(*header);
+            if (!resume) {
+                send(statusReply(400), stop);
+                return false;
+            }
+        }
+        auto events = state_.core->openEventStream(*client->protocol, resume);
+        if (!events) {
+            reject(McpHttpRejection::MethodNotAllowed, client);
+            send(rejectionReply(McpHttpRejection::MethodNotAllowed,
+                                "This session has no events subscription: call events.subscribe, "
+                                "then open the stream with GET."),
+                 stop);
+            return false;
+        }
+        const auto streamStop = std::make_shared<std::stop_source>();
+        {
+            const std::lock_guard lock(state_.factsMutex);
+            if (client->eventStream)
+                client->eventStream->request_stop();
+            client->eventStream = streamStop;
+            state_.dirty = true;
+        }
+        const std::stop_callback forward(stop, [&streamStop] { streamStop->request_stop(); });
+        const auto token = streamStop->get_token();
+        McpActivityEntry opened;
+        opened.kind = McpActivityKind::EventStream;
+        opened.client = client->id;
+        opened.clientLabel = McpServerService::State::clientLabel(client->info);
+        opened.summary = resume ? "Event stream resumed after " + std::to_string(*resume)
+                                : std::string("Event stream opened");
+        state_.recordActivity(std::move(opened));
+        const Fields fields{{"Content-Type", "text/event-stream"},
+                            {"Cache-Control", "no-cache"},
+                            {"Connection", "close"}};
+        bool open = writeAll(*connection_, httpResponse(200, fields, std::nullopt), limits_, token);
+        while (open && !token.stop_requested()) {
+            const auto note = events->next(SteadyClock::now() + kMcpEventKeepAlive, token);
+            if (note)
+                open =
+                    writeAll(*connection_, sseEvent(note->sequence, note->message), limits_, token);
+            else if (events->ended() || token.stop_requested())
+                break;
+            else
+                open = writeAll(*connection_, ": keep-alive\r\n\r\n", limits_, token);
+            if (open)
+                touch(*client);
+        }
+        {
+            const std::lock_guard lock(state_.factsMutex);
+            if (client->eventStream == streamStop)
+                client->eventStream.reset();
+        }
+        McpActivityEntry closed;
+        closed.kind = McpActivityKind::EventStream;
+        closed.client = client->id;
+        closed.clientLabel = McpServerService::State::clientLabel(client->info);
+        closed.summary = "Event stream closed";
+        state_.recordActivity(std::move(closed));
+        connection_->shutdownWrite();
+        return false;
     }
 
     bool refuse(const McpHttpRejection rejection, const std::shared_ptr<Client>& client,

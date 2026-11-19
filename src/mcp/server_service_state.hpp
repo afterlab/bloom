@@ -53,6 +53,8 @@ struct Client {
     std::map<std::string, std::shared_ptr<std::stop_source>> active;
     // Scripted by the testing driver: no protocol session.
     bool scripted = false;
+    // #747 (D2): the open GET event stream's stop source (one per client; a newer one stops it).
+    std::shared_ptr<std::stop_source> eventStream;
 };
 
 // One request handed to the worker pool and answered on its connection thread.

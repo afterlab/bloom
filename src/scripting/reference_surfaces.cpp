@@ -601,14 +601,21 @@ void addTools(std::vector<ReferenceEntry>& out) {
 
     auto events = makeEntry(
         ReferenceKind::Tool, "events", "document",
-        "Poll what changed: command events after a revision and sequence.",
+        "Poll what changed: command events after a revision and sequence, a page or a summary.",
         "Each event is a command result with `sequence` and `kind` (revision: an edit applied; "
-        "history: an undo or redo; rejected: an edit refused). Pass the last `sequence` you saw "
-        "as afterSequence. Every event names who made the edit in `origin`: user (the artist, in "
-        "the application's panels), agent (an MCP client: transact and history) or script (a "
-        "Python or JSON script, the Script editor included), so you can tell your own edits from "
-        "the artist's. When `resetRequired` is true (events were trimmed or the project was "
-        "replaced) re-query whatever you cache and start again from the returned sequence.");
+        "history: an undo or redo; rejected: an edit refused), or a notice (composition."
+        "compile-failed, project.saved, project.opened, project.created, project.closed, "
+        "project.copy-saved). Pass the last `sequence` you saw as afterSequence. Every event "
+        "names who made the edit in `origin`: user (the artist, in the application's panels), "
+        "agent (an MCP client: transact and history) or script (a Python or JSON script, the "
+        "Script editor included), so you can tell your own edits from the artist's. One answer "
+        "lists at most `limit` events (1,024); `kinds` and `compositions` select events (an event "
+        "that names no composition, a project-wide change, matches every composition). "
+        "response \"summary\" answers what changed after the cursor in one object instead: the "
+        "sequence and revision ranges, counts by kind and origin, and per composition, the "
+        "shape of an events.subscribe notification. When `resetRequired` is true (events were "
+        "trimmed or the project was replaced) re-query whatever you cache and start again from "
+        "the returned sequence. To be told instead of polling, use events.subscribe.");
     events.effects = readOnlyEffects();
     addArguments(events, {{.name = "sinceRevision",
                            .type = "integer",
@@ -619,17 +626,122 @@ void addTools(std::vector<ReferenceEntry>& out) {
                            .type = "integer",
                            .summary = "Skip events up to and including this sequence.",
                            .range = ">= 0",
-                           .defaultValue = "0"}});
-    events.result = "{revision, sequence, resetRequired, truncated, events:[{sequence, kind, "
-                    "succeeded, revision, origin (user|agent|script), diagnostics, outputs, "
-                    "outputCount, outputsOmitted?}]}. An event keeps its created ids when it made "
-                    "at most 1,024 (otherwise `outputsOmitted` and only `outputCount`); one "
-                    "answer lists at most 8,192 ids, and when it stops early `truncated` is true "
-                    "and `sequence` is the last event listed: pass it as afterSequence to "
-                    "continue.";
-    addExamples(events, {{"mcp", R"({"name":"events","arguments":{"sinceRevision":0}})"}});
-    addRelated(events, {"concept:revisions"});
+                           .defaultValue = "0"},
+                          {.name = "limit",
+                           .type = "integer",
+                           .summary = "The most events one answer lists; when more follow, "
+                                      "`truncated` is true and `sequence` is the last one listed.",
+                           .range = "1..1024",
+                           .defaultValue = "1024"},
+                          {.name = "kinds",
+                           .type = "array of strings",
+                           .summary = "Only these kinds (revision, history, rejected, "
+                                      "composition.compile-failed, project.saved, "
+                                      "project.opened, project.created, project.closed, "
+                                      "project.copy-saved).",
+                           .defaultValue = "every kind"},
+                          {.name = "compositions",
+                           .type = "array of composition ids",
+                           .summary = "Only events that change one of these compositions, or "
+                                      "name none (project-wide).",
+                           .defaultValue = "every composition"},
+                          {.name = "response",
+                           .type = "string",
+                           .summary = "The answer's form.",
+                           .defaultValue = "events",
+                           .choices = {{"events", "The events themselves"},
+                                       {"summary", "One summary: ranges and counts, no events"}}}});
+    events.result =
+        "{revision, sequence, resetRequired, truncated, events:[{sequence, kind, succeeded, "
+        "revision, origin (user|agent|script), diagnostics, outputs, outputCount, "
+        "outputsOmitted?}]}. An event keeps its created ids when it made at most 1,024 "
+        "(otherwise `outputsOmitted` and only `outputCount`); one answer lists at most `limit` "
+        "events and 8,192 ids, and when it stops early `truncated` is true and `sequence` is the "
+        "last event listed: pass it as afterSequence to continue. response \"summary\": "
+        "{revision, sequence, truncated:false, fromSequence, toSequence, resetRequired, reason?, "
+        "count, fromRevision?, toRevision?, kinds:{<kind>: n}, origins:{user|agent|script: n}, "
+        "compositions:[{composition, count, fromRevision, toRevision}] (at most 64), "
+        "compositionsOmitted, project?:{count, fromRevision, toRevision}}.";
+    addExamples(
+        events,
+        {{"mcp", R"({"name":"events","arguments":{"sinceRevision":0}})"},
+         {"mcp",
+          R"({"name":"events","arguments":{"sinceRevision":0,"afterSequence":120,"limit":100,"kinds":["revision","history"]}})"},
+         {"mcp",
+          R"({"name":"events","arguments":{"sinceRevision":0,"afterSequence":120,"response":"summary","compositions":[1]}})"}});
+    addRelated(events, {"concept:revisions", "events.subscribe"});
     out.push_back(std::move(events));
+
+    auto subscribe = makeEntry(
+        ReferenceKind::Tool, "events.subscribe", "document",
+        "Be told what changed instead of polling: coalesced change notifications.",
+        "Subscribes this MCP session. Bloom then sends notifications/bloom/events: at most one "
+        "per intervalMs, each saying what changed since the previous one as revision ranges "
+        "with counts (by kind, by origin and per composition, the shape of events with response "
+        "\"summary\") and the newest step of each asynchronous transact job that moved (kind "
+        "job). Over Streamable HTTP, open the stream with GET /mcp (Accept: text/event-stream, "
+        "your Mcp-Session-Id); each notification's SSE id is its `sequence`, so a reconnect with "
+        "Last-Event-ID resumes after it, and one without resumes after the last one sent. A "
+        "session has one stream: a newer GET ends the older. On stdio the notifications arrive "
+        "on stdout between answers. Bloom keeps no backlog per subscriber: when you fall further "
+        "behind than the retained events (initialize's limits.retainedEvents), or the project is "
+        "replaced, the next notification says resetRequired with reason overflow or "
+        "project-replaced; re-query what you cache and go on. Read the events themselves with "
+        "events from the previous `sequence`. Calling it again changes the filter and interval "
+        "in place.");
+    subscribe.effects = readOnlyEffects();
+    addArguments(subscribe,
+                 {{.name = "kinds",
+                   .type = "array of strings",
+                   .summary = "Only these kinds: revision, history, rejected, "
+                              "composition.compile-failed, project.saved, project.opened, "
+                              "project.created, project.closed, project.copy-saved, job.",
+                   .defaultValue = "every kind"},
+                  {.name = "compositions",
+                   .type = "array of composition ids",
+                   .summary = "Only changes to these compositions, and project-wide changes "
+                              "(which name none).",
+                   .defaultValue = "every composition"},
+                  {.name = "intervalMs",
+                   .type = "integer",
+                   .summary = "The least time between two notifications; changes inside it are "
+                              "coalesced into one.",
+                   .unit = "milliseconds",
+                   .range = "50..60000",
+                   .defaultValue = "250"},
+                  {.name = "afterSequence",
+                   .type = "integer",
+                   .summary = "Report changes after this event sequence (an events `sequence`).",
+                   .range = ">= 0",
+                   .defaultValue = "now (the first call), else unchanged"}});
+    subscribe.result =
+        "{succeeded, subscription, created, method:\"notifications/bloom/events\", sequence, "
+        "intervalMs, kinds, compositions}. Each notification's params: {subscription, "
+        "sequence, fromSequence, toSequence, resetRequired, reason?, count, fromRevision?, "
+        "toRevision?, kinds, origins, compositions:[{composition, count, fromRevision, "
+        "toRevision}], compositionsOmitted, project?, jobs?:[{job, mine, state, phase, "
+        "completed, total?, message?, revision?, code?, finished, cancellationRequested?}]}.";
+    subscribe.errors = {makeError("bloom.mcp.invalid-argument",
+                                  "an unknown kind, an interval out of range, or an "
+                                  "afterSequence in the future",
+                                  "fix the argument")};
+    addExamples(
+        subscribe,
+        {{"mcp",
+          R"({"name":"events.subscribe","arguments":{"kinds":["revision","history","job"],"compositions":[1],"intervalMs":500}})"}});
+    addRelated(subscribe, {"events", "events.unsubscribe", "jobs.list"});
+    out.push_back(std::move(subscribe));
+
+    auto unsubscribe = makeEntry(
+        ReferenceKind::Tool, "events.unsubscribe", "document",
+        "End this session's change notifications.",
+        "Ends the subscription events.subscribe made, and its stream (the GET stream closes). "
+        "Ending the MCP session ends it too.");
+    unsubscribe.effects = readOnlyEffects();
+    unsubscribe.result = "{succeeded, ended, subscription?, sequence?}";
+    addExamples(unsubscribe, {{"mcp", R"({"name":"events.unsubscribe","arguments":{}})"}});
+    addRelated(unsubscribe, {"events.subscribe"});
+    out.push_back(std::move(unsubscribe));
 
     // The export queue's built-in ids (the vocabulary of export.presets) lead; the older names
     // name the same presets and are still accepted.

@@ -135,9 +135,14 @@ enum class McpTool : std::uint8_t {
     // #747 (D1): wait for an asynchronous transact job (transact with async:true), with progress
     // when the request carries a progress token, and read its result.
     JobsWait = 51,
+    // #747 (D2): subscribe the calling session to coalesced change notifications
+    // (notifications/bloom/events on a Streamable HTTP GET stream, or on stdout for stdio), and
+    // end that subscription. Neither touches the project.
+    EventsSubscribe = 52,
+    EventsUnsubscribe = 53,
 };
 
-inline constexpr std::size_t kMcpToolCount = 52;
+inline constexpr std::size_t kMcpToolCount = 54;
 
 // The wire name. MCP tool names allow [A-Za-z0-9_.-]; the export.* names are ADR 0033's session
 // call names verbatim.
@@ -196,6 +201,8 @@ inline constexpr std::size_t kMcpToolCount = 52;
         "session.begin",
         "session.end",
         "jobs.wait",
+        "events.subscribe",
+        "events.unsubscribe",
     };
     // clang-format on
     return names[static_cast<std::size_t>(tool)];
@@ -446,6 +453,26 @@ inline constexpr std::size_t kMcpTransactOutputLimit = 10'000;
 // stops early and its `sequence` continues from the last event listed).
 inline constexpr std::size_t kMcpEventOutputLimit = 1'024;
 inline constexpr std::size_t kMcpEventsOutputBudget = 8'192;
+
+// #747 (D2): events pages and the change subscription.
+// - One events answer lists at most this many events (its `limit`, also the default); it then
+//   stops early and its `sequence` continues from the last event listed.
+inline constexpr std::size_t kMcpEventsPageLimit = 1'024;
+// - A subscription coalesces what changed into one notification per interval: at least the
+//   minimum apart, the default when events.subscribe gives none.
+inline constexpr std::chrono::milliseconds kMcpEventIntervalDefault{250};
+inline constexpr std::chrono::milliseconds kMcpEventIntervalMinimum{50};
+inline constexpr std::chrono::milliseconds kMcpEventIntervalMaximum{60'000};
+// - One notification (and one events summary) lists at most this many compositions; the rest are
+//   counted in compositionsOmitted.
+inline constexpr std::size_t kMcpEventCompositions = 64;
+// - At most this many asynchronous transact jobs are followed for a subscription (the unfinished
+//   ones and the newest finished ones); one notification lists each changed one once.
+inline constexpr std::size_t kMcpEventJobs = kMcpAsyncJobs + kMcpRetainedJobs;
+// - A session has one open stream; a newer one (a reconnect) ends the older. A quiet stream sends
+//   an SSE comment this often so a dead connection is noticed.
+inline constexpr std::size_t kMcpEventStreamsPerClient = 1;
+inline constexpr std::chrono::milliseconds kMcpEventKeepAlive{15'000};
 
 // A data file passed as {"fromFile": ...}: at most this many per call, each at most this many
 // bytes, values and levels deep.

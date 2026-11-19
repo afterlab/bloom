@@ -66,6 +66,8 @@ constexpr std::array<McpTool, kMcpToolCount> kTools{
     McpTool::SessionBegin,
     McpTool::SessionEnd,
     McpTool::JobsWait,
+    McpTool::EventsSubscribe,
+    McpTool::EventsUnsubscribe,
 };
 // clang-format on
 
@@ -217,6 +219,18 @@ yyjson_mut_val* limitsValue(Json& out, const McpServerCore::State& state) {
     out.set(value, "retainedEvents", out.number(limits.retainedCommandEvents));
     out.set(value, "eventOutputs", out.number(kMcpEventOutputLimit));
     out.set(value, "eventsOutputsPerAnswer", out.number(kMcpEventsOutputBudget));
+    // #747 (D2): events pages and the change subscription. A subscriber further behind than
+    // retainedEvents is told resetRequired (reason overflow); none is refused.
+    const auto milliseconds = [](const std::chrono::milliseconds value) {
+        return static_cast<std::uint64_t>(value.count());
+    };
+    out.set(value, "eventsPerAnswer", out.number(kMcpEventsPageLimit));
+    out.set(value, "eventIntervalMinMs", out.number(milliseconds(kMcpEventIntervalMinimum)));
+    out.set(value, "eventIntervalMaxMs", out.number(milliseconds(kMcpEventIntervalMaximum)));
+    out.set(value, "eventCompositions", out.number(kMcpEventCompositions));
+    out.set(value, "eventJobs", out.number(kMcpEventJobs));
+    out.set(value, "eventStreamsPerClient", out.number(kMcpEventStreamsPerClient));
+    out.set(value, "eventKeepAliveMs", out.number(milliseconds(kMcpEventKeepAlive)));
     return value;
 }
 
@@ -260,6 +274,12 @@ McpServerCore::State::State(McpCoreDependencies value) : dependencies(std::move(
 }
 
 McpServerCore::State::~State() {
+    // #747 (D2): every event stream ends (the transports have stopped theirs already).
+    {
+        const std::lock_guard lock(eventsMutex);
+        closing = true;
+    }
+    eventsChanged.notify_all();
     // #747: the job runner ends before anything it reads.
     stopJobs();
     const std::lock_guard lock(subscriptionMutex);
@@ -277,7 +297,7 @@ void McpServerCore::State::record(const commands::CommandEvent& event) {
     // leaves out a large event's ids (#745).
     const auto& source = event.result;
     McpRetainedCommand retained{
-        .kind = event.kind, .result = {}, .outputCount = source.outputs.size()};
+        .kind = event.kind, .result = {}, .outputCount = source.outputs.size(), .compositions = {}};
     auto& kept = retained.result;
     kept.action = source.action;
     kept.status = source.status;
@@ -298,17 +318,34 @@ void McpServerCore::State::record(const commands::CommandEvent& event) {
     kept.historyGrouped = source.historyGrouped;
     if (source.outputs.size() <= kMcpEventOutputLimit)
         kept.outputs = source.outputs;
-    const std::lock_guard lock(eventsMutex);
-    if (events.size() >= dependencies.limits.retainedCommandEvents)
-        events.pop_front();
-    events.emplace_back(++sequence, std::move(retained));
+    // #747 (D2): the compositions it changed, for a subscription's composition filter. A step
+    // that reaches beyond named compositions names none (project-wide).
+    if (source.evaluationChangedCompositions && !source.evaluationChangedCompositions->empty()) {
+        if (source.evaluationChangedCompositions->size() <= kMcpEventsPageLimit) {
+            retained.compositions.reserve(source.evaluationChangedCompositions->size());
+            for (const auto composition : *source.evaluationChangedCompositions)
+                retained.compositions.push_back(composition.value());
+        }
+    } else if (source.affectedComposition) {
+        retained.compositions.push_back(source.affectedComposition->value());
+    }
+    {
+        const std::lock_guard lock(eventsMutex);
+        if (events.size() >= dependencies.limits.retainedCommandEvents)
+            events.pop_front();
+        events.emplace_back(++sequence, std::move(retained));
+    }
+    eventsChanged.notify_all();
 }
 
 void McpServerCore::State::notice(McpNotice value) {
-    const std::lock_guard lock(eventsMutex);
-    if (events.size() >= dependencies.limits.retainedCommandEvents)
-        events.pop_front();
-    events.emplace_back(++sequence, std::move(value));
+    {
+        const std::lock_guard lock(eventsMutex);
+        if (events.size() >= dependencies.limits.retainedCommandEvents)
+            events.pop_front();
+        events.emplace_back(++sequence, std::move(value));
+    }
+    eventsChanged.notify_all();
 }
 
 void McpServerCore::State::syncEvents() {
@@ -339,11 +376,14 @@ void McpServerCore::State::followGeneration(scripting::LiveSessionHost& live,
         const std::lock_guard guard(eventsMutex);
         if (eventGeneration.has_value()) {
             events.clear();
-            resetSequence = sequence;
+            // #747 (D2): the replacement takes a sequence of its own, so every cursor from the
+            // old project (a caught-up one too) is told resetRequired.
+            resetSequence = ++sequence;
             replaced = true;
         }
         eventGeneration = generation;
     }
+    eventsChanged.notify_all();
     if (const auto stream = live.events())
         subscription =
             stream->subscribe([this](const commands::CommandEvent& event) { record(event); });
@@ -394,9 +434,10 @@ void McpServerCore::replaceHeadlessProject(const std::function<void()>& replace)
     {
         const std::lock_guard guard(state.eventsMutex);
         state.events.clear();
-        state.resetSequence = state.sequence;
+        state.resetSequence = ++state.sequence;
         state.replaced = true;
     }
+    state.eventsChanged.notify_all();
     scripting::Events events(headless->get());
     state.subscription = events.subscribe(
         [raw = &state](const commands::CommandEvent& event) { raw->record(event); });
@@ -666,6 +707,9 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const McpEnvelope
             // idempotencyKey.
             out.set(bloom, "asyncTransact", out.boolean(state.liveHost() != nullptr));
             out.set(bloom, "idempotencyKeys", out.boolean(true));
+            // #747 (D2): events.subscribe delivers notifications/bloom/events (on the Streamable
+            // HTTP GET stream, or on stdout for stdio); events takes limit, filters and a summary.
+            out.set(bloom, "eventSubscriptions", out.boolean(true));
             // #745, #741: every request limit, by the name its refusal gives.
             out.set(bloom, "limits", limitsValue(out, state));
             out.set(experimental, "bloom", bloom);
@@ -734,6 +778,11 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const McpEnvelope
                 if (*tool == McpTool::JobsWait) {
                     // #747: a job outlives the request that submitted it; no lease is held.
                     value = jobsWaitTool(state, out, member(params, "arguments"), control);
+                } else if (*tool == McpTool::EventsSubscribe) {
+                    // #747 (D2): the subscription belongs to the protocol session; no lease.
+                    value = eventsSubscribeTool(state, out, session, member(params, "arguments"));
+                } else if (*tool == McpTool::EventsUnsubscribe) {
+                    value = eventsUnsubscribeTool(state, out, session, member(params, "arguments"));
                 } else if (*tool == McpTool::ProfilerSnapshot) {
                     // Telemetry holds no lease: it answers while a project opens.
                     if (auto* arguments = member(params, "arguments"))

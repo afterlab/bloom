@@ -210,8 +210,10 @@ class McpProtocolSession final {
     [[nodiscard]] bool ready() const noexcept;
     [[nodiscard]] std::optional<McpClientInfo> client() const;
 
-  private:
+    // Defined privately in src/mcp (#747 D2: its events subscription is read there).
     struct State;
+
+  private:
     friend class McpServerCore;
     explicit McpProtocolSession(std::unique_ptr<State> state) noexcept;
     std::unique_ptr<State> state_;
@@ -303,6 +305,41 @@ struct McpHandled final {
     bool initializedClient = false;
 };
 
+// #747 (D2): one coalesced change notification of an events subscription (events.subscribe), as
+// a transport sends it: a notifications/bloom/events JSON-RPC message, and the event sequence it
+// reaches, which is the SSE event id and the cursor a reconnect resumes after (Last-Event-ID).
+struct McpEventNotification final {
+    std::string message;
+    std::uint64_t sequence = 0;
+};
+
+// #747 (D2): the delivery of one protocol session's events subscription (McpServerCore::
+// openEventStream). It holds no buffer of its own: each notification is built when it is due from
+// the core's retained events (limits.retainedEvents, the bounded buffer every subscriber shares)
+// and the followed transact jobs. A subscriber that falls further behind than the retained events
+// reach (a slow reader, or more changes in one interval than are retained) gets one notification
+// with resetRequired and reason "overflow" and continues from the newest event; a replaced project
+// gives reason "project-replaced". Several threads may not call next() at once.
+class McpEventStream final {
+  public:
+    struct State;
+    explicit McpEventStream(std::unique_ptr<State> state) noexcept;
+    ~McpEventStream();
+    McpEventStream(const McpEventStream&) = delete;
+    McpEventStream& operator=(const McpEventStream&) = delete;
+
+    // Waits until a notification is due (the subscription's interval after the previous one),
+    // the subscription ends, `until` passes or `stop` fires. nullopt when nothing is due by then
+    // (a transport keeps the connection alive) or the stream ended().
+    [[nodiscard]] std::optional<McpEventNotification>
+    next(std::chrono::steady_clock::time_point until, const std::stop_token& stop);
+    // events.unsubscribe, a newer stream for the same session, or the core going away.
+    [[nodiscard]] bool ended() const;
+
+  private:
+    std::unique_ptr<State> state_;
+};
+
 class McpServerCore final {
   public:
     explicit McpServerCore(McpCoreDependencies dependencies);
@@ -337,6 +374,13 @@ class McpServerCore final {
     // The tools/list payload's tool names in listing order (schemas come from the registry and
     // the export queue's vocabularies). Any thread.
     [[nodiscard]] std::span<const McpTool> tools() const noexcept;
+
+    // #747 (D2): delivers `session`'s events subscription; null when the session has none (it
+    // calls events.subscribe first). `resumeAfter` (the SSE Last-Event-ID) continues after that
+    // sequence; without it the stream continues after the last notification the subscription
+    // delivered. Opening a stream ends the session's previous one. Any thread.
+    [[nodiscard]] std::unique_ptr<McpEventStream>
+    openEventStream(McpProtocolSession& session, std::optional<std::uint64_t> resumeAfter);
 
     // The live host: follow the live session's current generation's command events (the service
     // calls it from pump() so events after a replacement are kept from the start). Any thread.

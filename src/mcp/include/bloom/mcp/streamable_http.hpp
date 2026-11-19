@@ -14,13 +14,16 @@
 // src/mcp. Pure framing and admission: no sockets (src/platform owns those), no clock, no session
 // table. Everything here is deterministic and unit-testable with byte strings.
 //
-// Endpoint: one path, POST and DELETE only.
+// Endpoint: one path, POST, GET and DELETE.
 // - POST /mcp carries exactly one JSON-RPC message. A request is answered with application/json,
 //   or with text/event-stream when it is a Task tool call that carried a progress token (progress
 //   notifications, then the response, then the stream closes). A notification or a client response
 //   is answered 202 Accepted with no body.
+// - GET /mcp (Accept: text/event-stream, Mcp-Session-Id) opens the session's standalone stream
+//   of server-initiated notifications once it subscribed (events.subscribe, #747 D2): each
+//   notification is an SSE event whose id is its event sequence, so Last-Event-ID resumes after
+//   it. A session that has not subscribed is answered 405.
 // - DELETE /mcp ends the caller's MCP session (204).
-// - GET /mcp is 405: Bloom sends no server-initiated messages, so it offers no standalone stream.
 // - Everything else is 404 (including /.well-known/* OAuth discovery: Bloom uses a static bearer
 //   token, not MCP OAuth).
 //
@@ -148,13 +151,15 @@ enum class McpHttpRejection : std::uint8_t {
     // Authorization is missing, malformed or not the current token (401, WWW-Authenticate: Bearer
     // realm="bloom"). Compared in constant time.
     Unauthorized = 4,
-    // GET, OPTIONS or anything other than POST/DELETE (405, Allow: POST, DELETE).
+    // OPTIONS or anything other than POST/GET/DELETE (405, Allow: GET, POST, DELETE); also a GET
+    // from a session without an events subscription (#747 D2).
     MethodNotAllowed = 5,
     // POST without Content-Type application/json (415).
     UnsupportedMediaType = 6,
-    // POST whose Accept does not permit both application/json and text/event-stream (406).
+    // POST whose Accept does not permit both application/json and text/event-stream, or a GET whose
+    // Accept does not permit text/event-stream (406).
     NotAcceptable = 7,
-    // A non-initialize POST, or a DELETE, without Mcp-Session-Id (400).
+    // A non-initialize POST, a GET or a DELETE without Mcp-Session-Id (400).
     MissingSession = 8,
     // Mcp-Session-Id is unknown, ended or expired (404: the client starts a new session).
     UnknownSession = 9,
@@ -246,6 +251,10 @@ httpResponse(int status, std::span<const std::pair<std::string_view, std::string
 // One server-sent event carrying one JSON-RPC message (`data: <json>` then a blank line). JSON
 // text contains no raw line breaks, so one data line carries the whole message.
 [[nodiscard]] std::string sseMessage(std::string_view json);
+// #747 (D2): one server-sent event of the GET stream: `id: <id>`, then the message as above.
+[[nodiscard]] std::string sseEvent(std::uint64_t id, std::string_view json);
+// A Last-Event-ID header's value: decimal digits that fit 64 bits, else nullopt. Pure.
+[[nodiscard]] std::optional<std::uint64_t> lastEventId(std::string_view value) noexcept;
 
 // Unpadded base64url of `bytes` (RFC 4648 section 5), for the token. Pure.
 [[nodiscard]] std::string base64Url(std::span<const std::byte> bytes);

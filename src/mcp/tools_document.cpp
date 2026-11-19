@@ -1187,10 +1187,30 @@ yyjson_mut_val* historyTool(McpServerCore::State&, Json& out, McpCall& call,
 
 yyjson_mut_val* eventsTool(McpServerCore::State& core, Json& out, McpCall& call,
                            yyjson_val* arguments) {
-    members(arguments, {"sinceRevision", "afterSequence"}, {"sinceRevision"});
+    members(arguments,
+            {"sinceRevision", "afterSequence", "limit", "kinds", "compositions", "response"},
+            {"sinceRevision"});
     const auto since = integer(member(arguments, "sinceRevision"));
     const auto after =
         member(arguments, "afterSequence") ? integer(member(arguments, "afterSequence")) : 0;
+    // #747 (D2): a page of at most `limit` events, the events a filter selects, or one summary.
+    auto limit = kMcpEventsPageLimit;
+    if (auto* value = member(arguments, "limit")) {
+        limit = static_cast<std::size_t>(integer(value));
+        if (limit == 0 || limit > kMcpEventsPageLimit)
+            throw InvalidInput("limit is " + grouped(limit) + "; use 1 to " +
+                               grouped(kMcpEventsPageLimit));
+    }
+    const auto filter = eventFilter(arguments);
+    if (std::ranges::find(filter.kinds, kMcpJobEventKind) != filter.kinds.end())
+        throw InvalidInput("kinds \"job\" is for events.subscribe; jobs.list lists the jobs");
+    bool summaryForm = false;
+    if (auto* response = member(arguments, "response")) {
+        const auto form = string(response, 16);
+        if (form != "events" && form != "summary")
+            throw InvalidInput("response is \"events\" or \"summary\"");
+        summaryForm = form == "summary";
+    }
     const auto revision = call.session.snapshot().revision().value();
     const std::lock_guard lock(core.eventsMutex);
     // A cursor from before the live project was replaced must start again.
@@ -1199,6 +1219,15 @@ yyjson_mut_val* eventsTool(McpServerCore::State& core, Json& out, McpCall& call,
         throw InvalidInput("Event cursor is in the future");
     auto* result = out.object();
     out.set(result, "revision", out.number(revision));
+    if (summaryForm) {
+        // #747 (D2): what changed after the cursor, coalesced into revision ranges with counts,
+        // the shape of a subscription's notification.
+        auto cursor = after;
+        static_cast<void>(summarizeEvents(core, out, result, filter, cursor, since));
+        out.set(result, "sequence", out.number(cursor));
+        out.set(result, "truncated", out.boolean(false));
+        return result;
+    }
     const auto& events = core.events;
     const auto revisionOf = [](const McpEventEntry& entry) {
         if (const auto* command = std::get_if<McpRetainedCommand>(&entry))
@@ -1212,34 +1241,56 @@ yyjson_mut_val* eventsTool(McpServerCore::State& core, Json& out, McpCall& call,
     auto* list = out.array();
     constexpr std::array<std::string_view, 3> names{"revision", "history", "rejected"};
     // #745: one answer lists at most kMcpEventsOutputBudget created ids; a client continues from
-    // `sequence`, which is then the last event listed.
+    // `sequence`, which is then the last event listed. #747 (D2): and at most `limit` events.
     std::size_t listedOutputs = 0;
+    std::size_t listed = 0;
     std::optional<std::uint64_t> lastListed;
     bool truncated = false;
     for (const auto& [sequence, entry] : events) {
         if ((!replaced && sequence <= after) || (!replaced && revisionOf(entry) < since))
             continue;
+        const auto* event = std::get_if<McpRetainedCommand>(&entry);
+        const auto kind = event ? names.at(static_cast<std::size_t>(event->kind))
+                                : std::string_view(std::get<McpNotice>(entry).kind);
+        if (!filter.selectsKind(kind))
+            continue;
+        if (!filter.compositions.empty()) {
+            std::uint64_t single = 0;
+            std::span<const std::uint64_t> named;
+            if (event) {
+                named = event->compositions;
+            } else if (const auto& notice = std::get<McpNotice>(entry); notice.composition) {
+                single = *notice.composition;
+                named = {&single, 1};
+            }
+            if (!filter.selectsCompositions(named))
+                continue;
+        }
+        if (listed == limit) {
+            truncated = true;
+            break;
+        }
         yyjson_mut_val* value = nullptr;
-        if (const auto* event = std::get_if<McpRetainedCommand>(&entry)) {
+        if (event) {
             const auto kept = event->result.outputs.size();
             if (lastListed && listedOutputs + kept > kMcpEventsOutputBudget) {
                 truncated = true;
                 break;
             }
             listedOutputs += kept;
-            const bool listed = kept == event->outputCount;
-            value = commandResult(out, event->result, listed);
+            const bool full = kept == event->outputCount;
+            value = commandResult(out, event->result, full);
             out.set(value, "outputCount", out.number(event->outputCount));
-            if (!listed)
+            if (!full)
                 out.set(value, "outputsOmitted", out.boolean(true));
-            out.set(value, "kind", out.text(names.at(static_cast<std::size_t>(event->kind))));
+            out.set(value, "kind", out.text(kind));
         } else {
-            const auto& notice = std::get<McpNotice>(entry);
-            value = noticeValue(out, notice);
+            value = noticeValue(out, std::get<McpNotice>(entry));
         }
         out.set(value, "sequence", out.number(sequence));
         out.append(list, value);
         lastListed = sequence;
+        ++listed;
     }
     out.set(result, "sequence", out.number(truncated ? *lastListed : core.sequence));
     out.set(result, "truncated", out.boolean(truncated));

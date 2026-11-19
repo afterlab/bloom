@@ -339,6 +339,8 @@ enum class McpActivityKind : std::uint8_t {
     // An agent session began or ended (#746); `summary` names it and, when it ended, why and what
     // it did.
     AgentSession = 11,
+    // An events.subscribe stream (GET /mcp) opened or closed (#747 D2); `summary` says which.
+    EventStream = 12,
 };
 
 // One line of the activity log. The panel builds the line it shows from the typed facts (tool,

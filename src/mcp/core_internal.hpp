@@ -15,6 +15,7 @@
 
 #include <bloom/core/worker_thread.hpp>
 
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -25,8 +26,8 @@
 #include <mutex>
 #include <optional>
 #include <span>
-#include <stop_token>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
 #include <variant>
 #include <vector>
@@ -117,8 +118,64 @@ struct McpRetainedCommand final {
     commands::CommandEventKind kind = commands::CommandEventKind::Rejected;
     commands::CommandResult result;
     std::size_t outputCount = 0;
+    // #747 (D2): the compositions the step changed (its evaluation-input footprint, else the one
+    // composition it was confined to); empty when it names none, which a composition filter
+    // treats as reaching every composition (project-wide).
+    std::vector<std::uint64_t> compositions;
 };
 using McpEventEntry = std::variant<McpRetainedCommand, McpNotice>;
+
+// #747 (D2): which events an events call or a subscription selects.
+struct McpEventFilter final {
+    // Empty selects every kind; otherwise names from kMcpEventKinds.
+    std::vector<std::string> kinds;
+    // Empty selects every composition. Otherwise an event is selected when it names one of these
+    // or names none (a project-wide change, which may reach any composition).
+    std::vector<std::uint64_t> compositions;
+    [[nodiscard]] bool selectsKind(std::string_view kind) const;
+    [[nodiscard]] bool selectsCompositions(std::span<const std::uint64_t> named) const;
+};
+// Every kind an event or a notification can carry: the command events, the notices and `job`
+// (an asynchronous transact job's progress and outcome, subscriptions only).
+inline constexpr std::array<std::string_view, 9> kMcpEventKinds{
+    "revision",          "history",        "rejected",        "composition.compile-failed",
+    "project.saved",     "project.opened", "project.created", "project.closed",
+    "project.copy-saved"};
+inline constexpr std::string_view kMcpJobEventKind = "job";
+// The `kinds` and `compositions` members of an events or events.subscribe call (absent: all).
+[[nodiscard]] McpEventFilter eventFilter(yyjson_val* arguments);
+
+// #747 (D2): one protocol session's events subscription (events.subscribe). Created by the call,
+// shared with the stream that delivers it; changed in place by a later events.subscribe.
+struct McpSubscription final {
+    std::uint64_t id = 0;
+    // The protocol session (McpProtocolSession::id) it belongs to: its own jobs are `mine`.
+    std::uint64_t client = 0;
+    // Guarded by McpServerCore::State::eventsMutex.
+    McpEventFilter filter;
+    std::chrono::milliseconds interval = kMcpEventIntervalDefault;
+    // The last event sequence and job change delivered (or skipped as not selected).
+    std::uint64_t cursor = 0;
+    std::uint64_t jobCursor = 0;
+    std::chrono::steady_clock::time_point lastSent{};
+    // The newest stream's number; an older stream ends.
+    std::uint64_t streamEpoch = 0;
+    // events.unsubscribe: every stream ends.
+    bool ended = false;
+};
+
+// #747 (D2): the newest step of an asynchronous transact job, as a subscription reports it.
+struct McpJobLine final {
+    std::uint64_t version = 0;
+    std::uint64_t client = 0;
+    McpJobState state = McpJobState::Queued;
+    std::string phase;
+    McpProgress progress;
+    std::optional<std::uint64_t> revision;
+    std::string code;
+    bool finished = false;
+    bool cancellationRequested = false;
+};
 
 struct McpProtocolSession::State {
     // Process-unique, from 1 (#746: an agent session names the protocol session that owns it).
@@ -127,6 +184,8 @@ struct McpProtocolSession::State {
     bool initialized = false;
     bool ready = false;
     std::optional<McpClientInfo> client;
+    // #747 (D2): its events subscription, when it has one.
+    std::shared_ptr<McpSubscription> subscription;
 };
 
 // ---- #747 (D1): asynchronous transact jobs and idempotency keys (transact_jobs.cpp)
@@ -216,6 +275,16 @@ struct McpServerCore::State {
     // The sequence when the live project was last replaced; an older cursor must reset.
     std::uint64_t resetSequence = 0;
     bool replaced = false;
+    // #747 (D2): woken (with eventsMutex) whenever an event, a notice, a job step or a
+    // subscription change arrives, so an event stream builds its next notification.
+    std::condition_variable_any eventsChanged;
+    // The newest step of each followed transact job (at most kMcpEventJobs; the oldest finished
+    // goes first), and a counter that advances with every step.
+    std::map<std::string, McpJobLine> jobLines;
+    std::uint64_t jobVersion = 0;
+    std::uint64_t nextSubscription = 1;
+    // The core is going away: every stream ends.
+    bool closing = false;
 
     // stdio only: the server-lifetime GPU final-render provider (McpCoreDependencies).
     std::shared_ptr<host::GpuExportProvider> gpuExportProvider;
@@ -272,8 +341,9 @@ struct McpServerCore::State {
     std::optional<double> headlessCommitMs;
     void recordHeadlessCommit(std::chrono::steady_clock::duration taken);
     [[nodiscard]] std::uint64_t retryAfterMs(std::size_t queuedAhead) const;
-    // Publishes a job step to McpCoreDependencies::jobEvents (called without jobs.mutex held).
-    void publishJob(const McpJobEvent& event) const;
+    // Publishes a job step to McpCoreDependencies::jobEvents and to event subscriptions (called
+    // without jobs.mutex held).
+    void publishJob(const McpJobEvent& event);
     // Fails the queued jobs of a generation other than `generation` (the project was replaced).
     void revokeJobs(std::uint64_t generation);
     // Stops the job runner and cancels every unfinished job (the core is going away).
@@ -444,6 +514,26 @@ void appendTransactJobRows(McpServerCore::State& core, Json& out, yyjson_mut_val
                                           yyjson_val* arguments);
 [[nodiscard]] yyjson_mut_val* eventsTool(McpServerCore::State& core, Json& out, McpCall& call,
                                          yyjson_val* arguments);
+// #747 (D2): events.subscribe and events.unsubscribe for the calling protocol session (no lease).
+[[nodiscard]] yyjson_mut_val* eventsSubscribeTool(McpServerCore::State& core, Json& out,
+                                                  McpProtocolSession::State& session,
+                                                  yyjson_val* arguments);
+[[nodiscard]] yyjson_mut_val* eventsUnsubscribeTool(McpServerCore::State& core, Json& out,
+                                                    McpProtocolSession::State& session,
+                                                    yyjson_val* arguments);
+// #747 (D2): what changed after `after`, coalesced: written into `into` as {fromSequence,
+// toSequence, resetRequired, reason?, count, fromRevision?, toRevision?, kinds, origins,
+// compositions, compositionsOmitted, project?}. Called with core.eventsMutex held. Moves `after`
+// to the newest event (or to the replacement's start when the project was replaced) and returns
+// the number of events `filter` selected; `resetRequired` is set when events after `after` are
+// gone (reason "overflow" or "project-replaced"; "cursor" for a cursor from the future).
+struct McpEventSummary final {
+    std::size_t count = 0;
+    bool resetRequired = false;
+};
+[[nodiscard]] McpEventSummary summarizeEvents(const McpServerCore::State& core, Json& out,
+                                              yyjson_mut_val* into, const McpEventFilter& filter,
+                                              std::uint64_t& after, std::uint64_t sinceRevision);
 [[nodiscard]] yyjson_mut_val* renderTool(McpServerCore::State& core, Json& out, McpCall& call,
                                          yyjson_val* arguments, bool compositionExport);
 [[nodiscard]] yyjson_mut_val* captureTool(McpServerCore::State& core, Json& out, McpCall& call,

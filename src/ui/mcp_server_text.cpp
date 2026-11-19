@@ -196,6 +196,7 @@ QString activityLine(const mcp::McpActivityEntry& entry) {
         what = tr("Token revealed");
         break;
     case K::AgentSession:
+    case K::EventStream:
         what = qs(entry.summary);
         break;
     case K::RequestRejected:

@@ -27,6 +27,7 @@ target_sources(
         core_internal.hpp
         embedded_guides.hpp
         "${bloom_mcp_guides_source}"
+        event_stream.cpp
         frame_statistics.cpp
         frame_statistics.hpp
         json.cpp

@@ -258,7 +258,14 @@ void admission() {
            "the scheme compares case-insensitively");
     const std::string get = "GET /mcp HTTP/1.1\r\nHost: 127.0.0.1:6767\r\nAuthorization: Bearer " +
                             std::string(kToken) + "\r\n\r\n";
-    expect(admit(get) == McpHttpRejection::MethodNotAllowed, "GET is 405 after the token");
+    // #747 (D2): GET opens the event stream, so it must accept text/event-stream.
+    expect(admit(get) == McpHttpRejection::NotAcceptable,
+           "GET without Accept: text/event-stream is 406 after the token");
+    expect(admit(replaced(get, "\r\n\r\n", "\r\nAccept: text/event-stream\r\n\r\n")) ==
+               McpHttpRejection::None,
+           "GET that accepts an event stream is admitted");
+    expect(admit(replaced(get, "GET", "OPTIONS")) == McpHttpRejection::MethodNotAllowed,
+           "OPTIONS is 405 after the token");
     expect(admit(replaced(get, std::string(kToken), "x")) == McpHttpRejection::Unauthorized,
            "GET without a token is 401 first");
     expect(admit(replaced(get, "GET", "DELETE")) == McpHttpRejection::None, "DELETE is admitted");

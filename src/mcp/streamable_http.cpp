@@ -471,8 +471,15 @@ McpHttpRejection admitRequest(const McpHttpRequest& request, const McpHttpAdmiss
         const auto authorization = singleField(request, "authorization");
         if (authorization.duplicate || !bearerMatches(authorization.value, token))
             return McpHttpRejection::Unauthorized;
-        if (request.method != McpHttpMethod::Post && request.method != McpHttpMethod::Delete)
+        if (request.method != McpHttpMethod::Post && request.method != McpHttpMethod::Delete &&
+            request.method != McpHttpMethod::Get)
             return McpHttpRejection::MethodNotAllowed;
+        if (request.method == McpHttpMethod::Get) {
+            // #747 (D2): the GET stream carries events.subscribe's notifications.
+            const auto accept = singleField(request, "accept");
+            if (!accept.value || accept.duplicate || !accepts(*accept.value, "text/event-stream"))
+                return McpHttpRejection::NotAcceptable;
+        }
         if (request.method == McpHttpMethod::Post) {
             const auto type = singleField(request, "content-type");
             if (!type.value || type.duplicate || mediaType(*type.value) != "application/json")
@@ -564,6 +571,28 @@ std::string sseMessage(const std::string_view json) {
     out += json;
     out += "\r\n\r\n";
     return out;
+}
+
+std::string sseEvent(const std::uint64_t id, const std::string_view json) {
+    std::string out = "id: " + std::to_string(id) + "\r\nevent: message\r\ndata: ";
+    out += json;
+    out += "\r\n\r\n";
+    return out;
+}
+
+std::optional<std::uint64_t> lastEventId(const std::string_view value) noexcept {
+    if (value.empty() || value.size() > 20)
+        return std::nullopt;
+    std::uint64_t id = 0;
+    for (const char c : value) {
+        if (c < '0' || c > '9')
+            return std::nullopt;
+        const auto digit = static_cast<std::uint64_t>(c - '0');
+        if (id > (std::numeric_limits<std::uint64_t>::max() - digit) / 10U)
+            return std::nullopt;
+        id = id * 10U + digit;
+    }
+    return id;
 }
 
 std::string base64Url(const std::span<const std::byte> bytes) {

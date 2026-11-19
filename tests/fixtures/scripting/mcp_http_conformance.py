@@ -292,8 +292,10 @@ class Conformance(unittest.TestCase):
         self.assertEqual(headers['www-authenticate'], 'Bearer realm="bloom"')
         status, headers, _ = Client(self.host, token='bloom_' + 'x' * 43).request(body=INIT)
         self.assertEqual((status, headers['www-authenticate']), (401, 'Bearer realm="bloom"'))
-        status, headers, _ = good.request('GET')
-        self.assertEqual((status, headers['allow']), (405, 'POST, DELETE'))
+        # #747 (D2): GET opens the event stream, so it must accept one.
+        self.assertEqual(good.request('GET')[0], 406)
+        status, headers, _ = good.request('OPTIONS')
+        self.assertEqual((status, headers['allow']), (405, 'GET, POST, DELETE'))
         self.assertEqual(good.request(path='/.well-known/oauth-authorization-server')[0], 404)
         self.assertEqual(good.request(body=INIT, headers={'Content-Type': 'text/plain'})[0], 415)
         self.assertEqual(good.request(body=INIT, headers={'Accept': 'application/json'})[0], 406)

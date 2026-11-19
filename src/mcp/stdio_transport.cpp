@@ -6,6 +6,8 @@
 #include <bloom/core/worker_thread.hpp>
 #include <bloom/mcp/server_core.hpp>
 
+#include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <istream>
@@ -119,6 +121,37 @@ void serveStdio(McpServerCore& core, std::istream& input, std::ostream& output,
                 thread.detach();
         }
     } release{inbox, reader};
+    // #747 (D2): events.subscribe's notifications are written on stdout between answers, by a
+    // delivery thread started once the session subscribes. Every write holds `writing`; the
+    // thread ends with the subscription (events.unsubscribe) and is stopped before this returns.
+    std::mutex writing;
+    std::atomic_bool deliveryOver = true;
+    bloom::core::StoppableWorkerThread delivery;
+    const auto deliver = [&] {
+        if (!deliveryOver.load())
+            return;
+        delivery = {};
+        auto events = core.openEventStream(*session, std::nullopt);
+        if (!events)
+            return;
+        deliveryOver = false;
+        delivery = bloom::core::StoppableWorkerThread(
+            [&output, &writing, &deliveryOver, &stop,
+             stream =
+                 std::shared_ptr<McpEventStream>(std::move(events))](const std::stop_token& own) {
+                while (!own.stop_requested() && !stop.stop_requested()) {
+                    const auto note =
+                        stream->next(std::chrono::steady_clock::now() + kMcpEventKeepAlive, own);
+                    if (note) {
+                        const std::lock_guard lock(writing);
+                        output << note->message << '\n' << std::flush;
+                    } else if (stream->ended()) {
+                        break;
+                    }
+                }
+                deliveryOver = true;
+            });
+    };
     while (!stop.stop_requested()) {
         Message message;
         McpRequestControl control;
@@ -156,9 +189,14 @@ void serveStdio(McpServerCore& core, std::istream& input, std::ostream& output,
             const std::lock_guard lock(inbox.mutex);
             inbox.active.reset();
         }
-        if (response)
+        if (response) {
+            const std::lock_guard lock(writing);
             output << *response << '\n' << std::flush;
+        }
+        if (message.envelope.tool == McpTool::EventsSubscribe)
+            deliver();
     }
+    delivery = {};
 }
 
 } // namespace bloom::mcp

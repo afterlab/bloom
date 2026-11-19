@@ -110,7 +110,14 @@ static_assert(mcp::toolUsesLiveUi(mcp::McpTool::SessionBegin) &&
               mcp::toolUsesLiveUi(mcp::McpTool::SessionEnd));
 static_assert(!mcp::toolMutatesDocument(mcp::McpTool::SessionBegin) &&
               !mcp::toolMutatesDocument(mcp::McpTool::SessionEnd));
-static_assert(static_cast<std::size_t>(mcp::McpTool::JobsWait) + 1 == mcp::kMcpToolCount);
+static_assert(static_cast<std::size_t>(mcp::McpTool::EventsUnsubscribe) + 1 == mcp::kMcpToolCount);
+// #747 (D2): the change subscription is inline, holds no lease and never edits the project.
+static_assert(mcp::toolName(mcp::McpTool::EventsSubscribe) == "events.subscribe");
+static_assert(mcp::toolName(mcp::McpTool::EventsUnsubscribe) == "events.unsubscribe");
+static_assert(mcp::toolExecution(mcp::McpTool::EventsSubscribe) == mcp::McpToolExecution::Inline);
+static_assert(!mcp::toolUsesLiveUi(mcp::McpTool::EventsSubscribe) &&
+              !mcp::toolMutatesDocument(mcp::McpTool::EventsSubscribe) &&
+              !mcp::toolStreamsProgress(mcp::McpTool::EventsSubscribe));
 // #747: jobs.wait waits for an asynchronous transact job, holds no lease and streams progress, as
 // a transact with a progress token does.
 static_assert(mcp::toolName(mcp::McpTool::JobsWait) == "jobs.wait");

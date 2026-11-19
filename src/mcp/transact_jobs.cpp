@@ -499,7 +499,33 @@ std::uint64_t McpServerCore::State::retryAfterMs(const std::size_t queuedAhead) 
     return static_cast<std::uint64_t>(std::ceil(estimate));
 }
 
-void McpServerCore::State::publishJob(const McpJobEvent& event) const {
+void McpServerCore::State::publishJob(const McpJobEvent& event) {
+    // #747 (D2): event subscriptions follow the job's newest step.
+    {
+        const std::lock_guard lock(eventsMutex);
+        auto& line = jobLines[event.job];
+        line.version = ++jobVersion;
+        line.client = event.client;
+        line.state = event.state;
+        line.phase = event.phase;
+        line.progress = event.progress;
+        line.revision = event.revision;
+        line.code = event.code;
+        line.finished = event.finished;
+        line.cancellationRequested = event.cancellationRequested;
+        // At most kMcpEventJobs are followed: the oldest finished job goes first.
+        while (jobLines.size() > kMcpEventJobs) {
+            auto oldest = jobLines.end();
+            for (auto at = jobLines.begin(); at != jobLines.end(); ++at)
+                if (at->second.finished &&
+                    (oldest == jobLines.end() || at->second.version < oldest->second.version))
+                    oldest = at;
+            if (oldest == jobLines.end())
+                break;
+            jobLines.erase(oldest);
+        }
+    }
+    eventsChanged.notify_all();
     if (!dependencies.jobEvents)
         return;
     try {
