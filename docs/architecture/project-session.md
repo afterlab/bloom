@@ -68,6 +68,15 @@ is rejected atomically, while older steps may be retired to make room. Undo, red
 refresh the charge as active ownership changes. The charge estimates authored content, not process
 RSS or allocator capacity.
 
+A history group (`CommandStack::beginGroup`, used by an MCP agent session, #746) folds one
+origin's consecutive commits into a single undo entry labelled with the group. Each commit
+replaces that entry's after-state, and the entry keeps its before-state. The group therefore
+retains two states however many commits it takes, and each commit costs the UI thread what any
+commit does. The entry is closed, and the group's next commit opens a new entry, when another
+origin commits, on any undo or redo, and when merging would exceed the allowance. A merged entry
+publishes the conservative whole-render footprint. `endGroup` reports the commits, entries and
+interruptions. Clearing the history closes the entry. Replacing the project replaces the stack, and the agent session that owned the group closes with it.
+
 ## Identity And Generations
 
 The following identities are deliberately separate:

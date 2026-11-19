@@ -31,6 +31,37 @@ sounds are on; the notification follows its own Preferences switch.
 | macOS | `UNUserNotificationCenter` from a bundle; the tray message from an unbundled binary | Written to the platform API, not built or run on macOS |
 | Windows | `QSystemTrayIcon::showMessage` (the supported fallback); a click raises Bloom | Not built or run on Windows |
 
+## Agent activity
+
+An MCP agent can work far faster than an artist, and Bloom must stay quiet while it does. Only
+what the artist did is reported as it happens. An agent's work is reported once, as a summary.
+
+- **Renders, exports and captures an agent or a script started.** These are transient export queue
+  jobs (`transient` on `ExportJobSucceeded` and `ExportJobFailed`). They play no sound and post no
+  notification of their own. Bloom counts them. After a quiet interval of 10 s with no new agent
+  activity, it posts at most one summary, for example "Agent: 37 renders, 1 failed", and plays
+  render_succeeded, or render_failed if anything failed. The summary is posted only while Bloom is
+  **not** the active application; when the artist is watching, the counts are dropped.
+- **An agent's refused command.** It is answered to the agent over MCP and listed in the MCP Server
+  panel's activity. It plays no refused cue and flashes no status message. A retired undo step
+  caused by an agent's edit is not reported either.
+- **An agent's edit that broke a composition's compile.** One warning per composition per quiet
+  interval. A repeat updates that composition's line in the MCP Server panel ("×3") and is
+  counted into the summary ("2 compositions failed to compile").
+- **An agent session** (`session.begin`, with `quiet`, which is on by default). It holds all of the
+  above until the session ends, then tells it once: "Agent session finished: Agent session “Shot
+  12”: 37 renders, 1 failed". If Bloom is active at that moment, there is no summary, but one
+  warning plays if the session broke a composition.
+- **Preferences > Sounds > "Sounds and notifications for agent activity"** controls all of the
+  above. It is **on by default**: agent activity stays quiet and is summarized. Off makes agent
+  activity silent: no summary, no warning, no notification. Event sounds, the master switch and
+  the render notification switch still apply to the summary. The MCP preferences key is
+  `agentActivityFeedback`.
+
+The one agent-caused notice that remains is the status message for an edit that would remove a
+composition's Output. That is the artist's composition losing its picture, so it is shown whoever
+made the edit (#716).
+
 ## Sounds
 
 UI sounds: SND01 "sine" by Yasuhiro Tsuchiya, from SND (snd.dev) by Dentsu Inc. CX Creative Center.
@@ -60,6 +91,8 @@ Category **E** is an event sound (default on); **I** is an interaction sound (de
 | Event | Where it fires | Cat. | Sound | Default |
 | --- | --- | --- | --- | --- |
 | Export queue job finished | `ExportJobSucceeded` event read by `ExportQueueAdapter` (`export_queue_adapter.cpp`); every export, frame, range or composition, is a queue job | E | render_succeeded + notification when inactive | On |
+| Agent's or script's render, export or capture finished or failed | the same events with `transient` set (MCP `render`, `export`, `capture`) | E | None per job; counted into the agent summary | On (agent switch) |
+| Agent summary | `UiFeedback::flushAgentActivity`, 10 s after the last agent activity, or at the end of a quiet agent session | E | render_succeeded, or render_failed if anything failed or broke; notification only when inactive | On (agent switch) |
 | Export queue job finished with warnings | same event with `withWarnings` | E | render_succeeded + notification | On |
 | Export queue job failed or refused (including verification failures) | `ExportJobFailed` event | E | render_failed + notification; the error dialog adds no second sound within 80 ms | On |
 | Export cancelled, queue drained | `ExportJobCancelled`, `ExportQueueDrained` | none | Silent: the artist asked for the cancel, and every job in a drained queue was already announced | n/a |
@@ -72,6 +105,8 @@ Category **E** is an event sound (default on); **I** is an interaction sound (de
 | Project open or copy failed | `openFinished`, `copyFinished` inform dialogs (`main_window.cpp`) | E | render_failed via the Error prompt | On |
 | Recover offered | `projectRecoverUnsaved` confirmation, a Question prompt (`project_host.cpp`) | I | modal_open, like any confirmation | Off |
 | Command refused | `CompositionSession::commandRejected` (`composition_session.cpp`), wired in `apps/bloom/main.cpp` | E | refused | On |
+| Agent's command refused, or undo steps retired for an agent's edit | `CompositionSession::handleResult` and `handleCommandEvent` with `CommandOrigin::Agent` | none | Silent, with no status message: answered over MCP and listed in the MCP Server activity | n/a |
+| Agent's edit broke a composition's compile | `McpServerAdapter::noteCompileFailure` calls `UiFeedback::noteAgentCompileFailure` | E | render_failed (Warning), once per composition per 10 s; held during a quiet agent session | On (agent switch) |
 | Error dialog (any kit prompt with Error tone) | `kit::inform` / `kit::buildConfirm` (`kit/dialog_prompts.cpp`), seen by `InteractionSounds` | E | render_failed | On |
 | Confirmation, Warning-tone and Info dialogs | same | I | modal_open (see Modal open) | Off |
 | Modal dialog opened | `QDialog` show (`interaction_sounds.cpp`) | I | modal_open | Off |

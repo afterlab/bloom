@@ -23,7 +23,7 @@ or create, is refused under the field and OK waits.
 | --- | --- | --- |
 | General | Audio playback, loop playback, **Crash recovery** (see below), the two **Agents** switches (see below), and **Check for updates automatically** (see below) | Immediately |
 | Import | **Sequence frame rate** (Match composition, or a rate such as 24 or 23.976; default 24) and **Still duration** (Composition length, or a fixed length in seconds) that newly imported footage starts with, and **SVG files** (Ask each time, As one layer or As editable shapes). See [Interpret Footage](interpret-footage.md#import-options-and-preferences) | The next import |
-| Sounds | Play sounds (master), volume, event sounds, interaction sounds, render notifications, and a Play test sound button. See [UI sound feedback](../ux/sound.md) | Immediately |
+| Sounds | Play sounds (master), volume, event sounds, interaction sounds, render notifications, "Sounds and notifications for agent activity" (on by default: an MCP agent's renders and warnings are summarized once instead of reported one by one; off makes them silent), and a Play test sound button. See [UI sound feedback](../ux/sound.md) | Immediately |
 | Viewer | Resolution, the background around the composition frame (Solid, Gray, Black, White), the transparency grid inside it, and the safe-areas, center-cross, thirds, rulers and pixel-grid overlays | Immediately |
 | Timeline | Time format, snapping, keyframes, graph editor, layer column width | Immediately |
 | Node Graph | Link style, snap to grid, grid size, **Show minimap** (the overview in the canvas corner, with its zoom row) and **Show zoom controls** (the zoom buttons and slider under the minimap); both on by default | Immediately |

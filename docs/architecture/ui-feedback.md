@@ -16,7 +16,7 @@ state, and it has no influence on evaluation or rendering.
 | Piece | Role |
 | --- | --- |
 | `FeedbackEvent` | A meaning: `RenderSucceeded`, `RenderFailed`, `ImportFinished`, `ImportFailed`, `Warning`, `Refused` (the Event category) and `ControlPress`, `Select`, `ToggleOn`, `ToggleOff`, `ModalOpen`, `ModalClose`, `ToolSwitch`, `DragStart`, `Drop`, `Disabled` (the Interaction category). One table maps each to a bundled sound and a gain trim. |
-| `UiFeedback` | Applies the Preferences switches (master, volume, Event, Interaction), the 80 ms same-sound repeat limit and the interaction suppression, then enqueues on a `SoundPlayer`. For a render result it also posts a `Notifier` notification when Bloom is not the active application. Pure C++ over two seams and an injectable clock and focus probe, so it is tested without a device or a window system. |
+| `UiFeedback` | Applies the Preferences switches (master, volume, Event, Interaction, agent activity), the 80 ms same-sound repeat limit and the interaction suppression, then enqueues on a `SoundPlayer`. For a render result it also posts a `Notifier` notification when Bloom is not the active application. Pure C++ over two seams and an injectable clock and focus probe, so it is tested without a device or a window system. |
 | `SoundPlayer` | The seam to audio. `UiSoundEngine` is the real one. |
 | `UiSoundEngine` | A separate small audio output over a `media::audio::playback::Backend` (miniaudio in the application). It never touches the transport `AudioEngine`, so UI sounds cannot disturb timeline or preview audio and do not take over a device (shared output). |
 | `Notifier` | The seam to operating-system notifications; `makeSystemNotifier()` is the platform implementation. |
@@ -52,6 +52,16 @@ enter and drop cues are exempt: they report that gesture. Event cues are never s
   export job outcome (frame, range and composition exports are all queue jobs; cancelled jobs and
   a drained queue make no sound), and `AssetController::importFinished` and
   `CompositionSession::commandRejected` call `play(event)` from `apps/bloom/main.cpp`.
+- Agent activity (#746, [`ux/sound.md`](../ux/sound.md#agent-activity)): `ExportQueueAdapter`
+  calls `noteAgentRender(succeeded)` for a transient job's outcome instead of `announceRender`.
+  `McpServerAdapter` calls `noteAgentCompileFailure(composition)`, which plays one Warning per
+  composition per `kAgentQuietInterval` (10 s). `AgentSessionController` calls
+  `holdAgentActivity(true)` when a quiet agent session opens and `holdAgentActivity(false, label)`
+  when it closes. `UiFeedback` keeps the counts (`AgentActivityCounts`) and arms a single-shot
+  timer from the last note. `flushAgentActivity` tells them once: a summary sound and, only while
+  Bloom is inactive, one notification. `FeedbackSettings::agentActivity` (default on) gates all of
+  it. A command an agent made that was refused never reaches `commandRejected`
+  (`CompositionSession::handleResult` checks `CommandResult::origin`).
 - Interaction events come from `InteractionSounds`. A new kit control that should cue adds one case
   to `InteractionSounds::hook`.
 

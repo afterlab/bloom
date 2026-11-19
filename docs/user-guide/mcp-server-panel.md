@@ -13,7 +13,8 @@ and says why: the reason is shown under it and in its tooltip.
 The status line reads one of:
 
 - Stopped.
-- Running on 127.0.0.1:6767 and the number of connected clients.
+- Running on 127.0.0.1:6767 and the number of connected clients, followed by "agent session “Shot
+  12” open" while an agent session is open.
 - Stopping…
 - Couldn't start, followed by the reason, for example when another program already uses the port.
 
@@ -53,6 +54,9 @@ old lines were dropped, the list starts with "Earlier activity was trimmed."
 Project calls read as plain lines, for example "claude-code saved 'Shot010'", "opened 'Shot010'",
 "created 'Untitled'" and "closed 'Shot010'". When an agent's edit leaves a composition unable to
 render, the list adds a red line naming the client, the tool, the composition and what is wrong.
+When the agent breaks the same composition again within 10 seconds, that line is updated with a
+count ("×3") instead of adding a new one. Agent sessions add a line when they begin and when they
+end, for example "Agent session “Shot 12” ended (ended): 37 commits, 1 undo step".
 
 While no project is open, the panel says so under Connected clients.
 

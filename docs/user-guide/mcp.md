@@ -47,7 +47,9 @@ The status line (Stopped, Running on 127.0.0.1:6767 with the number of clients, 
 reason the server could not start), the connected clients (name and version from the client,
 connected since, last activity, requests in flight, the last tool), and the activity list: every
 tool call with its client, outcome, error and duration, and every refused request (a wrong token,
-a browser origin, too many clients). Identical refusals within a second are counted on one line.
+a browser origin, too many clients). Identical refusals within a second are counted on one line,
+and repeated compile failures of one composition update its line with a count ("×3"). An open
+agent session is named on the status line.
 Up to 512 lines are kept; "Earlier activity was trimmed." marks a gap.
 
 ### Limits
@@ -192,8 +194,9 @@ call goes through the same controllers the window uses, and the window shows it 
   `viewerTransparencyGrid`, `viewerSafeAreas`, `viewerCenterCross`, `viewerThirds`, `viewerRulers`,
   `viewerPixelGrid`, `importSequenceFrameRate` (`"24"`, `"24000/1001"`, or empty for one image per
   composition frame), `importStillDuration` (seconds, `"5"` or `"1001/240"`, or empty for the
-  composition's length), `sounds`, `soundVolume` (0 to 100), `eventSounds`, `interactionSounds`
-  and `renderNotifications`.
+  composition's length), `sounds`, `soundVolume` (0 to 100), `eventSounds`, `interactionSounds`,
+  `renderNotifications` and `agentActivityFeedback` (Sounds and notifications for agent activity,
+  on by default).
 - **`jobs.list`** and **`jobs.cancel`** read and cancel what the Jobs panel shows: imports, previews,
   thumbnails, purges and export runs.
 
@@ -213,6 +216,65 @@ answer the question over MCP; pass `"overwrite":"replace"`. Queue jobs that ask 
 of a movie preset in that moment waits for the check (up to 30 seconds, and it ends when the request
 is cancelled) and then answers with the real availability, so a client never has to retry. A check
 that takes longer still fails with `bloom.mcp.export-unavailable` and "Checking encoders…".
+
+#### Quiet agent work
+
+Bloom keeps an agent's work quiet. A `render`, `export` or `capture` plays no sound and posts no
+notification of its own. A refused `transact` plays no refused cue and flashes no status message:
+it is answered to the agent and listed in the MCP Server activity. An edit that breaks a
+composition's compile warns once per composition per 10 seconds, and its repeats are counted on
+one activity line ("×3"). After 10 quiet seconds Bloom tells what the agent did once, for example
+"Agent: 37 renders, 1 failed". The summary is a sound, plus an operating-system notification when
+Bloom is not the active application. When the artist is in Bloom, there is no summary at all.
+Edit > Preferences > Sounds > **Sounds and notifications for agent activity**
+(`agentActivityFeedback`) is on by default; off makes agent activity silent. See
+[sound feedback](../ux/sound.md#agent-activity).
+
+#### Agent sessions
+
+A burst of many edits (building a shot, a batch of fixes) can run as one **agent session**:
+
+| Tool | Arguments | Result |
+| --- | --- | --- |
+| `session.begin` | optional `label` (up to 256 bytes), `quiet`, `deferViewer`, `groupUndo` (each true by default), `idleTimeoutSeconds` (30 to 3600, default 600) | `{succeeded, session}` |
+| `session.end` | optional `session` (the id `session.begin` answered; this client's session when absent) | `{succeeded, session}` with what it did |
+
+`session` is `{id, label, quiet, deferViewer, groupUndo, idleTimeoutSeconds, open, closed,
+commits, undoSteps, artistEdits, seconds}`. `closed` is `null` while it is open, then `ended`,
+`client-disconnected`, `idle-timeout`, `project-replaced` or `server-stopped`.
+
+While a session is open:
+
+- **`groupUndo`**: the session's commits are one undo step, "Agent session “label”". One Edit >
+  Undo takes the whole session back. The step keeps only the project as it was before the session
+  and as it is now, never one copy per commit, so a session of thousands of edits holds no more
+  memory than two edits do. A step that would exceed the undo history's memory limit is closed and
+  the session continues in a new one. A `history` undo inside the session takes back the session's
+  step so far, and the next commit starts a new step.
+- **The artist's own edit** is never folded into the agent's step and is never refused because the
+  window was behind. It closes the session's current step, becomes a step of its own, and the
+  agent's next commit starts a new session step after it. `session.end` reports `artistEdits` and
+  `undoSteps` (1 unless the artist split the session or `groupUndo` was false).
+- **The panels** (Timeline, Nodes, Properties and the rest) catch up with the agent's commits about
+  once a second instead of rebuilding for every commit. `query`, `transact` and `events` always see
+  the newest revision, so the agent keeps passing the `revision` of its last read as before.
+- **`deferViewer`**: the Viewer does not re-render for each commit. It refreshes when the session
+  ends, when the agent calls `editor.reveal`, `composition.activate`, `transport` or `viewer.set`,
+  and when the artist presses a key or a mouse button, scrolls or touches the window. The artist's
+  input always catches the window up before it lands. `capture` and `render` are unaffected: they
+  render the newest revision.
+- **`quiet`**: the session's renders and warnings are held and told once when it ends, as "Agent
+  session finished" with the label, under the rules in **Quiet agent work** above.
+
+One session is open at a time, in the whole application. A second `session.begin` answers
+`bloom.mcp.busy` naming the open one. A session closes on `session.end`, when its client
+disconnects, when its client sends nothing for `idleTimeoutSeconds` while it has no request in
+flight, when a project is opened, created or closed, and when the server stops. However it closes,
+the undo step is closed, the window catches up and the summary is told once. A `session.end` after
+it closed answers `bloom.mcp.invalid-argument` naming why. The MCP Server editor's status line shows
+an open session, and its activity lists when each session began and ended. Sessions exist only in
+the in-app server: `bloom-mcp` answers `bloom.mcp.not-live`.
+
 ### Export worker limits
 
 `export` takes optional `workerMemoryCapBytes` (0 = no cap, up to 1 TiB) and `workerThreads` (0 =

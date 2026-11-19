@@ -41,6 +41,24 @@ is remote code execution behind the MCP token, so it is bounded (source, output 
 cancellable, and its source and output also appear in the Script editor. This supersedes "running
 Script editor Python" in the list above.
 
+Amendment (2026-11-20, issue #746): agent work is quiet, and agents can open a session. The
+export queue's terminal events carry `transient`. A transient (agent or script) job's outcome,
+an agent's refused command and an agent's compile failure are counted by `UiFeedback` and told
+once per quiet interval, gated by a new Preferences switch that is on by default
+(`ux/sound.md`, "Agent activity"). The live-only tools `session.begin` and `session.end`
+(`McpLiveUiPort::beginAgentSession` and `endAgentSession`, applied by the UI's
+`AgentSessionController`) open one application-wide agent session owned by the calling protocol
+session. While it is open, `CommandStack::beginGroup` merges the agent's commits into one undo
+entry that keeps only the snapshots before and after it, so memory stays bounded at two
+snapshots whatever the session's length. Another origin's edit, any undo or redo, or a merge
+larger than the history's charge closes the entry. `CompositionSession` adopts the agent's
+commits for the panels at most once a second and, with `deferViewer`, leaves the Viewer's
+evaluation until the session ends, the agent calls a window tool, or the artist uses the input;
+the live session mirror publishes from the document, so agents always read the newest revision.
+`McpServerService::pump` closes the session when its client disconnects, goes idle, the project
+is replaced or the server stops; `session.end` closes it on request. `bloom-mcp` answers
+`bloom.mcp.not-live`.
+
 ## Context
 
 `apps/bloom-mcp` is a Qt-free MCP 2025-11-25 server on stdio. It opens its own headless session
