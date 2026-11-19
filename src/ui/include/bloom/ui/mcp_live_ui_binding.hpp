@@ -37,6 +37,7 @@ namespace bloom::ui {
 
 class CompositionPreviewController;
 class CompositionSession;
+class AgentSessionController;
 class ExportQueueAdapter;
 class MainWindow;
 class RamPreviewController;
@@ -66,6 +67,8 @@ class McpLiveUiBinding final : public QObject {
     void setExportQueue(ExportQueueAdapter* exportQueue);
     // The Jobs panel's model, for jobs.list and jobs.cancel. Weak; without one they answer Unbound.
     void setTaskMonitor(TaskMonitorModel* tasks);
+    // #746: session.begin and session.end. Weak; without one they answer Unbound.
+    void setAgentSessions(AgentSessionController* sessions);
     // The Script editor's runtime, for script.run. Weak; without one (a build without embedded
     // Python) script.run answers Unbound.
     void setScriptRuntime(const std::shared_ptr<ScriptPanelRuntime>& runtime);
@@ -158,6 +161,7 @@ class McpLiveUiBinding final : public QObject {
     QPointer<RamPreviewController> ramPreview_;
     QPointer<ExportQueueAdapter> exportQueue_;
     QPointer<TaskMonitorModel> tasks_;
+    QPointer<AgentSessionController> agentSessions_;
     std::weak_ptr<ScriptPanelRuntime> script_;
     runtime::ScopeFrameRoutes scopeRoutes_;
     QPointer<CompositionPreviewController> scopePreview_;

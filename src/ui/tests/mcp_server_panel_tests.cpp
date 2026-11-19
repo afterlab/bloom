@@ -500,6 +500,42 @@ void testCompileFailureFromActivity() {
     expect(found, "the MCP compile failure is a red Activity line");
 }
 
+// #746: an agent that keeps a composition broken across many edits shows one line for it, with
+// the count, instead of a line per edit.
+void testCompileFailureCoalesced() {
+    ScriptedMcpPort port;
+    ui::McpServerAdapter adapter(port);
+    adapter.setCompositionNamer([](const std::uint64_t) { return QStringLiteral("Main"); });
+    show(port, adapter, makeSnapshot(m::McpServerState::Running));
+    ui::McpServerEditor panel(&adapter);
+    panel.resize(760, 820);
+    panel.show();
+    auto* list = find<QListWidget>(panel, "mcpActivityList");
+    for (std::uint64_t id = 60; id < 63; ++id) {
+        m::McpActivityEntry entry;
+        entry.id = id;
+        entry.at = std::chrono::system_clock::now();
+        entry.kind = m::McpActivityKind::ToolCall;
+        entry.clientLabel = "Claude Code";
+        entry.tool = m::McpTool::Transact;
+        entry.outcome = m::McpCallOutcome::Succeeded;
+        entry.compileFailures.push_back(
+            {.composition = 7, .detail = "Layer Output could not be lowered."});
+        port.addActivity(entry);
+        adapter.drain();
+    }
+    expect(adapter.compileFailures().size() == 1 && adapter.compileFailures()[0].repeat == 3,
+           "three failures of one composition are one note");
+    int lines = 0;
+    for (int row = 0; list != nullptr && row < list->count(); ++row)
+        if (list->item(row)->text().contains(QStringLiteral("left 'Main' unable to render"))) {
+            ++lines;
+            expect(list->item(row)->text().endsWith(QStringLiteral("\u00d73")),
+                   "the line counts the repeats");
+        }
+    expect(lines == 1, "the panel shows the composition once");
+}
+
 // Project calls read as plain sentences in the Activity list.
 void testProjectActivityLines() {
     const auto line = [](const m::McpTool tool, const std::string& summary) {
@@ -654,6 +690,7 @@ int main(int argc, char** argv) {
     testCopyConfig();
     testCompileFailureActivity();
     testCompileFailureFromActivity();
+    testCompileFailureCoalesced();
     testProjectActivityLines();
     testIndicatorAndSound();
     testRealService();

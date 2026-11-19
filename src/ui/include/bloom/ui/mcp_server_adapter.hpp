@@ -33,6 +33,7 @@
 #include <thread>
 
 class QSettings;
+class QTimer;
 
 namespace bloom::ui {
 
@@ -57,6 +58,11 @@ struct McpCompileFailureNote final {
     QString composition;
     // Plain sentence, no codes or ids.
     QString detail;
+    // #746: the composition's id (0 when unknown) and how many agent edits in a row left it
+    // unable to compile. Failures of one composition within UiFeedback::kAgentQuietInterval of
+    // its newest note are coalesced into that note instead of adding a line each.
+    std::uint64_t compositionId = 0;
+    std::uint32_t repeat = 1;
 };
 
 class McpServerPort {
@@ -127,11 +133,16 @@ class McpServerAdapter final : public QObject {
         compositionNamer_ = std::move(namer);
     }
 
-    // Records an agent edit that broke compilation; the MCP Server panel shows it in Activity.
+    // Records an agent edit that broke compilation; the MCP Server panel shows it in Activity. A
+    // repeat failure of the same composition within the quiet interval updates the newest note
+    // (its repeat count, time and detail) instead of adding one, and the warning sound is
+    // UiFeedback's, coalesced per composition (#746).
     void noteCompileFailure(McpCompileFailureNote note);
     [[nodiscard]] const std::vector<McpCompileFailureNote>& compileFailures() const noexcept {
         return compileFailures_;
     }
+
+    static constexpr std::chrono::seconds kAgentSessionHeartbeat{5};
 
     // The status bar indicator asks for the panel to be shown.
     void requestReveal() { Q_EMIT revealRequested(); }
@@ -156,6 +167,9 @@ class McpServerAdapter final : public QObject {
     std::function<QString(std::uint64_t)> compositionNamer_;
     std::vector<McpCompileFailureNote> compileFailures_;
     std::atomic<bool> wakePending_{false};
+    // #746: while an agent session is open the service is pumped every kAgentSessionHeartbeat,
+    // so an idle client's session closes on time even when nothing else wakes the drain.
+    QTimer* heartbeat_ = nullptr;
     bloom::core::StoppableWorkerThread waiter_;
 };
 

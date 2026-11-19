@@ -123,7 +123,14 @@ QString statusText(const mcp::McpServerSnapshot& snapshot) {
         const auto clients = static_cast<int>(snapshot.clients.size());
         const auto count = clients == 1 ? tr("1 client")
                                         : tr("%1 clients").arg(clients);
-        return tr("Running on %1:%2 · %3").arg(host).arg(port).arg(count);
+        auto line = tr("Running on %1:%2 · %3").arg(host).arg(port).arg(count);
+        // #746: an open agent session is named on the status line.
+        if (snapshot.agentSession)
+            line += QStringLiteral(" · ") + (snapshot.agentSession->label.empty()
+                                                 ? tr("agent session open")
+                                                 : tr("agent session \u201c%1\u201d open")
+                                                       .arg(qs(snapshot.agentSession->label)));
+        return line;
     }
     }
     return {};
@@ -177,6 +184,9 @@ QString activityLine(const mcp::McpActivityEntry& entry) {
         break;
     case K::TokenRevealed:
         what = tr("Token revealed");
+        break;
+    case K::AgentSession:
+        what = qs(entry.summary);
         break;
     case K::RequestRejected:
         what = tr("Request refused");
@@ -238,6 +248,9 @@ QString compileFailureLine(const McpCompileFailureNote& note) {
     QString what = tr("left '%1' unable to render").arg(note.composition);
     if (!note.detail.isEmpty())
         what += QStringLiteral(": ") + note.detail;
+    // #746: repeated failures of one composition are one line.
+    if (note.repeat > 1)
+        what += QStringLiteral(" \u00d7") + QString::number(note.repeat);
     parts << what;
     const auto time = timeText(note.at);
     return (time.isEmpty() ? QString{} : time + QStringLiteral("  ")) +

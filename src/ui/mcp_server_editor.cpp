@@ -509,8 +509,13 @@ void McpServerEditor::refreshActivity() {
         item->setToolTip(item->text());
         activity_->addItem(item);
     }
-    while (activity_->count() > kActivityCap)
-        delete activity_->takeItem(activity_->item(0)->data(Qt::UserRole).toBool() ? 1 : 0);
+    while (activity_->count() > kActivityCap) {
+        auto* trimmed =
+            activity_->takeItem(activity_->item(0)->data(Qt::UserRole).toBool() ? 1 : 0);
+        std::erase_if(compileFailureItems_,
+                      [trimmed](const auto& entry) { return entry.second.first == trimmed; });
+        delete trimmed;
+    }
     lastActivityId_ = std::max(batch.lastId, lastActivityId_);
     if (atBottom)
         activity_->scrollToBottom();
@@ -521,13 +526,22 @@ void McpServerEditor::appendCompileFailures() {
     if (adapter_ == nullptr)
         return;
     for (const auto& note : adapter_->compileFailures()) {
-        if (note.id <= lastCompileFailureId_)
+        if (note.id <= lastCompileFailureId_) {
+            // A coalesced repeat (#746) updates the line it is already on.
+            const auto shown = compileFailureItems_.find(note.id);
+            if (shown != compileFailureItems_.end() && shown->second.second != note.repeat) {
+                shown->second.second = note.repeat;
+                shown->second.first->setText(compileFailureLine(note));
+                shown->second.first->setToolTip(shown->second.first->text());
+            }
             continue;
+        }
         lastCompileFailureId_ = note.id;
         auto* item = new QListWidgetItem(compileFailureLine(note));
         item->setToolTip(item->text());
         item->setForeground(kit::color(kit::Color::Error));
         activity_->addItem(item);
+        compileFailureItems_[note.id] = {item, note.repeat};
     }
     activity_->scrollToBottom();
     syncActivityEmpty();

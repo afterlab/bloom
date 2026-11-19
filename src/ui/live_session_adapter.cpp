@@ -35,17 +35,25 @@ LiveSessionAdapter::LiveSessionAdapter(scripting::LiveSessionHost& host,
                                        QObject* parent)
     : QObject(parent), host_(host), session_(session), project_(project),
       committer_(std::make_unique<scripting::LiveSessionCommitter>()) {
+    // #746: an agent session may hold the window's adoption of a commit (panels at a slow
+    // cadence), so the mirror is published from the document right after each commit: the next
+    // request always reads, and commits against, the revision this one produced.
     committer_->execute = [this](commands::Transaction transaction) {
-        return completed(session_.executeTransaction(std::move(transaction)));
+        auto result = completed(session_.executeTransaction(std::move(transaction)));
+        publish();
+        return result;
     };
     committer_->history = [this](const bool redo, const commands::CommandOrigin origin) {
         auto* stack = project_.liveDocumentAndStack().second;
-        return stack ? completed(redo ? stack->redo(origin) : stack->undo(origin)) : Result{};
+        auto result =
+            stack ? completed(redo ? stack->redo(origin) : stack->undo(origin)) : Result{};
+        publish();
+        return result;
     };
     committer_->gestureOpen = [this] {
         return session_.transformInteractionActive() || session_.valueEditActive();
     };
-    committer_->revision = [this] { return session_.snapshot().revision(); };
+    committer_->revision = [this] { return session_.liveSnapshot().revision(); };
     // #645: bloom.viewer.set_level, applied on the UI thread as viewer.set applies it for MCP.
     committer_->viewerLevel = [this](const std::vector<std::uint64_t>& groups,
                                      const std::optional<std::uint64_t> points) {
@@ -154,7 +162,7 @@ void LiveSessionAdapter::replace() {
         });
     host_.replace(
         {std::move(stream), &project_.publicationCoordinator(), &project_.artifactCoordinator()},
-        {.renderSource = {session_.snapshot(), {}, std::nullopt},
+        {.renderSource = {session_.liveSnapshot(), {}, std::nullopt},
          .context = {},
          .viewerDisplay = {},
          .viewerView = {},
@@ -166,7 +174,9 @@ void LiveSessionAdapter::replace() {
 void LiveSessionAdapter::publish() {
     if (shutDown_)
         return;
-    const auto snapshot = session_.snapshot();
+    // The document's newest snapshot, not what the window shows (#746: an agent session can hold
+    // the window behind).
+    const auto snapshot = session_.liveSnapshot();
     scripting::LiveSessionState state{.renderSource = {snapshot, {}, std::nullopt},
                                       .context = {},
                                       .viewerDisplay = viewerDisplay_,
@@ -186,7 +196,7 @@ void LiveSessionAdapter::publish() {
     context.layers = scripting::selectedLayers(snapshot, *context.composition, context.selection);
     // #693: a selected Merge entry's own layer (an imported SVG, a part of one) is a selected layer
     // for Align, Distribute and every other operation that defaults to the selection.
-    if (const auto* composition = session_.composition())
+    if (const auto* composition = snapshot.project().findComposition(session_.compositionId()))
         for (const auto& entry : session_.selectedEntries())
             if (const auto* layer =
                     document::mergeEntryLayer(composition->graph(), entry.merge, entry.slot);

@@ -33,6 +33,7 @@
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/scripting/live_session_host.hpp>
 #include <bloom/ui/acceleration_status.hpp>
+#include <bloom/ui/agent_session_controller.hpp>
 #include <bloom/ui/appimage_menu_entry.hpp>
 #include <bloom/ui/application_identity.hpp>
 #include <bloom/ui/application_preferences.hpp>
@@ -83,11 +84,11 @@
 #include <bloom/ui/ui_sound_engine.hpp>
 #include <bloom/ui/update_controller.hpp>
 #include <bloom/ui/update_service.hpp>
-#include <bloom/update/configuration.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/viewer_preview_pool.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>
+#include <bloom/update/configuration.hpp>
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -840,6 +841,11 @@ int main(int argc, char* argv[]) try {
     // below, once it exists.
     bloom::ui::McpLiveUiBinding mcpLiveUi(projectHost, compositionSession,
                                           previewController.playbackController());
+    // #746: an agent's session mode (session.begin, session.end): quiet feedback, a deferred
+    // Viewer, slow panel refresh and one undo step for the session.
+    bloom::ui::AgentSessionController agentSessions(
+        compositionSession, [&projectHost] { return projectHost.liveDocumentAndStack().second; });
+    mcpLiveUi.setAgentSessions(&agentSessions);
     bloom::mcp::McpServerServiceDependencies mcpDependencies{
         .live = liveSessionHost,
         // The export queue the project host currently owns; null while it is being replaced
@@ -1082,8 +1088,10 @@ int main(int argc, char* argv[]) try {
     mcpLiveUi.setExportQueue(&exportQueueAdapter);
     mcpLiveUi.setTaskMonitor(&taskMonitor);
     mcpAdapter.setCompositionNamer([&compositionSession](const std::uint64_t id) {
-        const auto* composition = compositionSession.snapshot().project().findComposition(
-            bloom::document::CompositionId::fromRaw(id));
+        // The document's newest snapshot: an agent session may hold the window behind (#746).
+        const auto snapshot = compositionSession.liveSnapshot();
+        const auto* composition =
+            snapshot.project().findComposition(bloom::document::CompositionId::fromRaw(id));
         return composition != nullptr ? QString::fromStdString(composition->name()) : QString{};
     });
     // Shutdown participant: close the listener at once; the packed-host predicate below keeps the
@@ -1111,6 +1119,10 @@ int main(int argc, char* argv[]) try {
     };
     applyFeedbackPreferences();
     exportQueueAdapter.setFeedback(&uiFeedback);
+    // #746: an agent's compile failures are warned once per composition, and an agent session
+    // that asked to be quiet holds its feedback until it ends.
+    mcpAdapter.setFeedback(&uiFeedback);
+    agentSessions.setFeedback(&uiFeedback);
     uiFeedback.setNotificationActivationHandler([&window] {
         window.setWindowState(window.windowState() & ~Qt::WindowMinimized);
         window.show();

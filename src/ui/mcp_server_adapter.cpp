@@ -6,6 +6,7 @@
 
 #include <QMetaObject>
 #include <QSettings>
+#include <QTimer>
 
 #include <algorithm>
 #include <variant>
@@ -87,6 +88,19 @@ void McpServerAdapter::drain() {
 void McpServerAdapter::observe() {
     handleEvents();
     const auto snapshot = port_.snapshot();
+    // #746: an open agent session keeps the service pumping, for its idle timeout.
+    const bool sessionOpen = snapshot && snapshot->agentSession.has_value();
+    if (sessionOpen && heartbeat_ == nullptr) {
+        heartbeat_ = new QTimer(this);
+        heartbeat_->setInterval(kAgentSessionHeartbeat);
+        connect(heartbeat_, &QTimer::timeout, this, &McpServerAdapter::drain);
+    }
+    if (heartbeat_ != nullptr && sessionOpen != heartbeat_->isActive()) {
+        if (sessionOpen)
+            heartbeat_->start();
+        else
+            heartbeat_->stop();
+    }
     const std::uint64_t revision = snapshot ? snapshot->revision : 0;
     if (revision == revision_)
         return;
@@ -126,14 +140,14 @@ void McpServerAdapter::handleEvents() {
                 {.id = 0,
                  .at = entry.at,
                  .client = QString::fromStdString(entry.clientLabel),
-                 .tool = QString::fromUtf8(entry.tool ? mcp::toolName(*entry.tool).data() : "",
-                                           entry.tool ? static_cast<qsizetype>(
-                                                            mcp::toolName(*entry.tool).size())
-                                                      : 0),
-                 .composition = name.isEmpty()
-                                    ? tr("Composition %1").arg(failure.composition)
-                                    : name,
-                 .detail = QString::fromStdString(failure.detail)});
+                 .tool = QString::fromUtf8(
+                     entry.tool ? mcp::toolName(*entry.tool).data() : "",
+                     entry.tool ? static_cast<qsizetype>(mcp::toolName(*entry.tool).size()) : 0),
+                 .composition =
+                     name.isEmpty() ? tr("Composition %1").arg(failure.composition) : name,
+                 .detail = QString::fromStdString(failure.detail),
+                 .compositionId = failure.composition,
+                 .repeat = 1});
         }
     }
     lastActivityId_ = std::max(lastActivityId_, activity.lastId);
@@ -144,16 +158,32 @@ std::shared_ptr<const mcp::McpServerSnapshot> McpServerAdapter::snapshot() const
 }
 
 void McpServerAdapter::noteCompileFailure(McpCompileFailureNote note) {
-    note.id = compileFailures_.empty() ? 1 : compileFailures_.back().id + 1;
     if (note.at == std::chrono::system_clock::time_point{})
         note.at = std::chrono::system_clock::now();
+    if (feedback_ != nullptr)
+        static_cast<void>(feedback_->noteAgentCompileFailure(note.compositionId));
+    // #746: the same composition failing again within the quiet interval is one line.
+    if (note.compositionId != 0)
+        for (auto it = compileFailures_.rbegin(); it != compileFailures_.rend(); ++it) {
+            if (it->compositionId != note.compositionId)
+                continue;
+            if (note.at - it->at < UiFeedback::kAgentQuietInterval) {
+                ++it->repeat;
+                it->at = note.at;
+                it->detail = std::move(note.detail);
+                it->client = std::move(note.client);
+                it->tool = std::move(note.tool);
+                Q_EMIT compileFailureNoted();
+                return;
+            }
+            break;
+        }
+    note.id = compileFailures_.empty() ? 1 : compileFailures_.back().id + 1;
     compileFailures_.push_back(std::move(note));
     // The log is bounded like the panel's list; the oldest note goes first.
     constexpr std::size_t kCap = 256;
     if (compileFailures_.size() > kCap)
         compileFailures_.erase(compileFailures_.begin());
-    if (feedback_ != nullptr)
-        feedback_->play(FeedbackEvent::Warning);
     Q_EMIT compileFailureNoted();
 }
 

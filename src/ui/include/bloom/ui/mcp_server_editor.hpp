@@ -11,8 +11,10 @@
 #include <QWidget>
 
 #include <cstdint>
+#include <map>
 
 class QListWidget;
+class QListWidgetItem;
 class QScrollArea;
 class QTimer;
 class QVBoxLayout;
@@ -88,6 +90,9 @@ class McpServerEditor final : public QWidget {
     bool syncing_ = false;
     std::uint64_t lastActivityId_ = 0;
     std::uint64_t lastCompileFailureId_ = 0;
+    // #746: the line each shown compile-failure note is on, and the repeat count it shows, so a
+    // coalesced repeat updates its line instead of adding one.
+    std::map<std::uint64_t, std::pair<QListWidgetItem*, std::uint32_t>> compileFailureItems_;
     std::uint64_t shownRevision_ = ~std::uint64_t{0};
     bool narrow_ = false;
 };

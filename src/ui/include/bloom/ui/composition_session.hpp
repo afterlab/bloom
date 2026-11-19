@@ -34,6 +34,7 @@
 
 #include <bloom/commands/result.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -45,6 +46,8 @@
 #include <unordered_map>
 #include <variant>
 #include <vector>
+
+class QTimer;
 
 namespace bloom::commands {
 class Transaction;
@@ -315,7 +318,36 @@ class CompositionSession final : public QObject {
     ~CompositionSession() override;
 
     [[nodiscard]] const document::Snapshot& snapshot() const noexcept;
+    // The document's newest snapshot. Equal to snapshot() except while an agent session holds
+    // panel refreshes (#746): agents read and commit against this one, never a held one.
+    [[nodiscard]] document::Snapshot liveSnapshot() const;
     [[nodiscard]] document::CompositionId compositionId() const noexcept;
+
+    // #746: an agent session's refresh hold. While it is set, an agent's (CommandOrigin::Agent)
+    // commit is adopted at most once per `panelCadence` when `panels` holds (snapshot() and every
+    // panel catch up then, in one snapshotChanged()), and with `viewer` it re-renders nothing: the
+    // evaluation provenance stays on what the Viewer last showed until refreshHeldViewer(). Any
+    // other origin's commit -- the artist's own -- adopts at once and refreshes the Viewer, as
+    // does releasing the hold. The document and the agent's own reads (liveSnapshot()) are never
+    // held; only what the window shows of them waits.
+    struct AgentRefreshHold final {
+        bool panels = true;
+        bool viewer = true;
+        std::chrono::milliseconds panelCadence{1000};
+    };
+    // nullopt releases the hold: whatever waits is adopted and the Viewer refreshed.
+    void setAgentRefreshHold(std::optional<AgentRefreshHold> hold);
+    [[nodiscard]] const std::optional<AgentRefreshHold>& agentRefreshHold() const noexcept {
+        return refreshHold_;
+    }
+    // Adopts what waits now, keeping the Viewer held when the hold says so.
+    void refreshHeldPanels();
+    // Adopts what waits and refreshes the Viewer: on demand, on the artist's interaction.
+    void refreshHeldViewer();
+    [[nodiscard]] bool panelRefreshPending() const noexcept { return panelsDeferred_; }
+    [[nodiscard]] bool viewerRefreshPending() const noexcept {
+        return panelsDeferred_ || evaluationDeferred_;
+    }
     [[nodiscard]] const document::Composition* composition() const noexcept;
     // #716: the status bar's words for a composition whose Output node was deleted, and the
     // refusal playback and export make of one: true (with that message through commandRejected())
@@ -994,6 +1026,9 @@ class CompositionSession final : public QObject {
     // #645: the Viewer's drill level changed (viewerLevel()).
     void viewerLevelChanged();
     void historyChanged();
+    // A refusal the artist should hear and read (the "refused" cue and the status bar). Never
+    // emitted for an agent's command (#746): an agent's refusal is answered over MCP and listed in
+    // the MCP Server activity, and an agent edit that retires old undo steps says nothing here.
     void commandRejected(const QString& message);
     // Emitted on begin/update/cancel/commit of a position interaction (docs/architecture/
     // animation-and-time.md, "Direct Manipulation And Preview Overrides").
@@ -1036,6 +1071,11 @@ class CompositionSession final : public QObject {
                                               const QString& label);
     [[nodiscard]] bool execute(commands::Transaction&& transaction);
     void handleCommandEvent(const commands::CommandEvent& event);
+    // Adopts the document's newest snapshot: what a RevisionChanged event did before #746, with
+    // `evidence` the command's result (null for a deferred adoption, which resets conservatively)
+    // and `holdEvaluation` keeping the Viewer's provenance where it was.
+    void adoptDocumentSnapshot(const commands::CommandResult* evidence, bool holdEvaluation);
+    void deferPanelRefresh();
     [[nodiscard]] bool handleResult(const commands::CommandResult& result);
     [[nodiscard]] const document::NodeRecord*
     nodeForSelection(const CompositionSelection& selection) const noexcept;
@@ -1225,6 +1265,11 @@ class CompositionSession final : public QObject {
     commands::CommandObserverId commandObserverId_ = 0;
     std::shared_ptr<CommandObserverState> commandObserverState_;
     document::Snapshot snapshot_;
+    // #746: an agent session's refresh hold and what it holds back.
+    std::optional<AgentRefreshHold> refreshHold_;
+    bool panelsDeferred_ = false;
+    bool evaluationDeferred_ = false;
+    QTimer* deferredRefreshTimer_ = nullptr;
     // TEMPORAL-2A time-indexed provenance. Sorted, non-overlapping, full-cover spans of the active
     // composition's time, each naming a genuine snapshot. Empty until the first refresh; then a
     // single full-cover span of the live snapshot.

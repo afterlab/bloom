@@ -342,6 +342,16 @@ void CompositionSession::withdrawPendingEntryLayer() {
 }
 
 commands::CommandResult CompositionSession::runTransaction(commands::Transaction&& transaction) {
+    // #746: an agent session can hold the window behind the document, and only by the agent's own
+    // commits. The artist's edit built against what the window shows first catches the window up
+    // (panels and Viewer) and then lands on the newest revision, so it is never refused as stale
+    // and never lost; its operations still validate against that revision.
+    if (panelsDeferred_ && transaction.origin() == commands::CommandOrigin::User) {
+        const auto shown = snapshot_.revision();
+        refreshHeldViewer();
+        if (transaction.expectedRevision() == shown)
+            transaction.setExpectedRevision(snapshot_.revision());
+    }
     if (!pendingEntryLayer_ || foldingEntryLayer_)
         return commandStack_->execute(std::move(transaction));
     const auto pending = *pendingEntryLayer_;

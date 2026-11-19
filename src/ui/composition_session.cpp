@@ -469,6 +469,12 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
     commandObserverId_ = 0;
     attachCommandObserver();
     snapshot_ = document_->snapshot();
+    // #746: a replaced project ends the agent session that held this one's refreshes.
+    refreshHold_.reset();
+    panelsDeferred_ = false;
+    evaluationDeferred_ = false;
+    if (deferredRefreshTimer_ != nullptr)
+        deferredRefreshTimer_->stop();
     // Reset the time-indexed evaluation provenance to the newly bound document BEFORE any signal is
     // published, so no observer can pair a new document with the old document's eval state, and a
     // same-numeric-ID document can never reuse it.
@@ -2336,140 +2342,181 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
         emit historyChanged();
         return;
     }
+    // #746: an agent's edit is answered over MCP; retiring undo steps for it is no refusal of the
+    // artist's, so it plays no cue and flashes no status message.
     if (event.kind == commands::CommandEventKind::HistoryChanged &&
-        event.result.historyEntriesDropped != 0) {
+        event.result.historyEntriesDropped != 0 &&
+        event.result.origin != commands::CommandOrigin::Agent) {
         emit commandRejected(
             QStringLiteral("Undo memory limit reached: %1 oldest undo step(s) were retired")
                 .arg(static_cast<qulonglong>(event.result.historyEntriesDropped)));
     }
     if (event.kind == commands::CommandEventKind::RevisionChanged) {
-        const auto previousRevision = snapshot_.revision();
-        const auto previousWorkArea = workArea();
-        // SPLIT-2: capture the PRE-command live snapshot before it is replaced. Undo's before-tail
-        // identity exists in this graph, not the new one.
-        const auto previousSnapshot = snapshot_;
-        snapshot_ = document_->snapshot();
-        const bool rangeChanged = workArea() != previousWorkArea;
-        const bool revisionAdvanced = snapshot_.revision() != previousRevision;
-        // TEMPORAL-2A: update the time-indexed provenance BEFORE invalidating interactions or
-        // cancelling value edits, because both emit signals whose handlers may build a request and
-        // must already see the provenance they are allowed to evaluate.
-        bool provenanceChanged = false;
-        bool retainedChanged = false;
-        if (revisionAdvanced) {
-            // Trust the evidence only on a contiguous command chain: the operation's own before and
-            // after revisions must match the session's previous and new live revisions. A stale or
-            // external revision, or any mismatch, resets conservatively.
-            const bool chainValid = event.result.succeeded() &&
-                                    event.result.beforeRevision == previousRevision &&
-                                    event.result.afterRevision == snapshot_.revision();
-            // A contiguous non-render-affecting command is neutral regardless of its affected-time
-            // footprint: preserve every retained span exactly, so no reset and no provenance
-            // change. A missing affected-time footprint is NOT neutral by itself: a
-            // render-affecting command with no footprint means a whole invalidation and resets. A
-            // non-contiguous (stale or external) chain resets as well.
-            if (!chainValid ||
-                (event.result.renderAffecting && !event.result.affectedTimes.has_value() &&
-                 !event.result.affectedComposition.has_value())) {
-                // Whole/unknown/mixed (or stale/external revision): conservative full-live reset.
-                // A whole render names no composition, so every retained composition goes too.
-                provenanceChanged = resetEvaluationRangesToLive();
-                retainedChanged = !retainedRanges_.empty();
-                retainedRanges_.clear();
-            } else if (event.result.renderAffecting && !event.result.affectedTimes.has_value()) {
-                // #355: a whole render confined to one composition resets only the compositions
-                // that render it; every other composition keeps its retained spans.
-                retainedChanged = applyFootprintToRetained(event.result, previousSnapshot);
-                DependentsCache dependents;
-                if (rendersThrough(evaluationRanges_, compositionId_,
-                                   *event.result.affectedComposition, dependents))
-                    provenanceChanged = resetEvaluationRangesToLive();
-            } else if (event.result.renderAffecting &&
-                       event.result.affectedTimes->compositionId != compositionId_) {
-                // #355: another composition's finite edit. The active composition keeps every span
-                // unless it renders that composition through a reachable nested reference and the
-                // edit actually changed something there.
-                retainedChanged = applyFootprintToRetained(event.result, previousSnapshot);
-                DependentsCache dependents;
-                if (!event.result.affectedTimes->intervals.empty() &&
-                    rendersThrough(evaluationRanges_, compositionId_,
-                                   event.result.affectedTimes->compositionId, dependents))
-                    provenanceChanged = resetEvaluationRangesToLive();
-            } else if (event.result.renderAffecting) {
-                retainedChanged = applyFootprintToRetained(event.result, previousSnapshot);
-                // SPLIT-2: a finite footprint replaces the changed pixel intervals with live (which
-                // clears their mappings) and composes any geometry remaps onto the unaffected
-                // segments, so an equivalent split keeps BOTH halves' cached pixels while their
-                // exposed geometry targets the current graph.
-                const bool hadRanges = !evaluationRanges_.empty();
-                const auto beforeRanges = evaluationRanges_;
-                bool trustworthy = false;
-                const auto* remaps = event.result.layerIdentityRemaps.has_value()
-                                         ? &*event.result.layerIdentityRemaps
-                                         : nullptr;
-                static_cast<void>(applyFiniteEvaluationFootprint(
-                    evaluationRanges_, compositionId_, *event.result.affectedTimes, remaps,
-                    previousSnapshot, trustworthy));
-                if (!trustworthy) {
-                    // The finite step may already have mutated ranges before failing, so
-                    // resetEvaluationRangesToLive()'s own "did it change" answer cannot be trusted:
-                    // compare the FINAL ranges against the ORIGINAL snapshot of them.
-                    static_cast<void>(resetEvaluationRangesToLive());
-                }
-                // Compute provenance change from beforeRanges vs the final ranges in every path, so
-                // a fail-closed reset after a partial finite mutation still emits
-                // documentEvaluationChanged.
-                provenanceChanged =
-                    !hadRanges || !std::ranges::equal(
-                                      beforeRanges, evaluationRanges_,
-                                      [](const EvaluationSnapshotRange& left,
-                                         const EvaluationSnapshotRange& right) {
-                                          return left.start == right.start &&
-                                                 left.end == right.end &&
-                                                 sameSnapshotOwner(left.snapshot, right.snapshot) &&
-                                                 sameMappings(left.mappings, right.mappings);
-                                      });
-            } else {
-                // Neutral: a contiguous non-render-affecting command preserves every retained span
-                // and never emits documentEvaluationChanged.
+        // #746: while an agent session holds refreshes, an agent's commit is adopted later (the
+        // panels at a slow cadence) and the Viewer is not re-rendered for it. Every other origin's
+        // commit, the artist's own above all, adopts at once and refreshes the Viewer.
+        if (refreshHold_.has_value() && event.result.origin == commands::CommandOrigin::Agent) {
+            if (refreshHold_->panels) {
+                deferPanelRefresh();
+                return;
             }
+            adoptDocumentSnapshot(&event.result, refreshHold_->viewer);
+            return;
         }
-        invalidateTransformInteractionOnStaleRevision();
-        if (valueEdit_ && valueEdit_->revision != snapshot_.revision()) {
-            cancelValueEdit();
-        }
-        if (keyframePreview_ && keyframePreview_->revision != snapshot_.revision())
-            clearKeyframePreview();
-        if (revisionAdvanced) {
-            lastDocumentChangeAffectedEvaluation_ = provenanceChanged;
-            normalizeSelection();
-            normalizeViewerLevel();
-            emit snapshotChanged();
-            // #716: the edit that takes the composition's Output away says what that means, however
-            // it was made (Delete, Dissolve, a script, an agent, redo).
-            if (const auto* before = previousSnapshot.project().findComposition(compositionId_);
-                before != nullptr && before->graph().compositionOutput().has_value())
-                static_cast<void>(refuseWithoutOutput());
-            // A document command moved the time-indexed provenance. This is the distinct signal a
-            // finite clip-range edit emits; evaluationChanged() is reserved for non-document
-            // transitions (display qualification, colour settings, rebind) that always force work.
-            if (provenanceChanged)
-                emit documentEvaluationChanged();
-            if (retainedChanged)
-                emit retainedEvaluationChanged();
-        }
-        // The effective range is compared against the live snapshot before and after the edit, so a
-        // mixed transaction that changed no range, or a range edit to another composition, is a
-        // no-op here. A range edit never advances evaluation, so this is the only signal it emits.
-        if (rangeChanged)
-            emit workAreaChanged();
+        adoptDocumentSnapshot(&event.result, false);
         return;
     }
     emit historyChanged();
 }
 
+void CompositionSession::adoptDocumentSnapshot(const commands::CommandResult* const evidence,
+                                               const bool holdEvaluation) {
+    // A deferred evaluation (an agent session's held Viewer) or a deferred adoption has no
+    // contiguous evidence: the next adoption that refreshes the Viewer resets conservatively.
+    const bool evaluationDeferred = evaluationDeferred_;
+    if (!holdEvaluation)
+        evaluationDeferred_ = false;
+    panelsDeferred_ = false;
+    if (deferredRefreshTimer_ != nullptr)
+        deferredRefreshTimer_->stop();
+    static const commands::CommandResult kNoEvidence{};
+    const auto& result = evidence != nullptr ? *evidence : kNoEvidence;
+    const auto previousRevision = snapshot_.revision();
+    const auto previousWorkArea = workArea();
+    // SPLIT-2: capture the PRE-command live snapshot before it is replaced. Undo's before-tail
+    // identity exists in this graph, not the new one.
+    const auto previousSnapshot = snapshot_;
+    snapshot_ = document_->snapshot();
+    const bool rangeChanged = workArea() != previousWorkArea;
+    const bool revisionAdvanced = snapshot_.revision() != previousRevision;
+    // TEMPORAL-2A: update the time-indexed provenance BEFORE invalidating interactions or
+    // cancelling value edits, because both emit signals whose handlers may build a request and
+    // must already see the provenance they are allowed to evaluate.
+    bool provenanceChanged = false;
+    bool retainedChanged = false;
+    if (revisionAdvanced && holdEvaluation) {
+        // #746: an agent session defers the Viewer. The evaluation provenance stays on the snapshot
+        // the Viewer last showed, so no frame is re-rendered for this commit; the next refresh
+        // resets it conservatively.
+        evaluationDeferred_ = true;
+    } else if (revisionAdvanced || (evaluationDeferred && !holdEvaluation)) {
+        // Trust the evidence only on a contiguous command chain: the operation's own before and
+        // after revisions must match the session's previous and new live revisions. A stale or
+        // external revision, or any mismatch, resets conservatively.
+        const bool chainValid = evidence != nullptr && !evaluationDeferred &&
+                                evidence->succeeded() &&
+                                evidence->beforeRevision == previousRevision &&
+                                evidence->afterRevision == snapshot_.revision();
+        // A contiguous non-render-affecting command is neutral regardless of its affected-time
+        // footprint: preserve every retained span exactly, so no reset and no provenance
+        // change. A missing affected-time footprint is NOT neutral by itself: a
+        // render-affecting command with no footprint means a whole invalidation and resets. A
+        // non-contiguous (stale or external) chain resets as well.
+        if (!chainValid || (result.renderAffecting && !result.affectedTimes.has_value() &&
+                            !result.affectedComposition.has_value())) {
+            // Whole/unknown/mixed (or stale/external revision): conservative full-live reset.
+            // A whole render names no composition, so every retained composition goes too.
+            provenanceChanged = resetEvaluationRangesToLive();
+            retainedChanged = !retainedRanges_.empty();
+            retainedRanges_.clear();
+        } else if (result.renderAffecting && !result.affectedTimes.has_value()) {
+            // #355: a whole render confined to one composition resets only the compositions
+            // that render it; every other composition keeps its retained spans.
+            retainedChanged = applyFootprintToRetained(result, previousSnapshot);
+            DependentsCache dependents;
+            if (rendersThrough(evaluationRanges_, compositionId_, *result.affectedComposition,
+                               dependents))
+                provenanceChanged = resetEvaluationRangesToLive();
+        } else if (result.renderAffecting &&
+                   result.affectedTimes->compositionId != compositionId_) {
+            // #355: another composition's finite edit. The active composition keeps every span
+            // unless it renders that composition through a reachable nested reference and the
+            // edit actually changed something there.
+            retainedChanged = applyFootprintToRetained(result, previousSnapshot);
+            DependentsCache dependents;
+            if (!result.affectedTimes->intervals.empty() &&
+                rendersThrough(evaluationRanges_, compositionId_,
+                               result.affectedTimes->compositionId, dependents))
+                provenanceChanged = resetEvaluationRangesToLive();
+        } else if (result.renderAffecting) {
+            retainedChanged = applyFootprintToRetained(result, previousSnapshot);
+            // SPLIT-2: a finite footprint replaces the changed pixel intervals with live (which
+            // clears their mappings) and composes any geometry remaps onto the unaffected
+            // segments, so an equivalent split keeps BOTH halves' cached pixels while their
+            // exposed geometry targets the current graph.
+            const bool hadRanges = !evaluationRanges_.empty();
+            const auto beforeRanges = evaluationRanges_;
+            bool trustworthy = false;
+            const auto* remaps =
+                result.layerIdentityRemaps.has_value() ? &*result.layerIdentityRemaps : nullptr;
+            static_cast<void>(applyFiniteEvaluationFootprint(evaluationRanges_, compositionId_,
+                                                             *result.affectedTimes, remaps,
+                                                             previousSnapshot, trustworthy));
+            if (!trustworthy) {
+                // The finite step may already have mutated ranges before failing, so
+                // resetEvaluationRangesToLive()'s own "did it change" answer cannot be trusted:
+                // compare the FINAL ranges against the ORIGINAL snapshot of them.
+                static_cast<void>(resetEvaluationRangesToLive());
+            }
+            // Compute provenance change from beforeRanges vs the final ranges in every path, so
+            // a fail-closed reset after a partial finite mutation still emits
+            // documentEvaluationChanged.
+            provenanceChanged =
+                !hadRanges ||
+                !std::ranges::equal(
+                    beforeRanges, evaluationRanges_,
+                    [](const EvaluationSnapshotRange& left, const EvaluationSnapshotRange& right) {
+                        return left.start == right.start && left.end == right.end &&
+                               sameSnapshotOwner(left.snapshot, right.snapshot) &&
+                               sameMappings(left.mappings, right.mappings);
+                    });
+        } else {
+            // Neutral: a contiguous non-render-affecting command preserves every retained span
+            // and never emits documentEvaluationChanged.
+        }
+    }
+    invalidateTransformInteractionOnStaleRevision();
+    if (valueEdit_ && valueEdit_->revision != snapshot_.revision()) {
+        cancelValueEdit();
+    }
+    if (keyframePreview_ && keyframePreview_->revision != snapshot_.revision())
+        clearKeyframePreview();
+    if (revisionAdvanced) {
+        lastDocumentChangeAffectedEvaluation_ = provenanceChanged;
+        normalizeSelection();
+        normalizeViewerLevel();
+        emit snapshotChanged();
+        // #716: the edit that takes the composition's Output away says what that means, however
+        // it was made (Delete, Dissolve, a script, an agent, redo).
+        if (const auto* before = previousSnapshot.project().findComposition(compositionId_);
+            before != nullptr && before->graph().compositionOutput().has_value())
+            static_cast<void>(refuseWithoutOutput());
+        // A document command moved the time-indexed provenance. This is the distinct signal a
+        // finite clip-range edit emits; evaluationChanged() is reserved for non-document
+        // transitions (display qualification, colour settings, rebind) that always force work.
+        if (provenanceChanged)
+            emit documentEvaluationChanged();
+        if (retainedChanged)
+            emit retainedEvaluationChanged();
+    } else if (provenanceChanged || retainedChanged) {
+        // #746: the Viewer an agent session held is refreshed with no new revision to adopt.
+        lastDocumentChangeAffectedEvaluation_ = provenanceChanged;
+        if (provenanceChanged)
+            emit documentEvaluationChanged();
+        if (retainedChanged)
+            emit retainedEvaluationChanged();
+    }
+    // The effective range is compared against the live snapshot before and after the edit, so a
+    // mixed transaction that changed no range, or a range edit to another composition, is a
+    // no-op here. A range edit never advances evaluation, so this is the only signal it emits.
+    if (rangeChanged)
+        emit workAreaChanged();
+}
+
 bool CompositionSession::handleResult(const commands::CommandResult& result) {
-    if (!result.succeeded()) {
+    // #746: an agent's refusal is answered over MCP (the transact result) and listed in the MCP
+    // Server activity; it plays no "refused" cue and flashes no status message.
+    if (!result.succeeded() && result.origin != commands::CommandOrigin::Agent) {
         const auto message = statusMessage(result);
         if (!message.isEmpty()) {
             emit commandRejected(message);

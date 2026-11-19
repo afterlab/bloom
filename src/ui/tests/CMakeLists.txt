@@ -1509,6 +1509,19 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# #746: an agent's session mode (grouped undo, the artist's edits, the deferred refresh, the quiet
+# summary and every way a session closes).
+add_executable(bloom_agent_session_test agent_session_tests.cpp)
+target_link_libraries(bloom_agent_session_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_agent_session_test)
+bloom_add_test(
+    NAME bloom.ui.agent-session
+    COMMAND bloom_agent_session_test
+    LABELS ui unit
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 add_executable(bloom_export_panel_test export_panel_tests.cpp)
 target_include_directories(bloom_export_panel_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_export_panel_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)

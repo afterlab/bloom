@@ -6,6 +6,7 @@
 #include <bloom/document/project.hpp>
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/project_session.hpp>
+#include <bloom/ui/agent_session_controller.hpp>
 #include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -104,6 +105,10 @@ void McpLiveUiBinding::setExportQueue(ExportQueueAdapter* const exportQueue) {
 
 void McpLiveUiBinding::setTaskMonitor(TaskMonitorModel* const tasks) { tasks_ = tasks; }
 
+void McpLiveUiBinding::setAgentSessions(AgentSessionController* const sessions) {
+    agentSessions_ = sessions;
+}
+
 mcp::McpLiveUiPort McpLiveUiBinding::port() {
     return {
         .revealComposition =
@@ -155,6 +160,22 @@ mcp::McpLiveUiPort McpLiveUiBinding::port() {
                 runScript(std::move(request), std::move(done));
             },
         .cancelScript = [this] { cancelScript(); },
+        .beginAgentSession =
+            [this](const mcp::McpAgentSessionBegin& request) {
+                return agentSessions_ ? agentSessions_->begin(request)
+                                      : mcp::McpAgentSessionResult{
+                                            McpUiRefusal::Unbound,
+                                            "This Bloom window does not offer agent sessions.",
+                                            {}};
+            },
+        .endAgentSession =
+            [this](const mcp::McpAgentSessionEnd& request) {
+                return agentSessions_ ? agentSessions_->end(request)
+                                      : mcp::McpAgentSessionResult{
+                                            McpUiRefusal::Unbound,
+                                            "This Bloom window does not offer agent sessions.",
+                                            {}};
+            },
         .undoHistory = [this] { return undoHistory(); },
         .viewerState = [this] { return viewerState(); },
         .previewCache = [this] { return previewCache(); },
@@ -168,6 +189,8 @@ mcp::McpLiveUiPort McpLiveUiBinding::port() {
 
 bool McpLiveUiBinding::revealComposition(const document::CompositionId composition,
                                          const std::optional<core::RationalTime> time) {
+    // #746: an agent asking to see something is a Viewer refresh on demand.
+    session_.refreshHeldViewer();
     if (!window_ || window_->workspaceHost() == nullptr)
         return false;
     const auto* found = session_.snapshot().project().findComposition(composition);
@@ -191,6 +214,7 @@ bool McpLiveUiBinding::revealComposition(const document::CompositionId compositi
 }
 
 mcp::McpUiResult McpLiveUiBinding::activateComposition(const document::CompositionId composition) {
+    session_.refreshHeldViewer();
     const auto* found = session_.snapshot().project().findComposition(composition);
     if (found == nullptr)
         return uiResult(McpUiRefusal::UnknownTarget,
@@ -203,6 +227,9 @@ mcp::McpUiResult McpLiveUiBinding::activateComposition(const document::Compositi
 // ---- selection.set -----------------------------------------------------------------------------
 
 mcp::McpUiResult McpLiveUiBinding::setSelection(const mcp::McpSelectionRequest& request) {
+    // #746: the window catches up with an agent session first, so what the agent just made can
+    // be selected.
+    session_.refreshHeldPanels();
     const auto* target = session_.snapshot().project().findComposition(request.composition);
     if (target == nullptr)
         return uiResult(McpUiRefusal::UnknownTarget,
@@ -290,6 +317,7 @@ mcp::McpUiResult McpLiveUiBinding::setSelection(const mcp::McpSelectionRequest& 
 
 mcp::McpUiResult McpLiveUiBinding::transport(const mcp::McpTransportRequest& request) {
     using Action = mcp::McpTransportAction;
+    session_.refreshHeldViewer();
     const auto context = frameContextFor(session_);
     if (!context)
         return uiResult(McpUiRefusal::InvalidArgument,
@@ -362,6 +390,7 @@ mcp::McpUiResult McpLiveUiBinding::transport(const mcp::McpTransportRequest& req
 // ---- viewer.set --------------------------------------------------------------------------------
 
 mcp::McpUiResult McpLiveUiBinding::setViewer(const mcp::McpViewerRequest& request) {
+    session_.refreshHeldViewer();
     // #645: the drill level is session state; it is checked first and applies without a Viewer.
     const bool levelOnly = request.level || request.points;
     if (levelOnly) {

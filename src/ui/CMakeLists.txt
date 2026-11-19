@@ -490,6 +490,7 @@ target_sources(
         audio_playback_session.cpp
         audio_device_control.cpp
         composition_session_drivers.cpp
+        composition_session_agent_refresh.cpp
         composition_session_entries.cpp
         composition_session_viewer_level.cpp
         entry_layer_session_operations.cpp
@@ -501,6 +502,7 @@ target_sources(
         editor_chrome.cpp
         editor_registry.cpp
         live_session_adapter.cpp
+        agent_session_controller.cpp
         script_panel.cpp
         script_panel.hpp
         acceleration_status.cpp
@@ -867,6 +869,7 @@ target_sources(
             include/bloom/ui/project_file_open_events.hpp
             include/bloom/ui/project_host.hpp
             include/bloom/ui/live_session_adapter.hpp
+            include/bloom/ui/agent_session_controller.hpp
             include/bloom/ui/ram_preview_controller.hpp
             include/bloom/ui/properties_editor.hpp
             include/bloom/ui/memory_budget_controller.hpp
