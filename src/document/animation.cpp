@@ -68,6 +68,27 @@ template <typename Curve> void normalizeFinalInterpolation(Curve& curve) noexcep
     }
 }
 
+// Calls `visit` with the id of every keyframe of `record`, every component's keys included.
+template <typename Visit>
+void forEachKeyframeId(const AnimationCurveRecord& record, Visit&& visit) {
+    std::visit(
+        [&](const auto& curve) {
+            using Curve = std::decay_t<decltype(curve)>;
+            if constexpr (bloom::document::kWholeValueAnimationCurve<Curve>) {
+                for (const auto& keyframe : curve.keyframes) {
+                    visit(keyframe.id);
+                }
+            } else {
+                for (const auto& component : curve.components) {
+                    for (const auto& keyframe : component.keyframes) {
+                        visit(keyframe.id);
+                    }
+                }
+            }
+        },
+        record);
+}
+
 template <typename Curve> [[nodiscard]] bool curveCanEnterStore(const Curve& curve) {
     if (!curve.id.isValid() || curve.keyframes.empty()) {
         return false;
@@ -560,21 +581,24 @@ bool AnimationCurveStore::insert(AnimationCurveRecord record) {
     if (!valid || find(id) != nullptr) {
         return false;
     }
-    const bool hasDuplicateKeyframe = std::visit(
-        [&](const auto& curve) {
-            const auto duplicated = [&](const auto& keys) {
-                return std::ranges::any_of(
-                    keys, [&](const auto& keyframe) { return containsKeyframe(keyframe.id); });
-            };
-            if constexpr (kWholeValueCurve<std::decay_t<decltype(curve)>>) {
-                return duplicated(curve.keyframes);
-            } else {
-                return std::ranges::any_of(curve.components, [&](const auto& component) {
-                    return duplicated(component.keyframes);
-                });
-            }
-        },
-        record);
+    // The record's keyframe ids must not already be in the store. One pass over the store against
+    // the record's sorted ids: checking each new id by scanning the whole store made rebuilding a
+    // keyframe-dense composition quadratic (issue #737: minutes for a 274,000-key project).
+    std::vector<KeyframeId> recordIds;
+    forEachKeyframeId(record, [&](const KeyframeId id) { recordIds.push_back(id); });
+    std::ranges::sort(recordIds);
+    bool hasDuplicateKeyframe = false;
+    for (const auto& existing : records_) {
+        forEachKeyframeId(existing, [&](const KeyframeId id) {
+            // Ids are allocated in order: a stored id is almost always outside the record's range.
+            hasDuplicateKeyframe =
+                hasDuplicateKeyframe || (!(id < recordIds.front()) && !(recordIds.back() < id) &&
+                                         std::ranges::binary_search(recordIds, id));
+        });
+        if (hasDuplicateKeyframe) {
+            break;
+        }
+    }
 
     if (hasDuplicateKeyframe) {
         return false;

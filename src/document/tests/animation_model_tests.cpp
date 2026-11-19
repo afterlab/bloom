@@ -20,6 +20,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -281,6 +282,66 @@ void testStoreRejectsMalformedCurves(ExpectationContext& expectations) {
             !bloom::document::isDefaultKeyframeHandle(
                 {bloom::document::kDefaultKeyframeHandleTime, -0.0}),
         "the default-handle test is bitwise, so a negative zero offset is not the default");
+}
+
+// A keyframe id already in the store rejects a new curve however the two curves hold it, and a
+// keyframe-dense composition fills its store in time linear in its keys per curve (issue #737:
+// rebuilding a 274,000-key project during save verification checked each key against the whole
+// store and took minutes).
+void testStoreRejectsKeyframeIdsAlreadyStored(ExpectationContext& expectations) {
+    AnimationCurveStore store;
+    expectations.expect(
+        store.insert(ScalarAnimationCurve{id<AnimationCurveId>(1),
+                                          {scalarKey(5, RationalTime::fromInteger(0), 0.0),
+                                           scalarKey(6, RationalTime::fromInteger(1), 1.0)}}) &&
+            store.insert(
+                Vec2AnimationCurve{id<AnimationCurveId>(2),
+                                   {component({scalarKey(7, RationalTime::fromInteger(0), 0.0)}),
+                                    component({scalarKey(8, RationalTime::fromInteger(0), 0.0)})}}),
+        "curves with distinct keyframe ids insert");
+    expectations.expect(
+        !store.insert(ScalarAnimationCurve{id<AnimationCurveId>(3),
+                                           {scalarKey(9, RationalTime::fromInteger(0), 0.0),
+                                            scalarKey(6, RationalTime::fromInteger(1), 0.0)}}) &&
+            !store.insert(Vec2AnimationCurve{
+                id<AnimationCurveId>(3),
+                {component({scalarKey(9, RationalTime::fromInteger(0), 0.0)}),
+                 component({scalarKey(5, RationalTime::fromInteger(0), 0.0)})}}) &&
+            !store.insert(ScalarAnimationCurve{
+                id<AnimationCurveId>(3), {scalarKey(8, RationalTime::fromInteger(0), 0.0)}}) &&
+            store.records().size() == 2,
+        "a whole-value or component key whose id is already stored rejects the curve");
+    expectations.expect(
+        store.insert(ScalarAnimationCurve{id<AnimationCurveId>(3),
+                                          {scalarKey(9, RationalTime::fromInteger(0), 0.0)}}),
+        "and the same curve inserts once its ids are free");
+
+    // 1,000 two-component curves of 300 keys each: 600,000 keys. Checking each new key against the
+    // whole store visits about 10^11 keys; one pass per curve visits about 3 * 10^8.
+    AnimationCurveStore dense;
+    constexpr std::uint64_t kCurves = 1000;
+    constexpr std::uint64_t kKeysPerComponent = 300;
+    std::uint64_t nextKey = 1;
+    bool insertedAll = true;
+    for (std::uint64_t curve = 1; curve <= kCurves; ++curve) {
+        std::vector<ScalarKeyframe> x;
+        std::vector<ScalarKeyframe> y;
+        for (std::uint64_t key = 0; key < kKeysPerComponent; ++key) {
+            const auto at = RationalTime::fromInteger(static_cast<std::int64_t>(key));
+            x.push_back(scalarKey(nextKey++, at, 0.0));
+            y.push_back(scalarKey(nextKey++, at, 1.0));
+        }
+        insertedAll =
+            insertedAll &&
+            dense.insert(Vec2AnimationCurve{id<AnimationCurveId>(curve),
+                                            {component(std::move(x)), component(std::move(y))}});
+    }
+    expectations.expect(insertedAll && dense.records().size() == kCurves,
+                        "a keyframe-dense store of 600,000 keys fills");
+    expectations.expect(!dense.insert(ScalarAnimationCurve{
+                            id<AnimationCurveId>(kCurves + 1),
+                            {scalarKey(nextKey / 2, RationalTime::fromInteger(0), 0.0)}}),
+                        "and still rejects a key id it already holds");
 }
 
 void testCompositionAnimationValidation(ExpectationContext& expectations) {
@@ -690,6 +751,7 @@ int main() {
         ExpectationContext expectations;
         testStoreCanonicalizationAndMutation(expectations);
         testStoreRejectsMalformedCurves(expectations);
+        testStoreRejectsKeyframeIdsAlreadyStored(expectations);
         testCompositionAnimationValidation(expectations);
         testProjectGlobalAnimationIds(expectations);
         testAnimationAllocatorAndPublication(expectations);
