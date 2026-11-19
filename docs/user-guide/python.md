@@ -305,7 +305,11 @@ because wiring and keys need the ids of what the first step created: one transac
 layer and node, and a second sets values, parents, mattes, links and keys. Each is an ordinary
 undo step of the same commands every other edit uses, so `result.steps` says how many undos it
 took (`plan.undo()` does them all). Keys go out as columns in one `bloom.ops.animation.set_key_columns`
-call per parameter, so a long key list is one operation. `plan.node(name, node_type)` declares a node
+call per parameter, so a long key list is one operation. To key many parameters in one operation
+yourself, `bloom.ops.animation.set_key_tracks(tracks)` takes a list of
+`{'parameter': ..., 'times': ..., 'values': ..., 'interpolations': ..., 'replace': ...}`
+dictionaries (interpolations and replace optional), one per parameter; if any track is refused,
+nothing is applied. `plan.node(name, node_type)` declares a node
 of any registered type; a node's `.set(role, value)`, `.animate(role, keys)` and
 `.feeds(other, port)` wire it. Layers and nodes are named in the plan; names must be unique
 within it. Times are composition frames unless you pass `seconds=True`.

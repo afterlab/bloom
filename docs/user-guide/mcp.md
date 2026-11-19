@@ -68,6 +68,12 @@ the commit bounds a tool result whose `diagnostic` carries `limit` `{name, value
 Refusals of the request's size or JSON shape suggest the columnar key form
 (`bloom.animation.set-key-columns`) and `{"fromFile": ...}` data files.
 
+A refusal for load (the four marked "busy" below) also says when to try again: `retryAfterMs` in
+`error.data` or in the tool's `diagnostic`, the recent commit time (a moving average of how long the
+last edits took from their turn to their result, 250 ms before the first) times the work queued
+ahead of the request plus one, between 100 ms and 30 seconds. Over HTTP, `Retry-After` carries the
+same in whole seconds, rounded up.
+
 | Limit (`limits.<name>`) | Value | Refused with |
 | --- | --- | --- |
 | `requestBytes`: one request (HTTP body or stdio line) | 1 MiB | `-32003` (HTTP 413) |
@@ -79,16 +85,21 @@ Refusals of the request's size or JSON shape suggest the columnar key form
 | `dataFileBytes`: one data file | 16 MiB | `-32010` |
 | `dataFileValues`: JSON values in one data file | 2,000,000 | `-32011` |
 | `dataFileDepth`: levels in one data file | 16 | `-32012` |
-| `inFlightPerClient`: requests one client has executing or waiting (1 on stdio) | 4 | `-32008` (HTTP 503, `Retry-After: 1`) |
-| `pendingMessages`: requests waiting for a worker, all clients | 16 | `-32000` (HTTP 503, `Retry-After: 1`) |
-| `commitQueue`: edits waiting to apply, MCP and the Script editor together (desktop only) | 16 | `bloom.mcp.commit-queue-full` |
+| `inFlightPerClient`: requests one client has executing or waiting (1 on stdio) | 4 | `-32008` (HTTP 503 with `Retry-After`), busy |
+| `pendingMessages`: requests waiting for a worker, all clients | 16 | `-32000` (HTTP 503 with `Retry-After`), busy |
+| `commitQueue`: edits waiting to apply, MCP and the Script editor together (desktop only) | 16 | `bloom.mcp.commit-queue-full`, busy |
 | `commitDeadlineMs`: how long an edit may wait to apply (desktop only) | 30,000 ms | `bloom.mcp.deadline-exceeded`, `bloom.mcp.gesture-open` |
 | `commitWork`: work in one `transact` (desktop only) | 1,000,000 units | `bloom.mcp.commit-too-large` |
 | `transactOutputs`: created ids a `transact` lists in `outputs` | 10,000 | never refused: answered in the summary form |
+| `asyncJobs`: asynchronous `transact` jobs queued or running, all clients (desktop only) | 16 | `bloom.mcp.jobs-full`, busy |
 
 `initialize` also reports `requestWorkers`, `clients`, `connections`, `renderFrames`,
-`retainedEvents`, `eventOutputs` (the ids an `events` record keeps) and `eventsOutputsPerAnswer`.
-Nothing that was refused ran, so send it again once the condition clears.
+`retainedEvents`, `eventOutputs` (the ids an `events` record keeps), `eventsOutputsPerAnswer`,
+`retainedJobs` (finished asynchronous jobs that stay listed: 64), `idempotencyKeys` (keys remembered
+at once: 1,024; the oldest goes first), `idempotencyKeyBytes` (128), `idempotencyWindowMs` (how long
+a key is remembered: 600,000) and `idempotencyAnswerBytes` (the largest answer a key keeps whole:
+64 KiB; a larger one is kept in its compact form). Nothing that was refused ran, so send it again
+once the condition clears.
 
 ### Edits, undo and project changes
 
@@ -108,6 +119,47 @@ queue of 16 edits. The [limits](#limits) table lists every bound an edit can mee
 
 Clients stay connected when you open or create a project. While a project is opening, calls answer
 `bloom.mcp.project-unavailable`; an `events` cursor from the old project reports `resetRequired`.
+
+#### Long edits: asynchronous transact, progress and cancellation
+
+`transact` with `"async": true` answers at once with a job: `{succeeded, async, job:
+"transact-<n>", state, phase, queuedAhead, baseRevision, ...}`. The job runs the edit exactly as a
+synchronous `transact` would, one job at a time in the order they were sent; nothing else waits for
+it. Follow it with:
+
+- **`jobs.wait`** `{job, timeoutMs?}` waits until the job finishes (or `timeoutMs`, default 30 s,
+  passes and the answer says `timedOut`) and returns it with `result`: the job's `transact` answer,
+  the same one a synchronous call would have given. With `_meta.progressToken` the answer is an
+  event stream of `notifications/progress` first. Cancelling the wait leaves the job running.
+- **`jobs.list`** lists it after the Jobs panel's rows, with the string id `transact-<n>`, kind
+  `transact`, `state` (`queued`, `running`, `succeeded`, `failed`, `cancelled`), `phase` (`queued`,
+  `building` its operations, `waiting` behind other edits, `preparing` them, `prepared` and waiting
+  for Bloom to publish it, `publishing`, `checking` compositions, `done`), `completed` of `total`, a
+  `message` such as "Applying operation 120 of 400", its `revision` once applied and its `code`
+  when it did not apply. The newest 64 finished jobs stay listed.
+- **`jobs.cancel`** `{job: "transact-<n>"}` stops a queued job at once and a running one before its
+  edit starts publishing; nothing is applied either way. An edit that has started publishing
+  finishes as one atomic undo step, and `jobs.wait` then shows it `succeeded`.
+
+A job belongs to the project it was sent for: if that project is replaced before the job applies,
+the job fails with `bloom.mcp.project-replaced` and never touches the new project. At most 16 jobs
+are queued or running at once (limit `asyncJobs`). Asynchronous `transact` needs the desktop
+application; `bloom-mcp` answers `bloom.mcp.not-live`.
+
+A synchronous `transact` sent with `_meta.progressToken` reports the same progress as an event
+stream before its answer.
+
+#### Retrying safely: idempotency keys
+
+Give `transact` an `idempotencyKey` (1 to 128 printable ASCII characters, such as a UUID) when a
+request might be sent twice, for example after a timeout. For 10 minutes the same key with the same
+arguments answers what the first request answered, with `idempotentReplay: true`, instead of
+applying the edit again; if the first is still running, the second waits for it. With `async: true`
+the repeat names the same job (and carries its `result` once it finished). Only an edit that reached
+the project is remembered, applied or refused (a stale revision, for example): one that was busy,
+cancelled or outlived its project is forgotten, so sending it again runs it. The same key with
+different arguments is refused with `bloom.mcp.idempotency-conflict` and nothing is applied. Keys
+are shared by every client and kept by both hosts.
 
 ### Projects and the application window
 
@@ -134,8 +186,9 @@ the call passes `discardChanges:true`, and while export jobs run they answer
 | `transport` | `action` (`seek`, `play`, `stop`, `step-forward`, `step-backward`, `go-to-start`, `go-to-end`, `ram-preview`), `time` for `seek`, optional `composition` | `time` counts in the given composition, or the active one. `ram-preview` caches the work area and then plays it, as the RAM Preview button and Numpad 0 do; `stop` also ends a RAM preview that is still caching. |
 | `viewer.set` | any of `display`, `view`, `exposure` (stops), `gamma` (1.0 is neutral), `channel` (`rgba`, `rgb`, `red`, `green`, `blue`, `alpha`), `zoom` (`"fit"`, `"actual-size"` or a factor, 1.0 is 100%), `resolution` (`auto`, `full`, `half`, `quarter`), `look` (true or false), `background` (`solid`, `gray`, `black`, `white`), `transparencyGrid` (true or false), `regionOfInterest` (`{x, y, width, height}` in composition pixels, or `null` to clear it), `level` (group layer ids from the top, outermost first; `[]` is the top level), `points` (a shape layer of that level whose points are edited, or `null`) | Display settings only: they never reach a render or the project. `level` and `points` are the Viewer's drill level, session state like a double-click. |
 | `export.reveal` | optional `job` | Brings the Export editor into view and, with `job`, selects it, as the Jobs panel's **Show in Export** does. `bloom.mcp.unknown-target` for a job the queue does not hold; `bloom.mcp.failed` when the panel could not be shown. |
-| `jobs.list` | none | The Jobs panel's rows: `{id, name, phase, state, completed, total, canCancel, cancellationRequested, exportJob}`. An export run's row names its `exportJob`. |
-| `jobs.cancel` | `job` | The Jobs panel's **Cancel**. `bloom.mcp.unknown-target` for a job it does not list; `bloom.mcp.invalid-argument` for a job it cannot cancel (an export run: use `export.stop`). |
+| `jobs.list` | none | The Jobs panel's rows: `{id, name, phase, state, completed, total, canCancel, cancellationRequested, exportJob}`, then the asynchronous `transact` jobs (string id `transact-<n>`, `kind: "transact"`; see [Long edits](#long-edits-asynchronous-transact-progress-and-cancellation)). An export run's row names its `exportJob`. |
+| `jobs.cancel` | `job` | The Jobs panel's **Cancel**, or an asynchronous `transact` job's (`"transact-<n>"`). `bloom.mcp.unknown-target` for a job it does not list (`bloom.mcp.unknown-job` for a transact job); `bloom.mcp.invalid-argument` for a job it cannot cancel (an export run: use `export.stop`) or one that has finished. |
+| `jobs.wait` | `job`, optional `timeoutMs` | Waits for an asynchronous `transact` job and returns it with its `result`; streams progress with a progress token. |
 | `preferences.get` | none | Every preference below with its current value, as `{key: value}`. |
 | `preferences.set` | `preferences`: `{key: value, ...}` (1 to 64) | Edit > Preferences' **OK**: every entry is checked first, then all are saved and applied together. An unknown key or a value out of range answers `bloom.mcp.invalid-argument` naming the key and changes nothing; `bloom.mcp.busy` while a dialog is open. |
 | `dialog.answer` | `button` | Presses one button of the modal dialog that blocks the window (see **Dialogs** below). Off unless the artist switches on Edit > Preferences > General > **Let agents answer open dialogs**: until then `bloom.mcp.not-allowed`. `bloom.mcp.invalid-argument` when no dialog is open or no visible, enabled button has that text, listing the buttons. |
@@ -335,9 +388,9 @@ The endpoint is one path, `/mcp`. `POST` carries one JSON-RPC message (batches a
 and needs `Content-Type: application/json` and an `Accept` that allows both `application/json` and
 `text/event-stream`. `initialize` returns an `Mcp-Session-Id` that every later request carries;
 `DELETE /mcp` ends the session; an ended or expired session answers 404 and the client initializes
-again. A task tool (`render`, `export`, `capture`, `export.wait`) that carries
-`_meta.progressToken` is answered as `text/event-stream`: `notifications/progress` events, then the
-result. `GET` is 405: Bloom sends no server-initiated messages. Requests from a browser `Origin`, a
+again. A task tool (`render`, `export`, `capture`, `export.wait`, `jobs.wait`) or a `transact` that
+carries `_meta.progressToken` is answered as `text/event-stream`: `notifications/progress` events,
+then the result (a call that finishes before it has progress to report answers as plain JSON). `GET` is 405: Bloom sends no server-initiated messages. Requests from a browser `Origin`, a
 `Host` other than `127.0.0.1:<port>` or `localhost:<port>`, or without the token are refused (403
 or 401) before anything else is read. Disconnecting does not cancel a request; send
 `notifications/cancelled`.
@@ -763,6 +816,28 @@ regular `.json` file of at most 16 MiB and 2 million values, at most 16 per call
 never pass through the conversation. Add `"response": "summary"` to `transact` and the answer
 carries `outputSummary` (`count`, `byName` and a SHA-256 `digest` of the full id list) instead of
 listing every created id. Python and `bloom-cli` have the same operation.
+
+**Many parameters at once.** `bloom.animation.set-key-tracks` keys many parameters in one
+operation and one undo step: `tracks` is a list of `{parameter, times, values, interpolations?,
+replace?}`, each exactly the arguments of `set-key-columns` for one parameter (`parameter` is an id
+or a `{"layer", "role"}` reference), and each merged with the same one-pass merge. Every track is
+checked: a track with uneven columns or a parameter that already has a track is refused before
+anything runs, and a track the project refuses when it applies (an unknown parameter, a value of the
+wrong width, two keys at one time) refuses the whole operation, so nothing is applied; the message
+names the track. Its work is every track's keys, within the one-commit bound of 1,000,000. The whole
+list can come from one data file:
+
+```json
+{"name": "transact", "arguments": {"expectedRevision": 7, "response": "summary",
+  "operations": [{"op": "bloom.animation.set-key-tracks",
+    "args": {"composition": 1, "tracks": {"fromFile": "/absolute/path/tracks.json"}}}]}}
+```
+
+with `tracks.json` holding
+`[{"parameter": {"layer": "Title", "role": "opacity"}, "times": [0, 12], "values": [0, 1]},
+{"parameter": 42, "times": [0, 24], "values": [[0, 0], [100, 50]], "interpolations": ["hold"]}]`.
+Python takes the same list of dictionaries (`bloom.ops.animation.set_key_tracks([...])`) and
+`bloom-cli` scripts the same JSON.
 
 **Keys.** `bloom.animation.set-keys` replaces or edits a parameter's keys in one undo step: `keys`
 is a list of `[time, value]` or `[time, value, interpolation]` entries in any order, and `replace`

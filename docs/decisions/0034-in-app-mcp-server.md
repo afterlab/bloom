@@ -41,6 +41,28 @@ is remote code execution behind the MCP token, so it is bounded (source, output 
 cancellable, and its source and output also appear in the Script editor. This supersedes "running
 Script editor Python" in the list above.
 
+Amendment (2026-11-20, issue #747): agents can run long edits asynchronously, retry safely and
+key many parameters in one operation. `transact` takes `async: true`, which answers at once with a
+job id (`transact-<n>`); the core's one job runner runs each job exactly as a synchronous
+`transact` on a lease of the generation it was sent for (a replaced project fails it with
+`bloom.mcp.project-replaced`). Progress (building, waiting in the commit queue, preparing operation
+i of n, prepared, publishing, the compile check) reaches `notifications/progress` for a request
+with a progress token (a synchronous `transact`, or the new live-only Task tool `jobs.wait`, which
+waits for a job and returns its result) and `jobs.list`, which lists transact jobs after the Jobs
+panel's rows; `jobs.cancel` stops a job until its commit starts publishing. Each step is an
+`McpJobEvent` through `McpCoreDependencies::jobEvents`. At most 16 jobs are queued or running
+(limit `asyncJobs`, `bloom.mcp.jobs-full`). `transact` also takes an `idempotencyKey`: for ten
+minutes the same key and arguments answer the original result (or job) instead of applying again,
+the same key with other arguments answers `bloom.mcp.idempotency-conflict`, and an answer where
+nothing reached the project is forgotten. Busy refusals (`inFlightPerClient`, `pendingMessages`,
+`commitQueue`, `asyncJobs`) carry `retryAfterMs` from the queue depth and the live host's recent
+commit time, and HTTP `Retry-After` follows it. `GET` stays 405 here; a server-initiated stream is
+issue #747's D2. The operation `bloom.animation.set-key-tracks` carries `{parameter, times,
+values, interpolations?, replace?}` for many parameters in one operation (one data file for all of
+them over MCP) through the same one-pass key merge, counted per key against the commit bound.
+`bloom-mcp` keeps idempotency keys and answers `async: true` and `jobs.wait` with
+`bloom.mcp.not-live`.
+
 Amendment (2026-11-20, issue #746): agent work is quiet, and agents can open a session. The
 export queue's terminal events carry `transient`. A transient (agent or script) job's outcome,
 an agent's refused command and an agent's compile failure are counted by `UiFeedback` and told
@@ -291,6 +313,8 @@ flows ask the artist about unsaved changes and destinations; the artist owns the
 | Work in one live commit (#744) | 1,000,000 units: one per operation, or per key, keyframe or edit it lists | `bloom.mcp.commit-too-large` |
 | Render request | 10,000 frames (unchanged) | -32602 |
 | Command events retained | 1,024 (unchanged) | `resetRequired` |
+| Asynchronous transact jobs queued or running (#747) | 16 | `bloom.mcp.jobs-full` with `retryAfterMs` |
+| Idempotency keys remembered (#747) | 1,024 for 10 minutes | the oldest is forgotten |
 
 **Amended (#745, #741): every limit is advertised and named.** initialize lists each request
 bound under `capabilities.experimental.bloom.limits`, and a refusal names the limit, its value and

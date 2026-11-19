@@ -239,6 +239,13 @@ revocation rule.
   and the host's shared state, so a host destroyed during preparation is safe: the client sees
   `shutting-down`. A commit that started publishing finishes atomically. An open gesture holds
   publication, not preparation.
+- **Progress and load (#747).** `LiveCallControl::progress`, when a caller sets it (an asynchronous
+  MCP `transact`, or one carrying a progress token), is told on the client thread, without the
+  host's lock, each time its commit moves: queued behind n commits, preparing (operation i of n,
+  through `CommandStack::prepare`'s progress callback), prepared and waiting for the owner, and
+  publishing, after which it can no longer be withdrawn. The host keeps a moving average of how
+  long recent transactions took from their turn to their result (`recentCommitTime()`); MCP derives
+  the `retryAfterMs` of its busy answers from it and the queue depth.
 
 ## MCP On The Live Session
 
@@ -256,6 +263,24 @@ core hands them to `McpServerService::pump()` on the UI thread and waits on the 
 `ExportQueueSubscription`; render, export and capture are transient export queue jobs there.
 `bloom-mcp` keeps its scripting render path for `render`, `export` and `capture` and serves the
 `export.*` tools from a headless export queue over its own session.
+
+**Asynchronous transact (#747).** `transact` with `async: true` is kept as an `McpTransactJob`
+holding the request's own parsed message, and answers with its id at once. One job runner thread
+in the core takes the jobs in order and runs each exactly as a synchronous `transact` (the same
+`runTransact`) on a lease of the live generation it was submitted on; a job whose project was
+replaced fails with `bloom.mcp.project-replaced` (a queued one when the core follows the new
+generation, a running one through its withdrawn commit). Its stop source is `jobs.cancel`'s:
+cancellation reaches the commit until it starts publishing. Every step is an `McpJobEvent`
+(`McpCoreDependencies::jobEvents`): job id, client, state, phase, progress with the submitting
+request's progress token, revision and, when finished, its outcome, compile failures and activity
+summary. The service records a finished job as an activity line of its client, as it records a
+request; a subscription stream can carry the events unchanged. `jobs.wait` waits on the job and
+streams its progress; `jobs.list` and `jobs.cancel` list and stop transact jobs beside the Jobs
+panel's rows. An `idempotencyKey` maps to an `McpIdempotency` entry: the arguments' SHA-256 and the
+remembered answer (or the job), for ten minutes and at most 1,024 keys; an answer where the
+transaction never reached the command stack is forgotten so a retry runs. Asynchronous jobs need
+the live host; `bloom-mcp` keeps idempotency keys but answers `async: true` with
+`bloom.mcp.not-live`.
 
 ## Binding Stack
 

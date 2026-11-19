@@ -447,7 +447,9 @@ at gesture start (or the current revision for a menu/clipboard action), with one
 | `ApplyEasyEase` | Easy Ease, In or Out on the selection; see **Easy Ease** |
 | `PasteKeyframes` | Accepts original parameter IDs, exact destination times, typed values and interpolation. Allocates new IDs, creates compatible animation for constant parameters, and rejects missing/driven targets, invalid values and occupied times without publishing a partial result |
 
-`SetParameterKeys` (MCP `bloom.animation.set-keys` and `set-key-columns`, which share it) merges
+`SetParameterKeys` (MCP `bloom.animation.set-keys` and `set-key-columns`, which share it, and
+each track of `bloom.animation.set-key-tracks`, #747: `SetParameterKeyTracks` applies one per
+parameter to the same draft, so a refused track refuses the transaction) merges
 its keys into the parameter's curve in one pass (#744): duplicate times are found by sorting, each
 key is found on the curve as it was by binary search, new keys are allocated in key order, sorted
 once and merged in, interpolations are set against the merged curve (the key at its last time stays
