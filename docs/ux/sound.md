@@ -105,6 +105,7 @@ Category **E** is an event sound (default on); **I** is an interaction sound (de
 | Project open or copy failed | `openFinished`, `copyFinished` inform dialogs (`main_window.cpp`) | E | render_failed via the Error prompt | On |
 | Recover offered | `projectRecoverUnsaved` confirmation, a Question prompt (`project_host.cpp`) | I | modal_open, like any confirmation | Off |
 | Command refused | `CompositionSession::commandRejected` (`composition_session.cpp`), wired in `apps/bloom/main.cpp` | E | refused | On |
+| Undo steps retired to make room for the artist's edit | `CompositionSession::noticePosted` from `noteUndoRetirement` (`composition_session_panel_rebuild.cpp`) | none | Silent: a status bar notice naming the step limit or the memory limit, once per burst (no notice within 10 s of the previous retirement); it is information, not a refusal (#744) | n/a |
 | Agent's command refused, or undo steps retired for an agent's edit | `CompositionSession::handleResult` and `handleCommandEvent` with `CommandOrigin::Agent` | none | Silent, with no status message: answered over MCP and listed in the MCP Server activity | n/a |
 | Agent's edit broke a composition's compile | `McpServerAdapter::noteCompileFailure` calls `UiFeedback::noteAgentCompileFailure` | E | render_failed (Warning), once per composition per 10 s; held during a quiet agent session | On (agent switch) |
 | Error dialog (any kit prompt with Error tone) | `kit::inform` / `kit::buildConfirm` (`kit/dialog_prompts.cpp`), seen by `InteractionSounds` | E | render_failed | On |

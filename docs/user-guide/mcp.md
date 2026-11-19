@@ -256,7 +256,8 @@ While a session is open:
   agent's next commit starts a new session step after it. `session.end` reports `artistEdits` and
   `undoSteps` (1 unless the artist split the session or `groupUndo` was false).
 - **The panels** (Timeline, Nodes, Properties and the rest) catch up with the agent's commits about
-  once a second instead of rebuilding for every commit. `query`, `transact` and `events` always see
+  once a second instead of rebuilding for every commit. Outside a session they rebuild at most once
+  per display frame for a burst of agent commits. `query`, `transact` and `events` always see
   the newest revision, so the agent keeps passing the `revision` of its last read as before.
 - **`deferViewer`**: the Viewer does not re-render for each commit. It refreshes when the session
   ends, when the agent calls `editor.reveal`, `composition.activate`, `transport` or `viewer.set`,
@@ -716,7 +717,9 @@ listing the members the records have.
 
 **Bulk keys.** For hundreds of keys, `bloom.animation.set-key-columns` takes columns instead of rows:
 `times`, `values` and optionally `interpolations` (one entry per time, missing ones linear), plus
-`replace`, with the same units and refusals as `set-keys`. A column, or any other operation
+`replace`, with the same units and refusals as `set-keys`, and the same one-pass merge: the cost of
+a key write grows with the keys written and the curve they go into, not with every key the
+composition already holds. A column, or any other operation
 argument, can be `{"fromFile": "/absolute/path/data.json"}`: the server reads that JSON file (a
 regular `.json` file of at most 16 MiB and 2 million values, at most 16 per call), so the numbers
 never pass through the conversation. Add `"response": "summary"` to `transact` and the answer

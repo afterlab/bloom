@@ -81,7 +81,11 @@ other durable typed namespaces. A key keeps its identity when its time or value 
 IDs are never reused.
 
 A composition owns an `AnimationCurveStore` containing records ordered canonically by
-`AnimationCurveId`:
+`AnimationCurveId`. The store keeps a sorted index of every keyframe id it holds (#744), so the
+composition-wide uniqueness check on each inserted key costs O(1) for an id above every id the store
+has held (every key an operation has just allocated) and O(log n) otherwise, never a pass over the
+composition's keys. Erasing a key leaves a tombstone, compacted away once tombstones are half the
+index; `replace` swaps one curve for another and changes only the ids the two differ by:
 
 ```text
 KeyframeInterpolation = Hold | Linear | EaseInOut
@@ -442,6 +446,16 @@ at gesture start (or the current revision for a menu/clipboard action), with one
 | `SetKeyframesEasing` | Writes the ease mode, Back overshoot and Elastic amplitude/period on the selection, optionally switching the interpolation in the same step. An absent field keeps its value; a non-finite value or negative amplitude rejects the whole batch. A component-less vector or color address edits every component's key at that time |
 | `ApplyEasyEase` | Easy Ease, In or Out on the selection; see **Easy Ease** |
 | `PasteKeyframes` | Accepts original parameter IDs, exact destination times, typed values and interpolation. Allocates new IDs, creates compatible animation for constant parameters, and rejects missing/driven targets, invalid values and occupied times without publishing a partial result |
+
+`SetParameterKeys` (MCP `bloom.animation.set-keys` and `set-key-columns`, which share it) merges
+its keys into the parameter's curve in one pass (#744): duplicate times are found by sorting, each
+key is found on the curve as it was by binary search, new keys are allocated in key order, sorted
+once and merged in, interpolations are set against the merged curve (the key at its last time stays
+Linear), handles are settled once against the curve as it was, and the curve is published with
+`AnimationCurveStore::replace`. The layer-range warning is computed once per operation, with the
+graph's nodes indexed once. The result is the curve setting each key in turn produced, ids
+included; a write of k keys into a curve of n costs O((n + k) log k), not one search, sorted insert
+and range walk per key.
 
 All four value kinds (Scalar, Vec2, Vec3 and Color4) use the same batch paths. A staged collision does
 not consume durable IDs or publish any other curve in the transaction. Undo/redo restores exact

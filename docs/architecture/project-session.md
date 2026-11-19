@@ -68,6 +68,13 @@ is rejected atomically, while older steps may be retired to make room. Undo, red
 refresh the charge as active ownership changes. The charge estimates authored content, not process
 RSS or allocator capacity.
 
+When an edit retires old undo steps, its result says which bound did so
+(`historyEntryLimitReached`, `historyMemoryLimitReached`). The window reports that as information,
+not a refusal (#744): `CompositionSession::noticePosted` puts one line in the status bar, with no
+cue, naming the step limit or the memory limit and its size. It is reported at most once per burst:
+a retirement within 10 s of the previous one is not reported again. An agent's retirement is never
+reported (#746).
+
 A history group (`CommandStack::beginGroup`, used by an MCP agent session, #746) folds one
 origin's consecutive commits into a single undo entry labelled with the group. Each commit
 replaces that entry's after-state, and the entry keeps its before-state. The group therefore
@@ -161,6 +168,20 @@ step:
 Workspace topology, editor types, window geometry, preferences, and recent paths are application or
 session preferences and remain unchanged. Observers cannot see a new `Document` paired with the old
 command stack or round-trip state.
+
+### Panel rebuilds
+
+`CompositionSession::snapshotChanged` reaches every observer at once for every adopted revision.
+The panels that rebuild their rows from the snapshot (Timeline, Node editor, Properties, the
+Timeline's keyframe panel, Assets) rebuild on `panelRebuildDue`, which follows it (#744): at once for
+the artist's own edit, undo or redo and for every change that is not a command (a rebind, a
+composition switch, colour settings), and at most once per display frame
+(`kPanelRebuildInterval`, 16 ms) for agent and script commits, so a burst of commits rebuilds each
+panel once per frame instead of once per commit. A change that does not wait emits a waiting
+rebuild with its own, and a rebind's rebuild follows its `documentRebound`, so no row of the old
+project outlives it. An agent session's slower hold (#746) adopts commits at its own cadence on top
+of this. The Timeline rebuilds its rows from one index of the graph per rebuild, keeps its pooled
+row widgets, and lists a row's Track Matte candidates only when the artist opens the cell.
 
 ## New Project
 
