@@ -330,6 +330,32 @@ inline constexpr bool kWholeValueAnimationCurve = std::is_same_v<Curve, ScalarAn
 
 [[nodiscard]] AnimationCurveId animationCurveId(const AnimationCurveRecord& record) noexcept;
 
+// The keyframe ids a store holds, for the composition-wide uniqueness check on every key insert.
+// Ids are sorted; an id above the highest one ever held (the IdAllocator high-water case: every
+// key an operation allocates) is answered in O(1) and appended in O(1), any other id by binary
+// search. An erased id stays in place as a tombstone, so erasing or re-inserting an id is
+// O(log n); tombstones are compacted away once they are half the index. Copying the index copies
+// two flat arrays, nothing per key. Before issue #744 every insert scanned every key of every
+// curve, which made building a keyframe-dense composition quadratic.
+class KeyframeIdIndex final {
+  public:
+    [[nodiscard]] bool contains(KeyframeId id) const noexcept;
+    // Adds an id; adding one already held changes nothing.
+    void insert(KeyframeId id);
+    // Adds sorted ids in one pass over the index.
+    void insertSorted(std::span<const KeyframeId> ids);
+    // Removes an id; removing one not held changes nothing.
+    void erase(KeyframeId id) noexcept;
+    [[nodiscard]] std::size_t size() const noexcept { return ids_.size() - tombstones_; }
+
+  private:
+    void compact() noexcept;
+
+    std::vector<KeyframeId> ids_;
+    std::vector<std::uint8_t> live_;
+    std::size_t tombstones_ = 0;
+};
+
 class AnimationCurveStore final {
   public:
     [[nodiscard]] std::span<const AnimationCurveRecord> records() const noexcept {
@@ -347,6 +373,15 @@ class AnimationCurveStore final {
 
     [[nodiscard]] bool insert(AnimationCurveRecord record);
     [[nodiscard]] bool erase(AnimationCurveId id);
+    // Replaces the stored curve with the same id by `record`, all or nothing, under the rules
+    // insert() applies to a new record: every key valid and strictly time-ordered, and no keyframe
+    // id held by any OTHER curve of the store. The cost is the two curves' keys, not the store's.
+    [[nodiscard]] bool replace(AnimationCurveRecord record);
+    // True when any curve of the store holds a key with this id. O(1) for an id above every id
+    // the store has held, O(log n) otherwise.
+    [[nodiscard]] bool containsKeyframe(KeyframeId id) const noexcept {
+        return keyframeIds_.contains(id);
+    }
 
     [[nodiscard]] bool insertKeyframe(AnimationCurveId curveId, ScalarKeyframe keyframe);
     [[nodiscard]] bool insertKeyframe(AnimationCurveId curveId, AnimationComponent component,
@@ -370,9 +405,10 @@ class AnimationCurveStore final {
 
   private:
     [[nodiscard]] AnimationCurveRecord* findMutable(AnimationCurveId id) noexcept;
-    [[nodiscard]] bool containsKeyframe(KeyframeId id) const noexcept;
 
     std::vector<AnimationCurveRecord> records_;
+    // Every keyframe id held by records_, kept in step by every mutator above.
+    KeyframeIdIndex keyframeIds_;
 };
 
 [[nodiscard]] ValidationResult

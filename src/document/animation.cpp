@@ -5,6 +5,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <iterator>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -138,6 +141,42 @@ componentCurveRecordCanEnterStore(const AnimationCurveId id,
         }
     }
     return hasKey;
+}
+
+// The record's keyframe ids, sorted (duplicates kept, so a caller can refuse them).
+[[nodiscard]] std::vector<KeyframeId> sortedKeyframeIds(const AnimationCurveRecord& record) {
+    std::vector<KeyframeId> ids;
+    forEachKeyframeId(record, [&](const KeyframeId id) { ids.push_back(id); });
+    std::ranges::sort(ids);
+    return ids;
+}
+
+[[nodiscard]] bool canEnterStore(const AnimationCurveRecord& record) {
+    return std::visit(
+        [](const auto& curve) {
+            using Curve = std::decay_t<decltype(curve)>;
+            if constexpr (bloom::document::kWholeValueAnimationCurve<Curve>) {
+                return curveCanEnterStore(curve);
+            } else {
+                return componentCurveRecordCanEnterStore(curve.id, curve.components);
+            }
+        },
+        record);
+}
+
+void normalizeRecordFinalInterpolation(AnimationCurveRecord& record) {
+    std::visit(
+        [](auto& curve) {
+            using Curve = std::decay_t<decltype(curve)>;
+            if constexpr (bloom::document::kWholeValueAnimationCurve<Curve>) {
+                normalizeFinalInterpolation(curve);
+            } else {
+                for (auto& component : curve.components) {
+                    normalizeFinalInterpolation(component);
+                }
+            }
+        },
+        record);
 }
 
 template <typename Curve> void validateCurve(const Curve& curve, ValidationResult& result) {
@@ -498,6 +537,110 @@ AnimationCurveId animationCurveId(const AnimationCurveRecord& record) noexcept {
     return {};
 }
 
+bool KeyframeIdIndex::contains(const KeyframeId id) const noexcept {
+    // Above the highest id ever held: every id an operation has just allocated.
+    if (ids_.empty() || ids_.back() < id) {
+        return false;
+    }
+    const auto at = std::ranges::lower_bound(ids_, id);
+    return at != ids_.end() && *at == id && live_[static_cast<std::size_t>(at - ids_.begin())] != 0;
+}
+
+void KeyframeIdIndex::insert(const KeyframeId id) {
+    if (ids_.empty() || ids_.back() < id) {
+        ids_.push_back(id);
+        live_.push_back(1);
+        return;
+    }
+    const auto at = std::ranges::lower_bound(ids_, id);
+    const auto index = static_cast<std::size_t>(at - ids_.begin());
+    if (*at == id) {
+        if (live_[index] == 0) {
+            live_[index] = 1;
+            --tombstones_;
+        }
+        return;
+    }
+    ids_.insert(at, id);
+    live_.insert(live_.begin() + static_cast<std::ptrdiff_t>(index), 1);
+}
+
+void KeyframeIdIndex::insertSorted(const std::span<const KeyframeId> ids) {
+    // Ids above the highest one held are appended; the rest revive a tombstone or are merged in
+    // with one pass, so a whole curve costs O(n + k), not O(n) per key.
+    const auto tail = std::ranges::find_if(
+        ids, [this](const KeyframeId id) { return ids_.empty() || ids_.back() < id; });
+    std::vector<KeyframeId> missing;
+    for (auto id = ids.begin(); id != tail; ++id) {
+        const auto at = std::ranges::lower_bound(ids_, *id);
+        const auto index = static_cast<std::size_t>(at - ids_.begin());
+        if (at != ids_.end() && *at == *id) {
+            if (live_[index] == 0) {
+                live_[index] = 1;
+                --tombstones_;
+            }
+        } else {
+            missing.push_back(*id);
+        }
+    }
+    if (missing.size() < 8) {
+        for (const auto id : missing) {
+            insert(id);
+        }
+    } else if (!missing.empty()) {
+        std::vector<KeyframeId> mergedIds;
+        std::vector<std::uint8_t> mergedLive;
+        mergedIds.reserve(ids_.size() + missing.size());
+        mergedLive.reserve(ids_.size() + missing.size());
+        std::size_t held = 0;
+        for (const auto id : missing) {
+            for (; held < ids_.size() && ids_[held] < id; ++held) {
+                mergedIds.push_back(ids_[held]);
+                mergedLive.push_back(live_[held]);
+            }
+            mergedIds.push_back(id);
+            mergedLive.push_back(1);
+        }
+        for (; held < ids_.size(); ++held) {
+            mergedIds.push_back(ids_[held]);
+            mergedLive.push_back(live_[held]);
+        }
+        ids_ = std::move(mergedIds);
+        live_ = std::move(mergedLive);
+    }
+    for (auto id = tail; id != ids.end(); ++id) {
+        ids_.push_back(*id);
+        live_.push_back(1);
+    }
+}
+
+void KeyframeIdIndex::erase(const KeyframeId id) noexcept {
+    const auto at = std::ranges::lower_bound(ids_, id);
+    const auto index = static_cast<std::size_t>(at - ids_.begin());
+    if (at == ids_.end() || *at != id || live_[index] == 0) {
+        return;
+    }
+    live_[index] = 0;
+    ++tombstones_;
+    if (tombstones_ * 2 > ids_.size()) {
+        compact();
+    }
+}
+
+void KeyframeIdIndex::compact() noexcept {
+    std::size_t kept = 0;
+    for (std::size_t index = 0; index < ids_.size(); ++index) {
+        if (live_[index] != 0) {
+            ids_[kept] = ids_[index];
+            live_[kept] = 1;
+            ++kept;
+        }
+    }
+    ids_.resize(kept);
+    live_.resize(kept);
+    tombstones_ = 0;
+}
+
 const AnimationCurveRecord* AnimationCurveStore::find(const AnimationCurveId id) const noexcept {
     const auto record = std::lower_bound(records_.begin(), records_.end(), id,
                                          [](const auto& candidate, const auto curveId) {
@@ -567,59 +710,26 @@ AnimationCurveStore::findComponent(const AnimationCurveId id,
 }
 
 bool AnimationCurveStore::insert(AnimationCurveRecord record) {
-    const bool valid = std::visit(
-        [](const auto& curve) {
-            using Curve = std::decay_t<decltype(curve)>;
-            if constexpr (kWholeValueCurve<Curve>) {
-                return curveCanEnterStore(curve);
-            } else {
-                return componentCurveRecordCanEnterStore(curve.id, curve.components);
-            }
-        },
-        record);
     const auto id = animationCurveId(record);
-    if (!valid || find(id) != nullptr) {
+    if (!canEnterStore(record) || find(id) != nullptr) {
         return false;
     }
-    // The record's keyframe ids must not already be in the store. One pass over the store against
-    // the record's sorted ids: checking each new id by scanning the whole store made rebuilding a
-    // keyframe-dense composition quadratic (issue #737: minutes for a 274,000-key project).
-    std::vector<KeyframeId> recordIds;
-    forEachKeyframeId(record, [&](const KeyframeId id) { recordIds.push_back(id); });
-    std::ranges::sort(recordIds);
-    bool hasDuplicateKeyframe = false;
-    for (const auto& existing : records_) {
-        forEachKeyframeId(existing, [&](const KeyframeId id) {
-            // Ids are allocated in order: a stored id is almost always outside the record's range.
-            hasDuplicateKeyframe =
-                hasDuplicateKeyframe || (!(id < recordIds.front()) && !(recordIds.back() < id) &&
-                                         std::ranges::binary_search(recordIds, id));
-        });
-        if (hasDuplicateKeyframe) {
-            break;
-        }
-    }
-
-    if (hasDuplicateKeyframe) {
+    // The record's keyframe ids must be unique within it and not already held by the store: one
+    // index lookup per id (issues #737 and #744), never a pass over the store's keys.
+    const auto recordIds = sortedKeyframeIds(record);
+    if (std::ranges::adjacent_find(recordIds) != recordIds.end() ||
+        std::ranges::any_of(recordIds, [this](const KeyframeId keyframeId) {
+            return keyframeIds_.contains(keyframeId);
+        })) {
         return false;
     }
-    std::visit(
-        [](auto& curve) {
-            using Curve = std::decay_t<decltype(curve)>;
-            if constexpr (kWholeValueCurve<Curve>) {
-                normalizeFinalInterpolation(curve);
-            } else {
-                for (auto& component : curve.components) {
-                    normalizeFinalInterpolation(component);
-                }
-            }
-        },
-        record);
+    normalizeRecordFinalInterpolation(record);
     const auto position = std::lower_bound(records_.begin(), records_.end(), id,
                                            [](const auto& candidate, const auto curveId) {
                                                return animationCurveId(candidate) < curveId;
                                            });
     records_.insert(position, std::move(record));
+    keyframeIds_.insertSorted(recordIds);
     return true;
 }
 
@@ -631,41 +741,52 @@ bool AnimationCurveStore::erase(const AnimationCurveId id) {
     if (record == records_.end() || animationCurveId(*record) != id) {
         return false;
     }
+    forEachKeyframeId(*record, [this](const KeyframeId keyframeId) {
+        keyframeIds_.erase(keyframeId);
+    });
     records_.erase(record);
     return true;
 }
 
-bool AnimationCurveStore::containsKeyframe(const KeyframeId id) const noexcept {
-    return std::ranges::any_of(records_, [id](const auto& record) {
-        const auto contains = [id](const auto& curve) {
-            return std::ranges::any_of(curve.keyframes,
-                                       [id](const auto& keyframe) { return keyframe.id == id; });
-        };
-        // std::get_if rather than std::visit: this reader is noexcept, and std::visit's contract
-        // still permits bad_variant_access however unreachable a valueless variant is here.
-        const auto containsComponentKey = [&](const auto* curve) {
-            return curve != nullptr && std::ranges::any_of(curve->components, contains);
-        };
-        if (const auto* scalar = std::get_if<ScalarAnimationCurve>(&record)) {
-            return contains(*scalar);
-        }
-        if (const auto* path = std::get_if<PathAnimationCurve>(&record)) {
-            return contains(*path);
-        }
-        if (const auto* gradient = std::get_if<GradientAnimationCurve>(&record)) {
-            return contains(*gradient);
-        }
-        return containsComponentKey(std::get_if<Vec2AnimationCurve>(&record)) ||
-               containsComponentKey(std::get_if<Vec3AnimationCurve>(&record)) ||
-               containsComponentKey(std::get_if<Color4AnimationCurve>(&record));
-    });
+bool AnimationCurveStore::replace(AnimationCurveRecord record) {
+    const auto id = animationCurveId(record);
+    auto* current = findMutable(id);
+    if (current == nullptr || current->index() != record.index() || !canEnterStore(record)) {
+        return false;
+    }
+    const auto recordIds = sortedKeyframeIds(record);
+    const auto currentIds = sortedKeyframeIds(*current);
+    if (std::ranges::adjacent_find(recordIds) != recordIds.end()) {
+        return false;
+    }
+    // An id the replaced curve already holds stays; any other must be free in the whole store.
+    std::vector<KeyframeId> added;
+    std::ranges::set_difference(recordIds, currentIds, std::back_inserter(added));
+    if (std::ranges::any_of(added, [this](const KeyframeId keyframeId) {
+            return keyframeIds_.contains(keyframeId);
+        })) {
+        return false;
+    }
+    std::vector<KeyframeId> removed;
+    std::ranges::set_difference(currentIds, recordIds, std::back_inserter(removed));
+    normalizeRecordFinalInterpolation(record);
+    *current = std::move(record);
+    for (const auto keyframeId : removed) {
+        keyframeIds_.erase(keyframeId);
+    }
+    keyframeIds_.insertSorted(added);
+    return true;
 }
 
 bool AnimationCurveStore::insertKeyframe(const AnimationCurveId curveId, ScalarKeyframe keyframe) {
     const auto keyframeId = keyframe.id;
     auto* record = findMutable(curveId);
     auto* curve = record == nullptr ? nullptr : std::get_if<ScalarAnimationCurve>(record);
-    return curve != nullptr && ::insertKeyframe(*curve, keyframe, containsKeyframe(keyframeId));
+    if (curve == nullptr || !::insertKeyframe(*curve, keyframe, containsKeyframe(keyframeId))) {
+        return false;
+    }
+    keyframeIds_.insert(keyframeId);
+    return true;
 }
 
 bool AnimationCurveStore::insertKeyframe(const AnimationCurveId curveId,
@@ -685,7 +806,11 @@ bool AnimationCurveStore::insertKeyframe(const AnimationCurveId curveId,
             }
         },
         *record);
-    return curve != nullptr && ::insertKeyframe(*curve, keyframe, false);
+    if (curve == nullptr || !::insertKeyframe(*curve, keyframe, false)) {
+        return false;
+    }
+    keyframeIds_.insert(keyframeId);
+    return true;
 }
 
 bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId, ScalarKeyframe keyframe) {
@@ -698,8 +823,12 @@ bool AnimationCurveStore::insertKeyframe(const AnimationCurveId curveId, PathKey
     const auto keyframeId = keyframe.id;
     auto* record = findMutable(curveId);
     auto* curve = record == nullptr ? nullptr : std::get_if<PathAnimationCurve>(record);
-    return curve != nullptr &&
-           ::insertKeyframe(*curve, std::move(keyframe), containsKeyframe(keyframeId));
+    if (curve == nullptr ||
+        !::insertKeyframe(*curve, std::move(keyframe), containsKeyframe(keyframeId))) {
+        return false;
+    }
+    keyframeIds_.insert(keyframeId);
+    return true;
 }
 
 bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId, PathKeyframe keyframe) {
@@ -713,8 +842,12 @@ bool AnimationCurveStore::insertKeyframe(const AnimationCurveId curveId,
     const auto keyframeId = keyframe.id;
     auto* record = findMutable(curveId);
     auto* curve = record == nullptr ? nullptr : std::get_if<GradientAnimationCurve>(record);
-    return curve != nullptr &&
-           ::insertKeyframe(*curve, std::move(keyframe), containsKeyframe(keyframeId));
+    if (curve == nullptr ||
+        !::insertKeyframe(*curve, std::move(keyframe), containsKeyframe(keyframeId))) {
+        return false;
+    }
+    keyframeIds_.insert(keyframeId);
+    return true;
 }
 
 bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId,
@@ -749,16 +882,18 @@ bool AnimationCurveStore::eraseKeyframe(const AnimationCurveId curveId,
     if (record == nullptr) {
         return false;
     }
-    if (auto* scalar = std::get_if<ScalarAnimationCurve>(record)) {
-        return eraseCurveKeyframe(*scalar, keyframeId);
-    }
-    if (auto* path = std::get_if<PathAnimationCurve>(record)) {
-        return eraseCurveKeyframe(*path, keyframeId);
-    }
-    if (auto* gradient = std::get_if<GradientAnimationCurve>(record)) {
-        return eraseCurveKeyframe(*gradient, keyframeId);
-    }
     bool erased = false;
+    if (auto* scalar = std::get_if<ScalarAnimationCurve>(record)) {
+        erased = eraseCurveKeyframe(*scalar, keyframeId);
+    } else if (auto* path = std::get_if<PathAnimationCurve>(record)) {
+        erased = eraseCurveKeyframe(*path, keyframeId);
+    } else if (auto* gradient = std::get_if<GradientAnimationCurve>(record)) {
+        erased = eraseCurveKeyframe(*gradient, keyframeId);
+    }
+    if (erased) {
+        keyframeIds_.erase(keyframeId);
+        return true;
+    }
     std::visit(
         [&](auto& curve) {
             using Curve = std::decay_t<decltype(curve)>;
@@ -773,6 +908,9 @@ bool AnimationCurveStore::eraseKeyframe(const AnimationCurveId curveId,
             }
         },
         *record);
+    if (erased) {
+        keyframeIds_.erase(keyframeId);
+    }
     return erased;
 }
 
@@ -802,6 +940,7 @@ bool AnimationCurveStore::eraseKeyframe(const AnimationCurveId curveId,
     const bool settles = bloom::document::hasNonFreeHandleMode(curve->keyframes);
     auto before = settles ? curve->keyframes : decltype(curve->keyframes){};
     curve->keyframes.erase(found);
+    keyframeIds_.erase(keyframeId);
     normalizeFinalInterpolation(*curve);
     if (settles)
         bloom::document::settleKeyframeHandles(curve->keyframes, before);

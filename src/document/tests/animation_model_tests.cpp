@@ -344,6 +344,118 @@ void testStoreRejectsKeyframeIdsAlreadyStored(ExpectationContext& expectations) 
                         "and still rejects a key id it already holds");
 }
 
+// Issue #744: the store's keyframe-id index answers every uniqueness check, so it must stay exact
+// through every mutator: record insert and erase, replace, key insert and erase, tombstones,
+// merging ids below the highest one held, compaction, and copies.
+void testKeyframeIdIndexStaysExact(ExpectationContext& expectations) {
+    AnimationCurveStore store;
+    // Curves whose ids interleave: curve n holds ids n, n + 20, n + 40, ... so inserting curve n
+    // merges ids below the highest one held (more than eight at once takes the one-pass merge).
+    constexpr std::uint64_t kCurves = 20;
+    constexpr std::uint64_t kKeysPerCurve = 12;
+    bool insertedAll = true;
+    for (std::uint64_t curve = kCurves; curve >= 1; --curve) {
+        std::vector<ScalarKeyframe> keys;
+        for (std::uint64_t key = 0; key < kKeysPerCurve; ++key)
+            keys.push_back(scalarKey(curve + key * kCurves,
+                                     RationalTime::fromInteger(static_cast<std::int64_t>(key)),
+                                     0.0));
+        insertedAll = insertedAll && store.insert(ScalarAnimationCurve{id<AnimationCurveId>(curve),
+                                                                       std::move(keys)});
+    }
+    const auto held = [&](const std::uint64_t first, const std::uint64_t last) {
+        for (auto value = first; value <= last; ++value)
+            if (!store.containsKeyframe(id<KeyframeId>(value)))
+                return false;
+        return true;
+    };
+    expectations.expect(insertedAll && held(1, kCurves * kKeysPerCurve) &&
+                            !store.containsKeyframe(id<KeyframeId>(kCurves * kKeysPerCurve + 1)),
+                        "interleaved key ids merged below the highest held id are all indexed");
+    expectations.expect(!store.insert(ScalarAnimationCurve{
+                            id<AnimationCurveId>(100),
+                            {scalarKey(57, RationalTime::fromInteger(0), 0.0)}}),
+                        "a curve reusing an id held deep inside the index is refused");
+    expectations.expect(
+        !store.insert(Vec2AnimationCurve{
+            id<AnimationCurveId>(100),
+            {component({scalarKey(900, RationalTime::fromInteger(0), 0.0)}),
+             component({scalarKey(900, RationalTime::fromInteger(0), 0.0)})}}) &&
+            !store.containsKeyframe(id<KeyframeId>(900)),
+        "a curve holding one id twice is refused and indexes nothing");
+
+    // Erasing a curve frees its ids (tombstones); the same record inserts again (revival).
+    const auto* third = store.findScalar(id<AnimationCurveId>(3));
+    const auto thirdCopy = third == nullptr ? ScalarAnimationCurve{} : *third;
+    expectations.expect(store.erase(id<AnimationCurveId>(3)) &&
+                            !store.containsKeyframe(id<KeyframeId>(3)) &&
+                            !store.containsKeyframe(id<KeyframeId>(23)) &&
+                            store.containsKeyframe(id<KeyframeId>(4)),
+                        "erasing a curve frees exactly its ids");
+    expectations.expect(store.insert(thirdCopy) && store.containsKeyframe(id<KeyframeId>(23)),
+                        "and the erased curve's own ids insert again");
+
+    // Key insert and erase keep the index in step, including an id below the highest held.
+    expectations.expect(store.eraseKeyframe(id<AnimationCurveId>(5), id<KeyframeId>(25)) &&
+                            !store.containsKeyframe(id<KeyframeId>(25)),
+                        "erasing a key frees its id");
+    expectations.expect(!store.insertKeyframe(id<AnimationCurveId>(5),
+                                              scalarKey(26, time(3, 2), 0.0)),
+                        "a key may not reuse an id another curve holds");
+    expectations.expect(store.insertKeyframe(id<AnimationCurveId>(5),
+                                             scalarKey(25, time(3, 2), 0.0)) &&
+                            store.containsKeyframe(id<KeyframeId>(25)),
+                        "a freed id below the highest held is free to insert again");
+
+    // replace() changes only the ids the two curves differ by and refuses a foreign id.
+    const auto* fifth = store.findScalar(id<AnimationCurveId>(5));
+    auto replaced = fifth == nullptr ? ScalarAnimationCurve{} : *fifth;
+    replaced.keyframes.erase(replaced.keyframes.begin());
+    replaced.keyframes.push_back(scalarKey(5000, RationalTime::fromInteger(100), 1.0));
+    auto foreign = replaced;
+    foreign.keyframes.push_back(scalarKey(6, RationalTime::fromInteger(101), 1.0));
+    expectations.expect(!store.replace(foreign) && store.containsKeyframe(id<KeyframeId>(5)) &&
+                            !store.containsKeyframe(id<KeyframeId>(5000)),
+                        "a replacement holding another curve's id is refused and changes nothing");
+    auto unordered = replaced;
+    std::ranges::reverse(unordered.keyframes);
+    expectations.expect(!store.replace(unordered), "an unordered replacement is refused");
+    expectations.expect(!store.replace(Vec2AnimationCurve{
+                            id<AnimationCurveId>(5),
+                            {component({scalarKey(7000, RationalTime::fromInteger(0), 0.0)}),
+                             component({})}}),
+                        "a replacement of another curve kind is refused");
+    expectations.expect(store.replace(replaced) && !store.containsKeyframe(id<KeyframeId>(5)) &&
+                            store.containsKeyframe(id<KeyframeId>(5000)) &&
+                            store.containsKeyframe(id<KeyframeId>(45)),
+                        "a replacement frees the ids it dropped and holds the ids it added");
+    expectations.expect(!store.replace(ScalarAnimationCurve{
+                            id<AnimationCurveId>(999),
+                            {scalarKey(8000, RationalTime::fromInteger(0), 0.0)}}),
+                        "replace never inserts a curve the store does not hold");
+
+    // A copy is independent of the original.
+    auto copy = store;
+    expectations.expect(copy.erase(id<AnimationCurveId>(7)) &&
+                            !copy.containsKeyframe(id<KeyframeId>(7)) &&
+                            store.containsKeyframe(id<KeyframeId>(7)),
+                        "a copied store indexes its own keys");
+
+    // Erasing most curves compacts the tombstones away; what remains is still exact.
+    bool erased = true;
+    for (std::uint64_t curve = 1; curve <= 16; ++curve)
+        erased = erased && store.erase(id<AnimationCurveId>(curve));
+    bool exact = true;
+    for (std::uint64_t value = 1; value <= kCurves * kKeysPerCurve; ++value) {
+        const bool kept = (value - 1) % kCurves + 1 > 16;
+        exact = exact && store.containsKeyframe(id<KeyframeId>(value)) == kept;
+    }
+    expectations.expect(erased && exact && store.validate().ok(),
+                        "after compaction the index holds exactly the remaining curves' ids");
+    expectations.expect(store.insert(thirdCopy) && store.containsKeyframe(id<KeyframeId>(3)),
+                        "and an id freed before compaction inserts again");
+}
+
 void testCompositionAnimationValidation(ExpectationContext& expectations) {
     Project valid(id<ProjectId>(1), "Project");
     auto composition = emptyComposition(1, 10);
@@ -752,6 +864,7 @@ int main() {
         testStoreCanonicalizationAndMutation(expectations);
         testStoreRejectsMalformedCurves(expectations);
         testStoreRejectsKeyframeIdsAlreadyStored(expectations);
+        testKeyframeIdIndexStaysExact(expectations);
         testCompositionAnimationValidation(expectations);
         testProjectGlobalAnimationIds(expectations);
         testAnimationAllocatorAndPublication(expectations);
