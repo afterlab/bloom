@@ -247,14 +247,18 @@ struct FileFacts final {
         nullptr));
 }
 
-// Opens `leaf` inside the parent without following a link.
+// Opens `leaf` inside the parent without following a link. `extraFlags` adds
+// FILE_FLAG_BACKUP_SEMANTICS for a probe that must also open a folder, so a folder in the way is
+// reported as not a regular file, the same as on Linux and macOS.
 [[nodiscard]] Handle openLeaf(const std::filesystem::path& parent, const std::wstring& leaf,
-                              const DWORD access, const DWORD share,
-                              const DWORD disposition) noexcept {
+                              const DWORD access, const DWORD share, const DWORD disposition,
+                              const DWORD extraFlags = 0) noexcept {
     try {
         const auto full = parent / leaf;
         return Handle(::CreateFileW(full.c_str(), access, share, nullptr, disposition,
-                                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+                                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
+                                        extraFlags,
+                                    nullptr));
     } catch (...) {
         return Handle();
     }
@@ -275,7 +279,8 @@ struct FileFacts final {
                                              const std::uint64_t byteLimit) noexcept {
     // A reparse point (symbolic link, junction) is inspected, never followed.
     Handle probe = openLeaf(parent, leaf, FILE_READ_ATTRIBUTES,
-                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, OPEN_EXISTING);
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, OPEN_EXISTING,
+                            FILE_FLAG_BACKUP_SEMANTICS);
     if (!probe.isValid()) {
         const auto code = ::GetLastError();
         if (code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND) {
