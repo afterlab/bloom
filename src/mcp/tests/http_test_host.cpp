@@ -88,6 +88,19 @@ int main(int argc, char** argv) {
                 live.publish(mirror());
                 return result;
             },
+        // #744: the transaction was prepared on the request worker; only publication runs here.
+        .publish =
+            [&](commands::PreparedTransaction& prepared) {
+                auto* stack = session->commandStack();
+                if (stack->rebaseNeeded(prepared))
+                    return scripting::LivePublication{std::nullopt, session->snapshot()};
+                auto command = stack->publish(std::move(prepared));
+                live.publish(mirror());
+                return scripting::LivePublication{
+                    scripting::SessionCommandResult{host::ProjectSessionCommandStatus::Completed,
+                                                    std::move(command), std::nullopt},
+                    std::nullopt};
+            },
         .history =
             [&](const bool redo, const commands::CommandOrigin origin) {
                 auto result = redo ? session->redo(origin) : session->undo(origin);

@@ -43,6 +43,17 @@ LiveSessionAdapter::LiveSessionAdapter(scripting::LiveSessionHost& host,
         publish();
         return result;
     };
+    // #744 (A2): the transaction was built, applied and validated on its client's thread; only its
+    // publication runs here. A base the artist's own edit has moved past goes back to the client
+    // with the live snapshot, unless the transaction expects a revision it no longer is (stale).
+    committer_->publish = [this](commands::PreparedTransaction& prepared) {
+        if (auto* const document = project_.liveDocumentAndStack().first;
+            document != nullptr && session_.rebaseNeeded(prepared))
+            return scripting::LivePublication{std::nullopt, document->snapshot()};
+        auto result = completed(session_.publishTransaction(std::move(prepared)));
+        publish();
+        return scripting::LivePublication{std::move(result), std::nullopt};
+    };
     committer_->history = [this](const bool redo, const commands::CommandOrigin origin) {
         auto* stack = project_.liveDocumentAndStack().second;
         auto result =
@@ -221,13 +232,15 @@ void LiveSessionAdapter::drain() {
     if (shutDown_)
         return;
     // At most one commit per event-loop slice.
-    static_cast<void>(host_.drainOne(*committer_));
+    const bool progressed = host_.drainOne(*committer_);
     if (host_.queuedCommits() == 0)
         return;
     if (host_.waitingForGesture())
         QTimer::singleShot(kGestureRetry, this, &LiveSessionAdapter::scheduleDrain);
-    else
+    else if (progressed)
         scheduleDrain();
+    // Otherwise the first commit is still being prepared on its client's thread (#744, A2); the
+    // commit subscription wakes this drain when it is ready to publish.
 }
 
 } // namespace bloom::ui

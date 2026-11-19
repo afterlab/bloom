@@ -911,6 +911,15 @@ class CompositionSession final : public QObject {
     // submission path, this refreshes the projection and emits the ordinary history/rejection
     // signals after the command stack publishes.
     [[nodiscard]] commands::CommandResult executeTransaction(commands::Transaction&& transaction);
+    // #744 (A2): publishes a transaction a live-session client prepared off this thread
+    // (commands::CommandStack::prepare). Only the publication runs here, with the same signals as
+    // executeTransaction(); a base the document has moved past is refused as stale (ask
+    // rebaseNeeded() first).
+    [[nodiscard]] commands::CommandResult
+    publishTransaction(commands::PreparedTransaction&& prepared);
+    // #744 (A2): whether `prepared` must be prepared again on the live snapshot before it can
+    // publish (commands::CommandStack::rebaseNeeded).
+    [[nodiscard]] bool rebaseNeeded(const commands::PreparedTransaction& prepared) const;
 
     [[nodiscard]] bool canUndo() const noexcept;
     [[nodiscard]] bool canRedo() const noexcept;

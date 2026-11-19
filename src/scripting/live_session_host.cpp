@@ -2,10 +2,12 @@
 // marshal, one generation counter and one revocation rule, shared by the Python console and MCP.
 #include <bloom/scripting/live_session_host.hpp>
 
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 
 namespace bloom::scripting {
 namespace {
@@ -37,6 +39,12 @@ SessionCommandResult refused(const LiveCommitStatus status) {
         break;
     case LiveCommitStatus::ShuttingDown:
         message = "Bloom is shutting down; nothing was applied";
+        break;
+    case LiveCommitStatus::TooLarge:
+        message = "The transaction carries more work than one live commit takes (" +
+                  std::to_string(kLiveCommitWorkLimit) +
+                  " units: one per operation, or one per key, keyframe or edit an operation "
+                  "lists); split it into several transactions. Nothing was queued";
         break;
     }
     result.diagnostic = OperationDiagnostic{std::string(liveCommitDiagnosticCode(status)), "", "",
@@ -111,10 +119,28 @@ struct HostCore {
     struct Commit {
         std::uint64_t generation = 0;
         LiveCallControl control;
+        // An owner-thread call (undo, redo, the Viewer's level).
         Apply apply;
-        enum class Step : std::uint8_t { Queued, Applying, Done } step = Step::Queued;
+        // #744 (A2): a transaction its client thread prepares, waiting for its turn; then what it
+        // prepared, waiting for the owner to publish it.
+        std::optional<commands::Transaction> transaction;
+        std::optional<commands::PreparedTransaction> prepared;
+        // The live snapshot the owner handed back when the document moved past the base.
+        std::optional<document::Snapshot> rebaseOn;
+        enum class Step : std::uint8_t {
+            Queued,
+            Preparing,
+            Prepared,
+            Applying,
+            Done
+        } step = Step::Queued;
         bool waitedForGesture = false;
+        // Set when the commit is completed while its client is preparing it, so preparation stops
+        // at its next check.
+        std::atomic_bool withdrawn = false;
         SessionCommandResult result;
+
+        [[nodiscard]] bool prepares() const noexcept { return !apply; }
     };
 
     mutable std::mutex mutex;
@@ -125,6 +151,8 @@ struct HostCore {
     LiveSessionServices services;
     std::deque<std::shared_ptr<Commit>> queue;
     std::vector<std::shared_ptr<CommitWake>> subscribers;
+    // The owner is publishing or applying a commit; the next one prepares once the mirror shows it.
+    bool applying = false;
 
     void wakeOwner() {
         // Called with `mutex` held; subscriber locks are leaf locks.
@@ -144,6 +172,7 @@ struct HostCore {
     void complete(Commit& commit, SessionCommandResult result) {
         commit.result = std::move(result);
         commit.step = Commit::Step::Done;
+        commit.withdrawn = true;
     }
 
     // Withdraws every queued commit (the owner keeps applying nothing from them).
@@ -155,12 +184,76 @@ struct HostCore {
         wakeOwner();
     }
 
+    // The client's own withdrawal of a commit it is waiting for (cancelled or past its deadline).
+    void withdraw(Commit& commit, const std::shared_ptr<Commit>& owned) {
+        std::erase(queue, owned);
+        complete(commit, refused(commit.control.stop.stop_requested() ? LiveCommitStatus::Cancelled
+                                 : commit.waitedForGesture ? LiveCommitStatus::GestureOpen
+                                                           : LiveCommitStatus::DeadlineExceeded));
+        // The next commit may now be first in line to prepare.
+        finished.notify_all();
+        wakeOwner();
+    }
+
+    // Prepares `commit` on the calling client thread (#744, A2): called with `lock` held when the
+    // commit is first in line and the owner is applying nothing, released while preparing.
+    void prepare(std::unique_lock<std::mutex>& lock, const std::shared_ptr<Commit>& commit) {
+        if (!mirror) {
+            std::erase(queue, commit);
+            complete(*commit, refused(LiveCommitStatus::ProjectReplaced));
+            finished.notify_all();
+            return;
+        }
+        // The newest mirror shows every earlier commit, which has published; the owner hands back
+        // the live snapshot when the document moved on anyway.
+        const auto base = commit->rebaseOn ? *commit->rebaseOn : mirror->renderSource.snapshot;
+        commit->rebaseOn.reset();
+        auto transaction = std::move(*commit->transaction);
+        commit->transaction.reset();
+        commit->step = Commit::Step::Preparing;
+        const auto control = commit->control;
+        lock.unlock();
+        std::optional<commands::PreparedTransaction> prepared;
+        std::optional<std::string> failure;
+        try {
+            prepared = commands::CommandStack::prepare(base, std::move(transaction), [&] {
+                return commit->withdrawn.load() || control.stop.stop_requested() ||
+                       Clock::now() >= control.deadline;
+            });
+        } catch (const std::exception& error) {
+            failure = error.what();
+        }
+        lock.lock();
+        if (commit->step == Commit::Step::Done)
+            return; // Withdrawn by revocation or shutdown while it was being prepared.
+        if (failure) {
+            std::erase(queue, commit);
+            SessionCommandResult result;
+            result.status = host::ProjectSessionCommandStatus::InvalidSession;
+            result.diagnostic =
+                OperationDiagnostic{"bloom.live.commit-failed", "", "", std::move(*failure)};
+            complete(*commit, std::move(result));
+            finished.notify_all();
+            wakeOwner();
+            return;
+        }
+        if (prepared->cancelled() || control.stop.stop_requested() ||
+            Clock::now() >= control.deadline) {
+            withdraw(*commit, commit);
+            return;
+        }
+        commit->prepared = std::move(prepared);
+        commit->step = Commit::Step::Prepared;
+        wakeOwner();
+    }
+
     SessionCommandResult enqueue(const std::uint64_t expected, const LiveCallControl& control,
-                                 Apply apply) {
+                                 Apply apply, std::optional<commands::Transaction> transaction) {
         auto commit = std::make_shared<Commit>();
         commit->generation = expected;
         commit->control = control;
         commit->apply = std::move(apply);
+        commit->transaction = std::move(transaction);
         std::unique_lock lock(mutex);
         if (availability == LiveSessionAvailability::ShuttingDown)
             return refused(LiveCommitStatus::ShuttingDown);
@@ -172,27 +265,32 @@ struct HostCore {
             return refused(LiveCommitStatus::QueueFull);
         queue.push_back(commit);
         wakeOwner();
-        const auto done = [&] { return commit->step == Commit::Step::Done; };
+        using Step = Commit::Step;
+        const auto done = [&] { return commit->step == Step::Done; };
+        // The commit's turn to be prepared: first in line, with nothing publishing before it.
+        const auto turn = [&] {
+            return commit->prepares() && commit->step == Step::Queued && !applying &&
+                   !queue.empty() && queue.front() == commit;
+        };
         while (!done()) {
-            if (commit->step == Commit::Step::Queued) {
+            if (commit->step == Step::Queued || commit->step == Step::Prepared) {
                 const bool expired = Clock::now() >= control.deadline;
                 if (control.stop.stop_requested() || expired) {
-                    std::erase(queue, commit);
-                    complete(*commit,
-                             refused(control.stop.stop_requested() ? LiveCommitStatus::Cancelled
-                                     : commit->waitedForGesture
-                                         ? LiveCommitStatus::GestureOpen
-                                         : LiveCommitStatus::DeadlineExceeded));
-                    wakeOwner();
+                    withdraw(*commit, commit);
                     break;
                 }
+                if (turn()) {
+                    prepare(lock, commit);
+                    continue;
+                }
+                const auto wake = [&] { return done() || turn(); };
                 if (control.deadline == Clock::time_point::max())
-                    finished.wait(lock, control.stop, done);
+                    finished.wait(lock, control.stop, wake);
                 else
-                    finished.wait_until(lock, control.stop, control.deadline, done);
+                    finished.wait_until(lock, control.stop, control.deadline, wake);
             } else {
-                // A commit that started applying finishes atomically, whatever the caller's stop
-                // token or deadline says.
+                // A commit that started publishing finishes atomically, whatever the caller's stop
+                // token or deadline says. (A preparing commit is this thread's own work.)
                 finished.wait(lock, done);
             }
         }
@@ -235,7 +333,13 @@ struct LiveSessionLease::Hold {
         return control;
     }
     SessionCommandResult commit(Apply apply) const {
-        return host->enqueue(generation, callControl(), std::move(apply));
+        return host->enqueue(generation, callControl(), std::move(apply), std::nullopt);
+    }
+    // #744 (A2): a transaction this client thread prepares in its turn.
+    SessionCommandResult commit(commands::Transaction transaction) const {
+        if (transaction.workUnits() > kLiveCommitWorkLimit)
+            return refused(LiveCommitStatus::TooLarge);
+        return host->enqueue(generation, callControl(), {}, std::move(transaction));
     }
 };
 
@@ -350,6 +454,7 @@ void LiveSessionHost::revoke(const LiveSessionAvailability reason) {
 }
 
 bool LiveSessionHost::drainOne(const LiveSessionCommitter& committer) {
+    using Step = HostCore::Commit::Step;
     std::unique_lock lock(state_->mutex);
     while (!state_->queue.empty()) {
         auto commit = state_->queue.front();
@@ -360,7 +465,9 @@ bool LiveSessionHost::drainOne(const LiveSessionCommitter& committer) {
             state_->finished.notify_all();
             return true;
         }
-        if (commit->control.stop.stop_requested() || Clock::now() >= commit->control.deadline) {
+        // A commit being prepared is its client's to withdraw; it checks the same conditions.
+        if (commit->step != Step::Preparing &&
+            (commit->control.stop.stop_requested() || Clock::now() >= commit->control.deadline)) {
             state_->queue.pop_front();
             state_->complete(
                 *commit, refused(commit->control.stop.stop_requested() ? LiveCommitStatus::Cancelled
@@ -369,24 +476,51 @@ bool LiveSessionHost::drainOne(const LiveSessionCommitter& committer) {
             state_->finished.notify_all();
             return true;
         }
+        // #744 (A2): a transaction is published only once its client has prepared it.
+        if (commit->prepares() && commit->step != Step::Prepared)
+            return false;
         if (committer.gestureOpen && committer.gestureOpen()) {
             // The commit waits in the queue, in order, until the gesture closes.
             commit->waitedForGesture = true;
             return false;
         }
         state_->queue.pop_front();
-        commit->step = HostCore::Commit::Step::Applying;
+        commit->step = Step::Applying;
+        state_->applying = true;
         lock.unlock();
         SessionCommandResult result;
+        std::optional<document::Snapshot> rebaseOn;
         try {
-            result = commit->apply(committer);
+            if (!commit->prepares()) {
+                result = commit->apply(committer);
+            } else if (committer.publish) {
+                auto publication = committer.publish(*commit->prepared);
+                if (publication.rebaseOn)
+                    rebaseOn = std::move(publication.rebaseOn);
+                else if (publication.result)
+                    result = std::move(*publication.result);
+            } else if (committer.execute) {
+                result = committer.execute(std::move(*commit->prepared).takeTransaction());
+            }
         } catch (const std::exception& error) {
+            rebaseOn.reset();
             result.status = host::ProjectSessionCommandStatus::InvalidSession;
             result.diagnostic =
                 OperationDiagnostic{"bloom.live.commit-failed", "", "", error.what()};
         }
         lock.lock();
-        state_->complete(*commit, std::move(result));
+        state_->applying = false;
+        if (rebaseOn) {
+            // The document moved past the base and the transaction still applies on the live
+            // revision: its client prepares it again on that snapshot, still first in line.
+            commit->transaction = std::move(*commit->prepared).takeTransaction();
+            commit->prepared.reset();
+            commit->rebaseOn = std::move(rebaseOn);
+            commit->step = Step::Queued;
+            state_->queue.push_front(commit);
+        } else {
+            state_->complete(*commit, std::move(result));
+        }
         state_->finished.notify_all();
         return true;
     }
@@ -420,11 +554,7 @@ LiveSessionLease LiveSessionHost::acquire(LiveCallControl control) {
     binding.valid = [hold] { return hold->valid(); };
     binding.snapshot = [hold] { return hold->currentOrThrow()->renderSource.snapshot; };
     binding.execute = [hold](commands::Transaction transaction) {
-        auto owned = std::make_shared<commands::Transaction>(std::move(transaction));
-        return hold->commit([owned](const LiveSessionCommitter& committer) {
-            return committer.execute ? committer.execute(std::move(*owned))
-                                     : SessionCommandResult{};
-        });
+        return hold->commit(std::move(transaction));
     };
     binding.history = [hold](const bool redo, const commands::CommandOrigin origin) {
         return hold->commit([redo, origin](const LiveSessionCommitter& committer) {
@@ -485,6 +615,12 @@ std::shared_ptr<EventStream> LiveSessionHost::events() const {
 bool LiveSessionHost::waitingForGesture() const noexcept {
     const std::lock_guard lock(state_->mutex);
     return !state_->queue.empty() && state_->queue.front()->waitedForGesture;
+}
+
+bool LiveSessionHost::preparing() const noexcept {
+    const std::lock_guard lock(state_->mutex);
+    return !state_->queue.empty() && state_->queue.front()->prepares() &&
+           state_->queue.front()->step != HostCore::Commit::Step::Prepared;
 }
 
 } // namespace bloom::scripting

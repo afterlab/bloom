@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/scripting/events.hpp>
 #include <bloom/scripting/operation_registry.hpp>
@@ -42,12 +43,19 @@ class StagedArtifactCoordinator;
 // come from the mirror and whose execute()/history() enqueue onto the owner thread and wait for the
 // result. The UI thread never calls acquire() or waits on a lease.
 //
-// Ordering and atomicity: queued commits apply in FIFO order, one per slice. A commit that has
-// started on the owner thread finishes atomically (it lands in the undo history exactly like a
-// panel edit, with the transaction's label). A commit still queued when its caller's stop token
-// fires, its deadline passes or its generation is revoked is withdrawn and never applied. A commit
-// never applies while the artist holds an open interactive gesture (ADR 0017): it waits in the
-// queue until the gesture closes, bounded by the caller's deadline (GestureOpen).
+// Ordering and atomicity: queued commits publish in FIFO order, one per slice. #744 (A2): a
+// transaction is built, applied, proven and validated off the owner thread, on the client thread
+// that commits it (commands::CommandStack::prepare), against the newest mirror, and only when every
+// earlier commit has published; the owner thread only publishes it (the revision check, the swap,
+// the undo history and the events). A commit whose base the document moved past in the meantime
+// (the artist's own edit) is prepared again on the live snapshot when its expected revision is
+// still the live one, and refused as stale otherwise. A commit that has started publishing
+// finishes atomically (it lands in the undo history exactly like a panel edit, with the
+// transaction's label). A commit still queued or preparing when its caller's stop token fires, its
+// deadline passes or its generation is revoked is withdrawn and never applied. A commit never
+// publishes while the artist holds an open interactive gesture (ADR 0017): it waits in the queue
+// until the gesture closes, bounded by the caller's deadline (GestureOpen). The work one commit
+// carries is bounded (kLiveCommitWorkLimit, TooLarge).
 namespace bloom::scripting {
 
 // Everything a client may read about the live session, captured together on the owner thread so
@@ -88,6 +96,9 @@ enum class LiveCommitStatus : std::uint8_t {
     // The deadline passed while an interactive gesture stayed open; nothing was applied.
     GestureOpen = 5,
     ShuttingDown = 6,
+    // #744 (A2): the transaction carries more work than one live commit takes
+    // (kLiveCommitWorkLimit); nothing was queued.
+    TooLarge = 7,
 };
 
 // A refused commit reaches the client as SessionCommandResult::diagnostic with this stable code,
@@ -108,6 +119,8 @@ enum class LiveCommitStatus : std::uint8_t {
         return "bloom.live.gesture-open";
     case LiveCommitStatus::ShuttingDown:
         return "bloom.live.shutting-down";
+    case LiveCommitStatus::TooLarge:
+        return "bloom.live.commit-too-large";
     }
     return "bloom.live.unknown";
 }
@@ -115,10 +128,28 @@ enum class LiveCommitStatus : std::uint8_t {
 // Shared with the Script editor's existing bound: at most 16 queued commits across all clients.
 inline constexpr std::size_t kLiveCommitQueueCapacity = 16;
 
+// #744 (A2): the most work one live commit carries, in commands::Transaction::workUnits() (one per
+// operation, or one per key, keyframe or edit an operation lists). A larger transaction is refused
+// before it is queued (TooLarge, bloom.live.commit-too-large); split it into several. Its
+// preparation runs off the owner thread and stops at the caller's deadline.
+inline constexpr std::size_t kLiveCommitWorkLimit = 1'000'000;
+
+// #744 (A2): what the owner made of a prepared transaction. Exactly one is set: the published (or
+// refused) result, or the live snapshot to prepare the transaction again on.
+struct LivePublication final {
+    std::optional<SessionCommandResult> result;
+    std::optional<document::Snapshot> rebaseOn;
+};
+
 // How the owner applies a queued commit. Set by the src/ui adapter; each function runs on the owner
 // thread inside drainOne() only.
 struct LiveSessionCommitter final {
+    // Applies a transaction on the owner thread. Used only without `publish` (simple owners and
+    // tests); the desktop sets `publish`.
     std::function<SessionCommandResult(commands::Transaction)> execute;
+    // #744 (A2): publishes a transaction a client thread prepared, or asks for a re-base when the
+    // document moved past its base and it would still apply (commands::CommandStack::rebaseNeeded).
+    std::function<LivePublication(commands::PreparedTransaction&)> publish;
     // false = undo, true = redo; the origin is who asked.
     std::function<SessionCommandResult(bool, commands::CommandOrigin)> history;
     // True while an interactive gesture (drag, scrub-edit, text edit) is open.
@@ -233,8 +264,10 @@ class LiveSessionHost final {
     // Revokes the current generation (project closing, opening, or shutdown): queued commits are
     // withdrawn with ProjectReplaced/ShuttingDown and new leases report `reason`.
     void revoke(LiveSessionAvailability reason);
-    // Applies at most one queued commit through `committer`; returns true if one was applied or
-    // withdrawn. A commit waiting for a gesture stays queued and returns false.
+    // Publishes or applies at most one queued commit through `committer`; returns true if one was
+    // published, applied, handed back for a re-base or withdrawn. A commit waiting for a gesture,
+    // or for its client to prepare it, stays queued and returns false; the commit subscription
+    // wakes the owner when it is ready.
     bool drainOne(const LiveSessionCommitter& committer);
     [[nodiscard]] LiveCommitSubscription subscribeCommits();
 
@@ -252,6 +285,9 @@ class LiveSessionHost final {
     // True while the oldest queued commit is waiting for an open gesture to close; the owner
     // drains again when the gesture ends.
     [[nodiscard]] bool waitingForGesture() const noexcept;
+    // #744 (A2): true while the oldest queued commit is a transaction its client has not finished
+    // preparing; the commit subscription wakes the owner when it is ready to publish.
+    [[nodiscard]] bool preparing() const noexcept;
 
   private:
     struct State;

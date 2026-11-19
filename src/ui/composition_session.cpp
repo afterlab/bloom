@@ -2332,6 +2332,21 @@ CompositionSession::executeTransaction(commands::Transaction&& transaction) {
     return result;
 }
 
+commands::CommandResult
+CompositionSession::publishTransaction(commands::PreparedTransaction&& prepared) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    // Another client's commit lands between the artist's materialized entry layer and the edit it
+    // was made for, so that edit no longer folds the layer into its own step (as after Undo).
+    pendingEntryLayer_.reset();
+    auto result = commandStack_->publish(std::move(prepared));
+    (void)handleResult(result);
+    return result;
+}
+
+bool CompositionSession::rebaseNeeded(const commands::PreparedTransaction& prepared) const {
+    return commandStack_->rebaseNeeded(prepared);
+}
+
 bool CompositionSession::execute(commands::Transaction&& transaction) {
     return handleResult(runTransaction(std::move(transaction)));
 }

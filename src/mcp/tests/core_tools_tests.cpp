@@ -1791,6 +1791,19 @@ void exportAcceptsEveryListedPreset() {
                 server.host.publish(mirror());
                 return result;
             },
+        // #744: the transaction was prepared on the request worker; only publication runs here.
+        .publish =
+            [&](commands::PreparedTransaction& prepared) {
+                auto* stack = server.session->commandStack();
+                if (stack->rebaseNeeded(prepared))
+                    return scripting::LivePublication{std::nullopt, server.session->snapshot()};
+                auto command = stack->publish(std::move(prepared));
+                server.host.publish(mirror());
+                return scripting::LivePublication{
+                    scripting::SessionCommandResult{host::ProjectSessionCommandStatus::Completed,
+                                                    std::move(command), std::nullopt},
+                    std::nullopt};
+            },
         .history =
             [&](const bool redo, const commands::CommandOrigin origin) {
                 auto result = redo ? server.session->redo(origin) : server.session->undo(origin);
