@@ -2,7 +2,9 @@
 // marshal, one generation counter and one revocation rule, shared by the Python console and MCP.
 #include <bloom/scripting/live_session_host.hpp>
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -153,6 +155,13 @@ struct HostCore {
     std::vector<std::shared_ptr<CommitWake>> subscribers;
     // The owner is publishing or applying a commit; the next one prepares once the mirror shows it.
     bool applying = false;
+    // #747: the moving average of recent transactions' time from their turn to their result.
+    std::optional<double> recentCommitMs;
+
+    void recordCommitTime(const Clock::duration taken) {
+        const auto ms = std::chrono::duration<double, std::milli>(taken).count();
+        recentCommitMs = recentCommitMs ? *recentCommitMs * 0.75 + ms * 0.25 : ms;
+    }
 
     void wakeOwner() {
         // Called with `mutex` held; subscriber locks are leaf locks.
@@ -216,10 +225,21 @@ struct HostCore {
         std::optional<commands::PreparedTransaction> prepared;
         std::optional<std::string> failure;
         try {
-            prepared = commands::CommandStack::prepare(base, std::move(transaction), [&] {
-                return commit->withdrawn.load() || control.stop.stop_requested() ||
-                       Clock::now() >= control.deadline;
-            });
+            std::function<void(std::size_t, std::size_t)> progress;
+            if (control.progress)
+                progress = [&control](const std::size_t applied, const std::size_t total) {
+                    control.progress({.step = LiveCommitProgress::Step::Preparing,
+                                      .ahead = 0,
+                                      .applied = applied,
+                                      .total = total});
+                };
+            prepared = commands::CommandStack::prepare(
+                base, std::move(transaction),
+                [&] {
+                    return commit->withdrawn.load() || control.stop.stop_requested() ||
+                           Clock::now() >= control.deadline;
+                },
+                progress);
         } catch (const std::exception& error) {
             failure = error.what();
         }
@@ -272,7 +292,34 @@ struct HostCore {
             return commit->prepares() && commit->step == Step::Queued && !applying &&
                    !queue.empty() && queue.front() == commit;
         };
+        // #747: tells the caller each time the commit moves on, without the lock.
+        std::optional<LiveCommitProgress> told;
+        const auto report = [&] {
+            if (!control.progress || done())
+                return;
+            LiveCommitProgress now;
+            if (commit->step == Step::Queued) {
+                const auto at = std::ranges::find(queue, commit);
+                now.ahead = static_cast<std::size_t>(at - queue.begin());
+            } else if (commit->step == Step::Prepared) {
+                now.step = LiveCommitProgress::Step::Prepared;
+            } else if (commit->step == Step::Applying) {
+                now.step = LiveCommitProgress::Step::Publishing;
+            } else {
+                return;
+            }
+            if (told && told->step == now.step && told->ahead == now.ahead)
+                return;
+            told = now;
+            lock.unlock();
+            control.progress(now);
+            lock.lock();
+        };
+        std::optional<Clock::time_point> turnStarted;
         while (!done()) {
+            report();
+            if (done())
+                break;
             if (commit->step == Step::Queued || commit->step == Step::Prepared) {
                 const bool expired = Clock::now() >= control.deadline;
                 if (control.stop.stop_requested() || expired) {
@@ -280,10 +327,23 @@ struct HostCore {
                     break;
                 }
                 if (turn()) {
+                    if (!turnStarted)
+                        turnStarted = Clock::now();
                     prepare(lock, commit);
                     continue;
                 }
-                const auto wake = [&] { return done() || turn(); };
+                // #747: a caller that reports progress also wakes when its place in the queue
+                // changes or publication starts.
+                const auto moved = [&] {
+                    if (!control.progress || !told)
+                        return false;
+                    if (commit->step == Step::Applying)
+                        return true;
+                    return commit->step == Step::Queued &&
+                           static_cast<std::size_t>(std::ranges::find(queue, commit) -
+                                                    queue.begin()) != told->ahead;
+                };
+                const auto wake = [&] { return done() || turn() || moved(); };
                 if (control.deadline == Clock::time_point::max())
                     finished.wait(lock, control.stop, wake);
                 else
@@ -291,9 +351,14 @@ struct HostCore {
             } else {
                 // A commit that started publishing finishes atomically, whatever the caller's stop
                 // token or deadline says. (A preparing commit is this thread's own work.)
+                if (control.progress &&
+                    (!told || told->step != LiveCommitProgress::Step::Publishing))
+                    continue; // report() tells that publication started first.
                 finished.wait(lock, done);
             }
         }
+        if (turnStarted && commit->result.command)
+            recordCommitTime(Clock::now() - *turnStarted);
         return std::move(commit->result);
     }
 };
@@ -378,6 +443,12 @@ void LiveSessionLease::setControl(LiveCallControl control) {
         return;
     const std::lock_guard lock(hold_->controlMutex);
     hold_->control = std::move(control);
+}
+
+LiveCallControl LiveSessionLease::control() const {
+    if (!hold_)
+        return {};
+    return hold_->callControl();
 }
 
 SessionCommandResult LiveSessionLease::history(const bool redo,
@@ -487,6 +558,8 @@ bool LiveSessionHost::drainOne(const LiveSessionCommitter& committer) {
         state_->queue.pop_front();
         commit->step = Step::Applying;
         state_->applying = true;
+        // #747: its client reports that publication started (it can no longer be withdrawn).
+        state_->finished.notify_all();
         lock.unlock();
         SessionCommandResult result;
         std::optional<document::Snapshot> rebaseOn;
@@ -604,6 +677,13 @@ std::uint64_t LiveSessionHost::generation() const noexcept {
 std::size_t LiveSessionHost::queuedCommits() const noexcept {
     const std::lock_guard lock(state_->mutex);
     return state_->queue.size();
+}
+
+std::optional<std::chrono::milliseconds> LiveSessionHost::recentCommitTime() const noexcept {
+    const std::lock_guard lock(state_->mutex);
+    if (!state_->recentCommitMs)
+        return std::nullopt;
+    return std::chrono::milliseconds(static_cast<std::int64_t>(std::ceil(*state_->recentCommitMs)));
 }
 
 std::shared_ptr<EventStream> LiveSessionHost::events() const {

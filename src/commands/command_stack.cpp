@@ -477,7 +477,8 @@ bool CommandStack::rebaseNeeded(const PreparedTransaction& prepared) const {
 
 PreparedTransaction CommandStack::prepare(const document::Snapshot& before,
                                           Transaction&& transaction,
-                                          const std::function<bool()>& cancelled) {
+                                          const std::function<bool()>& cancelled,
+                                          const std::function<void(std::size_t, std::size_t)>& progress) {
     auto owned = std::make_unique<PreparedTransaction::Detail>(before, std::move(transaction));
     auto& prepared = *owned;
     const auto& ops = prepared.transaction;
@@ -625,6 +626,8 @@ PreparedTransaction CommandStack::prepare(const document::Snapshot& before,
             }
         }
         ++operationIndex;
+        if (progress)
+            progress(operationIndex, ops.operations().size());
     }
 
     // #502. Entries and Layer nodes reconcile once every operation has applied, in the same draft

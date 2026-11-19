@@ -163,11 +163,33 @@ struct LiveSessionCommitter final {
         viewerLevel;
 };
 
+// #747: where a transaction stands on its way to the document, for a caller that reports
+// progress (an asynchronous MCP transact, or one that carries a progress token).
+struct LiveCommitProgress final {
+    enum class Step : std::uint8_t {
+        // Waiting in the queue behind `ahead` commits.
+        Queued = 0,
+        // Being prepared on the client thread: `applied` of `total` operations so far.
+        Preparing = 1,
+        // Prepared, waiting for the owner thread (and for an open gesture to close).
+        Prepared = 2,
+        // The owner thread is publishing it; from here it finishes whatever the stop token says.
+        Publishing = 3,
+    };
+    Step step = Step::Queued;
+    std::size_t ahead = 0;
+    std::size_t applied = 0;
+    std::size_t total = 0;
+};
+
 // The calling request's cancellation and deadline, carried into the marshal so a queued commit
 // can be withdrawn.
 struct LiveCallControl final {
     std::stop_token stop;
     std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max();
+    // #747: told, on the client thread and without the host's lock, each time the commit moves on
+    // (and after each operation it prepares). Optional.
+    std::function<void(const LiveCommitProgress&)> progress{};
 };
 
 // One client call's hold on one generation. Move-only. While a lease is alive its Session stays
@@ -202,6 +224,8 @@ class LiveSessionLease final {
     // Python console binds one per generation) gives each script its own cancellation. Call it on
     // the client thread that commits through the lease.
     void setControl(LiveCallControl control);
+    // #747: the call control later commits carry (to extend it, for example with progress).
+    [[nodiscard]] LiveCallControl control() const;
     // A revision-guarded undo or redo: queued like any commit, and refused with a stale-revision
     // result on the owner thread when the live revision is not `expectedRevision`.
     [[nodiscard]] SessionCommandResult history(bool redo, document::Revision expectedRevision);
@@ -279,6 +303,10 @@ class LiveSessionHost final {
     [[nodiscard]] LiveSessionAvailability availability() const noexcept;
     [[nodiscard]] std::uint64_t generation() const noexcept;
     [[nodiscard]] std::size_t queuedCommits() const noexcept;
+    // #747: a moving average of how long recent transactions took from their turn (the start of
+    // their preparation) to their result; nullopt before the first one. Back-pressure answers
+    // derive retryAfterMs from it and the queue depth.
+    [[nodiscard]] std::optional<std::chrono::milliseconds> recentCommitTime() const noexcept;
     // The current generation's command event stream (null while no project is bound), so a client
     // can follow command events from the moment a generation starts.
     [[nodiscard]] std::shared_ptr<EventStream> events() const;

@@ -116,9 +116,12 @@ class CommandStack final {
     // freezes the result. `cancelled` is polled between operations and phases; when it fires the
     // result is cancelled() and nothing else. A transaction whose expected revision is not `base`'s
     // is not applied: publish refuses it as stale, or rebaseNeeded() asks for a newer base.
-    [[nodiscard]] static PreparedTransaction prepare(const document::Snapshot& base,
-                                                     Transaction&& transaction,
-                                                     const std::function<bool()>& cancelled = {});
+    // #747: `progress`, when set, is told after each operation how many of the transaction's
+    // operations have applied (applied, total), on the calling thread.
+    [[nodiscard]] static PreparedTransaction
+    prepare(const document::Snapshot& base, Transaction&& transaction,
+            const std::function<bool()>& cancelled = {},
+            const std::function<void(std::size_t, std::size_t)>& progress = {});
     // #744 (A2). Owner thread. True when the document has moved past `prepared`'s base and the
     // transaction would still apply on the live revision (it expects that revision or none), so it
     // must be prepared again on the live snapshot before publish. Answers no for a transaction
