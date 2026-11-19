@@ -216,6 +216,18 @@ lifetime adapter in `src/ui` publishes the mirror on every snapshot, composition
 color-settings, display/view and save change. Its drain applies at most one commit per event-loop
 slice. It wakes on `LiveCommitSubscription` instead of the 16 ms poll the Script editor uses today.
 
+**Amended (#744): preparation leaves the UI thread.** The marshal bounded the queue but not the
+work in one commit, which applied on the UI thread: a 20,000-key transaction froze it for 12.5 s.
+A transaction is now built, applied, proven and validated on the request worker (or the Python
+scripting thread) that commits it, against the newest mirror, when it is first in line; the UI
+thread only publishes it -- the revision check, the swap, the undo history and the events. A
+commit whose base the artist's own edit has moved past is prepared again on the live snapshot when
+its expected revision is still the live one and refused as stale otherwise. One transaction
+carries at most 1,000,000 units of work (one per operation, or one per key, keyframe or edit an
+operation lists); a larger one is refused before it is queued with `bloom.mcp.commit-too-large`,
+and initialize advertises the bound as `capabilities.experimental.bloom.commitWorkLimit`. See
+[Scripting and add-ons](../architecture/scripting-and-addons.md#the-live-session-host).
+
 **The request path.**
 
 ```text
@@ -223,25 +235,26 @@ connection thread    accept, read with deadlines, parse, admit (Host, Origin, to
       | pending queue (16, shared with stdio's bound)
 request worker (4)   McpServerCore::handle -> LiveSessionHost::acquire -> lease
       | reads: the lease's immutable snapshot (worker thread)
-      | commits: queued to the owner thread, the worker waits
-UI thread            adapter drain: one commit per slice, through CompositionSession
+      | commits: queued; in its turn the worker prepares the transaction (#744)
+      |          (apply, prove, validate, freeze), then waits
+UI thread            adapter drain: one publication per slice, through CompositionSession
       | export jobs: scheduler tasks owned by the export queue
 worker -> connection thread   response or event stream
 ```
 
-The UI thread never parses, admits, handles a request or waits on one. Its only part is the bounded
-commit drain the live session already uses.
+The UI thread never parses, admits, handles a request, applies an agent's operations or waits on a
+request. Its only part is the bounded commit drain, which publishes what a worker prepared.
 
 **Commits.** One `transact` is one atomic transaction and one undo step. It is labelled with the
 transaction's `label`, or "Agent edit" when there is none, and it is visible in every panel when it
 applies. `expectedRevision` is required, as today; a conflict leaves the document unchanged. A
-commit never applies while the artist holds an open interactive gesture (ADR 0017): it waits in
-the queue until the gesture closes. A commit that is still queued when its request is cancelled,
-when its deadline passes (`kMcpCommitDeadline`, 30 s) or when its generation is revoked is
-withdrawn and never applied. Its result names why, with a stable code: `bloom.live.gesture-open`,
-`bloom.live.cancelled`, `bloom.live.deadline-exceeded` or `bloom.live.project-replaced`. A commit
-that has started applying finishes atomically. The `history` tool queues undo and redo the same
-way.
+commit never publishes while the artist holds an open interactive gesture (ADR 0017): it waits in
+the queue until the gesture closes (its preparation does not wait). A commit that is still queued
+or preparing when its request is cancelled, when its deadline passes (`kMcpCommitDeadline`, 30 s)
+or when its generation is revoked is withdrawn and never applied. Its result names why, with a
+stable code: `bloom.live.gesture-open`, `bloom.live.cancelled`, `bloom.live.deadline-exceeded` or
+`bloom.live.project-replaced`. A commit that has started publishing finishes atomically. The
+`history` tool queues undo and redo the same way, behind any commit queued before them.
 
 **Contextual arguments** fill from the live context (project, composition, selected nodes,
 selected layers, time), exactly as the Python console does. Align and distribute measure geometry
@@ -273,6 +286,7 @@ flows ask the artist about unsaved changes and destinations; the artist owns the
 | Pending messages | 16 (unchanged) | 503 with Retry-After: 1, -32000 |
 | Requests per client, executing or pending | 4 | 503, -32000 |
 | Queued commits, all clients and the Script editor | 16 (unchanged) | `bloom.mcp.commit-queue-full` |
+| Work in one live commit (#744) | 1,000,000 units: one per operation, or per key, keyframe or edit it lists | `bloom.mcp.commit-too-large` |
 | Render request | 10,000 frames (unchanged) | -32602 |
 | Command events retained | 1,024 (unchanged) | `resetRequired` |
 

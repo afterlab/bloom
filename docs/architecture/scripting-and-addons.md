@@ -200,17 +200,45 @@ revocation rule.
   event stream. The adapter drains at most one commit per event-loop slice through
   `CompositionSession`, woken by `LiveCommitSubscription` from a stop-aware waiter thread rather than
   a poll, and never while an interactive gesture (ADR 0017) is open: a held commit is retried when
-  the gesture ends.
+  the gesture ends. For a transaction the owner only publishes (#744):
+  `CompositionSession::publishTransaction` runs `CommandStack::publish`, which checks the revision,
+  stages the undo step and its charge, swaps the prepared state in through `Document::publish` and
+  sends the events. Its cost follows the records the edit changed and the history's length, never
+  the keys the transaction carries.
 - **Client side (scripting thread, MCP request workers).** `acquire()` returns a lease on the
   current generation: an attached `scripting::Session` whose reads come from the mirror and whose
   `execute()`, `undo()` and `redo()` enqueue and wait. A lease's `history(redo, expectedRevision)`
   checks the revision on the owner thread in the slice that applies it. Leases keep reading the
   state they took after a replacement and refuse to commit.
-- **Ordering and withdrawal.** Commits apply in FIFO order and land in the undo history like a panel
-  edit, with the transaction's label. A commit still queued when its caller's stop token fires, its
-  deadline passes or its generation is revoked is withdrawn and never applied, with a stable code
-  (`bloom.live.cancelled`, `deadline-exceeded`, `gesture-open`, `project-replaced`, `queue-full`,
-  `shutting-down`). A commit that started applying finishes atomically.
+- **Preparation off the owner thread (#744).** A transaction is built, applied, proven and
+  validated on the client thread that commits it, never on the UI thread:
+  `commands::CommandStack::prepare` applies the operations to a draft of the newest mirror's
+  snapshot (`document::Draft::of`), reconciles entry layers, proves the render footprint and
+  validates and freezes the result (`Document::prepare`), touching neither the stack nor the
+  document. A commit is prepared only when it is first in the queue and nothing is publishing, so
+  it is based on every earlier commit. When the document has moved past its base in the meantime
+  (the artist's own edit), `CommandStack::rebaseNeeded` decides: a transaction that expects the
+  live revision, or none, goes back to its client with the live snapshot and is prepared again; one
+  that expects an older revision is refused with the stale-revision status
+  (`bloom.scripting.stale-revision` over MCP), as it would have been had the artist's edit landed
+  first. Undo, redo and the Viewer level stay owner-thread calls in the same FIFO queue, so they
+  wait behind a commit that is still preparing.
+- **The work bound.** One live commit carries at most `kLiveCommitWorkLimit` (1,000,000) units of
+  `Transaction::workUnits()`: one per operation, or one per key, keyframe or edit an operation lists
+  (`Operation::workUnits()`; wrappers report what they wrap). A larger transaction is refused before
+  it is queued with `bloom.live.commit-too-large` (`bloom.mcp.commit-too-large`); MCP advertises the
+  bound as `capabilities.experimental.bloom.commitWorkLimit` and in the `transact` description and
+  help. Preparation polls the caller's stop token, deadline and the generation's withdrawal between
+  operations and phases, so it also ends at the 30-second commit deadline.
+- **Ordering and withdrawal.** Commits publish in FIFO order and land in the undo history like a
+  panel edit, with the transaction's label; the artist's own edits publish at once and in order with
+  them. A commit still queued or preparing when its caller's stop token fires, its deadline passes
+  or its generation is revoked (project replacement, shutdown) is withdrawn and never applied, with
+  a stable code (`bloom.live.cancelled`, `deadline-exceeded`, `gesture-open`, `project-replaced`,
+  `queue-full`, `shutting-down`, `commit-too-large`). Preparation holds only immutable snapshots
+  and the host's shared state, so a host destroyed during preparation is safe: the client sees
+  `shutting-down`. A commit that started publishing finishes atomically. An open gesture holds
+  publication, not preparation.
 
 ## MCP On The Live Session
 

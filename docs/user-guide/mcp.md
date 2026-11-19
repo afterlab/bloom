@@ -66,11 +66,16 @@ edits into one `transact` instead of sending them in parallel.
 ### Edits, undo and project changes
 
 A `transact` call is one atomic transaction and one undo step, labelled with its `label` or
-"Agent edit". It applies on Bloom's main thread between your own edits: never while you are in the
-middle of a drag, a scrub or a text edit (it waits until you finish, up to 30 seconds), and a
-revision conflict leaves the project unchanged. A queued edit that is cancelled, times out or
-outlives its project is never applied, and the result names why with a stable code:
-`bloom.mcp.cancelled`, `bloom.mcp.deadline-exceeded`, `bloom.mcp.gesture-open`,
+"Agent edit". Bloom builds and checks it off the main thread, so a large edit does not freeze the
+window, and then lands it between your own edits: never while you are in the middle of a drag, a
+scrub or a text edit (it waits until you finish, up to 30 seconds), and a revision conflict
+leaves the project unchanged. If you edit the project while an agent's edit is being built, yours
+lands first and the agent's edit answers with a revision conflict, as if it had come second. One
+`transact` carries at most 1,000,000 units of work (one per operation, or one per key, keyframe or
+edit an operation lists; initialize reports it as `capabilities.experimental.bloom.commitWorkLimit`);
+a larger one is refused with `bloom.mcp.commit-too-large`, so split it into several. A queued edit
+that is cancelled, times out or outlives its project is never applied, and the result names why
+with a stable code: `bloom.mcp.cancelled`, `bloom.mcp.deadline-exceeded`, `bloom.mcp.gesture-open`,
 `bloom.mcp.project-replaced`, `bloom.mcp.commit-queue-full`. The Script editor and MCP share one
 queue of 16 edits.
 

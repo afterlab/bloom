@@ -780,6 +780,15 @@ from locked layers) and its render reachability, both built once at freeze time.
 `RenderReachability::computations()`) let tests prove an edit's cost does not grow with unrelated
 compositions.
 
+A commit has two halves (#744). `Document::prepare(draft)` does everything above that reads no
+document state -- the incremental (or whole) validation, the publication shell, the freeze and the
+allocator reservation -- and returns a `PreparedCommit`; it reads only the draft and the immutable
+base it was drafted from, so any thread may run it. `Document::publish(expectedRevision,
+prepared)` is the owner's half: the provenance and base checks, the revision check, the high-water
+merge, the swap and the observers. `Document::commit()` is the two in a row. `Draft::of(snapshot)`
+drafts a document's own snapshot without the `Document` object, so a live commit can be built on a
+worker (see [Scripting and add-ons](scripting-and-addons.md#the-live-session-host)).
+
 `ProjectId` is not allocator-backed because one container owns one project. A document missing any
 required high-water member, including `driverBinding`, is invalid; high water is never
 reconstructed from surviving IDs.
