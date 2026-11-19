@@ -143,6 +143,14 @@ ProjectIoOperationMemory::reserve(const std::uint64_t bytes) const {
         return ProjectIoMemoryReservationResult(
             ProjectIoMemoryError::SingleAllocationLimitExceeded);
     }
+    return reserveAggregate(bytes);
+}
+
+ProjectIoMemoryReservationResult
+ProjectIoOperationMemory::reserveAggregate(const std::uint64_t bytes) const {
+    if (state_ == nullptr) {
+        return ProjectIoMemoryReservationResult(ProjectIoMemoryError::InvalidLimit);
+    }
     const auto& shared = state_->shared;
     std::scoped_lock lock(state_->mutex, shared->mutex);
     if (bytes > state_->limitBytes - state_->currentBytes) {

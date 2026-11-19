@@ -39,7 +39,7 @@ using bloom::project::CanonicalJsonWriterResult;
 using bloom::project::parseUnknownJsonNumber;
 
 static_assert(bloom::project::kCanonicalJsonMaximumDepth == 128);
-static_assert(bloom::project::kCanonicalJsonMaximumValues == 4'000'000);
+static_assert(bloom::project::kCanonicalJsonMaximumValues == 8'000'000);
 static_assert(bloom::project::kCanonicalJsonMaximumContainerEntries == 1'000'000);
 static_assert(noexcept(CanonicalJsonWriter::counting()));
 static_assert(!std::is_copy_constructible_v<CanonicalJsonWriter>);

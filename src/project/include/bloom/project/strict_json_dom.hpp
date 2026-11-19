@@ -32,6 +32,9 @@ namespace bloom::project {
 
 namespace detail {
 class StrictJsonDomBuilder;
+// The parsed document's storage (its PMR resource, the qualified reader's document, and the arena
+// the tree lives in); defined in strict_json_dom.cpp so no reader type crosses this header.
+struct StrictJsonDomStorage;
 } // namespace detail
 
 enum class JsonValueKind : std::uint8_t {
@@ -46,22 +49,21 @@ enum class JsonValueKind : std::uint8_t {
 class JsonValue;
 class JsonMember;
 
-// One decoded JSON value in the bounded strict DOM. Copying is disabled so a large tree is never
-// accidentally duplicated; every value moves. All owned storage (the number/string token, the
-// element array, and the member array) allocates through the same PMR resource as its owning
-// document, in turn bounded by the caller's `ProjectIoOperationMemory` budget.
+// One decoded JSON value in the bounded strict DOM: 16 bytes, a view into storage its owning
+// StrictJsonDomDocument holds. A number or string points at its text in the qualified reader's
+// decoded buffer; an array's elements and an object's members are each one contiguous block in the
+// document's arena. Nothing is allocated per value, so a document costs a small fixed amount per
+// value on top of its text (issue #737: the former per-value strings and vectors cost over 150
+// bytes per value and could not hold a large project within one save's memory budget). Copying is
+// disabled so a tree is never duplicated by accident; a value is only valid while its document
+// lives.
 class JsonValue final {
   public:
-    // Constructs a Null value bound to `resource`; every other kind is populated by the parse
-    // pipeline. Public so standard containers (which are not implicitly friends even when called
-    // from friended code) can construct DOM nodes in place.
-    explicit JsonValue(std::pmr::memory_resource* resource) noexcept;
+    // A Null value; every other kind is populated by the parse pipeline.
+    JsonValue() noexcept = default;
 
     JsonValue(const JsonValue&) = delete;
     JsonValue& operator=(const JsonValue&) = delete;
-    // Every value reachable from one document shares the same PMR resource pointer, so the
-    // underlying containers' allocators always compare equal and moving never allocates, copies
-    // element-wise, or throws.
     JsonValue(JsonValue&&) noexcept = default;
     JsonValue& operator=(JsonValue&&) noexcept = default;
     ~JsonValue() = default;
@@ -87,24 +89,19 @@ class JsonValue final {
   private:
     friend class detail::StrictJsonDomBuilder;
 
+    // The text of a Number or String, the first element of an Array, or the first member of an
+    // Object; `size_` counts bytes, elements or members. Every count fits: a decoded string is at
+    // most kStrictJsonDomMaximumDecodedStringBytes and a container at most
+    // kStrictJsonDomMaximumContainerEntries (both checked before the tree is built).
+    const void* data_ = nullptr;
+    std::uint32_t size_ = 0;
     JsonValueKind kind_ = JsonValueKind::Null;
     bool boolean_ = false;
-    std::pmr::string text_;
-    std::pmr::vector<JsonValue> elements_;
-    std::pmr::vector<JsonMember> members_;
 };
 
-// One decoded object member in source order: a decoded key plus its owned value.
 class JsonMember final {
   public:
-    // Constructs a member bound to `resource` with decoded `key` and a Null placeholder value;
-    // the parse pipeline fills in the value in place. Public for the same container-construction
-    // reason as JsonValue's constructor above. Deliberately not noexcept: copying `key` into
-    // PMR-owned storage allocates through ProjectIoMemoryResource's throwing
-    // std::pmr::memory_resource surface (do_allocate), which reports budget rejection as
-    // std::bad_alloc rather than a null pointer. That exception must reach
-    // parseStrictJsonDom()'s catch clause rather than hit a noexcept boundary and terminate.
-    JsonMember(std::pmr::memory_resource* resource, std::string_view key);
+    JsonMember() noexcept = default;
 
     JsonMember(const JsonMember&) = delete;
     JsonMember& operator=(const JsonMember&) = delete;
@@ -112,19 +109,20 @@ class JsonMember final {
     JsonMember& operator=(JsonMember&&) noexcept = default;
     ~JsonMember() = default;
 
-    [[nodiscard]] std::string_view key() const noexcept { return key_; }
+    [[nodiscard]] std::string_view key() const noexcept { return {key_, keySize_}; }
     [[nodiscard]] const JsonValue& value() const noexcept { return value_; }
 
   private:
     friend class detail::StrictJsonDomBuilder;
 
-    std::pmr::string key_;
+    const char* key_ = nullptr;
+    std::uint32_t keySize_ = 0;
     JsonValue value_;
 };
 
 inline constexpr std::size_t kStrictJsonDomMaximumInputBytes = 256U << 20U;
 inline constexpr std::uint32_t kStrictJsonDomMaximumDepth = 128;
-inline constexpr std::uint64_t kStrictJsonDomMaximumValues = 4'000'000;
+inline constexpr std::uint64_t kStrictJsonDomMaximumValues = 8'000'000;
 inline constexpr std::uint64_t kStrictJsonDomMaximumContainerEntries = 1'000'000;
 inline constexpr std::uint64_t kStrictJsonDomMaximumDecodedStringBytes = 89'478'488;
 
@@ -185,26 +183,26 @@ class StrictJsonDomPathText final {
     bool truncated_ = false;
 };
 
-// A parsed document owning its PMR resource and root value for as long as the document lives.
-// The resource lives behind a stable heap address so moving the document never invalidates the
-// pointers held by its PMR-allocated tree.
+// A parsed document owning its storage (PMR resource, decoded text and tree arena) and root value
+// for as long as the document lives. The storage lives behind a stable heap address so moving the
+// document never invalidates the views its tree holds.
 class StrictJsonDomDocument final {
   public:
     StrictJsonDomDocument(const StrictJsonDomDocument&) = delete;
     StrictJsonDomDocument& operator=(const StrictJsonDomDocument&) = delete;
-    StrictJsonDomDocument(StrictJsonDomDocument&&) noexcept = default;
-    StrictJsonDomDocument& operator=(StrictJsonDomDocument&&) noexcept = default;
-    ~StrictJsonDomDocument() = default;
+    StrictJsonDomDocument(StrictJsonDomDocument&&) noexcept;
+    StrictJsonDomDocument& operator=(StrictJsonDomDocument&&) noexcept;
+    ~StrictJsonDomDocument();
 
     [[nodiscard]] const JsonValue& root() const noexcept { return root_; }
 
   private:
     friend class detail::StrictJsonDomBuilder;
 
-    StrictJsonDomDocument(std::unique_ptr<ProjectIoMemoryResource> resource,
+    StrictJsonDomDocument(std::unique_ptr<detail::StrictJsonDomStorage> storage,
                           JsonValue root) noexcept;
 
-    std::unique_ptr<ProjectIoMemoryResource> resource_;
+    std::unique_ptr<detail::StrictJsonDomStorage> storage_;
     JsonValue root_;
 };
 

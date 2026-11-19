@@ -19,6 +19,7 @@
 #include <bloom/project/document_decode.hpp>
 #include <bloom/project/document_reconstruct.hpp>
 #include <bloom/project/manifest_requirements.hpp>
+#include <bloom/project/open_archive.hpp>
 #include <bloom/project/project_io_memory.hpp>
 #include <bloom/project/round_trip_state.hpp>
 #include <bloom/project/strict_json_dom.hpp>
@@ -809,14 +810,14 @@ void testCorruptionInjection(Expectations& expectations) {
 
 // ---------------------------------------------------------------------------------------------
 // Budget exhaustion: operation budgets sized to fail at encode, container write, parse, and
-// reconstruct, each reporting typed ResourceExhausted and returning the shared coordinator
+// decode, each reporting typed ResourceExhausted and returning the shared coordinator
 // snapshot to zero.
 // ---------------------------------------------------------------------------------------------
 
 // A larger fixture (many extension records, all owned by one provider so a single manifest
 // requirement covers them) is needed to spread the pipeline's stage-by-stage memory needs across
 // a wide enough range of budgets to isolate ManifestEncode, ContainerWrite, DocumentParse, and
-// Reconstruction as four *distinct* failure points. A minimal document does not: the container
+// DocumentDecode as four *distinct* failure points. A minimal document does not: the container
 // writer's and reader's own documented worst-case qualified-dependency working-memory reservation
 // (a merged-module constant, 4 MiB each, held only transiently within its own stage -- see
 // zip_container_writer.cpp/zip_container.cpp) dominates a minimal fixture's entire budget curve,
@@ -1007,8 +1008,13 @@ void testBudgetExhaustion(Expectations& expectations) {
         "budget exhaustion: a budget large enough to encode but too small to clear the archive "
         "writer's own qualified-compressor working-memory reservation fails at ContainerWrite "
         "with a typed ResourceExhausted and a zeroed snapshot on return");
+    // Issue #737: the compact strict DOM parses this document.json in well under the former
+    // 10 MB; about 7.0-8.0 MB isolates DocumentParse and 8.0-12.75 MB DocumentDecode.
+    // Reconstruction's own charge (64 bytes per value, for the stores over the moved decoded
+    // records) is smaller than the parsed tree released just before it, so once decoding fits,
+    // reconstruction does too.
     expectResourceExhausted(
-        expectations, 10'000'000, SaveArchiveStage::DocumentParse,
+        expectations, 7'500'000, SaveArchiveStage::DocumentParse,
         [](const auto& failure) {
             const auto* payload = failure.template payloadAs<SaveArchiveJsonParseFailure>();
             return payload != nullptr &&
@@ -1018,13 +1024,165 @@ void testBudgetExhaustion(Expectations& expectations) {
         "to parse document.json fails at DocumentParse with a typed ResourceExhausted and a "
         "zeroed snapshot on return");
     expectResourceExhausted(
-        expectations, 20'000'000, SaveArchiveStage::Reconstruction,
+        expectations, 10'500'000, SaveArchiveStage::DocumentDecode,
         [](const auto& failure) {
             return failure.template payloadAs<SaveArchiveResourceExhausted>() != nullptr;
         },
-        "budget exhaustion: a budget large enough to decode but too small for the composition "
-        "layer's own reconstruction-footprint reservation fails at Reconstruction with "
-        "SaveArchiveResourceExhausted and a zeroed snapshot on return");
+        "budget exhaustion: a budget large enough to parse but too small for the decoded "
+        "representation's reservation fails at DocumentDecode with SaveArchiveResourceExhausted "
+        "and a zeroed snapshot on return");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Issue #737: a keyframe-dense project (the field report: 252 corner-pinned layers, 274,000 keys,
+// 4.48 million JSON values) could not be saved. Its document.json exceeded the former 4,000,000
+// JSON value limit, and below that limit its save charged about 550 bytes per value -- a second
+// whole decoded representation for reconstruction, and the source's indentation counted as decoded
+// text -- against a 1 GiB budget, while rebuilding its curves during verification was quadratic.
+// This reproduces the condition at a size the suite can afford: the same keyframe-dense shape must
+// save and reopen identically while charging no more per value than the default budget allows a
+// project at the value limit's field density.
+// ---------------------------------------------------------------------------------------------
+
+// The field project's JSON value count, and the most one value of this shape may charge at the
+// save's peak: the old model charged 553 (2.48 GB for the field project); this one measures about
+// 296, so a project of the field's density saves within the default 2 GiB budget up to about 7
+// million values, close to where the document.json size limit stops it anyway.
+constexpr std::uint64_t kFieldProjectJsonValues = 4'480'445;
+constexpr std::uint64_t kMaximumSaveBytesPerJsonValue = 300;
+// The container writer's and reader's fixed qualified-compressor reservations (4 MiB each) and the
+// small fixed structures of an otherwise empty project.
+constexpr std::uint64_t kFixedSaveBytes = 12ULL << 20U;
+
+static_assert(bloom::project::kCanonicalJsonMaximumValues > kFieldProjectJsonValues);
+static_assert(bloom::project::kStrictJsonDomMaximumValues ==
+              bloom::project::kCanonicalJsonMaximumValues);
+static_assert(bloom::project::kDefaultProjectIoOperationResidentBytes >=
+              kFieldProjectJsonValues * kMaximumSaveBytesPerJsonValue + kFixedSaveBytes);
+
+void testKeyframeDenseProjectSavesAndReopens(Expectations& expectations) {
+    using namespace bloom::document;
+    const auto duration = bloom::core::RationalTime::create(240, 24);
+    expectations.expect(duration.has_value(), "dense save: fixture duration constructs");
+    if (!duration.has_value()) {
+        return;
+    }
+    auto newProject = makeNewProject("Untitled Project", "Main Composition", *duration);
+    auto* composition = newProject.project.findComposition(newProject.initialCompositionId);
+    expectations.expect(composition != nullptr, "dense save: fixture composition exists");
+    if (composition == nullptr) {
+        return;
+    }
+    // 160 two-component curves of 240 keys per component: 76,800 keys, the field's per-layer shape.
+    constexpr std::uint64_t kCurves = 160;
+    constexpr std::int64_t kKeysPerComponent = 240;
+    std::uint64_t nextKey = 1;
+    bool admitted = true;
+    for (std::uint64_t curve = 1; curve <= kCurves && admitted; ++curve) {
+        std::array<ComponentAnimationCurve, 2> components;
+        for (std::int64_t frame = 0; frame < kKeysPerComponent; ++frame) {
+            const auto at = bloom::core::RationalTime::create(frame, 30);
+            for (auto& component : components) {
+                component.keyframes.push_back({KeyframeId::fromRaw(nextKey++), at.value(),
+                                               360.0 + static_cast<double>(frame) * 0.25,
+                                               KeyframeInterpolation::Linear});
+            }
+        }
+        admitted = composition->parameters().insert(
+                       {ParameterId::fromRaw(curve), std::string(kPositionParameterSchemaKey),
+                        AnimationCurveSource{AnimationCurveId::fromRaw(curve)}}) &&
+                   composition->animationCurves().insert(
+                       Vec2AnimationCurve{AnimationCurveId::fromRaw(curve), std::move(components)});
+    }
+    expectations.expect(admitted, "dense save: every fixture curve is admitted");
+    if (!admitted) {
+        return;
+    }
+    Document document{std::move(newProject.project)};
+    auto snapshot = document.snapshot();
+    const auto colorSettings = neutralColorSettings();
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 0}, .requirements = {}};
+    const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
+
+    // The document's JSON values, counted the way the reader counts them, from an unbudgeted save.
+    std::uint64_t values = 0;
+    {
+        auto unbudgeted = buildVerifiedSaveArchive(manifest, documentInput, SaveArchiveLimits{},
+                                                   makeOperation(1ULL << 30U));
+        expectations.expect(static_cast<bool>(unbudgeted), "dense save: an unbudgeted save");
+        if (!unbudgeted) {
+            return;
+        }
+        auto container = bloom::project::readZipContainer(unbudgeted.archive()->bytes(),
+                                                          bloom::project::ZipContainerLimits{},
+                                                          makeOperation(1ULL << 30U));
+        const auto* entries = container.document();
+        expectations.expect(entries != nullptr, "dense save: the archive reads");
+        if (entries == nullptr) {
+            return;
+        }
+        auto dom = bloom::project::parseStrictJsonDom(entries->documentBytes(), {},
+                                                      makeOperation(1ULL << 30U));
+        expectations.expect(static_cast<bool>(dom), "dense save: the document parses");
+        if (!dom) {
+            return;
+        }
+        const std::function<std::uint64_t(const bloom::project::JsonValue&)> count =
+            [&count](const bloom::project::JsonValue& value) {
+                std::uint64_t total = 1;
+                for (const auto& element : value.arrayElements())
+                    total += count(element);
+                for (const auto& member : value.objectMembers())
+                    total += count(member.value());
+                return total;
+            };
+        values = count(dom.document()->root());
+    }
+    expectations.expect(values > 600'000, "dense save: the fixture holds over 600,000 JSON values");
+
+    const auto budget = values * kMaximumSaveBytesPerJsonValue + kFixedSaveBytes;
+    auto coordinator = ProjectIoMemoryCoordinator::create(2 * budget);
+    expectations.expect(coordinator.has_value(), "dense save: a coordinator");
+    if (!coordinator.has_value()) {
+        return;
+    }
+    auto saveOperation = coordinator->createOperation(budget, budget);
+    const auto saveProbe = *saveOperation;
+    auto built = buildVerifiedSaveArchive(manifest, documentInput, SaveArchiveLimits{},
+                                          std::move(*saveOperation));
+    const auto* failure = built.failure();
+    expectations.expect(
+        static_cast<bool>(built),
+        "dense save: a keyframe-dense project saves within " +
+            std::to_string(kMaximumSaveBytesPerJsonValue) +
+            " bytes per JSON value; failed at stage " +
+            std::to_string(failure != nullptr ? static_cast<int>(failure->stage()) : -1) +
+            ", peak " + std::to_string(saveProbe.snapshot().peakBytes) + " of " +
+            std::to_string(budget));
+    if (!built) {
+        return;
+    }
+
+    auto openOperation = coordinator->createOperation(budget, budget);
+    auto opened = bloom::project::openProjectArchive(built.archive()->bytes(), SaveArchiveLimits{},
+                                                     std::move(*openOperation));
+    expectations.expect(opened.outcome() == bloom::project::OpenArchiveOutcome::Opened,
+                        "dense save: the saved project reopens within the same budget");
+    if (opened.outcome() != bloom::project::OpenArchiveOutcome::Opened) {
+        return;
+    }
+    auto reopened = std::move(opened).takeOpened();
+    auto reopenedSnapshot = reopened.document->snapshot();
+    const CanonicalDocumentV1 reopenedInput{.snapshot = &reopenedSnapshot,
+                                            .colorSettings = &reopened.colorSettings};
+    auto rebuilt = buildVerifiedSaveArchive(manifest, reopenedInput, SaveArchiveLimits{},
+                                            makeOperation(2 * budget));
+    expectations.expect(static_cast<bool>(rebuilt) &&
+                            rebuilt.archive()->bytes().size() == built.archive()->bytes().size() &&
+                            std::memcmp(rebuilt.archive()->bytes().data(),
+                                        built.archive()->bytes().data(),
+                                        built.archive()->bytes().size()) == 0,
+                        "dense save: the reopened project saves to the identical archive");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1088,6 +1246,7 @@ int main() {
     testCorruptionInjection(expectations);
     testNonFiniteDocumentValueFailsTypedAndSurvives(expectations);
     testBudgetExhaustion(expectations);
+    testKeyframeDenseProjectSavesAndReopens(expectations);
     testDeterminism(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

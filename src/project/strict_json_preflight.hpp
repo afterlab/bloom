@@ -10,7 +10,7 @@ namespace bloom::project::detail {
 inline constexpr std::size_t kStrictJsonManifestMaximumInputBytes = 1U << 20U;
 inline constexpr std::size_t kStrictJsonDocumentMaximumInputBytes = 256U << 20U;
 inline constexpr std::uint32_t kStrictJsonMaximumDepth = 128;
-inline constexpr std::uint64_t kStrictJsonMaximumValues = 4'000'000;
+inline constexpr std::uint64_t kStrictJsonMaximumValues = 8'000'000;
 inline constexpr std::uint64_t kStrictJsonMaximumContainerEntries = 1'000'000;
 inline constexpr std::uint64_t kStrictJsonMaximumDecodedStringBytes = 89'478'488;
 inline constexpr std::size_t kStrictJsonCheckpointCadenceBytes = 64U << 10U;

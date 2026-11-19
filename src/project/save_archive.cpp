@@ -41,7 +41,19 @@ using bloom::project::SaveArchiveManifestEncodingFailure;
 using bloom::project::SaveArchiveResourceExhausted;
 using bloom::project::SaveArchiveStage;
 
+// The decoded representation of an entry (its typed envelope, RoundTripState and the Document
+// built from them) is made of ordinary allocations, so it is charged before it is built: the
+// decoded text it may copy plus this many bytes for every JSON value. A decoded record costs at
+// most about 74 bytes per JSON value it was spelled with (a layer output boundary: 368 bytes from 5
+// values; keyframes, parameters and nodes cost 14 to 16), so 128 covers the worst record with its
+// vector's growth slack.
 constexpr std::uint64_t kSemanticBytesPerJsonValue = 128;
+// Reconstruction moves the decoded storage into the Document rather than copying it; what it
+// allocates itself is the stores' and the graph's own sorted vectors and indexes over the moved
+// records, at most twice a record's size over its minimum spelling (issue #737: charging a second
+// whole representation here, with the source's indentation counted as text, kept a 274,000-key
+// project from ever fitting one save's budget).
+constexpr std::uint64_t kReconstructionBytesPerJsonValue = 64;
 
 [[nodiscard]] std::span<const std::byte> asBytes(const std::span<const char> bytes) noexcept {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
@@ -57,27 +69,33 @@ constexpr std::uint64_t kSemanticBytesPerJsonValue = 128;
 }
 
 [[nodiscard]] std::optional<std::uint64_t>
-semanticRepresentationCharge(const std::size_t sourceBytes,
-                             const std::uint64_t valueCount) noexcept {
-    if (valueCount >
-        (std::numeric_limits<std::uint64_t>::max() - sourceBytes) / kSemanticBytesPerJsonValue) {
+perValueCharge(const std::uint64_t textBytes, const std::uint64_t valueCount,
+               const std::uint64_t bytesPerValue) noexcept {
+    if (valueCount > (std::numeric_limits<std::uint64_t>::max() - textBytes) / bytesPerValue) {
         return std::nullopt;
     }
-    return static_cast<std::uint64_t>(sourceBytes) + valueCount * kSemanticBytesPerJsonValue;
+    return textBytes + valueCount * bytesPerValue;
 }
 
 [[nodiscard]] std::optional<ProjectIoMemoryReservation>
-reserveRepresentation(const ProjectIoOperationMemory& operation, const std::size_t sourceBytes,
-                      const std::uint64_t valueCount) {
-    const auto charge = semanticRepresentationCharge(sourceBytes, valueCount);
+reserveCharge(const ProjectIoOperationMemory& operation,
+              const std::optional<std::uint64_t> charge) {
     if (!charge.has_value()) {
         return std::nullopt;
     }
-    auto result = operation.reserve(*charge);
+    // One aggregate charge for the representation's many unmetered allocations.
+    auto result = operation.reserveAggregate(*charge);
     if (!result) {
         return std::nullopt;
     }
     return std::move(result).takeReservation();
+}
+
+[[nodiscard]] std::optional<ProjectIoMemoryReservation>
+reserveRepresentation(const ProjectIoOperationMemory& operation, const std::uint64_t textBytes,
+                      const std::uint64_t valueCount) {
+    return reserveCharge(operation,
+                         perValueCharge(textBytes, valueCount, kSemanticBytesPerJsonValue));
 }
 
 struct ScratchRequirements final {
@@ -219,18 +237,35 @@ encodeDocument(const CanonicalDocumentV1& input,
     return std::nullopt;
 }
 
-[[nodiscard]] std::uint64_t countJsonValues(const JsonValue& value) noexcept {
-    std::uint64_t total = 1;
-    if (value.kind() == JsonValueKind::Array) {
+// The values of a parsed entry and the bytes of decoded text they hold (string values, member keys
+// and number tokens): the inputs to its semantic representation charge.
+struct JsonTally final {
+    std::uint64_t values = 0;
+    std::uint64_t textBytes = 0;
+};
+
+void tallyJson(const JsonValue& value, JsonTally& tally) noexcept {
+    ++tally.values;
+    if (const auto text = value.asString()) {
+        tally.textBytes += text->size();
+    } else if (const auto token = value.asNumberToken()) {
+        tally.textBytes += token->size();
+    } else if (value.kind() == JsonValueKind::Array) {
         for (const auto& element : value.arrayElements()) {
-            total += countJsonValues(element);
+            tallyJson(element, tally);
         }
     } else if (value.kind() == JsonValueKind::Object) {
         for (const auto& member : value.objectMembers()) {
-            total += countJsonValues(member.value());
+            tally.textBytes += member.key().size();
+            tallyJson(member.value(), tally);
         }
     }
-    return total;
+}
+
+[[nodiscard]] JsonTally tallyJson(const JsonValue& root) noexcept {
+    JsonTally tally;
+    tallyJson(root, tally);
+    return tally;
 }
 
 [[nodiscard]] bloom::project::StrictJsonDomLimits
@@ -399,7 +434,8 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
                 SaveArchiveJsonParseFailure{manifestDom.error(), manifestDom.byteOffset(),
                                             SaveArchiveErrorPath::from(manifestDom.memberPath())}));
         }
-        const auto manifestValueCount = countJsonValues(manifestDom.document()->root());
+        const auto manifestTally = tallyJson(manifestDom.document()->root());
+        const auto manifestValueCount = manifestTally.values;
 
         stage = SaveArchiveStage::DocumentParse;
         if (manifestValueCount >= limits.json.maximumValues) {
@@ -409,19 +445,22 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
                                                    .path = SaveArchiveErrorPath{}}));
         }
         const auto remainingValues = limits.json.maximumValues - manifestValueCount;
-        auto documentDom = parseStrictJsonDom(
-            entries->documentBytes(), documentJsonLimits(limits, remainingValues), operation);
+        // Optional so the tree can be released as soon as it is decoded (below): it is the
+        // largest representation in the chain and nothing after decoding reads it (issue #737).
+        std::optional<StrictJsonDomResult> documentDomStorage(parseStrictJsonDom(
+            entries->documentBytes(), documentJsonLimits(limits, remainingValues), operation));
+        auto& documentDom = *documentDomStorage;
         if (!documentDom) {
             return ReopenChainResult::failure(SaveArchiveFailure(
                 stage,
                 SaveArchiveJsonParseFailure{documentDom.error(), documentDom.byteOffset(),
                                             SaveArchiveErrorPath::from(documentDom.memberPath())}));
         }
-        const auto documentValueCount = countJsonValues(documentDom.document()->root());
+        const auto documentTally = tallyJson(documentDom.document()->root());
 
         stage = SaveArchiveStage::ManifestDecode;
         auto manifestReservation =
-            reserveRepresentation(operation, entries->manifestBytes().size(), manifestValueCount);
+            reserveRepresentation(operation, manifestTally.textBytes, manifestTally.values);
         if (!manifestReservation.has_value()) {
             return ReopenChainResult::failure(
                 SaveArchiveFailure(stage, SaveArchiveResourceExhausted{}));
@@ -459,12 +498,16 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
 
         stage = SaveArchiveStage::DocumentDecode;
         auto decodeReservation =
-            reserveRepresentation(operation, entries->documentBytes().size(), documentValueCount);
+            reserveRepresentation(operation, documentTally.textBytes, documentTally.values);
         if (!decodeReservation.has_value()) {
             return ReopenChainResult::failure(
                 SaveArchiveFailure(stage, SaveArchiveResourceExhausted{}));
         }
         auto decodedDocument = decodeDocumentEnvelope(*trustedDocumentRoot);
+        trustedDocumentRoot = nullptr;
+        // The envelope and its RoundTripState own copies of everything they keep; the parsed tree
+        // is no longer needed, so its memory is free for reconstruction.
+        documentDomStorage.reset();
         if (decodedDocument.outcome() == DocumentDecodeOutcome::PreservedReadOnlyRequired) {
             return ReopenChainResult::documentPreservedReadOnlyRequired(
                 decodedDocument.preservationReason(),
@@ -481,13 +524,14 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
         }
 
         stage = SaveArchiveStage::Reconstruction;
-        auto reconstructionReservation =
-            reserveRepresentation(operation, entries->documentBytes().size(), documentValueCount);
+        auto reconstructionReservation = reserveCharge(
+            operation, perValueCharge(0, documentTally.values, kReconstructionBytesPerJsonValue));
         if (!reconstructionReservation.has_value()) {
             return ReopenChainResult::failure(
                 SaveArchiveFailure(stage, SaveArchiveResourceExhausted{}));
         }
-        auto reconstructed = reconstructDocument(*decodedDocument.value());
+        // Moved, not copied: a copy would keep a second whole decoded project resident, uncharged.
+        auto reconstructed = reconstructDocument(*std::move(decodedDocument).takeValue());
         if (!reconstructed) {
             return ReopenChainResult::failure(SaveArchiveFailure(stage, reconstructed.rejection()));
         }
@@ -497,8 +541,7 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
         // validation while both decoded and reconstructed representations remain charged.
         stage = SaveArchiveStage::RequirementsValidation;
         auto requirementsReservation = reserveRepresentation(
-            operation, entries->manifestBytes().size() + entries->documentBytes().size(),
-            manifestValueCount);
+            operation, manifestTally.textBytes + documentTally.textBytes, manifestValueCount);
         if (!requirementsReservation.has_value()) {
             return ReopenChainResult::failure(
                 SaveArchiveFailure(stage, SaveArchiveResourceExhausted{}));

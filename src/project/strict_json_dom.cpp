@@ -13,15 +13,14 @@
 #include <memory>
 #include <memory_resource>
 #include <new>
+#include <optional>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <unordered_set>
 #include <utility>
 
 namespace bloom::project {
-
-JsonValue::JsonValue(std::pmr::memory_resource* const resource) noexcept
-    : text_(resource), elements_(resource), members_(resource) {}
 
 std::optional<bool> JsonValue::asBoolean() const noexcept {
     if (kind_ != JsonValueKind::Boolean) {
@@ -34,35 +33,32 @@ std::optional<std::string_view> JsonValue::asNumberToken() const noexcept {
     if (kind_ != JsonValueKind::Number) {
         return std::nullopt;
     }
-    return std::string_view{text_};
+    return std::string_view{static_cast<const char*>(data_), size_};
 }
 
 std::optional<std::string_view> JsonValue::asString() const noexcept {
     if (kind_ != JsonValueKind::String) {
         return std::nullopt;
     }
-    return std::string_view{text_};
+    return std::string_view{static_cast<const char*>(data_), size_};
 }
 
 std::span<const JsonValue> JsonValue::arrayElements() const noexcept {
-    if (kind_ != JsonValueKind::Array) {
+    if (kind_ != JsonValueKind::Array || size_ == 0) {
         return {};
     }
-    return {elements_.data(), elements_.size()};
+    return {static_cast<const JsonValue*>(data_), size_};
 }
 
 std::span<const JsonMember> JsonValue::objectMembers() const noexcept {
-    if (kind_ != JsonValueKind::Object) {
+    if (kind_ != JsonValueKind::Object || size_ == 0) {
         return {};
     }
-    return {members_.data(), members_.size()};
+    return {static_cast<const JsonMember*>(data_), size_};
 }
 
 const JsonValue* JsonValue::findMember(const std::string_view key) const noexcept {
-    if (kind_ != JsonValueKind::Object) {
-        return nullptr;
-    }
-    for (const auto& member : members_) {
+    for (const auto& member : objectMembers()) {
         if (member.key() == key) {
             return &member.value();
         }
@@ -70,12 +66,130 @@ const JsonValue* JsonValue::findMember(const std::string_view key) const noexcep
     return nullptr;
 }
 
-JsonMember::JsonMember(std::pmr::memory_resource* const resource, const std::string_view key)
-    : key_(key.data(), key.size(), resource), value_(resource) {}
+// Every count the tree stores fits its 32-bit field (see JsonValue's own comment).
+static_assert(kStrictJsonDomMaximumDecodedStringBytes <= UINT32_MAX);
+static_assert(kStrictJsonDomMaximumContainerEntries <= UINT32_MAX);
+static_assert(kStrictJsonDomMaximumInputBytes <= UINT32_MAX);
+// The per-value cost the project-format resource budget is sized against (issue #737).
+static_assert(sizeof(JsonValue) <= 16);
+static_assert(sizeof(JsonMember) <= 32);
+static_assert(std::is_trivially_destructible_v<JsonValue>);
+static_assert(std::is_trivially_destructible_v<JsonMember>);
 
-StrictJsonDomDocument::StrictJsonDomDocument(std::unique_ptr<ProjectIoMemoryResource> resource,
+} // namespace bloom::project
+
+namespace bloom::project::detail {
+
+// The document's storage. Declared in this order so it is destroyed in the reverse: the arena's
+// chunks and the qualified reader's document are released first, then the chunk list, and the PMR
+// resource that charged all of them last.
+struct StrictJsonDomStorage final {
+    explicit StrictJsonDomStorage(ProjectIoOperationMemory operation) noexcept
+        : resource(std::move(operation)) {}
+
+    StrictJsonDomStorage(const StrictJsonDomStorage&) = delete;
+    StrictJsonDomStorage& operator=(const StrictJsonDomStorage&) = delete;
+    StrictJsonDomStorage(StrictJsonDomStorage&&) = delete;
+    StrictJsonDomStorage& operator=(StrictJsonDomStorage&&) = delete;
+
+    ~StrictJsonDomStorage() {
+        for (const auto& chunk : chunks_) {
+            resource.deallocate(chunk.data, chunk.size, alignof(std::max_align_t));
+        }
+        if (document != nullptr) {
+            yyjson_doc_free(document);
+        }
+        if (text != nullptr) {
+            resource.deallocate(text, textCapacity, alignof(std::max_align_t));
+        }
+    }
+
+    // A bump allocation of `count` default-constructed T in the arena. Throws std::bad_alloc when
+    // the operation budget refuses a chunk, which parse() reports as ResourceExhausted.
+    template <typename T> [[nodiscard]] T* allocateArray(const std::size_t count) {
+        static_assert(std::is_trivially_destructible_v<T>);
+        if (count == 0) {
+            return nullptr;
+        }
+        const auto bytes = count * sizeof(T);
+        auto* const storage = allocate(bytes, alignof(T));
+        auto* const first = static_cast<T*>(storage);
+        for (std::size_t index = 0; index < count; ++index) {
+            ::new (static_cast<void*>(first + index)) T();
+        }
+        return first;
+    }
+
+    ProjectIoMemoryResource resource;
+    // The reader's tree, released as soon as the Bloom tree is built from it.
+    yyjson_doc* document = nullptr;
+    // The decoded text every number, string and key of the tree points into: a padded copy of the
+    // input that the reader decodes in place.
+    char* text = nullptr;
+    std::size_t textCapacity = 0;
+
+  private:
+    struct Chunk final {
+        void* data = nullptr;
+        std::size_t size = 0;
+    };
+
+    // Chunks grow from 4 KiB by doubling to 4 MiB, so a small document charges little and a large
+    // one wastes at most a fraction of one chunk; a block larger than the cap gets its own exact
+    // chunk. The same sizes on every platform, unlike std::pmr::monotonic_buffer_resource's
+    // implementation-defined growth.
+    static constexpr std::size_t kFirstChunkBytes = std::size_t{4} << 10U;
+    static constexpr std::size_t kMaximumChunkBytes = std::size_t{4} << 20U;
+
+    [[nodiscard]] void* allocate(const std::size_t bytes, const std::size_t alignment) {
+        const auto padding =
+            remaining_ == 0
+                ? 0
+                : (alignment - (reinterpret_cast<std::uintptr_t>(cursor_) % alignment)) % alignment;
+        if (remaining_ < padding || remaining_ - padding < bytes) {
+            if (bytes > kMaximumChunkBytes) {
+                // Its own exact chunk; the current chunk keeps serving smaller blocks.
+                return addChunk(bytes);
+            }
+            nextChunkBytes_ = std::max(nextChunkBytes_, bytes);
+            cursor_ = static_cast<std::byte*>(addChunk(nextChunkBytes_));
+            remaining_ = nextChunkBytes_;
+            nextChunkBytes_ = std::min(nextChunkBytes_ * 2, kMaximumChunkBytes);
+            auto* const block = cursor_;
+            cursor_ += bytes;
+            remaining_ -= bytes;
+            return block;
+        }
+        auto* const block = cursor_ + padding;
+        cursor_ = block + bytes;
+        remaining_ -= padding + bytes;
+        return block;
+    }
+
+    [[nodiscard]] void* addChunk(const std::size_t bytes) {
+        chunks_.reserve(chunks_.size() + 1);
+        void* const data = resource.allocate(bytes, alignof(std::max_align_t));
+        chunks_.push_back({.data = data, .size = bytes});
+        return data;
+    }
+
+    std::pmr::vector<Chunk> chunks_{&resource};
+    std::byte* cursor_ = nullptr;
+    std::size_t remaining_ = 0;
+    std::size_t nextChunkBytes_ = kFirstChunkBytes;
+};
+
+} // namespace bloom::project::detail
+
+namespace bloom::project {
+
+StrictJsonDomDocument::StrictJsonDomDocument(std::unique_ptr<detail::StrictJsonDomStorage> storage,
                                              JsonValue root) noexcept
-    : resource_(std::move(resource)), root_(std::move(root)) {}
+    : storage_(std::move(storage)), root_(std::move(root)) {}
+
+StrictJsonDomDocument::StrictJsonDomDocument(StrictJsonDomDocument&&) noexcept = default;
+StrictJsonDomDocument& StrictJsonDomDocument::operator=(StrictJsonDomDocument&&) noexcept = default;
+StrictJsonDomDocument::~StrictJsonDomDocument() = default;
 
 } // namespace bloom::project
 
@@ -169,14 +283,14 @@ class StrictJsonDomBuilder final {
                                                    ProjectIoOperationMemory operation) noexcept;
 
   private:
-    // Not noexcept: the DOM walk copies decoded tokens/keys into PMR-owned containers using
-    // ordinary std::pmr::string/vector/unordered_set operations, which allocate through
-    // ProjectIoMemoryResource's throwing memory_resource surface (do_allocate). A budget
-    // rejection here must propagate as std::bad_alloc to parse()'s try/catch, which reports
-    // ResourceExhausted; the allocator adapters used only by yyjson's C callbacks are the
-    // noexcept ones (checkedAllocate), not this walk.
+    // Not noexcept: the arena and the duplicate-key set allocate through ProjectIoMemoryResource's
+    // throwing memory_resource surface (do_allocate). A budget rejection here must propagate as
+    // std::bad_alloc to parse()'s try/catch, which reports ResourceExhausted; the allocator
+    // adapters used only by yyjson's C callbacks are the noexcept ones (checkedAllocate), not this
+    // walk. The tree's text is never copied: it points into the reader's decoded buffer, which the
+    // document's storage keeps alive.
     [[nodiscard]] static bool buildValue(yyjson_val* value, JsonValue& out, PathStack& path,
-                                         std::pmr::memory_resource* resource,
+                                         StrictJsonDomStorage& storage,
                                          StrictJsonDomPathText& errorPath);
     [[nodiscard]] static StrictJsonDomPathText formatPath(const PathStack& stack,
                                                           std::string_view finalKey) noexcept;
@@ -216,41 +330,51 @@ StrictJsonDomResult StrictJsonDomBuilder::parse(const std::span<const std::byte>
         return makeFailure(translatePreflightError(preflight.error), preflight.errorOffset);
     }
 
-    std::unique_ptr<ProjectIoMemoryResource> resource;
+    std::unique_ptr<StrictJsonDomStorage> storage;
     try {
-        resource = std::make_unique<ProjectIoMemoryResource>(std::move(operation));
+        storage = std::make_unique<StrictJsonDomStorage>(std::move(operation));
     } catch (const std::bad_alloc&) {
         return makeFailure(StrictJsonDomError::ResourceExhausted, 0);
     }
 
-    const yyjson_alc allocator{&allocatorMalloc, &allocatorRealloc, &allocatorFree, resource.get()};
+    const yyjson_alc allocator{&allocatorMalloc, &allocatorRealloc, &allocatorFree,
+                               &storage->resource};
+    // The reader decodes in place (YYJSON_READ_INSITU) into a zero-padded copy the storage owns, so
+    // the tree's text outlives the reader's own tree, which is freed once the Bloom tree is built:
+    // the reader's 16 bytes per value and per key are not held while the document is decoded
+    // (issue #737). `input` itself is never modified. NUMBER_AS_RAW keeps every number's exact
+    // source token; the grammar is strict RFC 8259, matching the preceding preflight scan.
+    try {
+        storage->textCapacity = input.size() + YYJSON_PADDING_SIZE;
+        storage->text = static_cast<char*>(
+            storage->resource.allocate(storage->textCapacity, alignof(std::max_align_t)));
+    } catch (const std::bad_alloc&) {
+        storage->textCapacity = 0;
+        return makeFailure(StrictJsonDomError::ResourceExhausted, 0);
+    }
+    std::memcpy(storage->text, input.data(), input.size());
+    std::memset(storage->text + input.size(), 0, YYJSON_PADDING_SIZE);
     yyjson_read_err readError{};
-    // NOFLAG plus NUMBER_AS_RAW: strict RFC 8259 grammar (matching the preceding preflight scan)
-    // with every number preserved as its exact source token. `input` is not modified because
-    // YYJSON_READ_INSITU is not set.
-    yyjson_doc* const doc =
-        yyjson_read_opts(const_cast<char*>(reinterpret_cast<const char*>(input.data())),
-                         input.size(), YYJSON_READ_NUMBER_AS_RAW, &allocator, &readError);
-    if (doc == nullptr) {
+    storage->document =
+        yyjson_read_opts(storage->text, input.size(),
+                         YYJSON_READ_INSITU | YYJSON_READ_NUMBER_AS_RAW, &allocator, &readError);
+    if (storage->document == nullptr) {
         const auto error = readError.code == YYJSON_READ_ERROR_MEMORY_ALLOCATION
                                ? StrictJsonDomError::ResourceExhausted
                                : StrictJsonDomError::ParseFailed;
         return makeFailure(error, readError.pos);
     }
 
-    struct DocGuard final {
-        yyjson_doc* doc;
-        ~DocGuard() { yyjson_doc_free(doc); }
-    } docGuard{doc};
-
     try {
         PathStack path;
-        JsonValue root(resource.get());
+        JsonValue root;
         StrictJsonDomPathText errorPath;
-        if (!buildValue(yyjson_doc_get_root(doc), root, path, resource.get(), errorPath)) {
+        if (!buildValue(yyjson_doc_get_root(storage->document), root, path, *storage, errorPath)) {
             return makeDuplicateKeyFailure(errorPath);
         }
-        StrictJsonDomDocument document(std::move(resource), std::move(root));
+        yyjson_doc_free(storage->document);
+        storage->document = nullptr;
+        StrictJsonDomDocument document(std::move(storage), std::move(root));
         return makeSuccess(std::move(document));
     } catch (const std::bad_alloc&) {
         return makeFailure(StrictJsonDomError::ResourceExhausted, 0);
@@ -260,7 +384,7 @@ StrictJsonDomResult StrictJsonDomBuilder::parse(const std::span<const std::byte>
 }
 
 bool StrictJsonDomBuilder::buildValue(yyjson_val* const value, JsonValue& out, PathStack& path,
-                                      std::pmr::memory_resource* const resource,
+                                      StrictJsonDomStorage& storage,
                                       StrictJsonDomPathText& errorPath) {
     switch (yyjson_get_type(value)) {
     case YYJSON_TYPE_NULL:
@@ -272,23 +396,27 @@ bool StrictJsonDomBuilder::buildValue(yyjson_val* const value, JsonValue& out, P
         return true;
     case YYJSON_TYPE_RAW:
         out.kind_ = JsonValueKind::Number;
-        out.text_.assign(yyjson_get_raw(value), yyjson_get_len(value));
+        out.data_ = yyjson_get_raw(value);
+        out.size_ = static_cast<std::uint32_t>(yyjson_get_len(value));
         return true;
     case YYJSON_TYPE_STR:
         out.kind_ = JsonValueKind::String;
-        out.text_.assign(yyjson_get_str(value), yyjson_get_len(value));
+        out.data_ = yyjson_get_str(value);
+        out.size_ = static_cast<std::uint32_t>(yyjson_get_len(value));
         return true;
     case YYJSON_TYPE_ARR: {
+        const auto count = yyjson_arr_size(value);
+        auto* const elements = storage.allocateArray<JsonValue>(count);
         out.kind_ = JsonValueKind::Array;
-        out.elements_.reserve(yyjson_arr_size(value));
+        out.data_ = elements;
+        out.size_ = static_cast<std::uint32_t>(count);
         yyjson_arr_iter iter{};
         yyjson_arr_iter_init(value, &iter);
         std::size_t index = 0;
         for (yyjson_val* element = yyjson_arr_iter_next(&iter); element != nullptr;
              element = yyjson_arr_iter_next(&iter)) {
-            out.elements_.emplace_back(resource);
             path.pushIndex(index);
-            const bool built = buildValue(element, out.elements_.back(), path, resource, errorPath);
+            const bool built = buildValue(element, elements[index], path, storage, errorPath);
             path.pop();
             if (!built) {
                 return false;
@@ -298,29 +426,46 @@ bool StrictJsonDomBuilder::buildValue(yyjson_val* const value, JsonValue& out, P
         return true;
     }
     case YYJSON_TYPE_OBJ: {
-        out.kind_ = JsonValueKind::Object;
         const auto count = yyjson_obj_size(value);
-        out.members_.reserve(count);
-        std::pmr::unordered_set<std::string_view> seenKeys(resource);
-        seenKeys.reserve(count);
+        auto* const members = storage.allocateArray<JsonMember>(count);
+        out.kind_ = JsonValueKind::Object;
+        out.data_ = members;
+        out.size_ = static_cast<std::uint32_t>(count);
+        // Decoded duplicate keys are refused. A small object -- every object the project format
+        // writes -- compares against its earlier keys directly; only a large one pays for a set.
+        constexpr std::size_t kLinearDuplicateCheckMembers = 32;
+        std::optional<std::pmr::unordered_set<std::string_view>> seenKeys;
+        if (count > kLinearDuplicateCheckMembers) {
+            seenKeys.emplace(&storage.resource);
+            seenKeys->reserve(count);
+        }
         yyjson_obj_iter iter{};
         yyjson_obj_iter_init(value, &iter);
+        std::size_t index = 0;
         for (yyjson_val* key = yyjson_obj_iter_next(&iter); key != nullptr;
              key = yyjson_obj_iter_next(&iter)) {
             yyjson_val* const memberValue = yyjson_obj_iter_get_val(key);
             const std::string_view decodedKey(yyjson_get_str(key), yyjson_get_len(key));
-            if (!seenKeys.insert(decodedKey).second) {
+            const bool duplicate =
+                seenKeys.has_value()
+                    ? !seenKeys->insert(decodedKey).second
+                    : std::any_of(members, members + index, [&](const JsonMember& earlier) {
+                          return earlier.key() == decodedKey;
+                      });
+            if (duplicate) {
                 errorPath = formatPath(path, decodedKey);
                 return false;
             }
-            out.members_.emplace_back(resource, decodedKey);
+            auto& member = members[index];
+            member.key_ = decodedKey.data();
+            member.keySize_ = static_cast<std::uint32_t>(decodedKey.size());
             path.pushKey(decodedKey);
-            const bool built =
-                buildValue(memberValue, out.members_.back().value_, path, resource, errorPath);
+            const bool built = buildValue(memberValue, member.value_, path, storage, errorPath);
             path.pop();
             if (!built) {
                 return false;
             }
+            ++index;
         }
         return true;
     }

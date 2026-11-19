@@ -13,7 +13,7 @@ namespace bloom::project {
 class UnknownJsonNumber;
 
 inline constexpr std::size_t kCanonicalJsonMaximumDepth = 128;
-inline constexpr std::size_t kCanonicalJsonMaximumValues = 4'000'000;
+inline constexpr std::size_t kCanonicalJsonMaximumValues = 8'000'000;
 inline constexpr std::size_t kCanonicalJsonMaximumContainerEntries = 1'000'000;
 
 struct CanonicalJsonWriterLimits final {

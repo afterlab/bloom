@@ -445,6 +445,15 @@ class [[nodiscard]] DocumentDecodeResult final {
     [[nodiscard]] std::optional<RoundTripState> takeRoundTrip() && noexcept {
         return std::move(roundTrip_);
     }
+    // Move-only companion to value(), for the reopen chain's reconstruction, which consumes the
+    // envelope: moving it in, rather than copying it from value(), keeps a whole second copy of a
+    // large decoded project from ever being resident (issue #737). value() is null afterwards;
+    // roundTrip()/takeRoundTrip() are unaffected.
+    [[nodiscard]] std::optional<DecodedDocumentEnvelope> takeValue() && {
+        auto taken = std::move(envelope_);
+        envelope_.reset();
+        return taken;
+    }
 
   private:
     DocumentDecodeResult() = default;

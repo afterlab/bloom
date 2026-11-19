@@ -53,7 +53,7 @@ using bloom::project::detail::StrictJsonPreflightResult;
 static_assert(kStrictJsonManifestMaximumInputBytes == 1'048'576);
 static_assert(kStrictJsonDocumentMaximumInputBytes == 268'435'456);
 static_assert(kStrictJsonMaximumDepth == 128);
-static_assert(kStrictJsonMaximumValues == 4'000'000);
+static_assert(kStrictJsonMaximumValues == 8'000'000);
 static_assert(kStrictJsonMaximumContainerEntries == 1'000'000);
 static_assert(kStrictJsonMaximumDecodedStringBytes == 89'478'488);
 static_assert(kStrictJsonCheckpointCadenceBytes == 65'536);

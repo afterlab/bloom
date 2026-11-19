@@ -6,8 +6,13 @@
 
 namespace bloom::project {
 
-inline constexpr std::uint64_t kDefaultProjectIoOperationResidentBytes = 1ULL << 30U;
-inline constexpr std::uint64_t kDefaultProjectIoSharedResidentBytes = 2ULL << 30U;
+// One Open, Save or Save Copy, and every concurrent one together
+// (docs/architecture/project-format.md, "Resource Limits"). A keyframe-dense project charges about
+// 300 bytes per JSON value at the peak of its save (1.3 GB for the 4.48-million-value field project
+// of issue #737), and an open project keeps its decoded charge in the shared pool while another
+// save or a recovery write runs.
+inline constexpr std::uint64_t kDefaultProjectIoOperationResidentBytes = 2ULL << 30U;
+inline constexpr std::uint64_t kDefaultProjectIoSharedResidentBytes = 4ULL << 30U;
 inline constexpr std::uint64_t kDefaultProjectIoSingleAllocationBytes = 256ULL << 20U;
 
 enum class ProjectIoMemoryError : std::uint8_t {
@@ -89,7 +94,15 @@ class [[nodiscard]] ProjectIoMemoryReservationResult final {
 
 class ProjectIoOperationMemory final {
   public:
+    // Charges one allocation of `bytes`: refused above the single-allocation limit, then against
+    // this operation's and the shared budget.
     [[nodiscard]] ProjectIoMemoryReservationResult reserve(std::uint64_t bytes) const;
+    // Charges `bytes` as one aggregate: the conservative worst-case charge for the many allocations
+    // a dependency makes outside the operation allocator (docs/architecture/project-format.md,
+    // "Resource Limits"). It is checked against this operation's and the shared budget exactly as
+    // reserve() is, but not against the single-allocation limit, which bounds one allocation, not
+    // the sum of many (issue #737: a large project's decoded representation is charged this way).
+    [[nodiscard]] ProjectIoMemoryReservationResult reserveAggregate(std::uint64_t bytes) const;
     [[nodiscard]] ProjectIoOperationMemorySnapshot snapshot() const;
 
   private:

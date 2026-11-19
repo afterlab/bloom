@@ -1045,11 +1045,14 @@ void testBudgetExhaustion(Expectations& expectations) {
     const auto archiveBytes = bulkArchiveBytesOrAbort(expectations);
 
     // Budgets calibrated empirically against this exact bulk fixture (4000 extension records, one
-    // covering manifest requirement): under ~6 MB the shared chain's own ContainerRead working-set
-    // reservation dominates (matches save_archive_tests.cpp's own ContainerWrite/ContainerRead
-    // note); 6-13 MB isolates DocumentParse; 18-22 MB isolates Reconstruction.
+    // covering manifest requirement): under ~5.7 MB the shared chain's own ContainerRead
+    // working-set reservation dominates (matches save_archive_tests.cpp's own
+    // ContainerWrite/ContainerRead note); about 5.75-6.75 MB isolates DocumentParse and
+    // 6.75-11.5 MB DocumentDecode. Reconstruction's own charge (issue #737: 64 bytes per value, for
+    // the stores over the moved decoded records) is smaller than the parsed tree released just
+    // before it, so once decoding fits, reconstruction does too.
     expectOpenResourceExhausted(
-        expectations, archiveBytes, 8'000'000, SaveArchiveStage::DocumentParse,
+        expectations, archiveBytes, 6'250'000, SaveArchiveStage::DocumentParse,
         [](const auto& failure) {
             const auto* payload = failure.template payloadAs<SaveArchiveJsonParseFailure>();
             return payload != nullptr &&
@@ -1059,13 +1062,13 @@ void testBudgetExhaustion(Expectations& expectations) {
         "manifest.json but too small to parse document.json fails at DocumentParse with a typed "
         "ResourceExhausted and a zeroed snapshot on return");
     expectOpenResourceExhausted(
-        expectations, archiveBytes, 20'000'000, SaveArchiveStage::Reconstruction,
+        expectations, archiveBytes, 9'000'000, SaveArchiveStage::DocumentDecode,
         [](const auto& failure) {
             return failure.template payloadAs<SaveArchiveResourceExhausted>() != nullptr;
         },
-        "open budget exhaustion: a budget large enough to decode but too small for the "
-        "composition layer's own reconstruction-footprint reservation fails at Reconstruction "
-        "with SaveArchiveResourceExhausted and a zeroed snapshot on return");
+        "open budget exhaustion: a budget large enough to parse but too small for the decoded "
+        "representation's reservation fails at DocumentDecode with SaveArchiveResourceExhausted "
+        "and a zeroed snapshot on return");
 }
 
 // ---------------------------------------------------------------------------------------------

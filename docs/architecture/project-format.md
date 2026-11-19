@@ -187,15 +187,15 @@ and during streaming otherwise.
 | expanded `document.json` | 256 MiB (`268435456` bytes) |
 | total expanded bytes | 257 MiB (`269484032` bytes) |
 | JSON nesting depth, root included | `128` |
-| JSON values across both entries | `4000000` |
+| JSON values across both entries | `8000000` |
 | elements in one array or members in one object | `1000000` |
 | one decoded ordinary JSON string, excluding extension `payload` | 64 MiB (`67108864` UTF-8 bytes) |
 | one extension `payload` base64 spelling | 89478488 ASCII bytes |
 | one decoded opaque extension payload | 64 MiB (`67108864` bytes) |
 | all extension `payload` base64 spellings | 192 MiB (`201326592` ASCII bytes) |
 | all decoded opaque extension payloads | 128 MiB (`134217728` bytes) |
-| default aggregate resident Project I/O memory per operation | 1 GiB (`1073741824` bytes) |
-| application-wide resident Project I/O memory across concurrent operations | 2 GiB (`2147483648` bytes) |
+| default aggregate resident Project I/O memory per operation | 2 GiB (`2147483648` bytes) |
+| application-wide resident Project I/O memory across concurrent operations | 4 GiB (`4294967296` bytes) |
 | one Project I/O allocation | 256 MiB (`268435456` bytes) |
 
 Namespaced owner, type, provider, capability, and remapper IDs are ASCII lowercase identifiers
@@ -214,14 +214,26 @@ expanded entries, parser DOM and indexes, duplicate-key tables, decoded `Documen
 `RoundTripState`, opaque payloads, preserved archive bytes, canonical output, and reopen-validation
 state. The operation allocator performs checked addition before every reservation and rejects an
 individual allocation above 256 MiB. The application-owned `ProjectIoMemoryCoordinator` also
-charges the same reservation against one 2 GiB pool shared by every concurrent Project I/O task;
+charges the same reservation against one 4 GiB pool shared by every concurrent Project I/O task;
 headless entry points construct the same bounded coordinator. Third-party work must use the
 operation allocator or reserve a worst-case charge before calling a dependency; unmetered
 dependency allocation is not permitted. Moving storage between stages transfers its charge, while
 keeping two representations live charges both.
 
-`OpenOptions` and `SaveOptions` default the per-operation resident budget to 1 GiB and may lower it.
-No operation budget may exceed the shared 2 GiB implementation ceiling. Per-operation and shared
+The decoded representation (typed envelope, `RoundTripState`, and the `Document` built from them)
+uses ordinary allocations, so it is charged as one aggregate reservation before it is built: the
+decoded text it may copy (string values, member keys and number tokens, never the source's
+whitespace) plus 128 bytes per JSON value, which covers the largest decoded record per value it is
+spelled with and its vector growth. Reconstruction moves that storage into the `Document` and
+charges 64 bytes per JSON value for the stores' and graph's own vectors and indexes. An aggregate
+reservation is checked against the operation and shared budgets but not the single-allocation
+limit, since it stands for many allocations. An opened project keeps these charges for as long as
+it stays resident. A keyframe-dense project (37.6 bytes of `document.json` per JSON value) charges
+about 300 bytes per JSON value at the peak of its save, so it saves within the default budget up to
+about 7 million values, close to where the `document.json` size limit stops it.
+
+`OpenOptions` and `SaveOptions` default the per-operation resident budget to 2 GiB and may lower it.
+No operation budget may exceed the shared 4 GiB implementation ceiling. Per-operation and shared
 charges are acquired atomically or not at all, and are released when their owning allocation or
 reservation dies. A size conversion, multiplication, accumulation, or allocator charge that
 overflows is resource exhaustion, never a wrapped smaller request. Allocation failure and budget
