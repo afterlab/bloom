@@ -511,6 +511,121 @@ class AsyncTransact(unittest.TestCase):
         client.request('DELETE')
 
 
+class EventStream(unittest.TestCase):
+    """#747 (D2): events.subscribe, then GET /mcp streams notifications/bloom/events, coalesced
+    per interval; Last-Event-ID resumes after a notification, a replaced project resets, and the
+    stream ends with its session."""
+
+    def setUp(self):
+        self.host = Host()
+        assert self.host.status.startswith('READY'), self.host.status
+
+    def tearDown(self):
+        self.host.close()
+
+    def open_stream(self, client, last_event_id=None, accept='text/event-stream'):
+        connection = socket.create_connection(('127.0.0.1', self.host.port), timeout=15)
+        lines = ['GET /mcp HTTP/1.1', f'Host: 127.0.0.1:{self.host.port}',
+                 f'Authorization: Bearer {client.token}', f'Accept: {accept}']
+        if client.session:
+            lines.append(f'Mcp-Session-Id: {client.session}')
+        if last_event_id is not None:
+            lines.append(f'Last-Event-ID: {last_event_id}')
+        connection.sendall(('\r\n'.join(lines) + '\r\n\r\n').encode())
+        buffer = b''
+        while b'\r\n\r\n' not in buffer:
+            chunk = connection.recv(65536)
+            if not chunk:
+                break
+            buffer += chunk
+        head, _, rest = buffer.partition(b'\r\n\r\n')
+        status, headers, _ = parse(head + b'\r\n\r\n')
+        return {'socket': connection, 'buffer': rest, 'status': status, 'headers': headers}
+
+    @staticmethod
+    def next_event(stream, timeout=15):
+        """The next SSE event with data, as (id, message); None when the server closed."""
+        deadline = time.monotonic() + timeout
+        while True:
+            while b'\r\n\r\n' in stream['buffer']:
+                block, _, stream['buffer'] = stream['buffer'].partition(b'\r\n\r\n')
+                fields = {}
+                for line in block.decode().split('\r\n'):
+                    if line.startswith(':'):
+                        continue
+                    name, _, value = line.partition(': ')
+                    fields[name] = value
+                if 'data' in fields:
+                    return int(fields['id']), json.loads(fields['data'])
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AssertionError('no event within the timeout')
+            stream['socket'].settimeout(remaining)
+            chunk = stream['socket'].recv(65536)
+            if not chunk:
+                return None
+            stream['buffer'] += chunk
+
+    def rename(self, client, request_id, name):
+        revision = json.loads(client.call(request_id, 'query', {'kind': 'project'})[2])[
+            'result']['structuredContent']['revision']
+        _, _, body = client.call(request_id + 1, 'transact', {
+            'expectedRevision': revision,
+            'operations': [{'op': 'bloom.project.set-name', 'args': {'name': name}}]})
+        self.assertFalse(json.loads(body)['result']['isError'], body)
+
+    def test_stream_resume_and_replacement(self):
+        client = Client(self.host)
+        self.assertEqual(self.open_stream(client)['status'], 400, 'GET needs a session')
+        client.initialize()
+        refused = self.open_stream(client, accept='application/json')
+        self.assertEqual(refused['status'], 406)
+        refused['socket'].close()
+        refused = self.open_stream(client)
+        self.assertEqual((refused['status'], refused['headers']['allow']),
+                         (405, 'GET, POST, DELETE'), 'no subscription, no stream')
+        refused['socket'].close()
+        _, _, body = client.call(2, 'events.subscribe', {'intervalMs': 50, 'kinds': ['revision']})
+        subscribed = json.loads(body)['result']['structuredContent']
+        self.assertEqual((subscribed['succeeded'], subscribed['method']),
+                         (True, 'notifications/bloom/events'))
+        stream = self.open_stream(client)
+        self.assertEqual((stream['status'], stream['headers']['content-type']),
+                         (200, 'text/event-stream'))
+        self.rename(client, 3, 'Streamed')
+        first_id, first = self.next_event(stream)
+        self.assertEqual(first['method'], 'notifications/bloom/events')
+        params = first['params']
+        self.assertEqual((params['count'], params['kinds'], params['origins'],
+                          params['resetRequired'], params['sequence']),
+                         (1, {'revision': 1}, {'agent': 1}, False, first_id))
+        # The connection drops; two edits are missed; Last-Event-ID resumes after the first.
+        stream['socket'].close()
+        self.rename(client, 5, 'Missed one')
+        self.rename(client, 7, 'Missed two')
+        resumed = self.open_stream(client, last_event_id=first_id)
+        resumed_id, message = self.next_event(resumed)
+        params = message['params']
+        self.assertEqual((params['fromSequence'], params['count'], params['resetRequired']),
+                         (first_id + 1, 2, False), params)
+        self.assertEqual(params['toRevision'] - params['fromRevision'], 1, params)
+        # A replaced project is told, and the subscription goes on.
+        self.host.command('replace-project')
+        _, replaced = self.next_event(resumed)
+        self.assertEqual((replaced['params']['resetRequired'], replaced['params']['reason']),
+                         (True, 'project-replaced'), replaced)
+        self.assertGreater(replaced['params']['sequence'], resumed_id)
+        # A newer stream for the session ends the older one.
+        newer = self.open_stream(client)
+        self.assertEqual(newer['status'], 200)
+        self.assertIsNone(self.next_event(resumed))
+        resumed['socket'].close()
+        # Ending the session ends its stream.
+        self.assertEqual(client.request('DELETE')[0], 204)
+        self.assertIsNone(self.next_event(newer))
+        newer['socket'].close()
+
+
 class Lifecycle(unittest.TestCase):
     def test_port_in_use_and_regenerate(self):
         first = Host()

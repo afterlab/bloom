@@ -111,6 +111,17 @@ if(BUILD_TESTING)
         LABELS unit mcp
         TIMEOUT 240
     )
+    # #747 (D2): events subscriptions, coalesced notifications, overflow, reconnect with a cursor,
+    # project replacement, and the events tool's pages and summary form.
+    add_executable(bloom_mcp_event_stream_test tests/event_stream_tests.cpp)
+    target_link_libraries(bloom_mcp_event_stream_test PRIVATE bloom_mcp)
+    bloom_enable_warnings(bloom_mcp_event_stream_test)
+    bloom_add_test(
+        NAME bloom.mcp.event-stream
+        COMMAND bloom_mcp_event_stream_test
+        LABELS unit mcp
+        TIMEOUT 120
+    )
     # #724 Scopes: query kind `scopes` through the shared core, headless.
     add_executable(bloom_mcp_scope_query_test tests/scope_query_tests.cpp)
     target_link_libraries(bloom_mcp_scope_query_test PRIVATE bloom_mcp yyjson::yyjson)

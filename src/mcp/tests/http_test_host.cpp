@@ -7,12 +7,13 @@
 //        [--connections <n>]
 // Prints "READY <port>" or "REFUSED <reason>", then follows commands on stdin, one per line:
 // start, stop, regenerate, await-connections <n>, hold-commits, release-commits,
-// await-requests <n>, quit (end of input also quits). The token is in <dir>/mcp/token.
-// "DONE <line>" answers each one once it has taken effect: regenerate once the new token is in
-// force (or the attempt failed), await-connections once exactly <n> HTTP connections are open,
-// await-requests once exactly <n> requests are executing or waiting for a worker, so the test
-// waits on the server's state rather than on a delay. hold-commits stops publishing commits (a
-// transact then keeps its request worker busy) until release-commits.
+// await-requests <n>, replace-project, quit (end of input also quits). The token is in
+// <dir>/mcp/token. "DONE <line>" answers each one once it has taken effect: regenerate once the new
+// token is in force (or the attempt failed), await-connections once exactly <n> HTTP connections
+// are open, await-requests once exactly <n> requests are executing or waiting for a worker, so the
+// test waits on the server's state rather than on a delay. hold-commits stops publishing commits (a
+// transact then keeps its request worker busy) until release-commits. replace-project binds a new
+// live generation as File > Open does (#747 D2: event cursors from before it reset).
 #include "fixed_memory_budget.hpp"
 #include <bloom/host/export_presets.hpp>
 #include <bloom/host/export_queue.hpp>
@@ -224,6 +225,13 @@ int main(int argc, char** argv) {
                     holdCommits = true;
                 } else if (line == "release-commits") {
                     holdCommits = false;
+                } else if (line == "replace-project") {
+                    live.replace(
+                        {events, session->publicationCoordinator(), session->artifactCoordinator()},
+                        mirror());
+                    // The service's pump follows the new generation.
+                    for (int slice = 0; slice < 4; ++slice)
+                        turn();
                 } else if (line.starts_with("await-requests ")) {
                     const auto wanted = std::stoul(line.substr(line.find(' ') + 1));
                     while (driver.requestsInProgress() != wanted)

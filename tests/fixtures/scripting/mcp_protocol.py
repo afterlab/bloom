@@ -448,6 +448,62 @@ class Protocol(unittest.TestCase):
                 self.assertTrue(argument['summary'], f"{record['id']}.{argument['name']}")
                 self.assertEqual(argument['contextual'], argument['context'] != '')
 
+    def test_event_subscription_on_stdio(self):
+        """#747 (D2): after events.subscribe, notifications/bloom/events arrive on stdout between
+        answers, coalesced into ranges with counts; events.unsubscribe ends them."""
+        process = subprocess.Popen([MCP], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE)
+        lines = queue.Queue()
+
+        def read():
+            for line in process.stdout:
+                lines.put(json.loads(line))
+            lines.put(None)
+
+        threading.Thread(target=read, daemon=True).start()
+
+        def write(line):
+            process.stdin.write((line + '\n').encode())
+            process.stdin.flush()
+
+        def answer(request_id):
+            """The answer to request_id; notifications that arrive first are kept."""
+            while True:
+                message = lines.get(timeout=60)
+                self.assertIsNotNone(message, 'bloom-mcp ended')
+                if message.get('id') == request_id:
+                    return message
+                notes.append(message)
+
+        notes = []
+        try:
+            write(INIT)
+            answer(1)
+            write(READY)
+            write(tool(2, 'events.subscribe', {'intervalMs': 50, 'kinds': ['revision']}))
+            subscribed = answer(2)['result']['structuredContent']
+            self.assertEqual((subscribed['succeeded'], subscribed['method']),
+                             (True, 'notifications/bloom/events'))
+            write(tool(3, 'transact', {'expectedRevision': 0, 'operations': [
+                {'op': 'bloom.project.set-name', 'args': {'name': 'Told'}}]}))
+            self.assertFalse(answer(3)['result']['isError'])
+            while not notes:
+                message = lines.get(timeout=60)
+                self.assertIsNotNone(message, 'bloom-mcp ended')
+                notes.append(message)
+            note = notes[0]
+            self.assertEqual(note['method'], 'notifications/bloom/events')
+            self.assertNotIn('id', note)
+            self.assertEqual((note['params']['count'], note['params']['toRevision'],
+                              note['params']['kinds']), (1, 1, {'revision': 1}))
+            write(tool(4, 'events.unsubscribe', {}))
+            self.assertTrue(answer(4)['result']['structuredContent']['ended'])
+        finally:
+            process.stdin.close()
+            process.wait(timeout=60)
+            process.stdout.close()
+            process.stderr.close()
+
     def test_context_defaults_match_the_python_client(self):
         """Omitted contextual arguments come from the session, exactly as they do in Python."""
         responses = exchange([
