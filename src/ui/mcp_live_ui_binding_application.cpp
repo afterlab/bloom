@@ -359,6 +359,8 @@ const std::vector<PreferenceKey>& preferenceKeys() {
             flagKey("interactionSounds", &ApplicationPreferences::interactionSoundsEnabled));
         list.push_back(
             flagKey("renderNotifications", &ApplicationPreferences::renderNotificationsEnabled));
+        list.push_back(flagKey("agentActivityFeedback",
+                               &ApplicationPreferences::agentActivityFeedbackEnabled));
         list.push_back(artistOnlyFlagKey("agentsAnswerDialogs",
                                          &ApplicationPreferences::agentsAnswerDialogs));
         list.push_back(

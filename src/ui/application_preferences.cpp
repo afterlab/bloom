@@ -51,6 +51,7 @@ constexpr auto kSoundVolumeKey = "sound/volume-percent";
 constexpr auto kEventSoundsKey = "sound/events";
 constexpr auto kInteractionSoundsKey = "sound/interaction";
 constexpr auto kRenderNotificationsKey = "sound/render-notifications";
+constexpr auto kAgentActivityFeedbackKey = "sound/agent-activity";
 constexpr auto kPurgePreviewCacheShortcutKey = "shortcuts/purge-preview-cache";
 constexpr auto kPurgeMediaCacheShortcutKey = "shortcuts/purge-media-cache";
 constexpr auto kAgentAnswerDialogsKey = "agents/answer-dialogs";
@@ -270,6 +271,8 @@ ApplicationPreferences loadApplicationPreferences(const QSettings& settings) {
         settings.value(QLatin1String(kInteractionSoundsKey), false).toBool();
     preferences.renderNotificationsEnabled =
         settings.value(QLatin1String(kRenderNotificationsKey), true).toBool();
+    preferences.agentActivityFeedbackEnabled =
+        settings.value(QLatin1String(kAgentActivityFeedbackKey), true).toBool();
     // #688: a stored value is the artist's, an empty one included (no shortcut); only a missing
     // one is the default.
     if (settings.contains(QLatin1String(kPurgePreviewCacheShortcutKey)))
@@ -384,6 +387,8 @@ void saveApplicationPreferences(QSettings& settings, const ApplicationPreference
     settings.setValue(QLatin1String(kInteractionSoundsKey), preferences.interactionSoundsEnabled);
     settings.setValue(QLatin1String(kRenderNotificationsKey),
                       preferences.renderNotificationsEnabled);
+    settings.setValue(QLatin1String(kAgentActivityFeedbackKey),
+                      preferences.agentActivityFeedbackEnabled);
     settings.setValue(QLatin1String(kPurgePreviewCacheShortcutKey),
                       preferences.purgePreviewCacheShortcut);
     settings.setValue(QLatin1String(kPurgeMediaCacheShortcutKey),

@@ -11,7 +11,9 @@
 //
 // The adapter also reacts to the queue's typed terminal events: a succeeded or failed job is
 // announced through UiFeedback (a sound, plus the operating-system notification while Bloom is not
-// the active application). A drained queue makes no second sound.
+// the active application). A drained queue makes no second sound. A transient job (an agent's or a
+// script's render, export or capture, #746) is never announced on its own: it is counted into
+// UiFeedback's coalesced agent summary.
 //
 // ExportQueuePort is the seam between this class and the host service. The desktop composition
 // root passes a thin port over host::ExportQueueService; tests pass a scripted one. It carries only

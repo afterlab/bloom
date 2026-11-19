@@ -240,6 +240,129 @@ void testNotifications(Expectations& check) {
     check.expect(activated, "the activation handler reaches the notifier");
 }
 
+// #746: an agent's renders never get a sound or notification of their own; they are summed into
+// one summary posted once the agent has been quiet for the interval, and only while Bloom is not
+// the active application. The summary goes through the Notifier seam (the fake here), which is the
+// one the Linux, macOS and Windows notifiers implement, so this covers the logic every platform's
+// notification path receives.
+void testAgentRenderSummary(Expectations& check) {
+    Rig rig;
+    rig.active = false;
+    for (int index = 0; index < 37; ++index) {
+        rig.feedback->noteAgentRender(index != 5);
+        rig.advance(std::chrono::milliseconds{200});
+    }
+    check.expect(rig.player->played.empty() && rig.notifier->posted.empty(),
+                 "an agent's renders play no sound and post no notification per job");
+    check.expect(rig.feedback->pendingAgentActivity() ==
+                     ui::AgentActivityCounts{.renders = 37, .failed = 1, .brokenCompositions = 0},
+                 "the renders are counted for the summary");
+    rig.feedback->flushAgentActivity();
+    check.expect(rig.notifier->posted.empty(), "no summary before the agent has been quiet");
+    rig.advance(ui::UiFeedback::kAgentQuietInterval);
+    rig.feedback->flushAgentActivity();
+    check.expect(rig.notifier->posted.size() == 1 &&
+                     rig.notifier->posted[0].body ==
+                         QStringLiteral("Agent: 37 renders, 1 failed") &&
+                     rig.notifier->posted[0].failure,
+                 "one summary names the renders and the failure");
+    check.expect(rig.player->played.size() == 1 &&
+                     rig.player->played[0].sound == ui::FeedbackSound::RenderFailed,
+                 "the summary is heard once, as a failure when one failed");
+    rig.advance(ui::UiFeedback::kAgentQuietInterval);
+    rig.feedback->flushAgentActivity();
+    check.expect(rig.notifier->posted.size() == 1, "a summary is told once");
+
+    // While Bloom is the active application the artist is watching: no summary at all.
+    rig.active = true;
+    rig.feedback->noteAgentRender(true);
+    rig.advance(ui::UiFeedback::kAgentQuietInterval);
+    rig.feedback->flushAgentActivity();
+    check.expect(rig.notifier->posted.size() == 1 && rig.player->played.size() == 1,
+                 "no summary while Bloom is active");
+    check.expect(rig.feedback->pendingAgentActivity().empty(),
+                 "the dropped summary does not carry over");
+
+    // The switch off: agent work is silent.
+    rig.active = false;
+    auto settings = rig.feedback->settings();
+    settings.agentActivity = false;
+    rig.feedback->setSettings(settings);
+    rig.feedback->noteAgentRender(true);
+    rig.advance(ui::UiFeedback::kAgentQuietInterval);
+    rig.feedback->flushAgentActivity();
+    check.expect(rig.notifier->posted.size() == 1 && rig.player->played.size() == 1,
+                 "with the switch off agent work is silent");
+
+    // Render notifications off still lets the summary sound play; the notification follows its
+    // own switch, as the artist's renders do.
+    settings.agentActivity = true;
+    settings.renderNotifications = false;
+    rig.feedback->setSettings(settings);
+    rig.feedback->noteAgentRender(true);
+    rig.advance(ui::UiFeedback::kAgentQuietInterval);
+    rig.feedback->flushAgentActivity();
+    check.expect(rig.notifier->posted.size() == 1 && rig.player->played.size() == 2 &&
+                     rig.player->played.back().sound == ui::FeedbackSound::RenderSucceeded,
+                 "the summary notification follows the render notification switch");
+}
+
+// #746: a composition an agent breaks is warned once per composition per interval, never per edit.
+void testAgentCompileFailureCoalesced(Expectations& check) {
+    Rig rig;
+    check.expect(rig.feedback->noteAgentCompileFailure(7),
+                 "the first failure of a composition warns");
+    rig.advance(std::chrono::seconds{1});
+    check.expect(!rig.feedback->noteAgentCompileFailure(7) &&
+                     !rig.feedback->noteAgentCompileFailure(7),
+                 "further failures of the same composition are coalesced");
+    check.expect(rig.feedback->noteAgentCompileFailure(8), "another composition warns on its own");
+    check.expect(rig.player->played.size() == 2, "two warnings for two compositions");
+    rig.advance(ui::UiFeedback::kAgentQuietInterval);
+    check.expect(rig.feedback->noteAgentCompileFailure(7),
+                 "after the interval the composition warns again");
+    auto settings = rig.feedback->settings();
+    settings.agentActivity = false;
+    rig.feedback->setSettings(settings);
+    rig.advance(ui::UiFeedback::kAgentQuietInterval);
+    check.expect(!rig.feedback->noteAgentCompileFailure(9), "the switch off silences the warning");
+}
+
+// #746: a quiet agent session holds everything and tells it once when it ends.
+void testAgentSessionHold(Expectations& check) {
+    Rig rig;
+    rig.active = false;
+    rig.feedback->holdAgentActivity(true);
+    rig.feedback->noteAgentRender(true);
+    rig.feedback->noteAgentRender(true);
+    check.expect(!rig.feedback->noteAgentCompileFailure(4), "a held session plays no warning");
+    rig.advance(ui::UiFeedback::kAgentQuietInterval * 3);
+    rig.feedback->flushAgentActivity();
+    check.expect(rig.notifier->posted.empty() && rig.player->played.empty(),
+                 "nothing is told while the session holds it");
+    rig.feedback->holdAgentActivity(false, QStringLiteral("Agent session \u201cShot 12\u201d"));
+    check.expect(
+        rig.notifier->posted.size() == 1 &&
+            rig.notifier->posted[0].body ==
+                QStringLiteral("Agent session \u201cShot 12\u201d: 2 renders, 1 composition "
+                               "can't render"),
+        "the session's end tells everything once, under the session's name");
+    check.expect(rig.player->played.size() == 1, "with one sound");
+
+    // Active when the session ends: no summary, but a broken composition is warned once.
+    rig.active = true;
+    rig.advance(std::chrono::seconds{1});
+    rig.feedback->holdAgentActivity(true);
+    rig.feedback->noteAgentCompileFailure(4);
+    rig.feedback->noteAgentCompileFailure(5);
+    rig.feedback->holdAgentActivity(false, QStringLiteral("Agent session"));
+    check.expect(rig.notifier->posted.size() == 1 && rig.player->played.size() == 2 &&
+                     rig.player->played.back().sound == ui::FeedbackSound::RenderFailed,
+                 "an active window hears one warning for the session's broken compositions");
+    check.expect(ui::agentActivitySummaryText({.renders = 1}) == QStringLiteral("Agent: 1 render"),
+                 "one render reads in the singular");
+}
+
 void testImportMapping(Expectations& check) {
     using E = ui::FeedbackEvent;
     check.expect(ui::importFeedbackEvent(false, false, 3, 0, false) == E::ImportFinished,
@@ -581,6 +704,9 @@ int main(int argc, char** argv) {
     testRateLimit(check);
     testSuppression(check);
     testNotifications(check);
+    testAgentRenderSummary(check);
+    testAgentCompileFailureCoalesced(check);
+    testAgentSessionHold(check);
     testImportMapping(check);
     testBundledSoundsDecode(check);
     testEngineDecodesOffTheUiThread(check);

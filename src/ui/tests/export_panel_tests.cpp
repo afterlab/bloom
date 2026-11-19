@@ -265,6 +265,20 @@ void adapterTests(TestContext& context) {
     // The same events are never announced twice.
     rig.adapter->drain();
     context.expect(rig.player->played.size() == 2, "an event is announced once");
+
+    // #746: an agent's transient jobs are never announced one by one; they are counted into the
+    // agent summary (whose posting UiFeedback's own tests cover).
+    rig.port.raise(
+        host::ExportJobSucceeded{.job = document::ExportJobId::fromRaw(3), .transient = true});
+    rig.port.raise(host::ExportJobFailed{.job = document::ExportJobId::fromRaw(4),
+                                         .reason = {.reason = "Disk full"},
+                                         .transient = true});
+    rig.adapter->drain();
+    context.expect(rig.player->played.size() == 2 && rig.notifier->posted.size() == 1,
+                   "a transient job plays no sound and posts no notification of its own");
+    context.expect(rig.feedback->pendingAgentActivity().renders == 2 &&
+                       rig.feedback->pendingAgentActivity().failed == 1,
+                   "transient jobs are counted for the agent summary");
 }
 
 void jobsLink(TestContext& context) {

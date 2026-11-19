@@ -40,6 +40,7 @@ QWidget* PreferencesWindow::buildSoundsPage() {
         draft.eventSoundsEnabled = base.eventSoundsEnabled;
         draft.interactionSoundsEnabled = base.interactionSoundsEnabled;
         draft.renderNotificationsEnabled = base.renderNotificationsEnabled;
+        draft.agentActivityFeedbackEnabled = base.agentActivityFeedbackEnabled;
     });
     auto* rows = section->bodyLayout();
 
@@ -101,6 +102,14 @@ QWidget* PreferencesWindow::buildSoundsPage() {
               &ApplicationPreferences::renderNotificationsEnabled,
               tr("Shows a system notification when a render finishes or fails while Bloom is not "
                  "the active window."));
+    // #746: agents never get a sound or notification per job; this switch decides whether their
+    // work is summed into one summary while Bloom is in the background, or is silent.
+    addSwitch(QStringLiteral("preferencesAgentActivitySwitch"),
+              tr("Sounds and notifications for agent activity"),
+              &ApplicationPreferences::agentActivityFeedbackEnabled,
+              tr("On: an agent's renders are summed into one notification and sound while Bloom is "
+                 "in the background, and a composition it breaks is warned once. Off: agent work "
+                 "is silent. Never one per render either way."));
 
     // The category and volume rows follow the master switch (a sync callback runs on every
     // refresh and on a toggle).

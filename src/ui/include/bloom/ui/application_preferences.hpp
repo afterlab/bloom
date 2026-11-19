@@ -153,6 +153,13 @@ struct ApplicationPreferences final {
     bool interactionSoundsEnabled = false;
     // An operating-system notification for a render result while Bloom is not the active window.
     bool renderNotificationsEnabled = true;
+    // #746: "Sounds and notifications for agent activity". On (the default), an agent's renders,
+    // exports and captures are summed into at most one summary per quiet interval, heard and shown
+    // only while Bloom is not the active application, and its compile-failure warnings are heard
+    // once per composition; off, agent activity makes no sound and posts no notification at all.
+    // Either way an agent never gets a per-job sound or notification, a "refused" cue or a status
+    // message: it is answered over MCP and listed in the MCP Server activity.
+    bool agentActivityFeedbackEnabled = true;
 
     // #688: the keys of Edit > Purge > Purge preview cache and Purge media cache, as portable
     // key-sequence text (QKeySequence::PortableText). Empty is no shortcut. Ctrl is the Command

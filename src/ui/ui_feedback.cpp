@@ -4,8 +4,11 @@
 
 #include <QCoreApplication>
 #include <QGuiApplication>
+#include <QStringList>
+#include <QTimer>
 
 #include <algorithm>
+#include <utility>
 
 namespace bloom::ui {
 
@@ -66,9 +69,34 @@ const char* feedbackSoundName(const FeedbackSound sound) noexcept {
 }
 
 FeedbackSettings feedbackSettingsFrom(const ApplicationPreferences& preferences) {
-    return FeedbackSettings{preferences.soundsEnabled, preferences.soundVolumePercent,
-                            preferences.eventSoundsEnabled, preferences.interactionSoundsEnabled,
-                            preferences.renderNotificationsEnabled};
+    return FeedbackSettings{preferences.soundsEnabled,
+                            preferences.soundVolumePercent,
+                            preferences.eventSoundsEnabled,
+                            preferences.interactionSoundsEnabled,
+                            preferences.renderNotificationsEnabled,
+                            preferences.agentActivityFeedbackEnabled};
+}
+
+QString agentActivitySummaryText(const AgentActivityCounts& counts, const QString& heading) {
+    QStringList parts;
+    if (counts.renders > 0) {
+        parts
+            << (counts.renders == 1
+                    ? QCoreApplication::translate("UiFeedback", "1 render")
+                    : QCoreApplication::translate("UiFeedback", "%1 renders").arg(counts.renders));
+        if (counts.failed > 0)
+            parts << QCoreApplication::translate("UiFeedback", "%1 failed").arg(counts.failed);
+    }
+    if (counts.brokenCompositions > 0)
+        parts << (counts.brokenCompositions == 1
+                      ? QCoreApplication::translate("UiFeedback", "1 composition can't render")
+                      : QCoreApplication::translate("UiFeedback", "%1 compositions can't render")
+                            .arg(counts.brokenCompositions));
+    if (parts.isEmpty())
+        parts << QCoreApplication::translate("UiFeedback", "no renders");
+    const auto title =
+        heading.isEmpty() ? QCoreApplication::translate("UiFeedback", "Agent") : heading;
+    return title + QStringLiteral(": ") + parts.join(QStringLiteral(", "));
 }
 
 std::optional<FeedbackEvent> importFeedbackEvent(const bool cancelled, const bool discarded,
@@ -96,6 +124,100 @@ UiFeedback::UiFeedback(std::unique_ptr<SoundPlayer> player, std::unique_ptr<Noti
       clock_(clock ? std::move(clock) : Clock{[] { return std::chrono::steady_clock::now(); }}) {}
 
 UiFeedback::~UiFeedback() { shutdown(); }
+
+void UiFeedback::armAgentTimer() {
+    if (QCoreApplication::instance() == nullptr || held_)
+        return;
+    if (!agentTimer_) {
+        agentTimer_ = std::make_unique<QTimer>();
+        agentTimer_->setSingleShot(true);
+        QObject::connect(agentTimer_.get(), &QTimer::timeout, agentTimer_.get(),
+                         [this] { flushAgentActivity(); });
+    }
+    auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(kAgentQuietInterval);
+    if (agentLastNote_)
+        wait = std::max(std::chrono::milliseconds{1},
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            *agentLastNote_ + kAgentQuietInterval - clock_()));
+    agentTimer_->start(wait);
+}
+
+void UiFeedback::noteAgentRender(const bool succeeded) {
+    if (shutDown_)
+        return;
+    ++agent_.renders;
+    if (!succeeded)
+        ++agent_.failed;
+    agentLastNote_ = clock_();
+    armAgentTimer();
+}
+
+bool UiFeedback::noteAgentCompileFailure(const std::uint64_t composition) {
+    if (shutDown_)
+        return false;
+    const auto now = clock_();
+    if (agentBroken_.insert(composition).second)
+        agent_.brokenCompositions = static_cast<std::uint32_t>(agentBroken_.size());
+    agentLastNote_ = now;
+    std::erase_if(agentWarned_,
+                  [&](const auto& entry) { return now - entry.second >= kAgentQuietInterval; });
+    if (held_ || !settings_.agentActivity)
+        return false;
+    armAgentTimer();
+    if (agentWarned_.contains(composition))
+        return false;
+    agentWarned_.emplace(composition, now);
+    return play(FeedbackEvent::Warning);
+}
+
+void UiFeedback::holdAgentActivity(const bool hold, const QString& heading) {
+    if (hold == held_)
+        return;
+    held_ = hold;
+    if (hold) {
+        if (agentTimer_)
+            agentTimer_->stop();
+        return;
+    }
+    tellAgentActivity(heading);
+}
+
+void UiFeedback::flushAgentActivity(const bool force) {
+    if (held_ || agent_.empty())
+        return;
+    if (!force && agentLastNote_ && clock_() - *agentLastNote_ < kAgentQuietInterval) {
+        armAgentTimer();
+        return;
+    }
+    tellAgentActivity({});
+}
+
+void UiFeedback::tellAgentActivity(const QString& heading) {
+    const auto counts = std::exchange(agent_, {});
+    const auto sessionEnd = !heading.isEmpty();
+    agentBroken_.clear();
+    agentLastNote_.reset();
+    if (agentTimer_)
+        agentTimer_->stop();
+    if (shutDown_ || counts.empty() || !settings_.agentActivity)
+        return;
+    if (isActive_()) {
+        // The artist is watching: no summary. A session that broke a composition while it held
+        // its warnings says so once.
+        if (sessionEnd && counts.brokenCompositions > 0)
+            play(FeedbackEvent::Warning);
+        return;
+    }
+    play(counts.failed > 0 || counts.brokenCompositions > 0 ? FeedbackEvent::RenderFailed
+                                                            : FeedbackEvent::RenderSucceeded);
+    if (notifier_ == nullptr || !settings_.renderNotifications)
+        return;
+    notifier_->post(SystemNotification{
+        sessionEnd ? QCoreApplication::translate("UiFeedback", "Agent session finished")
+                   : QCoreApplication::translate("UiFeedback", "Agent activity"),
+        agentActivitySummaryText(counts, heading),
+        counts.failed > 0 || counts.brokenCompositions > 0});
+}
 
 void UiFeedback::setSettings(const FeedbackSettings& settings) noexcept {
     settings_ = settings;
@@ -171,6 +293,8 @@ void UiFeedback::setNotificationActivationHandler(std::function<void()> handler)
 
 void UiFeedback::shutdown() noexcept {
     shutDown_ = true;
+    if (agentTimer_)
+        agentTimer_->stop();
     if (player_ != nullptr) {
         player_->shutdown();
     }

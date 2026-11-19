@@ -82,12 +82,22 @@ void ExportQueueAdapter::handleEvents() {
                                           text(refused->reason.reason));
         if (feedback_ == nullptr)
             continue;
+        // #746: a transient job is an agent's or a script's render, export or capture. It gets
+        // no sound or notification of its own; it is counted into the agent summary.
         if (const auto* done = std::get_if<host::ExportJobSucceeded>(&event.payload)) {
+            if (done->transient) {
+                feedback_->noteAgentRender(true);
+                continue;
+            }
             const auto name = jobName(done->job);
             feedback_->announceRender(true, done->withWarnings
                                                 ? tr("“%1” finished with warnings").arg(name)
                                                 : tr("“%1” finished").arg(name));
         } else if (const auto* failed = std::get_if<host::ExportJobFailed>(&event.payload)) {
+            if (failed->transient) {
+                feedback_->noteAgentRender(false);
+                continue;
+            }
             feedback_->announceRender(false, tr("“%1” failed: %2")
                                                  .arg(jobName(failed->job), text(failed->reason.reason)));
         }

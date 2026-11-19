@@ -96,6 +96,7 @@ void testFullRoundTrip(Expectations& check) {
     prefs.eventSoundsEnabled = false;
     prefs.interactionSoundsEnabled = true;
     prefs.renderNotificationsEnabled = false;
+    prefs.agentActivityFeedbackEnabled = false;
     prefs.agentsAnswerDialogs = true;
     prefs.agentsRunScripts = true;
 
@@ -200,6 +201,9 @@ void testSoundDefaultsAndBounds(Expectations& check) {
                      defaults.renderNotificationsEnabled,
                  "sounds, event sounds and render notifications default on");
     check.expect(!defaults.interactionSoundsEnabled, "interaction sounds default off");
+    check.expect(defaults.agentActivityFeedbackEnabled &&
+                     ui::defaultApplicationPreferences().agentActivityFeedbackEnabled,
+                 "agent activity feedback defaults on: summarized, never per job (#746)");
     check.expect(!defaults.crashRecoveryEnabled && !ui::defaultApplicationPreferences().crashRecoveryEnabled,
                  "crash recovery defaults off");
     check.expect(defaults.soundVolumePercent == 40, "the default volume is 40 percent");
