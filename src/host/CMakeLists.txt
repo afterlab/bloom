@@ -27,6 +27,7 @@ target_sources(
         project_session.cpp
         project_session_creation.cpp
         publication_coordinator.cpp
+        save_failure_description.cpp
         save_publication.cpp
         session_async_io.cpp
         session_open.cpp
@@ -55,6 +56,7 @@ target_sources(
             include/bloom/host/project_color_choice.hpp
             include/bloom/host/project_session.hpp
             include/bloom/host/publication_coordinator.hpp
+            include/bloom/host/save_failure_description.hpp
             include/bloom/host/save_publication.hpp
             include/bloom/host/session_async_io.hpp
             include/bloom/host/session_open.hpp
@@ -199,6 +201,17 @@ if(BUILD_TESTING)
         NAME bloom.host.frame-range-runner
         COMMAND bloom_host_frame_range_runner_test
         LABELS unit host rendering
+    )
+
+    # Pure: builds typed save failures by value and checks their words; no file system.
+    add_executable(bloom_host_save_failure_description_test
+        tests/save_failure_description_tests.cpp)
+    target_link_libraries(bloom_host_save_failure_description_test PRIVATE bloom_host)
+    bloom_enable_warnings(bloom_host_save_failure_description_test)
+    bloom_add_test(
+        NAME bloom.host.save-failure-description
+        COMMAND bloom_host_save_failure_description_test
+        LABELS unit host persistence
     )
 
     # Gated exactly as bloom.project.staged_save is gated: this exercises a real
