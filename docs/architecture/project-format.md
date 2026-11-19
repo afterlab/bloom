@@ -21,7 +21,7 @@ Copy and open run as asynchronous tasks with staged, verified publication, drive
 Cross-platform publication parity is covered by the platform parity work in
 [`platform-support.md`](platform-support.md).
 
-Updated: 2026-11-12
+Updated: 2026-11-20
 
 ## Purpose And Ownership
 
@@ -732,9 +732,9 @@ consumed. Commit, restore, undo, redo, clone, import, and reopen may increase bu
 
 ### Commit Validation And Publication Cost
 
-Status: accepted (#357). Every published state is valid -- construction and every commit prove it
--- so a commit only has to prove what its draft changed relative to the published state it was
-drafted from (`Project::validatesAgainst`). A composition is changed when its content identity or
+Status: accepted (#357, #744). Every published state is valid -- construction and every commit
+prove it -- so a commit only has to prove what its draft changed relative to the published state it
+was drafted from (`Project::validatesAgainst`). A composition is changed when its content identity or
 any of its settings differ. Only changed compositions run `Composition::validate()`;
 project-wide ID uniqueness compares their declarations with each other and with the frozen,
 sorted per-composition ID index every published composition carries; composition nesting reads
@@ -746,6 +746,28 @@ which also supplies the refusal's diagnostics, so an invalid draft reports exact
 did. `Draft::validate()` keeps returning the full diagnostics, warnings included; `Draft::valid()`
 is the incremental yes/no. Diagnostic paths in project-wide ID checks and data-block rows are built
 only when a diagnostic exists.
+
+Composition content is shared per record (#744). Each animation curve, parameter, node, edge and
+layer record is its own immutable allocation behind a list of record pointers
+(`bloom/document/record_table.hpp`). A draft copies a record list's pointers when it first edits
+that list and copies a record only when it edits that record; publication copies the records the
+draft made, so a reference kept from the draft cannot reach the snapshot, and freezes the lists.
+The keyframe-id index of a curve store keeps its ids sorted in shared chunks of at most 512 ids, so
+a key edit copies the one chunk its id falls in. A one-key edit at 274,000 keys therefore copies
+one curve, one index chunk and the pointer lists, not the keys. Publication charges, indexes and
+checks only the records the new content does not share with the content it was copied from: the
+byte charge is the previous charge adjusted by the changed records; the declared-id index of each
+kind is updated from them (keyframe ids are the store's own chunked index); the lock index,
+nested references and render reachability are reused when the graph's records did not change and
+no changed parameter is a driver or an integer that may name a composition or group.
+`Composition::validatesAgainst` checks a changed composition the same way: each changed parameter
+and curve, the keyframe ids of the changed curves against the base's index, and the curve
+ownership and schema domain of every parameter and curve on either side of a change. The graph
+section (graph, masks, entry layers, layout and groups) runs whole when a node, edge, layer,
+Merge, the layout or the groups changed, or when a changed parameter is one it reads (a driver, a
+mask parameter or an integer constant); its cost is the graph's, never the keys'. Project-wide
+uniqueness checks only the ids changed records newly declare. `Composition::copyWork()` counts the
+records charged and validated and the indexes reused, so tests can prove an edit's cost.
 
 Assets, folders, extension records and data blocks are copy-on-write like composition content:
 snapshots share one immutable collection, a draft copies a collection only when it edits it, and

@@ -12,7 +12,7 @@ staged, verified publication, unsaved-change continuations and crash-recovery of
 projects list described under "Recent Paths And Presentation State" is not built: there is no Open
 Recent menu.
 
-Updated: 2026-11-15
+Updated: 2026-11-20
 
 ## Purpose
 
@@ -67,6 +67,17 @@ states in both undo and redo directions against the byte and entry limits; an ov
 is rejected atomically, while older steps may be retired to make room. Undo, redo, and branching
 refresh the charge as active ownership changes. The charge estimates authored content, not process
 RSS or allocator capacity.
+
+Snapshots share composition content per record (#744; see
+[`project-format.md`](project-format.md#commit-validation-and-publication-cost)): every animation
+curve, parameter, node, edge and layer record is its own immutable allocation, and consecutive
+snapshots share every record an edit did not touch. The allowance counts each record once, by
+identity, however many retained states hold it, plus each composition content's own allocation
+(its record lists, one pointer per record, its layout, groups and Merges). A step therefore costs
+what it changed and the record lists, so a one-key edit of a large composition charges its curve,
+not the composition, and undo depth no longer shrinks as the keys grow. A content's records are
+visited only when that content enters or leaves the history; the per-step size check reads the
+records the step changed.
 
 When an edit retires old undo steps, its result says which bound did so
 (`historyEntryLimitReached`, `historyMemoryLimitReached`). The window reports that as information,
