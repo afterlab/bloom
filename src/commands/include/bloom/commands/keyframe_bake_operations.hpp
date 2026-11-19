@@ -38,6 +38,9 @@ class BakeValueToKeyframes final : public Operation {
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::size_t workUnits() const noexcept override {
+        return keys_.empty() ? 1 : keys_.size();
+    }
     [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
         return compositionId_;
     }

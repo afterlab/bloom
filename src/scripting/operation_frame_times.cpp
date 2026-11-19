@@ -148,6 +148,7 @@ class FrameTimedOperation final : public commands::Operation {
     [[nodiscard]] bool renderAffecting() const noexcept override {
         return probe_->renderAffecting();
     }
+    [[nodiscard]] std::size_t workUnits() const noexcept override { return probe_->workUnits(); }
     [[nodiscard]] std::optional<document::CompositionId>
     parameterEditScope() const noexcept override {
         return probe_->parameterEditScope();

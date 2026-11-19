@@ -51,6 +51,9 @@ class Transaction final {
     void setOrigin(const CommandOrigin origin) noexcept { origin_ = origin; }
     [[nodiscard]] std::size_t size() const noexcept { return operations_.size(); }
     [[nodiscard]] bool empty() const noexcept { return operations_.empty(); }
+    // #744 (A2). The work this transaction carries: the sum of its operations' workUnits(),
+    // saturating at SIZE_MAX.
+    [[nodiscard]] std::size_t workUnits() const noexcept;
     [[nodiscard]] const std::vector<std::unique_ptr<Operation>>& operations() const noexcept {
         return operations_;
     }

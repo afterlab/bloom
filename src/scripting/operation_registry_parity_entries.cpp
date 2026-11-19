@@ -152,6 +152,7 @@ class LayerRoleParameterEdit final : public commands::Operation {
     [[nodiscard]] bool renderAffecting() const noexcept override {
         return probe_->renderAffecting();
     }
+    [[nodiscard]] std::size_t workUnits() const noexcept override { return probe_->workUnits(); }
     [[nodiscard]] std::optional<CompositionId> parameterEditScope() const noexcept override {
         return probe_->parameterEditScope();
     }
@@ -253,8 +254,10 @@ void addressEntries(std::vector<OperationDescriptor>& descriptors) {
             // call is refused when it is created rather than when it applies.
             auto probe = rest;
             probe["layer"] = Value(StableId{1});
-            if (auto checked = inner(op, probe); !checked)
+            auto checked = inner(op, probe);
+            if (!checked)
                 return checked;
+            const auto units = std::move(checked).takeOperation()->workUnits();
             return made(std::make_unique<commands::EntryLayerEdit>(
                 entry->composition, entry->merge, entry->slot,
                 [inner, op, named, rest = std::move(rest)](
@@ -265,7 +268,8 @@ void addressEntries(std::vector<OperationDescriptor>& descriptors) {
                     arguments["layer"] = Value(StableId{layerId.value()});
                     auto created = inner(op, arguments);
                     return created ? std::move(created).takeOperation() : nullptr;
-                }));
+                },
+                units));
         };
     }
 }

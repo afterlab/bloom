@@ -62,9 +62,12 @@ using EntryLayerOperationBuilder =
 // delegates to the built edit when the layer already existed; creating a layer is whole-render.
 class EntryLayerEdit final : public Operation {
   public:
+    // `workUnits` is the size of the edit `build` makes (Operation::workUnits).
     EntryLayerEdit(document::CompositionId composition, document::NodeId merge,
-                   document::LayerSlotId slot, EntryLayerOperationBuilder build)
-        : composition_(composition), merge_(merge), slot_(slot), build_(std::move(build)) {}
+                   document::LayerSlotId slot, EntryLayerOperationBuilder build,
+                   std::size_t workUnits = 1)
+        : composition_(composition), merge_(merge), slot_(slot), build_(std::move(build)),
+          workUnits_(workUnits == 0 ? 1 : workUnits) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
     [[nodiscard]] bool renderAffecting() const noexcept override;
@@ -73,12 +76,14 @@ class EntryLayerEdit final : public Operation {
     [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
         return composition_;
     }
+    [[nodiscard]] std::size_t workUnits() const noexcept override { return workUnits_; }
 
   private:
     document::CompositionId composition_;
     document::NodeId merge_;
     document::LayerSlotId slot_;
     EntryLayerOperationBuilder build_;
+    std::size_t workUnits_ = 1;
     // The edit built by the last apply, and whether that apply created the layer. Read only by the
     // render classification the command stack asks for after apply.
     mutable std::shared_ptr<Operation> built_;

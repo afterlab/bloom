@@ -3,6 +3,7 @@
 #include <bloom/commands/result.hpp>
 #include <bloom/document/document.hpp>
 
+#include <cstddef>
 #include <optional>
 #include <string_view>
 
@@ -26,6 +27,11 @@ class Operation {
     // that provably touch no compiled or evaluated input (for example the node-layout card
     // geometry) return false.
     [[nodiscard]] virtual bool renderAffecting() const noexcept { return true; }
+
+    // #744 (A2). The size of this operation's input, for the bound on the work in one live commit
+    // (scripting::kLiveCommitWorkLimit): 1, or one per key, keyframe or edit an operation that
+    // carries a list of them holds. A wrapper reports what it wraps.
+    [[nodiscard]] virtual std::size_t workUnits() const noexcept { return 1; }
 
     // Issue #355. An operation that changes ONLY parameter sources, animation curves and keyframes
     // of one composition -- never graph topology, node layout, or composition settings -- names
