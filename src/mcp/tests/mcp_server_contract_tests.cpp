@@ -104,7 +104,13 @@ static_assert(mcp::toolName(mcp::McpTool::ScriptRun) == "script.run");
 static_assert(mcp::toolUsesLiveUi(mcp::McpTool::DialogAnswer));
 static_assert(mcp::toolUsesLiveUi(mcp::McpTool::ScriptRun));
 static_assert(!mcp::toolMutatesDocument(mcp::McpTool::ScriptRun));
-static_assert(static_cast<std::size_t>(mcp::McpTool::ScriptRun) + 1 == mcp::kMcpToolCount);
+static_assert(mcp::toolName(mcp::McpTool::SessionBegin) == "session.begin");
+static_assert(mcp::toolName(mcp::McpTool::SessionEnd) == "session.end");
+static_assert(mcp::toolUsesLiveUi(mcp::McpTool::SessionBegin) &&
+              mcp::toolUsesLiveUi(mcp::McpTool::SessionEnd));
+static_assert(!mcp::toolMutatesDocument(mcp::McpTool::SessionBegin) &&
+              !mcp::toolMutatesDocument(mcp::McpTool::SessionEnd));
+static_assert(static_cast<std::size_t>(mcp::McpTool::SessionEnd) + 1 == mcp::kMcpToolCount);
 // Project colour settings are project session state, not a document command.
 static_assert(!mcp::toolMutatesDocument(mcp::McpTool::ProjectSetColorSettings));
 static_assert(mcp::toolExecution(mcp::McpTool::Render) == mcp::McpToolExecution::Task);

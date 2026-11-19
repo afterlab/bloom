@@ -132,6 +132,16 @@ struct McpServerService::State : std::enable_shared_from_this<McpServerService::
     bool tokenRegenerating = false;
     std::unique_ptr<service::Network> network;
     std::uint64_t publishedLiveGeneration = 0;
+    // #746: the open agent session, as the application answered session.begin, and the live
+    // generation it began in (a replaced project closes it).
+    struct AgentSessionRecord final {
+        McpAgentSessionView view;
+        std::uint64_t liveGeneration = 0;
+    };
+    std::optional<AgentSessionRecord> agentSession;
+    // The port the core calls: the application's, with session.begin and session.end wrapped so
+    // the service knows which client holds the open session.
+    McpLiveUiPort liveUi;
 
     // ---- Token (tokenMutex): read by connection threads for admission.
     mutable std::mutex tokenMutex;
@@ -179,6 +189,15 @@ struct McpServerService::State : std::enable_shared_from_this<McpServerService::
     [[nodiscard]] McpClientView view(const service::Client& client) const;
     // Removes a client (factsMutex held), cancels its requests and records the disconnect.
     void dropClientLocked(const std::string& sessionId, McpDisconnectCause cause);
+
+    // ---- Agent sessions (owner thread, #746).
+    void agentSessionOpened(const McpAgentSessionView& view);
+    void agentSessionClosed(const McpAgentSessionView& view);
+    // The service closes the session itself (its client went away or idle, the project was
+    // replaced, the server stopped): the application's endAgentSession with the cause.
+    void closeAgentSession(McpAgentSessionClose cause);
+    // The client whose protocol session is `protocol`, under factsMutex; null when it is gone.
+    [[nodiscard]] std::shared_ptr<service::Client> clientOfLocked(std::uint64_t protocol) const;
 
     // Owner-thread queue for the export queue.
     bool runOnOwner(const McpExportAccess::Work& work, const std::stop_token& stop);

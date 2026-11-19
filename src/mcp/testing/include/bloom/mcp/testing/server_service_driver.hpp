@@ -50,6 +50,15 @@ class McpServerServiceDriver final {
     // `token`, which must be well formed).
     void setToken(McpTokenState state, std::string token = {}, std::string reason = {});
 
+    // #746: the scripted client's protocol session id (what session.begin names as its client).
+    [[nodiscard]] std::uint64_t protocolSession(std::uint64_t client) const;
+    // Moves the client's last request `age` into the past, as a client that stayed idle that long.
+    void idleClient(std::uint64_t client, std::chrono::steady_clock::duration age);
+    // session.begin and session.end exactly as the core calls them (through the service's
+    // wrappers over the application's port).
+    McpAgentSessionResult beginAgentSession(const McpAgentSessionBegin& request);
+    McpAgentSessionResult endAgentSession(const McpAgentSessionEnd& request);
+
     // The HTTP connections the server holds open right now (accepted and not yet closed); a
     // connection over McpServerLimits::connections is answered 503 and never counted.
     [[nodiscard]] std::size_t openConnections() const;

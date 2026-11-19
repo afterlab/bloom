@@ -62,6 +62,8 @@ constexpr std::array<McpTool, kMcpToolCount> kTools{
     McpTool::Help,
     McpTool::DialogAnswer,
     McpTool::ScriptRun,
+    McpTool::SessionBegin,
+    McpTool::SessionEnd,
 };
 // clang-format on
 
@@ -128,6 +130,8 @@ yyjson_mut_val* failureValue(Json& out, const ToolFailure& failure) {
 McpProtocolSession::McpProtocolSession(std::unique_ptr<State> state) noexcept
     : state_(std::move(state)) {}
 McpProtocolSession::~McpProtocolSession() = default;
+
+std::uint64_t McpProtocolSession::id() const noexcept { return state_->id; }
 
 bool McpProtocolSession::initialized() const noexcept {
     const std::lock_guard lock(state_->mutex);
@@ -263,8 +267,10 @@ void McpServerCore::replaceHeadlessProject(const std::function<void()>& replace)
 std::span<const McpTool> McpServerCore::tools() const noexcept { return kTools; }
 
 std::unique_ptr<McpProtocolSession> McpServerCore::openSession() {
-    return std::unique_ptr<McpProtocolSession>(
-        new McpProtocolSession(std::make_unique<McpProtocolSession::State>()));
+    static std::atomic<std::uint64_t> nextSession{1};
+    auto state = std::make_unique<McpProtocolSession::State>();
+    state->id = nextSession.fetch_add(1, std::memory_order_relaxed);
+    return std::unique_ptr<McpProtocolSession>(new McpProtocolSession(std::move(state)));
 }
 
 std::string McpServerCore::errorResponse(const std::optional<std::string_view> requestKey,
@@ -527,7 +533,7 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
                     // while the old project is being replaced.
                     std::string summary;
                     value = sessionTool(state, out, *tool, member(params, "arguments"), control,
-                                        summary);
+                                        summary, protocol.id());
                     if (!summary.empty() && summary != handled.summary)
                         handled.summary += " " + summary;
                 } else {

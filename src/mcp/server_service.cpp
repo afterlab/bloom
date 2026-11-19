@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <array>
+#include <string>
+#include <string_view>
 
 namespace bloom::mcp {
 namespace {
@@ -303,6 +305,95 @@ void McpServerService::State::dropClientLocked(const std::string& sessionId,
     dirty = true;
 }
 
+std::shared_ptr<service::Client>
+McpServerService::State::clientOfLocked(const std::uint64_t protocol) const {
+    for (const auto& [id, client] : sessions) {
+        static_cast<void>(id);
+        if (client->protocol != nullptr && client->protocol->id() == protocol)
+            return client;
+    }
+    return nullptr;
+}
+
+namespace {
+
+// The label is cut at a character boundary so the activity line stays well under its 256-byte cap
+// and is never cut inside a character.
+std::string agentSessionName(const McpAgentSessionView& view) {
+    if (view.label.empty())
+        return "Agent session";
+    auto label = view.label;
+    if (label.size() > 160) {
+        auto end = std::size_t{160};
+        while (end > 0 && (static_cast<unsigned char>(label[end]) & 0xc0U) == 0x80U)
+            --end;
+        label.resize(end);
+    }
+    return "Agent session \u201c" + label + "\u201d";
+}
+
+std::string counted(const std::uint64_t count, const std::string_view one,
+                    const std::string_view many) {
+    return std::to_string(count) + ' ' + std::string(count == 1 ? one : many);
+}
+
+} // namespace
+
+void McpServerService::State::agentSessionOpened(const McpAgentSessionView& view) {
+    agentSession = AgentSessionRecord{view, dependencies.live.generation()};
+    McpActivityEntry entry;
+    entry.kind = McpActivityKind::AgentSession;
+    entry.tool = McpTool::SessionBegin;
+    {
+        const std::lock_guard lock(factsMutex);
+        if (const auto client = clientOfLocked(view.client)) {
+            entry.client = client->id;
+            entry.clientLabel = clientLabel(client->info);
+        }
+    }
+    entry.summary = agentSessionName(view) + " began";
+    recordActivity(std::move(entry));
+}
+
+void McpServerService::State::agentSessionClosed(const McpAgentSessionView& view) {
+    if (agentSession.has_value() && agentSession->view.session == view.session)
+        agentSession.reset();
+    McpActivityEntry entry;
+    entry.kind = McpActivityKind::AgentSession;
+    entry.tool = McpTool::SessionEnd;
+    {
+        const std::lock_guard lock(factsMutex);
+        if (const auto client = clientOfLocked(view.client)) {
+            entry.client = client->id;
+            entry.clientLabel = clientLabel(client->info);
+        }
+    }
+    entry.summary =
+        agentSessionName(view) + " ended (" +
+        std::string(agentSessionCloseName(view.closed.value_or(McpAgentSessionClose::Ended))) +
+        "): " + counted(view.commits, "commit", "commits") + ", " +
+        counted(view.undoSteps, "undo step", "undo steps");
+    recordActivity(std::move(entry));
+}
+
+void McpServerService::State::closeAgentSession(const McpAgentSessionClose cause) {
+    if (!agentSession.has_value())
+        return;
+    auto view = agentSession->view;
+    agentSession.reset();
+    if (dependencies.liveUi.endAgentSession) {
+        const auto result = dependencies.liveUi.endAgentSession(
+            McpAgentSessionEnd{.client = view.client, .session = view.session, .cause = cause});
+        if (result.ok())
+            view = result.session;
+    }
+    view.open = false;
+    view.closed = view.closed.value_or(cause);
+    agentSessionClosed(view);
+    const std::lock_guard lock(factsMutex);
+    dirty = true;
+}
+
 bool McpServerService::State::runOnOwner(const McpExportAccess::Work& work,
                                          const std::stop_token& stop) {
     auto task = std::make_shared<service::OwnerTask>();
@@ -381,6 +472,23 @@ McpServerService::McpServerService(McpServerServiceDependencies dependencies)
     if (!portInRange(s.preferences.port))
         s.preferences.port = kMcpDefaultPort;
     std::weak_ptr<State> weak = state_;
+    // #746: session.begin and session.end reach the application through these wrappers, so the
+    // service knows which client holds the open session and can close it for that client.
+    s.liveUi = s.dependencies.liveUi;
+    if (auto inner = s.dependencies.liveUi.beginAgentSession)
+        s.liveUi.beginAgentSession = [weak, inner](const McpAgentSessionBegin& request) {
+            auto result = inner(request);
+            if (const auto state = weak.lock(); state && result.ok())
+                state->agentSessionOpened(result.session);
+            return result;
+        };
+    if (auto inner = s.dependencies.liveUi.endAgentSession)
+        s.liveUi.endAgentSession = [weak, inner](const McpAgentSessionEnd& request) {
+            auto result = inner(request);
+            if (const auto state = weak.lock(); state && result.ok())
+                state->agentSessionClosed(result.session);
+            return result;
+        };
     s.core = std::make_unique<McpServerCore>(McpCoreDependencies{
         .session = std::ref(s.dependencies.live),
         .exports = {.run =
@@ -393,7 +501,7 @@ McpServerService::McpServerService(McpServerServiceDependencies dependencies)
         .gpuProvider = nullptr,
         .fileSessionGpuProvider = s.dependencies.fileSessionGpuProvider,
         .captureDirectory = s.dependencies.captureDirectory,
-        .ui = s.dependencies.liveUi,
+        .ui = s.liveUi,
         .profilerSnapshot = s.dependencies.profilerSnapshot,
         .serverVersion = s.dependencies.serverVersion,
         .limits = kMcpMessageLimits});
@@ -689,6 +797,27 @@ void McpServerService::pump() {
             s.dropClientLocked(id, McpDisconnectCause::Expired);
     }
 
+    // #746: the agent session closes when its server stops, its client disconnects or goes idle,
+    // or its project is replaced.
+    if (s.agentSession.has_value()) {
+        std::optional<McpAgentSessionClose> cause;
+        if (s.state != McpServerState::Running) {
+            cause = McpAgentSessionClose::ServerStopped;
+        } else {
+            const std::lock_guard lock(s.factsMutex);
+            const auto client = s.clientOfLocked(s.agentSession->view.client);
+            if (client == nullptr)
+                cause = McpAgentSessionClose::ClientDisconnected;
+            else if (client->inFlight == 0 && service::SteadyClock::now() - client->lastActivity >=
+                                                  s.agentSession->view.idleTimeout)
+                cause = McpAgentSessionClose::IdleTimeout;
+        }
+        if (!cause && s.dependencies.live.generation() != s.agentSession->liveGeneration)
+            cause = McpAgentSessionClose::ProjectReplaced;
+        if (cause)
+            s.closeAgentSession(*cause);
+    }
+
     // The live project as the server sees it.
     const auto liveGeneration = s.dependencies.live.generation();
     if (liveGeneration != s.publishedLiveGeneration) {
@@ -746,6 +875,8 @@ void McpServerService::pump() {
                           : availability == scripting::LiveSessionAvailability::ShuttingDown
                               ? "Bloom is closing."
                               : "A project is opening.";
+    if (s.agentSession)
+        next.agentSession = s.agentSession->view;
     next.commands = commandsFor(s, tokenState, tokenReason);
     {
         const std::lock_guard lock(s.publishMutex);

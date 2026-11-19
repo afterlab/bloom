@@ -599,6 +599,8 @@ void liveSeams() {
                 done(std::move(result));
             },
         .cancelScript = {},
+        .beginAgentSession = {},
+        .endAgentSession = {},
         .undoHistory = {},
         .viewerState = {},
         .previewCache = {},

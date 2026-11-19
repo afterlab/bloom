@@ -22,6 +22,7 @@
 #include <bloom/scripting/scope_read.hpp>
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -424,6 +425,90 @@ struct McpViewerRoute final {
     std::string note;
 };
 
+// ---- Agent sessions (session.begin, session.end; issue #746)
+//
+// An agent says it is about to do a burst of work. While its session is open Bloom keeps quiet
+// about it (no sound or notification until the session ends: `quiet`), does not re-render the
+// Viewer for each commit (it refreshes when the session ends, on demand or when the artist
+// interacts: `deferViewer`), refreshes the other panels at a slow cadence, and makes the session's
+// commits one undo step labelled with the session (`groupUndo`). One session is open at a time.
+// It closes on session.end, when its client disconnects or stays idle, when the project is
+// replaced and when the server stops. The artist's own edit inside a session ends that undo step
+// safely: it stays its own step and the session's next commit starts a new one.
+
+struct McpAgentSessionOptions final {
+    bool quiet = true;
+    bool deferViewer = true;
+    bool groupUndo = true;
+    friend bool operator==(const McpAgentSessionOptions&, const McpAgentSessionOptions&) = default;
+};
+
+// Why a session closed.
+enum class McpAgentSessionClose : std::uint8_t {
+    // session.end.
+    Ended = 0,
+    // Its client disconnected (DELETE /mcp, eviction, a new token).
+    ClientDisconnected = 1,
+    // Its client sent no request for the session's idle timeout.
+    IdleTimeout = 2,
+    // The project was opened, created or closed.
+    ProjectReplaced = 3,
+    // The server stopped or Bloom is quitting.
+    ServerStopped = 4,
+};
+
+[[nodiscard]] constexpr std::string_view agentSessionCloseName(const McpAgentSessionClose cause) {
+    constexpr std::array<std::string_view, 5> names{"ended", "client-disconnected", "idle-timeout",
+                                                    "project-replaced", "server-stopped"};
+    return names[static_cast<std::size_t>(cause)];
+}
+
+inline constexpr std::chrono::seconds kMcpAgentSessionDefaultIdle{600};
+inline constexpr std::chrono::seconds kMcpAgentSessionMinimumIdle{30};
+inline constexpr std::chrono::seconds kMcpAgentSessionMaximumIdle{3600};
+
+struct McpAgentSessionBegin final {
+    // The calling protocol session (McpProtocolSession::id()); only it may end the session.
+    std::uint64_t client = 0;
+    // The session's name; empty is "Agent session". The undo step reads "Agent session “label”".
+    std::string label;
+    McpAgentSessionOptions options;
+    std::chrono::seconds idleTimeout = kMcpAgentSessionDefaultIdle;
+};
+
+struct McpAgentSessionEnd final {
+    std::uint64_t client = 0;
+    // The session to end; 0 is the client's open session.
+    std::uint64_t session = 0;
+    McpAgentSessionClose cause = McpAgentSessionClose::Ended;
+};
+
+// A session as session.begin and session.end answer it.
+struct McpAgentSessionView final {
+    std::uint64_t session = 0;
+    std::uint64_t client = 0;
+    std::string label;
+    McpAgentSessionOptions options;
+    std::chrono::seconds idleTimeout = kMcpAgentSessionDefaultIdle;
+    bool open = false;
+    // Set once closed.
+    std::optional<McpAgentSessionClose> closed;
+    // Agent commits while it was open, the undo steps they made (1 unless the artist's own edit
+    // interrupted the session, or groupUndo was off: then one per commit) and the artist's edits
+    // in between.
+    std::uint64_t commits = 0;
+    std::uint64_t undoSteps = 0;
+    std::uint64_t artistEdits = 0;
+    double seconds = 0.0;
+};
+
+struct McpAgentSessionResult final {
+    McpUiRefusal refusal = McpUiRefusal::None;
+    std::string message;
+    McpAgentSessionView session;
+    [[nodiscard]] bool ok() const noexcept { return refusal == McpUiRefusal::None; }
+};
+
 struct McpLiveUiPort final {
     // editor.reveal: show the composition in the Viewer (making it active) and, when given, move
     // the playhead to `time` (seconds). False when the composition or time cannot be shown.
@@ -482,6 +567,13 @@ struct McpLiveUiPort final {
     // Cancel: it stops the running script and the commits it queued.
     std::function<void(McpScriptRequest, std::function<void(McpScriptResult)> done)> runScript;
     std::function<void()> cancelScript;
+    // session.begin and session.end (#746). beginAgentSession refuses Busy while another session
+    // is open (naming whose) or a project is opening; endAgentSession refuses InvalidArgument when
+    // the client has no open session, naming why its last one closed. The in-app server also calls
+    // endAgentSession itself, with the cause, when the client disconnects or goes idle, the project
+    // is replaced or the server stops.
+    std::function<McpAgentSessionResult(const McpAgentSessionBegin&)> beginAgentSession;
+    std::function<McpAgentSessionResult(const McpAgentSessionEnd&)> endAgentSession;
     // query kinds history, viewer and preview-cache: owner-thread reads, never project edits.
     std::function<McpUndoHistory()> undoHistory;
     std::function<McpViewerState()> viewerState;

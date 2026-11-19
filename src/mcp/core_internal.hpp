@@ -88,6 +88,8 @@ struct McpNotice final {
 using McpEventEntry = std::variant<commands::CommandEvent, McpNotice>;
 
 struct McpProtocolSession::State {
+    // Process-unique, from 1 (#746: an agent session names the protocol session that owns it).
+    std::uint64_t id = 0;
     mutable std::mutex mutex;
     bool initialized = false;
     bool ready = false;
@@ -286,9 +288,10 @@ struct TransientResult final {
                                                 McpCall& call, McpTool tool, yyjson_val* arguments);
 // project.*, editor.reveal, selection.set, composition.activate, transport, viewer.set and
 // export.reveal (tools_session.cpp). They hold no session lease.
+// `client` is the calling protocol session's id (session.begin and session.end, #746).
 [[nodiscard]] yyjson_mut_val* sessionTool(McpServerCore::State& core, Json& out, McpTool tool,
                                           yyjson_val* arguments, const McpRequestControl& control,
-                                          std::string& summary);
+                                          std::string& summary, std::uint64_t client);
 // The read-back queries text-metrics, layer-bounds, history, viewer and preview-cache
 // (tools_inspection.cpp).
 [[nodiscard]] bool isInspectionQuery(std::string_view kind) noexcept;

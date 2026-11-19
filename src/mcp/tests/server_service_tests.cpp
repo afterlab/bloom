@@ -71,12 +71,13 @@ struct Fixture final {
     std::unique_ptr<McpServerService> service;
 
     explicit Fixture(const std::string& name, McpServerPreferences preferences = {},
-                     const bool tokenFolder = true)
+                     const bool tokenFolder = true, McpLiveUiPort liveUi = {})
         : folder(scratch(name)) {
         service = std::make_unique<McpServerService>(McpServerServiceDependencies{
             .live = live.host,
             .exportQueue = {},
             .scheduler = scheduler,
+            .liveUi = std::move(liveUi),
             .tokenFile = tokenFolder ? folder / "mcp" / "token" : fs::path{},
             .captureDirectory = folder / "captures",
             .serverVersion = "test",
@@ -451,6 +452,132 @@ void subscriptionWakes() {
     expect(f.snapshot().revision == same, "a pump with nothing new publishes nothing");
 }
 
+// #746: the application's side of session.begin and session.end, faked: one open session, and
+// every close the service asks for, with its cause.
+struct FakeAgentSessions final {
+    std::optional<McpAgentSessionView> open;
+    std::vector<McpAgentSessionClose> closes;
+    std::uint64_t next = 1;
+
+    McpLiveUiPort port() {
+        McpLiveUiPort value;
+        value.beginAgentSession = [this](const McpAgentSessionBegin& request) {
+            if (open)
+                return McpAgentSessionResult{McpUiRefusal::Busy, "Another session is open.", {}};
+            McpAgentSessionView view;
+            view.session = next++;
+            view.client = request.client;
+            view.label = request.label;
+            view.options = request.options;
+            view.idleTimeout = request.idleTimeout;
+            view.open = true;
+            open = view;
+            return McpAgentSessionResult{McpUiRefusal::None, {}, view};
+        };
+        value.endAgentSession = [this](const McpAgentSessionEnd& request) {
+            if (!open || open->client != request.client)
+                return McpAgentSessionResult{McpUiRefusal::InvalidArgument, "No session.", {}};
+            auto view = *open;
+            open.reset();
+            view.open = false;
+            view.closed = request.cause;
+            view.commits = 3;
+            view.undoSteps = 1;
+            closes.push_back(request.cause);
+            return McpAgentSessionResult{McpUiRefusal::None, {}, view};
+        };
+        return value;
+    }
+};
+
+// #746: an agent session closes on session.end, when its client disconnects, when its client
+// stays idle past the session's timeout, when the project is replaced and when the server stops;
+// the snapshot shows the open session and the activity log records each begin and end.
+void agentSessionCloses() {
+    const auto begin = [](testing::McpServerServiceDriver& driver, const std::uint64_t client) {
+        return driver.beginAgentSession({.client = driver.protocolSession(client),
+                                         .label = "Shot 12",
+                                         .options = {},
+                                         .idleTimeout = std::chrono::seconds{60}});
+    };
+    const auto lastSummary = [](Fixture& f) {
+        const auto batch = f.service->activity(0);
+        return batch.entries.empty() ? std::string{} : batch.entries.back().summary;
+    };
+    FakeAgentSessions sessions;
+    const auto port = testing::McpServerServiceDriver::freePort(45200);
+    Fixture f("agent-session", {.port = port, .autoStart = false}, true, sessions.port());
+    expect(f.tokenReady() && f.service->start().accepted, "agent sessions: running");
+    testing::McpServerServiceDriver driver(*f.service);
+    const auto claude = driver.connectClient(
+        {.name = "claude-code", .version = "1", .title = "", .protocolVersion = ""});
+    const auto other =
+        driver.connectClient({.name = "other", .version = "1", .title = "", .protocolVersion = ""});
+
+    // session.end by its own client.
+    expect(begin(driver, claude).ok(), "session.begin opens a session");
+    f.service->pump();
+    expect(f.snapshot().agentSession && f.snapshot().agentSession->label == "Shot 12",
+           "the snapshot shows the open session");
+    expect(lastSummary(f).find("began") != std::string::npos, "the activity log records the begin");
+    expect(!driver.endAgentSession({.client = driver.protocolSession(other)}).ok(),
+           "another client cannot end it");
+    expect(driver.endAgentSession({.client = driver.protocolSession(claude)}).ok(),
+           "session.end closes it");
+    f.service->pump();
+    expect(!f.snapshot().agentSession && sessions.closes.back() == McpAgentSessionClose::Ended,
+           "closed by session.end");
+    expect(lastSummary(f).find("ended (ended): 3 commits, 1 undo step") != std::string::npos,
+           "the activity log records the end with what the session did");
+
+    // Client disconnect.
+    expect(begin(driver, claude).ok(), "a second session opens");
+    driver.disconnectClient(claude);
+    f.service->pump();
+    expect(sessions.closes.size() == 2 &&
+               sessions.closes.back() == McpAgentSessionClose::ClientDisconnected &&
+               !f.snapshot().agentSession,
+           "a disconnected client's session closes");
+
+    // Idle timeout.
+    const auto idle =
+        driver.connectClient({.name = "idle", .version = "1", .title = "", .protocolVersion = ""});
+    expect(begin(driver, idle).ok(), "an idle client's session opens");
+    driver.idleClient(idle, std::chrono::seconds{30});
+    f.service->pump();
+    expect(sessions.closes.size() == 2,
+           "a client idle for less than the timeout keeps its session");
+    driver.idleClient(idle, std::chrono::seconds{61});
+    f.service->pump();
+    expect(sessions.closes.size() == 3 &&
+               sessions.closes.back() == McpAgentSessionClose::IdleTimeout,
+           "a client idle past the session's timeout loses it");
+
+    // Project replacement.
+    expect(begin(driver, other).ok(), "a session opens before the project is replaced");
+    f.live.host.replace({f.live.events, f.live.session->publicationCoordinator(),
+                         f.live.session->artifactCoordinator()},
+                        {.renderSource = f.live.session->renderSourceSnapshot(),
+                         .context = f.live.session->operationContext(),
+                         .viewerDisplay = {},
+                         .viewerView = {},
+                         .projectPath = std::nullopt,
+                         .readOnly = false});
+    f.service->pump();
+    expect(sessions.closes.size() == 4 &&
+               sessions.closes.back() == McpAgentSessionClose::ProjectReplaced,
+           "a replaced project closes the session");
+
+    // Server stop.
+    expect(begin(driver, other).ok(), "a session opens before the server stops");
+    expect(f.service->stop().accepted, "the server stops");
+    f.pumpUntil([&] { return f.snapshot().state == McpServerState::Stopped; });
+    expect(sessions.closes.size() == 5 &&
+               sessions.closes.back() == McpAgentSessionClose::ServerStopped &&
+               !f.snapshot().agentSession,
+           "stopping the server closes the session");
+}
+
 } // namespace
 
 int main() {
@@ -465,6 +592,7 @@ int main() {
         listenerFailure();
         shutdownQuiesces();
         subscriptionWakes();
+        agentSessionCloses();
     } catch (const std::exception& error) {
         std::cerr << "FAILED: " << error.what() << '\n';
         return 1;

@@ -16,6 +16,8 @@ std::uint64_t McpServerServiceDriver::connectClient(McpClientInfo info) {
     auto& s = *service_.state_;
     auto client = std::make_shared<Client>();
     client->scripted = true;
+    // A protocol session of its own, so an agent session (#746) can name the client.
+    client->protocol = s.core->openSession();
     client->info = std::move(info);
     client->connectedAt = client->lastActivityAt = SystemClock::now();
     client->lastActivity = SteadyClock::now();
@@ -61,6 +63,37 @@ void McpServerServiceDriver::disconnectClient(const std::uint64_t client,
             s.dropClientLocked(found->sessionId, cause);
     }
     s.wake();
+}
+
+std::uint64_t McpServerServiceDriver::protocolSession(const std::uint64_t client) const {
+    auto& s = *service_.state_;
+    const std::lock_guard lock(s.factsMutex);
+    const auto found = find(s, client);
+    return found != nullptr && found->protocol != nullptr ? found->protocol->id() : 0;
+}
+
+void McpServerServiceDriver::idleClient(const std::uint64_t client,
+                                        const std::chrono::steady_clock::duration age) {
+    auto& s = *service_.state_;
+    {
+        const std::lock_guard lock(s.factsMutex);
+        if (const auto found = find(s, client))
+            found->lastActivity = SteadyClock::now() - age;
+    }
+    s.wake();
+}
+
+McpAgentSessionResult
+McpServerServiceDriver::beginAgentSession(const McpAgentSessionBegin& request) {
+    auto& s = *service_.state_;
+    return s.liveUi.beginAgentSession ? s.liveUi.beginAgentSession(request)
+                                      : McpAgentSessionResult{McpUiRefusal::Unbound, {}, {}};
+}
+
+McpAgentSessionResult McpServerServiceDriver::endAgentSession(const McpAgentSessionEnd& request) {
+    auto& s = *service_.state_;
+    return s.liveUi.endAgentSession ? s.liveUi.endAgentSession(request)
+                                    : McpAgentSessionResult{McpUiRefusal::Unbound, {}, {}};
 }
 
 void McpServerServiceDriver::setInFlight(const std::uint64_t client, const std::uint32_t requests) {

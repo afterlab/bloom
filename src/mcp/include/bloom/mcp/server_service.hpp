@@ -314,6 +314,8 @@ struct McpServerSnapshot final {
     // entry.
     std::uint64_t lastActivityId = 0;
     McpLiveProjectView project;
+    // #746: the agent session open now, as the application answered session.begin.
+    std::optional<McpAgentSessionView> agentSession;
     McpCommandAvailabilitySet commands;
 };
 
@@ -334,6 +336,9 @@ enum class McpActivityKind : std::uint8_t {
     ProjectReplaced = 8,
     TokenRegenerated = 9,
     TokenRevealed = 10,
+    // An agent session began or ended (#746); `summary` names it and, when it ended, why and what
+    // it did.
+    AgentSession = 11,
 };
 
 // One line of the activity log. The panel builds the line it shows from the typed facts (tool,
@@ -561,8 +566,11 @@ class McpServerService final {
     // ---- Owner thread (desktop: UI thread). Non-blocking, no I/O except start()'s bind.
 
     // Consumes recorded network, request and task facts, loads or stores the token through tasks,
-    // runs a pending auto-start once the token is Ready, expires idle clients, and publishes a new
-    // snapshot when anything changed. The only publisher.
+    // runs a pending auto-start once the token is Ready, expires idle clients, closes the agent
+    // session (#746) whose client disconnected or went idle, whose project was replaced or whose
+    // server stopped, and publishes a new snapshot when anything changed. The only publisher.
+    // While an agent session is open the owner pumps at least every few seconds (the src/ui
+    // adapter's heartbeat), so its idle timeout is noticed without any other activity.
     void pump();
 
     [[nodiscard]] McpCommandAvailability availability(McpServerCommand command) const;

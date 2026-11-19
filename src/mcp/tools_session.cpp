@@ -420,11 +420,103 @@ yyjson_mut_val* scriptTool(McpServerCore::State& core, Json& out, yyjson_val* ar
     return value;
 }
 
+// session.begin and session.end (#746): the application's agent session mode.
+yyjson_mut_val* agentSessionView(Json& out, const McpAgentSessionView& view) {
+    auto* value = out.object();
+    out.set(value, "id", out.number(view.session));
+    out.set(value, "label", out.text(view.label));
+    out.set(value, "quiet", out.boolean(view.options.quiet));
+    out.set(value, "deferViewer", out.boolean(view.options.deferViewer));
+    out.set(value, "groupUndo", out.boolean(view.options.groupUndo));
+    out.set(value, "idleTimeoutSeconds",
+            out.number(
+                static_cast<std::uint64_t>(std::max<std::int64_t>(0, view.idleTimeout.count()))));
+    out.set(value, "open", out.boolean(view.open));
+    out.set(value, "closed",
+            view.closed ? out.text(agentSessionCloseName(*view.closed)) : out.null());
+    out.set(value, "commits", out.number(view.commits));
+    out.set(value, "undoSteps", out.number(view.undoSteps));
+    out.set(value, "artistEdits", out.number(view.artistEdits));
+    out.set(value, "seconds", out.real(view.seconds));
+    return value;
+}
+
+yyjson_mut_val* agentSessionTool(McpServerCore::State& core, Json& out, const McpTool tool,
+                                 yyjson_val* arguments, const McpRequestControl& control,
+                                 std::string& summary, const std::uint64_t client) {
+    const auto& ui = core.dependencies.ui;
+    const auto refuse = [&](const McpUiRefusal code, const std::string& message) {
+        return refusal(out, code, message);
+    };
+    McpAgentSessionResult result;
+    if (tool == McpTool::SessionBegin) {
+        members(arguments, {"label", "quiet", "deferViewer", "groupUndo", "idleTimeoutSeconds"});
+        McpAgentSessionBegin request;
+        request.client = client;
+        if (auto* label = member(arguments, "label"))
+            request.label = string(label, 256);
+        if (auto* quiet = member(arguments, "quiet"))
+            request.options.quiet = boolean(quiet);
+        if (auto* defer = member(arguments, "deferViewer"))
+            request.options.deferViewer = boolean(defer);
+        if (auto* group = member(arguments, "groupUndo"))
+            request.options.groupUndo = boolean(group);
+        if (auto* idle = member(arguments, "idleTimeoutSeconds")) {
+            const auto seconds = integer(idle);
+            if (seconds < static_cast<std::uint64_t>(kMcpAgentSessionMinimumIdle.count()) ||
+                seconds > static_cast<std::uint64_t>(kMcpAgentSessionMaximumIdle.count()))
+                throw InvalidInput("idleTimeoutSeconds is a whole number of seconds from 30 to "
+                                   "3600");
+            request.idleTimeout = std::chrono::seconds{static_cast<std::int64_t>(seconds)};
+        }
+        if (core.liveHost() == nullptr)
+            return refuse(McpUiRefusal::NotLive,
+                          "This server has no application window; session.begin works only with "
+                          "the in-app MCP server. Each transact is one undo step here.");
+        if (!ui.beginAgentSession)
+            return refuse(McpUiRefusal::Unbound,
+                          "This Bloom window does not offer session.begin to agents yet.");
+        if (!onOwner(core, control, [&] { result = ui.beginAgentSession(request); }))
+            cancelled();
+        summary = "session.begin";
+    } else {
+        members(arguments, {"session"});
+        McpAgentSessionEnd request;
+        request.client = client;
+        if (auto* session = member(arguments, "session")) {
+            request.session = integer(session);
+            if (request.session == 0)
+                throw InvalidInput("session is the id session.begin answered");
+        }
+        if (core.liveHost() == nullptr)
+            return refuse(McpUiRefusal::NotLive,
+                          "This server has no application window; session.end works only with "
+                          "the in-app MCP server.");
+        if (!ui.endAgentSession)
+            return refuse(McpUiRefusal::Unbound,
+                          "This Bloom window does not offer session.end to agents yet.");
+        if (!onOwner(core, control, [&] { result = ui.endAgentSession(request); }))
+            cancelled();
+        summary = "session.end";
+    }
+    if (!result.ok())
+        return refuse(result.refusal,
+                      result.message.empty() ? "Bloom refused the request." : result.message);
+    auto* value = out.object();
+    out.set(value, "succeeded", out.boolean(true));
+    if (!result.message.empty())
+        out.set(value, "message", out.text(result.message));
+    out.set(value, "session", agentSessionView(out, result.session));
+    return value;
+}
+
 } // namespace
 
 yyjson_mut_val* sessionTool(McpServerCore::State& core, Json& out, const McpTool tool,
                             yyjson_val* arguments, const McpRequestControl& control,
-                            std::string& summary) {
+                            std::string& summary, const std::uint64_t client) {
+    if (tool == McpTool::SessionBegin || tool == McpTool::SessionEnd)
+        return agentSessionTool(core, out, tool, arguments, control, summary, client);
     if ((tool >= McpTool::ProjectSave && tool <= McpTool::ProjectClose) ||
         tool == McpTool::ProjectSaveCopy)
         return projectTool(core, out, tool, arguments, control, summary);

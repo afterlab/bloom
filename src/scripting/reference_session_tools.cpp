@@ -567,6 +567,75 @@ void parityTools(std::vector<ReferenceEntry>& out) {
                                  "read output; fix the script and run it again")}),
            {"transact", "history"});
 
+    // #746: an agent's session mode.
+    const std::string sessionResult =
+        "{succeeded, session:{id, label, quiet, deferViewer, groupUndo, idleTimeoutSeconds, open, "
+        "closed (null, ended, client-disconnected, idle-timeout, project-replaced or "
+        "server-stopped), commits, undoSteps, artistEdits, seconds}}";
+    simple("session.begin", "session",
+           "Begin an agent session: a burst of work Bloom keeps quiet, refreshes slowly and undoes "
+           "in one step.",
+           "While the session is open the agent's commits are one undo step labelled "
+           "\"Agent session\" (with label: \"Agent session \u201clabel\u201d\"), the panels "
+           "catch up with its commits about once a second, the Viewer is not re-rendered for "
+           "each commit (it refreshes on session.end, when the agent calls editor.reveal, "
+           "composition.activate, transport or viewer.set, and when the artist presses a key or a "
+           "mouse button), and its renders and broken compositions are told once, when it ends. "
+           "Reads and transact always see the newest revision. The artist's own edit inside a "
+           "session is a step of its own; the session's next commit starts a new step after it. "
+           "history undo inside a session takes back the session's step so far. One session is "
+           "open at a time. It closes on session.end, when this client disconnects or sends "
+           "nothing for idleTimeoutSeconds, when the project is replaced and when the server "
+           "stops. Never a project edit by itself.",
+           live,
+           {{.name = "label",
+             .type = "string",
+             .summary = "The session's name, shown in the undo history and the summary.",
+             .range = "0..256 bytes"},
+            {.name = "quiet",
+             .type = "boolean",
+             .summary = "Hold the session's sounds and notifications until it ends.",
+             .defaultValue = "true"},
+            {.name = "deferViewer",
+             .type = "boolean",
+             .summary = "Do not re-render the Viewer for each commit.",
+             .defaultValue = "true"},
+            {.name = "groupUndo",
+             .type = "boolean",
+             .summary = "Make the session's commits one undo step.",
+             .defaultValue = "true"},
+            {.name = "idleTimeoutSeconds",
+             .type = "integer",
+             .summary = "Close the session when this client sends nothing for this long.",
+             .unit = "seconds",
+             .range = "30..3600",
+             .defaultValue = "600"}},
+           sessionResult, R"({"name":"session.begin","arguments":{"label":"Build shot 12"}})",
+           withRefusals({refusal("bloom.mcp.busy",
+                                 "a session is open already (this client's or another agent's), "
+                                 "or a project is opening",
+                                 "end this client's session with session.end, or retry when the "
+                                 "other one ends")}),
+           {"session.end", "transact", "history"});
+
+    simple("session.end", "session",
+           "End this client's agent session: the Viewer and panels refresh and its summary is "
+           "told once.",
+           "Answers what the session did: its commits, the undo steps they made (1 unless the "
+           "artist's own edit split it, or groupUndo was off) and the artist's edits in between. "
+           "A session that already closed is refused with the reason it closed.",
+           live,
+           {{.name = "session",
+             .type = "integer",
+             .summary = "The session to end; the client's open session when absent.",
+             .unit = "the id session.begin answered",
+             .range = ">= 1"}},
+           sessionResult, R"({"name":"session.end","arguments":{}})",
+           withRefusals({refusal("bloom.mcp.invalid-argument",
+                                 "this client has no open session, or it already closed",
+                                 "the message names why it closed; nothing to end")}),
+           {"session.begin"});
+
     simple("cache.purge", "application", "Clear derived caches (Edit > Purge).",
            "Derived state only: the project, its revision and undo history are untouched. Source "
            "files are never touched.",

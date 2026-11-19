@@ -128,6 +128,8 @@ class McpProtocolSession final {
     McpProtocolSession& operator=(const McpProtocolSession&) = delete;
     ~McpProtocolSession();
 
+    // Process-unique and never reused; an agent session (#746) names the one that owns it.
+    [[nodiscard]] std::uint64_t id() const noexcept;
     [[nodiscard]] bool initialized() const noexcept;
     // True after notifications/initialized; tools/list and tools/call require it.
     [[nodiscard]] bool ready() const noexcept;

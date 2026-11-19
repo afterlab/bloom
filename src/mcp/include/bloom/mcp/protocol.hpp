@@ -114,9 +114,13 @@ enum class McpTool : std::uint8_t {
     // Script editor's runtime (#603).
     DialogAnswer = 47,
     ScriptRun = 48,
+    // Agent session mode (#746): quiet feedback, a deferred Viewer, slow panel refresh and one
+    // undo step for the session's commits. Live only; never a project edit by itself.
+    SessionBegin = 49,
+    SessionEnd = 50,
 };
 
-inline constexpr std::size_t kMcpToolCount = 49;
+inline constexpr std::size_t kMcpToolCount = 51;
 
 // The wire name. MCP tool names allow [A-Za-z0-9_.-]; the export.* names are ADR 0033's session
 // call names verbatim.
@@ -172,6 +176,8 @@ inline constexpr std::size_t kMcpToolCount = 49;
         "help",
         "dialog.answer",
         "script.run",
+        "session.begin",
+        "session.end",
     };
     // clang-format on
     return names[static_cast<std::size_t>(tool)];
@@ -209,7 +215,8 @@ enum class McpToolExecution : std::uint8_t { Inline = 0, Task = 1 };
             index <= static_cast<std::uint8_t>(McpTool::ExportReveal)) ||
            (index >= static_cast<std::uint8_t>(McpTool::ProjectSaveCopy) &&
             index <= static_cast<std::uint8_t>(McpTool::CompositionDeletePreset)) ||
-           tool == McpTool::DialogAnswer || tool == McpTool::ScriptRun;
+           tool == McpTool::DialogAnswer || tool == McpTool::ScriptRun ||
+           tool == McpTool::SessionBegin || tool == McpTool::SessionEnd;
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -275,6 +275,8 @@ int serve(scripting::Session& session) {
                     .answerDialog = {},
                     .runScript = {},
                     .cancelScript = {},
+                    .beginAgentSession = {},
+                    .endAgentSession = {},
                     .undoHistory = {},
                     .viewerState = {},
                     .previewCache = {},
