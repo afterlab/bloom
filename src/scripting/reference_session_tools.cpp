@@ -55,6 +55,13 @@ void projectTools(std::vector<ReferenceEntry>& out) {
                                 .summary = "Stop running export jobs instead of refusing.",
                                 .defaultValue = "false"};
 
+    // Issue #737: a save that ran and did not write the file names where it stopped and why.
+    const auto saveFailed =
+        refusal("bloom.mcp.save-failed",
+                "the save ran and did not write the file; the message names where it stopped and "
+                "why, and diagnostic.detail carries {stage, cause} as stable tokens",
+                "act on the cause the message names (free disk space or memory, choose a "
+                "writable folder, or reduce the project), then save again");
     auto save = makeEntry(ReferenceKind::Tool, "project.save", "project",
                           "Save the open project to its file (File > Save).",
                           "Not undoable. The project must have been saved before; otherwise use "
@@ -64,7 +71,8 @@ void projectTools(std::vector<ReferenceEntry>& out) {
     save.errors = {refusal("bloom.mcp.no-path", "the project has never been saved",
                            "use project.save-as with an absolute .bloom path"),
                    refusal("bloom.mcp.read-only", "the project is read-only",
-                           "save a copy with project.save-as")};
+                           "save a copy with project.save-as"),
+                   saveFailed};
     addExamples(save, {{"mcp", R"({"name":"project.save","arguments":{}})"}});
     addRelated(save, {"project.save-as", "query:project"});
     out.push_back(std::move(save));
@@ -88,7 +96,8 @@ void projectTools(std::vector<ReferenceEntry>& out) {
     saveAs.errors = {refusal("bloom.mcp.destination-exists", "a file exists at path",
                              "pass replace:true or choose another path"),
                      refusal("bloom.mcp.path-invalid", "path is relative or its folder is missing",
-                             "pass an absolute path in an existing folder")};
+                             "pass an absolute path in an existing folder"),
+                     saveFailed};
     addExamples(
         saveAs,
         {{"mcp", R"({"name":"project.save-as","arguments":{"path":"/projects/scene.bloom"}})"}});

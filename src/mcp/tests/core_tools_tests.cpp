@@ -514,7 +514,20 @@ void liveSeams() {
                     done({.refusal = mcp::McpUiRefusal::UnsavedChanges,
                           .message = "Untitled has unsaved changes.",
                           .path = {},
-                          .projectName = "Untitled"});
+                          .projectName = "Untitled",
+                          .saveFailure = std::nullopt});
+                    return;
+                }
+                if (request.path.filename() == "full.bloom") {
+                    // Issue #737: a save that ran and did not write the file.
+                    done({.refusal = mcp::McpUiRefusal::SaveFailed,
+                          .message = "Save failed while encoding document.json: the project holds "
+                                     "more values than one project file can.",
+                          .path = {},
+                          .projectName = "Study",
+                          .saveFailure = mcp::McpSaveFailureDetail{
+                              .stage = "publication.staged-save.build.document-encode",
+                              .cause = "value-count-exceeded"}});
                     return;
                 }
                 // Asynchronous, as the desktop binding is: finish from another thread later.
@@ -523,7 +536,8 @@ void liveSeams() {
                     done({.refusal = mcp::McpUiRefusal::None,
                           .message = "Saved.",
                           .path = path,
-                          .projectName = "Study"});
+                          .projectName = "Study",
+                          .saveFailure = std::nullopt});
                 });
             },
         .setSelection =
@@ -658,6 +672,21 @@ void liveSeams() {
     expect(contains(result, R"("succeeded":true)") && contains(result, "project.saved") &&
                lifecycle.size() == 2 && lifecycle.back().replace,
            "project.save-as waits for the asynchronous binding: " + result);
+#ifdef _WIN32
+    const std::string fullPath = R"(C:\\full.bloom)";
+#else
+    const std::string fullPath = "/tmp/full.bloom";
+#endif
+    result = server.call("project.save-as", R"({"path":")" + fullPath + R"(","replace":true})");
+    expect(
+        contains(result, R"("succeeded":false)") &&
+            contains(result, R"("code":"bloom.mcp.save-failed")") &&
+            contains(result, "Save failed while encoding document.json") &&
+            contains(
+                result,
+                R"("detail":{"stage":"publication.staged-save.build.document-encode","cause":"value-count-exceeded"})") &&
+            !contains(result, "project.saved"),
+        "a failed save answers bloom.mcp.save-failed with its stage and cause: " + result);
     // Colour settings are resolved by the core and applied by the application through the port.
     result = server.call("project.set-color-settings", R"({"config":"aces"})");
     expect(contains(result, R"("code":"updated")") && colour.has_value(),

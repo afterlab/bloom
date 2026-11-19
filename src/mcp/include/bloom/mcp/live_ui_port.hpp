@@ -68,9 +68,12 @@ enum class McpUiRefusal : std::uint8_t {
     Failed = 12,
     // The artist has not allowed this: an opt-in agent capability whose Preferences switch is off.
     NotAllowed = 13,
+    // A save or Save As ran and did not write the project file. The diagnostic's `detail` names the
+    // stage it stopped at and the cause (McpSaveFailureDetail, issue #737).
+    SaveFailed = 14,
 };
 
-inline constexpr std::size_t kMcpUiRefusalCount = 14;
+inline constexpr std::size_t kMcpUiRefusalCount = 15;
 
 [[nodiscard]] constexpr std::string_view uiRefusalCode(const McpUiRefusal refusal) {
     constexpr std::array<std::string_view, kMcpUiRefusalCount> codes{
@@ -88,6 +91,7 @@ inline constexpr std::size_t kMcpUiRefusalCount = 14;
         "bloom.mcp.read-only",
         "bloom.mcp.failed",
         "bloom.mcp.not-allowed",
+        "bloom.mcp.save-failed",
     };
     return codes[static_cast<std::size_t>(refusal)];
 }
@@ -126,6 +130,14 @@ struct McpProjectRequest final {
     bool stopJobs = false;
 };
 
+// Where a failed save stopped and why, as stable tokens (bloom::host::SaveFailureDescription):
+// `stage` is a dotted path such as "publication.staged-save.build.document-encode", `cause` the
+// payload such as "value-count-exceeded". Answered as the `detail` of the diagnostic.
+struct McpSaveFailureDetail final {
+    std::string stage;
+    std::string cause;
+};
+
 struct McpProjectResult final {
     McpUiRefusal refusal = McpUiRefusal::None;
     // Plain text; a refusal names the project ("Untitled has unsaved changes ...").
@@ -134,6 +146,8 @@ struct McpProjectResult final {
     std::filesystem::path path;
     // The project now open (after Close: the empty project the application shows).
     std::string projectName;
+    // SaveFailed: where the save stopped and why.
+    std::optional<McpSaveFailureDetail> saveFailure;
 
     [[nodiscard]] bool ok() const noexcept { return refusal == McpUiRefusal::None; }
 };

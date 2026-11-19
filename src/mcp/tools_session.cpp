@@ -242,9 +242,19 @@ yyjson_mut_val* projectTool(McpServerCore::State& core, Json& out, const McpTool
     // The activity log reads the project's name after the tool name ("project.save Shot010").
     summary = result.ok() && !result.projectName.empty() ? result.projectName
                                                          : std::string(toolName(tool));
-    if (!result.ok())
-        return refusal(out, result.refusal,
-                       result.message.empty() ? "Bloom refused the request." : result.message);
+    if (!result.ok()) {
+        auto* refused =
+            refusal(out, result.refusal,
+                    result.message.empty() ? "Bloom refused the request." : result.message);
+        if (result.saveFailure.has_value()) {
+            // Issue #737: where the save stopped and why, as stable tokens next to the message.
+            auto* detail = out.object();
+            out.set(detail, "stage", out.text(result.saveFailure->stage));
+            out.set(detail, "cause", out.text(result.saveFailure->cause));
+            out.set(yyjson_mut_obj_get(refused, "diagnostic"), "detail", detail);
+        }
+        return refused;
+    }
     constexpr std::array<std::string_view, 6> kinds{"project.saved",   "project.saved",
                                                     "project.opened",  "project.created",
                                                     "project.closed",  "project.copy-saved"};

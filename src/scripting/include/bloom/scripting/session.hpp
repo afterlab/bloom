@@ -67,10 +67,19 @@ enum class SessionSaveStatus : std::uint8_t {
     Failed,
 };
 
+// Where a save stopped and why: bloom::host::SaveFailureDescription's stage and cause tokens.
+struct SessionSaveFailure final {
+    std::string stage;
+    std::string cause;
+};
+
 struct SessionSaveResult final {
     SessionSaveStatus status = SessionSaveStatus::InvalidSession;
     std::string code;
     std::string message;
+    // A save the host pipeline ran and did not publish (code "bloom.scripting.save-failed"): where
+    // it stopped and why, as stable tokens (issue #737). Empty for every other result.
+    std::optional<SessionSaveFailure> failure;
 
     [[nodiscard]] bool succeeded() const noexcept { return status == SessionSaveStatus::Saved; }
 };

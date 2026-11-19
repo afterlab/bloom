@@ -1,5 +1,7 @@
 #include <bloom/scripting/session.hpp>
 
+#include <bloom/host/save_failure_description.hpp>
+
 #include <bloom/host/project_color_choice.hpp>
 
 #include <bloom/scripting/render.hpp>
@@ -424,7 +426,8 @@ SessionSaveResult Session::save() {
     if (displayPath_.empty()) {
         return {.status = SessionSaveStatus::Failed,
                 .code = "bloom.scripting.save-path-required",
-                .message = "The session has no path; use saveAs"};
+                .message = "The session has no path; use saveAs",
+                .failure = std::nullopt};
     }
     return saveTo(displayPath_, false);
 }
@@ -433,7 +436,8 @@ SessionSaveResult Session::saveAs(const std::filesystem::path& path) {
     if (path.empty()) {
         return {.status = SessionSaveStatus::Failed,
                 .code = "bloom.scripting.save-path-empty",
-                .message = "Save As requires a project path"};
+                .message = "Save As requires a project path",
+                .failure = std::nullopt};
     }
     return saveTo(path, true);
 }
@@ -442,18 +446,21 @@ SessionSaveResult Session::saveTo(const std::filesystem::path& path, const bool 
     if (binding_) {
         return {.status = SessionSaveStatus::ReadOnly,
                 .code = "bloom.scripting.use-host-save",
-                .message = "Use the live host's project Save command"};
+                .message = "Use the live host's project Save command",
+                .failure = std::nullopt};
     }
     if (!isValid()) {
         return {.status = SessionSaveStatus::InvalidSession,
                 .code = "bloom.scripting.invalid-session",
-                .message = "The project session is not available"};
+                .message = "The project session is not available",
+                .failure = std::nullopt};
     }
     if (session_->stateSnapshot().contentKind ==
         host::ProjectSessionContentKind::PreservedReadOnly) {
         return {.status = SessionSaveStatus::ReadOnly,
                 .code = "bloom.scripting.read-only",
-                .message = "A preserved read-only session cannot be edited or saved in place"};
+                .message = "A preserved read-only session cannot be edited or saved in place",
+                .failure = std::nullopt};
     }
     host::SessionPathIntentCapture pathIntent;
     if (saveAsOperation) {
@@ -461,7 +468,8 @@ SessionSaveResult Session::saveTo(const std::filesystem::path& path, const bool 
         if (!advanced) {
             return {.status = SessionSaveStatus::Failed,
                     .code = "bloom.scripting.save-intent-failed",
-                    .message = "The Save As path intent could not be admitted"};
+                    .message = "The Save As path intent could not be admitted",
+                    .failure = std::nullopt};
         }
         pathIntent = advanced.capture();
     } else {
@@ -471,13 +479,15 @@ SessionSaveResult Session::saveTo(const std::filesystem::path& path, const bool 
     if (!memoryCoordinator.has_value()) {
         return {.status = SessionSaveStatus::Failed,
                 .code = "bloom.scripting.save-memory-unavailable",
-                .message = "Project I/O memory could not be initialized"};
+                .message = "Project I/O memory could not be initialized",
+                .failure = std::nullopt};
     }
     auto operation = memoryCoordinator->createOperation();
     if (!operation.has_value()) {
         return {.status = SessionSaveStatus::Failed,
                 .code = "bloom.scripting.save-memory-unavailable",
-                .message = "Project I/O operation memory could not be initialized"};
+                .message = "Project I/O operation memory could not be initialized",
+                .failure = std::nullopt};
     }
     host::SessionSaveRequest request{.targetPath = path,
                                      .overwritePolicy =
@@ -491,12 +501,22 @@ SessionSaveResult Session::saveTo(const std::filesystem::path& path, const bool 
         if (saveAsOperation) {
             static_cast<void>(session_->abandonSaveAsIntent(pathIntent));
         }
+        // Issue #737: name where the save stopped and why, never one fixed sentence.
+        auto failure = host::describeSessionSaveFailure(result, request.limits);
+        if (!failure.has_value()) {
+            failure = host::SaveFailureDescription{
+                .stage = "savepoint",
+                .cause = "not-accepted",
+                .message = "The project file was written, but this session did not accept it"};
+        }
         return {.status = SessionSaveStatus::Failed,
                 .code = "bloom.scripting.save-failed",
-                .message = "The host save pipeline did not publish the project"};
+                .message = std::move(failure->message),
+                .failure = SessionSaveFailure{.stage = std::move(failure->stage),
+                                              .cause = std::move(failure->cause)}};
     }
     displayPath_ = path;
-    return {.status = SessionSaveStatus::Saved, .code = {}, .message = {}};
+    return {.status = SessionSaveStatus::Saved, .code = {}, .message = {}, .failure = std::nullopt};
 }
 
 } // namespace bloom::scripting

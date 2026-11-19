@@ -171,12 +171,22 @@ int serve(scripting::Session& session) {
             }
             const auto saved =
                 request.kind == Kind::Save ? session.save() : session.saveAs(request.path);
-            if (!saved.succeeded())
+            if (!saved.succeeded()) {
+                if (saved.failure.has_value()) {
+                    // Issue #737: the save ran and did not write the file; name where and why.
+                    auto failed = result;
+                    failed.refusal = mcp::McpUiRefusal::SaveFailed;
+                    failed.message = saved.message;
+                    failed.saveFailure = mcp::McpSaveFailureDetail{.stage = saved.failure->stage,
+                                                                   .cause = saved.failure->cause};
+                    return done(std::move(failed));
+                }
                 return refuse(saved.status == scripting::SessionSaveStatus::ReadOnly
                                   ? mcp::McpUiRefusal::ReadOnly
                                   : mcp::McpUiRefusal::Failed,
                               saved.message.empty() ? "The project could not be saved."
                                                     : saved.message);
+            }
             result.path = session.displayPath();
             result.message = "Saved " + result.projectName + ".";
             return done(result);

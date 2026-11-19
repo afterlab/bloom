@@ -87,8 +87,8 @@ the call passes `discardChanges:true`, and while export jobs run they answer
 
 | Tool | Arguments | Notes |
 | --- | --- | --- |
-| `project.save` | none | `bloom.mcp.no-path` when the project was never saved; `bloom.mcp.read-only` for a read-only project. |
-| `project.save-as` | `path` (absolute, `.bloom`), optional `replace` | `bloom.mcp.destination-exists` unless `replace` is true; `bloom.mcp.path-invalid` for a relative path or a missing folder. |
+| `project.save` | none | `bloom.mcp.no-path` when the project was never saved; `bloom.mcp.read-only` for a read-only project; `bloom.mcp.save-failed` when the file could not be written. |
+| `project.save-as` | `path` (absolute, `.bloom`), optional `replace` | `bloom.mcp.destination-exists` unless `replace` is true; `bloom.mcp.path-invalid` for a relative path or a missing folder; `bloom.mcp.save-failed` when the file could not be written. |
 | `project.open` | `path`, optional `discardChanges`, `stopJobs` | Replaces the open project. |
 | `project.new` | optional `discardChanges`, `stopJobs` | An untitled project. |
 | `project.close` | optional `discardChanges`, `stopJobs` | The window shows an empty project. |
@@ -123,6 +123,14 @@ the in-app server: `bloom-mcp` implements `project.save`, `project.save-as`, `pr
 Other refusals are `bloom.mcp.unknown-target`, `bloom.mcp.invalid-argument`, `bloom.mcp.busy` and
 `bloom.mcp.failed`, each with a message that says what to do.
 
+A `project.save` or `project.save-as` that did not write the file answers `bloom.mcp.save-failed`.
+Its message is the sentence the status bar shows ("Save failed while encoding document.json: ...")
+and its `diagnostic.detail` names the step and the cause as stable tokens, for example
+`{"stage": "publication.staged-save.build.document-encode", "cause": "value-count-exceeded"}` or
+`{"stage": "publication.preflight", "cause": "target-leaf-not-regular"}`. The project and the file
+on disk are unchanged, so the call can be retried once the cause is fixed. Both servers answer it
+the same way.
+
 Some of what you do in the window has no tool, on purpose: arranging panels (split, join,
 close, maximize, Reset Workspace, full screen, the toolbar), zooming and scrolling editors other
 than the Viewer, and the Viewer's guide overlays except through `preferences.set`; quitting Bloom;
@@ -142,6 +150,8 @@ call goes through the same controllers the window uses, and the window shows it 
   answers `bloom.mcp.unsaved-changes` or `bloom.mcp.jobs-running` unless `discardChanges` or
   `stopJobs` is passed. `stopJobs` stops the jobs through the export queue and the call goes on once
   they have. While another project operation or a dialog is open the call answers `bloom.mcp.busy`.
+  A save an agent started never opens a dialog, even when it fails: the agent gets
+  `bloom.mcp.save-failed` and the window shows the same sentence in its status bar.
   `project.close` leaves the same empty project File > New does.
 - **`selection.set`** selects as clicks in the Timeline and Nodes do: the Timeline, Nodes and
   Properties show it, and a `layers`-only `set` or `add` extends like Shift-click. The composition is
