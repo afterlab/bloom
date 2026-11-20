@@ -2,8 +2,9 @@
 #include "gpu_packaged_runtime.hpp"
 #include "gpu_pipeline_cache_private.hpp"
 
-#include <bloom/core/test_fixed_memory_reading.hpp>
+#include <bloom/core/diagnostic_record.hpp>
 #include <bloom/core/telemetry_counters.hpp>
+#include <bloom/core/test_fixed_memory_reading.hpp>
 
 #include <algorithm>
 #include <array>
@@ -95,6 +96,13 @@ platformSurfaceExtensionName(const GpuPresentationPlatform platform) noexcept {
     }
 }
 
+// A fixed-size, NUL-terminated driver string from Vulkan as a string; an unterminated array is
+// read to its end.
+template <std::size_t Size> [[nodiscard]] std::string boundedText(const char (&text)[Size]) {
+    const char* const end = std::find(text, text + Size, '\0');
+    return std::string(text, end);
+}
+
 [[nodiscard]] std::string_view deviceTypeLabel(const VkPhysicalDeviceType type) noexcept {
     switch (type) {
     case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
@@ -170,6 +178,10 @@ struct DeviceSelection final {
     std::uint32_t presentFamily = UINT32_MAX;
     VkPhysicalDeviceProperties properties{};
     std::array<std::uint8_t, VK_UUID_SIZE> deviceUuid{};
+    // The driver's own name and version text (VkPhysicalDeviceDriverProperties, core in 1.2), for
+    // the crash report's GPU line (#736).
+    std::string driverName;
+    std::string driverInfo;
     std::uint64_t deviceMemoryBytes = 0;
     VkPhysicalDeviceMemoryProperties memory{};
     bool unifiedMemory = false;
@@ -218,6 +230,13 @@ selectPhysicalDevice(const vk::raii::Instance& instance) {
         if (properties2.properties.apiVersion < VK_API_VERSION_1_2) {
             continue;
         }
+        // Core in Vulkan 1.2, so asked for only once the device is known to have it.
+        VkPhysicalDeviceDriverProperties driverProperties{};
+        driverProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+        VkPhysicalDeviceProperties2 driverQuery{};
+        driverQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        driverQuery.pNext = &driverProperties;
+        dispatcher->vkGetPhysicalDeviceProperties2(device, &driverQuery);
 
         VkPhysicalDeviceVulkan12Features features12{};
         features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
@@ -290,6 +309,8 @@ selectPhysicalDevice(const vk::raii::Instance& instance) {
         selection.properties = properties2.properties;
         std::copy(std::begin(idProperties.deviceUUID), std::end(idProperties.deviceUUID),
                   selection.deviceUuid.begin());
+        selection.driverName = boundedText(driverProperties.driverName);
+        selection.driverInfo = boundedText(driverProperties.driverInfo);
         selection.deviceMemoryBytes = deviceLocalBytes;
         selection.memory = memoryProperties2.memoryProperties;
         selection.unifiedMemory = unifiedMemory;
@@ -767,6 +788,18 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     impl->report.identity.device_uuid = selection->deviceUuid;
     impl->report.identity.device_type =
         std::string(deviceTypeLabel(selection->properties.deviceType));
+    // The crash report names the device and driver the program used last (#736).
+    {
+        std::string description = impl->report.identity.device_name + " (" +
+                                  impl->report.identity.device_type + "), driver ";
+        description +=
+            selection->driverName.empty() ? std::string("unknown") : selection->driverName;
+        if (!selection->driverInfo.empty())
+            description += " " + selection->driverInfo;
+        description += ", Vulkan " + std::to_string(impl->report.identity.api_version_major) + "." +
+                       std::to_string(impl->report.identity.api_version_minor);
+        core::recordGpuDevice(description);
+    }
     impl->report.compute_queue = true;
     impl->report.timeline_semaphore = true;
     impl->report.memory_budget_supported = selection->memoryBudgetSupported;
