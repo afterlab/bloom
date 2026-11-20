@@ -558,19 +558,19 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
         const auto before =
             index == 0 ? ui::PreparedPreviewFrameHandle{} : viewer.displayedFrameForTest();
         // The first frame of a route also prepares every program the composition needs (the #509
-        // features need 17, compiled by 16 runs of the shader tools): about a second on an idle
-        // machine and four with every core oversubscribed twice, well inside the wait. Its
-        // FIRST-FRAME line below says what it compiled and how long it waited.
+        // features need 17, compiled by 16 runs of the shader tools). Each field program holds
+        // only its own operations (#750): the one that held the whole field vocabulary took the
+        // device compiler about 30 s on a cold cache, and that, not a lost wakeup, was the first
+        // frame that never came under load. The wait's limit is the shared ceiling for a broken
+        // run; its FIRST-FRAME line below says what it compiled and how long it waited.
         const bool ready = bloom::test_support::awaitQtCondition(
-            "Viewer displays the first frame of the route",
-            [&] {
+            "Viewer displays the first frame of the route", [&] {
                 const auto displayed = viewer.displayedFrameForTest();
                 return controller.state().activity == ui::PreviewActivity::Ready &&
                        displayed != nullptr && (index == 0 || displayed != before || index == 3) &&
                        displayed->provenance().provider == expectedProvider &&
                        viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
-            },
-            30s);
+            });
         // What the first frame waited on: the shader programs it compiled (each a run of the
         // packaged shader tools on the frame's worker) and how long the wait was.
         if (index == 0 && viewerTools != nullptr) {
@@ -734,7 +734,8 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     } else {
         std::cout << "NotRun: " << route.name << " movie: no media worker here\n";
     }
-    checks.expect(provider->shutdownAndWait(10s), prefix + "the export provider retires");
+    checks.expect(provider->shutdownAndWait(bloom::test_support::kAwaitLimit),
+                  prefix + "the export provider retires");
 
     controller.beginShutdown();
     rig.bridge->beginShutdown();

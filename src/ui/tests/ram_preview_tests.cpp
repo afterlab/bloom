@@ -2091,10 +2091,17 @@ void testPurgePreviewCacheRetiresInFlightAndRecomputes(Expectations& expectation
                             fixture.session.canUndo() == canUndoBefore,
                         "purge never mutates project truth or undo history");
 
+    // #750: the purged request's task is awaited to its end, then the events it could have
+    // queued are delivered, instead of giving it half a second of events: after a fixed spin the
+    // check below passed whether or not the result had come back yet. The purge detached the
+    // request, so its end is the scheduler's quiescence.
     fixture.gate.release();
-    for (int turn = 0; turn < 50; ++turn) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    }
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("the purged request's task ends",
+                                              [&] { return fixture.scheduler.isQuiescent(); }),
+        "the purged request's task ends");
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
     expectations.expect(fixture.frameCache->size() == 0,
                         "a result completing after purge cannot repopulate the cache");
 
