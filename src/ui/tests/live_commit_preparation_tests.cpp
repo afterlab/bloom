@@ -19,6 +19,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <functional>
 #include <future>
 #include <iostream>
 #include <memory>
@@ -70,13 +72,18 @@ class HeldRename final : public commands::Operation {
 };
 
 struct Fixture final {
+    Fixture() = default;
+    explicit Fixture(std::function<void()> startGate) : waiterStartGate(std::move(startGate)) {}
+
+    // Declared before the adapter, which hands it to its waiter thread.
+    std::function<void()> waiterStartGate;
     runtime::TaskScheduler scheduler;
     ui::ProjectHost projectHost{scheduler};
     ui::CompositionSession session{*projectHost.liveDocumentAndStack().first,
                                    *projectHost.liveDocumentAndStack().second,
                                    projectHost.lowestCompositionId()};
     scripting::LiveSessionHost live;
-    ui::LiveSessionAdapter adapter{live, session, projectHost};
+    ui::LiveSessionAdapter adapter{live, session, projectHost, nullptr, waiterStartGate};
 
     [[nodiscard]] commands::CommandStack& stack() const {
         return *const_cast<ui::ProjectHost&>(projectHost).liveDocumentAndStack().second;
@@ -242,6 +249,63 @@ void shutdownDuringPreparation() {
     require(fixture.session.snapshot().revision() == revision, "nothing was published");
 }
 
+// On a loaded machine the adapter's waiter thread can start after an agent's commit was queued
+// and prepared: the commit still publishes, because the waiter counts every wake since the adapter
+// subscribed, not since the thread started (#750).
+void lateWaiterStillDrains() {
+    struct StartGate final {
+        std::mutex mutex;
+        std::condition_variable changed;
+        bool released = false;
+        void release() {
+            {
+                const std::lock_guard lock(mutex);
+                released = true;
+            }
+            changed.notify_all();
+        }
+    };
+    auto start = std::make_shared<StartGate>();
+    Fixture fixture([start] {
+        std::unique_lock lock(start->mutex);
+        start->changed.wait(lock, [&] { return start->released; });
+    });
+    auto prepared = std::make_shared<std::atomic_bool>(false);
+    auto commit = std::async(std::launch::async, [&fixture, prepared] {
+        scripting::LiveCallControl control;
+        control.progress = [prepared](const scripting::LiveCommitProgress& progress) {
+            if (progress.step == scripting::LiveCommitProgress::Step::Prepared)
+                prepared->store(true);
+        };
+        auto lease = fixture.live.acquire(std::move(control));
+        if (!lease)
+            return scripting::SessionCommandResult{};
+        commands::Transaction transaction("Late", lease.state().renderSource.snapshot.revision());
+        transaction.setOrigin(commands::CommandOrigin::Agent);
+        transaction.emplace<commands::SetProjectName>("Late");
+        return lease.session().execute(std::move(transaction));
+    });
+    // A failed check lets the waiter start and withdraws the commit, so nothing below waits on a
+    // thread that never returns.
+    const auto check = [&](const bool condition, const char* message) {
+        if (condition)
+            return;
+        start->release();
+        fixture.adapter.shutdown();
+        commit.wait();
+        require(false, message);
+    };
+    check(awaitQtCondition("the commit is prepared", [&] { return prepared->load(); }),
+          "the agent's commit is queued and prepared before the waiter thread starts");
+    start->release();
+    check(awaitQtCondition("the late waiter's drain publishes the commit",
+                           [&] { return commit.wait_for(0s) == std::future_status::ready; }),
+          "a commit prepared before the waiter thread started still publishes");
+    const auto result = commit.get();
+    require(result.succeeded() && fixture.session.snapshot().project().name() == "Late",
+            "the commit prepared before the waiter started publishes and the window adopts it");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -252,11 +316,12 @@ int main(int argc, char** argv) {
         artistEditDuringPreparation();
         capacityIsMeasuredInPreparation();
         shutdownDuringPreparation();
+        lateWaiterStillDrains();
     } catch (const std::exception& error) {
         std::cerr << "FAILED: " << error.what() << '\n';
         return 1;
     }
-    std::cout << "live commit preparation: off the UI thread, grouping, artist race and shutdown "
-                 "passed\n";
+    std::cout << "live commit preparation: off the UI thread, grouping, artist race, shutdown "
+                 "and a late waiter passed\n";
     return 0;
 }

@@ -56,7 +56,9 @@ void McpServerAdapter::startWaiter() {
     if (waiter_.joinable())
         return;
     waiter_ = bloom::core::StoppableWorkerThread([this](const std::stop_token stop) {
-        auto observed = port_.serial();
+        // Counted from the subscription's start, not from when this thread first runs: a wake the
+        // service recorded before then still drains, once (#750).
+        std::uint64_t observed = 0;
         while (!stop.stop_requested()) {
             const auto next = port_.waitForChange(observed, stop);
             if (!next.has_value())

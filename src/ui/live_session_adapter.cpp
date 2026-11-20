@@ -32,7 +32,7 @@ constexpr auto kGestureRetry = std::chrono::milliseconds{50};
 
 LiveSessionAdapter::LiveSessionAdapter(scripting::LiveSessionHost& host,
                                        CompositionSession& session, ProjectHost& project,
-                                       QObject* parent)
+                                       QObject* parent, std::function<void()> waiterStartGate)
     : QObject(parent), host_(host), session_(session), project_(project),
       committer_(std::make_unique<scripting::LiveSessionCommitter>()) {
     // #746: an agent session may hold the window's adoption of a commit (panels at a slow
@@ -88,6 +88,11 @@ LiveSessionAdapter::LiveSessionAdapter(scripting::LiveSessionHost& host,
         return scripting::SessionViewerLevelResult{"updated", "The Viewer's level changed"};
     };
 
+    // Subscribed before the first generation is bound, and counted from here, not from when the
+    // waiter thread first runs: a commit queued and prepared before a late-starting waiter reads
+    // the serial would otherwise never wake a drain (#750).
+    auto commits = host_.subscribeCommits();
+    const auto subscribed = commits.serial();
     replace();
     // Rebind refreshes can precede the project host's later sessionReplaced slots: revoke old
     // reads and queued commits before any of those refreshes can publish the new snapshot.
@@ -110,8 +115,10 @@ LiveSessionAdapter::LiveSessionAdapter(scripting::LiveSessionHost& host,
     // Commits are not scheduler work, so the completion drain would not see them: a stop-aware
     // waiter turns each queued commit into one queued drain on the UI thread.
     waiter_ = bloom::core::StoppableWorkerThread(
-        [this, subscription = host_.subscribeCommits()](const std::stop_token& stop) mutable {
-            auto observed = subscription.serial();
+        [this, subscription = std::move(commits), observed = subscribed,
+         startGate = std::move(waiterStartGate)](const std::stop_token& stop) mutable {
+            if (startGate)
+                startGate();
             while (const auto serial = subscription.waitForChange(observed, stop)) {
                 observed = *serial;
                 scheduleDrain();

@@ -342,7 +342,9 @@ at most one live commit per event-loop slice. The application-lifetime `McpServe
 `McpServerService::subscribe()` (socket activity and request workers record facts there) and
 queues at most one UI drain that calls `pump()`; it also drains on `TaskUiBridge::resultsAvailable`
 for the token's blocking-I/O tasks. Both waiters stop and join on destruction without waiting for
-request work, and neither polls.
+request work, and neither polls. Each counts wakes from its subscription, never from when its thread
+first runs: on a loaded machine the thread can start after a commit was queued and prepared or a
+request recorded, and that wake still drains, once (#750).
 
 Foreground preview, RAM/background completion and Viewer adjustment/probe/channel/CPU-fallback
 results consume this signal through typed handles. Qualified-display bootstrap, asset import,

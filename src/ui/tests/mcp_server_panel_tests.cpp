@@ -80,23 +80,24 @@ void testAdapterDrain() {
     expect(changed.count() == 1, "one revision gives exactly one changed()");
     expect(adapter.snapshot()->state == m::McpServerState::Running, "the adapter reads the pumped snapshot");
 
-    // The waiter coalesces several wakes into the drains that run on the main thread.
-    adapter.startWaiter();
+    // A wake the service recorded before the waiter thread first ran still drains (#750): the
+    // waiter counts from the subscription, not from its own start.
     port.stage(makeSnapshot(m::McpServerState::Stopped));
     port.publish();
+    adapter.startWaiter();
+    expect(bloom::test_support::awaitQtCondition("a wake from before the waiter started drains",
+                                                 [&] { return changed.count() >= 2; }),
+           "a wake from before the waiter started drains");
+    // The waiter coalesces several wakes into the drains that run on the main thread.
+    port.stage(makeSnapshot(m::McpServerState::Running));
     port.publish();
     port.publish();
-    // The waiter thread may start after the first publish; keep waking until it has drained.
-    expect(bloom::test_support::awaitConditionWith(
-               "the waiter's wakes drain into two changed() emissions",
-               [&] { return changed.count() >= 2; },
-               [&] {
-                   port.publish();
-                   QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-                   std::this_thread::sleep_for(std::chrono::milliseconds{10});
-               }),
-           "the waiter's wakes drain into two changed() emissions");
-    expect(changed.count() == 2, "the waiter's wakes drain once and emit one changed()");
+    port.publish();
+    expect(bloom::test_support::awaitQtCondition("the waiter's wakes drain",
+                                                 [&] { return changed.count() >= 3; }),
+           "the waiter's wakes drain");
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    expect(changed.count() == 3, "the waiter's wakes drain and emit one changed()");
 }
 
 void testPreferencesPersist() {

@@ -5,6 +5,7 @@
 #include <QObject>
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
@@ -38,8 +39,11 @@ class ProjectHost;
 class LiveSessionAdapter final : public QObject {
     Q_OBJECT
   public:
+    // `waiterStartGate` is for tests only: the waiter thread runs it first, so a test can start
+    // that thread late.
     LiveSessionAdapter(scripting::LiveSessionHost& host, CompositionSession& session,
-                       ProjectHost& project, QObject* parent = nullptr);
+                       ProjectHost& project, QObject* parent = nullptr,
+                       std::function<void()> waiterStartGate = {});
     ~LiveSessionAdapter() override;
     LiveSessionAdapter(const LiveSessionAdapter&) = delete;
     LiveSessionAdapter& operator=(const LiveSessionAdapter&) = delete;
