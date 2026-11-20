@@ -1,0 +1,85 @@
+diff --git a/util/CMakeLists.txt b/util/CMakeLists.txt
+index 7d6db7c..550942d 100644
+--- a/util/CMakeLists.txt
++++ b/util/CMakeLists.txt
+@@ -65,6 +65,7 @@ add_library(crashpad_util STATIC
+     net/http_multipart_builder.h
+     net/http_transport.cc
+     net/http_transport.h
++    net/http_transport_none.cc
+     net/url.cc
+     net/url.h
+     numeric/checked_address_range.cc
+@@ -170,7 +171,6 @@ if(APPLE)
+         misc/capture_context_mac.S
+         misc/clock_mac.cc
+         misc/paths_mac.cc
+-        net/http_transport_mac.mm
+         synchronization/semaphore_mac.cc
+     )
+     if(NOT IOS)
+@@ -251,27 +251,13 @@ endif()
+ 
+ if(LINUX OR ANDROID)
+     if (LINUX)
+-        if(NOT TARGET CURL::libcurl) # Some other lib might bring libcurl already
+-            find_package(CURL REQUIRED)
+-        endif()
+-
+-        target_link_libraries(crashpad_util PRIVATE CURL::libcurl)
+-        SET(HTTP_TRANSPORT_IMPL net/http_transport_libcurl.cc)
+-
+         target_compile_options(crashpad_util PRIVATE
+             # Clang >= 20 complains about thread_info.cc memsetting nontrivially copyable types
+             $<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<C_COMPILER_ID:Clang>,$<VERSION_GREATER_EQUAL:$<CXX_COMPILER_VERSION>,20>>:-Wno-nontrivial-memcall>
+         )
+-    else()
+-        find_package(OpenSSL)
+-        if(OPENSSL_FOUND)
+-            set(CRASHPAD_USE_BORINGSSL ON)
+-        endif()
+-        SET(HTTP_TRANSPORT_IMPL net/http_transport_socket.cc)
+     endif()
+     
+     target_sources(crashpad_util PRIVATE
+-        ${HTTP_TRANSPORT_IMPL}
+         linux/address_types.h
+         linux/auxiliary_vector.cc
+         linux/auxiliary_vector.h
+@@ -328,7 +314,6 @@ if(WIN32)
+         misc/clock_win.cc
+         misc/paths_win.cc
+         misc/time_win.cc
+-        net/http_transport_win.cc
+         process/process_memory_win.cc
+         process/process_memory_win.h
+         synchronization/semaphore_win.cc
+@@ -557,7 +542,7 @@ if(CRASHPAD_USE_BORINGSSL)
+ endif()
+ 
+ if(WIN32)
+-    target_link_libraries(crashpad_util PRIVATE user32 version winhttp)
++    target_link_libraries(crashpad_util PRIVATE user32 version)
+     if(MSVC)
+         target_compile_options(crashpad_util PRIVATE
+             $<$<COMPILE_LANGUAGE:C,CXX>:/wd4201> # nonstandard extension used : nameless struct/union.
+diff --git a/util/net/http_transport_none.cc b/util/net/http_transport_none.cc
+new file mode 100644
+index 0000000..f3e5246
+--- /dev/null
++++ b/util/net/http_transport_none.cc
+@@ -0,0 +1,14 @@
++// Bloom keeps every crash report on the machine that wrote it: this build has no HTTP transport,
++// so the handler cannot upload a report even when it is given an address. The upload thread
++// treats a missing transport as a permanent failure and leaves the report in the database.
++
++#include "util/net/http_transport.h"
++
++namespace crashpad {
++
++// static
++std::unique_ptr<HTTPTransport> HTTPTransport::Create() {
++  return nullptr;
++}
++
++}  // namespace crashpad

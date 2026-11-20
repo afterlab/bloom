@@ -1,0 +1,18 @@
+diff --git a/crashpad-config.cmake.in b/crashpad-config.cmake.in
+--- a/crashpad-config.cmake.in
++++ b/crashpad-config.cmake.in
+@@ -1,3 +1,5 @@
++include("${CMAKE_CURRENT_LIST_DIR}/crashpad-targets.cmake")
++
+ if(@CRASHPAD_ZLIB_SYSTEM@)
+     include(CMakeFindDependencyMacro)
+     find_dependency(ZLIB)
+@@ -6,6 +8,4 @@
+     target_link_libraries(crashpad::zlib INTERFACE ${ZLIB_LIBRARIES})
+ endif()
+ 
+-include("${CMAKE_CURRENT_LIST_DIR}/crashpad-targets.cmake")
+-
+-@PACKAGE_INIT@
+\ No newline at end of file
++@PACKAGE_INIT@

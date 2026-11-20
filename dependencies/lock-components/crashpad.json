@@ -1,0 +1,80 @@
+{
+  "name": "crashpad",
+  "version": "0bd6ca43a0958a86939a37569b61162f92f9a022",
+  "source": {
+    "url": "https://codeload.github.com/getsentry/crashpad/tar.gz/0bd6ca43a0958a86939a37569b61162f92f9a022",
+    "archiveSha256": "sha256:d5c4eb0a553be3f7d2bee4723851652aee6fe6067835a498915e39e73ca3a618",
+    "archiveSizeBytes": 1885404,
+    "retrievedAt": "2026-11-20",
+    "commit": "0bd6ca43a0958a86939a37569b61162f92f9a022",
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/crashpad/provenance.md",
+      "sha256": "sha256:73e6f7c8beafdedca21622f3a4916dc859ca2e706ea03186d2276cd2406c7b0a"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "Apache-2.0 AND MIT AND LicenseRef-getopt-public-domain",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/crashpad/LICENSE",
+        "sha256": "sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "path": "dependencies/licenses/crashpad/third_party-getopt-LICENSE",
+        "sha256": "sha256:f40ee07401827b6ac9cf0aee1aaffb00e42a3f2c729f9c83f96a3daafef5d944"
+      },
+      {
+        "path": "dependencies/licenses/crashpad/third_party-mpack-LICENSE",
+        "sha256": "sha256:260ffd3e123c24170cffccdc509ffd9339e71479735c080a3bf7db2da0b9331d"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": true,
+    "reviewRecord": {
+      "path": "dependencies/licenses/crashpad/review.md",
+      "sha256": "sha256:5e9dd6bda8d60a4aacf399a7ea559babaf79be47f66caf2f95547686eb21aa97"
+    },
+    "reviewedAt": "2026-11-20"
+  },
+  "patches": [
+    {
+      "path": "dependencies/patches/crashpad/0001-build-without-an-http-transport.patch",
+      "sha256": "sha256:b86a72a607c8d92ac542dc47c0d0881411721271a37b48c68cbda9642349ee32",
+      "applyOrder": 0,
+      "reason": "Build without an HTTP transport on every platform, so the handler cannot upload a report and Linux needs no libcurl"
+    },
+    {
+      "path": "dependencies/patches/crashpad/0002-declare-the-targets-before-the-system-zlib.patch",
+      "sha256": "sha256:abaad608047c09f058a5af7aeb5792beca4ecc1b6eaf07503db82a4041aae62e",
+      "applyOrder": 1,
+      "reason": "Declare the installed package's targets before giving crashpad::zlib the system zlib, so find_package(crashpad) works"
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "linux-syscall-support",
+      "relationship": "build"
+    },
+    {
+      "name": "mini-chromium",
+      "relationship": "link"
+    },
+    {
+      "name": "zlib",
+      "relationship": "link"
+    }
+  ],
+  "profileBuilds": [],
+  "securityReview": {
+    "reviewedAt": "2026-11-20",
+    "record": {
+      "path": "dependencies/licenses/crashpad/security.md",
+      "sha256": "sha256:6b8c42541b18c1157ea1a7e6d88278e49e06c519dab5b32ef7c406c60291aba3"
+    },
+    "vulnerabilities": []
+  }
+}

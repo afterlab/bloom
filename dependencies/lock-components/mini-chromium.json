@@ -1,0 +1,46 @@
+{
+  "name": "mini-chromium",
+  "version": "2f5c168fa462cf3836c4a7801b4f4955496d975d",
+  "source": {
+    "url": "https://codeload.github.com/getsentry/mini_chromium/tar.gz/2f5c168fa462cf3836c4a7801b4f4955496d975d",
+    "archiveSha256": "sha256:00f60d55f810dd66a64cf882cb8f4d241809e9e14c24baaaa96031b66ca79ac4",
+    "archiveSizeBytes": 142411,
+    "retrievedAt": "2026-11-20",
+    "commit": "2f5c168fa462cf3836c4a7801b4f4955496d975d",
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/mini-chromium/provenance.md",
+      "sha256": "sha256:7eb6eb5d5e658a9b1951fb22105ae2516f3118b249d2a50ec2a95a213d0abb3a"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "BSD-3-Clause",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/mini-chromium/LICENSE",
+        "sha256": "sha256:12bbc9942399b4014dac7584f3df08afb966ab92157e21e47e6a05db13c04ae0"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/mini-chromium/review.md",
+      "sha256": "sha256:06f2fd1a0241f42dbb42808898aca3ff9df3ade0ffeba58953fdc9fd4350f8bc"
+    },
+    "reviewedAt": "2026-11-20"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [],
+  "securityReview": {
+    "reviewedAt": "2026-11-20",
+    "record": {
+      "path": "dependencies/licenses/mini-chromium/security.md",
+      "sha256": "sha256:f95dc4789bf3f933e5bb3f5ab48562d3e69358b71634570df754d2b619024b8a"
+    },
+    "vulnerabilities": []
+  }
+}

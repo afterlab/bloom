@@ -124,6 +124,52 @@
       "conformanceFixtureSets": []
     },
     "cereal": null,
+    "crashpad": {
+      "linkage": "static",
+      "cmakeOptions": [
+        {
+          "name": "CRASHPAD_BUILD_TOOLS",
+          "value": "OFF"
+        },
+        {
+          "name": "CRASHPAD_ENABLE_INSTALL",
+          "value": "ON"
+        },
+        {
+          "name": "CRASHPAD_ENABLE_INSTALL_DEV",
+          "value": "ON"
+        },
+        {
+          "name": "CRASHPAD_ENABLE_STACKTRACE",
+          "value": "OFF"
+        },
+        {
+          "name": "CRASHPAD_ZLIB_SYSTEM",
+          "value": "ON"
+        }
+      ],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.crashpad.client-stack-trace",
+          "state": "disabled",
+          "reason": "Client-side stack walking with libunwind is off; the handler's minidump carries every thread's stack"
+        },
+        {
+          "id": "bloom.feature.crashpad.http-transport",
+          "state": "disabled",
+          "reason": "Built without an HTTP transport (reviewed patch): the handler keeps every report on the machine and cannot upload one"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.crashpad.minidump"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "library",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
     "cython": {
       "linkage": "executable",
       "cmakeOptions": [],
@@ -579,6 +625,19 @@
       "shippingRoles": [
         "cmake-package",
         "library",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "linux-syscall-support": null,
+    "mini-chromium": {
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.mini-chromium"
+      ],
+      "shippingRoles": [
         "license"
       ],
       "conformanceFixtureSets": []

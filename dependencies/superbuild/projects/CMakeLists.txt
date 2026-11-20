@@ -40,6 +40,7 @@ include(spirv-headers.cmake)
 include(spirv-tools.cmake)
 include(glslang.cmake)
 include(qt.cmake)
+include(crashpad.cmake)
 include(linux-runtime.cmake)
 
 # Prebuilt update and installer items, taken as published, by checksum (dependencies/update-runtime

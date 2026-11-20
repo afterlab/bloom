@@ -1,0 +1,46 @@
+{
+  "name": "linux-syscall-support",
+  "version": "9719c1e1e676814c456b55f5f070eabad6709d31",
+  "source": {
+    "url": "https://codeload.github.com/getsentry/chromium-linux-syscall-support/tar.gz/9719c1e1e676814c456b55f5f070eabad6709d31",
+    "archiveSha256": "sha256:a858367f0de0fd22a22172c562d750c29edb43f586cb6ff94be1941b77656bf3",
+    "archiveSizeBytes": 41686,
+    "retrievedAt": "2026-11-20",
+    "commit": "9719c1e1e676814c456b55f5f070eabad6709d31",
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/linux-syscall-support/provenance.md",
+      "sha256": "sha256:b86ac39b11a97636d507db1e9a4bfa99ae6c8373499aed7d0a663bc63c57d26e"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "BSD-3-Clause",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/linux-syscall-support/LICENSE",
+        "sha256": "sha256:63cc54f1d849448b225e71026acd6393390b09418cfad899b9dd453177f35c49"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/linux-syscall-support/review.md",
+      "sha256": "sha256:ca03973cd271381889ec9680bd33faa7f841a204b6a947c93b8cf3406312ce2f"
+    },
+    "reviewedAt": "2026-11-20"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [],
+  "securityReview": {
+    "reviewedAt": "2026-11-20",
+    "record": {
+      "path": "dependencies/licenses/linux-syscall-support/security.md",
+      "sha256": "sha256:e4fcadbc0068a1519a309f380a5b8eef966e2501aba7af49bdda5875d1bee2c1"
+    },
+    "vulnerabilities": []
+  }
+}
